@@ -362,6 +362,17 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
       );
     });
 
+    it("keeps a copy of exactly the rings.json a successful update stored, when asked", () => {
+      const f = setup();
+      const record = join(f.root, "record", "rings.json");
+      expect(f.runWith({ FEED_RINGS_RECORD: record }, "server-snapshot", bundle(f), VERSION).status).toBe(0);
+      expect(readFileSync(record, "utf8")).toBe(readFileSync(f.object("rings.json"), "utf8"));
+      // A refused update leaves the record of the last successful one.
+      const before = readFileSync(record, "utf8");
+      expect(f.runWith({ FEED_RINGS_RECORD: record }, "promote", "stable", VERSION, "100").status).not.toBe(0);
+      expect(readFileSync(record, "utf8")).toBe(before);
+    });
+
     it("refuses a missing file before writing anything, and a pre-0.8 version before offering it", () => {
       const f = setup();
       const dir = bundle(f);

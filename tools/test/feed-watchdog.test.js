@@ -2,7 +2,14 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { canaryMapDigest, channelProblems, parseChannel, watch } from "../deploy/feed-watchdog.js";
+import {
+  canaryMapDigest,
+  channelProblems,
+  latestRecord,
+  offerProblem,
+  parseChannel,
+  watch,
+} from "../deploy/feed-watchdog.js";
 
 const TOKENS = { internal: "i".repeat(43), stable: "s".repeat(43) };
 const sha512 = (text) => createHash("sha512").update(text).digest("base64");
@@ -64,6 +71,7 @@ describe("feed watchdog", () => {
     const { problems, report } = await run(world());
     expect(problems).toEqual([]);
     expect(report).toEqual([
+      "no recorded ring state: a 404 cannot be told from an empty ring; only servers-first is checked",
       "internal x64: 0.7.1-rc.1, served bytes match the published release",
       "stable x64: 0.7.0, served bytes match the published release",
       "internal server: nothing offered yet",
@@ -339,7 +347,7 @@ describe("server bundle channel (#877)", () => {
     const w = serverWorld({ servers: { internal: "0.8.0", stable: "0.8.0" } });
     const { problems, report } = await run(w);
     expect(problems).toEqual([]);
-    expect(report.filter((line) => line.includes("server"))).toEqual([
+    expect(report.filter((line) => / server: /.test(line))).toEqual([
       "internal server: 0.8.0, served bytes match the published release",
       "stable server: 0.8.0, served bytes match the published release",
     ]);
@@ -387,5 +395,153 @@ describe("server bundle channel (#877)", () => {
   it("fails when a ring is offered a server version with no published release", async () => {
     const { problems } = await run(serverWorld({ servers: { internal: "0.8.0" }, releases: {} }));
     expect(problems).toContain("internal server: 0.8.0 has no published GitHub release");
+  });
+
+  describe("against the recorded ring state", () => {
+    // The desktop world offers internal 0.7.1-rc.1 and stable 0.7.0 on x64.
+    const desktop = { internal: { version: "0.7.1-rc.1" }, stable: { version: "0.7.0" } };
+    const both = (servers) => {
+      const d = world();
+      const s = serverWorld({ servers });
+      // Server paths and the 0.8 releases come from the server world, the rest from the desktop one.
+      const server = (url) => new URL(String(url)).pathname.startsWith("/server/") || String(url).includes("/tags/v0.8");
+      return { fetch: (url, init) => (server(url) ? s.fetch(url, init) : d.fetch(url, init)) };
+    };
+
+    it("passes when every ring is offered exactly what was recorded, an empty ring included", async () => {
+      const record = { format: 1, rings: desktop, server: { internal: { version: "0.8.0-rc.1" } } };
+      const { problems, report } = await run(both({ internal: "0.8.0-rc.1" }), { record });
+      expect(problems).toEqual([]);
+      expect(report).toContain("stable server: nothing offered (none recorded)");
+      expect(report.join("\n")).not.toContain("no recorded ring state");
+    });
+
+    it("fails on a 404 where the record has an offer, on either channel", async () => {
+      const record = {
+        format: 1,
+        rings: { ...desktop, preview: { version: "0.7.0" } },
+        server: { internal: { version: "0.8.0-rc.1" }, stable: { version: "0.8.0" } },
+      };
+      const { problems } = await run(both({ internal: "0.8.0-rc.1" }), {
+        record,
+        tokens: { ...TOKENS },
+      });
+      expect(problems).toContain(
+        "stable server/latest-linux-x64.yml: got 404, but the recorded ring state offers 0.8.0",
+      );
+      const missingDesktop = await run(
+        {
+          fetch: (url, init) =>
+            String(url).endsWith("latest-x64.yml") && init.headers?.Authorization
+              ? new Response(null, { status: 404 })
+              : both({}).fetch(url, init),
+        },
+        { record: { format: 1, rings: desktop } },
+      );
+      expect(missingDesktop.problems).toContain(
+        "internal latest-x64.yml: got 404, but the recorded ring state offers 0.7.1-rc.1",
+      );
+    });
+
+    it("fails on an offer the record does not name, and accepts the rollout version", async () => {
+      const rolling = {
+        format: 1,
+        rings: desktop,
+        server: { internal: { version: "0.8.0-rc.1", rollout: { version: "0.8.0", percent: 10 } } },
+      };
+      expect((await run(both({ internal: "0.8.0" }), { record: rolling })).problems).toEqual([]);
+      const stale = { format: 1, rings: desktop, server: { internal: { version: "0.8.0" } } };
+      expect((await run(both({ internal: "0.8.0-rc.1" }), { record: stale })).problems).toContain(
+        "internal server/latest-linux-x64.yml: offers 0.8.0-rc.1, but the recorded ring state offers 0.8.0",
+      );
+      const none = { format: 1, rings: desktop };
+      expect((await run(both({ internal: "0.8.0-rc.1" }), { record: none })).problems).toContain(
+        "internal server/latest-linux-x64.yml: offers 0.8.0-rc.1, but the recorded ring state offers nothing",
+      );
+    });
+
+    it("refuses a record that is not a valid ring state", async () => {
+      await expect(run(both({}), { record: { format: 1, rings: {}, server: { nightly: {} } } })).rejects.toThrow();
+    });
+
+    it("holds servers first without a record: desktops on a server-era version need servers on it", async () => {
+      const d = world({
+        offers: { internal: "0.8.0" },
+        bodies: { "ORCA-0.8.0-win-x64.exe": "eight" },
+        releases: {
+          "0.8.0": {
+            draft: false,
+            published_at: "x",
+            assets: [{ name: "ORCA-0.8.0-win-x64.exe", digest: sha256("eight") }, ...release("0.8.0").assets],
+          },
+          "0.8.0-rc.1": release("0.8.0-rc.1"),
+        },
+      });
+      const servers = (offered) => {
+        const s = serverWorld({ servers: offered });
+        return {
+          fetch: (url, init) =>
+            new URL(String(url)).pathname.startsWith("/server/") ? s.fetch(url, init) : d.fetch(url, init),
+        };
+      };
+      expect((await run(servers({}))).problems).toContain(
+        "internal server/latest-linux-x64.yml: got 404, but internal's desktops are offered 0.8.0 (servers first)",
+      );
+      expect((await run(servers({ internal: "0.8.0-rc.1" }))).problems).toContain(
+        "internal server/latest-linux-x64.yml: offers 0.8.0-rc.1, older than the 0.8.0 internal's desktops are offered (servers first)",
+      );
+      expect((await run(servers({ internal: "0.8.0" }))).problems).toEqual([]);
+    });
+  });
+});
+
+describe("offerProblem", () => {
+  it("tells an expected-empty ring from an unexpected 404, and needs a record to judge", () => {
+    expect(offerProblem("x", undefined, [], 404)).toBeNull();
+    expect(offerProblem("x", {}, [], 404)).toBeNull();
+    expect(offerProblem("x", {}, ["0.8.0"], 404)).toBe("x: got 404, but the recorded ring state offers 0.8.0");
+    expect(offerProblem("x", {}, ["0.8.0", "0.8.1"], 200, "0.8.1")).toBeNull();
+  });
+});
+
+describe("latestRecord", () => {
+  const artifact = (id, name, run, created, branch = "main") => ({
+    id,
+    name,
+    expired: false,
+    created_at: created,
+    workflow_run: { id: run, head_branch: branch },
+  });
+  const runs = {
+    1: { id: 1, path: ".github/workflows/feed-promote.yml", head_branch: "main", event: "workflow_dispatch" },
+    2: { id: 2, path: ".github/workflows/feed-publish.yml", head_branch: "main", event: "workflow_dispatch" },
+    3: { id: 3, path: ".github/workflows/ci.yml", head_branch: "main", event: "workflow_dispatch" },
+    4: { id: 4, path: ".github/workflows/feed-promote.yml", head_branch: "main", event: "pull_request" },
+  };
+  const api = (artifacts) => async (url) => {
+    const path = String(url).replace("https://api.github.com/repos/o/r/", "");
+    if (path.startsWith("actions/artifacts")) return new Response(JSON.stringify({ artifacts }), { status: 200 });
+    const id = /^actions\/runs\/(\d+)$/.exec(path)?.[1];
+    return runs[id] ? new Response(JSON.stringify(runs[id]), { status: 200 }) : new Response(null, { status: 404 });
+  };
+
+  it("takes the newest record kept by a main dispatch of the feed workflows", async () => {
+    const fetch = api([
+      artifact(10, "feed-rings-promote", 1, "2026-11-22T10:00:00Z"),
+      artifact(11, "feed-rings-server", 2, "2026-11-22T11:00:00Z"),
+      artifact(12, "feed-rings-promote", 3, "2026-11-22T12:00:00Z"),
+      artifact(13, "feed-rings-promote", 4, "2026-11-22T13:00:00Z"),
+      artifact(14, "feed-rings-promote", 1, "2026-11-22T14:00:00Z", "attacker"),
+      artifact(15, "other", 2, "2026-11-22T15:00:00Z"),
+      { ...artifact(16, "feed-rings-desktop", 2, "2026-11-22T16:00:00Z"), expired: true },
+    ]);
+    expect(await latestRecord({ repo: "o/r", fetch })).toEqual({ run: 2, name: "feed-rings-server" });
+  });
+
+  it("answers undefined without a record, and fails rather than guessing when GitHub does", async () => {
+    expect(await latestRecord({ repo: "o/r", fetch: api([]) })).toBeUndefined();
+    await expect(latestRecord({ repo: "o/r", fetch: async () => new Response(null, { status: 500 }) })).rejects.toThrow(
+      /answered 500/,
+    );
   });
 });

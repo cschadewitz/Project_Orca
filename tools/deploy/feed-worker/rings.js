@@ -8,7 +8,9 @@
  * channel, with the same ring entries. Servers must never fall behind the desktops that talk
  * to them, so from the server bundle's first line (SERVER_FROM) a ring's desktops are offered
  * a version only once every server in that ring is offered it or newer: the server ring's
- * full version, since a server outside a rollout keeps the full version.
+ * full version, since a server outside a rollout keeps the full version. This is a rule about
+ * what the feed offers: it says nothing about what any host has installed or is running, which
+ * is the server updater's to establish (#878, #879).
  */
 
 export const RINGS = ["internal", "preview", "stable"];

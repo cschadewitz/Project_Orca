@@ -134,9 +134,42 @@ describe("server bundle channel workflows (#877)", () => {
     const wf = workflow("feed-promote.yml");
     const channel = wf.on.workflow_dispatch.inputs.channel;
     expect(channel).toMatchObject({ type: "choice", options: ["desktop", "server"], default: "desktop" });
-    const run = wf.jobs.promote.steps.at(-1).run;
+    const run = wf.jobs.promote.steps.find((s) => s.name === "Update the rings").run;
     expect(run).toContain('desktop) bash tools/deploy/feed-r2.sh promote "$RING" "$VERSION" "$PERCENT" ;;');
     expect(run).toContain('server) bash tools/deploy/feed-r2.sh promote-server "$RING" "$VERSION" "$PERCENT" ;;');
     expect(wf.jobs.promote.steps[0].name).toBe("Refuse while the feed is paused");
+  });
+
+  it("keeps the ring state every feed write stored, and the watchdog checks against the newest", () => {
+    const keep = (job, cond) => {
+      const steps = job.steps;
+      const write = steps.findIndex((s) => s.env?.FEED_RINGS_RECORD);
+      const upload = steps.findIndex((s) => s.name === "Keep the recorded ring state");
+      expect(steps[write].env.FEED_RINGS_RECORD).toBe("${{ runner.temp }}/feed-rings/rings.json");
+      expect(upload).toBe(write + 1);
+      expect(steps[upload].if).toBe(cond);
+      return steps[upload].with;
+    };
+    const publish = workflow("feed-publish.yml").jobs;
+    const promote = workflow("feed-promote.yml").jobs.promote;
+    for (const [w, name] of [
+      [keep(publish.server, "steps.applies.outputs.applies == 'true'"), "feed-rings-server"],
+      [keep(publish.publish, "success()"), "feed-rings-desktop"],
+      [keep(promote, "success()"), "feed-rings-promote"],
+    ])
+      expect(w).toEqual({
+        name,
+        path: "${{ runner.temp }}/feed-rings/rings.json",
+        "if-no-files-found": "error",
+        "retention-days": 90,
+      });
+    const watchdog = workflow("feed-watchdog.yml");
+    expect(watchdog.permissions).toEqual({ contents: "read", actions: "read" });
+    const steps = watchdog.jobs.watch.steps;
+    const record = steps.find((s) => s.id === "record");
+    expect(record.run).toContain("node tools/deploy/feed-watchdog.js record");
+    expect(record.run).toContain('gh run download "$run"');
+    expect(steps.at(-1).env.FEED_RINGS_RECORD).toBe("${{ steps.record.outputs.file }}");
+    expect(steps.indexOf(record)).toBe(steps.length - 2);
   });
 });

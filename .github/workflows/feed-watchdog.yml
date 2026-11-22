@@ -6,7 +6,10 @@
 # - a ring is offered something that is not a published GitHub release, `stable` a prerelease,
 #   or any ring a prerelease other than `-rc.N`;
 # - the installer the feed serves does not hash to its channel file's sha512, or differs from
-#   the published release asset.
+#   the published release asset;
+# - a ring's x64 or server channel answers 404 or offers another version than the ring state
+#   the newest feed write recorded (artifact feed-rings-*), or its servers are offered less
+#   than its desktops (servers first, #877). These are offers, not what hosts run.
 #
 # Read-only: it holds no bucket credential and writes nothing. The canary tokens are bearer
 # credentials, so only reviewed code reads them: the job runs from main only, in the
@@ -24,6 +27,8 @@ on:
 
 permissions:
   contents: read
+  # To find and download the recorded ring state (feed-rings-* artifacts of the feed workflows).
+  actions: read
 
 concurrency:
   group: feed-watchdog
@@ -47,9 +52,28 @@ jobs:
         with:
           node-version: 24
 
+      # What each ring should be offered: the rings.json the newest feed write stored, kept as an
+      # artifact by a main dispatch of feed-publish.yml or feed-promote.yml. Without one, an
+      # empty ring cannot be told from a broken one and only servers-first is checked.
+      - name: Find the recorded ring state
+        id: record
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          found=$(node tools/deploy/feed-watchdog.js record)
+          if [ -n "$found" ]; then
+            read -r run name <<<"$found"
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$RUNNER_TEMP/feed-rings"
+            echo "file=$RUNNER_TEMP/feed-rings/rings.json" >> "$GITHUB_OUTPUT"
+            echo "Recorded ring state: $name from run $run" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Check every ring and architecture
         env:
           FEED_URL: ${{ vars.ORCA_FEED_URL }}
           FEED_CANARY_TOKENS: ${{ secrets.ORCA_FEED_CANARY_TOKENS }}
+          FEED_RINGS_RECORD: ${{ steps.record.outputs.file }}
           GITHUB_TOKEN: ${{ github.token }}
         run: node tools/deploy/feed-watchdog.js

@@ -26,7 +26,8 @@
 # Server bundle first (#877): from the 0.8 line (rings.js SERVER_FROM) the `server` job puts
 # the release's signed server bundle into the feed and offers it to the internal ring's
 # servers before the desktop job runs, because a ring's desktops are never offered a version
-# its servers are not all on. It downloads the bundle by the release's single
+# its servers are not all offered. (Offered, not installed: the feed cannot see what a host
+# runs; that is the server updater's to establish, #878/#879.) It downloads the bundle by the release's single
 # `orca-server-run` record with `orca-release.py fetch-bundle`, which verifies the manifest's
 # keyless signature against the pinned release-server-bundle.yml identity and the archive's
 # digest exactly as a server does, checks the manifest names the tagged commit, and uploads
@@ -123,10 +124,21 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
           FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
           FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+          FEED_RINGS_RECORD: ${{ runner.temp }}/feed-rings/rings.json
           VERSION: ${{ inputs.version }}
         run: |
           bash tools/deploy/feed-r2.sh probe
           bash tools/deploy/feed-r2.sh server-snapshot "$RUNNER_TEMP/server" "$VERSION"
+
+      # The ring state this write stored, for the feed watchdog (feed-watchdog.js record).
+      - name: Keep the recorded ring state
+        if: steps.applies.outputs.applies == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: feed-rings-server
+          path: ${{ runner.temp }}/feed-rings/rings.json
+          if-no-files-found: error
+          retention-days: 90
 
   publish:
     name: publish ${{ inputs.version }} to the internal ring
@@ -280,9 +292,20 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
           FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
           FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+          FEED_RINGS_RECORD: ${{ runner.temp }}/feed-rings/rings.json
           VERSION: ${{ inputs.version }}
           ARCHES: ${{ steps.arches.outputs.arches }}
         # Prove R2 still honours conditional writes before relying on them.
         run: |
           bash tools/deploy/feed-r2.sh probe
           bash tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$ARCHES"
+
+      # The ring state this write stored, for the feed watchdog (feed-watchdog.js record).
+      - name: Keep the recorded ring state
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: feed-rings-desktop
+          path: ${{ runner.temp }}/feed-rings/rings.json
+          if-no-files-found: error
+          retention-days: 90

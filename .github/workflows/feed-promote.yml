@@ -4,7 +4,8 @@
 #
 # `channel` picks the Windows desktop channel or the server bundle channel (#877). Promote
 # servers first: from the 0.8 line a ring's desktops are refused any version that ring's
-# servers are not all on (its full server version), with a message saying so. Servers may
+# servers are not all offered (its full server version), with a message saying so. That is
+# what the feed offers, not what any host has installed or runs (#878/#879 establish that). Servers may
 # run ahead of desktops, and a halt is always allowed.
 #
 # The rules are in tools/deploy/feed-worker/rings.js: rings never move backwards (the client
@@ -86,6 +87,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           PERCENT: ${{ inputs.percent }}
           CHANNEL: ${{ inputs.channel }}
+          FEED_RINGS_RECORD: ${{ runner.temp }}/feed-rings/rings.json
         # Prove R2 still honours conditional writes before relying on them.
         run: |
           bash tools/deploy/feed-r2.sh probe
@@ -94,3 +96,13 @@ jobs:
             server) bash tools/deploy/feed-r2.sh promote-server "$RING" "$VERSION" "$PERCENT" ;;
             *) echo "::error::unknown channel $CHANNEL"; exit 1 ;;
           esac
+
+      # The ring state this write stored, for the feed watchdog (feed-watchdog.js record).
+      - name: Keep the recorded ring state
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: feed-rings-promote
+          path: ${{ runner.temp }}/feed-rings/rings.json
+          if-no-files-found: error
+          retention-days: 90

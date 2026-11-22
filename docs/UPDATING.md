@@ -192,12 +192,19 @@ signature against the pinned workflow identity before it uses anything.
   ahead of desktops (the daemon accepts the previous protocol major for one release), and a
   halt (percent 0) is always allowed on either channel. Server rings never move backwards and
   `stable` never takes a prerelease, as for desktops.
+- **What "servers first" proves.** It is a rule about the ring pointers: the whole ring's
+  servers are *offered* the version before its desktops are. It does not prove that any server
+  has downloaded, installed or is running it; a server applies an offer on its own schedule,
+  and only the server updater (#878, #879) can establish what a host runs. Do not read a
+  promotion, or a green watchdog, as evidence of installed servers.
 - **Pause.** `ORCA_FEED_PAUSE` stops server publication and server promotions (except a halt)
   exactly as it does for desktops.
 - **Watchdog.** The feed watchdog also checks each ring's server channel with the same
   canaries: a request without a token must get 401; the channel file must parse strictly and
   name a published release (never a prerelease in `stable`); and each of the three files must
-  be served with the listed size and SHA-256, equal to that release's asset.
+  be served with the listed size and SHA-256, equal to that release's asset. It also holds
+  both channels to the recorded ring state (below), and fails when a ring's desktops are
+  offered a server-era version its servers are not offered.
 
 The Worker needs no new binding or secret for this. Redeploy it from main (whatever pins its
 source) before the first server publication: an older Worker ignores `rings.json`'s server
@@ -259,8 +266,15 @@ ring a prerelease other than `-rc.N`; the channel file's `files[]` entry (what t
 updater reads) does not name exactly that architecture's installer or disagrees with the
 legacy `path` and `sha512`; or the installer the feed serves does not have that entry's size
 and sha512, or differs from the published release asset. It holds no bucket credential and
-cannot read `rings.json`, so it checks what each ring is offered, not what it should be
-offered; compare its summary with the last promotion.
+cannot read `rings.json` itself. Instead, every job that changes `rings.json` (publish and
+promote, both channels, run only from main in `desktop-feed`) keeps the exact file it stored
+as a `feed-rings-<job>` artifact for 90 days, and the watchdog downloads the newest one kept
+by a main dispatch of those workflows. Against it, a ring's x64 or server channel answering
+404 although the record gives that ring an offer fails, as does an offer of anything but the
+ring's recorded full or rollout version, or any offer to a ring the record leaves empty. With
+no record (none kept yet, or none in 90 days) it says so and cannot tell an empty ring from a
+broken one. A promotion that lands while the watchdog runs can make it fail once; rerun it.
+Like the rest of the watchdog, this checks what the feed offers, never what hosts run.
 
 To turn it on:
 

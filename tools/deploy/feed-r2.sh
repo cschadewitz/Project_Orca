@@ -18,7 +18,8 @@
 #                                          on a throwaway key (run before every write job)
 #
 # Environment: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (an R2 API token limited to the
-# bucket), FEED_ACCOUNT_ID (Cloudflare account id), FEED_BUCKET.
+# bucket), FEED_ACCOUNT_ID (Cloudflare account id), FEED_BUCKET. Optional FEED_RINGS_RECORD:
+# a path that receives a copy of rings.json exactly as a successful ring update stored it.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -78,6 +79,12 @@ update_rings() {
     if s3 put-object --bucket "$FEED_BUCKET" --key rings.json --body "$work/rings.json" \
       --content-type application/json --cache-control no-store "${condition[@]}" >/dev/null 2>"$work/put-error"; then
       tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}" <"$work/rings-message"
+      # The exact rings.json this write stored, for the job to keep as the feed watchdog's
+      # record of what each ring is expected to be offered.
+      if [[ -n "${FEED_RINGS_RECORD:-}" ]]; then
+        mkdir -p "$(dirname "$FEED_RINGS_RECORD")"
+        cp "$work/rings.json" "$FEED_RINGS_RECORD"
+      fi
       return 0
     fi
     grep -Eq 'PreconditionFailed|\(412\)' "$work/put-error" || { cat "$work/put-error" >&2; fail "could not write rings.json"; }
