@@ -7,6 +7,7 @@ import {
   OWNERSHIP_DIRECTORY,
   inspectFirstRunOwnership,
   reserveFirstRunOwnership,
+  type FirstRunOwnership,
 } from "../../src/main/first-run/ownership.js";
 import { syntheticFirstRunWriter } from "../fixtures/synthetic-first-run-writer.js";
 
@@ -22,7 +23,7 @@ export async function selected() {
   return path;
 }
 /** One whole owned launch: reserve, attest the writer, attach, observe the direct child's exit and settle. */
-export function launch(path: string) {
+export function launch(path: string): FirstRunOwnership {
   const owner = reserveFirstRunOwnership(path);
   syntheticFirstRunWriter(path, 123);
   let exited = false;
@@ -37,6 +38,7 @@ export function launch(path: string) {
   owner.attach(daemon);
   exited = true;
   expect(owner.complete()).toBe(true);
+  return owner;
 }
 export const journal = (path: string) => join(path, OWNERSHIP_DIRECTORY);
 export const listing = async (path: string) => (await readdir(journal(path))).sort();

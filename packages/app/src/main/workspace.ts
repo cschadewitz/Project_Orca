@@ -17,7 +17,7 @@ import { serverKey } from "./remote-credentials.js";
 import type { RemoteCommand } from "@orca/protocol/remote-access";
 import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
-import { handOffStoreForUpdate } from "./first-run/update-handoff.js";
+import { handOffStoreForUpdate, type StoppedReservation } from "./first-run/update-handoff.js";
 import type { UpdateHandoff } from "@orca/protocol/update-handoff";
 import {
   MAINTENANCE_RUNTIME_METHOD,
@@ -148,7 +148,7 @@ export interface WorkspaceDeps {
   defaultPath: () => string | undefined;
   setupBusy?: () => boolean;
   /** Injected for tests; default to the first-run journal's update handoff (#897). */
-  handOffStore?: (path: string, from: string, to: string) => UpdateHandoff;
+  handOffStore?: (path: string, stopped: StoppedReservation, from: string, to: string) => UpdateHandoff;
   /** Saved-receipt verification must bind this exact path before requesting its candidate. */
   recoverFirstRun?: (
     path: string,
@@ -1173,7 +1173,10 @@ export class Workspace {
     attempt.busy = true;
     try {
       if (!attempt.ownership.complete()) throw new FirstRunOwnershipRefusal();
-      attempt.handedOff = (this.deps.handOffStore ?? handOffStoreForUpdate)(attempt.firstRun.path, from, to);
+      // The exact reservation this attempt prepared and stopped, never whatever the journal's
+      // latest attempt is by now: the handoff refuses unless they are the same.
+      const stopped = { reservationId: attempt.ownership.reservationId, claimHash: attempt.ownership.claimHash };
+      attempt.handedOff = (this.deps.handOffStore ?? handOffStoreForUpdate)(attempt.firstRun.path, stopped, from, to);
     } finally {
       attempt.busy = false;
     }

@@ -28,9 +28,21 @@ import { hash, inspectFirstRunOwnership, refuse } from "./ownership.js";
 
 const directChildTerminal = z.object({ observation: z.literal("direct-child-terminal") }).passthrough();
 
-/** Returns the record written. */
+/** The exact reservation the updater stopped, as its own ownership handle recorded it. */
+export interface StoppedReservation {
+  reservationId: string;
+  claimHash: string;
+}
+
+/**
+ * Returns the record written. `stopped` is the reservation this update prepared, drained and
+ * stopped: the journal's latest attempt must be exactly that one (same reservation, same claim),
+ * settled by its observed exit, or the handoff is refused with nothing written. The record's path
+ * comes only from that captured claim.
+ */
 export function handOffStoreForUpdate(
   path: string,
+  stopped: StoppedReservation,
   from: string,
   to: string,
   now: () => Date = () => new Date(),
@@ -41,20 +53,23 @@ export function handOffStoreForUpdate(
   const latest = journal.latest;
   if (
     !latest?.settled ||
+    // Another daemon's attempt settled since this update's stop: it was not drained by this update.
+    latest.reservationId !== stopped.reservationId ||
     !latest.texts["claim.json"] ||
     !latest.texts["writer.json"] ||
     !latest.texts["terminal.json"] ||
     latest.texts["recovery-request.json"] ||
     latest.texts["ended-after-reboot.json"] ||
-    !directChildTerminal.safeParse(JSON.parse(latest.texts["terminal.json"])).success
+    !directChildTerminal.safeParse(JSON.parse(latest.texts["terminal.json"])).success ||
+    hash(latest.texts["claim.json"]) !== stopped.claimHash
   )
     return refuse();
   const storeDir = join(path, ".orca");
   const issued: UpdateHandoff = {
     version: 1,
     kind: "orca-update-handoff",
-    reservationId: latest.reservationId,
-    claimHash: hash(latest.texts["claim.json"]),
+    reservationId: stopped.reservationId,
+    claimHash: stopped.claimHash,
     workspace: fenceDirectory(path),
     store: fenceDirectory(storeDir),
     from,
@@ -70,6 +85,6 @@ export function handOffStoreForUpdate(
   // The journal must still end on the attempt the record names: nothing launched meanwhile.
   // If it moved on, the update is refused and the record left inert (see above).
   const after = inspectFirstRunOwnership(path).latest;
-  if (after?.reservationId !== latest.reservationId) refuse();
+  if (after?.reservationId !== stopped.reservationId) refuse();
   return issued;
 }

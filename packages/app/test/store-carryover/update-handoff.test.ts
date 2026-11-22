@@ -70,10 +70,10 @@ it("the store module skips every record the updater writes", () => {
 
 it("carries the store forward on the first start after the update, under the new daemon's fence", async () => {
   const path = await selected();
-  launch(path); // The 0.8.0 daemon ran, was stopped for the update, and its exit was observed.
+  const stopped = launch(path); // The 0.8.0 daemon ran, was stopped for the update, and its exit was observed.
   const store = join(path, ".orca");
   await legacy(store);
-  handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  handOffStoreForUpdate(path, stopped, "0.8.0", "0.9.0");
   expect(only(store)).toMatchObject({ from: "0.8.0", to: "0.9.0", attempts: 0 });
   // The installed app's first start: a new reservation, then its daemon enters as the writer.
   const owner = reserveFirstRunOwnership(path);
@@ -94,10 +94,10 @@ it("carries the store forward on the first start after the update, under the new
 
 it("does not write the marker when the real fence is lost at commit time", async () => {
   const path = await selected();
-  launch(path);
+  const stopped = launch(path);
   const store = join(path, ".orca");
   await legacy(store);
-  handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  handOffStoreForUpdate(path, stopped, "0.8.0", "0.9.0");
   const owner = reserveFirstRunOwnership(path);
   const hold = await enterFirstRunWriter(path, store, owner.launchToken!());
   const authority = desktopCarryover(hold, "0.9.0")!;
@@ -122,10 +122,10 @@ it("does not write the marker when the real fence is lost at commit time", async
 
 it("settles only the exact handoff it claimed, and only while its fence holds", async () => {
   const path = await selected();
-  launch(path);
+  const stopped = launch(path);
   const store = join(path, ".orca");
   await legacy(store);
-  handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  handOffStoreForUpdate(path, stopped, "0.8.0", "0.9.0");
   const owner = reserveFirstRunOwnership(path);
   const hold = await enterFirstRunWriter(path, store, owner.launchToken!());
   const authority = desktopCarryover(hold, "0.9.0")!;
@@ -148,10 +148,10 @@ it("settles only the exact handoff it claimed, and only while its fence holds", 
 
 it("the daemon's gate leaves a record it did not claim, after a carryover", async () => {
   const path = await selected();
-  launch(path);
+  const stopped = launch(path);
   const store = join(path, ".orca");
   await legacy(store);
-  handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  handOffStoreForUpdate(path, stopped, "0.8.0", "0.9.0");
   const owner = reserveFirstRunOwnership(path);
   const hold = await enterFirstRunWriter(path, store, owner.launchToken!());
   // While this writer copies, the record on disk is replaced: the fence still holds, but the
@@ -167,12 +167,12 @@ it("the daemon's gate leaves a record it did not claim, after a carryover", asyn
 
 it("the daemon's gate spends a same-format update's record only when this writer owns it", async () => {
   const path = await selected();
-  launch(path);
+  const stopped = launch(path);
   const store = join(path, ".orca");
   await mkdir(store, { recursive: true });
   // A store already in this build's format: the update keeps it.
   await enterStoreFormat(store, { appVersion: "0.8.0", mode: "write" });
-  handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  handOffStoreForUpdate(path, stopped, "0.8.0", "0.9.0");
   const handoff = only(store)!;
   const owner = reserveFirstRunOwnership(path);
   const hold = await enterFirstRunWriter(path, store, owner.launchToken!());
@@ -194,10 +194,10 @@ it("the daemon's gate spends a same-format update's record only when this writer
 
 it("keeps refusing without the proof: another launch in between, or the version that was not installed", async () => {
   const path = await selected();
-  launch(path);
+  const stopped = launch(path);
   const store = join(path, ".orca");
   await legacy(store);
-  handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  handOffStoreForUpdate(path, stopped, "0.8.0", "0.9.0");
   // Anything launched after the updater stopped the daemon breaks the chain.
   launch(path);
   const owner = reserveFirstRunOwnership(path);
@@ -212,15 +212,14 @@ it("is written only after an observed exit; nothing installed leaves it for the 
   const path = await selected();
   const owner = reserveFirstRunOwnership(path);
   // A reservation with no settled exit is not an updater stop.
-  expect(() => handOffStoreForUpdate(path, "0.8.0", "0.9.0")).toThrow("reconciliation");
+  expect(() => handOffStoreForUpdate(path, owner, "0.8.0", "0.9.0")).toThrow("reconciliation");
   expect(inspectFirstRunOwnership(path, true).latest?.settled).toBe(false);
-  void owner;
   const other = await selected();
-  launch(other);
+  const stoppedOther = launch(other);
   const store = join(other, ".orca");
   await mkdir(store, { recursive: true });
   await enterStoreFormat(store, { appVersion: "0.8.0", mode: "write" });
-  const issued = handOffStoreForUpdate(other, "0.8.0", "0.9.0");
+  const issued = handOffStoreForUpdate(other, stoppedOther, "0.8.0", "0.9.0");
   // The installer never ran: the updater leaves the record; the recovered 0.8.0 daemon follows
   // the stopped claim, cannot carry under it (other version), and spends it under its fence.
   const recovered = reserveFirstRunOwnership(other);
@@ -233,10 +232,10 @@ it("is written only after an observed exit; nothing installed leaves it for the 
 
 it("a record the update did not use is inert for every later reservation", async () => {
   const path = await selected();
-  launch(path);
+  const stopped = launch(path);
   const store = join(path, ".orca");
   await legacy(store);
-  const issued = handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  const issued = handOffStoreForUpdate(path, stopped, "0.8.0", "0.9.0");
   // Something else started after the stop and before the installed version: the chain breaks.
   launch(path);
   const owner = reserveFirstRunOwnership(path);
@@ -251,23 +250,23 @@ it("a record the update did not use is inert for every later reservation", async
 
 it("refuses, leaving the record, when the journal advances while it writes", async () => {
   const path = await selected();
-  launch(path);
+  const stopped = launch(path);
   const store = join(path, ".orca");
   await mkdir(store, { recursive: true });
-  expect(() => handOffStoreForUpdate(path, "0.8.0", "0.9.0", undefined, () => launch(path))).toThrow();
+  expect(() => handOffStoreForUpdate(path, stopped, "0.8.0", "0.9.0", undefined, () => launch(path))).toThrow();
   // The updater removes nothing: the record stays for the fenced writer that follows its claim.
   expect(only(store)).toMatchObject({ from: "0.8.0", to: "0.9.0" });
 }, 30000);
 
 it("a stale updater cannot replace the newer update's handoff, which the next start carries under", async () => {
   const path = await selected();
-  launch(path);
+  const stopped = launch(path);
   const store = join(path, ".orca");
   await legacy(store);
-  const stale = handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  const stale = handOffStoreForUpdate(path, stopped, "0.8.0", "0.9.0");
   // That update was abandoned; the daemon ran again and a newer update stopped it.
-  launch(path);
-  const newer = handOffStoreForUpdate(path, "0.8.0", "0.9.1");
+  const restopped = launch(path);
+  const newer = handOffStoreForUpdate(path, restopped, "0.8.0", "0.9.1");
   expect(newer.claimHash).not.toBe(stale.claimHash);
   // The stale updater publishing again, even over its own claim's record, replaces nothing.
   expect(() => publishUpdateHandoff(store, { ...stale, to: "0.9.1" })).toThrow(/EEXIST/);
@@ -280,4 +279,26 @@ it("a stale updater cannot replace the newer update's handoff, which the next st
   expect(readUpdateHandoff(store, newer.claimHash)).toBeUndefined();
   // The stale record names a claim nothing follows any more: inert, and left.
   expect(records(store)).toEqual([stale]);
+}, 30000);
+
+it("refuses to hand off when another daemon's attempt settled after this update's stop", async () => {
+  const path = await selected();
+  const stopped = launch(path); // This update's own drained, stopped daemon.
+  const store = join(path, ".orca");
+  await legacy(store);
+  // Before publication, another participating daemon ran and settled: the latest attempt is
+  // settled by an observed exit too, but it is not the one this update drained.
+  const other = launch(path);
+  expect(inspectFirstRunOwnership(path).latest?.reservationId).toBe(other.reservationId);
+  expect(() => handOffStoreForUpdate(path, stopped, "0.8.0", "0.9.0")).toThrow();
+  // Nothing published, under either claim.
+  expect(records(store)).toEqual([]);
+  // A forged claim for the right reservation is refused as well.
+  expect(() =>
+    handOffStoreForUpdate(path, { reservationId: other.reservationId, claimHash: stopped.claimHash }, "0.8.0", "0.9.0"),
+  ).toThrow();
+  expect(records(store)).toEqual([]);
+  // The exact latest stop still hands off, under its own claim's path only.
+  expect(handOffStoreForUpdate(path, other, "0.8.0", "0.9.0")).toMatchObject({ claimHash: other.claimHash });
+  expect(records(store).map((r) => r.claimHash)).toEqual([other.claimHash]);
 }, 30000);
