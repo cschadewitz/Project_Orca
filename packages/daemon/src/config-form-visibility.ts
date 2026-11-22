@@ -134,6 +134,14 @@ const nonSecret = new Set([
   "agents[].capabilities.skills.disable[]",
   "agents[].capabilities.skills.available",
   "agents[].capabilities.skills.available[]",
+  // Secret references (#336): where a credential lives, never its value.
+  "secrets",
+  "secrets.<key>",
+  "secrets.<key>.host",
+  "secrets.<key>.provider",
+  "secrets.<key>.name",
+  "secrets.<key>.path",
+  "secrets.<key>.description",
 ]);
 
 /** Structural classification permits labels/controls, never raw aggregate value display. */

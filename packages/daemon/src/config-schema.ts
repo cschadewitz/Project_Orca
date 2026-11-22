@@ -38,7 +38,7 @@ interface ZodNode {
     element?: ZodNode;
     innerType?: ZodNode;
     valueType?: ZodNode;
-    options?: ZodNode[];
+    options?: readonly ZodNode[];
     entries?: Record<string, string | number>;
     values?: readonly unknown[];
     defaultValue?: unknown;

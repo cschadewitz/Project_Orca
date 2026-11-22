@@ -16,6 +16,7 @@ import {
   type AgentHost,
   type AgentSession,
   type OpenSessionOptions,
+  type SecretUse,
 } from "@orca/agents";
 import { applyModel, currentModel, selectedModel } from "./session-model.js";
 import {
@@ -109,6 +110,7 @@ import {
   deliveryIssues,
   nodeCapabilityScope,
   preflightCapabilities,
+  preflightSecretReferences,
   resolveNodeCapabilities,
 } from "./capabilities.js";
 import { SessionSlots, type ConfiguredSessionLimits, type SessionSlot, type SessionSlotCaps } from "./session-slots.js";
@@ -144,6 +146,13 @@ export interface OrchestratorOptions {
   };
   workspaceProvider?: WorkspaceProvider;
   sessionFactory?: SessionFactory;
+  /**
+   * The server-verified use check for secret references (#336): resolves when the run may use
+   * every one of `uses` now, throws when not. Asked at every session open, immediately before
+   * the host reads anything. Without it, a launch whose agent steps use a secret reference is
+   * refused, and so is any session that would deliver one.
+   */
+  secretUse?: (request: { runId: string; uses: SecretUse[] }) => Promise<void>;
   /**
    * Daemon-wide session ceiling (#873) for an orchestrator built without configuration
    * generations. With generations, the current generation's `limits.maxAgentSessions` wins.
@@ -363,6 +372,7 @@ export class Orchestrator {
   liveInput: OrchestratorOptions["liveInput"];
   workspaceProvider: WorkspaceProvider;
   sessionFactory: SessionFactory;
+  private readonly secretUse: OrchestratorOptions["secretUse"];
   readonly plan: PlanService;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -427,6 +437,7 @@ export class Orchestrator {
     this.humanInput = o.humanInput ?? o.liveInput?.port ?? autoHumanInput();
     this.workspaceProvider = o.workspaceProvider ?? new LocalWorkspaceProvider(process.cwd());
     this.sessionFactory = o.sessionFactory ?? openAcpSession;
+    this.secretUse = o.secretUse;
     this.maxAgentSessions = o.maxAgentSessions;
     this.agentSlotWaitMs = o.agentSlotWaitMs;
     this.clock = o.clock ?? systemClock;
@@ -470,6 +481,9 @@ export class Orchestrator {
     // Every agent step's MCP servers and skills resolve and can be delivered, under this run's
     // role overrides, before anything is written (#335).
     preflightCapabilities((generation?.agents ?? this.agents).withOverrides(opts.overrides), def);
+    // A step whose agent uses a secret reference needs a use check to run (#336).
+    if (!this.secretUse)
+      preflightSecretReferences((generation?.agents ?? this.agents).withOverrides(opts.overrides), def);
     const inputs = validateWorkflowInputs(def, opts.vars ?? {});
     if (!inputs.validation.ok) {
       const { errors, warnings } = inputs.validation;
@@ -1917,6 +1931,11 @@ export class Orchestrator {
     extra: { path?: string; parents?: string[]; agentSessionId?: string; agentId?: string },
   ): Promise<Artifact> {
     const { extractStructuredData } = await import("@orca/core");
+    // A secret value a session of this run read (#336) is replaced before anything is derived
+    // or written: the stored body, its digest and byte count, its structured data, and what
+    // planning takes from it all describe the redacted text. The agent's own file in the
+    // workspace is the agent's, and is left as it wrote it.
+    content = rc.redactRuntimeSecrets(content);
     const name = spec.name ?? spec.kind;
     const mediaType = spec.mediaType ?? (extra.path?.endsWith(".json") ? "application/json" : "text/markdown");
     const artifact: Artifact = {
@@ -1994,14 +2013,24 @@ export class Orchestrator {
     return { mcpServers: resolved.manifest.mcpServers.map((m) => m.server), key };
   }
 
+  /** A child's values redact its ancestors too: a child's result is written to its parent's log. */
+  private rememberSecrets(rc: RunContext, values: readonly string[]): void {
+    const seen = new Set<string>();
+    for (let at: RunContext | undefined = rc; at && !seen.has(at.id);) {
+      seen.add(at.id);
+      at.addRuntimeSecrets(values);
+      const parent: string | undefined = at.state.run.parentRunId;
+      at = parent ? this.live.get(parent) : undefined;
+    }
+  }
+
   private async openSession(
     rc: RunContext,
     step: StepRun,
     selector: AgentSelector,
   ): Promise<{ session: AgentSession; release: () => Promise<void> }> {
-    const { agent, host } = (this.contextGenerations.get(rc)?.agents ?? this.agents)
-      .withOverrides(rc.state.run.overrides)
-      .resolve(selector);
+    const registry = this.contextGenerations.get(rc)?.agents ?? this.agents;
+    const { agent, host } = registry.withOverrides(rc.state.run.overrides).resolve(selector);
     if (
       rc.workspace.rootProvisioning &&
       (process.platform !== "linux" || !(host instanceof LocalHost) || host.id !== rc.workspace.hostId)
@@ -2071,6 +2100,12 @@ export class Orchestrator {
         cwd: rc.workspace.cwd,
         logger: rc.logger,
         clock: this.clock,
+        // Secret references are read on the session's own host, at this open, every time (#336).
+        secrets: registry.secrets(),
+        ...(this.secretUse
+          ? { authorizeSecretUse: (uses: SecretUse[]) => this.secretUse!({ runId: rc.id, uses }) }
+          : {}),
+        onSecretValues: (values) => this.rememberSecrets(rc, values),
         onSessionContinuity: (state) => {
           continuity = state;
         },

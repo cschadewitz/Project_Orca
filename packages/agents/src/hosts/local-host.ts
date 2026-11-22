@@ -2,7 +2,8 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile, access } from "node:fs/promises";
 import { join } from "node:path";
-import { OrcaError, type AgentSpec, type LocalHost as LocalHostSpec } from "@orca/core";
+import { OrcaError, literalEnv, type AgentSpec, type LocalHost as LocalHostSpec, type SecretSource } from "@orca/core";
+import { sourceMissing, trimSecret, withoutWithheld } from "../secrets.js";
 import {
   collectChildProcess,
   wrapAgentProcess,
@@ -44,13 +45,30 @@ export class LocalHost implements AgentHost {
     return join(...parts);
   }
 
-  spawnAgent(agent: AgentSpec, options: SpawnAgentOptions): Promise<AgentProcessHandle> {
+  readonly deliversSecrets = true;
+
+  async spawnAgent(agent: AgentSpec, options: SpawnAgentOptions): Promise<AgentProcessHandle> {
+    // Secrets (#336) are read here, immediately before the spawn, and only reach the child
+    // through the variables its references name: every variable a secret on this host is
+    // read from is removed from what it inherits.
+    const values = new Map<string, string>();
+    const secretEnv: Record<string, string> = {};
+    for (const d of options.secrets ?? []) {
+      const value = await this.readSecret(d.id, d.source);
+      values.set(d.id, value);
+      for (const name of d.env) secretEnv[name] = value;
+    }
     const child = spawn(agent.command, agent.args, {
       cwd: options.cwd,
-      env: { ...process.env, ...agent.env, ...(options.env ?? {}) },
+      env: {
+        ...withoutWithheld(process.env, options.withheldEnv),
+        ...literalEnv(agent.env),
+        ...(options.env ?? {}),
+        ...secretEnv,
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
-    return wrapAgentProcess(child, {
+    const handle = await wrapAgentProcess(child, {
       onSpawnError: (e) =>
         new OrcaError(
           "AGENT_TRANSPORT",
@@ -59,6 +77,25 @@ export class LocalHost implements AgentHost {
           { cause: e },
         ),
     });
+    if (values.size) handle.secretValues = values;
+    return handle;
+  }
+
+  /** The daemon's own environment, or a file on this machine (#336). */
+  private async readSecret(id: string, source: SecretSource): Promise<string> {
+    if (source.provider === "env") {
+      const value = process.env[source.name];
+      if (value === undefined || value === "") throw sourceMissing(id, source, this.id);
+      return value;
+    }
+    let value: string;
+    try {
+      value = trimSecret(await readFile(source.path, "utf8"));
+    } catch {
+      throw sourceMissing(id, source, this.id);
+    }
+    if (value === "") throw sourceMissing(id, source, this.id);
+    return value;
   }
 
   exec(command: string, options: { cwd?: string; stdin?: string; timeoutMs?: number } = {}): Promise<ExecResult> {

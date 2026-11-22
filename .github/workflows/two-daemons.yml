@@ -20,6 +20,9 @@ on:
       - packages/cli/src/**
       - packages/protocol/src/**
       - packages/agents/src/hosts/**
+      - packages/agents/src/acp-session.ts
+      - packages/agents/src/secrets.ts
+      - packages/agents/test/secrets-ssh-native-336.test.ts
       - .github/workflows/two-daemons.yml
   workflow_dispatch:
 
@@ -52,4 +55,6 @@ jobs:
       - name: Two daemons, one behind sshd
         env:
           ORCA_REQUIRE_SSHD: "1"
-        run: pnpm exec vitest run packages/testing/test/two-daemons.test.ts packages/app/test/server-update-ssh.test.ts
+        # Also: secret references (#336) delivered over a real sshd, with every argv scanned, and
+        # a server update (#879) run over a profile's ssh.
+        run: pnpm exec vitest run packages/testing/test/two-daemons.test.ts packages/agents/test/secrets-ssh-native-336.test.ts packages/app/test/server-update-ssh.test.ts

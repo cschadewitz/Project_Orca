@@ -9,6 +9,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   OrcaError,
   resolveCapabilities,
+  secretRefs,
   type AgentSelector,
   type AgentSpec,
   type CapabilityCheck,
@@ -258,5 +259,32 @@ export function preflightCapabilities(registry: AgentRegistry, def: WorkflowDefi
     });
     const issues = [...result.errors, ...deliveryIssues(result, step.nodePath)];
     if (issues.length) throw capabilityRefusal(step.nodeId, issues);
+  }
+}
+
+/**
+ * Launch preflight without a secret use check (#336): an agent step whose agent (its own env
+ * or an inline MCP server's) uses a secret reference cannot be given it, so the launch is
+ * refused, naming the step and the references, rather than failing at the step.
+ */
+export function preflightSecretReferences(registry: AgentRegistry, def: WorkflowDefinition): void {
+  for (const step of agentInstructions(def)) {
+    if (!registry.canResolve(step.agent)) continue;
+    const { agent } = registry.resolve(step.agent);
+    const ids = [
+      ...new Set(
+        [agent.env, ...agent.mcpServers.map((m) => m.env)].flatMap((env) => secretRefs(env).map((r) => r.ref.secret)),
+      ),
+    ];
+    if (ids.length)
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `step '${step.nodeId}' runs agent '${agent.id}', which uses secret reference${ids.length > 1 ? "s" : ""} ${ids
+          .map((id) => `'${id}'`)
+          .join(
+            ", ",
+          )}, and this daemon has no server-verified use check to deliver ${ids.length > 1 ? "them" : "it"} with yet`,
+        { nodeId: step.nodeId, agentId: agent.id, secrets: ids, reason: "unauthorized" },
+      );
   }
 }

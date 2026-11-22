@@ -587,6 +587,19 @@ describe("agents.list and agents.ping", () => {
     sub.stop();
   });
 
+  it("does not start an agent that uses a secret reference, and leaves its health alone (#336)", async () => {
+    const h = harness();
+    h.agents.addAgent(
+      AgentSpecSchema.parse({ id: "secretive", command: "q", hostId: "local", env: { T: { secret: "token" } } }),
+    );
+    const ping = AgentsPingResultSchema.parse((await call(h.ctx, "agents.ping", { agentId: "secretive" })).result);
+    expect(ping).toMatchObject({
+      ok: false,
+      error: { code: "CONFIG_INVALID", message: expect.stringMatching(/secret references \('token'\).*not started/) },
+      agent: { id: "secretive", state: "unknown" },
+    });
+  });
+
   it("does not wake a subscription that asked for other methods", async () => {
     const h = harness();
     const frames: { method: string }[] = [];
