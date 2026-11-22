@@ -1,26 +1,25 @@
 /**
- * The connected server, in the connection dialog (#879): its version, protocol and ring,
- * whether it is behind this app, and, for a server the managed updater installed, "Update
- * now".
+ * The connected server, in the connection dialog (#879): its version, protocol, ring, host
+ * key and workspace, whether it is behind this app, and, for a server the managed updater
+ * installed, "Update now".
  *
- * The daemon only says where its updater is. The person approves that updater for the SSH
- * profile first, seeing its paths and the exact command; after that the panel offers the
- * update while the daemon still reports the same updater, and asks again when it does not.
- * Each request names the connection the person is looking at (profile, connection, host key,
- * workspace, version), and main refuses it if that is no longer the connection. The panel
- * shows the updater's lines as they arrive and then how it ended, in the server's own words.
+ * Everything the person confirms comes from one preview main made (`bridge.read`): the server
+ * version, the target version, the host key, the workspace, the daemon's hint and the
+ * approval. Approving and updating name that preview, and main refuses if the connection no
+ * longer matches it. The updater's paths are typed by the person, with the daemon's report
+ * shown beside them as a hint; main checks the two agree. The panel shows the updater's lines
+ * as they arrive and then how it ended, in the server's own words.
  */
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type JSX } from "react";
 import type { ConnectionSnapshot } from "../../../src/bridge.js";
 import {
-  samePaths,
   serverBehind,
   serverUpdateCommand,
   SERVER_UPDATE_VERSION,
   type ServerUpdateBridge,
   type ServerUpdateOutcome,
+  type ServerUpdatePreview,
   type ServerUpdateProgress,
-  type ServerUpdaterState,
 } from "../../../src/server-update.js";
 import { Button, KeyValueList, Text, textClass, Well } from "../ui/index.js";
 
@@ -30,21 +29,21 @@ const SHOWN_LINES = 40;
 export function ServerUpdatePanel({
   bridge,
   connection,
-  appVersion,
 }: {
   bridge: ServerUpdateBridge;
   connection: ConnectionSnapshot;
-  appVersion: string;
 }): JSX.Element | null {
-  const [state, setState] = useState<ServerUpdaterState>();
+  const [preview, setPreview] = useState<ServerUpdatePreview>();
   const [running, setRunning] = useState(false);
   const [lines, setLines] = useState<ServerUpdateProgress[]>([]);
   const [outcome, setOutcome] = useState<ServerUpdateOutcome>();
   const [refusal, setRefusal] = useState<string>();
+  const [adapter, setAdapter] = useState("");
+  const [manifest, setManifest] = useState("");
   const live = useRef(true);
   const refresh = useCallback(async () => {
     const next = await bridge.read();
-    if (live.current) setState(next);
+    if (live.current) setPreview(next);
   }, [bridge]);
   useEffect(() => {
     live.current = true;
@@ -54,40 +53,40 @@ export function ServerUpdatePanel({
       off();
     };
   }, [bridge]);
-  // What main knows changes with the connection: a new hello, a reconnect, another profile.
+  // What main sees changes with the connection: a new hello, a reconnect, another profile.
   useEffect(() => {
     void refresh();
   }, [refresh, connection]);
-  const version = connection.orcaVersion;
-  if (version === undefined) return null;
+  if (connection.orcaVersion === undefined || !preview) return null;
   const managed = connection.managedServer;
-  const behind = serverBehind(version, appVersion);
-  const target =
-    state?.hostKey !== undefined && state.workspaceId !== undefined
-      ? { profile: state.profile, epoch: state.epoch, hostKey: state.hostKey, workspaceId: state.workspaceId }
-      : undefined;
-  const declared = state?.declared;
-  const approved = state?.approved;
-  const trusted = samePaths(declared, approved);
+  const { serverVersion, targetVersion, declared, approved } = preview;
   const approve = async () => {
-    if (!target || !declared) return;
     setRefusal(undefined);
-    const result = await bridge.approve({ ...target, ...declared });
+    const result = await bridge.approve({ preview: preview.id, adapter: adapter.trim(), manifest: manifest.trim() });
     if (!live.current) return;
     if (!result.ok) setRefusal(result.message);
     await refresh();
   };
   const update = async () => {
-    if (!target) return;
     setRunning(true);
     setLines([]);
     setOutcome(undefined);
-    const ended = await bridge.update({ ...target, version: appVersion });
+    const ended = await bridge.update({ preview: preview.id });
     if (!live.current) return;
     setRunning(false);
     setOutcome(ended);
     await refresh();
   };
+  const needsApproval = Boolean(
+    managed &&
+    declared &&
+    preview.hostKey &&
+    preview.workspaceId &&
+    serverVersion !== undefined &&
+    serverBehind(serverVersion, targetVersion) &&
+    SERVER_UPDATE_VERSION.test(targetVersion) &&
+    (!approved || approved.adapter !== declared.adapter || approved.manifest !== declared.manifest),
+  );
   return (
     <section className="orca-field" aria-labelledby="connected-server-title">
       <h3 id="connected-server-title" className={textClass("label-strong")}>
@@ -95,41 +94,52 @@ export function ServerUpdatePanel({
       </h3>
       <KeyValueList
         values={{
-          version,
+          ...(serverVersion !== undefined ? { version: serverVersion } : {}),
           ...(connection.versions ? { protocol: connection.versions.daemon } : {}),
           ...(managed?.ring ? { ring: managed.ring } : {}),
-          ...(state?.hostKey ? { "host key": state.hostKey } : {}),
+          ...(preview.hostKey ? { "host key": preview.hostKey } : {}),
+          ...(preview.workspaceId ? { workspace: preview.workspaceId } : {}),
         }}
       />
-      <Text style="caption" as="p">
-        {behind
-          ? `Older than this app (${appVersion}).`
-          : serverBehind(appVersion, version)
-            ? `Newer than this app (${appVersion}).`
-            : "The same release as this app."}
-        {managed ? "" : " Installed outside the managed server updater, so the app does not update it."}
-      </Text>
-      {managed && declared && target && !trusted && (
+      {serverVersion !== undefined && (
+        <Text style="caption" as="p">
+          {serverBehind(serverVersion, targetVersion)
+            ? `Older than this app (${targetVersion}).`
+            : serverBehind(targetVersion, serverVersion)
+              ? `Newer than this app (${targetVersion}).`
+              : "The same release as this app."}
+          {managed ? "" : " Installed outside the managed server updater, so the app does not update it."}
+        </Text>
+      )}
+      {needsApproval && declared && (
         <>
           <Text style="body" as="p" role={approved ? "alert" : undefined}>
             {approved
-              ? "The server now reports its updater somewhere other than you approved for this profile. Nothing runs until you approve the new location."
-              : "Approve this server's updater before the app runs it. The app runs only an updater you approved for this SSH profile, over this profile's own connection:"}
+              ? "The server now reports its updater somewhere other than you approved for it. Nothing runs until you enter and approve the new location."
+              : "Enter where this server's updater is to approve it. The app runs only an updater you approved for this server (this host key and workspace), over this profile's own connection."}
           </Text>
-          <Well label="Command the app will run on the server">
-            {(SERVER_UPDATE_VERSION.test(appVersion)
-              ? serverUpdateCommand(declared, appVersion)
-              : ["python3", declared.adapter, "--deployment", declared.manifest, "update", "--bundle", "…"]
-            ).join(" ")}
-          </Well>
-          <Button onClick={() => void approve()}>
-            {approved ? "Approve the new location" : "Approve this updater"}
+          <Text style="caption" as="p">
+            The server reports: {declared.adapter} with {declared.manifest}
+          </Text>
+          <PathInput label="Updater (orca-release.py)" value={adapter} onChange={setAdapter} />
+          <PathInput label="Deployment manifest" value={manifest} onChange={setManifest} />
+          {adapter.trim() && manifest.trim() && (
+            <Well label="Command the app will run on the server">
+              {serverUpdateCommand({ adapter: adapter.trim(), manifest: manifest.trim() }, targetVersion).join(" ")}
+            </Well>
+          )}
+          <Button
+            disabled={!adapter.trim() || !manifest.trim()}
+            disabledReason="Enter both paths"
+            onClick={() => void approve()}
+          >
+            Approve this updater
           </Button>
         </>
       )}
-      {managed && trusted && target && behind && (
+      {!preview.blocked && (
         <Button disabled={running} disabledReason="The server is updating" onClick={() => void update()}>
-          {running ? "Updating…" : `Update now to ${appVersion}`}
+          {running ? "Updating…" : `Update now to ${targetVersion}`}
         </Button>
       )}
       {refusal && (
@@ -144,6 +154,35 @@ export function ServerUpdatePanel({
         </Text>
       )}
     </section>
+  );
+}
+
+/** One path on the server, typed by the person. */
+function PathInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}): JSX.Element {
+  const id = useId();
+  return (
+    <div className="orca-field">
+      <label className={`orca-field__label ${textClass("label-strong")}`} htmlFor={id}>
+        {label}
+      </label>
+      <div className="orca-field__control">
+        <input
+          id={id}
+          className={`orca-input ${textClass("mono-id")}`}
+          value={value}
+          spellCheck={false}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -173,7 +212,7 @@ export function describe(outcome: ServerUpdateOutcome): string {
   }
 }
 
-/** The panel, fed from the bridge: the live connection snapshot and this app's version. */
+/** The panel, fed from the bridge's live connection snapshot. */
 export function ConnectedServer({ bridge }: { bridge: ServerUpdateBridge }): JSX.Element | null {
   const [connection, setConnection] = useState<ConnectionSnapshot>(() => window.orca.connection.read());
   useEffect(() => {
@@ -181,5 +220,5 @@ export function ConnectedServer({ bridge }: { bridge: ServerUpdateBridge }): JSX
     setConnection(window.orca.connection.read());
     return off;
   }, []);
-  return <ServerUpdatePanel bridge={bridge} connection={connection} appVersion={window.orca.updates.read().current} />;
+  return <ServerUpdatePanel bridge={bridge} connection={connection} />;
 }

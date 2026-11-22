@@ -4,11 +4,13 @@
  *
  * **Nothing installs through the daemon, and the daemon does not choose what runs.** It
  * reports, in `hello.deployment`, that the managed server updater launched it and where that
- * updater is; that is a hint. The person approves those two paths for the SSH profile once,
- * seeing them, and the app runs only the approved updater, refusing when the daemon's hint no
- * longer matches. The update is that updater run on the server over the profile's own SSH
- * connection (`SshTunnel.exec`: the pinned host key, the person's key, no forwards), exactly
- * the command an operator types:
+ * updater is; that is a hint. The person enters the updater's two paths themselves and
+ * approves them for that SSH profile, host key and workspace; the app runs only an approved
+ * updater named `orca-release.py`, and refuses when the daemon's hint does not match it. Every
+ * approval and update names one preview main made, and main rechecks the connection against
+ * it. The update is that updater run on the server over the profile's own SSH connection
+ * (`SshTunnel.exec`: the pinned host key, the person's key, no forwards), exactly the command
+ * an operator types:
  *
  *     python3 <adapter> --deployment <manifest> update --bundle v<app version>
  *
@@ -36,31 +38,37 @@ export interface ServerUpdaterPaths {
 }
 
 /**
- * The connected server as main sees it, for the dialog to show and the person to confirm:
- * the connection (`epoch`), the SSH profile and the host key it authenticated, the daemon's
- * workspace identity, where the daemon says its updater is, and what was approved.
+ * One look at the connected server, made by main: everything the dialog shows and the person
+ * confirms. Approving and updating name a preview by `id`, never the fields themselves, and
+ * main runs nothing unless a fresh look at the connection is still exactly this preview.
  */
-export interface ServerUpdaterState {
+export interface ServerUpdatePreview {
+  id: string;
   profile: string;
+  /** The connection, the host key its tunnel authenticated, and the daemon's workspace. */
   epoch: number;
   hostKey?: string;
   workspaceId?: string;
+  /** What the server runs, and the release the app would put on it (the app's own). */
+  serverVersion?: string;
+  targetVersion: string;
+  /** Where the daemon says its updater is: a hint, never what runs. */
   declared?: ServerUpdaterPaths;
+  /** What the person entered and approved for this profile, host key and workspace. */
   approved?: ServerUpdaterPaths;
+  /** Why "Update now" is not offered, or `undefined` when it is. */
+  blocked?: string;
 }
 
-/** What the person confirmed. Main runs nothing unless the connection is still exactly this. */
-export interface ServerUpdateTarget {
-  profile: string;
-  epoch: number;
-  hostKey: string;
-  workspaceId: string;
+export interface ServerUpdaterApproval extends ServerUpdaterPaths {
+  preview: string;
 }
-export interface ServerUpdaterApproval extends ServerUpdateTarget, ServerUpdaterPaths {}
-export interface ServerUpdateRequest extends ServerUpdateTarget {
-  /** The release confirmed; it must be this app's own version. */
-  version: string;
+export interface ServerUpdateRequest {
+  preview: string;
 }
+
+/** The only updater file the app runs on a server, whatever directory the person names. */
+export const SERVER_UPDATER_NAME = "orca-release.py";
 
 /** How one update attempt ended, as the dialog says it. */
 export type ServerUpdateOutcome =
@@ -89,11 +97,11 @@ export interface ServerUpdateProgress {
   line: string;
 }
 
-/** What the renderer may ask, each about one confirmed connection. */
+/** What the renderer may ask, each about one preview main made. */
 export interface ServerUpdateBridge {
-  /** The current profile connection's server, or `undefined` when it is not one. */
-  read(this: void): Promise<ServerUpdaterState | undefined>;
-  /** Approve the updater the dialog showed, for this profile. */
+  /** A fresh preview of the current profile connection's server, or `undefined` when it is not one. */
+  read(this: void): Promise<ServerUpdatePreview | undefined>;
+  /** Approve the updater paths the person entered, for the server in this preview. */
   approve(this: void, approval: ServerUpdaterApproval): Promise<{ ok: true } | { ok: false; message: string }>;
   update(this: void, request: ServerUpdateRequest): Promise<ServerUpdateOutcome>;
   /** Each line the updater prints while it runs. Returns the unsubscribe. */

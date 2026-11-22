@@ -15,8 +15,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CLIENT_PROTOCOL, HELLO_METHOD, HelloResultSchema } from "@orca/protocol";
 import { ConnectionProfileSchema, SshTunnel } from "@orca/protocol/remote-access";
 import { loopbackSshd, rpc, startTestDaemon, type LoopbackSshd, type TestDaemon } from "@orca/testing/two-daemons";
-import { ServerUpdater } from "../src/main/server-update.js";
-import { serverUpdateCommand, type ServerUpdateProgress, type ServerUpdaterPaths } from "../src/server-update.js";
+import { ServerUpdater, type SavedApproval } from "../src/main/server-update.js";
+import { serverUpdateCommand, type ServerUpdateProgress } from "../src/server-update.js";
 
 let root: string;
 let sshd: LoopbackSshd | undefined;
@@ -87,40 +87,43 @@ describe("updating a managed server over its SSH profile", () => {
     const deployment = first.deployment;
     expect(deployment).toEqual({ kind: "managed", adapter: updater(), manifest: manifest(), ring: "preview" });
     const workspaceId = first.identity!.workspaceId;
-    // The fake updater cannot install anything, so the release "updated to" is the one running.
-    const version = first.orcaVersion;
-    let approved: ServerUpdaterPaths | undefined;
+    // The stand-in updater installs nothing, so the target is a release past what the daemon
+    // runs, and the confirming hello (which really goes through the tunnel) is read as it.
+    const target = "99.0.0";
+    let approved: SavedApproval | undefined;
+    let confirming = false;
     const progress: ServerUpdateProgress[] = [];
     const run = new ServerUpdater({
-      version,
+      version: target,
       connection: () => ({ epoch: 1, profile: "loopback", hostKey: tunnel!.hostKeyFingerprint!, workspaceId }),
+      serverVersion: () => first.orcaVersion,
       declared: () => deployment,
       approved: () => approved,
-      approve: (_profile, paths) => (approved = paths),
-      run: (command, onLine) => ({ command: tunnel!.exec(command, onLine) }),
+      approve: (_profile, approval) => (approved = approval),
+      run: (command, onLine) => {
+        confirming = true;
+        return { command: tunnel!.exec(command, onLine) };
+      },
       hello: async () => {
         const answer = await hello();
-        return { orcaVersion: answer.orcaVersion, workspaceId: answer.identity!.workspaceId };
+        expect(confirming).toBe(true);
+        // Through the same tunnel, from the same workspace; only the version is the stand-in's.
+        return { orcaVersion: target, workspaceId: answer.identity!.workspaceId };
       },
       onProgress: (line) => progress.push(line),
       confirm: { attempts: 3, delayMs: 50 },
     });
-    const state = run.read()!;
-    expect(state.hostKey).toMatch(/^SHA256:/);
-    const request = {
-      profile: "loopback",
-      epoch: 1,
-      hostKey: state.hostKey!,
-      workspaceId,
-      version,
-    };
+    const preview = run.read()!;
+    expect(preview).toMatchObject({ hostKey: expect.stringMatching(/^SHA256:/), workspaceId, targetVersion: target });
 
     const mode = (value: string) => writeFile(join(root, "mode"), value);
     await mode("ok");
-    // Nothing runs before the person approves the updater for this profile.
-    expect(await run.update(request)).toMatchObject({ status: "unavailable" });
-    expect(run.approve({ ...request, ...state.declared! })).toEqual({ ok: true });
-    expect(await run.update(request)).toEqual({ status: "updated", version });
+    // Nothing runs before the person enters and approves the updater for this server.
+    expect(await run.update({ preview: preview.id })).toMatchObject({ status: "unavailable" });
+    expect(run.approve({ preview: preview.id, adapter: updater(), manifest: manifest() })).toEqual({ ok: true });
+    expect(approved).toMatchObject({ hostKey: preview.hostKey, workspaceId });
+    const request = { preview: run.read()!.id };
+    expect(await run.update(request)).toEqual({ status: "updated", version: target });
     expect(progress).toEqual([{ stream: "stdout", line: "/srv/orca/releases/v0.8.0" }]);
     await mode("lock");
     expect(await run.update(request)).toMatchObject({ status: "another-update" });
@@ -133,7 +136,7 @@ describe("updating a managed server over its SSH profile", () => {
     ]);
 
     // Each time, the server was asked for exactly the operator's command, word for word.
-    const quoted = serverUpdateCommand(approved!, version)
+    const quoted = serverUpdateCommand(approved!, target)
       .map((word) => `'${word}'`)
       .join(" ");
     expect((await readFile(join(root, "asked"), "utf8")).trim().split("\n")).toEqual([quoted, quoted, quoted]);

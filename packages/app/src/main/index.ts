@@ -1071,9 +1071,10 @@ function profileInUse(id: string): boolean {
 const serverUpdater = new ServerUpdater({
   version: app.getVersion(),
   connection: () => workspace.serverConnection,
+  serverVersion: () => connection.current.orcaVersion,
   declared: () => connection.managedDeployment(),
   approved: (profile) => remoteProfiles.serverUpdater(profile),
-  approve: (profile, paths) => remoteProfiles.approveServerUpdater(profile, paths),
+  approve: (profile, approval) => remoteProfiles.approveServerUpdater(profile, approval),
   run: (command, onLine) => workspace.runOnServer(command, onLine),
   hello: async () => {
     const hello = await workspace.client.hello(`orca-app/${app.getVersion()}`);
@@ -1081,22 +1082,17 @@ const serverUpdater = new ServerUpdater({
   },
   onProgress: (progress) => send("orca:server.update.progress", progress),
 });
-/* What the renderer sends is what the person confirmed; ServerUpdater checks it against the
-   connection as it is now. Anything malformed is refused before it gets there. */
-const ServerTargetShape = {
-  profile: ProfileIdSchema,
-  epoch: z.number().int().nonnegative(),
-  hostKey: z.string().regex(/^SHA256:[A-Za-z0-9+/=]+$/),
-  workspaceId: z.uuid(),
-};
-const ServerUpdateRequestSchema = z.object({ ...ServerTargetShape, version: z.string().max(64) }).strict();
+/* The renderer names a preview main made; ServerUpdater checks the connection still matches
+   it. Anything malformed is refused before it gets there. */
+const PreviewId = z.uuid();
+const ServerUpdateRequestSchema = z.object({ preview: PreviewId }).strict();
 const ServerUpdaterApprovalSchema = z
-  .object({ ...ServerTargetShape, adapter: ServerPathSchema, manifest: ServerPathSchema })
+  .object({ preview: PreviewId, adapter: ServerPathSchema, manifest: ServerPathSchema })
   .strict();
 ipcMain.handle("orca:server.read", () => serverUpdater.read());
 ipcMain.handle("orca:server.approve", (_event, approval: unknown) => {
   const parsed = ServerUpdaterApprovalSchema.safeParse(approval);
-  if (!parsed.success) return { ok: false, message: "Invalid approval" };
+  if (!parsed.success) return { ok: false, message: "Enter the updater's and the manifest's full paths." };
   try {
     return serverUpdater.approve(parsed.data);
   } catch (error) {
@@ -1108,6 +1104,7 @@ ipcMain.handle("orca:server.update", (_event, request: unknown) => {
   if (!parsed.success) return { status: "unavailable", reason: "Invalid update request" };
   return serverUpdater.update(parsed.data);
 });
+
 ipcMain.handle("orca:profiles.list", () => remoteProfiles.list());
 ipcMain.handle("orca:profiles.save", (_event, input: unknown) => profileResult(() => remoteProfiles.save(input)));
 ipcMain.handle("orca:profiles.remove", (_event, id: unknown) =>

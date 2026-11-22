@@ -568,18 +568,24 @@ set for the daemon only), and the daemon reports them in `hello.deployment` to a
 
 What the daemon reports is a hint, never what the app runs:
 
-- **Approve once per profile.** The first time, the connection dialog shows the two paths and
-  the exact command, and runs nothing until you approve that updater for the SSH profile. The
-  approval is kept beside the profile (`server-updaters.json`) and is forgotten when the
-  profile is pointed at another server or daemon port, its host key is forgotten, or it is
-  removed.
+- **You enter the updater's paths.** The first time, the connection dialog shows what the
+  server reports and asks you to type the updater's path (it must be an `orca-release.py`)
+  and the manifest's path (a `.json` file), shows the exact command, and runs nothing until
+  you approve. The app accepts the approval only when what you typed matches what the server
+  reports.
+- **The approval is for that server.** It is saved beside the profile
+  (`server-updaters.json`) with the host key the profile's tunnel authenticated and the
+  daemon's workspace identity, and applies only while both are the same. Pointing the profile
+  at another server or daemon port, forgetting its host key or removing it drops the approval.
 - **A mismatch is refused.** The app runs only the approved paths, and only while the daemon
-  still reports exactly those. If it reports another location, the dialog says so and asks
-  again; nothing runs.
-- **Each request is bound to what you saw.** The dialog sends the profile, the connection,
-  the host key the tunnel authenticated, the daemon's workspace identity and the version.
-  The app checks all of them against the connection as it is at that moment, and the version
-  must be the app's own.
+  still reports exactly those. If it reports another location, the dialog asks again.
+- **One preview, checked again.** Everything the dialog shows and you confirm (profile,
+  connection, host key, workspace, the server's version and the target version) comes from
+  one look the app took. Approving and updating name that look, and the app refuses if the
+  connection no longer matches it.
+- **Only forward, only the app's release.** The target is the app's own version, it must be
+  a release, and the server must be running an older one; the app checks this itself, not
+  only the dialog.
 
 The connection dialog shows the server's version, protocol, ring and host key, and whether it
 is older than the app. **Update now** runs, over the profile's own ssh (the pinned host key, the
@@ -594,7 +600,8 @@ forward-only versions, the update lock and the admission barrier. Nothing instal
 daemon's RPC. The app streams what the updater prints and then says how it ended:
 
 - **Updated**: the updater succeeded *and* a fresh authenticated hello from the same server
-  (same profile, host key and workspace) reports the new version.
+  (same profile, host key and workspace, checked again once the hello answers) reports the
+  new version.
 - **Unknown**: the SSH session was lost after the updater could have started, or it reported
   success and the server has not confirmed the new version within about a minute. The app
   says what the server last reported, if anything; check the server before trying again.

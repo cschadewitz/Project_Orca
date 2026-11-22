@@ -36,13 +36,22 @@ import { ConnectionRefusal } from "./connection-target.js";
 const ProfilesFileSchema = z.object({ version: z.literal(1), profiles: z.array(ConnectionProfileSchema) }).strict();
 
 /**
- * The server updater a person approved for a profile (#879): where it is on that server. The
- * app runs only an approved updater; a daemon's `hello.deployment` is a hint that must match.
+ * The server updater a person entered and approved for a profile (#879): where it is, and the
+ * server it was approved on, by the host key its tunnel authenticated and the daemon's
+ * workspace. It applies to that server only; a daemon's `hello.deployment` is a hint that must
+ * match it.
  */
-export const ServerUpdaterApprovalSchema = z.object({ adapter: ServerPathSchema, manifest: ServerPathSchema }).strict();
-export type ServerUpdaterApproval = z.infer<typeof ServerUpdaterApprovalSchema>;
+export const SavedServerUpdaterSchema = z
+  .object({
+    adapter: ServerPathSchema,
+    manifest: ServerPathSchema,
+    hostKey: z.string().regex(/^SHA256:[A-Za-z0-9+/=]+$/),
+    workspaceId: z.uuid(),
+  })
+  .strict();
+export type SavedServerUpdater = z.infer<typeof SavedServerUpdaterSchema>;
 const ApprovalsFileSchema = z
-  .object({ version: z.literal(1), approvals: z.record(z.string(), ServerUpdaterApprovalSchema) })
+  .object({ version: z.literal(1), approvals: z.record(z.string(), SavedServerUpdaterSchema) })
   .strict();
 
 /** What the connect dialog sends to create or edit a profile. `id` absent creates. */
@@ -117,7 +126,7 @@ export class RemoteProfiles {
   private get approvalsFile(): string {
     return join(this.deps.dir, "server-updaters.json");
   }
-  private approvals(): Record<string, ServerUpdaterApproval> {
+  private approvals(): Record<string, SavedServerUpdater> {
     try {
       const parsed = ApprovalsFileSchema.safeParse(JSON.parse(readFileSync(this.approvalsFile, "utf8")));
       if (parsed.success) return parsed.data.approvals;
@@ -126,22 +135,22 @@ export class RemoteProfiles {
     }
     return {};
   }
-  private writeApprovals(approvals: Record<string, ServerUpdaterApproval>): void {
+  private writeApprovals(approvals: Record<string, SavedServerUpdater>): void {
     mkdirSync(this.deps.dir, { recursive: true });
     const tmp = `${this.approvalsFile}.${process.pid}.tmp`;
     writeFileSync(tmp, `${JSON.stringify({ version: 1, approvals }, null, 2)}\n`);
     renameSync(tmp, this.approvalsFile);
   }
 
-  /** The server updater approved for this profile, if any (#879). */
-  serverUpdater(id: string): ServerUpdaterApproval | undefined {
+  /** The server updater approved for this profile, if any, with the server it was approved on (#879). */
+  serverUpdater(id: string): SavedServerUpdater | undefined {
     return this.get(id) ? this.approvals()[id] : undefined;
   }
 
   /** Record what the person approved. It lasts until the profile points elsewhere or its key is reset. */
-  approveServerUpdater(id: string, approval: ServerUpdaterApproval): void {
+  approveServerUpdater(id: string, approval: SavedServerUpdater): void {
     if (!this.get(id)) throw new ConnectionRefusal("That profile no longer exists.");
-    const parsed = ServerUpdaterApprovalSchema.parse(approval);
+    const parsed = SavedServerUpdaterSchema.parse(approval);
     this.writeApprovals({ ...this.approvals(), [id]: parsed });
   }
 

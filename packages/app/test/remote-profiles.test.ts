@@ -144,11 +144,17 @@ describe("RemoteProfiles", () => {
 
   it("keeps an approved server updater per profile until it points elsewhere, its key is reset or it is removed (#879)", () => {
     const { dir, profiles } = store();
-    const updater = { adapter: "/opt/orca/orca-release.py", manifest: "/etc/orca/deployment.json" };
+    const updater = {
+      adapter: "/opt/orca/orca-release.py",
+      manifest: "/etc/orca/deployment.json",
+      hostKey: "SHA256:abc",
+      workspaceId: "9b2b3c5e-3c0e-4f6a-9a59-6c1b8e6f0a11",
+    };
     expect(() => profiles.approveServerUpdater("lab", updater)).toThrow("no longer exists");
     profiles.save({ name: "Lab", destination: "lab" });
     expect(profiles.serverUpdater("lab")).toBeUndefined();
     expect(() => profiles.approveServerUpdater("lab", { ...updater, adapter: "relative.py" })).toThrow();
+    expect(() => profiles.approveServerUpdater("lab", { ...updater, hostKey: "abc" })).toThrow();
     profiles.approveServerUpdater("lab", updater);
     expect(profiles.serverUpdater("lab")).toEqual(updater);
     // Not part of the profile the renderer sees or edits.

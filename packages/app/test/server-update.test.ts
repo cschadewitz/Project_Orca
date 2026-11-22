@@ -13,9 +13,8 @@ import {
   serverUpdateCommand,
   updaterError,
   type ServerUpdateProgress,
-  type ServerUpdaterPaths,
 } from "../src/server-update.js";
-import { ServerUpdater, type ServerConnection } from "../src/main/server-update.js";
+import { ServerUpdater, type SavedApproval, type ServerConnection } from "../src/main/server-update.js";
 
 const deployment: ManagedDeployment = {
   kind: "managed",
@@ -116,43 +115,48 @@ describe("serverBehind", () => {
 
 describe("ServerUpdater", () => {
   const WORKSPACE = "9b2b3c5e-3c0e-4f6a-9a59-6c1b8e6f0a11";
-  const target = { profile: "lab", epoch: 4, hostKey: "SHA256:abc", workspaceId: WORKSPACE };
-  const request = { ...target, version: "0.8.0" };
   const paths = { adapter: deployment.adapter, manifest: deployment.manifest };
+  const SERVER = { hostKey: "SHA256:abc", workspaceId: WORKSPACE };
 
   function rig(
     options: {
       version?: string;
+      serverVersion?: string;
       declared?: ManagedDeployment | undefined;
-      approved?: { adapter: string; manifest: string } | undefined;
+      approved?: SavedApproval | undefined;
       profile?: boolean;
       hellos?: (() => Promise<{ orcaVersion: string; workspaceId?: string }>)[];
     } = {},
   ) {
     let finish: (exit: RemoteCommandExit) => void = () => {};
     let printer: (stream: "stdout" | "stderr", line: string) => void = () => {};
+    let ids = 0;
     const kill = vi.fn();
     const progress: ServerUpdateProgress[] = [];
     const state = {
-      connection: { epoch: 4, profile: "lab", hostKey: "SHA256:abc", workspaceId: WORKSPACE } as ServerConnection,
-      approved: ("approved" in options ? options.approved : paths) as ServerUpdaterPaths | undefined,
+      connection: { epoch: 4, profile: "lab", ...SERVER } as ServerConnection,
+      serverVersion: options.serverVersion ?? "0.7.1",
+      declared: "declared" in options ? options.declared : deployment,
+      approved: "approved" in options ? options.approved : { ...paths, ...SERVER },
     };
     if (options.profile === false) state.connection = { epoch: 4 };
     const hellos = [...(options.hellos ?? [async () => ({ orcaVersion: "0.8.0", workspaceId: WORKSPACE })])];
-    const run = vi.fn((_command: readonly string[], onLine: typeof printer) => {
-      if (options.profile === false) return undefined;
-      printer = onLine;
-      const command: RemoteCommand = { exit: new Promise((resolve) => (finish = resolve)), kill };
-      return { command };
-    });
+    const run = vi.fn<(command: readonly string[], onLine: typeof printer) => { command: RemoteCommand } | undefined>(
+      (_command, onLine) => {
+        printer = onLine;
+        const command: RemoteCommand = { exit: new Promise((resolve) => (finish = resolve)), kill };
+        return { command };
+      },
+    );
     const hello = vi.fn(() => (hellos.length > 1 ? hellos.shift()! : hellos[0]!)());
-    const approve = vi.fn((_profile: string, approved: ServerUpdaterPaths) => {
+    const approve = vi.fn((_profile: string, approved: SavedApproval) => {
       state.approved = approved;
     });
     const updater = new ServerUpdater({
       version: options.version ?? "0.8.0",
       connection: () => state.connection,
-      declared: () => ("declared" in options ? options.declared : deployment),
+      serverVersion: () => state.serverVersion,
+      declared: () => state.declared,
       approved: () => state.approved,
       approve,
       run,
@@ -160,7 +164,9 @@ describe("ServerUpdater", () => {
       onProgress: (line) => progress.push(line),
       confirm: { attempts: 3, delayMs: 1 },
       sleep: () => Promise.resolve(),
+      id: () => `preview-${++ids}`,
     });
+    const preview = () => updater.read()!.id;
     return {
       updater,
       state,
@@ -169,34 +175,113 @@ describe("ServerUpdater", () => {
       approve,
       kill,
       progress,
+      preview,
       finish: (exit: RemoteCommandExit) => finish(exit),
       print: (...a: Parameters<typeof printer>) => printer(...a),
     };
   }
 
-  it("shows main's view of the profile connection, and nothing for any other", () => {
-    expect(rig().updater.read()).toEqual({ ...target, declared: paths, approved: paths });
-    expect(rig({ approved: undefined, declared: undefined }).updater.read()).toEqual(target);
+  it("previews the profile connection's server from main's own view, and nothing for any other", () => {
+    expect(rig().updater.read()).toEqual({
+      id: "preview-1",
+      profile: "lab",
+      epoch: 4,
+      ...SERVER,
+      serverVersion: "0.7.1",
+      targetVersion: "0.8.0",
+      declared: paths,
+      approved: paths,
+    });
     expect(rig({ profile: false }).updater.read()).toBeUndefined();
   });
 
-  it("approves only what the server reports now, on the connection the person saw", () => {
-    const r = rig({ approved: undefined });
-    expect(r.updater.approve({ ...target, adapter: "/tmp/evil.py", manifest: paths.manifest })).toMatchObject({
-      ok: false,
+  it.each<[string, Parameters<typeof rig>[0], RegExp]>([
+    ["a development build", { version: "0.8.0-dev" }, /not a release build/],
+    ["a server already on the release", { serverVersion: "0.8.0" }, /already runs 0\.8\.0/],
+    ["a newer server", { serverVersion: "0.9.0" }, /already runs 0\.9\.0/],
+    ["an unmanaged daemon", { declared: undefined }, /not installed by the managed server updater/],
+    ["no approval", { approved: undefined }, /Approve this server's updater first/],
+    ["an approval made on another host key", { approved: { ...paths, ...SERVER, hostKey: "SHA256:old" } }, /Approve/],
+    [
+      "an approval made on another workspace",
+      { approved: { ...paths, ...SERVER, workspaceId: "6f2b3c5e-3c0e-4f6a-9a59-6c1b8e6f0a11" } },
+      /Approve/,
+    ],
+    [
+      "a daemon that now points elsewhere",
+      { declared: { ...deployment, adapter: "/srv/other/orca-release.py" } },
+      /somewhere other than you approved/,
+    ],
+  ])("blocks and runs nothing for %s", async (_name, options, reason) => {
+    const r = rig(options);
+    const preview = r.updater.read()!;
+    expect(preview.blocked).toMatch(reason);
+    expect(await r.updater.update({ preview: preview.id })).toMatchObject({
+      status: "unavailable",
+      reason: expect.stringMatching(reason),
     });
-    expect(r.updater.approve({ ...target, epoch: 5, ...paths })).toMatchObject({ ok: false });
+    expect(r.run).not.toHaveBeenCalled();
+  });
+
+  it("approves only paths the person entered that match the server's report, bound to that server", () => {
+    const r = rig({ approved: undefined });
+    const preview = r.preview();
+    expect(
+      r.updater.approve({ preview, adapter: "/srv/orca/orca-release.py", manifest: paths.manifest }),
+    ).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("not where this server says"),
+    });
+    expect(r.updater.approve({ preview, adapter: "/opt/orca/run.py", manifest: paths.manifest })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("orca-release.py"),
+    });
+    expect(r.updater.approve({ preview, adapter: paths.adapter, manifest: "/etc/orca/deployment" })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining(".json"),
+    });
+    expect(r.updater.approve({ preview: "never-shown", ...paths })).toMatchObject({ ok: false });
     expect(r.approve).not.toHaveBeenCalled();
-    expect(r.updater.approve({ ...target, ...paths })).toEqual({ ok: true });
-    expect(r.approve).toHaveBeenCalledExactlyOnceWith("lab", paths);
+    expect(r.updater.approve({ preview, ...paths })).toEqual({ ok: true });
+    expect(r.approve).toHaveBeenCalledExactlyOnceWith("lab", { ...paths, ...SERVER });
+
+    const anonymous = rig({ approved: undefined });
+    anonymous.state.connection = { epoch: 4, profile: "lab" };
+    expect(anonymous.updater.approve({ preview: anonymous.preview(), ...paths })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("not identified itself"),
+    });
+  });
+
+  it.each<[string, (r: ReturnType<typeof rig>) => void]>([
+    ["another connection", (r) => (r.state.connection = { ...r.state.connection, epoch: 5 })],
+    ["another host key", (r) => (r.state.connection = { ...r.state.connection, hostKey: "SHA256:zzz" })],
+    ["another server version", (r) => (r.state.serverVersion = "0.7.2")],
+    ["another hint", (r) => (r.state.declared = { ...deployment, manifest: "/etc/orca/other.json" })],
+  ])("refuses a preview once the server shows %s", async (_name, change) => {
+    const r = rig();
+    const preview = r.preview();
+    change(r);
+    expect(await r.updater.update({ preview })).toMatchObject({
+      status: "unavailable",
+      reason: expect.stringContaining("changed since this was shown"),
+    });
+    expect(r.updater.approve({ preview, ...paths })).toMatchObject({ ok: false });
+    expect(r.run).not.toHaveBeenCalled();
+  });
+
+  it("remembers only the last few previews", async () => {
+    const r = rig();
+    const first = r.preview();
+    for (let i = 0; i < 8; i++) r.preview();
+    expect(await r.updater.update({ preview: first })).toMatchObject({ status: "unavailable" });
   });
 
   it("runs the approved updater once however often it is asked, and confirms with a fresh hello", async () => {
     const r = rig();
-    const first = r.updater.update(request);
-    const second = r.updater.update(request);
-    expect(second).toBe(first);
-    await Promise.resolve();
+    const preview = r.preview();
+    const first = r.updater.update({ preview });
+    expect(r.updater.update({ preview })).toBe(first);
     expect(r.run).toHaveBeenCalledExactlyOnceWith(serverUpdateCommand(paths, "0.8.0"), expect.any(Function));
     r.print("stdout", "/opt/orca/releases/0.8.0");
     r.finish({ kind: "exited", code: 0 });
@@ -213,53 +298,61 @@ describe("ServerUpdater", () => {
         async () => ({ orcaVersion: "0.8.0", workspaceId: WORKSPACE }),
       ],
     });
-    const pending = restarting.updater.update(request);
-    await Promise.resolve();
+    const pending = restarting.updater.update({ preview: restarting.preview() });
     restarting.finish({ kind: "exited", code: 0 });
     expect(await pending).toEqual({ status: "updated", version: "0.8.0" });
 
     const stuck = rig({ hellos: [async () => ({ orcaVersion: "0.7.1", workspaceId: WORKSPACE })] });
-    const never = stuck.updater.update(request);
-    await Promise.resolve();
+    const never = stuck.updater.update({ preview: stuck.preview() });
     stuck.finish({ kind: "exited", code: 0 });
     expect(await never).toEqual({ status: "unknown", reason: "not-confirmed", serverVersion: "0.7.1" });
     expect(stuck.hello).toHaveBeenCalledTimes(3);
 
     // Another workspace answering is not this server confirming.
     const other = rig({ hellos: [async () => ({ orcaVersion: "0.8.0", workspaceId: "other" })] });
-    const elsewhere = other.updater.update(request);
-    await Promise.resolve();
+    const elsewhere = other.updater.update({ preview: other.preview() });
     other.finish({ kind: "exited", code: 0 });
     expect(await elsewhere).toEqual({ status: "unknown", reason: "not-confirmed" });
 
-    // Nor is another server behind the same profile.
+    // Nor is another server behind the same profile, before the hello...
     const moved = rig();
-    const gone = moved.updater.update(request);
-    await Promise.resolve();
+    const gone = moved.updater.update({ preview: moved.preview() });
     moved.state.connection = { ...moved.state.connection, hostKey: "SHA256:other" };
     moved.finish({ kind: "exited", code: 0 });
     expect(await gone).toEqual({ status: "unknown", reason: "not-confirmed" });
     expect(moved.hello).not.toHaveBeenCalled();
+
+    // ...or while it was in flight.
+    let swap: () => void = () => {};
+    const racing = rig({
+      hellos: [
+        async () => {
+          swap();
+          return { orcaVersion: "0.8.0", workspaceId: WORKSPACE };
+        },
+      ],
+    });
+    swap = () => (racing.state.connection = { ...racing.state.connection, hostKey: "SHA256:other" });
+    const raced = racing.updater.update({ preview: racing.preview() });
+    racing.finish({ kind: "exited", code: 0 });
+    expect(await raced).toEqual({ status: "unknown", reason: "not-confirmed" });
   });
 
   it("reports a session lost after the updater started as unknown, unless the server then confirms", async () => {
     const lost = rig({ hellos: [() => Promise.reject(new Error("down"))] });
-    const pending = lost.updater.update(request);
-    await Promise.resolve();
+    const pending = lost.updater.update({ preview: lost.preview() });
     lost.finish({ kind: "refused", refusal: "unreachable" });
     expect(await pending).toEqual({ status: "unknown", reason: "connection-lost" });
 
     const landed = rig();
-    const done = landed.updater.update(request);
-    await Promise.resolve();
+    const done = landed.updater.update({ preview: landed.preview() });
     landed.finish({ kind: "signalled", signal: "SIGHUP" });
     expect(await done).toEqual({ status: "updated", version: "0.8.0" });
   });
 
   it("reads the outcome from the last lines it kept", async () => {
     const r = rig();
-    const pending = r.updater.update(request);
-    await Promise.resolve();
+    const pending = r.updater.update({ preview: r.preview() });
     r.print("stderr", "orca-release: Busy: update.lock; held by the timer");
     for (let i = 0; i < SERVER_UPDATE_MAX_LINES; i++) r.print("stdout", `line ${i}`);
     r.finish({ kind: "exited", code: 1 });
@@ -268,51 +361,27 @@ describe("ServerUpdater", () => {
     expect(r.progress).toHaveLength(SERVER_UPDATE_MAX_LINES + 1);
   });
 
-  it.each<[string, Parameters<typeof rig>[0], Partial<typeof request>, RegExp]>([
-    ["a development build", { version: "0.8.0-dev" }, { version: "0.8.0-dev" }, /not a release build/],
-    ["another version than the app's", {}, { version: "0.9.0" }, /its own version, 0\.8\.0/],
-    ["a connection that is not a profile", { profile: false }, {}, /SSH profile/],
-    ["another profile", {}, { profile: "other" }, /connection changed/],
-    ["another connection", {}, { epoch: 5 }, /connection changed/],
-    ["another host key", {}, { hostKey: "SHA256:zzz" }, /connection changed/],
-    ["another workspace", {}, { workspaceId: "6f2b3c5e-3c0e-4f6a-9a59-6c1b8e6f0a11" }, /connection changed/],
-    ["no approval", { approved: undefined }, {}, /Approve this server's updater first/],
-    ["an unmanaged daemon", { declared: undefined }, {}, /other than you approved/],
-    [
-      "a daemon that now points elsewhere",
-      { declared: { ...deployment, adapter: "/tmp/orca-release.py" } },
-      {},
-      /other than you approved/,
-    ],
-  ])("runs nothing for %s", async (_name, options, change, reason) => {
-    const r = rig(options);
-    expect(await r.updater.update({ ...request, ...change })).toMatchObject({
-      status: "unavailable",
-      reason: expect.stringMatching(reason),
-    });
-    expect(r.run).not.toHaveBeenCalled();
-  });
-
   it("reports a tunnel that cannot start the updater in the app's words, and rethrows anything else", async () => {
     const r = rig();
     r.run.mockImplementationOnce(() => {
       throw new TunnelRefusal("host-key-missing");
     });
-    expect(await r.updater.update(request)).toEqual({
+    expect(await r.updater.update({ preview: r.preview() })).toEqual({
       status: "unreachable",
       refusal: "host-key-missing",
       message: new TunnelRefusal("host-key-missing").message,
     });
+    r.run.mockImplementationOnce(() => undefined);
+    expect(await r.updater.update({ preview: r.preview() })).toMatchObject({ status: "unavailable" });
     r.run.mockImplementationOnce(() => {
       throw new Error("bug");
     });
-    await expect(r.updater.update(request)).rejects.toThrow("bug");
+    await expect(r.updater.update({ preview: r.preview() })).rejects.toThrow("bug");
   });
 
   it("hangs up on quit, only while it runs, and stops waiting for confirmation", async () => {
     const r = rig({ hellos: [() => Promise.reject(new Error("down"))] });
-    const pending = r.updater.update(request);
-    await Promise.resolve();
+    const pending = r.updater.update({ preview: r.preview() });
     r.updater.stop();
     expect(r.kill).toHaveBeenCalledOnce();
     r.finish({ kind: "signalled", signal: "SIGTERM" });
