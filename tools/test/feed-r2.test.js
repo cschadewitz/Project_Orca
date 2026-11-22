@@ -362,15 +362,26 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
       );
     });
 
-    it("keeps a copy of exactly the rings.json a successful update stored, when asked", () => {
+    it("reads the live ring state, or the empty state before any write", () => {
       const f = setup();
-      const record = join(f.root, "record", "rings.json");
-      expect(f.runWith({ FEED_RINGS_RECORD: record }, "server-snapshot", bundle(f), VERSION).status).toBe(0);
-      expect(readFileSync(record, "utf8")).toBe(readFileSync(f.object("rings.json"), "utf8"));
-      // A refused update leaves the record of the last successful one.
-      const before = readFileSync(record, "utf8");
-      expect(f.runWith({ FEED_RINGS_RECORD: record }, "promote", "stable", VERSION, "100").status).not.toBe(0);
-      expect(readFileSync(record, "utf8")).toBe(before);
+      const out = join(f.root, "read.json");
+      expect(f.run("read-rings", out).status).toBe(0);
+      expect(JSON.parse(readFileSync(out, "utf8"))).toEqual({ format: 1, rings: {} });
+      expect(f.run("server-snapshot", bundle(f), VERSION).status).toBe(0);
+      const before = f.log().length;
+      expect(f.run("read-rings", out).status).toBe(0);
+      // Only reads.
+      expect(
+        f
+          .log()
+          .slice(before)
+          .map((a) => a[3]),
+      ).toEqual(["get-object"]);
+      expect(JSON.parse(readFileSync(out, "utf8"))).toEqual(JSON.parse(readFileSync(f.object("rings.json"), "utf8")));
+      // A store error is not mistaken for an empty feed.
+      const failed = f.runWith({ FAKE_FAIL_OP: "get-object" }, "read-rings", out);
+      expect(failed.status).not.toBe(0);
+      expect(failed.stderr).toContain("could not read rings.json");
     });
 
     it("refuses a missing file before writing anything, and a pre-0.8 version before offering it", () => {

@@ -1,5 +1,5 @@
 /** The desktop feed's ring rules and the CLI the release jobs run them through. */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -191,6 +191,19 @@ describe("feed-rings CLI and feed-token", () => {
     expect(() => run([file, "promote", "stable", "0.6.0", "100"])).toThrow(/backwards/);
     expect(() => run([file, "promote", "stable", "0.7.1", "ten"])).toThrow(/usage/);
     expect(readFileSync(file, "utf8")).toBe(before);
+  });
+
+  it("shows the validated ring state on one line without writing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "orca-rings-"));
+    dirs.push(dir);
+    const file = join(dir, "rings.json");
+    expect(run([file, "show"])).toBe(JSON.stringify({ format: 1, rings: {} }));
+    expect(existsSync(file)).toBe(false);
+    const state = { format: 1, rings: { stable: { version: "0.7.0" } } };
+    writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);
+    expect(run([file, "show"])).toBe(JSON.stringify(state));
+    writeFileSync(file, JSON.stringify({ format: 2, rings: {} }));
+    expect(() => run([file, "show"])).toThrow();
   });
 
   it("mints a token the Worker accepts and keeps only its hash", () => {

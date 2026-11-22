@@ -140,46 +140,23 @@ describe("server bundle channel workflows (#877)", () => {
     expect(wf.jobs.promote.steps[0].name).toBe("Refuse while the feed is paused");
   });
 
-  it("keeps the ring state every feed write stored, and the watchdog checks against the newest", () => {
-    const keep = (job, cond) => {
-      const steps = job.steps;
-      const write = steps.findIndex((s) => s.env?.FEED_RINGS_RECORD);
-      const upload = steps.findIndex((s) => s.name === "Keep the recorded ring state");
-      expect(steps[write].env.FEED_RINGS_RECORD).toBe("${{ runner.temp }}/feed-rings/rings.json");
-      expect(upload).toBe(write + 1);
-      expect(steps[upload].if).toBe(cond);
-      return steps[upload].with;
-    };
-    const publish = workflow("feed-publish.yml").jobs;
-    const promote = workflow("feed-promote.yml").jobs.promote;
-    for (const [w, name] of [
-      [keep(publish.server, "steps.applies.outputs.applies == 'true'"), "feed-rings-server"],
-      [keep(publish.publish, "success()"), "feed-rings-desktop"],
-      [keep(promote, "success()"), "feed-rings-promote"],
-    ])
-      expect(w).toEqual({
-        name,
-        path: "${{ runner.temp }}/feed-rings/rings.json",
-        "if-no-files-found": "error",
-        "retention-days": 90,
-      });
+  it("has the watchdog read the live ring state, with no ring-state artifacts", () => {
+    for (const name of ["feed-publish.yml", "feed-promote.yml", "feed-watchdog.yml"])
+      expect(read(name)).not.toMatch(/FEED_RINGS_RECORD|feed-rings-/);
+    expect(read("feed-watchdog.yml")).not.toMatch(/upload-artifact|download-artifact/);
     const watchdog = workflow("feed-watchdog.yml");
-    expect(watchdog.permissions).toEqual({ contents: "read", actions: "read" });
-    const steps = watchdog.jobs.watch.steps;
-    const record = steps.find((s) => s.id === "record");
-    expect(record.run).toContain("node tools/deploy/feed-watchdog.js record");
-    expect(record.run).toContain('gh run download "$run"');
-    const check = steps.find((s) => s.name === "Check every ring and architecture");
-    expect(check.env.FEED_RINGS_RECORD).toBe("${{ steps.record.outputs.file }}");
-    expect(steps.indexOf(record)).toBe(steps.indexOf(check) - 1);
-    // The record is carried forward after the check, even when the check failed.
-    const carry = steps.at(-1);
-    expect(carry.if).toBe("always() && steps.record.outputs.file != ''");
-    expect(carry.with).toEqual({
-      name: "${{ steps.record.outputs.carried }}",
-      path: "${{ steps.record.outputs.file }}",
-      "if-no-files-found": "error",
-      "retention-days": 90,
+    expect(watchdog.permissions).toEqual({ contents: "read" });
+    const { rings, watch } = watchdog.jobs;
+    expect(rings.environment).toBe("desktop-feed");
+    expect(rings.outputs).toEqual({ rings: "${{ steps.read.outputs.rings }}" });
+    expect(rings.steps.find((s) => s.id === "read").run).toContain("feed-r2.sh read-rings");
+    expect(watch.needs).toBe("rings");
+    expect(watch.environment).toBe("feed-canary");
+    const check = watch.steps.find((s) => s.name === "Check every ring and architecture");
+    expect(check.env).toMatchObject({
+      FEED_RINGS: "${{ needs.rings.outputs.rings }}",
+      FEED_COMMISSIONED: "${{ vars.ORCA_FEED_BUCKET != '' }}",
     });
+    expect(JSON.stringify(watch)).not.toMatch(/ORCA_FEED_ACCESS_KEY|ORCA_FEED_SECRET/);
   });
 });

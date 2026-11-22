@@ -7,12 +7,19 @@
 #   or any ring a prerelease other than `-rc.N`;
 # - the installer the feed serves does not hash to its channel file's sha512, or differs from
 #   the published release asset;
-# - a ring's x64 or server channel answers 404 or offers another version than the ring state
-#   the newest feed write recorded (artifact feed-rings-*), or its servers are offered less
-#   than its desktops (servers first, #877). These are offers, not what hosts run.
+# - a ring's x64 or server channel answers 404 or offers another version than the feed's live
+#   rings.json gives it, or its servers are offered less than its desktops (servers first,
+#   #877). These are offers, not what hosts run.
 #
-# Read-only: it holds no bucket credential and writes nothing. The canary tokens are bearer
-# credentials, so only reviewed code reads them: the job runs from main only, in the
+# rings.json is read by the separate `rings` job, in the `desktop-feed` environment that holds
+# the bucket credential (main only, read-only use: feed-r2.sh read-rings), and handed to the
+# canary job as a job output; the canary job never sees the bucket credential and the `rings`
+# job never sees a canary. While the feed is switched on (ORCA_FEED_BUCKET), a missing ring
+# state fails the check rather than passing an empty-looking feed.
+#
+# Read-only: nothing writes to the bucket, and the `rings` job uses its credential only for
+# that one read. The canary tokens are bearer credentials, so only reviewed code reads them:
+# the canary job runs from main only, in the
 # `feed-canary` environment, which deploys from main only and holds nothing but
 # ORCA_FEED_CANARY_TOKENS (a JSON object of ring to a token minted with
 # tools/deploy/feed-token.js). Never put the R2 write credential there. The repository
@@ -27,17 +34,50 @@ on:
 
 permissions:
   contents: read
-  # To find and download the recorded ring state (feed-rings-* artifacts of the feed workflows).
-  actions: read
 
 concurrency:
   group: feed-watchdog
   cancel-in-progress: true
 
 jobs:
+  rings:
+    name: read the live ring state
+    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != '' && vars.ORCA_FEED_BUCKET != ''
+    runs-on: ubuntu-24.04
+    environment: desktop-feed
+    timeout-minutes: 5
+    outputs:
+      rings: ${{ steps.read.outputs.rings }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          sparse-checkout: tools/deploy
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Read rings.json
+        id: read
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
+          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+        run: |
+          set -euo pipefail
+          bash tools/deploy/feed-r2.sh read-rings "$RUNNER_TEMP/rings.json"
+          echo "rings=$(cat "$RUNNER_TEMP/rings.json")" >> "$GITHUB_OUTPUT"
+          { echo "Ring state:"; echo '```json'; cat "$RUNNER_TEMP/rings.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
   watch:
     name: check the live feed
-    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != ''
+    needs: rings
+    # Runs when the ring state was read, or the feed is off (no bucket, nothing to read). A failed
+    # read while the feed is on still runs the check, which then fails for the missing state.
+    if: always() && github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != ''
     runs-on: ubuntu-24.04
     environment: feed-canary
     timeout-minutes: 15
@@ -52,41 +92,11 @@ jobs:
         with:
           node-version: 24
 
-      # What each ring should be offered: the rings.json the newest feed write stored, kept as an
-      # artifact by a main dispatch of feed-publish.yml or feed-promote.yml, or this workflow's
-      # carried copy of it (below). Found through those workflows' own runs, so other artifacts
-      # never hide it. Without one, a feed that offers anything fails the check.
-      - name: Find the recorded ring state
-        id: record
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          found=$(node tools/deploy/feed-watchdog.js record)
-          if [ -n "$found" ]; then
-            read -r run name carried <<<"$found"
-            gh run download "$run" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$RUNNER_TEMP/feed-rings"
-            echo "file=$RUNNER_TEMP/feed-rings/rings.json" >> "$GITHUB_OUTPUT"
-            echo "carried=$carried" >> "$GITHUB_OUTPUT"
-            echo "Recorded ring state: $name from run $run" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
       - name: Check every ring and architecture
         env:
           FEED_URL: ${{ vars.ORCA_FEED_URL }}
           FEED_CANARY_TOKENS: ${{ secrets.ORCA_FEED_CANARY_TOKENS }}
-          FEED_RINGS_RECORD: ${{ steps.record.outputs.file }}
+          FEED_RINGS: ${{ needs.rings.outputs.rings }}
+          FEED_COMMISSIONED: ${{ vars.ORCA_FEED_BUCKET != '' }}
           GITHUB_TOKEN: ${{ github.token }}
         run: node tools/deploy/feed-watchdog.js
-
-      # Keep the record this run checked against, verbatim and stamped with its own time, so it
-      # outlives artifact retention while the watchdog runs daily; it never outranks a newer write.
-      - name: Carry the recorded ring state forward
-        if: always() && steps.record.outputs.file != ''
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ${{ steps.record.outputs.carried }}
-          path: ${{ steps.record.outputs.file }}
-          if-no-files-found: error
-          retention-days: 90

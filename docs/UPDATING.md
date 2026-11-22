@@ -203,7 +203,7 @@ signature against the pinned workflow identity before it uses anything.
   canaries: a request without a token must get 401; the channel file must parse strictly and
   name a published release (never a prerelease in `stable`); and each of the three files must
   be served with the listed size and SHA-256, equal to that release's asset. It also holds
-  both channels to the recorded ring state (below), and fails when a ring's desktops are
+  both channels to the live ring state (below), and fails when a ring's desktops are
   offered a server-era version its servers are not offered.
 
 The Worker needs no new binding or secret for this. Redeploy it from main (whatever pins its
@@ -265,20 +265,19 @@ a ring is offered a version with no published GitHub release, `stable` a prerele
 ring a prerelease other than `-rc.N`; the channel file's `files[]` entry (what the installed
 updater reads) does not name exactly that architecture's installer or disagrees with the
 legacy `path` and `sha512`; or the installer the feed serves does not have that entry's size
-and sha512, or differs from the published release asset. It holds no bucket credential and
-cannot read `rings.json` itself. Instead, every job that changes `rings.json` (publish and
-promote, both channels, run only from main in `desktop-feed`) keeps the exact file it stored
-as a `feed-rings-<job>` artifact for 90 days. The watchdog finds the newest one through
-those workflows' own runs on main (dispatched ones only, read page by page), so other
-workflows' artifacts can never hide it, and keeps a verbatim copy of it as its own
-`feed-rings-carried-<time>` artifact, stamped with the record's time, so the record lives on
-while the watchdog runs daily and never outranks a newer write. Against the record, a ring's
-x64 or server channel answering 404 although the record gives that ring an offer fails, as
-does an offer of anything but the ring's recorded full or rollout version, or any offer to a
-ring the record leaves empty. Before the feed offers anything, no record is fine; once any
-canary is offered a version, a missing record fails the run, because an empty ring could no
-longer be told from a broken one. A promotion that lands while the watchdog runs can make it
-fail once; rerun it.
+and sha512, or differs from the published release asset.
+
+It also holds every ring to the feed's live `rings.json`. A separate first job, run only from
+main in `desktop-feed` (the environment that holds the bucket credential), reads that one file
+with `feed-r2.sh read-rings` and hands it to the canary job as a job output; it never sees a
+canary token, and the canary job never sees the bucket credential. Against that state, a
+ring's x64 or server channel answering 404 although the ring has an offer fails, as does an
+offer of anything but the ring's full or rollout version, or any offer to a ring with none.
+Whether the feed is switched on comes from the repository variable `ORCA_FEED_BUCKET`, not
+from what the feed answers: while it is set, a ring state that could not be read fails the
+run, because an empty ring could no longer be told from a broken one. Before it is set,
+nothing is read and only servers-first is checked. A promotion that lands between the read
+and the checks can make the watchdog fail once; rerun it.
 Like the rest of the watchdog, this checks what the feed offers, never what hosts run.
 
 To turn it on:

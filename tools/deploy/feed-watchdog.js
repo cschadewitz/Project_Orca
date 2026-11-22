@@ -22,19 +22,18 @@
  * the ring may hold, and its three files must be served with the listed sizes and SHA-256
  * digests, equal to that release's recorded assets. A broken server channel fails the run.
  *
- * What each ring should be offered comes from the last ring state a feed write recorded: every
- * job that changes rings.json (feed-r2.sh, run only from main in the protected desktop-feed
- * environment) keeps the exact file it stored as the artifact `feed-rings-<job>`, and the
- * workflow downloads the newest one, found through the trusted workflows' own runs and carried
- * forward by the watchdog itself (`latestRecord` below). Against it, an x64 or server channel
- * answering 404 for a ring that has a recorded offer is a failure, as is an offer of anything
- * but that ring's recorded full or rollout version, or an offer to a ring with none. Without a
- * record only the rule below is checked, and once anything is offered that itself fails.
+ * What each ring should be offered comes from the feed's live rings.json, which a separate job
+ * of feed-watchdog.yml reads with the bucket credential (in the desktop-feed environment, main
+ * only, never in the canary job) and hands over as FEED_RINGS. Against it, an x64 or server
+ * channel answering 404 for a ring that rings.json gives an offer is a failure, as is an offer
+ * of anything but that ring's full or rollout version, or an offer to a ring with none. When
+ * the feed is switched on (FEED_COMMISSIONED, from the ORCA_FEED_BUCKET variable) and no ring
+ * state was handed over, the run fails: an empty ring could not be told from a broken one.
  * Independently, a ring whose x64 desktops are offered a version from the server bundle's line
  * must offer its servers that version or newer (servers first, rings.js). These are checks of
  * what the feed offers, never of what any host has installed or is running.
  *
- * It cannot read rings.json (that needs the bucket credential, which stays in the protected
+ * This process never holds the bucket credential and cannot read rings.json (that needs the bucket credential, which stays in the protected
  * desktop-feed environment), so it checks what a ring is offered, not what it should be offered.
  * The canary tokens live in the `feed-canary` environment, which only main can deploy to.
  * Tokens are only ever sent as Authorization headers; nothing here prints them. When the
@@ -45,7 +44,6 @@
  * empty ones included, look alike from outside). It reveals no token.
  */
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseServerChannel } from "./feed-server.js";
@@ -154,36 +152,46 @@ export function canaryMapDigest(tokens) {
  * Run every check. `fetch` and the served architectures are injectable for tests. Resolves
  * to { problems, report }: report lines are safe to print, problems fail the run.
  */
-/** The versions RING may be offered on CHANNEL by the recorded ring state: full, rollout or none. */
+/** The versions RING may be offered on CHANNEL by rings.json: full, rollout or none. */
 export function recordedOffers(record, ring, channel) {
   const entry = (channel === "server" ? record.server : record.rings)?.[ring];
   return [entry?.version, entry?.rollout?.version].filter(Boolean);
 }
 
 /**
- * Hold one channel's answer for a ring against the recorded offers: null when it agrees,
+ * Hold one channel's answer for a ring against what rings.json offers it: null when it agrees,
  * otherwise the problem. STATUS is the HTTP status, VERSION the offered version on a 200.
  */
 export function offerProblem(where, record, offers, status, version) {
   if (!record) return null;
-  if (status === 404)
-    return offers.length ? `${where}: got 404, but the recorded ring state offers ${offers.join(" or ")}` : null;
-  if (!offers.length) return `${where}: offers ${version}, but the recorded ring state offers nothing`;
-  if (!offers.includes(version))
-    return `${where}: offers ${version}, but the recorded ring state offers ${offers.join(" or ")}`;
+  if (status === 404) return offers.length ? `${where}: got 404, but rings.json offers ${offers.join(" or ")}` : null;
+  if (!offers.length) return `${where}: offers ${version}, but rings.json offers nothing`;
+  if (!offers.includes(version)) return `${where}: offers ${version}, but rings.json offers ${offers.join(" or ")}`;
   return null;
 }
 
-export async function watch({ url, tokens, repo, githubToken, fetch = globalThis.fetch, served, record }) {
+export async function watch({
+  url,
+  tokens,
+  repo,
+  githubToken,
+  fetch = globalThis.fetch,
+  served,
+  record,
+  commissioned = false,
+}) {
   const arches = served ?? worker.SERVED_ARCHES ?? ARCHES;
   const base = url.endsWith("/") ? url : `${url}/`;
   const problems = [];
   const report = [];
   if (record) validateRings(record);
-  else report.push("no recorded ring state: a 404 cannot be told from an empty ring; only servers-first is checked");
+  else if (commissioned)
+    problems.push("the feed is switched on (ORCA_FEED_BUCKET) but its ring state (rings.json) was not available");
+  else
+    report.push(
+      "no ring state (the feed is off): a 404 cannot be told from an empty ring; only servers-first is checked",
+    );
   const desktopOffers = new Map();
-  // Whether any channel of any canary ring answered with an offer: the feed is commissioned.
-  const seen = { offered: false };
   const feed = (name, token, method = "GET") =>
     fetch(new URL(name, base), {
       method,
@@ -218,19 +226,19 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
           problems.push(`${ring} latest-${arch}.yml: ${arch} is not served but got ${response.status}`);
         continue;
       }
-      // Only x64 is held against the record: a snapshot may leave arm64 out (#889).
+      // Only x64 is held against rings.json: a snapshot may leave arm64 out (#889).
       const offers = arch === "x64" && record ? recordedOffers(record, ring, "desktop") : [];
       if (response.status === 404) {
         const problem = arch === "x64" ? offerProblem(`${ring} latest-x64.yml`, record, offers, 404) : null;
         if (problem) problems.push(problem);
-        else report.push(`${ring} ${arch}: nothing offered${record && arch === "x64" ? " (none recorded)" : " yet"}`);
+        else
+          report.push(`${ring} ${arch}: nothing offered${record && arch === "x64" ? " (none in rings.json)" : " yet"}`);
         continue;
       }
       if (response.status !== 200) {
         problems.push(`${ring} latest-${arch}.yml: got ${response.status}`);
         continue;
       }
-      seen.offered = true;
       let channel;
       try {
         channel = parseChannel(await response.text());
@@ -296,16 +304,12 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
       else report.push(`${ring} ${arch}: ${channel.version}, served bytes match the published release`);
     }
   }
-  await watchServers({ tokens, rings, feed, github, releases, problems, report, record, desktopOffers, seen });
-  // Once anything is offered, the feed is commissioned and must have a record to be judged:
-  // without one, a missing route or snapshot would look like an empty ring.
-  if (!record && seen.offered)
-    problems.push("the feed offers versions but no recorded ring state was found; expected offers cannot be checked");
+  await watchServers({ tokens, rings, feed, github, releases, problems, report, record, desktopOffers });
   return { problems, report };
 }
 
 /** The server bundle channel of every ring with a canary (#877). Adds to problems and report. */
-async function watchServers({ tokens, rings, feed, github, releases, problems, report, record, desktopOffers, seen }) {
+async function watchServers({ tokens, rings, feed, github, releases, problems, report, record, desktopOffers }) {
   const anonymous = await feed("server/latest-linux-x64.yml");
   if (anonymous.status !== 401)
     problems.push(`a server channel request without a token got ${anonymous.status}, not 401`);
@@ -321,14 +325,13 @@ async function watchServers({ tokens, rings, feed, github, releases, problems, r
       const problem = offerProblem(where, record, offers, 404);
       if (problem) problems.push(problem);
       else if (needed) problems.push(`${where}: got 404, but ${ring}'s desktops are offered ${needed} (servers first)`);
-      else report.push(`${ring} server: nothing offered${record ? " (none recorded)" : " yet"}`);
+      else report.push(`${ring} server: nothing offered${record ? " (none in rings.json)" : " yet"}`);
       continue;
     }
     if (response.status !== 200) {
       problems.push(`${where}: got ${response.status}`);
       continue;
     }
-    seen.offered = true;
     let channel;
     try {
       channel = parseServerChannel(await response.text());
@@ -403,94 +406,7 @@ async function watchServers({ tokens, rings, feed, github, releases, problems, r
   }
 }
 
-const WRITE_RECORD = /^feed-rings-(server|desktop|promote)$/;
-const CARRIED_RECORD = /^feed-rings-carried-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;
-// A run lasts well under this, so a run created this long before the newest record found in its
-// workflow cannot hold a newer one; older runs are not read.
-const RUN_SPAN_MS = 24 * 60 * 60 * 1000;
-const MAX_PAGES = 10;
-
-/** `feed-rings-carried-<stamp>`: the name the watchdog re-keeps a record under, stamped with its time. */
-export function carriedName(recordedAt) {
-  return `feed-rings-carried-${new Date(recordedAt)
-    .toISOString()
-    .replace(/\.\d{3}Z$/, "Z")
-    .replace(/[-:]/g, "")}`;
-}
-
-/**
- * The newest recorded ring state: `{ run, name, recordedAt }`, or undefined when there is none.
- *
- * Found only through the runs of the workflows trusted to write or carry it, never through the
- * repository-wide artifact list, which other workflows' artifacts can push it out of:
- *
- * - `feed-rings-server|desktop|promote`, kept by a feed-publish.yml or feed-promote.yml run
- *   dispatched on main right after its write; recorded when the artifact was created. Each
- *   workflow's runs are read newest first, page by page, until they started a day before the
- *   newest record found in it.
- * - `feed-rings-carried-<stamp>`, kept by the newest feed-watchdog.yml run on main that kept
- *   one: a verbatim copy of the record that run checked against, stamped with that record's own
- *   time. It keeps the record alive past artifact retention while the watchdog runs daily, and
- *   never outranks a newer write.
- */
-export async function latestRecord({ repo, githubToken, fetch = globalThis.fetch }) {
-  const api = async (path) => {
-    const response = await fetch(`https://api.github.com/repos/${repo}/${path}`, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        ...(githubToken ? { Authorization: `Bearer ${githubToken}` } : {}),
-      },
-    });
-    if (response.status !== 200) throw new Error(`GitHub answered ${response.status} for ${path}`);
-    return response.json();
-  };
-  async function* runs(workflow, events) {
-    for (let page = 1; page <= MAX_PAGES; page++) {
-      const { workflow_runs: list = [] } = await api(
-        `actions/workflows/${workflow}/runs?branch=main&per_page=100&page=${page}`,
-      );
-      for (const run of list)
-        if (run.path === `.github/workflows/${workflow}` && run.head_branch === "main" && events.includes(run.event))
-          yield run;
-      if (list.length < 100) return;
-    }
-  }
-  const artifactsOf = async (run) =>
-    ((await api(`actions/runs/${run.id}/artifacts?per_page=100`)).artifacts ?? []).filter((a) => !a.expired);
-  const newer = (a, b) => !b || Date.parse(a.recordedAt) > Date.parse(b.recordedAt);
-  let best;
-  for (const workflow of ["feed-publish.yml", "feed-promote.yml"]) {
-    let found;
-    for await (const run of runs(workflow, ["workflow_dispatch"])) {
-      if (found && Date.parse(run.created_at) < Date.parse(found.recordedAt) - RUN_SPAN_MS) break;
-      for (const artifact of await artifactsOf(run)) {
-        if (!WRITE_RECORD.test(artifact.name)) continue;
-        const candidate = { run: run.id, name: artifact.name, recordedAt: artifact.created_at };
-        if (newer(candidate, found)) found = candidate;
-      }
-    }
-    if (found && newer(found, best)) best = found;
-  }
-  for await (const run of runs("feed-watchdog.yml", ["schedule", "workflow_dispatch"])) {
-    const carried = (await artifactsOf(run)).find((a) => CARRIED_RECORD.test(a.name));
-    if (!carried) continue;
-    const [, y, mo, d, h, mi, se] = CARRIED_RECORD.exec(carried.name);
-    const candidate = { run: run.id, name: carried.name, recordedAt: `${y}-${mo}-${d}T${h}:${mi}:${se}Z` };
-    if (newer(candidate, best)) best = candidate;
-    break;
-  }
-  return best;
-}
-
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url) && process.argv[2] === "record") {
-  try {
-    const found = await latestRecord({ repo: process.env.GITHUB_REPOSITORY, githubToken: process.env.GITHUB_TOKEN });
-    if (found) console.log(`${found.run} ${found.name} ${carriedName(found.recordedAt)}`);
-  } catch (error) {
-    console.error(`::error::${error.message}`);
-    process.exit(1);
-  }
-} else if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   let tokens;
   try {
     tokens = JSON.parse(process.env.FEED_CANARY_TOKENS ?? "");
@@ -504,20 +420,21 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.exit(1);
   }
   let record;
-  if (process.env.FEED_RINGS_RECORD) {
+  if (process.env.FEED_RINGS) {
     try {
-      record = validateRings(JSON.parse(readFileSync(process.env.FEED_RINGS_RECORD, "utf8")));
+      record = validateRings(JSON.parse(process.env.FEED_RINGS));
     } catch (error) {
-      console.error(`::error::the recorded ring state is unreadable: ${error.message}`);
+      console.error(`::error::the feed's ring state is unreadable: ${error.message}`);
       process.exit(1);
     }
-  } else console.log("::warning::no recorded ring state (FEED_RINGS_RECORD); only servers-first is checked");
+  }
   const { problems, report } = await watch({
     url,
     tokens,
     repo: process.env.GITHUB_REPOSITORY,
     githubToken: process.env.GITHUB_TOKEN,
     record,
+    commissioned: process.env.FEED_COMMISSIONED === "true",
   });
   for (const line of report) console.log(line);
   for (const problem of problems) console.error(`::error::${problem}`);
