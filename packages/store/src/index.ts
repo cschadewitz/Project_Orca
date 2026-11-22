@@ -18,3 +18,10 @@ export * from "./store-contracts.js";
 
 export * from "./admission-retry-store.js";
 export * from "./continuation-admission-store.js";
+
+export { sqliteStores, sqliteCollection, SQLITE_METADATA_FILE, type SqliteStoresOptions } from "./sqlite/stores.js";
+export { SqliteDatabase, type SqliteOptions } from "./sqlite/database.js";
+export { SqliteDocumentStore } from "./sqlite/documents.js";
+export { SqliteEventStore } from "./sqlite/events.js";
+export { SqlitePlanJournal } from "./sqlite/journal.js";
+export { SqliteArtifactStore } from "./sqlite/artifacts.js";

@@ -1,10 +1,10 @@
 # Store workload benchmark (#341)
 
 A reproducible benchmark of the four storage workloads #341 names, at three dataset scales,
-run through the #338 store contracts so the same code measures every backend. This is the
-harness only. The comparison that decides whether a graph projection or a key-value cache
-improves on SQLite waits for #339's SQLite baseline and is recorded in an ADR, with its
-budgets written down **before** any comparison is read.
+run through the #338 store contracts so the same code measures every backend: memory, file
+and SQLite (#339). The comparison that decides whether a graph projection or a key-value
+cache improves on SQLite is recorded in an ADR, with its budgets written down **before** any
+comparison is read.
 
 Code: `tools/benchmarks/store-workloads/`. Self-test: `tools/test/store-workloads.test.js`
 (runs the smoke shape on every push). No production store code and no new dependency.
@@ -16,7 +16,7 @@ node tools/benchmarks/store-workloads/run.js --scale medium --backend file --rep
 ```
 
 Options: `--scale smoke|small|medium|large` (required), `--backend memory,file,sqlite`
-(default `memory,file`; `sqlite` reports `skipped` until #339 registers it), `--seed`
+(default `memory,file`), `--seed`
 (default 341), `--repeat` (default 3), `--scratch DIR` (default the OS temp dir),
 `--workloads` (comma list), `--output FILE` (refuses to overwrite; default stdout). Progress
 goes to stderr. The process exits 1 if any workload invariant fails.
@@ -79,8 +79,8 @@ each workload's measurements, its wall time and RSS delta, the store's bytes on 
 
 Add an entry to `backends.js` with `name`, `durable` and `create(dir)` returning
 `{ stores(), collection(name), dispose() }`: a new handle per call on a durable backend.
-That is the same shape as the conformance suite's `ConformanceBackend`. The `sqlite` entry
-is a placeholder that #339 replaces.
+That is the same shape as the conformance suite's `ConformanceBackend`. An entry with
+`unavailable: "<reason>"` instead of `create` is reported as `skipped`.
 
 ## First observations (container smoke, not the reference machine)
 
@@ -99,8 +99,9 @@ comparison will need to look at. These numbers are not a baseline:
 
 ## What is next (not in this PR)
 
-1. #339 registers the SQLite backend; run `small`, `medium` and `large` on the reference
-   machine, cold and warm, and keep the raw reports beside the ADR.
+1. Run `small`, `medium` and `large` on the reference machine, cold and warm, for all three
+   backends, and keep the raw reports beside the ADR. Container observations for SQLite are
+   in `docs/storage/sqlite-metadata.md`.
 2. The ADR records the target p95 latency, throughput, resource, durability, recovery-time
    and operating-complexity budgets and the test machine **before** the comparison, then
    decides graph and key-value separately, each with a reconsideration trigger.

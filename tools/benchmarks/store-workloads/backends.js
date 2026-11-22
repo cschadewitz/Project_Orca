@@ -49,7 +49,27 @@ export function backends(api) {
     sqlite: {
       name: "sqlite",
       durable: true,
-      unavailable: "No SQLite backend yet: #339 adds it, then registers it here.",
+      async create(dir) {
+        // Every handle is its own connection, closed when the backend is disposed.
+        const open = [];
+        const track = (handle, close) => {
+          open.push(close);
+          return handle;
+        };
+        return {
+          stores: () => {
+            const stores = store.sqliteStores(dir);
+            return track(stores, () => stores.close());
+          },
+          collection: (name) => {
+            const collection = store.sqliteCollection(dir, name, passthrough);
+            return track(collection, () => collection.collection.db.close());
+          },
+          dispose: async () => {
+            for (const close of open.splice(0)) close();
+          },
+        };
+      },
     },
   };
 }

@@ -35,7 +35,8 @@ export interface PlanJournal {
   subscribe(listener: PlanEventListener, planId?: string): () => void;
 }
 
-abstract class BasePlanJournal implements PlanJournal {
+/** Sequencing is the backend's (`write`); notifying subscribers after it commits is shared. */
+export abstract class BasePlanJournal implements PlanJournal {
   private readonly listeners = new Set<{ listener: PlanEventListener; planId?: string | undefined }>();
   constructor(protected readonly clock: Clock = systemClock) {}
 
