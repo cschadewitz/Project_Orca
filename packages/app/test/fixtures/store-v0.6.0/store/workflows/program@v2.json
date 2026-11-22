@@ -1,0 +1,274 @@
+{
+  "id": "program",
+  "name": "Program (request -> plan -> SDLC runs)",
+  "version": "2",
+  "description": "Decompose a feature/system request, plan it against everything else ORCA is tracking, and drive each piece through ai-sdlc.",
+  "vars": {
+    "itemWorkflow": "ai-sdlc",
+    "concurrency": 2,
+    "maxAutoApproveItems": 12
+  },
+  "inputs": {
+    "request": "The Request record (title, body).",
+    "plan": "Optional plan key to register the work in (defaults to orca.config.yaml `planning.plan`)."
+  },
+  "start": "start",
+  "nodes": {
+    "start": {
+      "type": "start"
+    },
+    "decompose": {
+      "name": "Decompose request into work items",
+      "type": "agent",
+      "agent": {
+        "role": "decomposer"
+      },
+      "template": "program/decompose",
+      "inputs": [],
+      "produces": [
+        {
+          "kind": "decomposition",
+          "path": ".orca/program/{{ request.id }}/decomposition.md",
+          "required": true,
+          "validate": {
+            "requiredFields": [
+              "items"
+            ]
+          }
+        }
+      ],
+      "completion": {
+        "mode": "turn-end",
+        "maxFollowUps": 1,
+        "maxAttempts": 1
+      },
+      "vars": {}
+    },
+    "register": {
+      "type": "custom:plan-register",
+      "name": "Register work items, dependencies, risks and decisions in the plan"
+    },
+    "assess-risks": {
+      "name": "Assess risks across the breakdown",
+      "type": "agent",
+      "agent": {
+        "role": "planner"
+      },
+      "template": "program/assess-risks",
+      "inputs": [
+        {
+          "kind": "decomposition",
+          "required": true
+        }
+      ],
+      "produces": [
+        {
+          "kind": "risk-register",
+          "name": "riskRegister",
+          "path": ".orca/program/{{ request.id }}/risk-register.md",
+          "required": true,
+          "validate": {
+            "requiredFields": [
+              "status"
+            ]
+          }
+        }
+      ],
+      "completion": {
+        "mode": "turn-end",
+        "maxFollowUps": 1,
+        "maxAttempts": 1
+      },
+      "vars": {}
+    },
+    "decide": {
+      "name": "Make each open decision with a decision matrix",
+      "type": "loop",
+      "mode": "forEach",
+      "items": "vars.openDecisions",
+      "itemVar": "decision",
+      "indexVar": "index",
+      "maxIterations": 20,
+      "body": {
+        "graph": {
+          "start": "start",
+          "nodes": {
+            "start": {
+              "type": "start"
+            },
+            "matrix": {
+              "name": "Fill in the decision matrix",
+              "type": "agent",
+              "agent": {
+                "role": "planner"
+              },
+              "template": "program/decide",
+              "inputs": [],
+              "produces": [
+                {
+                  "kind": "decision-matrix",
+                  "name": "decisionMatrix",
+                  "path": ".orca/program/{{ request.id }}/decisions/{{ vars.decision.key }}.md",
+                  "required": true,
+                  "validate": {
+                    "requiredFields": [
+                      "options"
+                    ]
+                  }
+                }
+              ],
+              "completion": {
+                "mode": "turn-end",
+                "maxFollowUps": 1,
+                "maxAttempts": 1
+              },
+              "vars": {}
+            },
+            "resolve": {
+              "type": "custom:decision-matrix",
+              "name": "Score the matrix and record the decision",
+              "artifact": "decisionMatrix",
+              "decision": "{{ vars.decision.key }}"
+            },
+            "done": {
+              "type": "end",
+              "outcome": "success"
+            }
+          },
+          "edges": [
+            {
+              "from": "start",
+              "to": "matrix"
+            },
+            {
+              "from": "matrix",
+              "to": "resolve"
+            },
+            {
+              "from": "resolve",
+              "to": "done"
+            }
+          ]
+        }
+      },
+      "breakOnFailure": true
+    },
+    "schedule": {
+      "type": "custom:plan-schedule",
+      "name": "Compute the schedule",
+      "artifactPath": ".orca/program/{{ request.id }}/schedule.md"
+    },
+    "plan-gate": {
+      "name": "Approve the plan",
+      "type": "gate",
+      "question": "Approve {{ len(vars.workItems) }} work items for '{{ request.title }}'? Ready now: {{ join(pluck(vars.schedule.ready, 'slug'), ', ') }}. Waiting: {{ len(vars.schedule.waiting) }}. Held for risk: {{ len(vars.schedule.held) }}. Highest open risk: {{ vars.schedule.risk.highestLevel }}.",
+      "options": [
+        {
+          "id": "approve",
+          "label": "approve"
+        },
+        {
+          "id": "reject",
+          "label": "reject"
+        }
+      ],
+      "autoApproveWhen": "len(vars.workItems) <= vars.maxAutoApproveItems && vars.schedule.risk.highestLevel != 'critical' && len(vars.schedule.unschedulable) == 0",
+      "autoOption": "approve"
+    },
+    "dispatch": {
+      "type": "custom:plan-dispatch",
+      "name": "Run SDLC per work item in schedule order",
+      "concurrency": 2,
+      "scope": "request",
+      "onWaiting": "defer"
+    },
+    "summarize": {
+      "name": "Summarise the program",
+      "type": "agent",
+      "agent": {
+        "role": "planner"
+      },
+      "template": "program/summary",
+      "inputs": [
+        {
+          "kind": "decomposition",
+          "required": true
+        },
+        {
+          "name": "riskRegister",
+          "required": false
+        },
+        {
+          "kind": "schedule",
+          "required": false
+        }
+      ],
+      "produces": [
+        {
+          "kind": "generic",
+          "name": "programSummary",
+          "path": ".orca/program/{{ request.id }}/summary.md",
+          "required": true
+        }
+      ],
+      "completion": {
+        "mode": "turn-end",
+        "maxFollowUps": 1,
+        "maxAttempts": 1
+      },
+      "vars": {}
+    },
+    "done": {
+      "type": "end",
+      "outcome": "success"
+    },
+    "rejected": {
+      "type": "end",
+      "outcome": "failure",
+      "message": "Plan rejected."
+    }
+  },
+  "edges": [
+    {
+      "from": "start",
+      "to": "decompose"
+    },
+    {
+      "from": "decompose",
+      "to": "register"
+    },
+    {
+      "from": "register",
+      "to": "assess-risks"
+    },
+    {
+      "from": "assess-risks",
+      "to": "decide"
+    },
+    {
+      "from": "decide",
+      "to": "schedule"
+    },
+    {
+      "from": "schedule",
+      "to": "plan-gate"
+    },
+    {
+      "from": "plan-gate",
+      "to": "dispatch",
+      "when": "choice == 'approve'"
+    },
+    {
+      "from": "plan-gate",
+      "to": "rejected"
+    },
+    {
+      "from": "dispatch",
+      "to": "summarize"
+    },
+    {
+      "from": "summarize",
+      "to": "done"
+    }
+  ]
+}

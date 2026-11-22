@@ -26,9 +26,15 @@ Do not download or open them.
 Check that your computer appears in the platform and architecture rows. If it doesn't,
 stop and tell your coordinator. Don't try a different file.
 
+On Linux, this round offers only the **Ubuntu 24.04 Desktop x64** (`amd64`) **`.deb`**
+named in the file table. Its package and command are `orca-desktop`. Ignore any tar.gz,
+AppImage or arm64 file on the download page.
+
 ## What you are agreeing to
 
-- Install or extract the candidate on your own computer, under your own user account.
+- Install the candidate on your own computer, under your own user account. On Linux
+  that is a reviewed `sudo apt-get install` of the checked `.deb`; ORCA itself always
+  runs as you.
 - Make a new throwaway folder, `orca-trial`, with a tiny throwaway Git project in it.
   Use only that folder with ORCA.
 - Run one built-in sample. It starts no AI agent, needs no account and no internet, and
@@ -46,7 +52,7 @@ at all.
   separately distributed installer signed by **Casey Schadewitz**. The
   [Windows page](windows.md) P4 names the single case where you may continue past
   SmartScreen; every other warning, including any browser warning, means **stop and
-  report**.
+  report**. The Linux `.deb` is unsigned too: its SHA-256 on your card is its identity.
 - This round tests installing, launching and a first local run. It does not test AI coding
   agents. The provider integrations in this code (Claude, Codex, Gemini, Pi, GitHub
   Copilot CLI, OpenCode), the review judges and ORCA's own tool-guard rules are
@@ -76,12 +82,17 @@ at all.
 
 - any value on your card is unfilled, or the file you downloaded doesn't match its SHA-256
 - your operating system, browser or antivirus shows a security warning, or blocks the file
-- an installer asks for administrator rights
+- an installer asks for administrator rights. The only exceptions are the Linux page's
+  `sudo apt-get` commands: P3's dry run, P4's install of the `.deb` whose hash matched,
+  and the reviewed removal of `orca-desktop` after the round
+- APT's plan removes, upgrades or downgrades a package, or installs anything other than
+  `orca-desktop`
+- anything asks you to run ORCA with `sudo` or as root
 - ORCA asks you to sign in, enter a key or token, pay, or pick an AI agent
 - a folder ORCA shows you is outside your throwaway `orca-trial` folder
-- anything asks you to turn off a protection: sandbox, SmartScreen, antivirus, or a
-  permission
-- files change outside `orca-trial` and the folder you put the app in, or you think data
+- anything asks you to turn off a protection: sandbox, AppArmor, SmartScreen, antivirus,
+  or a permission
+- files change outside `orca-trial` and the app's own install location, or you think data
   could be lost
 - you're unsure whether something already happened. Don't repeat it to find out.
 - you're uncomfortable for any reason

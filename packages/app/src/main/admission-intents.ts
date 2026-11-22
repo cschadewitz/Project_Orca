@@ -5,8 +5,9 @@
  * records are dropped on write, so the journal holds only retained (unresolved) intents.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { PROTECTED_STORAGE_CODE, type ProtectedStorageReason, type ProtectedStorageStage } from "../bridge.js";
 import type { LaunchReview, RetainedLaunch } from "../configuration-launch-contract.js";
 import { canonicalGuidedValue, parseGuidedReview } from "./guided-intent-contract.js";
 
@@ -33,8 +34,87 @@ export interface IntentEncryption {
 function sameScope(a: IntentScope, b: IntentScope): boolean {
   return a.target === b.target && a.principalId === b.principalId && a.workspaceId === b.workspaceId;
 }
-const refusal = () =>
-  new Error("Secure run-intent storage is unavailable. No run was submitted; restore the OS keychain before retrying.");
+/**
+ * Why protected storage refused (#857). Electron cannot tell a cancelled unlock prompt from a
+ * locked keyring, so both are `keyring-locked`: the Linux backend is a real keyring that did
+ * not hand over ORCA's key. `no-keyring` is Linux's `basic_text`, which ORCA never uses.
+ */
+function storageFix(reason: ProtectedStorageReason, then: string): string {
+  switch (reason) {
+    // Chromium asks the Linux keyring for ORCA's key once per process and keeps a refusal
+    // until the app exits (seen natively on the #857 recut: unlocking the keyring afterwards
+    // does not help). So the way on is a restart, not an in-app retry. A fresh Ubuntu session
+    // may have no login keyring yet; its prompt then asks to create one instead of unlocking.
+    case "keyring-locked":
+      return `The system keyring did not give ORCA its encryption key: the keyring is locked or not set up yet, or its prompt was cancelled. ORCA can ask the keyring only once each time it starts, so quit and reopen ORCA, follow the system prompt to create or unlock your keyring, then ${then}.`;
+    case "no-keyring":
+      return `No supported system keyring (GNOME Keyring or KWallet) is available in this session, and ORCA does not store run intents in plain text. Start or unlock your desktop keyring, then quit and reopen ORCA and ${then}.`;
+    case "unavailable":
+      return `Restore the OS keychain, then ${then}.`;
+  }
+}
+/**
+ * Where the refusal happened, which decides what the screen may claim:
+ * - `before-send`: this launch was certainly not sent and no earlier retained intent can be
+ *   in the way: the journal was read with none for this work and the new one's write was
+ *   refused, or there is no journal at all. The only stage that may say "No run was
+ *   submitted" and offer a fresh Retry launch.
+ * - `after-send`: the daemon may already hold the launch; its receipt could not be saved.
+ * - `unconfirmed`: reading an existing journal failed (submit, recover, resolve, list). An
+ *   earlier launch may exist, so nothing is claimed about it and the guidance is recovery-only
+ *   until a successful read verifies that no retained launch matches.
+ */
+function storageMessage(reason: ProtectedStorageReason, stage: ProtectedStorageStage): string {
+  if (stage === "before-send")
+    return reason === "unavailable"
+      ? "Secure run-intent storage is unavailable. No run was submitted; restore the OS keychain before retrying."
+      : `Secure run-intent storage is unavailable. No run was submitted. ${storageFix(reason, "launch again")}`;
+  if (stage === "after-send")
+    return `The launch was sent, but secure run-intent storage refused its receipt. Do not start new work. ${storageFix(reason, "recover the original launch")}`;
+  // Reopening or unlocking does not prove the earlier launch is absent, so this stage never
+  // points at a new launch. Recovery reads the journal first; only a verified absence (the
+  // renderer's verified-new state) says that a new launch is safe.
+  return `Secure run-intent storage is unavailable, so ORCA cannot read its retained launches. An earlier launch may still exist; do not start new work. ${storageFix(reason, "recover the original launch. ORCA reads its retained launches first and tells you if a new launch is safe")}`;
+}
+/**
+ * A fail-closed refusal of protected storage. The main process maps it to the `PROTECTED_STORAGE`
+ * bridge code with `details.reason` and `details.stage`, so the renderer can tell a refused new
+ * launch (retry it) from a launch that may already exist (recover it).
+ */
+export class ProtectedStorageRefusal extends Error {
+  override readonly name = "ProtectedStorageRefusal";
+  constructor(
+    readonly reason: ProtectedStorageReason,
+    readonly stage: ProtectedStorageStage = "unconfirmed",
+  ) {
+    super(storageMessage(reason, stage));
+  }
+  /** The same cause, restated for the caller that knows where in the launch it happened. */
+  at(stage: ProtectedStorageStage): ProtectedStorageRefusal {
+    return new ProtectedStorageRefusal(this.reason, stage);
+  }
+}
+export function isProtectedStorageRefusal(error: unknown): error is ProtectedStorageRefusal {
+  return error instanceof ProtectedStorageRefusal;
+}
+/** The bridge shape of a refusal; anything else is left to the generic mapping. */
+export function protectedStorageBridgeError(
+  error: unknown,
+): { code: typeof PROTECTED_STORAGE_CODE; message: string; details: { reason: string; stage: string } } | undefined {
+  if (!isProtectedStorageRefusal(error)) return undefined;
+  return {
+    code: PROTECTED_STORAGE_CODE,
+    message: error.message,
+    details: { reason: error.reason, stage: error.stage },
+  };
+}
+const KEYRING_BACKENDS = new Set(["gnome_libsecret", "kwallet", "kwallet5", "kwallet6"]);
+/** Thrown inside validation, where the catch replaces it with the "could not be verified" message. */
+const invalid = () => new Error("Saved run intents are invalid.");
+const receiptMismatch = () =>
+  new Error(
+    "The retained intent does not match this admission receipt. Recover the original intent; do not submit new work.",
+  );
 /** The most retained intents, and so the most rows any journal file holds: no write keeps an abandoned one. */
 const RETAINED_LIMIT = 1000;
 const full = () =>
@@ -46,22 +126,62 @@ export class AdmissionIntents {
     private readonly path: string,
     private readonly encryption: IntentEncryption,
   ) {}
+  /** Never falls back: `basic_text` is refused even when Electron reports it as available. */
+  private refusal(): ProtectedStorageRefusal {
+    const backend = this.encryption.getSelectedStorageBackend?.();
+    if (backend === "basic_text") return new ProtectedStorageRefusal("no-keyring");
+    if (backend !== undefined && KEYRING_BACKENDS.has(backend)) return new ProtectedStorageRefusal("keyring-locked");
+    return new ProtectedStorageRefusal("unavailable");
+  }
   private check(): void {
     if (!this.encryption.isEncryptionAvailable() || this.encryption.getSelectedStorageBackend?.() === "basic_text")
-      throw refusal();
+      throw this.refusal();
   }
+  /**
+   * `before-send` only when no retained intent can exist: the check refused and there is no
+   * journal file at all (nothing was ever retained, so nothing was sent). That is also what a
+   * fresh install sees when Launch work first reads retained launches. A refused read of an
+   * existing journal stays `unconfirmed` (#857 review): an earlier retained launch may exist
+   * and must not be offered again as new.
+   */
   private read(): IntentRecord[] {
-    this.check();
+    try {
+      this.check();
+    } catch (error) {
+      if (isProtectedStorageRefusal(error) && !this.journalExists()) throw error.at("before-send");
+      throw error;
+    }
+    return this.readChecked();
+  }
+  /** Read and verified with no existing intent for this work: a refused write was not sent. */
+  private writeNewWork(records: IntentRecord[]): void {
+    try {
+      this.write(records);
+    } catch (error) {
+      if (isProtectedStorageRefusal(error)) throw error.at("before-send");
+      throw error;
+    }
+  }
+  private journalExists(): boolean {
+    try {
+      statSync(this.path);
+      return true;
+    } catch (error) {
+      // Anything but a confirmed absence (a permission error, say) is treated as "may exist".
+      return (error as NodeJS.ErrnoException).code !== "ENOENT";
+    }
+  }
+  private readChecked(): IntentRecord[] {
     let bytes: Buffer;
     try {
       bytes = readFileSync(this.path);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw refusal();
+      throw new ProtectedStorageRefusal("unavailable");
     }
     try {
       const data: unknown = JSON.parse(this.encryption.decryptString(bytes));
-      if (!Array.isArray(data) || data.length > RETAINED_LIMIT) throw refusal();
+      if (!Array.isArray(data) || data.length > RETAINED_LIMIT) throw invalid();
       const ids = new Set<string>();
       for (const row of data) {
         if (
@@ -77,7 +197,7 @@ export class AdmissionIntents {
           !["retained", "abandoned"].includes(row.state) ||
           ids.has(row.id)
         )
-          throw refusal();
+          throw invalid();
         if (Object.hasOwn(row, "guided")) {
           const guided = row.guided as IntentRecord["guided"];
           if (
@@ -88,9 +208,9 @@ export class AdmissionIntents {
               (id) => id !== undefined && (typeof id !== "string" || !id.length),
             )
           )
-            throw refusal();
+            throw invalid();
           const review = parseGuidedReview(guided.review);
-          if (review.workflowId !== row.workflowId || review.target.workspaceId !== row.workspaceId) throw refusal();
+          if (review.workflowId !== row.workflowId || review.target.workspaceId !== row.workspaceId) throw invalid();
         }
         ids.add(row.id);
       }
@@ -105,9 +225,14 @@ export class AdmissionIntents {
    * Every retained record is kept, since retry, recovery and reconciliation need it. */
   private write(records: IntentRecord[]): void {
     this.check();
+    const retained = records.filter((r) => r.state === "retained");
+    let bytes: Buffer;
     try {
-      const retained = records.filter((r) => r.state === "retained");
-      const bytes = this.encryption.encryptString(JSON.stringify(retained));
+      bytes = this.encryption.encryptString(JSON.stringify(retained));
+    } catch {
+      throw this.refusal();
+    }
+    try {
       mkdirSync(dirname(this.path), { recursive: true });
       const temporary = `${this.path}.${randomUUID()}.tmp`;
       const fd = openSync(temporary, "wx", 0o600);
@@ -128,7 +253,7 @@ export class AdmissionIntents {
         }
       }
     } catch {
-      throw refusal();
+      throw new ProtectedStorageRefusal("unavailable");
     }
   }
   /** Persist before the first network admission. Repeated clicks/restarts reuse exact intent. */
@@ -157,7 +282,7 @@ export class AdmissionIntents {
       idempotencyKey: randomUUID(),
       state: "retained",
     };
-    this.write([...records, record]);
+    this.writeNewWork([...records, record]);
     return { ...record };
   }
   list(scope: IntentScope): Pick<IntentRecord, "id" | "workflowId">[] {
@@ -172,7 +297,8 @@ export class AdmissionIntents {
   }
   retainGuided(scope: IntentScope, raw: LaunchReview): IntentRecord {
     const review = parseGuidedReview(raw);
-    if (scope.workspaceId !== review.target.workspaceId || !scope.target || !scope.principalId) throw refusal();
+    if (scope.workspaceId !== review.target.workspaceId || !scope.target || !scope.principalId)
+      throw new Error("Verified run-intent scope is unavailable. No run was submitted.");
     const records = this.read();
     const held = records.find((r) => r.workflowId === review.workflowId && r.state === "retained");
     if (held) {
@@ -191,7 +317,7 @@ export class AdmissionIntents {
       state: "retained",
       guided: { version: 1, review },
     };
-    this.write([...records, record]);
+    this.writeNewWork([...records, record]);
     return structuredClone(record);
   }
   guided(scope: IntentScope, id: string): IntentRecord {
@@ -214,11 +340,11 @@ export class AdmissionIntents {
   recordGuidedReceipt(scope: IntentScope, id: string, ids: { operationId?: string; admissionId?: string }): void {
     const records = this.read();
     const record = records.find((r) => sameScope(r, scope) && r.id === id && r.state === "retained");
-    if (!record?.guided) throw refusal();
+    if (!record?.guided) throw receiptMismatch();
     for (const key of ["operationId", "admissionId"] as const) {
       const value = ids[key];
       if (value === undefined) continue;
-      if (!value || (record.guided[key] && record.guided[key] !== value)) throw refusal();
+      if (!value || (record.guided[key] && record.guided[key] !== value)) throw receiptMismatch();
       record.guided[key] = value;
     }
     this.write(records);

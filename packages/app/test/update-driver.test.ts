@@ -28,7 +28,7 @@ vi.mock("electron-updater", () => ({
     },
   },
 }));
-import { updateDriver } from "../src/main/update-driver.js";
+import { acceptsVersion, updateDriver } from "../src/main/update-driver.js";
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
@@ -134,7 +134,9 @@ it.each(["timeout", "error", "throw"] as const)(
       if (kind === "error") failed();
       await assertion;
       failed(); // Duplicate/late callbacks cannot change the already classified outcome.
-      expect(fake.instance.quitAndInstall).toHaveBeenCalledExactlyOnceWith(false, true);
+      // Silent, then relaunch: an interactive per-user installer would stop on "who should
+      // this be installed for", where "all users" elevates into a second, per-machine install.
+      expect(fake.instance.quitAndInstall).toHaveBeenCalledExactlyOnceWith(true, true);
       expect(fake.instance.off).toHaveBeenCalledExactlyOnceWith("error", failed);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -143,3 +145,29 @@ it.each(["timeout", "error", "throw"] as const)(
     }
   },
 );
+
+it("offers release candidates only to installs that opt in", async () => {
+  expect(acceptsVersion("0.7.1", {})).toBe(true);
+  expect(acceptsVersion("0.7.1-rc.1", {})).toBe(false);
+  expect(acceptsVersion("0.7.1-rc.1", { ORCA_UPDATE_PRERELEASE: "1" })).toBe(true);
+  for (const value of ["true", "yes", "0", ""])
+    expect(acceptsVersion("0.7.1-rc.1", { ORCA_UPDATE_PRERELEASE: value })).toBe(false);
+  const dir = mkdtempSync(join(tmpdir(), "orca-feed-prerelease-"));
+  try {
+    writeFileSync(join(dir, "token"), "synthetic");
+    vi.stubEnv("ORCA_UPDATE_URL", "https://feed.example/preview/");
+    vi.stubEnv("ORCA_UPDATE_TOKEN_FILE", join(dir, "token"));
+    fake.instance.checkForUpdates.mockResolvedValue({ isUpdateAvailable: true, updateInfo: { version: "0.7.1-rc.1" } });
+    const driver = updateDriver(true, "win32", "x64")!;
+    expect(await driver.check()).toBeUndefined();
+    vi.stubEnv("ORCA_UPDATE_PRERELEASE", "1");
+    expect(await driver.check()).toBe("0.7.1-rc.1");
+    expect(fake.instance.allowDowngrade).toBe(false);
+  } finally {
+    fake.instance.checkForUpdates.mockReset();
+    fake.instance.checkForUpdates.mockImplementation(() =>
+      Promise.resolve({ isUpdateAvailable: true, updateInfo: { version: "0.6.1" } }),
+    );
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

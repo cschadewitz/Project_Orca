@@ -6,6 +6,7 @@
   "type": "module",
   "main": "./dist/main/index.js",
   "author": "ORCA",
+  "homepage": "https://github.com/cschadewitz/Project_Orca",
   "scripts": {
     "dev": "node scripts/dev.js",
     "build:renderer": "vite build",
@@ -29,10 +30,10 @@
     "@testing-library/react": "^16.3.3",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
-    "@vitejs/plugin-react": "^6.1.2",
+    "@vitejs/plugin-react": "^6.3.0",
     "electron": "^44.10.0",
     "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2",
-    "vite": "^8.3.5"
+    "vite": "^8.3.8"
   }
 }

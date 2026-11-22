@@ -23,7 +23,7 @@ it("routes the heavy Linux jobs to the runner the picker chose, from the workflo
   const pick = runner.steps.find(({ id }) => id === "pick");
   expect(pick.run).toBe("node tools/linux-runner.js");
   expect(pick.env).toEqual({
-    FORCE_HOSTED: "${{ vars.CI_FORCE_HOSTED }}",
+    FORCE_HOSTED: "${{ inputs.hosted_only && 'true' || vars.CI_FORCE_HOSTED }}",
     HEALTH_URL: "${{ secrets.CI_RUNNER_HEALTH_URL }}",
   });
   expect(Object.keys(workflow.on.workflow_call.secrets)).toEqual(["CI_RUNNER_HEALTH_URL"]);
@@ -59,7 +59,9 @@ it("on GitHub-hosted Linux, grants user namespaces to the launched Electron only
 
 it("keeps release-call inputs, exact test checkouts and both native hosted legs", () => {
   expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual(["ref"]);
-  expect(Object.keys(workflow.on.workflow_call.inputs)).toEqual(["ref"]);
+  expect(Object.keys(workflow.on.workflow_call.inputs)).toEqual(["ref", "hosted_only", "upgrade_launch_required"]);
+  expect(workflow.on.workflow_call.inputs.hosted_only).toMatchObject({ type: "boolean", default: false });
+  expect(workflow.on.workflow_call.inputs.upgrade_launch_required).toMatchObject({ type: "boolean", default: true });
   expect(matrix.map(({ os }) => os)).toEqual(["ubuntu-latest", "macos-latest", "windows-latest"]);
   for (const entry of matrix.filter(({ os }) => os !== "ubuntu-latest")) expect(entry.runner).toBe(entry.os);
   expect(proof["runs-on"]).toBe("${{ matrix.runner }}");

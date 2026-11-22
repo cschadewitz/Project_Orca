@@ -1,0 +1,67 @@
+[
+  {
+    "id": "dep_7VJ22ZJ4XZN84WXNS4YXR295A0",
+    "planId": "plan_01M7Y4N2F8SXV6CPP5X7GXWN58",
+    "from": "wi_01M7Y4N2FEB9B6JRDH72BKHGMZ",
+    "target": {
+      "kind": "decision",
+      "decisionId": "dec_6N0D4VZ3831E5E1CES5NCHHPQZ"
+    },
+    "type": "blocks",
+    "requiredBy": "start",
+    "status": "satisfied",
+    "origin": {
+      "kind": "decomposition",
+      "runId": "run_01M7Y4N25RKWC5S4YPWMJX1R3M",
+      "artifactId": "art_01M7Y4N2EC8Z1T9JE45YV9392Q"
+    },
+    "createdAt": "2026-11-21T04:08:25.848Z",
+    "updatedAt": "2026-11-21T04:08:26.402Z",
+    "rationale": "decision session-store must be made first",
+    "resolvedAt": "2026-11-21T04:08:26.402Z",
+    "resolution": "decision session-store = cookie"
+  },
+  {
+    "id": "dep_EQ89MFMMV3N5PFHJCDWGZY09WB",
+    "planId": "plan_01M7Y4N2F8SXV6CPP5X7GXWN58",
+    "from": "wi_01M7Y4N2FEB9B6JRDH72BKHGMZ",
+    "target": {
+      "kind": "work-item",
+      "workItemId": "wi_01M7Y4N2FEP02284GR1X5MZ93Y"
+    },
+    "type": "blocks",
+    "requiredBy": "start",
+    "status": "satisfied",
+    "origin": {
+      "kind": "decomposition",
+      "runId": "run_01M7Y4N25RKWC5S4YPWMJX1R3M",
+      "artifactId": "art_01M7Y4N2EC8Z1T9JE45YV9392Q"
+    },
+    "createdAt": "2026-11-21T04:08:25.851Z",
+    "updatedAt": "2026-11-21T04:08:28.040Z",
+    "resolvedAt": "2026-11-21T04:08:28.040Z",
+    "resolution": "schema is done"
+  },
+  {
+    "id": "dep_22VR8PZE6XRZHGW2VPHFWF9PQD",
+    "planId": "plan_01M7Y4N2F8SXV6CPP5X7GXWN58",
+    "from": "wi_01M7Y4N2FEW0KDSP52EJ2M09VW",
+    "target": {
+      "kind": "work-item",
+      "workItemId": "wi_01M7Y4N2FEB9B6JRDH72BKHGMZ",
+      "stage": "spec"
+    },
+    "type": "informs",
+    "requiredBy": "start",
+    "status": "satisfied",
+    "origin": {
+      "kind": "decomposition",
+      "runId": "run_01M7Y4N25RKWC5S4YPWMJX1R3M",
+      "artifactId": "art_01M7Y4N2EC8Z1T9JE45YV9392Q"
+    },
+    "createdAt": "2026-11-21T04:08:25.853Z",
+    "updatedAt": "2026-11-21T04:08:28.666Z",
+    "resolvedAt": "2026-11-21T04:08:28.666Z",
+    "resolution": "login-api produced spec"
+  }
+]

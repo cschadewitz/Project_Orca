@@ -1,0 +1,17 @@
+# Copy to wrangler.toml (not committed), set your bucket and route, then `npx wrangler deploy`
+# from this directory. Add the token map with `npx wrangler secret put FEED_TOKENS`.
+name = "orca-feed"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = false
+
+[[r2_buckets]]
+binding = "FEED"
+bucket_name = "orca-feed"
+
+[[routes]]
+pattern = "updates.example.net"
+custom_domain = true
+
+[observability]
+enabled = false

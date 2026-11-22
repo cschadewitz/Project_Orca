@@ -397,11 +397,14 @@ test("actual app refuses admission when the availability check is false", async 
       launched.page.evaluate((id) => (window as unknown as IntentWindow).orca.admissionIntents!.start(id), workflowId),
       "checking unavailable-storage refusal",
     );
+    // The guidance names the cause (#857): the OS keychain, a locked or cancelled Linux keyring,
+    // or Linux basic_text. Every variant is the same fail-closed refusal with nothing submitted.
     expect(result).toMatchObject({
       ok: false,
       error: {
-        message:
-          "Secure run-intent storage is unavailable. No run was submitted; restore the OS keychain before retrying.",
+        code: "PROTECTED_STORAGE",
+        message: expect.stringMatching(/^Secure run-intent storage is unavailable\. No run was submitted[.;] /),
+        details: { reason: expect.stringMatching(/^(keyring-locked|no-keyring|unavailable)$/), stage: "before-send" },
       },
     });
     const observed = await observation(app);

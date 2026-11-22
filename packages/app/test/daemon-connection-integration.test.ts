@@ -73,6 +73,8 @@ vi.mock("electron", async () => {
         contentEvents.emit(event);
       });
     },
+    once: (event: string, listener: () => void) => contentEvents.once(event, listener),
+    off: (event: string, listener: () => void) => contentEvents.off(event, listener),
     send: (channel: string, value: unknown) => {
       shell.sent(channel, value);
       if (channel === "orca:macUpdate.prepare")
@@ -95,6 +97,8 @@ vi.mock("electron", async () => {
     setTitleBarOverlay: vi.fn(),
     isDestroyed: () => false,
     isFocused: () => true,
+    isVisible: () => false,
+    show: vi.fn(),
     webContents,
     isEnabled: () => shell.nativeEnabled,
     setEnabled: (value: boolean) => {

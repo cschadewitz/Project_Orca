@@ -164,5 +164,16 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Flaky tests are fixed, not waited out or retried, and a skip names its issue (#863).
+    files: [
+      "packages/*/test/**/*.{ts,tsx,js}",
+      "packages/app/renderer/test/**/*.{ts,tsx}",
+      "tools/test/**/*.js",
+      "vitest.config.ts",
+      "vitest.renderer.config.ts",
+    ],
+    rules: { "orca/no-flaky-test-waits": "error" },
+  },
   prettier,
 );

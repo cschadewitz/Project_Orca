@@ -16,9 +16,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Chooses where `check` and its test shards run: Tyler's self-hosted runners when they
-  # have idle runners, GitHub-hosted otherwise. Any failure to ask (DNS, timeout,
-  # non-200, bad JSON) counts as zero.
+  # Chooses where `check` runs: Tyler's self-hosted runners when one is idle, GitHub-hosted
+  # otherwise. Any failure to ask (DNS, timeout, non-200, bad JSON) counts as zero.
   # Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners
   # (e.g. when a job queued on them); re-run the workflow to apply it.
   # Pull requests from forks always get GitHub-hosted runners: their code must not run
@@ -32,8 +31,6 @@ jobs:
       labels: ${{ steps.pick.outputs.labels }}
       workers: ${{ steps.pick.outputs.workers }}
       pnpm_cache: ${{ steps.pick.outputs.pnpm_cache }}
-      matrix: ${{ steps.pick.outputs.matrix }}
-      shards: ${{ steps.pick.outputs.shards }}
     steps:
       - id: pick
         shell: bash
@@ -45,7 +42,7 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           THIS_REPO: ${{ github.repository }}
         run: |
-          m1=0 m2=0 total=0 per_host=
+          idle=0
           if [[ "$HEAD_REPO" != "$THIS_REPO" ]]; then
             echo "pull request from fork ${HEAD_REPO}: using GitHub-hosted runners"
             FORCE_HOSTED=true
@@ -53,72 +50,20 @@ jobs:
           # Check curl's own status: a timeout after partial output must not count
           # No health URL configured counts as zero idle runners, like any other failure
           if [[ "$FORCE_HOSTED" != "true" && -n "$HEALTH_URL" ]] && body=$(curl -fsS --max-time 5 "$HEALTH_URL"); then
-            # Never log the body: only the validated counts below reach the log.
-            # Exact idle runners per host, when the health service sends them
-            if jq -e '.machines | type == "object"' <<<"$body" >/dev/null 2>&1; then
-              per_host=yes
-              m1=$(jq -r '.machines.m1 // 0' <<<"$body" 2>/dev/null) || m1=0
-              m2=$(jq -r '.machines.m2 // 0' <<<"$body" 2>/dev/null) || m2=0
-            fi
-            # The repository's total idle runners across all hosts
-            total=$(jq -r '.Project_Orca // 0' <<<"$body" 2>/dev/null) || total=0
+            idle=$(jq -r '.Project_Orca // 0' <<<"$body" 2>/dev/null) || idle=0
           fi
-          for n in m1 m2 total; do [[ "${!n}" =~ ^[0-9]+$ ]] || printf -v "$n" 0; done
-          base='"self-hosted","linux","x64","tyler"'
-          if [[ -z "$per_host" ]]; then
-            # Total only (the health service's current response): no host labels to pin to.
-            # Use the pool when it has an idle runner: the shard runs first and `check`
-            # after it (`needs: test`), so one runner can serve the whole run in turn. The
-            # count is a snapshot, not a reservation; a run that loses the race queues, it
-            # cannot stall. One shard, so two 20-worker shards never share a host.
-            if (( total >= 1 )); then
-              echo "labels=[${base}]" >> "$GITHUB_OUTPUT"
-              echo 'workers=20' >> "$GITHUB_OUTPUT"
-              echo 'pnpm_cache=' >> "$GITHUB_OUTPUT"
-              shards="[{\"shard\":1,\"total\":1,\"labels\":[${base}]}]"
-            else
-              echo 'labels=["ubuntu-24.04"]' >> "$GITHUB_OUTPUT"
-              echo 'workers=2' >> "$GITHUB_OUTPUT"
-              echo 'pnpm_cache=pnpm' >> "$GITHUB_OUTPUT"
-              shards='[{"shard":1,"total":1,"labels":["ubuntu-24.04"]}]'
-            fi
-            echo "shards=${shards}" >> "$GITHUB_OUTPUT"
-            echo "matrix=$(jq -c '{include: .}' <<<"$shards")" >> "$GITHUB_OUTPUT"
-            echo "idle in total: ${total} (no per-host counts); shards: ${shards}"
-            exit 0
-          fi
-          # Count a runner for `check` and one for each shard pinned to a host, so the run
-          # uses a host only when it has room for all of them and does not queue behind
-          # other work. `check` starts after the shards, so losing that race queues the run
-          # but cannot stall it. `check` takes m1 when it can; a shard goes to each host
-          # with a runner left, so two shards never share a host.
-          c1=$m1 c2=$m2 check_host=
-          if (( c1 > 0 )); then check_host=m1; c1=$((c1 - 1))
-          elif (( c2 > 0 )); then check_host=m2; c2=$((c2 - 1)); fi
-          up=()
-          if (( c1 > 0 )); then up+=(m1); fi
-          if (( c2 > 0 )); then up+=(m2); fi
-          if [[ -n "$check_host" ]] && (( ${#up[@]} > 0 )); then
-            echo "labels=[${base},\"${check_host}\"]" >> "$GITHUB_OUTPUT"
+          [[ "$idle" =~ ^[0-9]+$ ]] || idle=0
+          if (( idle > 0 )); then
+            echo 'labels=["self-hosted","linux","x64","tyler"]' >> "$GITHUB_OUTPUT"
             # Why 20 workers and no pnpm cache: docs/ci-runners.md
             echo 'workers=20' >> "$GITHUB_OUTPUT"
             echo 'pnpm_cache=' >> "$GITHUB_OUTPUT"
-            shards='[]'
-            for i in "${!up[@]}"; do
-              shards=$(jq -c --argjson shard "$((i + 1))" --argjson total "${#up[@]}" \
-                --argjson labels "[${base},\"${up[$i]}\"]" \
-                '. + [{shard: $shard, total: $total, labels: $labels}]' <<<"$shards")
-            done
           else
-            # No host can hold `check` and a shard together: everything on hosted runners
             echo 'labels=["ubuntu-24.04"]' >> "$GITHUB_OUTPUT"
             echo 'workers=2' >> "$GITHUB_OUTPUT"
             echo 'pnpm_cache=pnpm' >> "$GITHUB_OUTPUT"
-            shards='[{"shard":1,"total":1,"labels":["ubuntu-24.04"]}]'
           fi
-          echo "shards=${shards}" >> "$GITHUB_OUTPUT"
-          echo "matrix=$(jq -c '{include: .}' <<<"$shards")" >> "$GITHUB_OUTPUT"
-          echo "idle per host: m1=${m1} m2=${m2}; shards: ${shards}"
+          echo "idle self-hosted runners: ${idle}"
 
   changes:
     name: classify changes
@@ -126,11 +71,11 @@ jobs:
     outputs:
       code: ${{ steps.classify.outputs.code }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
       - name: Classify
@@ -140,104 +85,9 @@ jobs:
           SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node tools/ci-shadow/docs.js
 
-  # The full suite, split in two by file (`vitest --shard`) so a second runner host can
-  # share it. Each shard only produces a blob (test results plus raw coverage); `check`
-  # merges them in its `Test with coverage` step, so the thresholds, the evidence
-  # consumer and the `check (node 24)` name all stay as they were. Targeted PR runs and
-  # docs-only changes are not sharded: this job skips its test steps for them.
-  test:
-    name: test (shard ${{ matrix.shard }}/${{ matrix.total }})
-    needs: [changes, runner]
-    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    # Each shard is pinned to its own host by the machine label the picker chose.
-    # matrix.labels is already an array here: fromJSON takes a string and would fail
-    runs-on: ${{ matrix.labels }}
-    env:
-      WORKERS_CAP: ${{ needs.runner.outputs.workers }}
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.runner.outputs.matrix) }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: ${{ needs.runner.outputs.pnpm_cache }}
-
-      - name: Bound test workers
-        run: |
-          node --input-type=module <<'NODE'
-          import { appendFileSync } from 'node:fs';
-          import { availableParallelism } from 'node:os';
-
-          const workers = Math.min(Number(process.env.WORKERS_CAP) || 2, Math.max(1, availableParallelism() - 1));
-          appendFileSync(process.env.GITHUB_ENV, `VITEST_MAX_WORKERS=${workers}\n`);
-          console.log(`Vitest worker limit: ${workers} (available parallelism: ${availableParallelism()})`);
-          NODE
-
-      - run: pnpm install --frozen-lockfile
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
-
-      - name: Restore Vitest file-order cache
-        if: contains(fromJSON(needs.runner.outputs.labels), 'tyler')
-        continue-on-error: true
-        run: |
-          src=/var/cache/vitest-order/results.json
-          dir=node_modules/.vite/vitest/da39a3ee5e6b4b0d3255bfef95601890afd80709
-          if [ -f "$src" ]; then
-            mkdir -p "$dir"
-            cp "$src" "$dir/results.json"
-          fi
-
-      # The same plan `check` makes: a targeted PR run is not sharded.
-      - name: Plan test execution
-        id: selection
-        env:
-          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
-          SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          SHADOW_NODE: 24
-        run: node tools/ci-shadow/execute.js plan
-
-      # Production MCP acceptance launches the emitted daemon and MCP entry points.
-      - name: Build
-        if: steps.selection.outputs.mode != 'targeted'
-        run: pnpm run build
-
-      # Thresholds are skipped: half the files cannot meet them. `check` enforces them
-      # on the merged coverage.
-      - name: Test shard ${{ matrix.shard }}/${{ matrix.total }}
-        if: steps.selection.outputs.mode != 'targeted'
-        run: |
-          pnpm exec vitest run --coverage \
-            --shard="${{ matrix.shard }}/${{ matrix.total }}" \
-            --reporter=default --reporter=blob \
-            --outputFile.blob="blob-reports/blob-${{ matrix.shard }}.json"
-        env:
-          ORCA_MCP_REQUIRE_PRODUCTION: "1"
-          VITEST_SKIP_THRESHOLDS: "1"
-
-      - name: Upload test blob
-        if: ${{ !cancelled() && hashFiles('blob-reports/*.json') != '' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: vitest-blob-${{ matrix.shard }}
-          path: blob-reports/
-          retention-days: 1
-
-  # `check` starts only after every shard job has finished (`needs: test`). No job here
-  # holds a runner while it waits for another job to get one, so runs that compete for the
-  # same self-hosted pool can queue but never stall each other
-  # (tools/test/ci-runner-contention.test.js).
   check:
     name: check (node ${{ matrix.node }})
-    needs: [changes, runner, test]
+    needs: [changes, runner]
     if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON(needs.runner.outputs.labels) }}
     env:
@@ -250,7 +100,7 @@ jobs:
         # 24 is the floor declared in package.json engines and selected by mise.toml.
         node: [24]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Selection recomputes the exact base/head/candidate union from immutable objects.
           fetch-depth: 0
@@ -258,9 +108,9 @@ jobs:
 
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
       # resolve the store path. Version comes from package.json packageManager.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
           cache: ${{ needs.runner.outputs.pnpm_cache }}
@@ -319,7 +169,7 @@ jobs:
       # Warm Vitest's file-order cache from the runner volume (docs/ci-runners.md). A missing
       # file is fine. The directory name is the sha1 of the root project's empty name.
       - name: Restore Vitest file-order cache
-        # Homelab runners only: the same labels `runs-on` used.
+        # Self-hosted runners only: the same labels `runs-on` used.
         if: needs.changes.outputs.code != 'false' && contains(fromJSON(needs.runner.outputs.labels), 'tyler')
         continue-on-error: true
         run: |
@@ -424,37 +274,11 @@ jobs:
           SHADOW_NODE: ${{ matrix.node }}
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
-      # Every shard job has finished before `check` starts; a shard that failed, was
-      # cancelled or never ran fails the merge here rather than leaving it to a missing blob.
-      - name: Test shards passed
-        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
-        env:
-          SHARDS_RESULT: ${{ needs.test.result }}
-        run: |
-          if [[ "$SHARDS_RESULT" != "success" ]]; then
-            echo "::error::test shards did not pass (result: ${SHARDS_RESULT})"; exit 1
-          fi
-
-      # The shards' blobs hold absolute paths, so the merge needs a checkout at the same
-      # location as theirs: the same runner labels and image give that.
-      - name: Download test blobs
-        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
-        uses: actions/download-artifact@v8
-        with:
-          pattern: vitest-blob-*
-          path: blob-reports
-          merge-multiple: true
-
       - name: Test with coverage
         if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
-        # Merges the shards' results and coverage; the thresholds apply to the whole suite.
-        run: |
-          test "$(ls blob-reports/*.json 2>/dev/null | wc -l)" -eq "$SHARDS" || { echo "::error::expected $SHARDS shard blobs in blob-reports/"; exit 1; }
-          pnpm exec vitest run --merge-reports=blob-reports --coverage \
-            --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
+        # Explicit `run` forwards reporter flags to Vitest through pnpm.
+        run: pnpm run test:coverage --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
         env:
-          # One blob per shard; the picker's shard count is the same on every entry
-          SHARDS: ${{ fromJSON(needs.runner.outputs.shards)[0].total }}
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       # Both still run when the thresholds fail: a red build is exactly when the numbers
@@ -468,7 +292,7 @@ jobs:
         id: upload-coverage
         continue-on-error: true
         if: ${{ !cancelled() && hashFiles('coverage/coverage-summary.json') != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage
           path: coverage/
@@ -485,6 +309,93 @@ jobs:
         if: needs.changes.outputs.code != 'false'
         run: node packages/cli/dist/main.js demo
 
+      # The upgrade launch check (#863): this commit's built daemon and app, opened on a store
+      # ORCA 0.6.0 wrote (packages/app/test/fixtures/store-v0.6.0). Every other launch of the
+      # app is in app-smoke.yml, which runs only for releases, so without this an app that no
+      # longer starts, or no longer reads an upgrading person's store, is found at release.
+      # Pull requests run it when they touch what ships or the fixture; main always does.
+      - name: Decide whether to run the upgrade launch check
+        id: launch
+        if: needs.changes.outputs.code != 'false'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          paths=$(git diff --name-only "$BASE...$HEAD" | awk '/^packages\// || /^workflows\// || /^templates\// ||
+            /^pnpm-lock\.yaml$/ || /^pnpm-workspace\.yaml$/ || /^package\.json$/ || /^patches\// ||
+            /^tsconfig[^\/]*\.json$/ || /^release-compatibility\.json$/ || /^\.github\/workflows\/ci\.yml$/')
+          if [ -n "$paths" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "nothing the app or daemon ships changed; skipping the upgrade launch check"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Install skipped the ~100 MB binary (above); this check is the one step that needs it.
+      # Resolved from packages/app, the package that depends on electron (pnpm is strict).
+      - name: Put the Electron binary on disk for the upgrade launch check
+        id: electron
+        if: steps.launch.outputs.run == 'true'
+        shell: bash
+        working-directory: packages/app
+        run: |
+          electron_path=$(node -e "console.log(require('electron'))" | tail -n 1)
+          echo "$electron_path" >&2
+          printf 'path=%s\n' "$electron_path" >> "$GITHUB_OUTPUT"
+
+      # Same prerequisites and the same scoped AppArmor exception as app-smoke.yml's smoke
+      # job, for the same reasons; see the comments there.
+      - name: Check the Linux display and sandbox prerequisites
+        if: steps.launch.outputs.run == 'true' && runner.environment != 'github-hosted'
+        run: |
+          command -v xvfb-run
+          if ! unshare --user --map-root-user true; then
+            echo "::error::The self-hosted runner must support unprivileged user namespaces for Chromium's sandbox."
+            exit 1
+          fi
+
+      - name: Prepare a GitHub-hosted Linux runner
+        if: steps.launch.outputs.run == 'true' && runner.environment == 'github-hosted'
+        env:
+          ELECTRON_EXE: ${{ steps.electron.outputs.path }}
+        run: |
+          set -euo pipefail
+          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
+          exe=$(readlink -f "$ELECTRON_EXE")
+          test -x "$exe"
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=1
+          printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+            "profile orca-electron-userns \"$exe\" flags=(unconfined) {" '  userns,' '}' \
+            | sudo tee /etc/apparmor.d/orca-electron-userns > /dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/orca-electron-userns
+          sudo grep -q '^orca-electron-userns ' /sys/kernel/security/apparmor/profiles
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          if unshare --user --map-root-user true 2> /dev/null; then
+            echo "::error::an unrelated executable can still create user namespaces"; exit 1
+          fi
+          echo "user namespaces: allowed only for $exe (profile orca-electron-userns)"
+
+      - name: Upgrade launch check
+        if: steps.launch.outputs.run == 'true'
+        timeout-minutes: 5
+        run: xvfb-run -a pnpm run app:upgrade-launch
+
+      - name: Upload the upgrade launch check's output
+        if: ${{ failure() && steps.launch.outputs.run == 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: upgrade-launch
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
       # Retain actual full/selected suite evidence; job steps authenticate execution mode.
       # Always retain sanitized failure/missing-result evidence. Failure here cannot
       # mask or override any existing step, job, coverage or required-check outcome.
@@ -496,7 +407,7 @@ jobs:
       - name: Upload advisory full-suite evidence
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-full-evidence-${{ github.run_id }}-${{ github.run_attempt }}-node-${{ matrix.node }}
           path: ${{ runner.temp }}/ci-shadow-evidence/evidence.json

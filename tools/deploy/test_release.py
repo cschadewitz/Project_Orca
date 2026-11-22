@@ -534,7 +534,10 @@ class ReleaseAssetsTests(unittest.TestCase):
                 (nested / name).write_bytes(body)
                 (nested / (name + ".blockmap")).write_text("sidecar")
                 digest = base64.b64encode(hashlib.sha512(body).digest()).decode()
-                (nested / f"latest-{arch}.yml").write_text(f"version: 0.6.0\npath: {name}\nsha512: {digest}\n")
+                (nested / f"latest-{arch}.yml").write_text(
+                    f"version: 0.6.0\nfiles:\n  - url: {name}\n    sha512: {digest}\n    size: {len(body)}\n"
+                    f"path: {name}\nsha512: {digest}\nreleaseDate: '2026-11-21T00:00:00.000Z'\n"
+                )
             assets.verify(root, "0.6.0")
             self.assertFalse((root / "x64").exists())
             (root / "ORCA-0.6.0-win-arm64.exe").write_text("corrupted")

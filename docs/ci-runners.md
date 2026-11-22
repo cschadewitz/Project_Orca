@@ -1,7 +1,7 @@
 # CI runner selection
 
 The `check` job in [`ci.yml`](../.github/workflows/ci.yml) runs on one of Tyler's
-self-hosted runners (label `tyler`) when enough are idle and on a GitHub-hosted `ubuntu-24.04` runner
+self-hosted runners (label `tyler`) when one is idle and on a GitHub-hosted `ubuntu-24.04` runner
 otherwise. This page covers how that choice is made, how to override it, and what
 the self-hosted runners can and cannot reach. It does not change what CI verifies;
 see [CI shadow selection](ci-shadow-selection.md) for that.
@@ -11,13 +11,13 @@ see [CI shadow selection](ci-shadow-selection.md) for that.
 The `pick runner` job (`runs-on: ubuntu-slim`) fetches the runner host's health
 endpoint, whose URL is the repository secret `CI_RUNNER_HEALTH_URL` (a secret so that
 logs mask it; fork and Dependabot runs get no secrets and so use hosted runners), and reads the
-idle runners per host from it (see Sharding). With the secret unset, the picker
+idle runner count (`{"Project_Orca": <idle runners>}`) from it. With the secret unset, the picker
 selects GitHub-hosted runners.
 
 | Picker result | `check` runs on | Vitest workers | pnpm cache |
 | --- | --- | --- | --- |
-| a host has an idle runner (see Sharding) | `[self-hosted, linux, x64, tyler]` | 20 | none (see below) |
-| no host does, or any failure | `ubuntu-24.04` | 2 | `setup-node` `cache: pnpm` |
+| at least one runner is idle | `[self-hosted, linux, x64, tyler]` | 20 | none (see below) |
+| none is, or any failure | `ubuntu-24.04` | 2 | `setup-node` `cache: pnpm` |
 
 Every failure to ask counts as zero: no `CI_RUNNER_HEALTH_URL`, DNS, a curl timeout, a non-200 response,
 non-JSON, or a non-numeric count. The step runs under `bash` with `pipefail`
@@ -59,71 +59,6 @@ Sampling `process.memoryUsage().arrayBuffers` in each test process does.
 
 Only `check` moves. `changes` and `pick runner` always run on GitHub-hosted runners.
 
-## Sharding
-
-The full suite runs as shards in the `test` job (`vitest --shard=N/M` at the worker count
-above). Each shard builds, runs its part with coverage, and uploads a Vitest blob.
-`check (node 24)` is still the one job the evidence consumer and branch protection know:
-it `needs` the shards, and its `Test with coverage` step downloads the blobs and runs
-`vitest --merge-reports --coverage`, so the coverage thresholds and the full-suite report
-cover every file.
-
-`check` starts only after every shard job has finished (`needs: test`), then runs its
-typecheck, lint and build and merges the blobs. A shard that did not pass fails `check`
-at its `Test shards passed` step. No job holds a runner while it waits for another job
-to get one, so CI runs that compete for the self-hosted pool can queue behind each other
-but cannot stall each other (`tools/test/ci-runner-contention.test.js` simulates that).
-The price is that `check`'s typecheck, lint and build no longer overlap the tests.
-
-`check` and each shard are pinned to a host by a machine label (`m1`, `m2`), set in that
-host's `RUNNER_LABELS` next to `tyler`. GitHub still decides when a runner is ready, but a
-job can only start on its own host, so two 20-worker shards never share a machine however
-many runners it has. The picker uses a host only when it has an idle runner for every job
-pinned to it, so a run does not queue behind other work. It subtracts `check`'s runner
-first: `check`
-goes to `m1` when it has an idle runner (otherwise `m2`), and a shard goes to each host
-that still has one. It reads the per-host idle counts from `health`:
-
-| Idle runners (m1, m2) | `check` | Shards |
-| --- | --- | --- |
-| 2+, 1+ | `m1` | 2: shard 1 on `m1`, shard 2 on `m2` |
-| 1, 1+ | `m1` | 1, on `m2` |
-| 2+, 0 | `m1` | 1, on `m1` |
-| 0, 2+ | `m2` | 1, on `m2` |
-| no host can hold `check` and a shard, a failed request, or `CI_FORCE_HOSTED` | `ubuntu-24.04`, 2 workers | 1, on `ubuntu-24.04` |
-
-When `health` sends only the repository's total (`{"Project_Orca": <idle runners>}`,
-its current response) there is nothing to pin a host with, so the picker uses the plain
-`tyler` label: with at least one idle runner, one shard and then `check` run there (one
-runner can take both in turn, since `check` starts after the shard); with none,
-everything runs on `ubuntu-24.04`. Only one shard, so two 20-worker shards never land on
-the same host. The picker logs only the validated counts (never the response body) to
-show which case applied.
-
-The idle counts are a snapshot, not a reservation. Another CI run on a different ref, or
-an `app-smoke` or `desktop` job on the same pool, can take those runners after the picker
-looks. The run's jobs then queue until runners free up. Because `check` waits for the
-shards through `needs` rather than on a runner, no CI run's jobs can block another's; the
-queue drains as long as runners stay up and jobs finish (an outage or a hung job still
-holds it up).
-
-The picker therefore wants two idle runners on `m1` (one for `check`, one for shard 1)
-before it splits the suite in two; `m2` needs one.
-
-`health` gets the counts from GitHub's runner list, which spans every host registered to
-the repo, so the hosts do not need to reach each other. The runner stack's own
-documentation covers how the counts are configured.
-
-A shard sees only part of the files, so it cannot meet the thresholds; shards set
-`VITEST_SKIP_THRESHOLDS` and only the merge enforces them. The blobs hold absolute paths,
-so `test` and `check` must run on the same image, with the workspace at the same
-location. Targeted PR runs and docs-only changes are not sharded: `test` skips its test
-steps for them.
-
-The picker counts idle runners once, so a host that fills up between the pick and the
-job queues its job until a runner frees. `check` and shard 1 both run on `m1`, one after
-the other, so `check`'s typecheck, lint and build no longer compete with shard 1's workers.
-
 ## Vitest file-order cache
 
 Vitest starts the longest test files first, from the per-file durations it cached on
@@ -142,8 +77,8 @@ missing, stale or wrong one costs speed, never correctness.
 ## Known limit: the idle count is a snapshot
 
 The choice is made once, when `pick runner` runs. If another job takes the last idle
-runner after that, the run's jobs queue on the self-hosted label until a runner frees.
-They do not fall back to hosted by themselves.
+runner after that, `check` queues on the self-hosted label until a runner frees.
+It does not fall back to hosted by itself.
 
 ## Forcing GitHub-hosted runners
 
@@ -176,14 +111,12 @@ loopback destinations; and the only credential a job holds is its `GITHUB_TOKEN`
 (install, build and test steps) runs on these machines, so treat them as running
 untrusted-by-default code.
 
-In this repository `ci.yml`'s `check` and `test` jobs select the `tyler` label on their
-own. The Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and release calls)
+In this repository `ci.yml`'s `check` job selects the `tyler` label on its own. The Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and release calls)
 use it too when the health endpoint reports at least one idle runner, and GitHub-hosted
 `ubuntu-24.04` otherwise; [`tools/linux-runner.js`](../tools/linux-runner.js) makes that
-choice once per run, and `CI_FORCE_HOSTED` applies to it as well. Those jobs need no
-second idle runner, because none of them waits on another. On the hosted fallback a step installs xvfb if it is missing and loads an
+choice once per run, and `CI_FORCE_HOSTED` applies to it as well. On the hosted fallback a step installs xvfb if it is missing and loads an
 AppArmor profile that lets the one Electron executable the job launches (the development
-Electron, or the packaged `linux-unpacked/orca`, resolved through symlinks) create the
+Electron, or the packaged `linux-unpacked/orca-desktop`, resolved through symlinks) create the
 user namespaces Chromium's sandbox needs. Ubuntu 24.04's restriction stays on for
 everything else, and the step checks that an unrelated program is still refused. The
 profile is otherwise unconfined, so it is a scoped exception, not a sandbox for the app.

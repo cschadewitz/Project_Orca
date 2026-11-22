@@ -58,5 +58,5 @@ it("the real Desktop workflow verifies exact runtime headers then stages before 
   expect(script).toContain("set -euo pipefail");
   expect(config.mac.identity).toBeNull();
   expect(config.mac.notarize).toBe(false);
-  expect(config.afterPack).toBe("./scripts/verify-diagnostics-native.js");
+  expect(config.afterPack).toBe("./scripts/after-pack.js");
 });

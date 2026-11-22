@@ -251,6 +251,9 @@ async function layoutSettled(): Promise<void> {
   const seen: string[] = [await sample()];
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
+    // The interval between samples of a stability check, not a wait for a condition: the
+    // condition is three equal readings in a row, bounded by the deadline above.
+    // eslint-disable-next-line orca/no-flaky-test-waits -- a sampling interval (#863)
     await page.waitForTimeout(100);
     seen.push(await sample());
     const tail = seen.slice(-3);

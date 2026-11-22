@@ -12,6 +12,7 @@ import type {
   LaunchReview,
   LaunchState,
   LaunchTarget,
+  ProtectedStorageRefusalView,
 } from "./contracts.js";
 
 export function sameLaunchTarget(a: LaunchTarget, b: LaunchTarget): boolean {
@@ -59,6 +60,8 @@ function protectedInputs(context: LaunchContext, draft: LaunchDraft, previous: r
     ]),
   ];
 }
+/** Recovery found the journal readable and no retained launch for the refused review. */
+class VerifiedNewLaunch extends Error {}
 /** No connection, persistence or retry implementation: all effects go through the shared owner. */
 export class GuidedLaunchController {
   private state: LaunchState;
@@ -70,6 +73,13 @@ export class GuidedLaunchController {
     this.update({ busy: value });
   }
   private fence = 0;
+  /**
+   * Set when this submit was refused because an existing protected journal could not be read
+   * (`unconfirmed`): nothing was sent by it, but an earlier retained launch may exist. Recover
+   * then reads the journal; if it finds no retained launch for this review, the review is
+   * verified as new and becomes launchable again (#857 review).
+   */
+  private storageUnconfirmedSubmit = false;
   constructor(
     context: LaunchContext,
     draft: LaunchDraft,
@@ -97,6 +107,9 @@ export class GuidedLaunchController {
     };
   };
   private update(patch: Partial<LaunchState>): void {
+    // A storage refusal describes one refused submit; any other phase change retires it.
+    if (patch.phase !== undefined && !Object.hasOwn(patch, "storageRefusal"))
+      patch = { ...patch, storageRefusal: undefined };
     this.state = freeze({ ...this.state, ...patch });
     this.listeners.forEach((listener) => listener());
   }
@@ -309,6 +322,7 @@ export class GuidedLaunchController {
     const fence = this.fence;
     this.update({ phase: "submitting", message: "Retaining the protected launch intent." });
     if (launch !== undefined) {
+      this.storageUnconfirmedSubmit = false;
       this.update({ unresolvedReview: review });
       try {
         await this.receive(
@@ -331,8 +345,17 @@ export class GuidedLaunchController {
       if (fence !== this.fence) return;
       this.update({ message: "Submitting the retained launch intent." });
       await this.receive(() => this.ports.submit!(intent), fence, review);
-    } catch {
-      if (fence === this.fence)
+    } catch (error) {
+      if (fence !== this.fence) return;
+      if (
+        error instanceof LaunchPortFailure &&
+        error.storage?.stage === "before-send" &&
+        this.state.intent === undefined
+      )
+        this.refuseStorage(review, error.storage);
+      else if (error instanceof LaunchPortFailure && error.storage !== undefined)
+        this.block(this.failureMessage(error));
+      else
         this.block(
           "Protected intent storage is unavailable. No launch was sent by this controller; your draft is retained.",
         );
@@ -363,7 +386,9 @@ export class GuidedLaunchController {
           await this.receive(async () => {
             const intent = await this.ports.resolveIntent!(review);
             if (fence !== this.fence) throw new LaunchPortFailure("stale");
+            if (!intent && this.storageUnconfirmedSubmit) throw new VerifiedNewLaunch();
             if (!intent) throw new LaunchPortFailure("unavailable");
+            this.storageUnconfirmedSubmit = false;
             this.update({ intent, unresolvedReview: undefined });
             return this.ports.recover(intent);
           }, fence);
@@ -452,21 +477,66 @@ export class GuidedLaunchController {
           message: "Admission is unresolved. Recover the retained intent to inspect or reconcile it.",
         });
     } catch (error) {
-      if (fence === this.fence && error instanceof LaunchPortFailure) this.block(this.failureMessage(error));
-      else if (fence === this.fence)
+      // Only a confirmed before-send refusal means nothing was sent, so only then does the exact
+      // review stay ready for a fresh Retry. After a send, or when retained intents could not be
+      // read, block instead: the intent and unresolved review stay, and Recover is the way on.
+      if (
+        fence === this.fence &&
+        error instanceof LaunchPortFailure &&
+        error.storage?.stage === "before-send" &&
+        review &&
+        this.state.intent === undefined
+      )
+        this.refuseStorage(review, error.storage);
+      else if (fence === this.fence && error instanceof VerifiedNewLaunch) this.verifiedNew();
+      else if (fence === this.fence && error instanceof LaunchPortFailure) {
+        if (error.storage?.stage === "unconfirmed" && review && this.state.intent === undefined)
+          this.storageUnconfirmedSubmit = true;
+        this.block(this.failureMessage(error));
+      } else if (fence === this.fence)
         this.update({
           phase: "recovering",
           message: "The launch acknowledgement is unavailable. Recover the original intent; do not submit new work.",
         });
     }
   }
+  /** The journal is readable again and holds no retained launch for the refused review. */
+  private verifiedNew(): void {
+    const review = this.state.unresolvedReview;
+    this.storageUnconfirmedSubmit = false;
+    if (review === undefined) return;
+    const message =
+      "Secure storage is available and no retained launch exists for this review, so nothing was submitted. Choose Launch to send it.";
+    this.update({ phase: "review", review, unresolvedReview: undefined, message });
+    this.ports.announce(message);
+  }
+  private refuseStorage(review: LaunchReview, storage: ProtectedStorageRefusalView): void {
+    const message = `${storage.message} Your draft is retained.`;
+    this.update({
+      phase: "review",
+      review,
+      unresolvedReview: undefined,
+      storageRefusal: { reason: storage.reason, stage: storage.stage, message },
+      message,
+    });
+    this.ports.announce(message);
+  }
+  /** Retry after a protected-storage refusal: the same reviewed command, checked again by main. */
+  async retryProtectedStorage(): Promise<void> {
+    if (this.state.storageRefusal === undefined) return;
+    await this.submit();
+  }
   private failureMessage(error: LaunchPortFailure): string {
+    if (error.storage !== undefined)
+      return `${error.storage.message} Your draft and any retained intent are preserved; choose Recover original launch once storage is available.`;
     const messages = {
       unauthorized:
         "Current authorization refused the launch operation. Your draft and any retained intent are preserved.",
       stale: "The target, workflow or active configuration is stale. Your draft and any retained intent are preserved.",
       validation: "The runtime refused input validation. Your draft and any retained intent are preserved.",
       unavailable: "The launch operation is unavailable. Your draft and any retained intent are preserved.",
+      "protected-storage":
+        "Secure run-intent storage is unavailable. Restore the OS keychain, then retry. Your draft and any retained intent are preserved.",
     };
     return messages[error.reason];
   }

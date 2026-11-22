@@ -1,0 +1,222 @@
+# A real Windows update, end to end, with nothing published (#863, item 5; adopted from T3
+# Code's mock update server). It packages this commit twice, as N and N+1, installs N, serves
+# both through this machine's copy of the feed Worker (tools/deploy/feed-local.js runs the
+# Worker's own handler over a directory) and has the installed app check, download and
+# install N+1 with an `internal` token, and check and stay current with a `preview` token
+# (packages/app/test/windows-update/update.spec.ts).
+#
+# What it shows: an unsigned build, installed per-user, takes N+1 from the feed Worker's own
+# handler when its token's ring offers N+1 and stays put when its ring offers N, and after
+# the restart Windows reports N+1 installed. What it does not show: that the updated app
+# relaunches, that the Worker's Range answers were used (electron-updater may fall back to a
+# full download and still pass), signed-feed acceptance (feed-publish.yml checks that), or
+# the prerelease opt-in. Runs on pull requests that touch any of these parts, and by hand.
+# GitHub-hosted only; no secret, no bucket, no signing.
+name: Desktop feed (update test)
+
+on:
+  pull_request:
+    paths:
+      - tools/deploy/feed-worker/**
+      - tools/deploy/feed-local.js
+      - packages/app/src/main/update-driver.ts
+      - packages/app/src/main/updates.ts
+      - packages/app/src/main/update-ipc.ts
+      - packages/app/test/windows-update/**
+      - packages/app/electron-builder.yml
+      - packages/app/package.json
+      - pnpm-lock.yaml
+      - .github/workflows/feed-update-e2e.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: feed-update-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Versions no release will use, so nothing here can be mistaken for a real build.
+  FROM_VERSION: 99.0.0
+  TO_VERSION: 99.0.1
+
+jobs:
+  update:
+    name: update N to N+1 through a local feed
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # With the Electron binary: it is what electron-builder packages.
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Build the bundled daemon
+        run: pnpm --filter @orca/app run build:daemon
+
+      # Identical to desktop.yml's step (tools/test/feed-update-e2e.test.js holds it so).
+      - name: Stage native addons for all requested Windows architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_version=$(node -p 'process.versions.node')
+          case "$node_version" in *[!0-9.]*|'') exit 1 ;; esac
+          headers_scratch=$(mktemp -d "$RUNNER_TEMP/orca-win-native-headers.XXXXXX")
+          trap 'rm -rf -- "$headers_scratch"' EXIT
+          archive="node-v${node_version}-headers.tar.gz"
+          base="https://nodejs.org/download/release/v${node_version}"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 30 --max-filesize 65536 \
+            "$base/SHASUMS256.txt" --output "$headers_scratch/SHASUMS256.txt"
+          for name in "$archive" win-x64/node.lib win-arm64/node.lib; do
+            mkdir -p "$headers_scratch/$(dirname "$name")"
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 60 --max-filesize 16777216 \
+              "$base/$name" --output "$headers_scratch/$name"
+            CHECKSUM_ROOT="$headers_scratch" CHECKSUM_NAME="$name" python - <<'PY'
+          import hashlib, os, pathlib, re
+          root, name = pathlib.Path(os.environ["CHECKSUM_ROOT"]), os.environ["CHECKSUM_NAME"]
+          entries = [line[:64] for line in (root / "SHASUMS256.txt").read_text().splitlines()
+                     if re.fullmatch(r"[0-9a-f]{64}  " + re.escape(name), line)]
+          if len(entries) != 1 or hashlib.sha256((root / name).read_bytes()).hexdigest() != entries[0]:
+              raise SystemExit("Exact Node input checksum unavailable or mismatched")
+          PY
+          done
+          # GNU tar in Git Bash reads a drive-letter archive path as host:path.
+          # Use the verified archive's basename from its directory instead.
+          (cd "$headers_scratch" && tar -xzf "$archive")
+          for arch in x64 arm64; do
+            mkdir -p "$headers_scratch/node-v${node_version}/$arch"
+            cp "$headers_scratch/win-$arch/node.lib" "$headers_scratch/node-v${node_version}/$arch/node.lib"
+          done
+          node tools/packaged-windows/stage-native-addons.js --headers "$headers_scratch/node-v${node_version}"
+
+      # x64 only, NSIS only, as the feed serves. The same build, stamped twice. The output stays
+      # under dist/release, which electron-builder.yml excludes from `files`, so N+1 cannot
+      # package N's installer.
+      - name: Package N and N+1
+        run: |
+          set -euo pipefail
+          for version in "$FROM_VERSION" "$TO_VERSION"; do
+            pnpm --filter @orca/app exec electron-builder --win nsis --x64 --publish never \
+              -c.extraMetadata.version="$version" -c.directories.output="dist/release/update-e2e/$version" \
+              -c.publish.channel=latest-x64
+          done
+          ls -l packages/app/dist/release/update-e2e/*
+
+      - name: Install N
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = "packages/app/dist/release/update-e2e/$env:FROM_VERSION/ORCA-$env:FROM_VERSION-win-x64.exe"
+          $process = Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "installer exited $($process.ExitCode)" }
+          $entry = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+            Where-Object DisplayName -like 'ORCA*' | Select-Object -First 1
+          if (-not $entry) { throw 'no ORCA uninstall entry' }
+          # electron-builder writes no InstallLocation to the Uninstall key; DisplayIcon is
+          # "<install dir>\ORCA.exe,0".
+          $exe = ($entry.DisplayIcon -replace ',\d+$', '').Trim('"')
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
+          "ORCA_UPDATE_EXECUTABLE=$exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "installed $($entry.DisplayVersion) at $exe"
+
+      # A throwaway certificate for localhost, trusted machine-wide for this job only: the
+      # client refuses any feed URL that is not HTTPS.
+      - name: Trust a throwaway localhost certificate
+        run: |
+          set -euo pipefail
+          feed="$RUNNER_TEMP/feed"
+          mkdir -p "$feed"
+          MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+            -keyout "$feed/key.pem" -out "$feed/cert.pem"
+          certutil -f -addstore Root "$(cygpath -w "$feed/cert.pem")"
+
+      # Two snapshots as feed-r2.sh lays them out, internal on N+1 and preview on N, and one
+      # token per ring minted the way testers' are.
+      - name: Lay out the local feed
+        run: |
+          set -euo pipefail
+          feed="$RUNNER_TEMP/feed"
+          for version in "$FROM_VERSION" "$TO_VERSION"; do
+            dir="packages/app/dist/release/update-e2e/$version"
+            node tools/deploy/feed-local.js snapshot "$feed/bucket" "$version" \
+              "$dir/ORCA-$version-win-x64.exe" "$dir/ORCA-$version-win-x64.exe.blockmap" "$dir/latest-x64.yml"
+          done
+          node tools/deploy/feed-local.js rings "$feed/bucket" \
+            "{\"format\":1,\"rings\":{\"internal\":{\"version\":\"$TO_VERSION\"},\"preview\":{\"version\":\"$FROM_VERSION\"}}}"
+          entries=()
+          for ring in internal preview; do
+            out=$(node tools/deploy/feed-token.js "$ring")
+            sed -n 's/^token: //p' <<<"$out" > "$feed/token-$ring.txt"
+            entries+=("$(sed -n 's/^FEED_TOKENS entry: //p' <<<"$out")")
+          done
+          node -e 'console.log(JSON.stringify(Object.assign({}, ...process.argv.slice(1).map(JSON.parse))))' \
+            "${entries[@]}" > "$feed/tokens.json"
+          {
+            echo "ORCA_UPDATE_TOKEN_INTERNAL=$(cygpath -w "$feed/token-internal.txt")"
+            echo "ORCA_UPDATE_TOKEN_PREVIEW=$(cygpath -w "$feed/token-preview.txt")"
+          } >> "$GITHUB_ENV"
+
+      - name: Update N to N+1 through the local feed
+        env:
+          ORCA_UPDATE_URL: https://localhost:8443/
+          ORCA_UPDATE_FROM: ${{ env.FROM_VERSION }}
+          ORCA_UPDATE_TO: ${{ env.TO_VERSION }}
+        run: |
+          set -euo pipefail
+          feed="$RUNNER_TEMP/feed"
+          node tools/deploy/feed-local.js serve "$feed/bucket" 8443 "$feed/cert.pem" "$feed/key.pem" \
+            "$(cat "$feed/tokens.json")" &
+          server=$!
+          trap 'kill $server 2>/dev/null || true' EXIT
+          for _ in $(seq 1 50); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$feed/cert.pem" https://localhost:8443/latest-x64.yml || true)
+            [ "$code" = 401 ] && break
+            sleep 0.2
+          done
+          [ "$code" = 401 ] || { echo "::error::the local feed did not come up (last answer: $code)"; exit 1; }
+          pnpm run app:windows-update
+
+      # What was left waiting: an installer window, the app, or the updater's cached installer.
+      - name: Show what the update left behind
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-Process | Where-Object { $_.MainWindowTitle -or $_.ProcessName -like 'ORCA*' } |
+            Format-Table Id, ProcessName, MainWindowTitle, Path -AutoSize -Wrap
+          Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'ORCA' } |
+            Format-Table ProcessId, Name, CommandLine -AutoSize -Wrap
+          Get-ChildItem "$env:LOCALAPPDATA" -Directory -Filter '*updater*' -ErrorAction SilentlyContinue |
+            Get-ChildItem -Recurse -ErrorAction SilentlyContinue | Format-Table FullName, Length -AutoSize
+
+      - name: Stop anything the update left running
+        if: always()
+        shell: pwsh
+        run: Get-Process ORCA -ErrorAction SilentlyContinue | Stop-Process -Force
+
+      - name: Upload the update test's output
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: feed-update-e2e
+          path: |
+            test-results/windows-update/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

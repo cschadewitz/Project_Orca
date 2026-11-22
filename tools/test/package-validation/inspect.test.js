@@ -14,6 +14,7 @@ import {
   appAsar,
   appImage,
   blockmap,
+  debPackage,
   daemon,
   linuxArchive,
   makePe,
@@ -50,6 +51,8 @@ function fullSet(overrides = {}) {
     [`ORCA-${VERSION}-linux-x64.tar.gz`]: linuxArchive(VERSION, "x64"),
     [`ORCA-${VERSION}-linux-arm64.tar.gz`]: linuxArchive(VERSION, "arm64"),
     [`ORCA-${VERSION}-linux-x86_64.AppImage`]: appImage(),
+    [`ORCA-${VERSION}-linux-amd64.deb`]: debPackage(),
+    [`ORCA-${VERSION}-linux-arm64.deb`]: debPackage(),
     [`ORCA-${VERSION}-win-x64.zip`]: windowsArchive(VERSION, "x64", source),
     [`ORCA-${VERSION}-win-x64.exe`]: installer,
     [`ORCA-${VERSION}-win-x64.exe.blockmap`]: blockmap(installer.length),
@@ -152,7 +155,7 @@ describe("identity refusals", () => {
     expect(() => run(fullSet(), { only })).toThrow(/candidate_artifacts_absent/);
     const partial = run(fullSet(), { only, allowPartial: true });
     expect(partial.complete).toBe(false);
-    expect(partial.absent).toHaveLength(7);
+    expect(partial.absent).toHaveLength(9);
   });
 
   it("refuses a source checkout at another commit, with local changes, or at another version", () => {
@@ -171,6 +174,48 @@ describe("identity refusals", () => {
     expect(() => run(fullSet(), { manifestOverride: { extra: true } })).toThrow(/candidate_manifest_invalid/);
     expect(() => classify(`ORCA-${VERSION}-mac-arm64.dmg`, VERSION)).toThrow(/artifact_out_of_scope/);
     expect(() => classify(`ORCA-1.0.0-win-x64.exe`, VERSION)).toThrow(/artifact_unrecognized/);
+  });
+
+  // #853: the .deb is the supported Ubuntu 24.04 install, so a release set carries it.
+  it("classifies Debian packages by their Debian architecture names", () => {
+    expect(classify(`ORCA-${VERSION}-linux-amd64.deb`, VERSION)).toEqual({
+      kind: "deb",
+      platform: "linux",
+      arch: "x64",
+    });
+    expect(classify(`ORCA-${VERSION}-linux-arm64.deb`, VERSION)).toEqual({
+      kind: "deb",
+      platform: "linux",
+      arch: "arm64",
+    });
+    expect(() => classify(`ORCA-${VERSION}-linux-x64.deb`, VERSION)).toThrow(/artifact_unrecognized/);
+  });
+
+  it("refuses a .deb that is not a Debian package", () => {
+    const name = `ORCA-${VERSION}-linux-amd64.deb`;
+    const refused = (bytes) => {
+      const report = run({ [name]: bytes }, { allowPartial: true });
+      expect(report.status).toBe("refused");
+      return report.artifacts.find((artifact) => artifact.file === name).refusal;
+    };
+    expect(refused(Buffer.from("not an archive"))).toMatch(/^ar_magic_missing/);
+    expect(
+      refused(
+        debPackage([
+          ["debian-binary", "3.0\n"],
+          ["control.tar.xz", "c"],
+          ["data.tar.xz", "d"],
+        ]),
+      ),
+    ).toMatch(/^deb_format_invalid/);
+    expect(
+      refused(
+        debPackage([
+          ["debian-binary", "2.0\n"],
+          ["data.tar.xz", "d"],
+        ]),
+      ),
+    ).toMatch(/^deb_format_invalid/);
   });
 });
 

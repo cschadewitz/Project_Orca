@@ -1,0 +1,465 @@
+{
+  "id": "ai-sdlc",
+  "name": "AI-native SDLC loop",
+  "version": "1",
+  "description": "Drive one work item from intent to a reviewed, deployable change.",
+  "vars": {
+    "maxBuildAttempts": 3,
+    "maxReviewRounds": 2,
+    "buildAttempt": 0,
+    "reviewRound": 0
+  },
+  "inputs": {
+    "workItem": "The work item (title, description, acceptance criteria) this run implements."
+  },
+  "start": "start",
+  "nodes": {
+    "start": {
+      "type": "start"
+    },
+    "plan": {
+      "name": "Plan: capture intent",
+      "type": "agent",
+      "agent": {
+        "role": "planner"
+      },
+      "template": "sdlc/plan",
+      "inputs": [],
+      "produces": [
+        {
+          "kind": "intent",
+          "path": ".orca/work/{{ workItem.slug }}/intent.md",
+          "required": true,
+          "validate": {
+            "requiredFields": [
+              "status"
+            ],
+            "minBodyLength": 40
+          }
+        }
+      ],
+      "completion": {
+        "mode": "turn-end",
+        "maxFollowUps": 1,
+        "maxAttempts": 1
+      },
+      "vars": {}
+    },
+    "design": {
+      "name": "Design: requirements + design spec",
+      "type": "agent",
+      "agent": {
+        "role": "designer"
+      },
+      "template": "sdlc/design",
+      "inputs": [
+        {
+          "kind": "intent",
+          "required": true
+        }
+      ],
+      "produces": [
+        {
+          "kind": "spec",
+          "path": ".orca/work/{{ workItem.slug }}/spec.md",
+          "required": true,
+          "validate": {
+            "requiredFields": [
+              "status",
+              "risk"
+            ],
+            "fieldValues": {
+              "risk": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            "minBodyLength": 80
+          }
+        }
+      ],
+      "completion": {
+        "mode": "turn-end",
+        "maxFollowUps": 1,
+        "maxAttempts": 1
+      },
+      "vars": {}
+    },
+    "spec-gate": {
+      "name": "Approve spec",
+      "type": "gate",
+      "question": "Approve the spec for {{ workItem.title }} (risk: {{ artifacts.spec.data.risk }})?",
+      "options": [
+        {
+          "id": "approve",
+          "label": "approve"
+        },
+        {
+          "id": "reject",
+          "label": "reject"
+        }
+      ],
+      "autoApproveWhen": "artifacts.spec.data.risk != 'high'",
+      "autoOption": "approve"
+    },
+    "await-deps": {
+      "type": "custom:plan-await",
+      "name": "Wait for upstream work this build needs",
+      "phase": "build"
+    },
+    "bump-build": {
+      "type": "set",
+      "vars": {
+        "buildAttempt": "=vars.buildAttempt + 1"
+      }
+    },
+    "build": {
+      "name": "Build: plan and implement",
+      "type": "agent",
+      "agent": {
+        "role": "builder"
+      },
+      "template": "sdlc/build",
+      "inputs": [
+        {
+          "kind": "spec",
+          "required": true
+        },
+        {
+          "name": "testReport",
+          "required": false
+        },
+        {
+          "name": "review",
+          "required": false
+        }
+      ],
+      "produces": [
+        {
+          "kind": "plan",
+          "path": ".orca/work/{{ workItem.slug }}/plan.md",
+          "required": true
+        },
+        {
+          "kind": "implementation",
+          "path": ".orca/work/{{ workItem.slug }}/implementation.md",
+          "required": true,
+          "validate": {
+            "requiredFields": [
+              "status",
+              "branch"
+            ]
+          }
+        }
+      ],
+      "completion": {
+        "mode": "turn-end",
+        "maxFollowUps": 2,
+        "maxAttempts": 2
+      },
+      "vars": {}
+    },
+    "test": {
+      "name": "Test: run and report",
+      "type": "agent",
+      "agent": {
+        "role": "tester"
+      },
+      "template": "sdlc/test",
+      "inputs": [
+        {
+          "kind": "spec",
+          "required": true
+        },
+        {
+          "kind": "implementation",
+          "required": true
+        }
+      ],
+      "produces": [
+        {
+          "kind": "test-report",
+          "name": "testReport",
+          "path": ".orca/work/{{ workItem.slug }}/test-report.md",
+          "required": true,
+          "validate": {
+            "requiredFields": [
+              "status",
+              "passed"
+            ]
+          }
+        }
+      ],
+      "completion": {
+        "mode": "turn-end",
+        "maxFollowUps": 1,
+        "maxAttempts": 1
+      },
+      "vars": {}
+    },
+    "tests-passed": {
+      "name": "Did tests pass?",
+      "type": "decision",
+      "source": {
+        "kind": "artifact",
+        "artifact": "testReport",
+        "field": "passed"
+      },
+      "options": [
+        {
+          "id": "true",
+          "label": "true"
+        },
+        {
+          "id": "false",
+          "label": "false"
+        }
+      ],
+      "defaultOption": "false"
+    },
+    "bump-review": {
+      "type": "set",
+      "vars": {
+        "reviewRound": "=vars.reviewRound + 1"
+      }
+    },
+    "review": {
+      "name": "Review: agentic PR review",
+      "type": "agent",
+      "agent": {
+        "role": "reviewer"
+      },
+      "template": "sdlc/review",
+      "inputs": [
+        {
+          "kind": "spec",
+          "required": true
+        },
+        {
+          "kind": "implementation",
+          "required": true
+        },
+        {
+          "name": "testReport",
+          "required": true
+        }
+      ],
+      "produces": [
+        {
+          "kind": "review",
+          "path": ".orca/work/{{ workItem.slug }}/review.md",
+          "required": true,
+          "validate": {
+            "requiredFields": [
+              "status",
+              "verdict"
+            ],
+            "fieldValues": {
+              "verdict": [
+                "approve",
+                "changes-requested"
+              ]
+            }
+          }
+        }
+      ],
+      "completion": {
+        "mode": "turn-end",
+        "maxFollowUps": 1,
+        "maxAttempts": 1
+      },
+      "vars": {}
+    },
+    "review-verdict": {
+      "name": "Review verdict",
+      "type": "decision",
+      "source": {
+        "kind": "artifact",
+        "artifact": "review",
+        "field": "verdict"
+      },
+      "options": [
+        {
+          "id": "approve",
+          "label": "approve"
+        },
+        {
+          "id": "changes-requested",
+          "label": "changes-requested"
+        }
+      ]
+    },
+    "deploy": {
+      "name": "Deploy: open PR / ship",
+      "type": "agent",
+      "agent": {
+        "role": "deployer"
+      },
+      "template": "sdlc/deploy",
+      "inputs": [
+        {
+          "kind": "implementation",
+          "required": true
+        },
+        {
+          "kind": "review",
+          "required": true
+        }
+      ],
+      "produces": [
+        {
+          "kind": "deploy-report",
+          "name": "deployReport",
+          "path": ".orca/work/{{ workItem.slug }}/deploy-report.md",
+          "required": true,
+          "validate": {
+            "requiredFields": [
+              "status"
+            ]
+          }
+        }
+      ],
+      "completion": {
+        "mode": "turn-end",
+        "maxFollowUps": 1,
+        "maxAttempts": 1
+      },
+      "vars": {}
+    },
+    "delivery-status": {
+      "name": "Was delivery completed?",
+      "type": "decision",
+      "source": {
+        "kind": "artifact",
+        "artifact": "deployReport",
+        "field": "status"
+      },
+      "options": [
+        {
+          "id": "done",
+          "label": "done"
+        },
+        {
+          "id": "blocked",
+          "label": "blocked"
+        }
+      ],
+      "defaultOption": "blocked"
+    },
+    "done": {
+      "type": "end",
+      "outcome": "success",
+      "message": "Work item delivered."
+    },
+    "delivery-blocked": {
+      "type": "end",
+      "outcome": "failure",
+      "message": "Delivery was not completed; see the deploy report."
+    },
+    "rejected": {
+      "type": "end",
+      "outcome": "failure",
+      "message": "Spec rejected at gate."
+    },
+    "exhausted": {
+      "type": "end",
+      "outcome": "failure",
+      "message": "Build/review budget exhausted."
+    }
+  },
+  "edges": [
+    {
+      "from": "start",
+      "to": "plan"
+    },
+    {
+      "from": "plan",
+      "to": "design"
+    },
+    {
+      "from": "design",
+      "to": "spec-gate"
+    },
+    {
+      "from": "spec-gate",
+      "to": "await-deps",
+      "when": "choice == 'approve'"
+    },
+    {
+      "from": "spec-gate",
+      "to": "rejected",
+      "when": "choice == 'reject'"
+    },
+    {
+      "from": "await-deps",
+      "to": "bump-build"
+    },
+    {
+      "from": "bump-build",
+      "to": "build"
+    },
+    {
+      "from": "build",
+      "to": "test"
+    },
+    {
+      "from": "test",
+      "to": "tests-passed"
+    },
+    {
+      "from": "tests-passed",
+      "to": "bump-review",
+      "when": "choice == 'true'",
+      "label": "passed"
+    },
+    {
+      "from": "tests-passed",
+      "to": "bump-build",
+      "when": "choice == 'false' && vars.buildAttempt < vars.maxBuildAttempts",
+      "label": "failed, retry"
+    },
+    {
+      "from": "tests-passed",
+      "to": "exhausted",
+      "label": "failed, give up"
+    },
+    {
+      "from": "bump-review",
+      "to": "review"
+    },
+    {
+      "from": "review",
+      "to": "review-verdict"
+    },
+    {
+      "from": "review-verdict",
+      "to": "deploy",
+      "when": "choice == 'approve'"
+    },
+    {
+      "from": "review-verdict",
+      "to": "bump-build",
+      "when": "choice == 'changes-requested' && vars.reviewRound < vars.maxReviewRounds && vars.buildAttempt < vars.maxBuildAttempts",
+      "label": "changes requested"
+    },
+    {
+      "from": "review-verdict",
+      "to": "exhausted",
+      "label": "give up"
+    },
+    {
+      "from": "deploy",
+      "to": "delivery-status"
+    },
+    {
+      "from": "delivery-status",
+      "to": "done",
+      "when": "choice == 'done'"
+    },
+    {
+      "from": "delivery-status",
+      "to": "delivery-blocked"
+    }
+  ]
+}

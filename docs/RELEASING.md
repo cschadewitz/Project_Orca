@@ -38,7 +38,8 @@ Closing it proposes the release.
    builds the desktop and daemon artifacts from that same commit (`desktop.yml`, below),
    then tags `vX.Y.Z` and publishes the release with the changelog section as its body,
    the artifacts attached, and GitHub's generated list of merged pull requests appended
-   underneath.
+   underneath. A **final** (`0.7.0`, no prerelease suffix) stops short of that: see
+   [Publishing a final](#publishing-a-final).
 
 Closing a milestone stops at a pull request on purpose. A milestone can be closed by
 accident and reopened; a published tag cannot be unpublished cleanly. One merge click is
@@ -63,6 +64,79 @@ access token instead of `GITHUB_TOKEN` would move the checks back onto the PR, a
 of a token to store and rotate; that trade is only worth making if `main` ever gains
 required status checks.
 
+### Publishing a final
+
+A final becomes the repository's "latest", so its page must offer only signed or validated
+downloads. The Windows installers `release-publish.yml` builds are unsigned, and only the
+Ubuntu 24.04 amd64 `.deb` has native install acceptance. So for a final, `publish` creates
+a **draft** through the API, targeting the merge commit, with the Ubuntu amd64 `.deb`
+attached and nothing else: no tag exists yet, nothing is latest, and no feed step runs. It
+takes the release id from the creation response, uploads by that id, and reads the draft
+back (still a draft, the intended commit, exactly the `.deb` with this run's digest) before
+the job summary reports the id. The run's other builds stay in its workflow artifacts.
+
+Work on the draft **by id, never by tag**: a draft has no tag yet, and the API can report
+its `tag_name` as a temporary `untagged-…` value. With `R=cschadewitz/Project_Orca`, `ID`
+the release id from the job summary, `SHA` the commit and `V` the version:
+
+1. **Automatic** while the repository variable `ORCA_RELEASE_AUTO_SIGN` is `true` (off by
+   default): the same run's `sign` job dispatches **Windows signed (spike)** from `main` with
+   `source_sha` set to `SHA` (while `main` still matches it outside notes, docs and
+   workflows; later product drift on `main` makes the source check refuse it). Dispatching
+   changes no protection: the signed run still waits on whatever the `windows-signing`
+   environment requires. Removing its required reviewer is a separate setting (the owner
+   chose no reviewer, main only, on 2026-11-21).
+2. The signing run itself checks Authenticode status `Valid`, a timestamp, the expected
+   publisher, and that `latest-x64.yml` `files[0]` (`url`, `size`, base64 **SHA-512**)
+   describes exactly `ORCA-$V-win-x64.exe`.
+3. **Automatic** (same switch): when it succeeds, **Release (attach signed installer)**
+   (`release-attach-signed.yml`, `tools/deploy/release-attach.sh`) first checks the signing
+   run itself: a successful `windows-signed.yml` run of this repository, dispatched from
+   `main`, with exactly one unexpired signed artifact. It finds the one final draft targeting
+   `SHA`, re-checks the x64 installer's signature, timestamp and publisher, records the run
+   and the installer's digest in the draft's notes, then uploads it by id and reads both
+   back. Before each write it re-reads that exact draft (still a draft, same target and name,
+   only the `.deb` or `.deb` + `.exe`, no other run's record) and stops if anything changed.
+   Because the record comes first, an interrupted upload is resumed with the same run, and a
+   later signing run of the same commit is refused. A reconcile every 6 hours re-dispatches
+   the attach for any final draft missing its installer or record (the recorded run if there
+   is one); an installer attached by hand without a record is left alone. A rerun is a
+   no-op; different bytes under the same name stop it. Its summary gives the installer's **SHA-256**. To check by hand:
+   `gh api repos/$R/releases/$ID --jq '{draft, name, tag_name, target_commitish, assets: [.assets[] | {name, digest}]}'`
+   must show `draft: true`, `name: "v$V"`, `target_commitish` equal to `SHA`, and exactly the
+   `.deb` and the `.exe`. `tag_name` may read `v$V` or `untagged-…`; step 6 sets it.
+4. If either automatic step did not run (the switch is off, or the signing run was refused),
+   dispatch **Windows signed (spike)** for `SHA` by hand, then **Release (attach signed
+   installer)** with that run's id (`signed_run_id`); with the switch on the attach follows
+   on its own. Attaching entirely by hand (no record, so the feed must then be dispatched by
+   hand too) is
+   `gh api -X POST -H 'Content-Type: application/octet-stream' "https://uploads.github.com/repos/$R/releases/$ID/assets?name=ORCA-$V-win-x64.exe" --input <file>`.
+5. Run native acceptance on the exact staged bytes before anything is public: the signed
+   x64 `.exe` and the Ubuntu amd64 `.deb`, each with a digest equal to what step 3's check
+   shows on the draft (signature, install, first launch, a built-in sample, reopen). The
+   signing run's checks in step 2 are not that acceptance. If either fails, stop: the draft
+   stays a draft and nothing is public.
+6. Publish by dispatching **Release (publish final)** (`release-publish-final.yml`) from
+   `main` with `release_id=$ID`, `version=$V`, and what step 5 accepted: `source_sha=$SHA`,
+   `deb_sha256` and `exe_sha256` (the digests of the exact files that passed). Immediately
+   before publishing it compares all of them with the draft: still a draft, named `v$V`,
+   targeting `SHA`, exactly those two assets with those digests, and the installer's digest
+   equal to the signing record. It refuses a version that is not newer than the current
+   Latest and an existing tag at another commit, publishes with the tag and target stated
+   explicitly, and reads back the published digests, the tag and Latest. It shares one queue
+   with the attach, so the two never interleave; publish only through it, not by editing the
+   draft by hand.
+7. Where the desktop feed is enabled, publishing feeds that signing run automatically
+   (step 6 dispatches **Desktop feed (automatic)**, which dispatches **Desktop feed (publish signed)**; see
+   [UPDATING.md](UPDATING.md)). Check that run went green.
+
+If `publish` fails or is re-run for a final, it refuses to make a second draft while any
+draft named or tagged `v$V` exists, and prints their ids. Reuse such a draft when step 3's
+checks pass for the commit you mean to release (upload the `.deb` by id if it is missing).
+Delete a draft only when its target or assets are wrong, then dispatch **Release
+(publish)** again. More than one draft for the version is always a stop: delete the extras
+after checking which one, if any, is valid.
+
 ## The artifacts
 
 Two, both from the merge commit that gets tagged, so their protocol versions agree by
@@ -71,7 +145,7 @@ construction rather than by anyone checking:
 | Artifact | What it is | Files on the release |
 | --- | --- | --- |
 | **daemon** | The CLI, bundled to one ESM file. No Electron. | `orca-daemon-X.Y.Z.mjs` |
-| **desktop** | The Electron app, with that same daemon build inside it. | `.AppImage`, `.tar.gz`, `.dmg`, `.zip`, `.exe` |
+| **desktop** | The Electron app, with that same daemon build inside it. | `.deb`, `.AppImage`, `.tar.gz`, `.dmg`, `.zip`, `.exe` |
 
 `.github/workflows/desktop.yml` builds both, on `ubuntu-latest`, `macos-latest` and
 `windows-latest`. `release-publish.yml` calls it as a reusable workflow against the merge
@@ -85,6 +159,13 @@ It is deliberately not part of `ci.yml`, which sets
 Architectures: x64 and arm64 everywhere, except the Linux `AppImage`, which is x64 only —
 building an arm64 one on an x64 runner needs an arm64 `appimagetool` to run there. arm64
 Linux gets the `tar.gz`, which is the same tree without the single-file wrapper.
+
+On Linux the `.deb` (x64 and arm64) is the supported install, and the one to point testers
+at: Ubuntu 24.04 and later restrict the user namespaces Chromium's sandbox needs, and only
+the package's root install script can load the AppArmor profile that lets
+`/opt/ORCA/orca-desktop` make them. The Linux executable, package, command and desktop entry
+are all `orca-desktop`, because `orca` is Ubuntu Desktop's screen reader. The archive and the AppImage abort before their first window there (#853).
+[INSTALL-LINUX.md](INSTALL-LINUX.md) has the install, the reason and what CI checks.
 
 ### The daemon inside the desktop artifact
 
@@ -152,7 +233,7 @@ and `mac.notarize: false` remain in effect.
 | --- | --- |
 | macOS | `CFBundleIdentifier` becomes `com.schadewitz.orca`; builder-derived helper bundle IDs follow it. `ORCA.app`, product name, DMG/ZIP targets and artifact filenames are unchanged. OS permissions, notification identity and Keychain access must be checked as a new identity, not assumed to transfer from `dev.orca.desktop`. |
 | Windows | Explicit `win.appId: dev.orca.desktop` preserves existing NSIS identity. The locked builder derives the installer GUID from that ID and uses the ID for shortcut AppUserModelID. Install/uninstall registration, installation name and updater cache naming remain stable. A Windows ID migration is deferred to a separate product decision; do not remove this override as cleanup. |
-| Linux | The default ID changes, but the current AppImage/tar.gz targets retain executable `orca`, package/product names, desktop entry and artifact filenames. This is not a Debian service/store migration. |
+| Linux | The default ID changes; product name and artifact filenames are unchanged. For #853 the executable and desktop entry became `orca-desktop` (was `orca`, which is the GNOME screen reader's package and command on Ubuntu Desktop), and the `.deb` installs to `/opt/ORCA` as package `orca-desktop`. This is not a Debian service/store migration. |
 | Application data | Package name `@orca/app` and product name `ORCA` are unchanged. Electron's default `userData` is name-based, not bundle-ID-based; preferences and encrypted run intents stay at the same paths. Workspace selection and `<workspace>/.orca` are unchanged. No files are moved, reset or deleted. |
 | Updates | Windows remains on its existing NSIS identity and `latest-ARCH` feed channels. This change does not enable macOS/Linux automatic updates, change feeds or publish artifacts. |
 
@@ -171,10 +252,12 @@ The compatibility exception follows the builder's [NSIS identity contract](https
 Focused tests resolve IDs and names with the locked builder and compare Linux desktop
 entries; they do not substitute for running old and new installers on native systems.
 
-### Signing and notarisation are not done
+### Signing and notarisation
 
-Both artifacts are **unsigned**, and both platforms say so to the person who downloads
-them. This is a follow-up, not an oversight, and it stays written here until it is closed.
+The ordinary builds from `desktop.yml` and the release job are **unsigned** on every
+platform. Windows finals are signed in a separate lane (`windows-signed.yml`) and only that
+signed installer is released; macOS signing and notarisation are not done yet, and stay
+written here until they are.
 
 - **macOS** shows "ORCA is damaged and can't be opened" or a Gatekeeper refusal, because an
   unsigned app that arrived with a quarantine attribute cannot be opened by double-clicking
@@ -191,24 +274,23 @@ them. This is a follow-up, not an oversight, and it stays written here until it 
   With those present, `mac.identity` and `mac.notarize` in `packages/app/electron-builder.yml`
   come off `null`/`false` and the workflow gains a keychain step.
 
-- **Windows** shows a SmartScreen "unrecognised app" warning on the unsigned NSIS installer
-  that release assets carry (a signed build comes from `windows-signed.yml` and is distributed
-  separately), and may still show warnings after signing starts: a valid signature authenticates a publisher
-  but does not guarantee SmartScreen reputation or bypass enterprise policy.
+- **Windows**: the NSIS installers the ordinary release job and `desktop.yml` build are
+  unsigned CI output and are never a final's download. The supported installer for a final
+  is the one `windows-signed.yml` signs for the release commit, attached to the draft before
+  publication ([Publishing a final](#publishing-a-final)). A valid signature authenticates
+  the publisher but does not guarantee SmartScreen reputation or bypass enterprise policy.
 
   The [Windows signing runbook](windows-signing-runbook.md) covers publisher choice,
   Azure Artifact Signing eligibility/cost, owner-led enrollment, least-privilege OIDC CI,
   builder 26 compatibility, timestamps, updater publisher matching and native acceptance.
-  The proposed cloud route keeps keys service-managed and needs no client secret. A
-  publicly trusted CA's cloud/HSM offering is an alternative if Azure is unsuitable;
-  self-signed/internal certificates do not establish public publisher trust. No route is
-  provisioned or enabled by the runbook.
+  A publicly trusted CA's cloud/HSM offering is an alternative if Azure is unsuitable;
+  self-signed/internal certificates do not establish public publisher trust.
 
 - **Linux** has nothing to sign against. An AppImage can carry a detached GPG signature, and
   almost nothing verifies one; it is not on the list.
 
-Until that lands, the release notes for a version carrying desktop artifacts should say the
-builds are unsigned and how to open them.
+Release notes say which downloads are signed and supported; a prerelease's page carries
+unsigned CI output and its notes must say not to install that output.
 
 ## Changelog fragments
 
@@ -260,6 +342,21 @@ Release: v0.3.0-rc.1
 That overrides the labels. A version with a prerelease suffix is published with
 `--prerelease`, so it never becomes the repository's "latest".
 
+### A final is its last candidate
+
+A final release (`0.7.0`) should ship the code of its newest release candidate
+(`v0.7.0-rc.N`) plus fixes someone chose on purpose, not whatever merged to `main` after the
+candidate was tested. Land those fixes as cherry-picks or say why each one belongs. To make
+drift visible, the release pull request for a final compares what the release is built
+from (`packages/` with its manifests, `workflows/`, `templates/`, the lockfile and the root
+build config and `.github/workflows/desktop.yml`, listed as `DRIFT_PATHS` in
+`tools/release-pr-body.js`) with the newest
+`v<version>-rc.*` tag and either says nothing changed or shows a warning with the
+`git diff --stat` and a comparison link. If the comparison output is missing, the
+workflow stops before pushing anything rather than reporting that nothing changed. This only works when candidates are released
+through this workflow, so they carry tags. Learned from T3 Code, whose stable release
+builds the exact commit its last nightly shipped (#863).
+
 ### What counts as breaking
 
 Not the TypeScript API — nothing outside this repository imports it. ORCA's compatibility
@@ -283,6 +380,38 @@ claim the release makes on your behalf: write the fragment when it would be fals
 
 Documentation under `docs/` describes `main`, not the last release. Link docs at the tag
 (`/blob/vX.Y.Z/docs/...`) when a release note needs to point at them.
+
+## Rehearsing a release (dry run)
+
+Run **Release (publish)** from the Actions tab with **dry_run** ticked and a branch or
+commit as **ref**. The ref must contain `efdaf863` (#862) or be newer: the App smoke
+workflow's `linux-native` job is required for a rehearsal as for a release, and it installs
+the ref's `.deb` and runs `pnpm run app:linux-native`, which older refs (including rc.2,
+`c2e617af`) do not have, so a rehearsal of one fails there. The upgrade launch check is the
+one step an older ref may lack; it reports not applicable. It runs every job a real release runs (the full check path, the desktop
+artifacts, the smoke and type proof) and then uploads the artifacts to a **draft
+prerelease** called `vX.Y.Z-dryrun.<run number>`, where `X.Y.Z` is the ref's
+`package.json` version without its prerelease suffix. Nothing is tagged, nothing is
+published or marked latest, and no feed step runs. The draft's notes start with a
+dry-run warning.
+
+Dispatch it with the workflow from `main` (the "Use workflow from" box); the run refuses
+any other. The rehearsed ref is untrusted: its code only ever runs in jobs with a read-only
+token and no saved git credentials, and the smoke runs on GitHub-hosted runners, never the
+self-hosted ones, without the runner health endpoint; the desktop and smoke jobs pick their
+runners with `main`'s tooling, not the ref's. The draft is uploaded by a separate job that
+checks out `main`'s workflow revision, validates the version and commit, and treats the
+artifacts as data. A ref from before the upgrade launch check reports it as not applicable.
+
+A real (non-dry-run) release refuses any commit that is not on `main`, and a manual one must
+also be dispatched with `main`'s workflow: its publish job runs the released commit's own
+tooling with a write token, so that commit has to be reviewed. Any commit on `main`
+qualifies, so fixing forward after a failed publish still works.
+
+Use it before merging a release pull request, or to try a risky change through the
+release graph before it lands. A failure costs nothing, unlike a failed `release-publish`
+after merge, which leaves a bump on `main` with no tag. Delete the draft when you are done
+(`gh release delete vX.Y.Z-dryrun.N`). Learned from T3 Code's preview release train (#863).
 
 ## Doing it by hand
 
@@ -338,8 +467,9 @@ The final job validates both feeds and uploads assets to a draft before publishi
 optionally activates the private HTTPS feed through a separately provisioned SSH account.
 This replaces the older statement that distribution requires making the repository public.
 Repository credentials stay with GitHub Actions/`gh`; clients use read-only feed credentials.
-The signing setup above remains unproven and unsigned Windows installs require an explicit
-bootstrap trust decision. Do not describe unit tests as packaged-update or signing evidence.
+(Since #856 the feed is the R2 Worker fed only from signed runs; since #865 a final's
+Windows download is the signed installer, so no unsigned bootstrap is part of a final.) Do
+not describe unit tests as packaged-update or signing evidence.
 
 Review `release-compatibility.json` with every store-format change. A changed epoch blocks
 automatic Debian activation and recovery across that boundary; a binary-only rollback is

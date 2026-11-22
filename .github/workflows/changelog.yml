@@ -48,7 +48,7 @@ jobs:
             "skip=" + ([.labels[].name] | any(. == "no-changelog" or . == "release") | tostring)' \
             <<<"$pr" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.pr.outputs.skip != 'true'
         with:
           # The three-dot diff below needs the merge base and the resolved PR head.
