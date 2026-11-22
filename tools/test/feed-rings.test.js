@@ -1,11 +1,12 @@
 /** The desktop feed's ring rules and the CLI the release jobs run them through. */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   compareVersions,
   emptyRings,
+  hasServer,
   promote,
   publish,
   rolloutBucket,
@@ -116,7 +117,8 @@ describe("promote", () => {
 
   it("does not let publication clear a newer internal rollout", () => {
     const rolling = promote(
-      { format: 1, rings: { internal: { version: "0.7.0" } } },
+      // Internal's servers already run the rc the desktops are given (#877).
+      { format: 1, rings: { internal: { version: "0.7.0" } }, server: { internal: { version: "0.8.0-rc.2" } } },
       "internal",
       "0.8.0-rc.1",
       50,
@@ -191,6 +193,19 @@ describe("feed-rings CLI and feed-token", () => {
     expect(readFileSync(file, "utf8")).toBe(before);
   });
 
+  it("shows the validated ring state on one line without writing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "orca-rings-"));
+    dirs.push(dir);
+    const file = join(dir, "rings.json");
+    expect(run([file, "show"])).toBe(JSON.stringify({ format: 1, rings: {} }));
+    expect(existsSync(file)).toBe(false);
+    const state = { format: 1, rings: { stable: { version: "0.7.0" } } };
+    writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);
+    expect(run([file, "show"])).toBe(JSON.stringify(state));
+    writeFileSync(file, JSON.stringify({ format: 2, rings: {} }));
+    expect(() => run([file, "show"])).toThrow();
+  });
+
   it("mints a token the Worker accepts and keeps only its hash", () => {
     const { token, entry } = mint("preview", Buffer.alloc(32, 7));
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -199,5 +214,120 @@ describe("feed-rings CLI and feed-token", () => {
     expect(value).toEqual({ ring: "preview" });
     expect(JSON.stringify(entry)).not.toContain(token);
     expect(() => mint("nightly")).toThrow(/ring must be/);
+  });
+
+  it("mints a token limited to the server channel (#877)", () => {
+    const { entry } = mint("stable", Buffer.alloc(32, 8), { server: true });
+    expect(Object.values(entry)).toEqual([{ ring: "stable", channel: "server" }]);
+  });
+});
+
+describe("server bundle channel (#877)", () => {
+  const base = { format: 1, rings: { internal: { version: "0.7.1" }, preview: { version: "0.7.1" } } };
+
+  it("starts with the 0.8 line, release candidates included", () => {
+    expect(hasServer("0.8.0-rc.1")).toBe(true);
+    expect(hasServer("0.8.0")).toBe(true);
+    expect(hasServer("1.0.0")).toBe(true);
+    expect(hasServer("0.7.9")).toBe(false);
+    expect(() => publish(base, "0.7.2", "server")).toThrow(/predates the server bundle/);
+    expect(() => promote(base, "preview", "0.7.2", 100, "server")).toThrow(/predates the server bundle/);
+  });
+
+  it("publishes and promotes servers in their own rings, without touching the desktop ones", () => {
+    const published = publish(base, "0.8.0-rc.1", "server");
+    expect(published.changed).toBe(true);
+    expect(published.message).toBe("internal servers now offer 0.8.0-rc.1");
+    expect(published.rings.rings).toEqual(base.rings);
+    expect(published.rings.server).toEqual({ internal: { version: "0.8.0-rc.1" } });
+    const rolling = promote(published.rings, "preview", "0.8.0-rc.1", 25, "server");
+    expect(rolling.message).toBe("preview servers offer 0.8.0-rc.1 to 25%");
+    expect(rolling.rings.server.preview).toEqual({ rollout: { version: "0.8.0-rc.1", percent: 25 } });
+    expect(promote(rolling.rings, "preview", "0.8.0-rc.1", 0, "server").message).toBe(
+      "preview servers rollout of 0.8.0-rc.1 halted",
+    );
+    expect(() => promote(rolling.rings, "preview", "0.8.0-rc.2", 0, "server")).toThrow(
+      "preview servers are not rolling out 0.8.0-rc.2",
+    );
+    const full = promote(rolling.rings, "preview", "0.8.0-rc.1", 100, "server").rings;
+    expect(() => promote(full, "preview", "0.8.0-rc.1", 100, "server")).toThrow(/never move backwards/);
+    expect(() => promote(full, "stable", "0.8.0-rc.1", 100, "server")).toThrow(/stable cannot take a prerelease/);
+    expect(publish(full, "0.8.0-rc.1", "server").changed).toBe(false);
+  });
+
+  it("refuses to offer desktops a version their ring's servers are not all on", () => {
+    expect(() => publish(base, "0.8.0-rc.1")).toThrow(
+      "internal servers are offered nothing; offer the server bundle 0.8.0-rc.1 to all of internal first (servers never fall behind desktops)",
+    );
+    let rings = publish(base, "0.8.0-rc.1", "server").rings;
+    rings = publish(rings, "0.8.0-rc.1").rings;
+    expect(rings.rings.internal).toEqual({ version: "0.8.0-rc.1" });
+    // A server rollout is not enough: servers outside it keep the full version.
+    rings = promote(rings, "preview", "0.8.0-rc.1", 50, "server").rings;
+    for (const percent of [5, 100])
+      expect(() => promote(rings, "preview", "0.8.0-rc.1", percent)).toThrow(
+        "preview servers are offered nothing; offer the server bundle 0.8.0-rc.1 to all of preview first",
+      );
+    rings = promote(rings, "preview", "0.8.0-rc.1", 100, "server").rings;
+    rings = promote(rings, "preview", "0.8.0-rc.1", 5).rings;
+    expect(rings.rings.preview).toEqual({ version: "0.7.1", rollout: { version: "0.8.0-rc.1", percent: 5 } });
+    // Desktops of a ring never pass its servers' full version, servers may run ahead.
+    rings = promote(rings, "internal", "0.8.0", 100, "server").rings;
+    expect(() => promote(rings, "preview", "0.8.0", 100)).toThrow("preview servers are on 0.8.0-rc.1;");
+    expect(promote(rings, "internal", "0.8.0", 100).rings.rings.internal).toEqual({ version: "0.8.0" });
+  });
+
+  it("always lets a desktop rollout halt, and leaves pre-0.8 desktops alone", () => {
+    const rings = {
+      format: 1,
+      rings: { preview: { version: "0.7.1", rollout: { version: "0.8.0-rc.1", percent: 5 } } },
+      server: {},
+    };
+    expect(promote(rings, "preview", "0.8.0-rc.1", 0).rings.rings.preview).toEqual({ version: "0.7.1" });
+    expect(promote(base, "preview", "0.7.2", 100).rings.rings.preview).toEqual({ version: "0.7.2" });
+    expect(publish(base, "0.7.2").rings.rings.internal).toEqual({ version: "0.7.2" });
+  });
+
+  it("validates the server rings like the desktop ones, and reads a file without them", () => {
+    expect(validateRings(base)).toBe(base);
+    for (const server of [
+      [],
+      { nightly: { version: "0.8.0" } },
+      { stable: { version: "0.8.0-rc.1" } },
+      { preview: { version: "0.8.0", rollout: { version: "0.8.0", percent: 5 } } },
+    ])
+      expect(() => validateRings({ ...base, server })).toThrow();
+  });
+
+  it("resolves a token's server version from the server rings", async () => {
+    const rings = { ...base, server: { preview: { version: "0.8.0-rc.1" } } };
+    expect(await versionFor(rings, "preview", "a".repeat(64), "server")).toBe("0.8.0-rc.1");
+    expect(await versionFor(rings, "internal", "a".repeat(64), "server")).toBeUndefined();
+    expect(await versionFor(base, "preview", "a".repeat(64), "server")).toBeUndefined();
+    expect(await versionFor(rings, "preview", "a".repeat(64))).toBe("0.7.1");
+  });
+
+  it("runs both channels through the CLI", () => {
+    const dir = mkdtempSync(join(tmpdir(), "orca-rings-server-"));
+    try {
+      const file = join(dir, "rings.json");
+      writeFileSync(file, JSON.stringify(base));
+      expect(run([file, "publish-server", "0.8.0-rc.1"])).toBe("internal servers now offer 0.8.0-rc.1");
+      expect(run([file, "promote-server", "preview", "0.8.0-rc.1", "100"])).toBe(
+        "preview servers now offer 0.8.0-rc.1 to everyone",
+      );
+      expect(run([file, "promote", "preview", "0.8.0-rc.1", "100"])).toBe("preview now offers 0.8.0-rc.1 to everyone");
+      expect(JSON.parse(readFileSync(file, "utf8")).server).toEqual({
+        internal: { version: "0.8.0-rc.1" },
+        preview: { version: "0.8.0-rc.1" },
+      });
+      // A refusal leaves the file as it was.
+      const before = readFileSync(file, "utf8");
+      expect(() => run([file, "promote", "stable", "0.8.0", "100"])).toThrow(/stable servers are offered nothing/);
+      expect(() => run([file, "promote-desktop", "stable", "0.8.0", "100"])).toThrow(/usage/);
+      expect(readFileSync(file, "utf8")).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

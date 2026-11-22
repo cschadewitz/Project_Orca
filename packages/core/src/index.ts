@@ -23,6 +23,7 @@ export * from "./util/path-get.js";
 export * from "./util/jsonl.js";
 
 export * from "./model/run-provenance.js";
+export * from "./model/recovery.js";
 
 export * from "./model/admission-retry.js";
 
