@@ -97,6 +97,7 @@ import { parseVars, workflowGuards } from "./launch-options.js";
 import { authCommand } from "./auth.js";
 import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
+import { storeCommand } from "./store.js";
 import { planCommand } from "./plan.js";
 import { requireTemplatePack, selectionOverrides } from "./selection.js";
 
@@ -570,6 +571,11 @@ export const commands: Record<string, Command> = {
   leases: {
     help: "leases [list | break <runId> [--force] [--keep]]  Show who is interpreting which run; free a run whose interpreter is gone.",
     run: leasesCommand,
+  },
+
+  store: {
+    help: "store [format | carry-forward]  Show the store's format; convert an older-format store once, with every other ORCA stopped.",
+    run: storeCommand,
   },
 
   runs: {

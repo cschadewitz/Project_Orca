@@ -4,12 +4,13 @@
  * A store records the format (store epoch) and the ORCA version that last wrote it in
  * `store-format.json`. Every writer checks it before touching anything else:
  *
- * - Same format: open in place. An app update that keeps the format needs nothing else.
- * - The previous supported format, or an unmarked store written before the marker existed:
- *   carry it forward (store-format-carryover.ts): back the whole store up into
- *   `format-backups/`, verify the copy and that nothing else wrote meanwhile, read the store
- *   under the current format, and only then stamp the marker. Any failure refuses startup and
- *   leaves the prior format authoritative.
+ * - Same format, or an unmarked store this format's line already wrote: open in place (and
+ *   stamp). An app update that keeps the format, the automatic desktop path, needs nothing else.
+ * - The previous supported format, or an unmarked store from before that line: ordinary startup
+ *   refuses (CARRYOVER_REQUIRED). `orca store carry-forward`, run with every other ORCA process
+ *   stopped, converts it explicitly (store-format-carryover.ts): a verified whole-store backup
+ *   into `format-backups/`, a check that nothing else wrote meanwhile, a read of the store under
+ *   the current format, and only then the marker. Any failure leaves the prior format in charge.
  * - An older format this build no longer reads: refuse, naming the release to open it with first.
  * - A format this build does not know (in practice, one written by a newer ORCA): refuse for
  *   reads and writes alike. The store is never rewritten.
@@ -57,7 +58,8 @@ const MarkerSchema = z.object({
 export type StoreFormatMarker = z.infer<typeof MarkerSchema>;
 
 /** NEWER, TOO_OLD and DAMAGED describe the marker; the rest are carryover refusals. */
-export type StoreFormatReason = "NEWER" | "TOO_OLD" | "DAMAGED" | "BUSY" | "UNREADABLE" | "BACKUPS_UNSAFE";
+export type StoreFormatReason =
+  "NEWER" | "TOO_OLD" | "DAMAGED" | "CARRYOVER_REQUIRED" | "BUSY" | "UNREADABLE" | "BACKUPS_UNSAFE";
 export class StoreFormatError extends OrcaError {
   override readonly name = "StoreFormatError";
   constructor(
@@ -70,9 +72,10 @@ export class StoreFormatError extends OrcaError {
 }
 
 export type StoreFormatOutcome =
-  | { status: "fresh" | "current"; epoch: string }
-  /** Opened in place after carrying an older store forward; `backup` is absent in read mode. */
-  | { status: "carried"; epoch: string; from: string | "unmarked"; backup?: string };
+  /** `adopted`: an unmarked store this format's line wrote, now stamped without conversion. */
+  | { status: "fresh" | "current" | "adopted"; epoch: string }
+  /** Carried forward explicitly by {@link carryStoreForward}, after a verified backup. */
+  | { status: "carried"; epoch: string; from: string | "unmarked"; backup: string };
 
 export interface StoreFormatOptions {
   /** The ORCA version doing the open, recorded in the marker. */
@@ -81,8 +84,6 @@ export interface StoreFormatOptions {
   mode: "write" | "read";
   /** Injected for tests. */
   now?: () => Date;
-  /** Test seam: runs after the backup copy, before the store is re-checked. */
-  afterCopy?: () => Promise<void>;
 }
 
 /** Read the marker without checking it; `undefined` when the store has none. */
@@ -139,9 +140,37 @@ function judge(storeDir: string, marker: StoreFormatMarker, current: string): vo
   );
 }
 
+/** Written only by builds of the current format's line (#566 rehearsal: v0.6.0 has neither). */
+async function identifiedAsCurrent(storeDir: string): Promise<boolean> {
+  const names = await readdir(storeDir).catch(() => [] as string[]);
+  return names.includes(".workspace-identified") && names.includes("workspace-identity");
+}
+
+const carryoverRequired = (storeDir: string, from: string) =>
+  new StoreFormatError(
+    "CARRYOVER_REQUIRED",
+    `This store was written ${from === "unmarked" ? "by an ORCA release before 0.7" : `in store format ${from}`}, and this ORCA (store format ${STORE_FORMAT_EPOCH}) does not convert it during ordinary startup. Stop every ORCA app, daemon and command using it, then run \`orca store carry-forward\` once. Nothing was changed.`,
+    storeDir,
+  );
+
+async function stamp(storeDir: string, appVersion: string, now: Date, backup: string | undefined): Promise<void> {
+  const value: StoreFormatMarker = {
+    format: 1,
+    epoch: STORE_FORMAT_EPOCH,
+    writtenBy: appVersion,
+    updatedAt: now.toISOString(),
+    ...(backup ? { backup } : {}),
+  };
+  const tmp = join(storeDir, `${STORE_FORMAT_FILE}.${randomUUID()}.tmp`);
+  await writeFile(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
+  await rename(tmp, join(storeDir, STORE_FORMAT_FILE));
+}
+
 /**
- * Check the store's format before any other store access and, in write mode, carry an older
- * store forward: back it up whole, then stamp the current format. Throws {@link StoreFormatError}.
+ * Check the store's format before any other store access. Ordinary startup never converts a
+ * store: it opens the current format, stamps a fresh store or an unmarked store this format's
+ * line already wrote, and refuses everything else (CARRYOVER_REQUIRED for an older format,
+ * which {@link carryStoreForward} handles explicitly). Throws {@link StoreFormatError}.
  */
 export async function enterStoreFormat(storeDir: string, options: StoreFormatOptions): Promise<StoreFormatOutcome> {
   const current = STORE_FORMAT_EPOCH;
@@ -150,41 +179,44 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
     if (marker) judge(storeDir, marker, current);
     return marker;
   };
-  if (options.mode === "read") {
-    const marker = await check();
-    if (!marker)
-      return (await holdsData(storeDir))
-        ? { status: "carried", epoch: current, from: "unmarked" }
-        : { status: "fresh", epoch: current };
-    return marker.epoch === current
-      ? { status: "current", epoch: current }
-      : { status: "carried", epoch: current, from: marker.epoch };
-  }
+  const classify = async (marker: StoreFormatMarker | undefined) => {
+    if (marker?.epoch === current) return "current" as const;
+    if (marker) throw carryoverRequired(storeDir, marker.epoch);
+    if (!(await holdsData(storeDir))) return "fresh" as const;
+    if (await identifiedAsCurrent(storeDir)) return "adopted" as const;
+    throw carryoverRequired(storeDir, "unmarked");
+  };
+  if (options.mode === "read") return { status: await classify(await check()), epoch: current };
   await mkdir(storeDir, { recursive: true });
   return withFileLock(join(storeDir, LOCK), async () => {
     const marker = await check();
+    const status = await classify(marker);
     const now = (options.now ?? (() => new Date()))();
-    const stamp = async (backup?: string) => {
-      const value: StoreFormatMarker = {
-        format: 1,
-        epoch: current,
-        writtenBy: options.appVersion,
-        updatedAt: now.toISOString(),
-        ...(backup ? { backup } : marker?.backup ? { backup: marker.backup } : {}),
-      };
-      const tmp = join(storeDir, `${STORE_FORMAT_FILE}.${randomUUID()}.tmp`);
-      await writeFile(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
-      await rename(tmp, join(storeDir, STORE_FORMAT_FILE));
-    };
-    if (marker?.epoch === current) {
-      if (marker.writtenBy !== options.appVersion) await stamp();
-      return { status: "current", epoch: current };
-    }
-    if (!marker && !(await holdsData(storeDir))) {
-      await stamp();
-      return { status: "fresh", epoch: current };
-    }
+    if (status !== "current" || marker?.writtenBy !== options.appVersion)
+      await stamp(storeDir, options.appVersion, now, marker?.backup);
+    return { status, epoch: current };
+  });
+}
+
+/**
+ * The explicit, offline carryover of an older-format store (`orca store carry-forward`). The
+ * caller states that every other ORCA process using the store is stopped; this still refuses
+ * when quiescence cannot be confirmed (store-format-carryover.ts), and stamps the current
+ * format only after a verified backup and a read check. Throws {@link StoreFormatError}.
+ */
+export async function carryStoreForward(
+  storeDir: string,
+  options: { appVersion: string; now?: () => Date; afterCopy?: () => Promise<void> },
+): Promise<StoreFormatOutcome> {
+  const current = STORE_FORMAT_EPOCH;
+  return withFileLock(join(storeDir, LOCK), async () => {
+    const marker = await readStoreFormat(storeDir);
+    if (marker) judge(storeDir, marker, current);
+    if (marker?.epoch === current) return { status: "current", epoch: current };
+    if (!marker && !(await holdsData(storeDir)))
+      throw new StoreFormatError("UNREADABLE", `${storeDir} holds no ORCA store to carry forward.`, storeDir);
     const from = marker?.epoch ?? "unmarked";
+    const now = (options.now ?? (() => new Date()))();
     let backup: string;
     try {
       const staged = await stageCarryover(storeDir, from, current, now, {
@@ -195,7 +227,7 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
       if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
       throw error;
     }
-    await stamp(backup);
+    await stamp(storeDir, options.appVersion, now, backup);
     await pruneFormatBackups(storeDir, backup);
     return { status: "carried", epoch: current, from, backup };
   });

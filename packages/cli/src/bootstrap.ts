@@ -334,20 +334,15 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       closedUpdateOwnsConfiguredRoots(configDir, resolve(configDir, config.storeDir)),
     );
   else await enterFirstRunWriter(resolve(configDir), resolve(configDir, config.storeDir), firstRunLaunch);
-  // Before any store reader or writer (#566): refuse a store this build cannot open, and back
-  // an older-format store up whole before carrying it forward. Closed update validation only
-  // checks; an ephemeral bootstrap never opens the store at all.
-  const storeFormat = opts.ephemeral
-    ? undefined
-    : await enterStoreFormat(resolve(configDir, config.storeDir), {
-        appVersion: storeWriterVersion(),
-        mode: isClosedUpdateBootstrap() ? "read" : "write",
-      });
+  // Before any store reader or writer (#566): refuse a store this build cannot open, including
+  // an older format, which only `orca store carry-forward` converts. Closed update validation
+  // only checks; an ephemeral bootstrap never opens the store at all.
+  if (!opts.ephemeral)
+    await enterStoreFormat(resolve(configDir, config.storeDir), {
+      appVersion: storeWriterVersion(),
+      mode: isClosedUpdateBootstrap() ? "read" : "write",
+    });
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
-  if (storeFormat?.status === "carried" && storeFormat.backup)
-    logger.info(
-      `store carried forward from ${storeFormat.from} to ${storeFormat.epoch}; the previous store is backed up in ${storeFormat.backup}`,
-    );
   const agents = AgentRegistry.fromConfig(config);
   const assets = await releaseAssets(config);
   const templates = await loadTemplates(assets.templates, configDir);

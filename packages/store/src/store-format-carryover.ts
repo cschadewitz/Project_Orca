@@ -2,8 +2,10 @@
  * Carrying an older-format store forward (#566): a verified whole-store backup and a read
  * check under the new readers, both done before the current format is stamped.
  *
- * Nothing here assumes the store is quiet. Pre-0.7.1 writers hold no lock this code can see,
- * so quiescence is checked rather than inferred: no live run lease, and the store's complete
+ * Only the explicit `orca store carry-forward` runs this, with the person stating every other
+ * ORCA process is stopped. Even so nothing here assumes the store is quiet: pre-0.7.1 writers
+ * hold no lock this code can see, so quiescence is checked as well: no live run lease (a lease
+ * lookup that fails refuses), and the store's complete
  * file signature (path, type, size, mtime, inode) unchanged from before the copy, after it, and
  * again just before the marker is written. Each copied file's bytes are compared with the
  * source. Any difference discards the staged copy and refuses startup with the prior format
@@ -157,7 +159,12 @@ async function readsUnderCurrentFormat(copy: string): Promise<void> {
   for (const plan of await stores.plan.journal.listPlans()) await stores.plan.journal.read(plan);
 }
 
-/** The backups directory, made owner-only; refuses one that is not a real directory of ours. */
+/**
+ * The backups directory, made owner-only; refuses one that is not a real directory of ours.
+ * On Windows, mode bits mean nothing: the backup inherits the store directory's ACL, which is
+ * the same boundary the copied private directories have in place (the store does not verify
+ * Windows ACLs for them either; the recovery inventory reports ACL_UNVERIFIED).
+ */
 async function backupRoot(storeDir: string): Promise<string> {
   const root = join(storeDir, STORE_FORMAT_BACKUP_DIR);
   try {
@@ -195,7 +202,16 @@ export async function stageCarryover(
   now: Date,
   hooks: { afterCopy?: () => Promise<void> } = {},
 ): Promise<{ commit(): Promise<string> }> {
-  const live = (await new FileLeaseStore(storeDir).list().catch(() => [])).filter((lease) => !lapsed(lease));
+  let leases;
+  try {
+    leases = await new FileLeaseStore(storeDir).list();
+  } catch (error) {
+    throw new CarryoverRefused(
+      "BUSY",
+      `Run leases in this store could not be read, so it cannot be confirmed that no run is active: ${(error as Error).message}. Nothing was changed.`,
+    );
+  }
+  const live = leases.filter((lease) => !lapsed(lease));
   if (live.length)
     throw new CarryoverRefused(
       "BUSY",

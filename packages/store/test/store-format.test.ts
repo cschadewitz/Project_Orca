@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  carryStoreForward,
   enterStoreFormat,
   readStoreFormat,
   STORE_FORMAT_BACKUP_DIR,
@@ -74,13 +75,40 @@ describe("store format marker (#566)", () => {
     expect(await backups(dir)).toEqual([]);
   });
 
-  it("backs up, verifies and reads an unmarked store before stamping it", async () => {
+  it("stamps an unmarked store its own format line wrote, without converting it", async () => {
+    const dir = await store();
+    await mkdir(join(dir, "workspace-identity"), { recursive: true });
+    await legacy(dir);
+    expect(await enterStoreFormat(dir, { appVersion: "0.7.1", mode: "read" })).toMatchObject({ status: "adopted" });
+    expect(await readStoreFormat(dir)).toBeUndefined();
+    expect(await enterStoreFormat(dir, { appVersion: "0.7.1", mode: "write" })).toMatchObject({ status: "adopted" });
+    expect(await readStoreFormat(dir)).toMatchObject({ epoch: STORE_FORMAT_EPOCH, writtenBy: "0.7.1" });
+    expect(await backups(dir)).toEqual([]);
+  });
+
+  it("never converts an older store during ordinary startup", async () => {
     const dir = await store();
     await mkdir(dir, { recursive: true });
     await legacy(dir);
-    const outcome = await enterStoreFormat(dir, {
+    for (const mode of ["write", "read"] as const)
+      await expect(enterStoreFormat(dir, { appVersion: "0.7.1", mode })).rejects.toMatchObject({
+        code: "STORE_FORMAT",
+        reason: "CARRYOVER_REQUIRED",
+      });
+    await marker(dir, SUPPORTED_STORE_FORMATS[0]!, "0.6.0");
+    await expect(enterStoreFormat(dir, { appVersion: "0.7.1", mode: "write" })).rejects.toMatchObject({
+      reason: "CARRYOVER_REQUIRED",
+    });
+    expect((await readStoreFormat(dir))?.epoch).toBe(SUPPORTED_STORE_FORMATS[0]);
+    expect(await backups(dir)).toEqual([]);
+  });
+
+  it("carry-forward backs up, verifies and reads an older store before stamping it", async () => {
+    const dir = await store();
+    await mkdir(dir, { recursive: true });
+    await legacy(dir);
+    const outcome = await carryStoreForward(dir, {
       appVersion: "0.7.1",
-      mode: "write",
       now: clock("2026-11-22T01:02:03.004Z"),
     });
     expect(outcome).toMatchObject({ status: "carried", from: "unmarked" });
@@ -100,6 +128,7 @@ describe("store format marker (#566)", () => {
     expect((await readdir(join(outcome.backup, "runs"))).sort()).toEqual(["run_old.jsonl"]);
     expect(await readStoreFormat(dir)).toMatchObject({ epoch: STORE_FORMAT_EPOCH, backup: outcome.backup });
     expect((await enterStoreFormat(dir, { appVersion: "0.7.1", mode: "write" })).status).toBe("current");
+    expect((await carryStoreForward(dir, { appVersion: "0.7.1" })).status).toBe("current");
     expect(await backups(dir)).toHaveLength(1);
   });
 
@@ -107,9 +136,8 @@ describe("store format marker (#566)", () => {
     const dir = await store();
     await mkdir(dir, { recursive: true });
     await legacy(dir);
-    const error = await enterStoreFormat(dir, {
+    const error = await carryStoreForward(dir, {
       appVersion: "0.7.1",
-      mode: "write",
       afterCopy: () => writeFile(join(dir, "runs", "run_old.jsonl"), LOG + LOG.split("\n")[1] + "\n"),
     }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(StoreFormatError);
@@ -118,7 +146,7 @@ describe("store format marker (#566)", () => {
     expect(await backups(dir)).toEqual([]);
     // Once the other writer is gone, the next start carries it forward.
     await writeFile(join(dir, "runs", "run_old.jsonl"), LOG);
-    expect((await enterStoreFormat(dir, { appVersion: "0.7.1", mode: "write" })).status).toBe("carried");
+    expect((await carryStoreForward(dir, { appVersion: "0.7.1" })).status).toBe("carried");
   });
 
   it("refuses while a run lease is live", async () => {
@@ -137,9 +165,16 @@ describe("store format marker (#566)", () => {
         ttlMs: 600_000,
       }),
     );
-    await expect(enterStoreFormat(dir, { appVersion: "0.7.1", mode: "write" })).rejects.toMatchObject({
-      reason: "BUSY",
-    });
+    await expect(carryStoreForward(dir, { appVersion: "0.7.1" })).rejects.toMatchObject({ reason: "BUSY" });
+    expect(await readStoreFormat(dir)).toBeUndefined();
+  });
+
+  it("refuses when run leases cannot be read", async () => {
+    const dir = await store();
+    await mkdir(dir, { recursive: true });
+    await legacy(dir);
+    await writeFile(join(dir, "leases"), "not a directory");
+    await expect(carryStoreForward(dir, { appVersion: "0.7.1" })).rejects.toMatchObject({ reason: "BUSY" });
     expect(await readStoreFormat(dir)).toBeUndefined();
   });
 
@@ -148,7 +183,7 @@ describe("store format marker (#566)", () => {
     await mkdir(dir, { recursive: true });
     await legacy(dir);
     await writeFile(join(dir, "requests.json"), "{not json");
-    await expect(enterStoreFormat(dir, { appVersion: "0.7.1", mode: "write" })).rejects.toMatchObject({
+    await expect(carryStoreForward(dir, { appVersion: "0.7.1" })).rejects.toMatchObject({
       reason: "UNREADABLE",
     });
     expect(await readStoreFormat(dir)).toBeUndefined();
@@ -168,11 +203,7 @@ describe("store format marker (#566)", () => {
     await mkdir(join(dir, STORE_FORMAT_BACKUP_DIR, ".partial-00000000-0000-4000-8000-000000000000"));
     for (const [i, at] of ["2026-11-20", "2026-11-21", "2026-11-22"].entries()) {
       await marker(dir, previous, `0.6.${i}`);
-      const outcome = await enterStoreFormat(dir, {
-        appVersion: "0.7.1",
-        mode: "write",
-        now: clock(`${at}T00:00:00Z`),
-      });
+      const outcome = await carryStoreForward(dir, { appVersion: "0.7.1", now: clock(`${at}T00:00:00Z`) });
       expect(outcome).toMatchObject({ status: "carried", from: previous });
     }
     expect((await backups(dir)).sort()).toEqual([
@@ -188,7 +219,7 @@ describe("store format marker (#566)", () => {
     await mkdir(dir, { recursive: true });
     await legacy(dir);
     await writeFile(join(dir, STORE_FORMAT_BACKUP_DIR), "not a directory");
-    await expect(enterStoreFormat(dir, { appVersion: "0.7.1", mode: "write" })).rejects.toMatchObject({
+    await expect(carryStoreForward(dir, { appVersion: "0.7.1" })).rejects.toMatchObject({
       reason: "BACKUPS_UNSAFE",
     });
     expect(await readStoreFormat(dir)).toBeUndefined();
@@ -231,12 +262,9 @@ describe("store format marker (#566)", () => {
 
   it("only checks in read mode", async () => {
     const dir = await store();
-    await mkdir(dir, { recursive: true });
+    await mkdir(join(dir, "workspace-identity"), { recursive: true });
     await legacy(dir);
-    expect(await enterStoreFormat(dir, { appVersion: "0.7.1", mode: "read" })).toMatchObject({
-      status: "carried",
-      from: "unmarked",
-    });
+    expect(await enterStoreFormat(dir, { appVersion: "0.7.1", mode: "read" })).toMatchObject({ status: "adopted" });
     expect(await readdir(dir)).not.toContain(STORE_FORMAT_FILE);
     expect(await backups(dir)).toEqual([]);
   });
