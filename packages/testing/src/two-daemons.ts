@@ -212,6 +212,8 @@ export interface LoopbackSshd {
    * sockets and every other ambient option a developer's `~/.ssh/config` could add.
    */
   readonly sshArgs: readonly string[];
+  /** The generated host key as `<type> <base64>`, for a client that keeps its own pin. */
+  readonly hostKey: string;
   /**
    * Forward a free local port through sshd to `127.0.0.1:remotePort` - another daemon, as a
    * remote machine's port would be reached - and answer the local port.
@@ -232,11 +234,22 @@ const SSH_STEP_MS = 5_000;
  * The boundary is the current user on this machine, not a second machine: sshd logs in as
  * the same account, so it isolates *configuration*, not privilege. What it does limit is what
  * the generated key can do - its `authorized_keys` entry is `restrict`ed to local port
- * forwarding to `127.0.0.1` and a forced `true`, so the key opens no shell, runs no other
- * command, gets no pty, agent, X11 or remote forwarding - and the client side trusts only the
- * generated host key and reads no ambient SSH configuration.
+ * forwarding to `127.0.0.1` and a forced `true` (or the caller's `forcedCommand`), so the key
+ * opens no shell, runs no other command, gets no pty, agent, X11 or remote forwarding - and the
+ * client side trusts only the generated host key and reads no ambient SSH configuration.
  */
-export async function loopbackSshd(): Promise<LoopbackSshd | undefined> {
+export interface LoopbackSshdOptions {
+  /**
+   * The command every session of the generated key runs instead of what the client asked for
+   * (`authorized_keys` `command=`); the client's request is in `SSH_ORIGINAL_COMMAND`. Defaults
+   * to `true`. A test stands in a server-side program this way without opening a shell.
+   */
+  forcedCommand?: string;
+}
+
+export async function loopbackSshd(options: LoopbackSshdOptions = {}): Promise<LoopbackSshd | undefined> {
+  const forced = options.forcedCommand ?? "true";
+  if (/["\\\n]/.test(forced)) throw new Error("forcedCommand cannot hold quotes, backslashes or newlines");
   if (!existsSync(SSHD) || process.platform === "win32") {
     if (process.env[REQUIRE_SSHD_ENV] === "1") throw new Error(`${REQUIRE_SSHD_ENV}=1 but ${SSHD} is not installed`);
     return undefined;
@@ -255,9 +268,13 @@ export async function loopbackSshd(): Promise<LoopbackSshd | undefined> {
     await run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "orca-fixture-client", "-f", identity]);
     const authorized = join(root, "authorized_keys");
     const clientKey = (await readFile(`${identity}.pub`, "utf8")).trim();
-    await writeFile(authorized, `restrict,port-forwarding,permitopen="127.0.0.1:*",command="true" ${clientKey}\n`, {
-      mode: 0o600,
-    });
+    await writeFile(
+      authorized,
+      `restrict,port-forwarding,permitopen="127.0.0.1:*",command="${forced}" ${clientKey}\n`,
+      {
+        mode: 0o600,
+      },
+    );
     const port = await freePort();
     const config = join(root, "sshd_config");
     await writeFile(
@@ -347,6 +364,7 @@ export async function loopbackSshd(): Promise<LoopbackSshd | undefined> {
       identity,
       user,
       sshArgs,
+      hostKey: hostPub,
       async forward(remotePort) {
         const local = await freePort();
         const tunnel = spawn(
