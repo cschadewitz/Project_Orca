@@ -2,6 +2,7 @@
 service: cosign is a stub that records its arguments, and the validation that runs the
 release (demo, configs, temporary daemon hello) is replaced by a recorder. The real thing runs
 in release-server-bundle.yml's clean-host check."""
+import hashlib
 import importlib.util
 import io
 import json
@@ -117,6 +118,14 @@ class ServerBundleTests(unittest.TestCase):
         (stage, record, demo_release), = self.validated
         self.assertEqual(demo_release, str(stage))
         self.assertEqual((record["node"], record["entry"], record["sha"]), ("runtime/bin/node", "orca-daemon.mjs", SHA))
+        # The durable receipt: the exact signed files this release was verified from (#878).
+        receipt = {}
+        for kind, name in zip(("archive", "manifest", "signature"), release.bundle_names("0.8.0")[1:]):
+            body = (self.files / name).read_bytes()
+            receipt[kind + "Sha256"] = hashlib.sha256(body).hexdigest()
+            receipt[kind + "Size"] = len(body)
+        self.assertEqual(record["bundle"], receipt)
+        self.assertEqual(record["bundle"]["archiveSha256"], self.manifest["archive"]["sha256"])
         meta = release.metadata(staged)
         self.assertEqual(meta["node"], str(staged / "runtime/bin/node"))
         self.assertEqual(meta["entry"], str(staged / "orca-daemon.mjs"))

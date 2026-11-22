@@ -140,6 +140,22 @@ describe("server bundle channel workflows (#877)", () => {
     expect(wf.jobs.promote.steps[0].name).toBe("Refuse while the feed is paused");
   });
 
+  it("stops or resumes every server from main, refusing only a resume while paused (#878)", () => {
+    const wf = workflow("feed-server-stop.yml");
+    expect(wf.on.workflow_dispatch.inputs.action).toMatchObject({ type: "choice", options: ["stop", "resume"] });
+    expect(wf.concurrency).toEqual({ group: "release-publication", "cancel-in-progress": false });
+    expect(wf.permissions).toEqual({ contents: "read" });
+    const { switch: job } = wf.jobs;
+    expect(job.if).toBe("github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''");
+    expect(job.environment).toBe("desktop-feed");
+    const guard = job.steps[0];
+    expect(guard.name).toBe("Refuse to resume while the feed is paused");
+    expect(guard.run).toContain('if [ "$PAUSE" = "true" ] && [ "$ACTION" = "resume" ]; then');
+    expect(job.steps[1].with).toMatchObject({ ref: "main", "persist-credentials": false });
+    const update = job.steps.find((s) => s.name === "Update the rings");
+    expect(update.run.indexOf("feed-r2.sh probe")).toBeLessThan(update.run.indexOf('feed-r2.sh "$ACTION-servers"'));
+  });
+
   it("has the watchdog read the live ring state, with no ring-state artifacts", () => {
     for (const name of ["feed-publish.yml", "feed-promote.yml", "feed-watchdog.yml"])
       expect(read(name)).not.toMatch(/FEED_RINGS_RECORD|feed-rings-/);

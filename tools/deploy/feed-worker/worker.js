@@ -211,6 +211,9 @@ export async function handle(request, env) {
     } catch {
       return respond(503);
     }
+    // The servers' stop switch (#878): no server may activate anything, even a version it was
+    // offered before; the updater only ever activates what a fresh channel file names.
+    if (rings?.serverStop === true) return respond(503, { "X-Orca-Feed-Stop": "servers", "Retry-After": "3600" });
     const version = rings && (await versionFor(rings, caller.ring, caller.hash, "server"));
     if (!version || !(await serverPublished(env.FEED, version))) return respond(404);
     return serve(env.FEED, `server/${version}/latest-linux-x64.yml`, name, request);
