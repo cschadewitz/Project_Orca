@@ -11,6 +11,7 @@
  * `api` is `{ store, core }`: the @orca/store and @orca/core modules. run.js passes the compiled
  * `dist` builds; the self-test passes the sources.
  */
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /** Collection documents are this benchmark's own shape; nothing to validate beyond JSON. */
@@ -64,6 +65,19 @@ export function backends(api) {
           collection: (name) => {
             const collection = store.sqliteCollection(dir, name, passthrough);
             return track(collection, () => collection.collection.db.close());
+          },
+          // The write-ahead log, for the checkpoint workload: its settings, its size on disk, and
+          // a connection of the benchmark's own to checkpoint it with.
+          wal: {
+            settings: store.SQLITE_CHECKPOINT,
+            bytes: () => {
+              const file = join(dir, `${store.SQLITE_METADATA_FILE}-wal`);
+              return existsSync(file) ? statSync(file).size : 0;
+            },
+            connect: () => {
+              const db = new store.SqliteDatabase(join(dir, store.SQLITE_METADATA_FILE));
+              return track(db, () => db.close());
+            },
           },
           dispose: async () => {
             for (const close of open.splice(0)) close();

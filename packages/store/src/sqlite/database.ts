@@ -13,7 +13,8 @@
  * store never load it.
  *
  * Settings: WAL (readers never block the writer), `synchronous = FULL` (a commit acknowledged to a
- * caller survives power loss on hardware that honours flushes), foreign keys on. The database
+ * caller survives power loss on hardware that honours flushes), foreign keys on, and checkpoints
+ * as `SqliteCheckpointOptions` describes. The database
  * file must be on a local filesystem: SQLite's locking is not reliable over network filesystems,
  * so remote workers reach metadata through the control-plane daemon, never by opening this file.
  */
@@ -26,6 +27,50 @@ import { ORCA_SQLITE_APPLICATION_ID, SQLITE_MIGRATIONS } from "./schema.js";
 export interface SqliteOptions {
   /** How long a write keeps retrying `SQLITE_BUSY` before `STORE_LOCK_TIMEOUT`. Default 10 s. */
   busyDeadlineMs?: number;
+  /** When the write-ahead log is copied back into the database. Defaults: `SQLITE_CHECKPOINT`. */
+  checkpoint?: SqliteCheckpointOptions;
+}
+
+/**
+ * WAL checkpointing (#339). A checkpoint copies committed pages from `metadata.sqlite-wal` back
+ * into the database file; until one runs the log only grows, and every reader has to look
+ * through it. SQLite's own automatic checkpoint runs *inside* the commit that crosses the
+ * threshold, so that one write pays for copying the whole log. These settings move the work out
+ * of the write path where they can, and bound the log on disk where they cannot.
+ */
+export interface SqliteCheckpointOptions {
+  /**
+   * Log pages (4 KiB each) past which a commit runs a passive checkpoint itself
+   * (`wal_autocheckpoint`). The backstop for a connection that never goes idle. 0 turns it off.
+   */
+  autoPages?: number;
+  /**
+   * After this long without a write from this connection, run a passive checkpoint off the
+   * write path. 0 turns it off.
+   */
+  idleMs?: number;
+  /**
+   * The size the log file is cut back to once a checkpoint has copied all of it
+   * (`journal_size_limit`), so one burst does not leave a large file behind for good.
+   */
+  walLimitBytes?: number;
+}
+
+/** The checkpoint settings every connection gets unless told otherwise. */
+export const SQLITE_CHECKPOINT: Readonly<Required<SqliteCheckpointOptions>> = Object.freeze({
+  autoPages: 1000,
+  idleMs: 1000,
+  walLimitBytes: 64 * 1024 * 1024,
+});
+
+/** What one checkpoint did, from `PRAGMA wal_checkpoint`. */
+export interface SqliteCheckpointResult {
+  /** True when another connection held a lock the checkpoint needed and it stopped early. */
+  busy: boolean;
+  /** Pages in the log. */
+  logPages: number;
+  /** Pages of it now copied into the database. */
+  checkpointedPages: number;
 }
 
 const BUSY = 5;
@@ -48,6 +93,8 @@ export class SqliteDatabase {
   readonly db: DatabaseSync;
   private readonly statements = new Map<string, StatementSync>();
   private readonly busyDeadlineMs: number;
+  private readonly checkpointSettings: Required<SqliteCheckpointOptions>;
+  private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
 
   constructor(
@@ -55,6 +102,7 @@ export class SqliteDatabase {
     options: SqliteOptions = {},
   ) {
     this.busyDeadlineMs = options.busyDeadlineMs ?? 10_000;
+    this.checkpointSettings = { ...SQLITE_CHECKPOINT, ...options.checkpoint };
     mkdirSync(dirname(file), { recursive: true });
     const { DatabaseSync } = sqlite();
     this.db = new DatabaseSync(file);
@@ -66,6 +114,9 @@ export class SqliteDatabase {
       this.db.exec("PRAGMA journal_mode = WAL");
       this.db.exec("PRAGMA synchronous = FULL");
       this.db.exec("PRAGMA foreign_keys = ON");
+      const { autoPages, walLimitBytes } = this.checkpointSettings;
+      this.db.exec(`PRAGMA wal_autocheckpoint = ${Math.max(0, Math.floor(autoPages))}`);
+      this.db.exec(`PRAGMA journal_size_limit = ${Math.max(-1, Math.floor(walLimitBytes))}`);
       this.migrate();
     } catch (error) {
       this.db.close();
@@ -176,8 +227,46 @@ export class SqliteDatabase {
           { cause: error },
         );
       }
+      this.scheduleIdleCheckpoint();
       return result;
     });
+  }
+
+  /**
+   * Copy the log back into the database now. `passive` never waits: it copies what no reader
+   * still needs and reports `busy` if it could not finish. `truncate` waits (within the
+   * connection's busy timeout) for readers and writers, copies everything and empties the log
+   * file: for maintenance, never on the write path. A failure is the caller's to see.
+   */
+  checkpoint(mode: "passive" | "truncate" = "passive"): SqliteCheckpointResult {
+    const row = this.db.prepare(`PRAGMA wal_checkpoint(${mode === "truncate" ? "TRUNCATE" : "PASSIVE"})`).get() as {
+      busy: number;
+      log: number;
+      checkpointed: number;
+    };
+    return { busy: row.busy !== 0, logPages: row.log, checkpointedPages: row.checkpointed };
+  }
+
+  /**
+   * Re-arm the idle checkpoint after a commit: a burst of writes is followed by one checkpoint
+   * once it has stopped, not one per write. The timer never keeps the process alive, and a
+   * checkpoint that fails (another connection busy, the store closed under it) is left for the
+   * next one or for `wal_autocheckpoint`: it never fails a write that has already committed.
+   */
+  private scheduleIdleCheckpoint(): void {
+    const { idleMs } = this.checkpointSettings;
+    if (idleMs <= 0 || this.closed) return;
+    if (this.idleTimer !== undefined) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = undefined;
+      if (this.closed) return;
+      try {
+        this.checkpoint("passive");
+      } catch {
+        // Best effort by design; see above.
+      }
+    }, idleMs);
+    this.idleTimer.unref?.();
   }
 
   /**
@@ -227,6 +316,8 @@ export class SqliteDatabase {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.idleTimer !== undefined) clearTimeout(this.idleTimer);
+    this.idleTimer = undefined;
     this.statements.clear();
     this.db.close();
   }

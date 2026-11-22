@@ -21,6 +21,7 @@ export const SCALES = {
     hotDocs: 2,
     opsPerWriter: 8,
     concurrency: [1, 2],
+    checkpointBurst: 200,
   },
   small: {
     workItems: 250,
@@ -33,6 +34,7 @@ export const SCALES = {
     hotDocs: 4,
     opsPerWriter: 40,
     concurrency: [1, 4, 16],
+    checkpointBurst: 5_000,
   },
   medium: {
     workItems: 2_500,
@@ -45,6 +47,7 @@ export const SCALES = {
     hotDocs: 8,
     opsPerWriter: 40,
     concurrency: [1, 4, 16],
+    checkpointBurst: 20_000,
   },
   large: {
     workItems: 25_000,
@@ -57,6 +60,7 @@ export const SCALES = {
     hotDocs: 16,
     opsPerWriter: 20,
     concurrency: [1, 4, 16],
+    checkpointBurst: 50_000,
   },
 };
 

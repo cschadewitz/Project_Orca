@@ -33,6 +33,23 @@ fence), #905 (Linux package hand-off) and #910 (Windows durability).
 - **Durability:** `synchronous = FULL`: an acknowledged commit survives power loss
   on storage that honours flushes. The file backend gives the same promise
   (fsync before rename).
+- **Checkpoints:** a checkpoint copies committed pages from `metadata.sqlite-wal`
+  back into the database. Three settings (`SqliteOptions.checkpoint`, defaults in
+  `SQLITE_CHECKPOINT`):
+  - `autoPages` 1000 (about 4 MB): SQLite's automatic passive checkpoint, run by the
+    commit that crosses it. It is the bound for a connection that never goes quiet,
+    and that one commit pays for the copy (see the measurements below).
+  - `idleMs` 1000: once a connection has made no write for a second, it runs a
+    passive checkpoint itself, off the write path, so a burst is followed by one
+    checkpoint and the log is copied back while the store is quiet. It never waits
+    for readers and never fails a write that has committed; anything it could not
+    copy is left for the next one.
+  - `walLimitBytes` 64 MiB (`journal_size_limit`): after a large transaction (an
+    import, a big unit of work) the log file is cut back to this size once it has
+    been checkpointed, instead of keeping its largest size for good.
+
+  `SqliteDatabase.checkpoint("truncate")` copies everything and empties the log, for
+  maintenance; it waits for other connections and is never run on the write path.
 - **Writes:** every write is one `BEGIN IMMEDIATE ... COMMIT`. `node:sqlite` is
   synchronous, so no other operation in the process can interleave with a write.
   Contention with another connection is `SQLITE_BUSY`: the connection waits 50 ms,
@@ -90,12 +107,43 @@ run in a 4-vCPU cloud container (Node 22) compared with the file backend:
 | Bytes on disk (incl. WAL) | 19.8 MB | 33.8 MB |
 
 At `large` (SQLite only: 200,000 events, 54,000 dependency edges, 20,000-document
-collections) history pages stayed under 1 ms p95 and the log reached 214 MB with
-its WAL. Two things to look at before a baseline: a dependency question costs
-about 160 ms because one plan's edges are a large result, and single-writer
-throughput at that scale dropped to about 400 ops/s with 12 to 24 ms p95 at 4
-writers while 16 writers reached 4,750 ops/s, which points at WAL checkpoints
-landing inside the measured window.
+collections) history pages stayed under 1 ms p95 and the log reached 212 MB. A
+dependency question costs about 160 ms because one plan's edges are a large result
+(a #341 question, not a storage setting).
+
+### Checkpoints
+
+An earlier `large` run reported single-writer throughput of about 400 ops/s, which
+looked like checkpoints landing inside the measured window. With the checkpoint
+settings above it did not recur: 1, 4 and 16 writers reached 4,186, 4,595 and
+4,843 committed ops/s (p95 0.36, 1.7 and 6.9 ms). It did not recur without them
+either: two `large` runs on the previous settings (one full, one of the write
+workload alone) gave 3,388 to 4,798 ops/s at every writer level. The 400 ops/s
+was this container's noise, not a checkpoint cost.
+
+The `walCheckpoint` workload measures the checkpoints directly: one run receiving a
+sustained burst of appends, as an agent streaming output does.
+
+| | medium (20,000 appends) | large (50,000 appends) |
+|---|---|---|
+| Appends per second | 2,622 | 3,083 |
+| Append latency p50 / p95 / max (ms) | 0.34 / 0.59 / 17 | 0.28 / 0.49 / 93 |
+| Appends over 5 ms | 2 | 16 |
+| Log file at its largest | 4.2 MB | 33 MB |
+| Checkpoint after the idle window | nothing left (0.05 ms) | nothing left (0.03 ms) |
+| Truncating checkpoint | 3 ms, log emptied | 19 ms, log emptied |
+
+- The automatic checkpoint is the cost a writer sees: about one append in 3,000 runs
+  one and takes 5 to 90 ms. That is the price of a bounded log under `synchronous =
+  FULL`. A larger `autoPages` makes those commits rarer but longer, and a smaller one
+  the reverse; in single-connection experiments at 250, 1000 and 4000 pages the tail
+  was within this container's noise, so the default stays at SQLite's 1000.
+- The idle checkpoint does its job: after a burst, the next checkpoint finds nothing
+  to copy.
+- The log file at `large` reached 33 MB, not 4 MB: while other connections were reading
+  (the earlier workloads keep their handles open), SQLite could not start the log over
+  and it kept growing. It stayed under the 64 MiB limit, and the limit is what brings
+  it back down afterwards.
 
 Every workload invariant held on all backends. These are observations, not the
 baseline: the #341 ADR records its budgets and the reference machine first.
@@ -124,8 +172,8 @@ leaves only an unreferenced blob.
 
 ## Not in this change (follow-ups under #339)
 
-- Checkpoint behaviour under sustained load, and the `large` scale on the
-  reference machine.
+- The `large` scale on the reference machine, for the #341 baseline. The numbers
+  above are from a cloud container.
 - Making SQLite selectable for a workspace, after the format gates above. That
   switch is also when the daemon serves history from it to #255. **Precondition
   for that change:** a populated workspace can never be opened by both backends.

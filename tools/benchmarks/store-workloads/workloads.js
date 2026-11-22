@@ -366,9 +366,70 @@ export async function projectionRebuild({ api, handle, root, repeat }) {
   };
 }
 
+// -------------------------------------------------------- 5. checkpoints
+
+/**
+ * A sustained burst of appends to one run, as an agent streaming output does, on a backend with a
+ * write-ahead log (SQLite, #339): how the log grows, what the commits that run a checkpoint cost,
+ * and what is left once writes stop. Backends without a log report that they have none.
+ */
+export async function walCheckpoint({ handle, scale }) {
+  if (!handle.wal) return { skipped: "no write-ahead log on this backend" };
+  const { wal } = handle;
+  const events = handle.stores().events;
+  const runId = "run_bench_wal";
+  const text = "streamed agent output ".repeat(8);
+  await events.append({
+    type: "run.created",
+    runId,
+    payload: { workflowId: "bench", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} },
+  });
+  const latency = [];
+  let maxWal = wal.bytes();
+  const started = performance.now();
+  for (let i = 1; i < scale.checkpointBurst; i++) {
+    const { ms } = await timed(() =>
+      events.append({
+        type: "agent.update",
+        runId,
+        payload: { stepRunId: "step_wal", sessionId: "s", update: { kind: "agent_message_chunk", text } },
+      }),
+    );
+    latency.push(ms);
+    if (i % 100 === 0) maxWal = Math.max(maxWal, wal.bytes());
+  }
+  const burstMs = performance.now() - started;
+  maxWal = Math.max(maxWal, wal.bytes());
+  const endOfBurst = wal.bytes();
+  // Quiet for longer than the idle window: the store's own idle checkpoint has had its chance.
+  await new Promise((resolve) => setTimeout(resolve, wal.settings.idleMs + 250));
+  const db = wal.connect();
+  const idle = await timed(() => db.checkpoint("passive"));
+  const truncate = await timed(() => db.checkpoint("truncate"));
+  const afterTruncate = wal.bytes();
+  const committed = (await events.lastSeq(runId)) === scale.checkpointBurst - 1;
+  return {
+    settings: { ...wal.settings },
+    appends: latency.length,
+    appendsPerSecond: round(latency.length / (burstMs / 1000)),
+    latency: summarize(latency),
+    appendsOver5ms: latency.filter((ms) => ms > 5).length,
+    walBytes: { max: maxWal, endOfBurst, afterTruncate },
+    // After the idle window: a checkpoint that finds nothing to copy is quick.
+    checkpointAfterIdle: { ms: round(idle.ms), ...idle.value },
+    truncateMs: round(truncate.ms),
+    checks: {
+      everyAppendCommitted: committed,
+      logStayedUnderLimit: maxWal <= wal.settings.walLimitBytes,
+      truncateEmptiedLog: !truncate.value.busy && afterTruncate === 0,
+    },
+  };
+}
+
 export const WORKLOADS = {
   dependencyTraversal,
   paginatedHistory,
   concurrentMetadataWrites,
   projectionRebuild,
+  walCheckpoint,
 };
