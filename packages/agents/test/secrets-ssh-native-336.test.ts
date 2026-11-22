@@ -78,4 +78,29 @@ describe("secret delivery over a real sshd", () => {
     expect(JSON.parse(await readFile(out, "utf8"))).toEqual({ token: value });
     expect(leaks).toEqual([]);
   }, 60_000);
+
+  it("answers an exit-status-only probe over the real connection, output discarded", async (context) => {
+    if (!sshd) return context.skip("no /usr/sbin/sshd; set ORCA_REQUIRE_SSHD=1 to require it");
+    const host = new SshHost(
+      HostSpecSchema.parse({
+        id: "loopback",
+        type: "ssh",
+        host: "127.0.0.1",
+        user: sshd.user,
+        sshArgs: sshd.sshArgs.slice(0, -1),
+      }) as never,
+      { sftp: false },
+    );
+    await writeFile(join(dir, "present"), "x\n");
+    const probe = (path: string) =>
+      host.execStatus(
+        `{ set +xv && exec 2>/dev/null; } || exit 4; head -c 200000 /dev/zero; test -s '${path}' || exit 3`,
+        {
+          timeoutMs: 20_000,
+        },
+      );
+    expect(await probe(join(dir, "present"))).toBe(0);
+    expect(await probe(join(dir, "absent"))).toBe(3);
+    expect(await host.execStatus("sleep 5", { timeoutMs: 200 })).toBeNull();
+  }, 60_000);
 });

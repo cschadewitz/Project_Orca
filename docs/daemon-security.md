@@ -293,6 +293,8 @@ that the two match. A method that is missing from the table is refused with
 | `risks.update` | `plan.write` | workspace-wide | decision |
 | `agents.list` | `agents.read` | workspace-wide | — |
 | `agents.ping` | `agents.ping` | workspace-wide | mutation |
+| `secrets.list` | `secrets.read` | workspace-wide; filtered to the caller's grant | — |
+| `secrets.check` | `secrets.read` | workspace-wide; filtered to the caller's grant | — |
 | `subscribe` | any authenticated principal | a run-scoped stream needs `runs.read` and the run; each notification is checked separately | — |
 | `unsubscribe` | any authenticated principal | only the caller's own connection's subscriptions | — |
 | `maintenance` | `daemon.maintenance` | workspace-wide | mutation |

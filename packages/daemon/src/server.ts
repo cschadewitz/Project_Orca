@@ -61,8 +61,9 @@ import type { daemonExecutionRuntime } from "./execution-runtime.js";
 import { Maintenance } from "./maintenance.js";
 import { attachSocket } from "./socket.js";
 import { Authorizer, bindPrincipal, principalOf } from "./auth/guard.js";
+import { SecretsReadModel, type SecretsSource } from "./secrets-model.js";
 import { directAdmissionAuthority } from "./admission-retry.js";
-import { holds } from "./auth/principal.js";
+import { holds, type Principal } from "./auth/principal.js";
 import {
   HostResourceReadModel,
   resourceResponseForPublication,
@@ -80,6 +81,8 @@ export interface DaemonOptions extends MethodContext {
   runtimeIdle?: ReturnType<typeof daemonExecutionRuntime> | undefined;
   /** Opt-in contract seam only. Normal CLI composition does not install a resource collector. */
   hostResourceSource?: HostResourceReadSource;
+  /** The live secret reference catalog and its hosts, for `secrets.list` and `secrets.check` (#336). */
+  secretsSource?: () => SecretsSource;
   /** Installed protected evidence reader; never a callback that attaches execution. */
   admissionExecutionSource?: ((runId: string) => Promise<AdmissionExecutionView | undefined>) | undefined;
   /** Actual protected runtime and registered retry services; never a placeholder capability. */
@@ -646,6 +649,26 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           return current.principal;
         },
       };
+    };
+  }
+  if (opts.secretsSource) {
+    const model = new SecretsReadModel(opts.secretsSource);
+    // The principal as it is now: a credential is re-read at each call, so a revoked or
+    // narrowed grant stops showing what it no longer covers.
+    const current = (invocation: MethodContext): Principal => {
+      const bound = principalOf(invocation);
+      if (!bound) throw authRequired();
+      if (auth.mode !== "token") return bound.principal;
+      const credentialId = bound.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      const latest = auth.credentials.current(credentialId);
+      if (!latest.ok) throw authInvalid();
+      if (latest.principal.id !== bound.principal.id || !holds(latest.principal, "secrets.read")) throw authForbidden();
+      return latest.principal;
+    };
+    ctx.secretsRead = {
+      list: async (invocation) => model.list(current(invocation)),
+      check: (params, invocation) => model.check(current(invocation), params.id),
     };
   }
   if (opts.hostResourceSource && identity && auth.mode === "token") {
