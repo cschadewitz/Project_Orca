@@ -346,7 +346,9 @@ For a final the order is:
    its notes point at a successful **Release (accept Windows arm64)** run on `main` whose
    evidence artifact names that release, commit, installer digest and upgrade baseline
    (`tools/deploy/feed-arches.js`, #889). The baseline is the newest earlier published final
-   with an arm64 installer that is not marked x64-only, and it must itself carry a verified
+   from 0.7.1 on (`ARM64_EVIDENCE_FROM`; no earlier final could carry the records, and
+   v0.6.0's arm64 installer is unsigned) with an arm64 installer that is not marked x64-only,
+   and it must itself carry a verified
    acceptance (records for its installer and a successful acceptance run on `main` whose
    record job, named as the receipt for that release, commit and installer digest, passed); a
    baseline without that proof fails the check instead of counting as a fresh install. A
