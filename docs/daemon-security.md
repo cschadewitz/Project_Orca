@@ -56,7 +56,7 @@ Only `issue` and `rotate` print a token, once; nothing else ever shows one.
 
 | Step      | Command                                                                                                                                  |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Provision | `orca auth issue <principal> [--preset client] [--workflow-scope <id>]... [--runs-scope owned\|all] [--expires-at <ISO>] [--label <text>]` |
+| Provision | `orca auth issue <principal> [--preset client] [--workflow-scope <id>]... [--runs-scope owned\|all] [--secret <id>@<host>\|'*']... [--expires-at <ISO>] [--label <text>]` |
 | Inspect   | `orca auth list`: id, principal, `active`/`expired`/`revoked`, scope and expiry                                                          |
 | Rotate    | `orca auth rotate <id> [--expires-at <ISO>]`: keeps the current expiry unless given. The bootstrap credential rotates only by restarting `orca serve`. |
 | Revoke    | `orca auth revoke <id>`                                                                                                                  |
@@ -121,7 +121,10 @@ directory.
 
 ## Principals, permissions and scopes
 
-A credential holds a list of these permissions:
+A credential holds a list of these permissions, and optionally a `secrets` grant: `"*"` or
+a list of `{ secret, provider, host, binding }` entries naming the secret references its principal's runs may use
+(see [secret-use-authority.md](secret-use-authority.md)). `--secret` writes it and adds
+`secrets.use`; `rotate` keeps it.
 
 | Permission           | Grants                                                                     |
 | -------------------- | -------------------------------------------------------------------------- |
@@ -140,6 +143,8 @@ A credential holds a list of these permissions:
 | `config.read`        | `config.get`, which returns the configuration **unredacted**; `config.changed`. |
 | `config.write`       | `config.set` (also requires `config.read`), `config.apply`.                                 |
 | `daemon.maintenance` | The update coordinator's admission control.                                |
+| `secrets.use`        | The principal's runs may receive values for the references its `secrets` grant names (#336). |
+| `secrets.read`       | Secret reference metadata (`secrets.list`, `secrets.check`), never a value. Workspace-wide. |
 
 `config.read` authorizes legacy unredacted editor bytes. Every `config.set` form,
 including empty patch/structured edits and `validateOnly`, returns those bytes and
@@ -169,7 +174,7 @@ A **resource scope** limits which resources those permissions apply to:
 
 A scope that is anything other than `{ workflows: "*", runs: "all" }` is **restricted**. A
 restricted principal can never hold the workspace-wide permissions (`permissions.grant`,
-`plan.*`, `agents.*`, `config.*`, `daemon.maintenance`). Each of them would reveal or change
+`plan.*`, `agents.*`, `config.*`, `daemon.maintenance`, `secrets.read`). Each of them would reveal or change
 something the scope hides: the plan links runs across owners, agent health names claimed
 work, and the configuration lists everything. `issue` rejects such a credential, and the
 permission check rejects it again at call time.
@@ -178,7 +183,7 @@ Presets are expanded into the record at issue time:
 
 | Preset     | Permissions                                                                 | Scope                    |
 | ---------- | --------------------------------------------------------------------------- | ------------------------ |
-| `owner`    | All existing operator grants; excludes explicit opt-in host telemetry. | Unrestricted.            |
+| `owner`    | All existing operator grants; excludes explicit opt-in host telemetry. Grants every secret reference (`secrets: "*"`). | Unrestricted.            |
 | `operator` | Existing operator grants except `config.*`, `permissions.grant` and `daemon.maintenance`; excludes `host.telemetry.read`. | Unrestricted.            |
 | `viewer`   | `runs.read`, `artifacts.read`, `workflows.read`, `plan.read`, `agents.read`. | Unrestricted.            |
 | `client`   | `runs.read`, `artifacts.read`, `workflows.read`, `runs.start`, `runs.control`, `inputs.answer`. | `{ workflows: "*", runs: "owned" }`; narrow `workflows` at issue time. |

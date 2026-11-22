@@ -45,6 +45,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         preset: { type: "string" },
         label: { type: "string" },
         "workflow-scope": { type: "string", multiple: true },
+        secret: { type: "string", multiple: true },
         "host-key": { type: "string", multiple: true },
         "jump-host-key": { type: "string", multiple: true },
         "runs-scope": { type: "string" },

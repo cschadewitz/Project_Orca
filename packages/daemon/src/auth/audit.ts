@@ -16,7 +16,7 @@ import { chmodSync, closeSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Principal } from "./principal.js";
 
-export type AuditEvent = "authn.denied" | "authz.denied" | "operation" | "connection.closed";
+export type AuditEvent = "authn.denied" | "authz.denied" | "operation" | "connection.closed" | "secret.use";
 
 export interface AuditActor {
   principal: string;
@@ -27,7 +27,8 @@ export interface AuditActor {
 export interface AuditRecord {
   at: string;
   event: AuditEvent;
-  transport: "http" | "socket";
+  /** `engine` for a decision the daemon makes for a run, not for a call (a secret use). */
+  transport: "http" | "socket" | "engine";
   actor?: AuditActor | undefined;
   operation?: string | undefined;
   target?: Record<string, string> | undefined;

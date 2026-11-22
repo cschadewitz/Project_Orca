@@ -157,7 +157,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   // and each later call's, has the values redacted, stderr tails included, so a caller can
   // return or write it as it is.
   const secretPlan = planSessionSecrets(opts.host, opts.agent, opts.secrets);
-  await checkSecretUse(secretPlan, opts.host.id, opts.agent.id, opts.authorizeSecretUse);
+  await checkSecretUse(secretPlan, opts.host, opts.agent.id, opts.authorizeSecretUse);
   const values: string[] = [];
   const redacted = <T>(work: () => Promise<T>) =>
     work().catch((error: unknown) => {

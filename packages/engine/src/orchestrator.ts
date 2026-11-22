@@ -463,7 +463,12 @@ export class Orchestrator {
   liveInput: OrchestratorOptions["liveInput"];
   workspaceProvider: WorkspaceProvider;
   sessionFactory: SessionFactory;
-  private readonly secretUse: OrchestratorOptions["secretUse"];
+  /**
+   * The use check for secret references (#336). Settable so an embedder can wire its
+   * authority once it exists (the daemon builds it after the orchestrator); a launch that
+   * would use a reference is refused while it is unset.
+   */
+  secretUse: OrchestratorOptions["secretUse"];
   readonly plan: PlanService;
   readonly clock: Clock;
   readonly logger: Logger;

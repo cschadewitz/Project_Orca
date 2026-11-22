@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile, access } from "node:fs/promises";
 import { join } from "node:path";
 import { OrcaError, literalEnv, type AgentSpec, type LocalHost as LocalHostSpec, type SecretSource } from "@orca/core";
-import { sourceMissing, trimSecret, withoutWithheld } from "../secrets.js";
+import { secretText, sourceMissing, sourceNotText, trimSecret, withoutWithheld } from "../secrets.js";
 import {
   collectChildProcess,
   wrapAgentProcess,
@@ -88,12 +88,15 @@ export class LocalHost implements AgentHost {
       if (value === undefined || value === "") throw sourceMissing(id, source, this.id);
       return value;
     }
-    let value: string;
+    let bytes: Buffer;
     try {
-      value = trimSecret(await readFile(source.path, "utf8"));
+      bytes = await readFile(source.path);
     } catch {
       throw sourceMissing(id, source, this.id);
     }
+    const text = secretText(bytes);
+    if (text === undefined) throw sourceNotText(id, source, this.id);
+    const value = trimSecret(text);
     if (value === "") throw sourceMissing(id, source, this.id);
     return value;
   }

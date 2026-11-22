@@ -605,14 +605,20 @@ agents:
         env: { GITHUB_PERSONAL_ACCESS_TOKEN: { secret: github-token } }
 ```
 
-- **Not delivered yet in this version.** Using a secret needs a server-verified check that
-  whoever the session is for may use that secret, its provider and its host, asked at every
-  session open so a revoked grant stops the next one. That check, and the permissions for
-  listing and validating secrets it rests on, land with the rest of #336. Until then the
-  daemon has none, so a launch whose agent steps use a reference is refused before the run
-  starts (naming the step, the agent and the secrets), and `agents.ping` does not start an
-  agent that uses one. Everything below describes how delivery works once the check is in
-  place; config validation, host binding and the withholding of secret sources apply now.
+- **Delivered only under a grant.** At every session open the daemon asks whether the
+  principal that owns the run (the root run's starter, as durably recorded) may use each
+  secret, with its provider, on the host it is bound to, from that principal's credentials
+  as they are *now*: a revoked or expired credential stops the next open. One credential
+  must cover the whole use, including the run's workflow in its scope. A credential grants
+  references with `orca auth issue <principal> --secret github-token@local` (repeatable) or
+  `--secret '*'`; the `owner` preset, which the local client's bootstrap credential uses,
+  grants every reference, and no other preset grants any. A denial fails that step before
+  anything is read, with `reason: unauthorized`. In standalone mode (no credentials file)
+  the verified OS user owns the config and its secrets outright; with `orca serve
+  --unauthenticated-loopback` every local run may use every reference. A direct `orca run`
+  with `--cwd` or `--agent`/`--model` overrides records no owner and cannot use references,
+  and `agents.ping` never starts an agent that uses one. See
+  [secret-use-authority.md](secret-use-authority.md).
 - **Only where it lives is configured, never the value.** `provider: env` reads a variable
   from the host's environment: the daemon's own on a local host, the remote login shell's on
   an SSH host. `provider: file` reads a file on the host whole, dropping one trailing newline;

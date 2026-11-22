@@ -1,6 +1,6 @@
 /** Explicit OS-user admission for local CLI/stdio entry points, never network RPC. */
 import { bindLocalAdmissionExecution } from "./admission-execution-authority.js";
-import { createHash } from "node:crypto";
+import { osUserPrincipalId } from "./local-secret-use.js";
 import { existsSync, constants } from "node:fs";
 import { access, mkdir, stat } from "node:fs/promises";
 import { userInfo } from "node:os";
@@ -66,10 +66,7 @@ export async function localSubmissionAuthority(
     return local;
   }
   const localUser = userInfo();
-  const principalId = `os-user-${createHash("sha256")
-    .update(JSON.stringify([localUser.uid, localUser.username]))
-    .digest("hex")
-    .slice(0, 32)}`;
+  const principalId = osUserPrincipalId(localUser);
   const verify = async () => {
     const current = userInfo();
     if (
