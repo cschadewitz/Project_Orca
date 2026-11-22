@@ -2061,6 +2061,9 @@ export class Orchestrator {
       // An exit that cannot be observed at all (the handle's promise rejects) is not evidence
       // the process is gone: the slot stays held and is reported as unconfirmed.
       const exited = startupTermination(e);
+      // Teardown has begun: a retry of this step in the same run must wait for this slot,
+      // not count it as a per-run session the run holds for good.
+      if (exited) slot.closing();
       if (exited)
         void exited.then(
           () => slot.release(),

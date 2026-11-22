@@ -248,3 +248,51 @@ it("carries the process exit on a failed open whose cleanup could not observe it
   input.destroy();
   output.destroy();
 });
+
+it("an exit that cannot be observed rejects terminated and raises no unhandled rejection (#873)", async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    output.on("data", (bytes: Buffer) => {
+      for (const line of bytes.toString().split("\n").filter(Boolean)) {
+        const m = JSON.parse(line) as { id?: number; method?: string };
+        if (m.method === "initialize")
+          input.write(
+            JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } }) + "\n",
+          );
+        else if (m.method === "session/new")
+          input.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { sessionId: "s1" } }) + "\n");
+      }
+    });
+    let unobservable!: (e: Error) => void;
+    const exited = new Promise<never>((_, reject) => {
+      unobservable = reject;
+    });
+    const host = new LocalHost({ id: "local", type: "local" });
+    vi.spyOn(host, "spawnAgent").mockResolvedValue({
+      stream: stdioAcpStream(input, output),
+      pid: undefined,
+      exited,
+      stderrTail: () => "",
+      kill: vi.fn(),
+    });
+    const session = await openAcpSession({
+      host,
+      agent: AgentSpecSchema.parse({ id: "agent", command: "unused" }),
+      cwd: process.cwd(),
+      handshakeTimeoutMs: 1000,
+    });
+    unobservable(new Error("exit unobservable"));
+    await expect(session.terminated).rejects.toThrow("exit unobservable");
+    // Give every derived observer of `proc.exited` a chance to report itself.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(unhandled).toEqual([]);
+    input.destroy();
+    output.destroy();
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});

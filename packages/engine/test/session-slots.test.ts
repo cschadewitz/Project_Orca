@@ -654,6 +654,37 @@ edges: [{ from: first, to: second }, { from: second, to: done }]
     expect(f.opened).toEqual(["a"]);
   });
 
+  it("a same-run retry after a failed startup waits for the old process instead of failing", async () => {
+    let exit!: () => void;
+    const exited = new Promise<void>((r) => (exit = r));
+    const failure = withStartupTermination(new OrcaError("AGENT_PROTOCOL", "handshake failed"), exited);
+    const f: Fake = fake({
+      agents: [{ id: "a", sessionMode: "per-run" }],
+      maxAgentSessions: 1,
+      workflow: `
+id: retry
+name: retry
+start: work
+nodes:
+  work: { type: agent, agent: a, prompt: "go", maxAttempts: 2 }
+  done: { type: end }
+edges: [{ from: work, to: done }]
+`,
+      openFails: (n) => {
+        if (n !== 1) return false;
+        // The first attempt's process is shutting down and takes 40 ms to go.
+        f.bump("a", "local", 1);
+        void exited.then(() => f.bump("a", "local", -1));
+        setTimeout(exit, 40);
+        return failure;
+      },
+    });
+    const run = await f.orchestrator.startAndRun({ workflowId: "retry" });
+    expect(run.run.status, JSON.stringify(run.run.error)).toBe("completed");
+    expect(f.opened).toEqual(["a"]);
+    expect(f.peak.total).toBe(1);
+  });
+
   it("keeps a failed open's slot when its process exit cannot be observed", async () => {
     const failure = withStartupTermination(
       new OrcaError("AGENT_PROTOCOL", "handshake failed"),

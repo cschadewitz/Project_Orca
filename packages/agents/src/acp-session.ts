@@ -287,7 +287,12 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   const conn = app.connect(proc.stream);
   const closed = conn.closed.then(() => undefined);
   void closed.then(() => activeTurn?.abort.abort("agent connection closed"));
-  void proc.exited.then(() => activeTurn?.abort.abort("agent process exited"));
+  // A handle whose exit cannot be observed rejects; that ends no turn, and must not surface as
+  // an unhandled rejection either.
+  void proc.exited.then(
+    () => activeTurn?.abort.abort("agent process exited"),
+    () => undefined,
+  );
   const cleanupProcess = processCleanup(proc, opts.exitGraceMs);
   // Settles when the owned process's exit is observed. A rejection means the exit cannot be
   // observed at all, which is not evidence it is gone, so it stays a rejection for callers.
