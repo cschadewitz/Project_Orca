@@ -24,6 +24,9 @@
 #            notes (release-attach.sh server-attach), re-reading the release before every write.
 #            Release (publish final) refuses a final without that recorded bundle.
 name: Release (server bundle)
+# Binds the run to one version and commit: release-attach.sh publish reads it back as part of
+# the bundle's receipt.
+run-name: Release (server bundle) v${{ inputs.version }} at ${{ inputs.source_sha }}
 
 on:
   workflow_dispatch:

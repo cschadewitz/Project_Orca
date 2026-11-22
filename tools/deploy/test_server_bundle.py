@@ -166,6 +166,52 @@ class ServerBundleTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Bundle entry refused"):
                 release.unpack_bundle(target, "orca-server-0.8.0-linux-x64", self.tmp / "unpacked")
 
+    def fetch_fixture(self, body, prerelease=False, digests=None):
+        names = [p.name for p in sorted(self.files.iterdir())]
+        ordered = [n for suffix in (".tar.xz", ".manifest.json", ".sigstore.json") for n in names if n.endswith(suffix)]
+        real = {name: release.file_sha256(self.files / name) for name in ordered}
+        record = "<!-- orca-server-run: 7 " + " ".join("sha256:" + real[n] for n in ordered) + " -->"
+        api = {"tag_name": "v0.8.0", "draft": False, "prerelease": prerelease,
+               "body": body.replace("RECORD", record),
+               "assets": [{"name": n, "browser_download_url": "https://example.invalid/" + n,
+                           "digest": "sha256:" + (digests or real)[n]} for n in ordered]}
+        fetched = []
+
+        def download(url, target, limit, accept=None):
+            if url.startswith("https://api.github.com/"):
+                Path(target).write_text(json.dumps(api))
+            else:
+                fetched.append(url.rsplit("/", 1)[1])
+                Path(target).write_bytes((self.files / url.rsplit("/", 1)[1]).read_bytes())
+        patcher = patch.object(release, "download", download)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return fetched
+
+    def test_downloads_a_published_bundle_once_its_record_is_there(self):
+        fetched = self.fetch_fixture("Notes.\n\nRECORD")
+        self.assertEqual(self.deployment.stage_bundle("v0.8.0").name, "v0.8.0")
+        self.assertEqual(len(fetched), 3)
+
+    def test_a_bundle_without_its_record_is_not_ready(self):
+        for body in ("Notes.", "RECORD RECORD"):
+            with self.subTest(body=body):
+                fetched = self.fetch_fixture(body)
+                with self.assertRaisesRegex(RuntimeError, "no complete server bundle yet"):
+                    self.deployment.stage_bundle("v0.8.0")
+                self.assertEqual(fetched, [])
+
+    def test_assets_that_are_not_the_recorded_ones_are_not_fetched(self):
+        fetched = self.fetch_fixture("RECORD", digests={n.name: "0" * 64 for n in self.files.iterdir()})
+        with self.assertRaisesRegex(RuntimeError, "not the recorded one"):
+            self.deployment.stage_bundle("v0.8.0")
+        self.assertEqual(fetched, [])
+
+    def test_a_prerelease_flag_must_match_the_version(self):
+        self.fetch_fixture("RECORD", prerelease=True)
+        with self.assertRaisesRegex(RuntimeError, "not a published release of that version"):
+            self.deployment.stage_bundle("v0.8.0")
+
     def test_an_existing_release_is_never_overwritten(self):
         (self.deployment.root / "releases" / "v0.8.0").mkdir()
         with self.assertRaisesRegex(RuntimeError, "already exists"):

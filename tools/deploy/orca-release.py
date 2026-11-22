@@ -46,6 +46,8 @@ BUNDLE_ISSUER = "https://token.actions.githubusercontent.com"
 BUNDLE_TRIGGER = "workflow_dispatch"
 BUNDLE_SCHEMA = "orca-server-bundle/1"
 BUNDLE_PLATFORM = "linux-x64"
+BUNDLE_RECORD_RE = (r"<!-- orca-server-run: [0-9]+ sha256:([0-9a-f]{64}) sha256:([0-9a-f]{64})"
+                    r" sha256:([0-9a-f]{64}) -->")
 BUNDLE_MAX_BYTES = 512 << 20          # compressed archive
 BUNDLE_MAX_UNPACKED = 1536 << 20      # everything it unpacks to
 # cosign is fetched once into the deployment root and checked against this digest every time
@@ -551,12 +553,22 @@ class Deployment:
         if (published.get("draft") or published.get("prerelease") is not ("-" in version)
                 or published.get("tag_name") != f"v{version}"):
             raise RuntimeError("Target is not a published release of that version")
-        assets = {asset.get("name"): asset.get("browser_download_url") for asset in published.get("assets", [])}
+        # A release candidate is published first and its bundle attached by a later run, which
+        # records the three digests in the notes last. That record is the "ready" signal: until
+        # it is there (exactly once), the bundle is not complete and is not fetched.
+        records = re.findall(BUNDLE_RECORD_RE, published.get("body") or "")
+        if len(records) != 1 or (published.get("body") or "").count("orca-server-run") != 1:
+            raise RuntimeError(f"Release v{version} has no complete server bundle yet (no single orca-server-run record); retry later")
+        recorded = dict(zip(files, records[0]))
+        assets = {asset.get("name"): asset for asset in published.get("assets", [])}
         for name in files:
-            if not assets.get(name):
-                raise RuntimeError(f"Release v{version} has no {name}")
+            asset = assets.get(name) or {}
+            if not asset.get("browser_download_url") or asset.get("digest") != "sha256:" + recorded[name]:
+                raise RuntimeError(f"Release v{version}'s {name} is missing or not the recorded one; retry later")
             limit = BUNDLE_MAX_BYTES if name.endswith(".tar.xz") else 4 << 20
-            self.typed_dispatch(download, assets[name], directory / name, limit)
+            self.typed_dispatch(download, asset["browser_download_url"], directory / name, limit)
+            if file_sha256(directory / name) != recorded[name]:
+                raise RuntimeError(f"Downloaded {name} is not the recorded file")
 
     def verify_bundle(self, directory, version):
         """Signature first (pinned signer), then the manifest, then the archive's digest."""
