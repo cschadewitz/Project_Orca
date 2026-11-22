@@ -55,3 +55,16 @@ it("ignores a late failure after the connection has changed", async () => {
   ui.rerender(<ConnectionBanner connection={file} />);
   expect(screen.queryByText("Old failure")).toBeNull();
 });
+it("explains a daemon one protocol major behind and stays quiet on the app's own protocol (#880)", () => {
+  installBridge();
+  const since = new Date().toISOString();
+  const older = toConnection({ state: "live", since, olderProtocol: true, versions: { app: "3.0", daemon: "2.1" } });
+  const ui = render(<ConnectionBanner connection={older} />);
+  expect(screen.getByRole("status").textContent).toBe(
+    "This daemon speaks protocol 2.1, one major version behind this app's 3.0. Features added since are off until the daemon is updated.",
+  );
+  ui.rerender(
+    <ConnectionBanner connection={toConnection({ state: "live", since, versions: { app: "3.0", daemon: "3.0" } })} />,
+  );
+  expect(screen.queryByRole("status")).toBeNull();
+});

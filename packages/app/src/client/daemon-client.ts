@@ -73,8 +73,6 @@ import {
   INPUTS_LIST_METHOD,
   InputsAnswerResultSchema,
   InputsListResultSchema,
-  PROTOCOL_VERSION,
-  isCompatible,
   RUNS_CANCEL_METHOD,
   RUNS_EVENTS_METHOD,
   RUNS_GET_METHOD,
@@ -156,6 +154,7 @@ import {
   type WorkflowsListParams,
   type WorkflowsListResult,
 } from "@orca/protocol";
+import { appHelloOffer, appSpeaks } from "./protocol-window.js";
 import { type ZodType } from "zod";
 import { assertCredentialDestination, authenticationCode, type DaemonTokenSource } from "./auth.js";
 import { DaemonSubscription, type DaemonSubscriptionOptions } from "./subscription.js";
@@ -352,7 +351,7 @@ export class DaemonClient {
     // would let a late reply mutate connection state before that caller checks its epoch.
     return this.call(
       HELLO_METHOD,
-      { client, protocol: PROTOCOL_VERSION },
+      { client, ...appHelloOffer() },
       HelloResultSchema,
       retryAuth,
       AbortSignal.timeout(10_000),
@@ -596,7 +595,7 @@ export class DaemonClient {
         const hello = await this.hello("orca-app/subscription", false);
         if (!isCurrent()) return undefined;
         this.options.onHello?.(hello);
-        if (!isCompatible(PROTOCOL_VERSION, hello.protocol)) {
+        if (!appSpeaks(hello.protocol)) {
           throw new DaemonClientError({ code: "PROTOCOL_VERSION", message: "Daemon protocol mismatch" });
         }
         return hello.identity;

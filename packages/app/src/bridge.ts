@@ -147,6 +147,12 @@ export interface ConnectionSnapshot {
   eventCursor?: number;
   /** Protocol versions for the `mismatch` rendering: "daemon 1.2 · app 1.3". */
   versions?: { app: string; daemon: string };
+  /**
+   * The daemon answered on the previous protocol major this app still speaks (#880). It is
+   * connected and writable, and whatever the newer major added is off because the daemon
+   * does not advertise it; the connection banner says so. Absent on the app's own protocol.
+   */
+  olderProtocol?: true;
   /** The daemon's own version, once it has answered `hello`. */
   orcaVersion?: string;
   /** What the daemon said it can do. Absent means it has not said, which is not an error. */

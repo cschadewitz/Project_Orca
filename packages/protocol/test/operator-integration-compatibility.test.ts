@@ -19,7 +19,7 @@ describe("operator integration compatibility boundary", () => {
     const release: { protocol: typeof PROTOCOL_VERSION; storeEpoch: string; capabilities: string[] } = JSON.parse(
       await readFile(new URL("../../../release-compatibility.json", import.meta.url), "utf8"),
     );
-    expect(PROTOCOL_VERSION).toEqual({ major: 2, minor: 0 });
+    expect(PROTOCOL_VERSION).toEqual({ major: 2, minor: 1 });
     expect(release.protocol).toEqual(PROTOCOL_VERSION);
     expect(release.storeEpoch).toBe("operator-journals-v4");
     expect(release.capabilities).toEqual([
@@ -47,7 +47,7 @@ describe("operator integration compatibility boundary", () => {
       ok: false,
       error: {
         code: "NOT_SUPPORTED",
-        message: "client speaks protocol 1.10, daemon speaks 2.0",
+        message: "client speaks protocol 1.10, daemon speaks 2.1",
         details: { client: previousProtocol, daemon: PROTOCOL_VERSION },
       },
     });
@@ -63,7 +63,7 @@ describe("operator integration compatibility boundary", () => {
     });
     const machine = new ConnectionMachine({ hello: async () => oldHello, onChange: () => {}, quietMs: 0 });
     machine.acceptHello(oldHello);
-    expect(machine.current).toMatchObject({ state: "mismatch", versions: { app: "2.0", daemon: "1.10" } });
+    expect(machine.current).toMatchObject({ state: "mismatch", versions: { app: "2.1", daemon: "1.10" } });
     expect(isCompatible(PROTOCOL_VERSION, previousProtocol)).toBe(false);
   });
 });
