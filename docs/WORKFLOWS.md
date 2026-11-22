@@ -370,7 +370,7 @@ agents:
   sessions a run holds plus the sessions its child runs need will wait forever; size the cap
   for that, or use `per-step` for agents that fan out.
 - `hello` reports the daemon-wide cap, sessions open and queue depth; `agents.list` adds the
-  per-agent and per-host caps and use (protocol 2.1).
+  per-agent and per-host caps and use (optional fields; older clients ignore them).
 
 ## Templates
 

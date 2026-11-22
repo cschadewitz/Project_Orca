@@ -192,7 +192,7 @@ export const HelloResultSchema = z.object({
   /**
    * Agent session slots at the moment of the handshake (#873): the daemon-wide cap when one is
    * configured, sessions open and steps queued. Present when the daemon serves the agent
-   * surface; `agents.list` carries the per-agent and per-host detail. Protocol 2.1.
+   * surface; `agents.list` carries the per-agent and per-host detail. Optional.
    */
   sessionSlots: SessionSlotsSummarySchema.optional(),
 });

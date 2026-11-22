@@ -81,8 +81,8 @@ export type AgentView = z.infer<typeof AgentViewSchema>;
  * Agent session slots (#873): the optional caps this daemon is configured with, how many
  * sessions are open against them, and how many steps are queued for one. A cap that is not
  * configured is absent - unlimited is the default - so an empty `agents`/`hosts` record and no
- * `maxAgentSessions` mean "no caps", and the counts are still real. Protocol 2.1; optional, so
- * an older client ignores it and an older daemon simply never sends it.
+ * `maxAgentSessions` mean "no caps", and the counts are still real. Optional, so an older
+ * client ignores it and an older daemon simply never sends it.
  */
 export const SessionSlotsViewSchema = z.object({
   limits: z.object({
@@ -128,7 +128,7 @@ export const AgentsListResultSchema = z.object({
    * what is it on" - and a claim is the only record of that which outlives a step.
    */
   claims: z.array(ClaimViewSchema),
-  /** Session caps, use and queue depth (#873). Protocol 2.1; absent from an older daemon. */
+  /** Session caps, use and queue depth (#873). Optional; absent from an older daemon. */
   sessionSlots: SessionSlotsViewSchema.optional(),
   asOf: z.string(),
 });
