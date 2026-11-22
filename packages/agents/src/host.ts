@@ -81,6 +81,12 @@ export interface AgentHost {
   spawnAgent(agent: AgentSpec, options: SpawnAgentOptions): Promise<AgentProcessHandle>;
   /** Run a shell command on the host (used by workspace providers, e.g. `git worktree add`). */
   exec(command: string, options?: { cwd?: string; stdin?: string; timeoutMs?: number }): Promise<ExecResult>;
+  /**
+   * Run a shell command on the host for its exit status alone: its output is discarded
+   * rather than collected, and it is killed at `timeoutMs`. `null` when it was killed or
+   * did not exit normally. For probes that need only an answer (#336).
+   */
+  execStatus?(command: string, options: { timeoutMs: number }): Promise<number | null>;
   /** Join path segments using the host's conventions. */
   joinPath(...parts: string[]): string;
   /**
@@ -218,6 +224,25 @@ export interface CollectChildProcessOptions {
  * (`sh -c` forks one) still holds the stdout pipe open and `close` would not
  * fire until it finished, which is exactly what the timeout exists to prevent.
  */
+/** Wait for `child`'s exit status, killing it at `timeoutMs`; its output is not read. */
+export function childExitStatus(child: ChildProcess, timeoutMs: number): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killIfRunning(child, "SIGKILL");
+    }, timeoutMs);
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      resolve(timedOut ? null : code);
+    });
+  });
+}
+
 export function collectChildProcess(
   child: PipedChildProcess,
   options: CollectChildProcessOptions = {},

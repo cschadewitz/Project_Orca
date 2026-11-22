@@ -3,11 +3,11 @@
  * a token daemon, HTTP RPC and an open WebSocket. The grant is read again at every call.
  */
 import WebSocket from "ws";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { secretHostBinding, type AgentHost } from "@orca/agents";
 import { HostSpecSchema, type HostSpec, type SecretsConfig } from "@orca/core";
 import { PROTOCOL_VERSION } from "@orca/protocol";
-import { ReadModel, startDaemon, type SecretsSource } from "@orca/daemon";
+import { MAX_REMOTE_CHECKS, ReadModel, startDaemon, type SecretsSource } from "@orca/daemon";
 import { CredentialStore, OwnershipStore, UNRESTRICTED, orchestratorResolver } from "../src/auth/index.js";
 import { emptyFixture } from "./fixture.js";
 
@@ -25,14 +25,21 @@ async function setup() {
   const { orchestrator: orc } = emptyFixture();
   let box: HostSpec = HostSpecSchema.parse({ id: "box", type: "ssh", host: "box.example" });
   const probes: string[] = [];
+  let hold: Promise<void> | undefined;
   const exec: AgentHost["exec"] = async (command) => {
     probes.push(command);
+    await hold;
     return { code: 0, stdout: "", stderr: "" };
   };
   const secretsSource = (): SecretsSource => ({
     secrets: () => catalog,
     hasHost: (id) => id === "box",
-    host: () => ({ id: "box", spec: box, exec }) as unknown as AgentHost,
+    host: () =>
+      ({
+        id: "box",
+        spec: box,
+        execStatus: async (command: string, o: { timeoutMs: number }) => (await exec(command, o)).code,
+      }) as unknown as AgentHost,
   });
   const credentials = new CredentialStore();
   const viewer = await credentials.issue({ principal: "viewer", preset: "viewer" });
@@ -62,7 +69,12 @@ async function setup() {
   const rebind = (host: string) => {
     box = HostSpecSchema.parse({ id: "box", type: "ssh", host });
   };
-  return { daemon, credentials, viewer, narrow, call, probes, rebind };
+  const holdProbes = () => {
+    let release!: () => void;
+    hold = new Promise<void>((resolve) => (release = resolve));
+    return release;
+  };
+  return { daemon, credentials, viewer, narrow, call, probes, rebind, holdProbes };
 }
 
 async function socket(url: string, token: string) {
@@ -156,4 +168,21 @@ it("stops an open connection once the host is rebound or the credential revoked"
     error: { code: "AUTH_INVALID" },
   });
   expect(probes).toHaveLength(1);
+});
+
+it("bounds concurrent remote checks across callers; denied and excess requests start no probe", async () => {
+  const { viewer, narrow, call, probes, holdProbes } = await setup();
+  const release = holdProbes();
+  const denied = Array.from({ length: 6 }, () => call(viewer.token, "secrets.check", { id: "key" }));
+  const checks = Array.from({ length: MAX_REMOTE_CHECKS + 2 }, () =>
+    call(narrow.token, "secrets.check", { id: "key" }),
+  );
+  await vi.waitFor(() => expect(probes).toHaveLength(MAX_REMOTE_CHECKS));
+  for (const answer of await Promise.all(denied))
+    expect(answer).toMatchObject({ ok: false, error: { code: "AUTH_FORBIDDEN" } });
+  release();
+  const results = (await Promise.all(checks)).map((a) => (a.result as { available: boolean; reason?: string }).reason);
+  expect(results.filter((r) => r === "busy")).toHaveLength(2);
+  expect(results.filter((r) => r === undefined)).toHaveLength(MAX_REMOTE_CHECKS);
+  expect(probes).toHaveLength(MAX_REMOTE_CHECKS);
 });

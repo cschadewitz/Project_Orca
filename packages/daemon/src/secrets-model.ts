@@ -21,13 +21,22 @@ export interface SecretsSource {
 }
 
 const CHECK_TIMEOUT_MS = 15_000;
+/**
+ * Remote checks in flight at once, across every caller. Each is one SSH process; a check
+ * past this is answered `busy` without starting one.
+ */
+export const MAX_REMOTE_CHECKS = 4;
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export class SecretsReadModel {
-  constructor(private readonly source: () => SecretsSource) {}
+  private remoteChecks = 0;
+  constructor(
+    private readonly source: () => SecretsSource,
+    private readonly maxRemoteChecks = MAX_REMOTE_CHECKS,
+  ) {}
 
   /** The references `principal` may see: all with `*`, else those its grant names as bound now. */
   private visible(principal: Principal): [string, SecretsConfig[string]][] {
@@ -93,18 +102,23 @@ export class SecretsReadModel {
       ref.provider === "env"
         ? `sh -c ${shellQuote(`[ -n "\${${ref.name}:+x}" ]`)}`
         : `test -f ${shellQuote(ref.path)} && test -r ${shellQuote(ref.path)} && test -s ${shellQuote(ref.path)}`;
+    // Only the exit status is wanted, so only a host that can give it alone is asked: its
+    // output is never read or buffered. One with no such path is not probed at all.
+    if (!host.execStatus) return result(false, "unreachable");
+    if (this.remoteChecks >= this.maxRemoteChecks) return result(false, "busy");
+    this.remoteChecks++;
     try {
-      const { code } = await host.exec(
+      const code = await host.execStatus(
         `{ set +xv && exec 2>/dev/null; } || exit 4; if ${test}; then exit 0; else exit 3; fi`,
-        {
-          timeoutMs: CHECK_TIMEOUT_MS,
-        },
+        { timeoutMs: CHECK_TIMEOUT_MS },
       );
       if (code === 0) return result(true);
       if (code === 3) return result(false, "missing");
       return result(false, "unreachable");
     } catch {
       return result(false, "unreachable");
+    } finally {
+      this.remoteChecks--;
     }
   }
 }

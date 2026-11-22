@@ -126,7 +126,7 @@ Protocol 2.6 (`packages/protocol/src/secrets.ts`, answered by `SecretsReadModel`
 | Method          | Permission     | Returns |
 | --------------- | -------------- | ------- |
 | `secrets.list`  | `secrets.read` | `{ secrets: [{ id, host, provider, description? }] }`, sorted by id. A principal whose grant is not `"*"` sees only the ids its grant names with the provider, host and endpoint binding each has now. `name` (env) or `path` (file) only with `config.read`. |
-| `secrets.check` | `secrets.read` | `{ id, host, available, reason? }` for one visible reference, checked on its own host **without** reading the value. `reason` is `missing`, `unreachable` or `unknown-host`. A reference outside the caller's grant is refused as not found (`CONFIG_INVALID`, `reason: "not-found"`) and never checked. |
+| `secrets.check` | `secrets.read` | `{ id, host, available, reason? }` for one visible reference, checked on its own host **without** reading the value. `reason` is `missing`, `unreachable`, `unknown-host` or `busy`. A reference outside the caller's grant is refused as not found (`CONFIG_INVALID`, `reason: "not-found"`) and never checked. |
 
 How a check works:
 
@@ -140,6 +140,11 @@ How a check works:
   piped to another program or compared. A file is tested with `test -f/-r/-s`. Exit 0 is
   available, 3 (the test failed) is `missing`, anything else (including a connection
   failure) is `unreachable`. No output is returned.
+- **Bounded.** An SSH check is one `ssh` process run for its exit status alone: its
+  output is discarded, never read or buffered, and it is killed after 15 seconds. At most
+  four run at once across every caller; a check past that answers `busy` at once and starts
+  nothing. A reference outside the caller's grant, or a caller without `secrets.read`, never
+  gets that far. Local checks are not counted.
 
 `available: true` means **present**, nothing more: the variable is set and non-empty, or the
 file is readable and non-empty. It does not prove that the value is right, that it is UTF-8

@@ -3,11 +3,11 @@
  * grant, checked on the reference's own host without reading the value.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { secretHostBinding, type AgentHost } from "@orca/agents";
+import { SshHost, secretHostBinding, type AgentHost } from "@orca/agents";
 import { HostSpecSchema, type HostSpec, type SecretsConfig } from "@orca/core";
 import { LOCAL_PRINCIPAL, PRESETS, UNRESTRICTED, SecretsReadModel, type Principal } from "../src/index.js";
 
@@ -22,7 +22,15 @@ const BOX = HostSpecSchema.parse({ id: "box", type: "ssh", host: "box.example" }
 
 function source(secrets: SecretsConfig, exec: AgentHost["exec"] = async () => ({ code: 0, stdout: "", stderr: "" })) {
   const hosts = new Map<string, AgentHost>(
-    [LOCAL, BOX].map((spec) => [spec.id, { id: spec.id, spec, exec } as unknown as AgentHost]),
+    [LOCAL, BOX].map((spec) => [
+      spec.id,
+      // Only the exit status of a probe is asked for; `exec` stands in for the remote shell.
+      {
+        id: spec.id,
+        spec,
+        execStatus: async (command: string, o: { timeoutMs: number }) => (await exec(command, o)).code,
+      } as unknown as AgentHost,
+    ]),
   );
   return () => ({
     secrets: () => secrets,
@@ -180,6 +188,65 @@ describe("secrets.check", () => {
       details: { secret: "key", reason: "not-found" },
     });
     await expect(model.check(principal("*"), "nope")).rejects.toMatchObject({ details: { reason: "not-found" } });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("bounds remote checks in flight: an excess check is busy and starts no SSH process", async () => {
+    if (process.platform === "win32") return;
+    const dir = await mkdtemp(join(tmpdir(), "orca-secrets-bound-"));
+    dirs.push(dir);
+    // A stand-in `ssh` that counts each start and holds it until the test lets go.
+    const ssh = join(dir, "ssh");
+    const count = join(dir, "count");
+    const gate = join(dir, "go");
+    await writeFile(
+      ssh,
+      `#!/bin/sh\necho started >> '${count}'\nwhile [ ! -e '${gate}' ]; do sleep 0.02; done\nprintf '%0100000d' 0\nexit 0\n`,
+    );
+    await chmod(ssh, 0o755);
+    const spec = HostSpecSchema.parse({ id: "box", type: "ssh", host: "box.example", sshBinary: ssh });
+    const host = new SshHost(spec as never, { sftp: false });
+    const model = new SecretsReadModel(
+      () => ({
+        secrets: () => ({ key: { host: "box", provider: "file", path: "/etc/orca/key" } }),
+        hasHost: (id) => id === "box",
+        host: () => host,
+      }),
+      2,
+    );
+    const all = principal("*");
+    const first = [model.check(all, "key"), model.check(all, "key")];
+    // Both slots are taken: the next ones answer at once, and start nothing.
+    await vi.waitFor(async () => expect((await readFile(count, "utf8")).trim().split("\n")).toHaveLength(2));
+    expect(await Promise.all([model.check(all, "key"), model.check(all, "key")])).toEqual([
+      { id: "key", host: "box", available: false, reason: "busy" },
+      { id: "key", host: "box", available: false, reason: "busy" },
+    ]);
+    expect((await readFile(count, "utf8")).trim().split("\n")).toHaveLength(2);
+    await writeFile(gate, "");
+    // A probe's exit status is all that is read, however much it prints.
+    expect(await Promise.all(first)).toEqual([
+      { id: "key", host: "box", available: true },
+      { id: "key", host: "box", available: true },
+    ]);
+    // The slots are free again.
+    expect(await model.check(all, "key")).toEqual({ id: "key", host: "box", available: true });
+    expect((await readFile(count, "utf8")).trim().split("\n")).toHaveLength(3);
+  });
+
+  it("does not probe a host that cannot answer with an exit status alone", async () => {
+    const exec = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
+    const model = new SecretsReadModel(() => ({
+      secrets: () => ({ key: { host: "box", provider: "file", path: "/etc/orca/key" } }),
+      hasHost: () => true,
+      host: () => ({ id: "box", spec: BOX, exec }) as unknown as AgentHost,
+    }));
+    expect(await model.check(principal("*"), "key")).toEqual({
+      id: "key",
+      host: "box",
+      available: false,
+      reason: "unreachable",
+    });
     expect(exec).not.toHaveBeenCalled();
   });
 });

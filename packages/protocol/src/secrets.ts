@@ -41,9 +41,10 @@ export type SecretsCheckParams = z.infer<typeof SecretsCheckParamsSchema>;
 /**
  * Why a reference is not available, never in the provider's own words: `missing` (the
  * variable is unset or empty, or the file is absent, unreadable or empty), `unreachable` (the
- * host did not answer), `unknown-host` (the configured host does not exist).
+ * host did not answer), `unknown-host` (the configured host does not exist), `busy` (too many
+ * remote checks are already running; nothing was started, try again).
  */
-export const SECRET_UNAVAILABLE_REASONS = ["missing", "unreachable", "unknown-host"] as const;
+export const SECRET_UNAVAILABLE_REASONS = ["missing", "unreachable", "unknown-host", "busy"] as const;
 export const SecretsCheckResultSchema = z
   .object({
     id: SecretIdSchema,
