@@ -486,6 +486,29 @@ describe("server bundle channel (#877)", () => {
       );
     });
 
+    it("expects every server channel to answer the stop while rings.json sets it, and never otherwise (#878)", async () => {
+      const stop = (inner) => ({
+        fetch: (url, init) =>
+          String(url).endsWith("/server/latest-linux-x64.yml") && init.headers?.Authorization
+            ? new Response(null, { status: 503, headers: { "X-Orca-Feed-Stop": "servers", "Retry-After": "3600" } })
+            : inner.fetch(url, init),
+      });
+      const server = { internal: { version: "0.8.0-rc.1" } };
+      const stopped = { format: 1, rings: desktop, server, serverStop: true };
+      const { problems, report } = await run(stop(both({ internal: "0.8.0-rc.1" })), { record: stopped });
+      expect(problems).toEqual([]);
+      expect(report).toContain("internal server: stopped (serverStop); no server activates anything");
+      expect(report).toContain("stable server: stopped (serverStop); no server activates anything");
+      // The switch set, but a ring still served: a failure.
+      expect((await run(both({ internal: "0.8.0-rc.1" }), { record: stopped })).problems).toContain(
+        "internal server/latest-linux-x64.yml: rings.json stops servers, but the feed answered 200",
+      );
+      // A stop the record does not set: a failure too.
+      expect(
+        (await run(stop(both({ internal: "0.8.0-rc.1" })), { record: { format: 1, rings: desktop, server } })).problems,
+      ).toContain("internal server/latest-linux-x64.yml: answers the servers' stop, but rings.json does not set it");
+    });
+
     it("refuses a record that is not a valid ring state", async () => {
       await expect(run(both({}), { record: { format: 1, rings: {}, server: { nightly: {} } } })).rejects.toThrow();
     });

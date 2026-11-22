@@ -133,8 +133,16 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
 /**
  * 2.2 adds the `search` read method (#255): a new name in `READ_METHODS`, answered under
  * `runs.read`. A 2.1 client never calls it; a 2.2 client asks `hello.methods` before it does.
+ *
+ * 2.3 adds the operations view's reads (#340): optional `outcome`, `workflowId`,
+ * `workflowVersion`, `createdFrom`, `createdTo`, `runIds` and `operations` on `runs.list`, optional
+ * `operations` on `runs.get`, and the optional `operations` field they fill on
+ * `RunSummaryView` (last sequence and activity, step counts, lease owner, and host and usage
+ * facets that say `unavailable` rather than zero). Every one is optional and asked for: a
+ * 2.2 daemon ignores the unknown params and answers the unfiltered page, so a 2.3 client
+ * checks the daemon's version before it trusts a filter it sent.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 2 };
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 3 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is

@@ -10,3 +10,6 @@ it.skipIf(process.platform === "win32")("server bundle assembly and verified sta
 it.skipIf(process.platform === "win32")("one-step server setup: idempotent, repairs, refuses unmanaged (#881)", () => {
   expect(() => execFileSync("python3", ["-B", "tools/deploy/test_server_setup.py"], { stdio: "pipe" })).not.toThrow();
 });
+it.skipIf(process.platform === "win32")("unattended server updates from the feed, deferral and rollback (#878)", () => {
+  expect(() => execFileSync("python3", ["-B", "tools/deploy/test_auto_update.py"], { stdio: "pipe" })).not.toThrow();
+});
