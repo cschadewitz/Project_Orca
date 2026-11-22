@@ -4,7 +4,7 @@
  * token file. Runs when `ORCA_SSH_TUNNEL_TEST` names an sshd (see remote-access.test.ts); the
  * ssh-tunnel workflow sets one up on Linux and Windows runners.
  */
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -244,6 +244,9 @@ describe.skipIf(!live)("profile connection over a real ssh", () => {
     await vi.waitFor(() => expect(liveCredentials()).toHaveLength(1), { timeout: 30_000 });
     expect(liveCredentials()[0]!.id).not.toBe(issued[0]!.id);
     expect((await client.hello("after-renewal")).orcaVersion).toBe("ssh-live");
+    // Back to real time: a credential issued from here on is not due, so no renewal keeps
+    // running in the background behind the steps below.
+    now = Date.now();
     await lease.release();
 
     // Revoked on the server: the next connect issues a new one, once.
@@ -253,7 +256,10 @@ describe.skipIf(!live)("profile connection over a real ssh", () => {
     await again.release();
 
     // Removing the profile revokes it: `orca auth list` shows nothing live.
-    await expect(profiles.remove(view.id)).resolves.toBe("revoked");
+    // The nonsecret record, for a failure to say what was left to revoke and where.
+    const before = readFileSync(join(dir, "app", "credentials", `${view.id}.json`), "utf8");
+    const outcome = await profiles.remove(view.id);
+    expect(outcome, `record before removal: ${before}; live: ${JSON.stringify(liveCredentials())}`).toBe("revoked");
     expect(liveCredentials()).toEqual([]);
   }, 120_000);
 });
