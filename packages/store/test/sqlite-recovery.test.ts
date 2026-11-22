@@ -4,7 +4,7 @@
  * as the diagnosable repair state, and a process killed mid-write at random commit boundaries.
  */
 import { spawn } from "node:child_process";
-import { cp, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -134,6 +134,56 @@ describe("SQLite import from a file-backed store", () => {
     expect((await sqlite(dir).events.read("run_1")).length).toBe(12);
   });
 
+  it("refuses history only the database has, or the same id with different content, and changes nothing", async () => {
+    const cases: [string, (raw: DatabaseSync) => void, Record<string, unknown>][] = [
+      [
+        "a run only the database has",
+        (raw) =>
+          raw.exec(
+            `INSERT INTO runs (run_id) VALUES ('run_x');
+             INSERT INTO events (run_id, seq, id, type, body) SELECT 'run_x', 0, 'evt_x', type,
+               json_set(json_set(body, '$.runId', 'run_x'), '$.id', 'evt_x') FROM events WHERE run_id = 'run_2'`,
+          ),
+        { runId: "run_x" },
+      ],
+      [
+        "an event with the same id and different content",
+        (raw) =>
+          raw.exec(
+            `UPDATE events SET body = json_set(body, '$.at', '1999-01-01T00:00:00.000Z') WHERE run_id = 'run_1' AND seq = 3`,
+          ),
+        { runId: "run_1", seq: 3 },
+      ],
+      [
+        "a plan journal only the database has",
+        (raw) => raw.exec("INSERT INTO plan_journals (plan_id) VALUES ('plan_x')"),
+        { planId: "plan_x" },
+      ],
+      [
+        "an artifact record only the database has",
+        (raw) =>
+          raw.exec(
+            "INSERT INTO artifacts (id, content_hash, run_id, kind, name, body) SELECT 'art_x', content_hash, run_id, kind, name, json_set(body, '$.id', 'art_x') FROM artifacts WHERE id = 'art_1'",
+          ),
+        { artifactId: "art_x" },
+      ],
+    ];
+    for (const [, mutate, details] of cases) {
+      const dir = await makeDir();
+      const files = await seedFileStore(dir);
+      await importFileMetadata(dir);
+      const raw = new DatabaseSync(join(dir, SQLITE_METADATA_FILE));
+      mutate(raw);
+      raw.close();
+      await files.plan.plans.delete("plan_2");
+      const before = await verifySqliteMetadata(dir);
+      const error = await rejection(importFileMetadata(dir));
+      expect(isOrcaError(error, "STORE_FORMAT")).toBe(true);
+      expect((error as { details?: unknown }).details).toMatchObject({ reason: "IMPORT_CONFLICT", ...details });
+      expect(await verifySqliteMetadata(dir)).toEqual(before);
+    }
+  });
+
   it("refuses a source that changes while it is read, and changes nothing", async () => {
     const dir = await makeDir();
     const files = await seedFileStore(dir);
@@ -229,6 +279,58 @@ describe("SQLite backup, restore and verify", () => {
     const error = await rejection(restoreSqliteMetadata(join(source, SQLITE_METADATA_FILE), await makeDir()));
     expect(isOrcaError(error, "STORE_FORMAT")).toBe(true);
     expect((error as { details?: unknown }).details).toMatchObject({ reason: "NOT_SEALED" });
+  });
+
+  it("backup refuses a store with no database instead of creating an empty one", async () => {
+    const dir = await makeDir();
+    const target = join(await makeDir(), "backup.sqlite");
+    const error = await rejection(backupSqliteMetadata(dir, target));
+    expect(isOrcaError(error, "STORE_FORMAT")).toBe(true);
+    expect((error as { details?: unknown }).details).toMatchObject({ reason: "MISSING" });
+    expect(await readdir(dir)).toEqual([]);
+    expect(await readdir(dirname(target))).toEqual([]);
+  });
+
+  it("backup copies a database another connection has open and is writing", async () => {
+    const dir = await makeDir();
+    await seedFileStore(dir);
+    await importFileMetadata(dir);
+    const live = sqlite(dir);
+    await live.plan.plans.put(plan(8, "live"));
+    const target = join(await makeDir(), "backup.sqlite");
+    await backupSqliteMetadata(dir, target);
+    const fresh = await makeDir();
+    await restoreSqliteMetadata(target, fresh);
+    expect((await sqlite(fresh).plan.plans.get("plan_8"))?.name).toBe("live");
+  });
+
+  it("verify writes nothing anywhere in the store", async () => {
+    const dir = await makeDir();
+    await seedFileStore(dir);
+    await importFileMetadata(dir);
+    const tree = async () => {
+      const out: string[] = [];
+      const walk = async (d: string): Promise<void> => {
+        for (const entry of (await readdir(d, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+          const path = join(d, entry.name);
+          const info = await stat(path);
+          out.push(`${path} ${entry.isDirectory() ? "dir" : info.size} ${info.mtimeMs} ${info.mode}`);
+          if (entry.isDirectory()) await walk(path);
+        }
+      };
+      await walk(dir);
+      return out;
+    };
+    const before = await tree();
+    expect((await verifySqliteMetadata(dir)).ok).toBe(true);
+    // SQLite itself creates its WAL coordination files (an empty `-wal` and the `-shm` index)
+    // when a reader opens a WAL database nobody else has open; a reader cannot remove them
+    // safely, and the next writer's clean close does. Nothing else, data or metadata, changes.
+    const sidecar = new RegExp(`${SQLITE_METADATA_FILE}-(wal 0|shm \\d+) `);
+    expect((await tree()).filter((line) => !sidecar.test(line))).toEqual(before);
+    expect((await tree()).filter((line) => line.includes(`${SQLITE_METADATA_FILE}-wal`))).toEqual(
+      (await tree()).filter((line) => line.includes(`${SQLITE_METADATA_FILE}-wal 0 `)),
+    );
   });
 
   it("verify reports a blob whose bytes no longer match its hash", async () => {

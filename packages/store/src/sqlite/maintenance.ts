@@ -17,9 +17,10 @@
  *   gaps, artifact rows whose blob is missing or wrong, and blobs no row references.
  */
 import { constants } from "node:fs";
-import { copyFile, link, mkdir, open, readFile, stat, unlink } from "node:fs/promises";
+import { copyFile, link, mkdir, open, readdir, readFile, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   ArtifactSchema,
   OrcaError,
@@ -35,7 +36,7 @@ import { FileArtifactStore } from "../artifact-store.js";
 import { fileStores } from "../document-store.js";
 import { JsonlEventStore } from "../jsonl-event-store.js";
 import { JsonlPlanJournal } from "../plan-store.js";
-import { sqlite, SqliteDatabase, type SqliteOptions } from "./database.js";
+import { sqlite, type SqliteOptions } from "./database.js";
 import type { SqliteCollection } from "./documents.js";
 import { insertEvent } from "./events.js";
 import { SQLITE_MIGRATIONS } from "./schema.js";
@@ -130,28 +131,48 @@ export async function importFileMetadata(dir: string, options: SqliteImportOptio
   );
   try {
     return await db.write(() => {
-      // Preflight: decide every conflict before the first write.
+      // Preflight: decide every conflict, on both sides, before the first write. History (runs,
+      // plan journals, artifact records) is append-only: what the database already holds must be
+      // exactly a prefix of the source, record for record, and nothing may exist only in the
+      // database. Collections are current state, which the file store owns until the switch.
+      const sourceRuns = new Set(source.runs.map(([runId]) => runId));
+      for (const { run_id: runId } of db.prepare("SELECT run_id FROM runs").all() as { run_id: string }[])
+        if (!sourceRuns.has(runId)) throw conflict("a run", { runId });
       const appendFrom = new Map<string, number>();
       for (const [runId, history] of source.runs) {
         const present = db
-          .prepare("SELECT seq, id FROM events WHERE run_id = ? ORDER BY seq")
-          .all(runId) as unknown as { seq: number; id: string }[];
+          .prepare("SELECT seq, body FROM events WHERE run_id = ? ORDER BY seq")
+          .all(runId) as unknown as { seq: number; body: string }[];
         if (present.length > history.length) throw conflict("more events in a run", { runId });
-        for (const row of present)
-          if (history[Number(row.seq)]?.id !== row.id)
-            throw conflict("different events in a run", { runId, seq: row.seq });
+        for (const row of present) {
+          const expected = history[Number(row.seq)];
+          if (!expected || !isDeepStrictEqual(OrcaEventSchema.parse(JSON.parse(row.body)), expected))
+            throw conflict("a different event in a run", { runId, seq: row.seq });
+        }
         appendFrom.set(runId, present.length);
       }
+      const sourcePlans = new Set(source.plans.map(([planId]) => planId));
+      for (const { plan_id: planId } of db.prepare("SELECT plan_id FROM plan_journals").all() as { plan_id: string }[])
+        if (!sourcePlans.has(planId)) throw conflict("a plan journal", { planId });
       const planFrom = new Map<string, number>();
       for (const [planId, history] of source.plans) {
         const present = db
           .prepare("SELECT seq, body FROM plan_events WHERE plan_id = ? ORDER BY seq")
           .all(planId) as unknown as { seq: number; body: string }[];
         if (present.length > history.length) throw conflict("more plan journal events", { planId });
-        for (const row of present)
-          if (history[Number(row.seq)]?.id !== (JSON.parse(row.body) as { id: string }).id)
-            throw conflict("different plan journal events", { planId, seq: row.seq });
+        for (const row of present) {
+          const expected = history[Number(row.seq)];
+          if (!expected || !isDeepStrictEqual(PlanEventSchema.parse(JSON.parse(row.body)), expected))
+            throw conflict("a different plan journal event", { planId, seq: row.seq });
+        }
         planFrom.set(planId, present.length);
+      }
+      const sourceArtifacts = new Map(source.artifacts.map((a) => [a.id, a]));
+      for (const row of db.prepare("SELECT id, body FROM artifacts").all() as { id: string; body: string }[]) {
+        const expected = sourceArtifacts.get(row.id);
+        if (!expected) throw conflict("an artifact record", { artifactId: row.id });
+        if (!isDeepStrictEqual(ArtifactSchema.parse(JSON.parse(row.body)), expected))
+          throw conflict("a different artifact record", { artifactId: row.id });
       }
 
       const report: SqliteImportReport = {
@@ -255,15 +276,23 @@ export async function backupSqliteMetadata(dir: string, target: string): Promise
       file: target,
       reason: "EXISTS",
     });
+  const source = join(dir, SQLITE_METADATA_FILE);
+  if (!(await exists(source)))
+    throw new OrcaError("STORE_FORMAT", `${source} does not exist; there is no SQLite metadata to back up`, {
+      reason: "MISSING",
+      file: source,
+    });
   const staged = `${target}.${randomUUID()}.partial`;
   try {
-    const db = new SqliteDatabase(join(dir, SQLITE_METADATA_FILE));
+    const { DatabaseSync } = sqlite();
+    // A read-only connection: a backup never migrates or otherwise changes what it copies.
+    const db = new DatabaseSync(source, { readOnly: true });
     try {
-      await db.statement(() => db.prepare("VACUUM INTO ?").run(staged));
+      db.exec("PRAGMA busy_timeout = 10000");
+      db.prepare("VACUUM INTO ?").run(staged);
     } finally {
       db.close();
     }
-    const { DatabaseSync } = sqlite();
     const copy = new DatabaseSync(staged);
     try {
       copy.exec("PRAGMA journal_mode = DELETE");
@@ -416,11 +445,26 @@ export interface SqliteVerifyReport {
 export async function verifySqliteMetadata(dir: string): Promise<SqliteVerifyReport> {
   const file = join(dir, SQLITE_METADATA_FILE);
   if (!(await exists(file))) throw new OrcaError("STORE_FORMAT", `${file} does not exist`, { reason: "MISSING", file });
-  const stores = sqliteStores(dir);
-  const db = (stores.requests as unknown as { collection: SqliteCollection<never> }).collection.db;
+  // Read-only all the way down: a read-only connection (no migration, no journal-mode change,
+  // nothing created), one read transaction for a consistent snapshot, and blobs only read.
+  const { DatabaseSync } = sqlite();
+  const db = new DatabaseSync(file, { readOnly: true });
   try {
+    const schema = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+    if (schema !== SQLITE_MIGRATIONS.length)
+      throw new OrcaError(
+        "STORE_FORMAT",
+        `${file} has SQLite metadata schema ${schema}; this build verifies ${SQLITE_MIGRATIONS.length}`,
+        {
+          reason: schema > SQLITE_MIGRATIONS.length ? "NEWER" : "OLDER",
+          file,
+          schema,
+          supported: SQLITE_MIGRATIONS.length,
+        },
+      );
     const problems: SqliteVerifyReport["problems"] = [];
-    const scan = await db.read(() => {
+    db.exec("BEGIN");
+    const scan = (() => {
       const all = <R>(sql: string) => db.prepare(sql).all() as unknown as R[];
       const one = <R>(sql: string) => db.prepare(sql).get() as unknown as R;
       return {
@@ -443,7 +487,8 @@ export async function verifySqliteMetadata(dir: string): Promise<SqliteVerifyRep
         eventBodies: all<{ body: string }>("SELECT body FROM events"),
         planEventBodies: all<{ body: string }>("SELECT body FROM plan_events"),
       };
-    });
+    })();
+    db.exec("COMMIT");
     if (scan.integrity.join() !== "ok") problems.push({ kind: "integrity", detail: { messages: scan.integrity } });
     for (const g of scan.gaps) problems.push({ kind: "eventSequenceGap", detail: { runId: g.run_id, ...g } });
     for (const g of scan.planGaps) problems.push({ kind: "planSequenceGap", detail: { planId: g.plan_id, ...g } });
@@ -478,7 +523,16 @@ export async function verifySqliteMetadata(dir: string): Promise<SqliteVerifyRep
       }
       if (sha256(bytes) !== artifact.contentHash) problems.push({ kind: "artifactBlobMismatch", detail });
     }
-    const unreferencedBlobs = await (stores.artifacts as FileArtifactStore).unreferencedBlobs();
+    const referenced = new Set(
+      scan.artifacts.map((row) => (JSON.parse(row.body) as { contentHash?: string }).contentHash),
+    );
+    let names: string[] = [];
+    try {
+      names = await readdir(blobs);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const unreferencedBlobs = names.filter((n) => /^[a-f0-9]{64}$/.test(n) && !referenced.has(n)).sort();
     return {
       ok: problems.length === 0,
       integrity: scan.integrity,
@@ -493,6 +547,6 @@ export async function verifySqliteMetadata(dir: string): Promise<SqliteVerifyRep
       unreferencedBlobs,
     };
   } finally {
-    stores.close?.();
+    db.close();
   }
 }
