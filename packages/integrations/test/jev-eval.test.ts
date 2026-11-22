@@ -213,8 +213,22 @@ describe("custom:jev-eval", () => {
     });
   });
 
-  it("retries a retryable provider failure within maxAttempts and gives up on a non-retryable one", async () => {
+  it("repeats a sent request only when the node is marked repeatable (#357)", async () => {
     const yaml = ROUTED.replace("model: jev-1.13.0", "model: jev-1.13.0\n    maxAttempts: 2");
+    const flaky = new ScriptedJevProvider(
+      { throws: new JevProviderError("HTTP 429", true, 429) },
+      { body: GOOD_ANSWERS },
+    );
+    const state = await jevHarness(yaml, { provider: flaky }).run("routed", { acceptance: ACCEPTANCE });
+    expect(state.run.status).toBe("failed");
+    expect(state.run.error).toMatchObject({ code: "JEV_PROVIDER" });
+    expect(flaky.requests).toHaveLength(1);
+    expect(stepFor(state, "jev")).toMatchObject({ attempt: 1 });
+    expect(stepFor(state, "jev")?.noEffect).toBeUndefined();
+  });
+
+  it("retries a retryable provider failure within maxAttempts and gives up on a non-retryable one", async () => {
+    const yaml = ROUTED.replace("model: jev-1.13.0", "model: jev-1.13.0\n    maxAttempts: 2\n    repeatable: true");
     const flaky = new ScriptedJevProvider(
       { throws: new JevProviderError("HTTP 429", true, 429) },
       { body: GOOD_ANSWERS },

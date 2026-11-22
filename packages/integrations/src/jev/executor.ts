@@ -64,7 +64,14 @@ export interface JevEvaluationData {
   error?: { code: string; message: string; details?: Record<string, unknown> };
 }
 
-type Failure = { code: string; message: string; retryable: boolean; details?: Record<string, unknown> };
+type Failure = {
+  code: string;
+  message: string;
+  retryable: boolean;
+  details?: Record<string, unknown>;
+  /** The request reached the provider, or may have: the attempt's outcome is not known to be nothing. */
+  sent?: true;
+};
 
 class EvalFailure extends Error {
   constructor(readonly failure: Failure) {
@@ -73,8 +80,14 @@ class EvalFailure extends Error {
 }
 
 /** A function declaration, not an arrow: control flow only narrows after a call whose target is explicitly typed `never`. */
-function fail(code: string, message: string, retryable: boolean, details?: Record<string, unknown>): never {
-  throw new EvalFailure({ code, message, retryable, ...(details ? { details } : {}) });
+function fail(
+  code: string,
+  message: string,
+  retryable: boolean,
+  details?: Record<string, unknown>,
+  sent?: true,
+): never {
+  throw new EvalFailure({ code, message, retryable, ...(details ? { details } : {}), ...(sent ? { sent } : {}) });
 }
 
 function inputAlias(ref: JevEvalNode["inputs"][number], resolved: CoreResolved | undefined, i: number): string {
@@ -215,11 +228,11 @@ export function jevEvalExecutor(options: JevEvalOptions = {}): NodeExecutor {
       raw = await provider.evaluate({ state, model, questions: node.questions }, { signal });
     } catch (e) {
       if (ctx.signal.aborted) throw e;
-      if (timeout.aborted) fail("STEP_TIMEOUT", `JEV did not answer within ${node.timeoutMs}ms`, true);
+      if (timeout.aborted) fail("STEP_TIMEOUT", `JEV did not answer within ${node.timeoutMs}ms`, true, undefined, true);
       if (e instanceof JevProviderError)
-        fail("JEV_PROVIDER", e.message, e.retryable, e.status !== undefined ? { status: e.status } : undefined);
+        fail("JEV_PROVIDER", e.message, e.retryable, e.status !== undefined ? { status: e.status } : undefined, true);
       const err = describeError(e);
-      return fail(err.code === "INTERNAL" ? "JEV_PROVIDER" : err.code, err.message, true, err.details);
+      return fail(err.code === "INTERNAL" ? "JEV_PROVIDER" : err.code, err.message, true, err.details, true);
     }
 
     const checked = validateJevResponse(node.questions, raw);
@@ -305,11 +318,11 @@ export function jevEvalExecutor(options: JevEvalOptions = {}): NodeExecutor {
         return await record(ctx, node, await evaluate(ctx, node, requested));
       } catch (e) {
         if (!(e instanceof EvalFailure)) throw e;
-        const { code, message, retryable, details } = e.failure;
-        // An evaluation only reads artifacts and asks a model: nothing outside ORCA changed, so the
-        // retry budget may repeat it (#357).
+        const { code, message, retryable, details, sent } = e.failure;
+        // Before the request is sent nothing outside ORCA happened; after it, the attempt is
+        // repeated only when the node says asking again is safe (#357).
         if (node.onError === "fail" || code === "WORKFLOW_INVALID")
-          return failed(code, message, details, retryable, "none");
+          return failed(code, message, details, retryable, !sent || node.repeatable ? "none" : undefined);
         ctx.logger.warn("jev evaluation failed; recording the failure as the node asked", { code, message });
         return record(ctx, node, {
           status: "failed",

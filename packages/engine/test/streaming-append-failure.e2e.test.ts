@@ -45,6 +45,8 @@ function refuseFirstUpdate(events: EventStore): { store: EventStore; refused: ()
       }
       return events.append(input);
     },
+    // Agent turns are synced before their prompt is sent (#357).
+    synchronizeEvent: (event) => events.synchronizeEvent!(event),
     read: (runId) => events.read(runId),
     readTypes: (runId, types) => events.readTypes(runId, types),
     readRange: (runId, range) => events.readRange(runId, range),

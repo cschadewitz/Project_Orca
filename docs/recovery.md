@@ -109,11 +109,15 @@ The retry budget follows the same rule. A failed attempt is retried automaticall
   before each prompt is sent, on its own session or the run's pooled one. Once one is recorded
   the step is `dispatched` and its failure is never retried automatically: it fails the run, and
   the step is uncertain until reviewed. A failure before the first prompt (the agent did not
-  start, the session did not open) is retried as before.
+  start, the session did not open) is retried as before. The record is synced to durable
+  storage (`synchronizeEvent`, an fsync on the file and SQLite stores) before the prompt goes
+  out, so a crash or power loss cannot lose the evidence of a prompt that was sent; a store that
+  cannot sync it refuses the turn (`NOT_SUPPORTED`) and no prompt is sent.
 - Any other node that can act outside ORCA (a plugin's custom node) is retried only when its
   executor states the attempt did nothing outside, `failed(code, message, details, true,
   "none")`; `step.failed` records that as `effect: "none"`. Without it the attempt is assumed to
-  have acted.
+  have acted. `custom:jev-eval` states it for failures before its request is sent, and after
+  that only when the node sets `repeatable: true`.
 - Steps that act only inside ORCA (gates, `set`, containers) are retried as before.
 
 A step paused on purpose is different: an agent that asked a person, or a container waiting on a

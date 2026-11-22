@@ -9,6 +9,7 @@ import {
   type EventJournalCorrelation,
   HumanInputLiveIdentitySchema,
   type OrcaEvent,
+  EffectReviewDecisionSchema,
   type OrcaEventInput,
 } from "@orca/core";
 import type { WorkflowVersionStore } from "./workflow-store.js";
@@ -323,6 +324,10 @@ export class ProtectedEventStore implements EventStore {
         publicPayload.answer = input.payload.answer;
     }
     if (input.type === "branch.skipped") publicPayload.reason = input.payload.reason;
+    // Side-effect evidence and decisions (#357) are schema-limited enum tags; the note stays redacted.
+    if (input.type === "step.failed" && input.payload.effect === "none") publicPayload.effect = "none";
+    if (input.type === "step.effect.reviewed")
+      publicPayload.decision = EffectReviewDecisionSchema.parse(input.payload.decision);
     if (input.type === "step.completed") {
       const result = publicPayload.result as Record<string, unknown>;
       if (input.payload.result.outcome) result.outcome = input.payload.result.outcome;
