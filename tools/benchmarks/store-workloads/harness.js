@@ -20,12 +20,14 @@ export async function runBenchmark({
   repeat = 3,
   scratch,
   workloads = Object.keys(WORKLOADS),
+  /** Backends beyond backends.js, by name; the self-test injects faulty ones through this. */
+  extraBackends = {},
   log = () => {},
 }) {
   const scale = SCALES[scaleName];
   if (!scale) throw new Error(`unknown scale ${scaleName}`);
   for (const w of workloads) if (!WORKLOADS[w]) throw new Error(`unknown workload ${w}`);
-  const registry = allBackends(api);
+  const registry = { ...allBackends(api), ...extraBackends };
   await mkdir(scratch, { recursive: true });
   const report = { schemaVersion: REPORT_SCHEMA_VERSION, scale: scaleName, shape: scale, seed, repeat, results: [] };
   for (const name of backends) {

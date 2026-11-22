@@ -198,38 +198,57 @@ export async function paginatedHistory({ backend, handle, scale, repeat }) {
 
 // ---------------------------------------------------- 3. concurrent writes
 
+/** Attempts per CAS increment before it counts as failed; enough that 16 contending writers all finish. */
+export const CAS_ATTEMPTS = 64;
+
 export async function concurrentMetadataWrites({ api, handle, scale, seed }) {
-  const name = "bench-metadata";
   const body = "x".repeat(200);
-  const seedStore = handle.collection(name);
   const hot = Array.from({ length: scale.hotDocs }, (_, i) => `hot_${i}`);
-  await seedStore.putMany([
-    ...Array.from({ length: scale.collectionDocs }, (_, i) => ({ id: `doc_${i}`, owner: "seed", n: 0, body })),
-    ...hot.map((id) => ({ id, owner: "hot", n: 0, body })),
-  ]);
   const levels = [];
   for (const writers of scale.concurrency) {
+    // Every level starts from an identically seeded collection of its own, so earlier levels'
+    // rows never grow the file a later level writes to.
+    const name = `bench-metadata-${writers}`;
+    await handle
+      .collection(name)
+      .putMany([
+        ...Array.from({ length: scale.collectionDocs }, (_, i) => ({ id: `doc_${i}`, owner: "seed", n: 0, body })),
+        ...hot.map((id) => ({ id, owner: "hot", n: 0, body })),
+      ]);
+    // Each writer's operations are fixed before timing starts: which hot key each CAS targets
+    // does not depend on how the writers happen to interleave.
     const random = prng(seed ^ writers);
-    const before = await sumHot(api, seedStore, hot);
+    const schedules = Array.from({ length: writers }, (_, w) =>
+      Array.from({ length: scale.opsPerWriter }, (_, i) =>
+        i % 2 === 0
+          ? { kind: "cas", id: hot[Math.floor(random() * hot.length)] }
+          : { kind: "put", id: `own_${w}_${i}`, doc: { id: `own_${w}_${i}`, owner: `w${w}`, n: i, body } },
+      ),
+    );
+    const intendedCas = schedules.flat().filter((op) => op.kind === "cas").length;
+    const intendedPuts = schedules
+      .flat()
+      .filter((op) => op.kind === "put")
+      .map((op) => op.id);
+    const before = await sumHot(api, handle.collection(name), hot);
     const latencies = [];
     let casOk = 0;
+    let putOk = 0;
     let conflicts = 0;
     let exhausted = 0;
     let errors = 0;
     const errorCodes = {};
-    const own = [];
     const start = performance.now();
     await Promise.all(
-      Array.from({ length: writers }, async (_, w) => {
+      schedules.map(async (ops) => {
         const docs = api.store.asVersionedDocumentStore(handle.collection(name));
-        for (let i = 0; i < scale.opsPerWriter; i++) {
+        for (const op of ops) {
           const t = performance.now();
           try {
-            if (i % 2 === 0) {
-              const id = hot[Math.floor(random() * hot.length)];
+            if (op.kind === "cas") {
               let done = false;
-              for (let attempt = 0; attempt < 8 && !done; attempt++) {
-                const current = await docs.getVersioned(id);
+              for (let attempt = 0; attempt < CAS_ATTEMPTS && !done; attempt++) {
+                const current = await docs.getVersioned(op.id);
                 const result = await docs.putIfVersion({ ...current.doc, n: current.doc.n + 1 }, current.version);
                 if (result.ok) done = true;
                 else conflicts++;
@@ -237,9 +256,8 @@ export async function concurrentMetadataWrites({ api, handle, scale, seed }) {
               if (done) casOk++;
               else exhausted++;
             } else {
-              const id = `own_${writers}_${w}_${i}`;
-              await docs.put({ id, owner: `w${w}`, n: i, body });
-              own.push(id);
+              await docs.put(op.doc);
+              putOk++;
             }
           } catch (error) {
             errors++;
@@ -253,19 +271,31 @@ export async function concurrentMetadataWrites({ api, handle, scale, seed }) {
     const wallMs = performance.now() - start;
     const reader = api.store.asVersionedDocumentStore(handle.collection(name));
     const after = await sumHot(api, reader, hot);
-    const present = (await reader.list((d) => own.includes(d.id))).length;
+    const present = new Set((await reader.list((d) => d.id.startsWith("own_"))).map((d) => d.id));
+    const attempted = intendedCas + intendedPuts.length;
+    const succeeded = casOk + putOk;
     levels.push({
       writers,
-      ops: writers * scale.opsPerWriter,
+      attemptedOps: attempted,
+      succeededOps: succeeded,
       wallMs: round(wallMs),
-      opsPerSecond: round((writers * scale.opsPerWriter) / (wallMs / 1000)),
+      attemptedOpsPerSecond: round(attempted / (wallMs / 1000)),
+      // Only committed operations count as throughput: a backend that commits nothing scores zero.
+      succeededOpsPerSecond: round(succeeded / (wallMs / 1000)),
       latency: summarize(latencies),
-      cas: { succeeded: casOk, conflicts, retriesExhausted: exhausted },
+      cas: {
+        intended: intendedCas,
+        succeeded: casOk,
+        conflicts,
+        retriesExhausted: exhausted,
+        attemptLimit: CAS_ATTEMPTS,
+      },
       errors,
       ...(errors ? { errorCodes } : {}),
       checks: {
-        noLostCasIncrement: after - before === casOk,
-        everyUnconditionalWritePresent: present === own.length,
+        everyIntendedOperationCommitted: succeeded === attempted && errors === 0 && exhausted === 0,
+        hotCountersRoseByIntendedIncrements: after - before === intendedCas,
+        everyIntendedUnconditionalWritePresent: intendedPuts.every((id) => present.has(id)),
       },
     });
   }

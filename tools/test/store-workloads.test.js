@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import * as core from "@orca/core";
 import * as store from "@orca/store";
+import { backends } from "../benchmarks/store-workloads/backends.js";
 import { allChecks, REPORT_SCHEMA_VERSION, runBenchmark } from "../benchmarks/store-workloads/harness.js";
 import { SCALES } from "../benchmarks/store-workloads/scales.js";
 import { prng, summarize } from "../benchmarks/store-workloads/stats.js";
@@ -43,6 +44,97 @@ describe("store workload benchmark", () => {
     const file = report.results.find((r) => r.backend === "file");
     expect(file.storeBytes).toBeGreaterThan(0);
     expect(file.workloads.dependencyTraversal.cold.n).toBe(SCALES.smoke.traversalSamples);
+  });
+
+  it("fails the write workload for a backend that does not commit, and counts only committed throughput", async () => {
+    const real = backends({ store, core }).memory;
+    /** Wrap the metadata collections; everything else is the real memory backend. */
+    const faulty = (name, wrap) => ({
+      name,
+      durable: false,
+      async create(dir) {
+        const inner = await real.create(dir);
+        return {
+          ...inner,
+          collection: (n) => (n.startsWith("bench-metadata-") ? wrap(inner.collection(n)) : inner.collection(n)),
+        };
+      },
+    });
+    // Acknowledges every write and keeps none of them: it must not look correct.
+    const silent = faulty("silent", (c) => ({
+      ...c,
+      getVersioned: c.getVersioned.bind(c),
+      putMany: c.putMany.bind(c),
+      list: c.list.bind(c),
+      query: c.query.bind(c),
+      deleteIfVersion: c.deleteIfVersion.bind(c),
+      get: c.get.bind(c),
+      delete: c.delete.bind(c),
+      put: async () => {},
+      putIfVersion: async () => ({ ok: true, version: "v" }),
+    }));
+    // Every write fails.
+    const failing = faulty("failing", (c) => ({
+      ...c,
+      getVersioned: c.getVersioned.bind(c),
+      putMany: c.putMany.bind(c),
+      list: c.list.bind(c),
+      query: c.query.bind(c),
+      deleteIfVersion: c.deleteIfVersion.bind(c),
+      get: c.get.bind(c),
+      delete: c.delete.bind(c),
+      put: async () => {
+        throw Object.assign(new Error("disk full"), { code: "STORE_WRITE" });
+      },
+      putIfVersion: async () => ({ ok: false, current: undefined }),
+    }));
+    const report = await runBenchmark({
+      api: { store, core },
+      scale: "smoke",
+      backends: ["silent", "failing"],
+      workloads: ["concurrentMetadataWrites"],
+      extraBackends: { silent, failing },
+      repeat: 1,
+      scratch,
+    });
+    const [silentResult, failingResult] = report.results;
+    expect(silentResult.checksPassed).toBe(false);
+    for (const level of silentResult.workloads.concurrentMetadataWrites.levels) {
+      expect(level.checks.hotCountersRoseByIntendedIncrements).toBe(false);
+      expect(level.checks.everyIntendedUnconditionalWritePresent).toBe(false);
+    }
+    expect(failingResult.checksPassed).toBe(false);
+    for (const level of failingResult.workloads.concurrentMetadataWrites.levels) {
+      expect(level.succeededOps).toBe(0);
+      expect(level.succeededOpsPerSecond).toBe(0);
+      expect(level.attemptedOpsPerSecond).toBeGreaterThan(0);
+      expect(level.errorCodes).toEqual({ STORE_WRITE: level.attemptedOps / 2 });
+      expect(level.cas.retriesExhausted).toBe(level.cas.intended);
+      expect(level.checks.everyIntendedOperationCommitted).toBe(false);
+    }
+  });
+
+  it("gives the same operation plan at every writer level on every run", async () => {
+    const first = await runBenchmark({
+      api: { store, core },
+      scale: "smoke",
+      backends: ["file"],
+      workloads: ["concurrentMetadataWrites"],
+      repeat: 1,
+      scratch,
+    });
+    const second = await runBenchmark({
+      api: { store, core },
+      scale: "smoke",
+      backends: ["file"],
+      workloads: ["concurrentMetadataWrites"],
+      repeat: 1,
+      scratch,
+    });
+    const shape = (r) =>
+      r.results[0].workloads.concurrentMetadataWrites.levels.map((l) => [l.writers, l.attemptedOps, l.cas.intended]);
+    expect(shape(first)).toEqual(shape(second));
+    expect(first.results[0].checksPassed).toBe(true);
   });
 
   it("refuses unknown scales, backends and workloads", async () => {
