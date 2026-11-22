@@ -151,7 +151,7 @@ it("connects through a saved SSH profile and confirms removal on its row (#874)"
   const profiles = {
     list: vi.fn(async () => [view]),
     save: vi.fn(),
-    remove: vi.fn(async () => ({ ok: true as const, value: null })),
+    remove: vi.fn(async () => ({ ok: true as const, value: { revoke: "not-reached" as const } })),
     importCredential: vi.fn(),
     forgetHostKey: vi.fn(),
   };
@@ -170,6 +170,63 @@ it("connects through a saved SSH profile and confirms removal on its row (#874)"
   expect(document.activeElement?.textContent).toBe("Keep");
   fireEvent.click(screen.getByText("✕ Remove profile"));
   await waitFor(() => expect(profiles.remove).toHaveBeenCalledWith("lab"));
+  // The server could not be reached: its credential stays valid there, and the person is told.
+  await screen.findByText(/could not be reached, so its credential stays valid there/);
+  h.dispose();
+});
+
+it("saves a profile's sign-in settings and says when it signs in (#875)", async () => {
+  stubMatchMedia(1200);
+  const h = harness();
+  const r = rig();
+  const saved = {
+    id: "lab",
+    name: "Lab",
+    destination: "casey@lab",
+    remotePort: 6722,
+    serverCommand: "/opt/orca/bin/orca",
+    readOnly: true as const,
+    hasCredential: false,
+    hostKeyPinned: false,
+  };
+  let views: (typeof saved)[] = [];
+  const profiles = {
+    list: vi.fn(async () => views),
+    save: vi.fn(async () => {
+      views = [saved];
+      return { ok: true as const, value: saved };
+    }),
+    remove: vi.fn(),
+    importCredential: vi.fn(),
+    forgetHostKey: vi.fn(),
+  };
+  render(
+    <h.Providers>
+      <ConnectionDialog bridge={{ ...r.bridge, profiles }} target={r.target} close={() => {}} />
+    </h.Providers>,
+  );
+  fireEvent.click(await screen.findByText("Add profile…"));
+  // The editor's inputs in order: name, server, ssh port, key, jump, jump port, daemon port,
+  // server command, workspace config, then the read-only box.
+  const inputs = [...screen.getByRole("group", { name: "New profile" }).querySelectorAll("input")];
+  const type = (index: number, value: string) => fireEvent.change(inputs[index]!, { target: { value } });
+  type(0, "Lab");
+  type(1, "casey@lab");
+  type(7, "/opt/orca/bin/orca");
+  expect(inputs[9]!.type).toBe("checkbox");
+  fireEvent.click(inputs[9]!);
+  fireEvent.click(screen.getByText("Save profile"));
+  await waitFor(() =>
+    expect(profiles.save).toHaveBeenCalledWith({
+      name: "Lab",
+      destination: "casey@lab",
+      serverCommand: "/opt/orca/bin/orca",
+      readOnly: true,
+    }),
+  );
+  // No credential yet is not a blocker: Connect signs in.
+  await screen.findByText("Signs in on first connect");
+  expect((screen.getAllByText("Connect")[0] as HTMLButtonElement).disabled).toBe(false);
   h.dispose();
 });
 

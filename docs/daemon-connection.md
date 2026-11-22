@@ -63,11 +63,13 @@ The default way to reach a daemon on another machine is a saved **SSH profile**:
 app runs the tunnel itself and the daemon stays bound to the server's loopback. In
 the connection dialog, **Add profile…** takes a name, `user@host`, an optional SSH
 port, an optional private key path, an optional jump host and the daemon's port on
-the server (default 6722). These typed fields are all a profile holds: there are no
-free-form ssh options, and no ssh config file (yours or the system's) is read.
-**Import credential…** opens a file picker in the main process and seals the chosen
-daemon credential (for example one printed by `orca auth issue … --preset client` on
-the server) into the profile's slot in the OS keychain; the token never reaches the
+the server (default 6722), plus the sign-in settings below. These typed fields are all
+a profile holds: there are no free-form ssh options, and no ssh config file (yours or
+the system's) is read. **Connect** signs in on its own the first time (see
+[Automatic sign-in](#automatic-sign-in-875)). **Import credential…** is the manual
+alternative: it opens a file picker in the main process and seals the chosen daemon
+credential (for example one printed by `orca auth issue … --preset client` on the
+server) into the profile's slot in the OS keychain; the token never reaches the
 renderer, the preferences file or a log. **Connect** then probes the daemon through
 the tunnel with the same authenticated `hello`, draft check and refusal rules as a
 URL, and a refused probe closes the candidate tunnel and leaves the previous
@@ -108,8 +110,9 @@ host key** for a server that was deliberately rebuilt), failed SSH authenticatio
 unreachable server, a local address that could not be held, a timeout, and an
 SSH connection that works with no daemon listening on the server (a Windows OpenSSH
 server does not refuse that channel, so there it shows as a timeout). Removing a profile
-deletes its keychain credential and pinned key. Editing a profile to point at a
-different server or daemon port forgets both.
+deletes its keychain credential and pinned key, after revoking the credential on the
+server when it can. Editing a profile to point at a different server or daemon port
+forgets both.
 
 Only a profile that was never pinned trusts the key its server presents on the first
 connect. Once a connect has pinned a key, the app records the enrollment beside the
@@ -131,6 +134,54 @@ precedence: an environment override still pins the launch and disables profile
 switching. The tunnel and the
 credential slots live in `@orca/protocol/remote-access`, which the daemon can import
 for delegation (#883). Windows uses the built-in OpenSSH client (`ssh.exe`).
+
+### Automatic sign-in (#875)
+
+A profile with no credential gets one on its first connect, with no token to copy.
+Once the tunnel's ssh has authenticated the server against its pin, the app runs
+ORCA's own command line there over the same kind of pinned, config-free ssh:
+
+```
+<server command> auth issue desktop-<this computer> --preset client|viewer \
+  --expires-at <now + 90 days> --label orca-app-<profile> [--config <workspace config>] --json
+```
+
+The token goes from that command's output straight into the profile's keychain slot. It
+is never printed, logged or written anywhere else; beside the slot, a small nonsecret
+record (`credentials/<profile>.json`) keeps the credential's id and expiry. Each
+command word is limited to letters, digits and `. _ : / \ -`, so no shell on the
+server (sh, cmd or PowerShell) reads anything into it.
+
+- **Server command** is ORCA's CLI on the server: `orca` on the SSH user's `PATH` by
+  default, or a full path such as a managed install's wrapper.
+- **Workspace config** is the daemon's config file on the server, passed as `--config`.
+  Without it the CLI uses the SSH user's default (a config found from the home
+  directory, or the home directory itself), which must be the daemon's workspace.
+- **Read only** issues the credential with the `viewer` preset, for profiles that only
+  watch runs and plans.
+
+Before the credential is used, the app checks it with an authenticated `hello` over
+the tunnel. A credential the daemon refuses gets one replacement (an expired or revoked
+one, say); if the daemon refuses a credential that was just issued, the CLI issued it
+for another workspace than the daemon's on that port, so the app revokes it again and
+asks for the profile's workspace config. Concurrent connects of one profile share a
+single setup, so the server issues one credential.
+
+While connected, the app checks every 12 hours and renews a credential with
+`auth rotate` once less than 30 days are left; a profile that is not connected renews
+on its next connect. Rotation keeps the grants, and the server revokes the old secret.
+Removing a profile first revokes its credential on the server (`auth revoke`) through
+its pinned host key; if the server cannot be reached, the profile is still removed and
+the dialog says the credential stays valid there until it expires. Changing the server
+command, workspace config or read-only setting replaces the credential on the next
+connect and revokes the old one. An imported credential is kept as it is and never
+renewed or revoked by the app.
+
+Failures name what to do: ORCA not found on the server under the server command, not
+allowed to run it, no workspace there (or a workspace config path with no file), another
+CLI failure (run `orca auth list` on the server), the daemon on the port belonging to
+another workspace, and a refused credential that could not be replaced. Server output is
+never shown or logged.
 
 ### Choosing a remote access path
 

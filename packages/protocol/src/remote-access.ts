@@ -49,6 +49,18 @@ const DESTINATION = new RegExp(`^(?:${USER}@)?${HOST}$`);
 /** An absolute key path, as ssh's `-i` takes it. No `~` (ORCA does not expand it), no quotes or newlines. */
 const KEY_PATH = /^(?:\/|[A-Za-z]:[\\/])[^"\r\n\0]{1,1023}$/;
 
+/**
+ * One word of a command ORCA runs on the server. ssh hands the remote shell the words joined
+ * by spaces, so each is restricted to characters no shell (sh, cmd, PowerShell) treats
+ * specially: no quoting is needed, and none can be injected. (A backslash is for Windows
+ * paths; on an sh server it can only escape one of these same safe characters.)
+ */
+const REMOTE_WORD = /^[A-Za-z0-9._:/\\-]{1,1024}$/;
+/** An absolute path on the server, as one remote word. */
+const SERVER_PATH = /^(?:\/|[A-Za-z]:[\\/])[A-Za-z0-9._\\/-]{0,1023}$/;
+/** The server's ORCA CLI: a command name on its PATH, or an absolute path such as a managed wrapper. */
+const SERVER_COMMAND = /^(?:[A-Za-z0-9._-]{1,64}|(?:\/|[A-Za-z]:[\\/])[A-Za-z0-9._\\/-]{0,1023})$/;
+
 const Port = z.number().int().min(1).max(65535);
 /**
  * One SSH hop, as typed fields only. There is no free-form ssh argument and no ssh config
@@ -71,6 +83,16 @@ export const ConnectionProfileSchema = z
     jump: z.object(HopShape).strict().optional(),
     /** The daemon's port on the remote loopback. */
     remotePort: Port.default(DEFAULT_REMOTE_DAEMON_PORT),
+    /**
+     * The server's ORCA CLI, which issues and renews this profile's credential (#875): a
+     * command on the server's PATH or an absolute path, such as a managed install's wrapper.
+     * Default `orca`.
+     */
+    serverCommand: z.string().regex(SERVER_COMMAND, "Enter a command name or a full path without spaces").optional(),
+    /** The daemon's workspace config on the server, passed as `--config`. Absent: the CLI's own default. */
+    serverConfig: z.string().regex(SERVER_PATH, "Enter the config file's full path, without spaces").optional(),
+    /** Observe only: the profile's credential is issued with the read-only `viewer` preset. */
+    readOnly: z.boolean().optional(),
   })
   .strict();
 export type ConnectionProfile = z.infer<typeof ConnectionProfileSchema>;
@@ -209,6 +231,16 @@ const PERMANENT: ReadonlySet<TunnelRefusalCode> = new Set([
   "auth-failed",
 ]);
 const STDERR_TAIL = 16 * 1024;
+/** The most a remote command may print: ORCA's CLI prints one small JSON record. */
+const REMOTE_OUTPUT_LIMIT = 64 * 1024;
+
+/** What a command run on the server returned (see `SshTunnel.run`). */
+export interface RemoteResult {
+  code: number;
+  stdout: string;
+  /** The command's own error lines, without ssh's: to classify, never to show or log. */
+  serverLines: string[];
+}
 
 /**
  * Where a pin file stands. `none`: never enrolled, so the next connect may pin whatever the
@@ -266,6 +298,21 @@ export interface HopSpec {
   forward?: string | undefined;
   /** Or one connection's `-W <host>:<port>`, carried on stdin/stdout (the daemon). */
   stdio?: string | undefined;
+}
+
+/** Thrown before ssh starts when a remote command word could be read by a shell. */
+export class RemoteCommandRefused extends Error {
+  override readonly name = "RemoteCommandRefused";
+}
+
+/** The argv for running `command` on the hop's server instead of forwarding (see `hopArgs`). */
+export function commandArgs(hop: HopSpec, command: readonly string[]): string[] {
+  if (!command.length) throw new RemoteCommandRefused("No remote command");
+  for (const word of command)
+    if (!REMOTE_WORD.test(word)) throw new RemoteCommandRefused("A remote command word has unsupported characters");
+  const args = hopArgs({ ...hop, stdio: "-" });
+  const w = args.indexOf("-W");
+  return [...args.slice(0, w), ...args.slice(w + 2), ...command];
 }
 
 /** A profile's ssh processes: the optional persistent jump, and the per-connection daemon hop. */
@@ -443,6 +490,8 @@ export class SshTunnel {
   private listener: Server | undefined;
   private readonly accepted = new Set<Socket>();
   private readonly streams = new Set<Stream>();
+  /** Commands running on the server (`exec`), stopped with the tunnel. */
+  private readonly commands = new Set<ChildProcess>();
   private port: number | undefined;
   private closed = false;
   private restartTimer: NodeJS.Timeout | undefined;
@@ -487,11 +536,8 @@ export class SshTunnel {
     if (this.listener) throw new Error("Tunnel already open");
     this.setState({ phase: "starting" });
     try {
-      const { profile, knownHostsFile } = this.options;
-      mkdirSync(dirname(knownHostsFile), { recursive: true });
       this.port = await this.listen();
-      this.hops = tunnelHops(profile, knownHostsFile, profile.jump ? await ephemeralLoopbackPort() : undefined);
-      if (this.hops.jump) await this.launchJump();
+      await this.prepare();
       await this.probe();
       this.attempt = 0;
       this.setState({ phase: "open", localPort: this.port });
@@ -502,6 +548,105 @@ export class SshTunnel {
       throw error instanceof TunnelRefusal ? error : new TunnelRefusal(refusal);
     }
     return this.url!;
+  }
+
+  /**
+   * Run one command on the profile's server (behind its jump host, if any) and collect its
+   * output: ORCA's own CLI there, for credential setup (#875). Opens nothing that outlives
+   * the call; the server is authenticated against its pin exactly as for a connection, and
+   * the command's words must pass `REMOTE_WORD`. ssh's own failures reject with a
+   * `TunnelRefusal`; a command that ran resolves with its exit code, standard output, and
+   * the server's error lines (to classify, never to show or log).
+   */
+  static run(options: SshTunnelOptions, command: readonly string[], timeoutMs = 60_000): Promise<RemoteResult> {
+    return new SshTunnel(options).runOnce(command, timeoutMs);
+  }
+
+  /** `run` on a tunnel that was never opened: it is closed when the command ends. */
+  async runOnce(command: readonly string[], timeoutMs = 60_000): Promise<RemoteResult> {
+    if (this.listener || this.hops) throw new Error("Tunnel already in use");
+    try {
+      await this.prepare();
+      return await this.exec(command, timeoutMs);
+    } finally {
+      await this.close();
+    }
+  }
+
+  /** Run a command on the server of an open tunnel (see `run`). */
+  async exec(command: readonly string[], timeoutMs = 60_000): Promise<RemoteResult> {
+    if (this.closed || !this.hops) throw new TunnelRefusal("closed");
+    if (!this.jumpUp()) throw new TunnelRefusal("unreachable");
+    const hop = this.hops.daemon;
+    if (pinState(hop.knownHostsFile) === "broken") throw new TunnelRefusal("host-key-missing");
+    const args = commandArgs(hop, command);
+    let child: ChildProcess;
+    try {
+      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args);
+    } catch {
+      throw new TunnelRefusal("ssh-missing");
+    }
+    this.commands.add(child);
+    child.once("exit", () => this.commands.delete(child));
+    return new Promise<RemoteResult>((resolve, reject) => {
+      let authenticated = false;
+      let failed = false;
+      let tail = "";
+      const serverLines: string[] = [];
+      const stdout: Buffer[] = [];
+      let size = 0;
+      const timer = setTimeout(() => {
+        failed = true;
+        reject(new TunnelRefusal("timeout"));
+        child.kill();
+      }, timeoutMs);
+      child.stdout?.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size <= REMOTE_OUTPUT_LIMIT) stdout.push(chunk);
+      });
+      watchLines(child, (line) => {
+        tail = (tail + line + "\n").slice(-STDERR_TAIL);
+        if (authenticated) {
+          // After authentication, what is not ssh's own debug output is the command's.
+          if (!/^debug\d:/.test(line) && serverLines.length < 64) serverLines.push(line.slice(0, 512));
+          return;
+        }
+        const key = /Server host key: \S+ (SHA256:[A-Za-z0-9+/=]+)/.exec(line);
+        if (key) this.fingerprint = key[1];
+        if (/^debug1: Entering interactive session/.test(line)) {
+          try {
+            this.enroll(hop.knownHostsFile);
+          } catch (error) {
+            failed = true;
+            clearTimeout(timer);
+            reject(error instanceof Error ? error : new TunnelRefusal("pin-write-failed"));
+            child.kill();
+            return;
+          }
+          authenticated = true;
+        }
+      });
+      child.once("error", (error: NodeJS.ErrnoException) => {
+        if (failed) return;
+        failed = true;
+        clearTimeout(timer);
+        reject(new TunnelRefusal(error.code === "ENOENT" ? "ssh-missing" : "ssh-failed"));
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        if (failed) return;
+        if (!authenticated) {
+          reject(new TunnelRefusal(classifySshFailure(tail)));
+          return;
+        }
+        if (size > REMOTE_OUTPUT_LIMIT) {
+          reject(new TunnelRefusal("ssh-failed"));
+          return;
+        }
+        resolve({ code: code ?? 255, stdout: Buffer.concat(stdout).toString("utf8"), serverLines });
+      });
+      child.stdin?.end();
+    });
   }
 
   /**
@@ -536,6 +681,15 @@ export class SshTunnel {
     this.setState({ phase: "closed" });
   }
 
+  /** Work out the hops and start the jump host, if any: what every stream and command needs. */
+  private async prepare(): Promise<void> {
+    if (this.closed) throw new TunnelRefusal("closed");
+    const { profile, knownHostsFile } = this.options;
+    mkdirSync(dirname(knownHostsFile), { recursive: true });
+    this.hops = tunnelHops(profile, knownHostsFile, profile.jump ? await ephemeralLoopbackPort() : undefined);
+    if (this.hops.jump) await this.launchJump();
+  }
+
   private async shutdown(): Promise<void> {
     this.closed = true;
     if (this.restartTimer) clearTimeout(this.restartTimer);
@@ -550,8 +704,11 @@ export class SshTunnel {
     this.accepted.clear();
     const listener = this.listener;
     this.listener = undefined;
+    const commands = [...this.commands];
+    this.commands.clear();
     await Promise.all([
       ...streams.map((stream) => stop(stream.child)),
+      ...commands.map(stop),
       ...(jump ? jump.children.map(stop) : []),
       listener ? new Promise<void>((resolve) => listener.close(() => resolve())) : undefined,
     ]);

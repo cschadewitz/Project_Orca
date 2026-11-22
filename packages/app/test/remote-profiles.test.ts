@@ -8,6 +8,7 @@ import {
   TunnelRefusal,
   type SecretCipher,
   type SshTunnel,
+  type RemoteResult,
   type SshTunnelOptions,
   type TunnelState,
 } from "@orca/protocol/remote-access";
@@ -24,7 +25,13 @@ import { DaemonClient } from "../src/client/daemon-client.js";
 import { CredentialTransportUnavailable, type DaemonTokenSource } from "../src/client/auth.js";
 import { DaemonSubscription } from "../src/client/subscription.js";
 import { ConnectionTarget, connectionFailure } from "../src/main/connection-target.js";
-import { RemoteProfiles, type ProfileLease } from "../src/main/remote-profiles.js";
+import {
+  helloVerdict,
+  RemoteProfiles,
+  type CredentialVerdict,
+  type ProfileLease,
+  type RemoteProfilesDeps,
+} from "../src/main/remote-profiles.js";
 import { Workspace, type WorkspaceDeps } from "../src/main/workspace.js";
 import { PreferencesFile } from "../src/preferences/preferences-file.js";
 
@@ -34,6 +41,71 @@ const cipher: SecretCipher = {
   encryptString: (value) => Buffer.from(`sealed:${Buffer.from(value).toString("base64")}`),
   decryptString: (value) => Buffer.from(value.toString().replace(/^sealed:/, ""), "base64").toString(),
 };
+
+/**
+ * ORCA's command line on the server, as `orca auth issue|rotate|revoke --json` answers over
+ * ssh. `fail` makes the next commands exit as a broken install would.
+ */
+class FakeServer {
+  readonly commands: string[][] = [];
+  readonly credentials = new Map<
+    string,
+    { token: string; principal: string; expiresAt: string; revoked: boolean; label?: string }
+  >();
+  /** Tokens the daemon accepts besides live issued ones (an imported credential). */
+  readonly accepted = new Set<string>([TOKEN]);
+  fail?: { code: number; lines: string[] } | undefined;
+  /** The daemon answers from another workspace: it knows none of the issued credentials. */
+  otherWorkspace = false;
+  private next = 0;
+  run(command: readonly string[]): RemoteResult {
+    this.commands.push([...command]);
+    if (this.fail) return { code: this.fail.code, stdout: "", serverLines: this.fail.lines };
+    const words = [...command];
+    const flag = (name: string) => {
+      const at = words.indexOf(name);
+      return at < 0 ? undefined : words[at + 1];
+    };
+    const [, , sub, subject] = words;
+    const gone = { code: 1, stdout: "", serverLines: [`error: no live credential ${subject}`] };
+    if (sub === "issue" || sub === "rotate") {
+      let principal = subject!;
+      let label = flag("--label");
+      if (sub === "rotate") {
+        const old = this.credentials.get(subject!);
+        if (!old || old.revoked) return gone;
+        old.revoked = true;
+        principal = old.principal;
+        label = old.label;
+      }
+      const id = `cred${String(++this.next).padStart(8, "0")}`;
+      const token = `orca_live_${id}_secretsecretsecret`;
+      const expiresAt = flag("--expires-at")!;
+      this.credentials.set(id, { token, principal, expiresAt, revoked: false, ...(label ? { label } : {}) });
+      return {
+        code: 0,
+        stdout: JSON.stringify({ token, credential: { id, principal, expiresAt } }, null, 2),
+        serverLines: [],
+      };
+    }
+    if (sub === "revoke") {
+      const old = this.credentials.get(subject!);
+      if (!old || old.revoked)
+        return { code: 1, stdout: "", serverLines: ["error [CONFIG_INVALID]: no live credential has that id"] };
+      old.revoked = true;
+      return { code: 0, stdout: JSON.stringify({ id: subject, revoked: true }), serverLines: [] };
+    }
+    return { code: 1, stdout: "", serverLines: ["error [CONFIG_INVALID]: auth expects issue, list, rotate or revoke"] };
+  }
+  live(): string[] {
+    return [...this.credentials].filter(([, c]) => !c.revoked).map(([id]) => id);
+  }
+  verdict(token: string): CredentialVerdict {
+    if (this.accepted.has(token)) return "accepted";
+    const known = [...this.credentials.values()].find((c) => c.token === token);
+    return known && !known.revoked && !this.otherWorkspace ? "accepted" : "refused";
+  }
+}
 
 class FakeTunnel {
   closed = 0;
@@ -46,7 +118,19 @@ class FakeTunnel {
     private readonly outcome: Promise<string>,
     /** Where an authenticated stream ends up: the stand-in daemon's port. */
     private readonly daemonPort?: number,
+    private readonly server = new FakeServer(),
   ) {}
+  async exec(command: readonly string[]): Promise<RemoteResult> {
+    await Promise.resolve();
+    return this.server.run(command);
+  }
+  async runOnce(command: readonly string[]): Promise<RemoteResult> {
+    try {
+      return await this.exec(command);
+    } finally {
+      await this.close();
+    }
+  }
   connect(): Socket {
     if (this.stateNow.phase !== "open" || !this.daemonPort) throw new TunnelRefusal("closed");
     this.connects += 1;
@@ -78,19 +162,28 @@ class FakeTunnel {
   }
 }
 
-function store(outcome: () => Promise<string> = () => Promise.resolve("http://127.0.0.1:41000"), daemonPort?: number) {
+function store(
+  outcome: () => Promise<string> = () => Promise.resolve("http://127.0.0.1:41000"),
+  daemonPort?: number,
+  extra: Partial<RemoteProfilesDeps> = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "orca-profiles-"));
   const tunnels: FakeTunnel[] = [];
+  const server = new FakeServer();
   const profiles = new RemoteProfiles({
     dir,
     cipher,
+    hostname: "Casey's PC",
     tunnel: (options) => {
-      const tunnel = new FakeTunnel(options, outcome(), daemonPort);
+      const tunnel = new FakeTunnel(options, outcome(), daemonPort, server);
       tunnels.push(tunnel);
       return tunnel as unknown as SshTunnel;
     },
+    // The daemon's verdict on a credential, without a request of its own on the streams.
+    verify: async (_connect, _url, token) => server.verdict(token),
+    ...extra,
   });
-  return { dir, profiles, tunnels };
+  return { dir, profiles, tunnels, server };
 }
 
 describe("RemoteProfiles", () => {
@@ -107,14 +200,15 @@ describe("RemoteProfiles", () => {
     expect(() => profiles.importCredential("build-box", "not a token")).toThrow("not an ORCA daemon credential");
   });
 
-  it("removing a profile removes its keychain entry and pinned key", () => {
+  it("removing a profile removes its keychain entry and pinned key", async () => {
     const { dir, profiles } = store();
     profiles.save({ name: "Lab", destination: "lab" });
     profiles.importCredential("lab", TOKEN);
     mkdirSync(join(dir, "known_hosts"), { recursive: true });
     writeFileSync(join(dir, "known_hosts", "lab"), "lab ssh-ed25519 AAAA\n");
     expect(profiles.list()[0]?.hostKeyPinned).toBe(true);
-    profiles.remove("lab");
+    // Imported by hand: ORCA never issued it, so there is nothing for it to revoke.
+    await expect(profiles.remove("lab")).resolves.toBe("none");
     expect(profiles.list()).toEqual([]);
     expect(existsSync(join(dir, "credentials", "lab.credential"))).toBe(false);
     expect(existsSync(join(dir, "known_hosts", "lab"))).toBe(false);
@@ -139,7 +233,6 @@ describe("RemoteProfiles", () => {
   it("shares one tunnel per profile, closes it with its last user, and refuses edits while in use", async () => {
     const { profiles, tunnels } = store();
     profiles.save({ name: "Lab", destination: "lab" });
-    await expect(profiles.open("lab")).rejects.toThrow("No credential");
     profiles.importCredential("lab", TOKEN);
     const a = await profiles.open("lab");
     const b = await profiles.open("lab");
@@ -147,14 +240,14 @@ describe("RemoteProfiles", () => {
     expect(tunnels[0]!.options.knownHostsFile).toMatch(/known_hosts[\\/]lab$/);
     expect(a.url).toBe("http://127.0.0.1:41000");
     expect(a.auth.read()).toBe(TOKEN);
-    expect(() => profiles.remove("lab")).toThrow("Connect to another daemon");
+    await expect(profiles.remove("lab")).rejects.toThrow("Connect to another daemon");
     expect(() => profiles.save({ id: "lab", name: "Lab", destination: "x" })).toThrow("Connect to another daemon");
     await a.release();
     await a.release();
     expect(tunnels[0]!.closed).toBe(0);
     await b.release();
     expect(tunnels[0]!.closed).toBe(1);
-    profiles.remove("lab");
+    await profiles.remove("lab");
   });
 
   it("a failed tunnel is released and the next open starts a new one", async () => {
@@ -174,7 +267,7 @@ describe("RemoteProfiles", () => {
 });
 
 describe("pending work does not outlive a profile change", () => {
-  it("writes a picked credential only into the profile the picker was opened for", () => {
+  it("writes a picked credential only into the profile the picker was opened for", async () => {
     const { profiles } = store();
     profiles.save({ name: "Lab", destination: "lab" });
 
@@ -194,7 +287,7 @@ describe("pending work does not outlive a profile change", () => {
 
     // Removed, then recreated under the same id: still not the profile the picker was for.
     const ticket = profiles.ticket("lab");
-    profiles.remove("lab");
+    await profiles.remove("lab");
     expect(() => profiles.importCredential("lab", TOKEN, ticket)).toThrow("no longer exists");
     profiles.save({ name: "Lab", destination: "lab" });
     expect(() => profiles.importCredential("lab", TOKEN, ticket)).toThrow("profile changed");
@@ -247,14 +340,22 @@ const reply = (result: unknown) => new Response(JSON.stringify({ kind: "response
 
 describe("credentials travel only on the tunnel's authenticated streams", () => {
   /** A stand-in daemon: what the far end of an authenticated ssh stream reaches. */
-  async function daemonRig(stall = false) {
+  async function daemonRig(stall = false, accept: (authorization: string | undefined) => boolean = () => true) {
     const rpc: (string | undefined)[] = [];
     const sockets: (string | undefined)[] = [];
     const server = createServer((request, response) => {
       rpc.push(request.headers.authorization);
       request.resume();
       request.on("end", () => {
-        if (!stall) response.end(JSON.stringify({ kind: "response", id: 1, ok: true, result: hello }));
+        if (stall) return;
+        if (!accept(request.headers.authorization)) {
+          response.writeHead(401);
+          response.end(
+            JSON.stringify({ kind: "response", id: 1, ok: false, error: { code: "AUTH_INVALID", message: "no" } }),
+          );
+          return;
+        }
+        response.end(JSON.stringify({ kind: "response", id: 1, ok: true, result: hello }));
       });
     });
     const wss = new WebSocketServer({ server, handleProtocols: () => "orca.v1" });
@@ -288,6 +389,38 @@ describe("credentials travel only on the tunnel's authenticated streams", () => 
     };
     return { port, rpc, sockets, offered, url, close };
   }
+
+  it("checks a credential with the daemon over the tunnel's own streams (#875)", async () => {
+    let known: string | undefined;
+    const daemon = await daemonRig(false, (authorization) => authorization === `Bearer ${known}`);
+    try {
+      // The daemon's own hello check, not the seam.
+      const { profiles, server } = store(() => Promise.resolve(daemon.url), daemon.port, { verify: helloVerdict });
+      profiles.save({ name: "Lab", destination: "lab" });
+      // The daemon knows none of what the server's CLI issues: another workspace.
+      await expect(profiles.open("lab")).rejects.toMatchObject({ code: "wrong-workspace" });
+      expect(daemon.rpc).toHaveLength(1);
+      expect(daemon.rpc[0]).toMatch(/^Bearer orca_live_cred/);
+      expect(server.live()).toEqual([]);
+      // It knows the next one: accepted, and the sign-in check went only to the daemon.
+      known = "orca_live_cred00000002_secretsecretsecret";
+      const lease = await profiles.open("lab");
+      expect(lease.auth.read()).toBe(known);
+      expect(daemon.rpc.at(-1)).toBe(`Bearer ${known}`);
+      expect(daemon.offered).toEqual([]);
+      await lease.release();
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it("connects without checking when no daemon answers, so the probe can say why", async () => {
+    const { profiles } = store(undefined, undefined, { verify: helloVerdict });
+    profiles.save({ name: "Lab", destination: "lab" });
+    const lease = await profiles.open("lab");
+    expect(lease.auth.read()).toMatch(/^orca_live_cred/);
+    await lease.release();
+  });
 
   it("sends RPCs and the socket's credential over connect() streams, never to the URL", async () => {
     const daemon = await daemonRig();
@@ -556,5 +689,201 @@ describe("saved profile preference", () => {
     expect(file.read().daemonProfile).toBe("lab");
     file.saveDaemonUrl(null);
     expect(file.read().daemonProfile).toBeUndefined();
+  });
+});
+
+describe("automatic sign-in (#875)", () => {
+  const pin = (dir: string, id = "lab") => {
+    mkdirSync(join(dir, "known_hosts"), { recursive: true });
+    writeFileSync(join(dir, "known_hosts", id), `orca-${id} ssh-ed25519 AAAA\n`);
+  };
+
+  it("issues a credential on the first connect, straight into the keychain slot", async () => {
+    const { dir, profiles, server, tunnels } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const lease = await profiles.open("lab");
+    expect(server.commands).toHaveLength(1);
+    const [command] = server.commands;
+    expect(command!.slice(0, 5)).toEqual(["orca", "auth", "issue", "desktop-casey-s-pc", "--preset"]);
+    expect(command).toContain("client");
+    expect(command!.slice(-3)).toEqual(["--label", "orca-app-lab", "--json"]);
+    const expiresAt = command![command!.indexOf("--expires-at") + 1]!;
+    expect(Date.parse(expiresAt) - Date.now()).toBeGreaterThan(89 * 24 * 3600_000);
+    const [id] = server.live();
+    const token = server.credentials.get(id!)!.token;
+    expect(lease.auth.read()).toBe(token);
+    // The token is in the sealed slot only: not in the profile, the record or the view.
+    for (const file of ["profiles.json", join("credentials", "lab.json"), join("credentials", "lab.credential")])
+      expect(readFileSync(join(dir, file), "utf8")).not.toContain(token);
+    expect(JSON.parse(readFileSync(join(dir, "credentials", "lab.json"), "utf8"))).toMatchObject({ credentialId: id });
+    expect(profiles.list()[0]).toMatchObject({ hasCredential: true, credentialExpiresAt: expiresAt });
+    expect(JSON.stringify(profiles.list())).not.toContain(token);
+    await lease.release();
+    // The next connect reuses it.
+    await (await profiles.open("lab")).release();
+    expect(server.commands).toHaveLength(1);
+    expect(tunnels).toHaveLength(2);
+  });
+
+  it("uses the profile's server command, workspace config and read-only preset", async () => {
+    const { profiles, server } = store();
+    profiles.save({
+      name: "Lab",
+      destination: "lab",
+      serverCommand: "/opt/orca/bin/orca",
+      serverConfig: "/srv/orca/orca.config.yaml",
+      readOnly: true,
+    });
+    expect(() => profiles.save({ name: "Bad", destination: "lab", serverCommand: "orca; rm -rf /" })).toThrow();
+    expect(() => profiles.save({ name: "Bad", destination: "lab", serverConfig: "relative.yaml" })).toThrow();
+    await (await profiles.open("lab")).release();
+    const [command] = server.commands;
+    expect(command![0]).toBe("/opt/orca/bin/orca");
+    expect(command![command!.indexOf("--preset") + 1]).toBe("viewer");
+    expect(command![command!.indexOf("--config") + 1]).toBe("/srv/orca/orca.config.yaml");
+    expect(profiles.list()[0]).toMatchObject({ readOnly: true, serverCommand: "/opt/orca/bin/orca" });
+  });
+
+  it("issues one credential for concurrent first connects", async () => {
+    const { profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    const [a, b] = await Promise.all([profiles.open("lab"), profiles.open("lab")]);
+    expect(server.commands.filter((c) => c[2] === "issue")).toHaveLength(1);
+    expect(a.auth.read()).toBe(b.auth.read());
+    await a.release();
+    await b.release();
+  });
+
+  it("renews before expiry while connected, and leases move to the new credential", async () => {
+    let now = Date.now();
+    const { profiles, server } = store(undefined, undefined, {
+      credentialPolicy: { ttlMs: 10_000, renewBeforeMs: 4_000, checkEveryMs: 20 },
+      now: () => now,
+    });
+    profiles.save({ name: "Lab", destination: "lab" });
+    const lease = await profiles.open("lab");
+    const first = lease.auth.read();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(server.commands).toHaveLength(1);
+    now += 7_000;
+    await vi.waitFor(() => expect(server.commands.map((c) => c[2])).toEqual(["issue", "rotate"]));
+    await vi.waitFor(() => expect(lease.auth.read()).not.toBe(first));
+    // The server revoked the old one on rotate: one live credential, the one in the slot.
+    expect(server.live()).toHaveLength(1);
+    expect(server.credentials.get(server.live()[0]!)!.token).toBe(lease.auth.read());
+    await lease.release();
+    // Not connected: renewal waits for the next connect, which does it first.
+    now += 7_000;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(server.commands).toHaveLength(2);
+    await (await profiles.open("lab")).release();
+    expect(server.commands.map((c) => c[2])).toEqual(["issue", "rotate", "rotate"]);
+  });
+
+  it("replaces a credential the daemon refuses once, then refuses clearly", async () => {
+    const { profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    await (await profiles.open("lab")).release();
+    // Revoked on the server by hand: the next connect issues a new one.
+    server.credentials.get(server.live()[0]!)!.revoked = true;
+    const lease = await profiles.open("lab");
+    // The refused one is revoked too, in case it was only expired: nothing stale stays live.
+    expect(server.commands.map((c) => c[2])).toEqual(["issue", "issue", "revoke"]);
+    expect(server.verdict(lease.auth.read()!)).toBe("accepted");
+    await lease.release();
+
+    // Refused again and no new one can be issued: one attempt, then a refusal with the remedy.
+    server.credentials.get(server.live()[0]!)!.revoked = true;
+    server.fail = { code: 1, lines: ["error: the credentials file cannot be read"] };
+    await expect(profiles.open("lab")).rejects.toMatchObject({ code: "credential-refused" });
+    expect(server.commands.filter((c) => c[2] === "issue")).toHaveLength(3);
+  });
+
+  it("takes back a credential the daemon on the port does not know: another workspace", async () => {
+    const { profiles, server, tunnels } = store();
+    server.otherWorkspace = true;
+    profiles.save({ name: "Lab", destination: "lab" });
+    await expect(profiles.open("lab")).rejects.toMatchObject({
+      code: "wrong-workspace",
+      message: expect.stringContaining("workspace config"),
+    });
+    expect(server.commands.map((c) => c[2])).toEqual(["issue", "revoke"]);
+    expect(server.live()).toEqual([]);
+    expect(profiles.list()[0]!.hasCredential).toBe(false);
+    expect(tunnels[0]!.closed).toBe(1);
+  });
+
+  it("names what is wrong on the server, with the remedy, and never its output", async () => {
+    const { profiles, server, tunnels } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    const cases: [number, string[], string, string][] = [
+      [127, ["bash: line 1: orca: command not found"], "cli-missing", "Install ORCA there"],
+      [1, ["'orca' is not recognized as an internal or external command"], "cli-missing", "full path"],
+      [126, ["bash: line 1: /opt/orca: Permission denied"], "cli-permission", "may run"],
+      [1, ["error [CONFIG_INVALID]: /srv/x.yaml: bad"], "server-not-set-up", "workspace config"],
+      [1, ["error: ENOENT: no such file or directory, open '/srv/x.yaml'"], "server-not-set-up", "Set up the daemon"],
+      [1, ["error: EACCES: permission denied, open '/srv/auth/credentials.json'"], "cli-permission", "SSH user"],
+      [1, ["something else secret-ish"], "cli-failed", "auth list"],
+    ];
+    for (const [code, lines, refusal, remedy] of cases) {
+      server.fail = { code, lines };
+      const error = await profiles.open("lab").catch((e: unknown) => e as Error & { code: string });
+      expect(error).toMatchObject({ code: refusal, message: expect.stringContaining(remedy) });
+      expect((error as Error).message).not.toContain(lines[0]!);
+    }
+    // Output that is not ORCA's JSON is a failure too, never a stored token.
+    server.fail = undefined;
+    vi.spyOn(server, "run").mockReturnValueOnce({ code: 0, stdout: "orca_live_x", serverLines: [] });
+    await expect(profiles.open("lab")).rejects.toMatchObject({ code: "cli-failed" });
+    expect(profiles.list()[0]!.hasCredential).toBe(false);
+    expect(tunnels.every((tunnel) => tunnel.closed === 1)).toBe(true);
+  });
+
+  it("revokes the server's credential when the profile is removed, and says when it could not", async () => {
+    const { dir, profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    await (await profiles.open("lab")).release();
+    pin(dir);
+    await expect(profiles.remove("lab")).resolves.toBe("revoked");
+    expect(server.live()).toEqual([]);
+    expect(server.commands.at(-1)!.slice(0, 3)).toEqual(["orca", "auth", "revoke"]);
+    expect(existsSync(join(dir, "credentials", "lab.json"))).toBe(false);
+
+    profiles.save({ name: "Lab", destination: "lab" });
+    await (await profiles.open("lab")).release();
+    pin(dir);
+    server.fail = { code: 255, lines: [] };
+    await expect(profiles.remove("lab")).resolves.toBe("not-reached");
+    expect(profiles.list()).toEqual([]);
+
+    // Never revoke through a server whose key is not pinned: that is not the server it was issued by.
+    server.fail = undefined;
+    profiles.save({ name: "Lab", destination: "lab" });
+    await (await profiles.open("lab")).release();
+    const before = server.commands.length;
+    await expect(profiles.remove("lab")).resolves.toBe("not-reached");
+    expect(server.commands).toHaveLength(before);
+  });
+
+  it("issues a new credential when the preset changes, and revokes the old one", async () => {
+    const { profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    await (await profiles.open("lab")).release();
+    const [old] = server.live();
+    expect(profiles.save({ id: "lab", name: "Lab", destination: "lab", readOnly: true }).hasCredential).toBe(false);
+    await (await profiles.open("lab")).release();
+    expect(server.commands.map((c) => c[2])).toEqual(["issue", "issue", "revoke"]);
+    expect(server.commands[1]).toContain("viewer");
+    expect(server.live()).not.toContain(old);
+    expect(server.live()).toHaveLength(1);
+  });
+
+  it("keeps an imported credential the daemon accepts, and never renews it", async () => {
+    const { profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    profiles.importCredential("lab", TOKEN);
+    expect(profiles.list()[0]).toMatchObject({ credentialImported: true });
+    await (await profiles.open("lab")).release();
+    expect(server.commands).toEqual([]);
   });
 });
