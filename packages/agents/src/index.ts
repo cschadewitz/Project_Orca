@@ -10,6 +10,7 @@ export * from "./session.js";
 export * from "./config-options.js";
 export * from "./acp-session.js";
 export * from "./secrets.js";
+export * from "./capability-use.js";
 export * from "./typed-sidecar.js";
 export * from "./managed-typed-store.js";
 export type * from "./scoped-permission-capture.js";

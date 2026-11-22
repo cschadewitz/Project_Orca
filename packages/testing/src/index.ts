@@ -36,6 +36,8 @@ export function scriptedAgentSpec(options: {
   playbookJson?: unknown;
   stateFile?: string;
   promptLog?: string;
+  /** Where the agent appends each `session/new` it receives (see `ScriptedAgentOptions`). */
+  sessionLog?: string;
   roles?: string[];
   /** Session config options the agent advertises (overrides the playbook's `configOptions`). */
   configOptions?: SessionConfigOption[];
@@ -63,6 +65,7 @@ export function scriptedAgentSpec(options: {
   const env: Record<string, string> = {};
   if (options.playbookJson !== undefined) env.ORCA_PLAYBOOK_JSON = JSON.stringify(options.playbookJson);
   if (options.configOptions) env.ORCA_CONFIG_OPTIONS_JSON = JSON.stringify(options.configOptions);
+  if (options.sessionLog) env.ORCA_SESSION_LOG = options.sessionLog;
   return AgentSpecSchema.parse({
     id: options.id ?? "scripted",
     name: "Scripted test agent",

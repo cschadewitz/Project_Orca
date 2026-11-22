@@ -46,6 +46,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         label: { type: "string" },
         "workflow-scope": { type: "string", multiple: true },
         secret: { type: "string", multiple: true },
+        "mcp-server": { type: "string", multiple: true },
         "host-key": { type: "string", multiple: true },
         "jump-host-key": { type: "string", multiple: true },
         "runs-scope": { type: "string" },

@@ -58,6 +58,8 @@ export const PERMISSIONS = [
   "secrets.read",
   /** The principal's runs may receive values for the references its `secrets` grant names (#336). */
   "secrets.use",
+  /** The principal's runs may be given the catalog MCP servers its `capabilities` grant names (#337). */
+  "capabilities.use",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 export const PermissionSchema = z.enum(PERMISSIONS);
@@ -140,6 +142,49 @@ export function grantCovers(
   );
 }
 
+/**
+ * The catalog capabilities a principal's runs may be given (#337): every one (`*`), or each
+ * MCP server id together with the host it runs on, that host's endpoint binding and the
+ * server's definition digest when granted. A grant does not follow an id the config points
+ * at another command, nor a host id pointed at another endpoint. See
+ * docs/secret-use-authority.md.
+ */
+export const CapabilityGrantSchema = z.union([
+  z.literal("*"),
+  z.array(
+    z
+      .object({
+        kind: z.literal("mcpServer"),
+        id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+        host: z.string().min(1),
+        binding: z.string().regex(/^h1:[0-9a-f]{32}$/),
+        /** `mcpServerDefinitionDigest` of the definition when granted. */
+        definition: z.string().regex(/^m1:[0-9a-f]{32}$/),
+      })
+      .strict(),
+  ),
+]);
+export type CapabilityGrant = z.infer<typeof CapabilityGrantSchema>;
+
+/** Whether `grant` covers one use: that server, defined that way, on that host. */
+export function capabilityGrantCovers(
+  grant: CapabilityGrant | undefined,
+  use: { kind: "mcpServer"; id: string; hostId: string; hostBinding: string; definition: string },
+): boolean {
+  if (grant === undefined) return false;
+  return (
+    grant === "*" ||
+    grant.some(
+      (g) =>
+        g.kind === use.kind &&
+        g.id === use.id &&
+        g.host === use.hostId &&
+        g.binding === use.hostBinding &&
+        g.definition === use.definition,
+    )
+  );
+}
+
 export function isUnrestricted(scope: ResourceScope): boolean {
   return scope.workflows === "*" && scope.runs === "all";
 }
@@ -154,6 +199,8 @@ export interface Principal {
   readonly scope: ResourceScope;
   /** The secret references this principal may use; none when absent (#336). */
   readonly secrets?: SecretGrant | undefined;
+  /** The catalog capabilities this principal's runs may be given; none when absent (#337). */
+  readonly capabilities?: CapabilityGrant | undefined;
 }
 
 /**
@@ -184,6 +231,7 @@ export const PRESETS = {
     permissions: PERMISSIONS.filter((p) => p !== "host.telemetry.read"),
     scope: UNRESTRICTED,
     secrets: "*",
+    capabilities: "*",
   },
   /** Drive and watch every run, plan and agent; no configuration, standing rules or admission. */
   operator: {
@@ -217,7 +265,7 @@ export const PRESETS = {
   },
 } as const satisfies Record<
   string,
-  { permissions: readonly Permission[]; scope: ResourceScope; secrets?: SecretGrant }
+  { permissions: readonly Permission[]; scope: ResourceScope; secrets?: SecretGrant; capabilities?: CapabilityGrant }
 >;
 export type PresetName = keyof typeof PRESETS;
 export const PRESET_NAMES = Object.keys(PRESETS) as PresetName[];
@@ -234,4 +282,5 @@ export const LOCAL_PRINCIPAL: Principal = {
   permissions: new Set(PRESETS.owner.permissions),
   scope: UNRESTRICTED,
   secrets: "*",
+  capabilities: "*",
 };

@@ -130,6 +130,31 @@ permission and the grant they read are already in place.
 
 Neither method ever returns a value, and neither falls back to another host.
 
+## Catalog MCP servers (#337)
+
+The same decision, made the same way, gives a session a catalog MCP server.
+`Orchestrator.capabilityUse({ runId, uses })` is asked at every session open whose step
+selects one, pooled `per-run` sessions included, before anything starts. Each use is
+`{ kind: "mcpServer", id, hostId, hostBinding, definition }`, where `definition` is
+`mcpServerDefinitionDigest` (`m1:` plus 32 hex digits of a sha256 over the server's
+command, arguments and environment, with secret references as references).
+
+- A credential's optional `capabilities` grant is `"*"` or a list of `{ kind: "mcpServer",
+  id, host, binding, definition }`. The `owner` preset grants `"*"`; no other preset grants
+  any. `orca auth issue --mcp-server <id>@<host>` (repeatable) or `--mcp-server '*'` writes
+  it and adds the `capabilities.use` permission; the definition and binding are taken from
+  the config at that moment.
+- Steps 1 to 5 above apply unchanged, with `capabilities.use` in place of `secrets.use` and
+  the grant naming that server id, defined exactly that way, on the agent's host and its
+  current endpoint. A refusal is `CONFIG_INVALID`, `details { kind, id, hostId, reason:
+  "unauthorized" }`, audited as `capability.use`.
+- Loopback and standalone OS-user mode get `"*"` exactly as they do for secrets.
+- After the decision, the server's command must be found on the agent's host (see
+  docs/WORKFLOWS.md). Any secret reference in the server's `env` is then read like every
+  other reference in that session: on the agent's host, under `secrets.use`, with no
+  fallback to another host.
+- `agents.ping` has no run and so no owner: it starts only the agent's own inline servers.
+
 ## Ping
 
 `agents.ping` keeps refusing to deliver (part A). Diagnostics do not need the credential.

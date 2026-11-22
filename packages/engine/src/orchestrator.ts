@@ -11,15 +11,21 @@ import { configuredGenerationSecrets, launchProvenance } from "./configuration-p
 import {
   AgentRegistry,
   LocalHost,
+  mcpServerCommandAvailable,
+  mcpServerDefinitionDigest,
   openAcpSession,
+  secretHostBinding,
   startupTermination,
   type AgentHost,
+  type CapabilityUseCheck,
   type AgentSession,
   type OpenSessionOptions,
   type SecretUse,
 } from "@orca/agents";
 import { applyModel, currentModel, selectedModel } from "./session-model.js";
 import {
+  type CapabilityIssue,
+  type ResolvedMcpServer,
   describeError,
   evaluateCondition,
   effectAbandoned,
@@ -171,6 +177,13 @@ export interface OrchestratorOptions {
    * refused, and so is any session that would deliver one.
    */
   secretUse?: (request: { runId: string; uses: SecretUse[] }) => Promise<void>;
+  /**
+   * The server-verified use check for catalog MCP servers (#337): resolves when the run may be
+   * given every one of `uses` now, throws when not. Asked at every session open that would
+   * give an agent one. Without it, a launch whose agent steps select a catalog server is
+   * refused, and so is any session that would be given one.
+   */
+  capabilityUse?: CapabilityUseCheck;
   /**
    * Daemon-wide session ceiling (#873) for an orchestrator built without configuration
    * generations. With generations, the current generation's `limits.maxAgentSessions` wins.
@@ -469,6 +482,8 @@ export class Orchestrator {
    * would use a reference is refused while it is unset.
    */
   secretUse: OrchestratorOptions["secretUse"];
+  /** The use check for catalog MCP servers (#337); settable for the same reason. */
+  capabilityUse: OrchestratorOptions["capabilityUse"];
   readonly plan: PlanService;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -534,6 +549,7 @@ export class Orchestrator {
     this.workspaceProvider = o.workspaceProvider ?? new LocalWorkspaceProvider(process.cwd());
     this.sessionFactory = o.sessionFactory ?? openAcpSession;
     this.secretUse = o.secretUse;
+    this.capabilityUse = o.capabilityUse;
     this.maxAgentSessions = o.maxAgentSessions;
     this.agentSlotWaitMs = o.agentSlotWaitMs;
     this.clock = o.clock ?? systemClock;
@@ -576,7 +592,9 @@ export class Orchestrator {
       this.validateOverrides(def, opts.overrides, generation?.agents, generation?.workflows, generation?.templates);
     // Every agent step's MCP servers and skills resolve and can be delivered, under this run's
     // role overrides, before anything is written (#335).
-    preflightCapabilities((generation?.agents ?? this.agents).withOverrides(opts.overrides), def);
+    preflightCapabilities((generation?.agents ?? this.agents).withOverrides(opts.overrides), def, {
+      catalogServers: this.capabilityUse !== undefined,
+    });
     // A step whose agent uses a secret reference needs a use check to run (#336).
     if (!this.secretUse)
       preflightSecretReferences((generation?.agents ?? this.agents).withOverrides(opts.overrides), def);
@@ -2404,7 +2422,7 @@ export class Orchestrator {
     rc: RunContext,
     step: StepRun,
     agent: AgentSpec,
-  ): { mcpServers: AgentSpec["mcpServers"]; key: string } {
+  ): { mcpServers: AgentSpec["mcpServers"]; catalog: ResolvedMcpServer[]; key: string } {
     const registry = this.contextGenerations.get(rc)?.agents ?? this.agents;
     const node = rc.definition.nodes[step.nodeId];
     const resolved = resolveNodeCapabilities({
@@ -2415,7 +2433,12 @@ export class Orchestrator {
       node: nodeCapabilityScope(node).scope,
       digests: true,
     });
-    const issues = [...resolved.errors, ...deliveryIssues(resolved, `workflow.nodes.${step.nodeId}`)];
+    const issues = [
+      ...resolved.errors,
+      ...deliveryIssues(resolved, `workflow.nodes.${step.nodeId}`, {
+        catalogServers: this.capabilityUse !== undefined,
+      }),
+    ];
     if (issues.length) throw capabilityRefusal(step.nodeId, issues);
     const redacted = redactCapabilityManifest(resolved.manifest);
     const key = capabilityManifestKey(redacted);
@@ -2427,7 +2450,60 @@ export class Orchestrator {
         `capabilities for step '${step.nodeId}' changed since the run was launched; a skill's files were edited. Start a new run to use the edited skill`,
         { nodeId: step.nodeId, launched: recorded.capabilities, now: redacted },
       );
-    return { mcpServers: resolved.manifest.mcpServers.map((m) => m.server), key };
+    return {
+      mcpServers: resolved.manifest.mcpServers.map((m) => m.server),
+      catalog: resolved.manifest.mcpServers.filter((m) => m.catalog),
+      key,
+    };
+  }
+
+  /**
+   * Before a session is given a catalog MCP server (#337): the run's owner must be granted
+   * each one, as defined now, on this agent's host and endpoint; then each command must be
+   * there on that host. Either failure refuses the step before anything is spawned, naming
+   * the step and the server. Nothing is installed, and no other host is tried.
+   */
+  private async authorizeCatalogServers(
+    rc: RunContext,
+    step: StepRun,
+    agent: AgentSpec,
+    host: AgentHost,
+    servers: ResolvedMcpServer[],
+  ): Promise<void> {
+    if (servers.length === 0) return;
+    if (!this.capabilityUse)
+      throw capabilityRefusal(
+        step.nodeId,
+        deliveryIssues(
+          { manifest: { mcpServers: servers, skills: [] }, errors: [], warnings: [] },
+          `workflow.nodes.${step.nodeId}`,
+          { catalogServers: false },
+        ),
+      );
+    const hostBinding = secretHostBinding(host.spec);
+    await this.capabilityUse({
+      runId: rc.id,
+      uses: servers.map((m) => ({
+        kind: "mcpServer" as const,
+        id: m.id,
+        hostId: host.spec.id,
+        hostBinding,
+        definition: mcpServerDefinitionDigest(m.server),
+      })),
+    });
+    const unavailable: CapabilityIssue[] = [];
+    for (const m of servers) {
+      const reason = await mcpServerCommandAvailable(host, m.server, { cwd: rc.workspace.cwd, agentEnv: agent.env });
+      if (reason)
+        unavailable.push({
+          path: `workflow.nodes.${step.nodeId}.capabilities.mcpServers`,
+          message:
+            reason === "missing"
+              ? `MCP server '${m.id}' cannot start on host '${host.spec.id}': command '${m.server.command}' was not found there. Install it on that host or remove the server from the selection`
+              : `MCP server '${m.id}' could not be checked on host '${host.spec.id}': the host did not answer`,
+        });
+    }
+    if (unavailable.length) throw capabilityRefusal(step.nodeId, unavailable);
   }
 
   /** A child's values redact its ancestors too: a child's result is written to its parent's log. */
@@ -2456,6 +2532,8 @@ export class Orchestrator {
     const key = `${rc.id}:${agent.id}`;
     const model = selectedModel(rc.state.run.overrides, agent);
     const capabilities = this.stepCapabilities(rc, step, agent);
+    // Asked at every open, pooled or not: a revoked grant stops the next step (#337).
+    await this.authorizeCatalogServers(rc, step, agent, host, capabilities.catalog);
     let pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
     if (pooled && pooled.capabilities !== capabilities.key) {
       // A per-run session carries the MCP servers it was opened with. A step whose scope

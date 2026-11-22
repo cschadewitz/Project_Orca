@@ -11,8 +11,10 @@ import {
   type ResourceScope,
   type SecretGrant,
   SecretGrantSchema,
+  type CapabilityGrant,
+  CapabilityGrantSchema,
 } from "@orca/daemon";
-import { secretHostBinding } from "@orca/agents";
+import { mcpServerDefinitionDigest, secretHostBinding } from "@orca/agents";
 import { loadConfig } from "../bootstrap.js";
 import type { CommandContext } from "./index.js";
 
@@ -61,6 +63,49 @@ function secretGrant(ctx: CommandContext, config: OrcaConfig): SecretGrant | und
   });
 }
 
+/**
+ * `--mcp-server <id>@<host>` (repeatable) or `--mcp-server '*'`: the catalog MCP servers a
+ * credential's runs may be given (#337), on the host of the agent that starts them. Each id
+ * must be in the catalog now; the grant records its definition digest and the host's endpoint
+ * binding, so a server redefined to another command, or a host pointed elsewhere, is not
+ * covered.
+ */
+function capabilityGrant(ctx: CommandContext, config: OrcaConfig): CapabilityGrant | undefined {
+  const values = ctx.flags["mcp-server"] as string[] | undefined;
+  if (!values?.length) return undefined;
+  if (values.includes("*")) {
+    if (values.length > 1)
+      throw new OrcaError("CONFIG_INVALID", "--mcp-server '*' grants every catalog server; give it alone");
+    return "*";
+  }
+  const grants = values.map((value) => {
+    const at = value.lastIndexOf("@");
+    if (at <= 0 || at === value.length - 1)
+      throw new OrcaError("CONFIG_INVALID", `--mcp-server takes <id>@<host> or '*', not '${value}'`);
+    const id = value.slice(0, at);
+    const host = value.slice(at + 1);
+    const server = config.capabilities?.mcpServers[id];
+    if (!server) throw new OrcaError("CONFIG_INVALID", `--mcp-server names '${id}', which is not a catalog MCP server`);
+    const spec = config.hosts.find((h) => h.id === host);
+    if (!spec)
+      throw new OrcaError("CONFIG_INVALID", `--mcp-server '${id}' names host '${host}', which is not configured`);
+    return {
+      kind: "mcpServer" as const,
+      id,
+      host,
+      binding: secretHostBinding(spec),
+      definition: mcpServerDefinitionDigest(server),
+    };
+  });
+  const parsed = CapabilityGrantSchema.safeParse(grants);
+  if (!parsed.success) throw new OrcaError("CONFIG_INVALID", "--mcp-server ids use letters, digits, '.', '_' and '-'");
+  const seen = new Set<string>();
+  return (parsed.data as Exclude<CapabilityGrant, "*">).filter((g) => {
+    const key = `${g.id}@${g.host}`;
+    return !seen.has(key) && (seen.add(key), true);
+  });
+}
+
 function credentialId(value: string | undefined, sub: string): string {
   if (!value || !/^[A-Za-z0-9_-]{12}$/.test(value))
     throw new OrcaError("CONFIG_INVALID", `auth ${sub} needs a credential id from auth list`);
@@ -98,13 +143,19 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
       if (workflowIds?.some((id) => !id || id === "*"))
         throw new OrcaError("CONFIG_INVALID", "--workflow-scope requires workflow ids; omit it for all workflows");
       const secrets = secretGrant(ctx, config);
+      const capabilities = capabilityGrant(ctx, config);
+      // A grant is only usable with `secrets.use` or `capabilities.use`, so naming one adds
+      // that permission to the preset's.
+      const added = [
+        ...(secrets !== undefined ? (["secrets.use"] as const) : []),
+        ...(capabilities !== undefined ? (["capabilities.use"] as const) : []),
+      ];
       const issued = await auth.credentials.issue({
         principal: value,
         preset,
-        // A grant is only usable with `secrets.use`, so naming one adds it to the preset's.
-        ...(secrets !== undefined
-          ? { secrets, permissions: [...new Set([...PRESETS[preset].permissions, "secrets.use" as const])] }
-          : {}),
+        ...(secrets !== undefined ? { secrets } : {}),
+        ...(capabilities !== undefined ? { capabilities } : {}),
+        ...(added.length ? { permissions: [...new Set([...PRESETS[preset].permissions, ...added])] } : {}),
         scope: { workflows: workflowIds ? [...new Set(workflowIds)] : PRESETS[preset].scope.workflows, runs },
         label: ctx.flags.label as string | undefined,
         expiresAt: expiry(ctx),
@@ -124,7 +175,7 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
               ? "expired"
               : "active";
           ctx.out(
-            `${c.id} ${c.principal} ${state} workflows=${c.scope.workflows === "*" ? "*" : c.scope.workflows.join(",")} runs=${c.scope.runs}${c.secrets === undefined ? "" : ` secrets=${c.secrets === "*" ? "*" : c.secrets.map((g) => `${g.secret}(${g.provider})@${g.host}`).join(",")}`}${c.expiresAt ? ` expires=${c.expiresAt}` : ""}${c.label ? ` label=${c.label}` : ""}`,
+            `${c.id} ${c.principal} ${state} workflows=${c.scope.workflows === "*" ? "*" : c.scope.workflows.join(",")} runs=${c.scope.runs}${c.secrets === undefined ? "" : ` secrets=${c.secrets === "*" ? "*" : c.secrets.map((g) => `${g.secret}(${g.provider})@${g.host}`).join(",")}`}${c.capabilities === undefined ? "" : ` mcpServers=${c.capabilities === "*" ? "*" : c.capabilities.map((g) => `${g.id}@${g.host}`).join(",")}`}${c.expiresAt ? ` expires=${c.expiresAt}` : ""}${c.label ? ` label=${c.label}` : ""}`,
           );
         }
       return 0;

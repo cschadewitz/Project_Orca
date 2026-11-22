@@ -120,22 +120,31 @@ export function resolveNodeCapabilities(input: NodeCapabilityInput): ResolveCapa
 }
 
 /**
- * What ORCA hands an agent session today: the agent's own legacy inline MCP servers, narrowed
- * by any scope. Catalog servers and skills resolve, with identities, sources and (for skills)
- * content digests that validation and the launch preview show, but nothing new reaches a
- * session until delivery checks the caller, the host and the agent can actually take each
- * one (#337). A step that selects one is refused rather than started without it.
+ * What a step's resolved set needs that ORCA cannot give a session.
+ *
+ * - **Catalog MCP servers** (#337) are given to a session only through the server-verified
+ *   use decision (the run owner's `capabilities` grant), after their command is found on the
+ *   agent's host. A caller with no such decision (`catalogServers: false`) refuses them.
+ * - **Skills** resolve, with identities, sources and content digests that validation and the
+ *   launch preview show, but are not delivered yet: a step that selects one is refused rather
+ *   than started without it.
+ *
+ * The agent's own legacy inline `mcpServers` need neither: config authority put them on it.
  */
-export function deliveryIssues(result: ResolveCapabilitiesResult, nodePath: string): CapabilityIssue[] {
+export function deliveryIssues(
+  result: ResolveCapabilitiesResult,
+  nodePath: string,
+  delivery: { catalogServers: boolean } = { catalogServers: true },
+): CapabilityIssue[] {
   const issues: CapabilityIssue[] = [];
   const list = (ids: string[]) => ids.map((id) => `'${id}'`).join(", ");
   const servers = result.manifest.mcpServers.filter((m) => m.catalog).map((m) => m.id);
-  if (servers.length)
+  if (servers.length && !delivery.catalogServers)
     issues.push({
       path: `${nodePath}.capabilities.mcpServers`,
-      message: `selects catalog MCP server${servers.length > 1 ? "s" : ""} ${list(servers)}, but this version of ORCA does not pass catalog servers to an agent session yet. Remove ${
+      message: `selects catalog MCP server${servers.length > 1 ? "s" : ""} ${list(servers)}, and this daemon has no server-verified use check to give ${
         servers.length > 1 ? "them" : "it"
-      } from the selection, or define the server inline on the agent, to run this step`,
+      } to a session with. Run it through a daemon or an admitted run, or define the server inline on the agent`,
     });
   const skills = result.manifest.skills.map((s) => s.id);
   if (skills.length)
@@ -244,7 +253,11 @@ const INLINE_PATH_SEP = "::";
  * Launch preflight: every agent step in the definition, under the run's role overrides, must
  * resolve and be deliverable. Throws the first step's refusal, naming its fields.
  */
-export function preflightCapabilities(registry: AgentRegistry, def: WorkflowDefinition): void {
+export function preflightCapabilities(
+  registry: AgentRegistry,
+  def: WorkflowDefinition,
+  delivery: { catalogServers: boolean } = { catalogServers: true },
+): void {
   for (const step of agentInstructions(def)) {
     if (!registry.canResolve(step.agent)) continue;
     const { agent } = registry.resolve(step.agent);
@@ -257,7 +270,7 @@ export function preflightCapabilities(registry: AgentRegistry, def: WorkflowDefi
       nodePath: step.nodePath,
       digests: true,
     });
-    const issues = [...result.errors, ...deliveryIssues(result, step.nodePath)];
+    const issues = [...result.errors, ...deliveryIssues(result, step.nodePath, delivery)];
     if (issues.length) throw capabilityRefusal(step.nodeId, issues);
   }
 }

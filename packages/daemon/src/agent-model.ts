@@ -129,7 +129,8 @@ export class AgentModel {
       const scoped = resolveCapabilities({ catalog: registry.capabilities().catalog, agent });
       const session = await this.orc.sessionFactory({
         host,
-        // Catalog servers are not delivered to sessions yet (#337), so a ping does not start them.
+        // A ping has no run, so no owner whose grant could give it a catalog server (#337): it
+        // starts only the agent's own inline servers.
         agent: { ...agent, mcpServers: scoped.manifest.mcpServers.filter((m) => !m.catalog).map((m) => m.server) },
         cwd,
         secrets: registry.secrets(),

@@ -24,6 +24,9 @@ on:
       - packages/agents/src/acp-session.ts
       - packages/agents/src/secrets.ts
       - packages/agents/test/secrets-ssh-native-336.test.ts
+      - packages/agents/src/capability-use.ts
+      - packages/engine/src/capabilities.ts
+      - packages/engine/test/capabilities-ssh-native-337.test.ts
       - .github/workflows/two-daemons.yml
   workflow_dispatch:
 
@@ -57,8 +60,9 @@ jobs:
         env:
           ORCA_REQUIRE_SSHD: "1"
         # Also: secret references (#336) delivered over a real sshd, with every argv scanned, and
-        # a server update (#879) run over a profile's ssh.
-        run: pnpm exec vitest run packages/testing/test/two-daemons.test.ts packages/agents/test/secrets-ssh-native-336.test.ts packages/app/test/server-update-ssh.test.ts
+        # a server update (#879) run over a profile's ssh, and catalog MCP servers (#337) given to
+        # an agent on the SSH host only after their command is found there.
+        run: pnpm exec vitest run packages/testing/test/two-daemons.test.ts packages/agents/test/secrets-ssh-native-336.test.ts packages/app/test/server-update-ssh.test.ts packages/engine/test/capabilities-ssh-native-337.test.ts
       # A parent daemon delegating steps to the other over the same sshd (#883).
       - name: Delegation over loopback ssh
         env:

@@ -43,7 +43,9 @@ import {
   bootstrapLocalOwner,
   openAuthDirectory,
   orchestratorResolver,
+  credentialCapabilityUse,
   credentialSecretUse,
+  loopbackCapabilityUse,
   loopbackSecretUse,
   LOCAL_PRINCIPAL,
   validateDeployment,
@@ -271,7 +273,7 @@ export const commands: Record<string, Command> = {
   auth: {
     help: "auth [issue <principal>|list|rotate <credentialId>|revoke <credentialId>]  Manage this workspace's daemon credentials.",
     usage:
-      "issue defaults to --preset client (owner, operator, viewer also supported).\n--workflow-scope id may be repeated; --runs-scope all|owned selects run scope.\n--secret id@host (repeatable) or --secret '*' grants use of secret references and adds secrets.use; the owner preset grants '*'.\n--label text names a credential; --expires-at ISO sets an expiry for issue or rotate.\n--json prints structured results. Only issue and rotate print a token, once. Restart serve to rotate its local bootstrap credential.\nLocal clients use ORCA_DAEMON_TOKEN, ORCA_DAEMON_TOKEN_FILE, or auth/local-client.token beside the workspace config.\n",
+      "issue defaults to --preset client (owner, operator, viewer also supported).\n--workflow-scope id may be repeated; --runs-scope all|owned selects run scope.\n--secret id@host (repeatable) or --secret '*' grants use of secret references and adds secrets.use; the owner preset grants '*'.\n--mcp-server id@host (repeatable) or --mcp-server '*' lets the credential's runs be given catalog MCP servers on that host and adds capabilities.use; the owner preset grants '*'.\n--label text names a credential; --expires-at ISO sets an expiry for issue or rotate.\n--json prints structured results. Only issue and rotate print a token, once. Restart serve to rotate its local bootstrap credential.\nLocal clients use ORCA_DAEMON_TOKEN, ORCA_DAEMON_TOKEN_FILE, or auth/local-client.token beside the workspace config.\n",
     run: authCommand,
   },
   remote: {
@@ -1076,6 +1078,15 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
         audit: authDir.audit,
       })
     : loopbackSecretUse(LOCAL_PRINCIPAL);
+  // So are catalog MCP servers, under the owner's `capabilities` grant (#337).
+  app.orchestrator.capabilityUse = authDir
+    ? credentialCapabilityUse({
+        resolver: orchestratorResolver(app.orchestrator),
+        ownership: authDir.ownership,
+        credentials: authDir.credentials,
+        audit: authDir.audit,
+      })
+    : loopbackCapabilityUse(LOCAL_PRINCIPAL);
   const workspaceId = await workspaceIdentity(storeDir);
   const identity = createDaemonIdentity(workspaceId);
   const liveRuntime =
