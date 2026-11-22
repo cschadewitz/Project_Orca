@@ -177,10 +177,11 @@ export class FileArtifactStore implements ArtifactStore {
     this.log = new JsonlLogDir(join(dir, "artifacts"), logger ? { logger } : {});
   }
 
-  private get base(): string {
+  protected get base(): string {
     return join(this.dir, "artifacts");
   }
-  private async load(): Promise<Map<string, Artifact>> {
+  /** The whole index, by id, in first-written order. A backend with its own index overrides this. */
+  protected async load(): Promise<Map<string, Artifact>> {
     await mkdir(join(this.base, "blobs"), { recursive: true });
     const map = new Map<string, Artifact>();
     for (const a of await this.log.readCommitted("index", ArtifactSchema)) map.set(a.id, a);
@@ -191,7 +192,11 @@ export class FileArtifactStore implements ArtifactStore {
     const bytes = toBytes(content);
     verifyBlob(record, bytes);
     await publishBlob(join(this.base, "blobs"), record, bytes);
-    await this.log.append("index", () => record);
+    await this.index(record);
+  }
+  /** Record `artifact` in the index once its blob is durable; the commit point of a `put`. */
+  protected async index(artifact: Artifact): Promise<void> {
+    await this.log.append("index", () => artifact);
   }
   async get(id: string): Promise<Artifact | undefined> {
     return (await this.load()).get(id);
@@ -236,7 +241,9 @@ export class FileArtifactStore implements ArtifactStore {
    * append failed leaves exactly such a blob - invisible to `get`, `list` and every reader, and
    * adopted again by a retried `put` of the same content. This is the compensation inventory
    * (#338): it only reports, and never deletes, because a concurrent `put` may be between its
-   * blob and its record. Scratch files from an interrupted publish are not blobs and are skipped.
+   * blob and its record. The answer is a projection of the index as it is now, not permission to
+   * reclaim: a reclaimer re-checks under its own fence, or after a grace period, before deleting.
+   * Scratch files from an interrupted publish are not blobs and are skipped.
    */
   async unreferencedBlobs(): Promise<string[]> {
     const referenced = new Set([...(await this.load()).values()].map((a) => a.contentHash));

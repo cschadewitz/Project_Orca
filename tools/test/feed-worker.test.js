@@ -343,3 +343,167 @@ describe("parseRange", () => {
     expect(parseRange("bytes=1-2,3-4")).toEqual({ multiple: true });
   });
 });
+
+describe("server bundle channel (#877)", () => {
+  const SERVER_TOKEN = "q".repeat(43);
+  const files = (version) => {
+    const stem = `orca-server-${version}-linux-x64`;
+    return {
+      [`server/${version}/${stem}.tar.xz`]: `archive ${version} bytes`,
+      [`server/${version}/${stem}.manifest.json`]: `{"version":"${version}"}`,
+      [`server/${version}/${stem}.manifest.json.sigstore.json`]: "{}",
+      [`server/${version}/latest-linux-x64.yml`]: `version: ${version}\n`,
+      [`server/${version}/complete.json`]: JSON.stringify({ format: 1, version, platform: "linux-x64" }),
+    };
+  };
+  const SERVER_RINGS = {
+    ...RINGS,
+    server: {
+      internal: { version: "0.8.0-rc.2" },
+      preview: { version: "0.8.0-rc.1" },
+    },
+  };
+  const serverEnv = (rings = SERVER_RINGS, extra = {}) => {
+    const e = env(rings, { ...files("0.8.0-rc.1"), ...files("0.8.0-rc.2"), ...extra });
+    const tokens = JSON.parse(e.FEED_TOKENS);
+    tokens[sha(SERVER_TOKEN)] = { ring: "preview", channel: "server" };
+    return { ...e, FEED_TOKENS: JSON.stringify(tokens) };
+  };
+
+  it("resolves each ring's server version, for any token of that ring", async () => {
+    const e = serverEnv();
+    for (const [token, version] of [
+      [TOKENS.internal, "0.8.0-rc.2"],
+      [TOKENS.preview, "0.8.0-rc.1"],
+      [SERVER_TOKEN, "0.8.0-rc.1"],
+    ]) {
+      const response = await handle(get("/server/latest-linux-x64.yml?x=1", { token }), e);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toBe("text/yaml; charset=utf-8");
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(await response.text()).toBe(`version: ${version}\n`);
+    }
+    // Stable has no server version yet; a rings.json from before the channel has no `server`.
+    expect((await handle(get("/server/latest-linux-x64.yml", { token: TOKENS.stable }), e)).status).toBe(404);
+    expect(
+      (await handle(get("/server/latest-linux-x64.yml", { token: TOKENS.internal }), serverEnv(RINGS))).status,
+    ).toBe(404);
+  });
+
+  it("applies a server rollout per token, independently of the desktop channel", async () => {
+    const percent = 50;
+    const rings = {
+      ...SERVER_RINGS,
+      server: { preview: { version: "0.8.0-rc.1", rollout: { version: "0.8.0-rc.2", percent } } },
+    };
+    const e = serverEnv(rings);
+    for (const token of [TOKENS.preview, SERVER_TOKEN]) {
+      const inRollout = (await rolloutBucket(sha(token), "0.8.0-rc.2")) < percent;
+      const response = await handle(get("/server/latest-linux-x64.yml", { token }), e);
+      expect(await response.text()).toBe(`version: ${inRollout ? "0.8.0-rc.2" : "0.8.0-rc.1"}\n`);
+    }
+    // The desktop channel of the same ring is untouched.
+    expect(await (await handle(get("/latest-x64.yml", { token: TOKENS.preview }), e)).text()).toBe("version: 0.7.0\n");
+  });
+
+  it("serves the bundle, manifest and signature by the version in their name, with HEAD and Range", async () => {
+    const e = serverEnv();
+    const stem = "/server/orca-server-0.8.0-rc.1-linux-x64";
+    const archive = await handle(get(`${stem}.tar.xz`, { token: SERVER_TOKEN }), e);
+    expect(archive.status).toBe(200);
+    expect(archive.headers.get("Content-Type")).toBe("application/octet-stream");
+    expect(await archive.text()).toBe("archive 0.8.0-rc.1 bytes");
+    const manifest = await handle(get(`${stem}.manifest.json`, { token: SERVER_TOKEN }), e);
+    expect(manifest.headers.get("Content-Type")).toBe("application/json");
+    expect(await manifest.text()).toBe('{"version":"0.8.0-rc.1"}');
+    expect((await handle(get(`${stem}.manifest.json.sigstore.json`, { token: SERVER_TOKEN }), e)).status).toBe(200);
+    const head = await handle(get(`${stem}.tar.xz`, { token: SERVER_TOKEN, method: "HEAD" }), e);
+    expect(head.status).toBe(200);
+    expect(head.headers.get("Content-Length")).toBe("24");
+    expect(head.body).toBeNull();
+    const range = await handle(get(`${stem}.tar.xz`, { token: TOKENS.stable, headers: { Range: "bytes=0-6" } }), e);
+    expect(range.status).toBe(206);
+    expect(range.headers.get("Content-Range")).toBe("bytes 0-6/24");
+    expect(await range.text()).toBe("archive");
+    const rangeHead = await handle(
+      get(`${stem}.tar.xz`, { token: SERVER_TOKEN, method: "HEAD", headers: { Range: "bytes=-5" } }),
+      e,
+    );
+    expect(rangeHead.status).toBe(206);
+    expect(rangeHead.headers.get("Content-Range")).toBe("bytes 19-23/24");
+  });
+
+  it("serves nothing of a server snapshot until its own completion record is exactly right", async () => {
+    const version = "0.8.0-rc.1";
+    for (const record of [
+      undefined,
+      "{}",
+      '{"format":1,"version":"0.8.0-rc.2","platform":"linux-x64"}',
+      '{"format":1,"version":"0.8.0-rc.1","platform":"linux-arm64"}',
+      '{"format":2,"version":"0.8.0-rc.1","platform":"linux-x64"}',
+      '{"format":1,"version":"0.8.0-rc.1","platform":"linux-x64","extra":1}',
+      "not json",
+    ]) {
+      const e = serverEnv();
+      if (record === undefined) e.FEED.objects.delete(`server/${version}/complete.json`);
+      else e.FEED.objects.set(`server/${version}/complete.json`, Buffer.from(record));
+      expect((await handle(get("/server/latest-linux-x64.yml", { token: SERVER_TOKEN }), e)).status).toBe(404);
+      expect(
+        (await handle(get(`/server/orca-server-${version}-linux-x64.tar.xz`, { token: SERVER_TOKEN }), e)).status,
+      ).toBe(404);
+    }
+    // The desktop completion record never stands in for the server one.
+    const e = serverEnv(SERVER_RINGS, { [`${version}/complete.json`]: `{"format":1,"version":"${version}"}` });
+    e.FEED.objects.delete(`server/${version}/complete.json`);
+    expect(
+      (await handle(get(`/server/orca-server-${version}-linux-x64.tar.xz`, { token: SERVER_TOKEN }), e)).status,
+    ).toBe(404);
+  });
+
+  it("keeps a server-only token out of the desktop channel", async () => {
+    const e = serverEnv();
+    for (const path of ["/latest-x64.yml", "/ORCA-0.7.0-win-x64.exe", "/ORCA-0.7.0-win-x64.exe.blockmap"])
+      expect((await handle(get(path, { token: SERVER_TOKEN }), e)).status).toBe(404);
+    // A desktop token of the same ring still reads it.
+    expect((await handle(get("/latest-x64.yml", { token: TOKENS.preview }), e)).status).toBe(200);
+  });
+
+  it("refuses a token entry naming any other channel, and anonymous server requests", async () => {
+    const e = serverEnv();
+    const tokens = JSON.parse(e.FEED_TOKENS);
+    tokens[sha("r".repeat(43))] = { ring: "preview", channel: "desktop" };
+    const odd = { ...e, FEED_TOKENS: JSON.stringify(tokens) };
+    for (const path of ["/server/latest-linux-x64.yml", "/latest-x64.yml"])
+      expect((await handle(get(path, { token: "r".repeat(43) }), odd)).status).toBe(401);
+    const anonymous = await handle(get("/server/latest-linux-x64.yml"), e);
+    expect(anonymous.status).toBe(401);
+    expect(anonymous.headers.get("WWW-Authenticate")).toBe('Bearer realm="orca-feed"');
+    expect((await handle(get("/server/latest-linux-x64.yml", { token: SERVER_TOKEN, method: "POST" }), e)).status).toBe(
+      405,
+    );
+    expect(await authenticate(get("/", { token: SERVER_TOKEN }), JSON.parse(e.FEED_TOKENS))).toEqual({
+      hash: sha(SERVER_TOKEN),
+      ring: "preview",
+      serverOnly: true,
+    });
+  });
+
+  it("refuses other server paths and other platforms", async () => {
+    const e = serverEnv();
+    for (const path of [
+      "/server/latest-linux-arm64.yml",
+      "/server/orca-server-0.8.0-rc.1-linux-arm64.tar.xz",
+      "/server/0.8.0-rc.1/complete.json",
+      "/server/orca-server-0.8.0-rc.1-linux-x64.zip",
+      "/server/rings.json",
+      "/server/server/latest-linux-x64.yml",
+      "/server/orca-server-0.8.0-..-linux-x64.tar.xz",
+    ])
+      expect((await handle(get(path, { token: TOKENS.internal }), e)).status, path).toBe(404);
+  });
+
+  it("answers 503 for an invalid server ring rather than guessing", async () => {
+    const e = serverEnv({ ...RINGS, server: { nightly: { version: "0.8.0" } } });
+    expect((await handle(get("/server/latest-linux-x64.yml", { token: TOKENS.internal }), e)).status).toBe(503);
+  });
+});

@@ -13,6 +13,10 @@
     "./child-bundle": {
       "types": "./dist/child-bundle.d.ts",
       "import": "./dist/child-bundle.js"
+    },
+    "./two-daemons": {
+      "types": "./dist/two-daemons.d.ts",
+      "import": "./dist/two-daemons.js"
     }
   },
   "files": [
