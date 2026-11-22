@@ -421,13 +421,18 @@ daemon's config, readable only by its user:
 orca auth issue parent-daemon --preset client --json > build-box.token
 # on this machine
 install -m 600 build-box.token auth/remotes/build-box.token   # or set remotes[].credentialFile
-orca remote enroll build-box
+# on build-box: its host key's fingerprint
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+# on this machine
+orca remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for a jump host
 ```
 
-`orca remote enroll` is the only connect that trusts a host key on first use. It pins the
-remote's host keys (and its jump host's) in `auth/remotes/<id>.known_hosts`, checks the
-credential there, and records in `auth/remotes/<id>.json` the workspace and principal the
-remote daemon names and the credential's id (never the secret). From then on a delegated step:
+`orca remote enroll` trusts a host key only when it is already pinned in
+`auth/remotes/<id>.known_hosts` (`.jump` for the jump host) or matches a fingerprint you give.
+A host that presents any other key is refused before anything, the credential included, is
+sent to it. Enrollment then pins the keys, checks the credential, and records in
+`auth/remotes/<id>.json` the workspace and principal the remote daemon names and the
+credential's id (never the secret). From then on a delegated step:
 
 - opens SSH trusting only the enrolled keys; a changed or missing key refuses the step before
   any byte reaches the remote;
@@ -441,7 +446,9 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
 - **The step's task becomes a remote run, once.** The step's rendered prompt (without ORCA's
   deliverable instructions) is passed as the remote workflow's `prompt` variable, and the run
   is admitted with `runs.admit` under a key derived from this run and the step's first
-  attempt. Before anything is sent, a receipt is written under the store's `delegations/`.
+  attempt. Before anything is sent, a receipt is written under the store's `delegations/`,
+  bound to the enrollment and to the remote target and workflow: after a re-enrollment or a
+  retarget, an earlier delegation's receipt is never acted on (its step is refused instead).
   A retried step, or this daemon after a restart, reads the receipt: it sends the same key
   again while the answer is unknown (the remote replays it), follows a run that was admitted
   (and brings back the artifacts of one that already succeeded: a succeeded run stays the

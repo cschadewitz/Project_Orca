@@ -271,9 +271,9 @@ export const commands: Record<string, Command> = {
     run: authCommand,
   },
   remote: {
-    help: "remote enroll <id>  Enroll a configured remote daemon so steps can be delegated to it.",
+    help: "remote enroll <id> [--host-key SHA256:...]  Enroll a configured remote daemon so steps can be delegated to it.",
     usage:
-      "enroll connects once over SSH, pins the remote's host keys (and its jump host's), checks the credential in auth/remotes/<id>.token, and records the workspace and principal the daemon there names in auth/remotes/<id>.json.\nDelegated steps go only to an enrolled remote, over those keys, with that credential. Enroll again after replacing the credential or moving the remote.\n--json prints the enrollment record.\n",
+      "enroll trusts a host key only if it is already pinned in auth/remotes/<id>.known_hosts (.jump for the jump host) or matches a fingerprint you give: --host-key SHA256:... (and --jump-host-key), as ssh-keygen -l prints it on that machine. It refuses an unverified host before sending anything.\nIt then pins the keys, checks the credential in auth/remotes/<id>.token, and records the workspace and principal the daemon there names in auth/remotes/<id>.json.\nDelegated steps go only to an enrolled remote, over those keys, with that credential. Enroll again after replacing the credential or moving the remote.\n--json prints the enrollment record.\n",
     run: remoteCommand,
   },
 

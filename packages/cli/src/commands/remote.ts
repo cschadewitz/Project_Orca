@@ -28,6 +28,8 @@ export async function remoteCommand(ctx: CommandContext): Promise<number> {
     knownHostsFile: files.knownHostsFile,
     file: files.enrollmentFile,
     token,
+    hostKeys: (ctx.flags["host-key"] as string[] | undefined) ?? [],
+    jumpHostKeys: (ctx.flags["jump-host-key"] as string[] | undefined) ?? [],
   });
   if (ctx.flags.json) ctx.out(JSON.stringify(record, null, 2));
   else {

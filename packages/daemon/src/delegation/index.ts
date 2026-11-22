@@ -20,7 +20,8 @@
  */
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { OrcaError, type OrcaConfig, type RemoteDaemonSpec } from "@orca/core";
+import { createHash } from "node:crypto";
+import { OrcaError, type AgentSpec, type OrcaConfig, type RemoteDaemonSpec } from "@orca/core";
 import type { AgentSession, OpenSessionOptions } from "@orca/agents";
 import {
   ConnectionProfileSchema,
@@ -31,7 +32,7 @@ import {
 } from "@orca/protocol/remote-access";
 import { delegationRefusal, openDaemonSession, type DelegationTransport } from "./daemon-session.js";
 import { credentialIdOf, enrollmentFile, readEnrollment, type Enrollment } from "./enrollment.js";
-import { DelegationReceipts } from "./receipts.js";
+import { DelegationReceipts, type DelegationBinding } from "./receipts.js";
 
 export {
   delegationRefusal,
@@ -42,7 +43,14 @@ export {
   type OpenDaemonSessionOptions,
 } from "./daemon-session.js";
 export { RemoteDaemonClient, RemoteFault, RemoteUnreachable } from "./remote-client.js";
-export { delegationKey, DelegationReceipts, DelegationReceiptSchema, type DelegationReceipt } from "./receipts.js";
+export {
+  delegationKey,
+  DelegationReceipts,
+  DelegationReceiptSchema,
+  ReceiptConflict,
+  type DelegationBinding,
+  type DelegationReceipt,
+} from "./receipts.js";
 export {
   credentialIdOf,
   enrollmentFile,
@@ -142,6 +150,35 @@ export function readRemoteCredential(remote: RemoteDaemonSpec, file: string): st
     }
   if (!TOKEN.test(token)) throw missing("it does not hold an ORCA token");
   return token;
+}
+
+/**
+ * What a session's receipts are bound to: the enrolled scope, the enrollment itself (a
+ * re-enrollment is another binding), and the delegation's configuration, i.e. the remote
+ * target and the agent's workflow and prompt variable. An edit to anything else in the config
+ * leaves it alone; a retarget does not.
+ */
+export function delegationBinding(
+  enrollment: Enrollment,
+  profile: ConnectionProfile,
+  agent: Pick<AgentSpec, "workflow" | "promptVar">,
+): DelegationBinding {
+  const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return {
+    workspaceId: enrollment.workspaceId,
+    principalId: enrollment.principalId,
+    enrollment: digest(enrollment),
+    target: digest({
+      destination: profile.destination,
+      sshPort: profile.sshPort ?? null,
+      jump: profile.jump ?? null,
+      remotePort: profile.remotePort ?? null,
+      serverCommand: profile.serverCommand ?? null,
+      serverConfig: profile.serverConfig ?? null,
+      workflow: agent.workflow ?? null,
+      promptVar: agent.promptVar ?? "prompt",
+    }),
+  };
 }
 
 /** The remote's enrollment record, or a refusal saying how to enroll it. */
@@ -252,7 +289,7 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
       remoteName: profile.name,
       transport: tunnelTransport(tunnel),
       token,
-      expected: { workspaceId: enrollment.workspaceId, principalId: enrollment.principalId },
+      binding: delegationBinding(enrollment, profile, open.agent),
       receipts,
       ...(open.askPermission ? { askPermission: (req, invocation) => open.askPermission!(req, invocation) } : {}),
       ...(open.logger ? { logger: open.logger } : {}),

@@ -81,7 +81,14 @@ import {
   type OpenInputView,
 } from "@orca/protocol";
 import { RemoteDaemonClient, RemoteFault, RemoteUnreachable } from "./remote-client.js";
-import { delegationKey, type DelegationReceipt, type DelegationReceipts } from "./receipts.js";
+import {
+  delegationKey,
+  ReceiptConflict,
+  sameBinding,
+  type DelegationBinding,
+  type DelegationReceipt,
+  type DelegationReceipts,
+} from "./receipts.js";
 
 /** ACP shapes, through `@orca/agents`' own types: this package does not import the SDK. */
 type PromptInput = Parameters<AgentSession["prompt"]>[0];
@@ -148,8 +155,12 @@ export interface OpenDaemonSessionOptions {
   remoteName: string;
   transport: DelegationTransport;
   token: string;
-  /** What enrollment proved the remote daemon names: the session refuses any other. */
-  expected: { workspaceId: string; principalId: string };
+  /**
+   * What enrollment proved the remote daemon names (its workspace and principal), with the
+   * enrollment and delegation configuration they were proven for: the session refuses any
+   * other daemon, and acts only on receipts made under this same binding.
+   */
+  binding: DelegationBinding;
   /** Where this daemon records what it asked the remote to run. */
   receipts: DelegationReceipts;
   askPermission?: (req: PermissionRequest, invocation?: PermissionInvocation) => Promise<string | undefined>;
@@ -258,14 +269,14 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
         `The daemon on ${options.remoteName} does not take delegated runs (it does not answer ${missing.join(", ")}). It may be read-only, not in token mode, or an older ORCA.`,
         { missing },
       );
-    if (hello.identity && hello.identity.workspaceId !== options.expected.workspaceId) throw changed("workspace");
+    if (hello.identity && hello.identity.workspaceId !== options.binding.workspaceId) throw changed("workspace");
     const discovery = OperatorDiscoverySchema.parse(
       await client.call("operator.discover", {}).catch((e: unknown) => {
         throw fault(e);
       }),
     );
-    if (discovery.target.workspaceId !== options.expected.workspaceId) throw changed("workspace");
-    if (discovery.principalId !== options.expected.principalId) throw changed("principal");
+    if (discovery.target.workspaceId !== options.binding.workspaceId) throw changed("workspace");
+    if (discovery.principalId !== options.binding.principalId) throw changed("principal");
     if (!discovery.operations.includes("runs.admit"))
       throw refuse(
         "auth",
@@ -431,13 +442,22 @@ class DaemonSession implements AgentSession {
     };
     this.current = current;
     this.note(`Delegated to ${this.options.remoteName} as run ${runId}.`);
+    /** Record a transition; one another session already made a newer decision on loses. */
+    const record = (next: DelegationReceipt) => {
+      try {
+        receipt = this.store(next);
+      } catch (error) {
+        if (!(error instanceof ReceiptConflict)) throw error;
+        this.logger.warn("delegation receipt changed by another session", { profile: this.options.profile, runId });
+      }
+    };
     const settle = (outcome: NonNullable<DelegationReceipt["outcome"]>) =>
-      (receipt = this.store({ ...receipt, state: "settled", outcome }));
+      record({ ...receipt, state: "settled", outcome });
     /** After a cancel: settled once the run is seen ended, else the intent is kept for later. */
     const afterCancel = (status: Terminal["status"] | undefined) => {
       if (receipt.state !== "admitted") return;
       if (status) settle(status);
-      else receipt = this.store({ ...receipt, state: "cancel-pending" });
+      else record({ ...receipt, state: "cancel-pending" });
     };
     try {
       const outcome = await this.follow(runId, deadline, signal, current);
@@ -479,8 +499,13 @@ class DaemonSession implements AgentSession {
 
   // ------------------------------------------------------------------ receipts
 
-  /** Replace this delegation's receipt (durable before it returns). */
-  private store(receipt: Omit<DelegationReceipt, "version" | "updatedAt">): DelegationReceipt {
+  /**
+   * Replace this delegation's receipt (durable before it returns), if it is still the revision
+   * it was read at; `ReceiptConflict` otherwise. A receipt without a revision must be new.
+   */
+  private store(
+    receipt: Omit<DelegationReceipt, "version" | "updatedAt" | "revision"> & { revision?: number },
+  ): DelegationReceipt {
     const { version: _v, updatedAt: _u, ...rest } = receipt as DelegationReceipt;
     return this.options.receipts.write(rest);
   }
@@ -508,56 +533,78 @@ class DaemonSession implements AgentSession {
     for (;;) {
       if (signal?.aborted) throw new OrcaError("CANCELLED", "cancelled before the remote run was admitted");
       const receipt = this.options.receipts.read(parentRunId, delegationId);
-      if (receipt && receipt.profile !== this.options.profile)
+      if (receipt && (receipt.profile !== this.options.profile || !sameBinding(receipt.binding, this.options.binding)))
         throw delegationRefusal(
           this.options.profile,
           "scope-changed",
-          `This step was delegated to remote ${receipt.profile}, and its agent now names ${this.options.profile}. Nothing was sent; cancel the run and start it again to delegate to the new remote.`,
+          `This step was delegated under remote ${receipt.profile} as it was enrolled and configured then, and that has changed since (the remote, its enrollment, or the agent's workflow). Nothing was sent; cancel the run and start it again to delegate under the new one.`,
           { delegatedTo: receipt.profile },
         );
-      if (!receipt) {
-        const fresh = this.store({
+      try {
+        const settledReceipt = await this.step(receipt, turn, task, deadline, signal, wait);
+        if (settledReceipt) return settledReceipt;
+      } catch (error) {
+        // Another session moved the receipt on: read it again and decide anew.
+        if (!(error instanceof ReceiptConflict)) throw error;
+      }
+    }
+  }
+
+  /** One decision on a delegation's receipt: the receipt to follow, or undefined to read again. */
+  private async step(
+    receipt: DelegationReceipt | undefined,
+    turn: TurnContext,
+    task: string,
+    deadline: number,
+    signal: AbortSignal | undefined,
+    wait: (what: string) => Promise<void>,
+  ): Promise<DelegationReceipt | undefined> {
+    const { runId: parentRunId, delegationId } = turn;
+    if (!receipt) {
+      const fresh = this.store({
+        profile: this.options.profile,
+        binding: this.options.binding,
+        parentRunId,
+        delegationId,
+        generation: 0,
+        key: delegationKey(parentRunId, delegationId, 0),
+        state: "submitting",
+      });
+      return this.submit(fresh, task, deadline, signal);
+    }
+    switch (receipt.state) {
+      case "admitted": {
+        // Reattach only to a run that may still go on; one that ended is settled first.
+        const ended = await this.call("runs.get", { runId: receipt.remoteRunId! }, deadline, signal).then(
+          (answer) => RunsGetResultSchema.parse(answer).run.status,
+        );
+        if (ended !== "succeeded" && ended !== "failed" && ended !== "cancelled") return receipt;
+        this.store({ ...receipt, state: "settled", outcome: ended });
+        return undefined;
+      }
+      case "submitting":
+        // The answer was never learned. The same key replays the admission if it was made.
+        return this.submit(receipt, task, deadline, signal);
+      case "cancel-pending":
+        // A cancellation still being settled. Nothing here submits: the key is fenced or its
+        // run is cancelled, and only once that is authoritative may a new generation start.
+        if (!(await this.settleCancel(receipt, deadline, signal))) await wait("an earlier cancellation");
+        return undefined;
+      case "settled": {
+        if (receipt.outcome === "succeeded" && receipt.remoteRunId) return receipt;
+        // The earlier run is verified ended without success, or verified never admitted.
+        const generation = receipt.generation + 1;
+        const next = this.store({
+          revision: receipt.revision,
           profile: this.options.profile,
+          binding: this.options.binding,
           parentRunId,
           delegationId,
-          generation: 0,
-          key: delegationKey(parentRunId, delegationId, 0),
+          generation,
+          key: delegationKey(parentRunId, delegationId, generation),
           state: "submitting",
         });
-        return this.submit(fresh, task, deadline, signal);
-      }
-      switch (receipt.state) {
-        case "admitted": {
-          // Reattach only to a run that may still go on; one that ended is settled first.
-          const ended = await this.call("runs.get", { runId: receipt.remoteRunId! }, deadline, signal).then(
-            (answer) => RunsGetResultSchema.parse(answer).run.status,
-          );
-          if (ended !== "succeeded" && ended !== "failed" && ended !== "cancelled") return receipt;
-          this.store({ ...receipt, state: "settled", outcome: ended });
-          continue;
-        }
-        case "submitting":
-          // The answer was never learned. The same key replays the admission if it was made.
-          return this.submit(receipt, task, deadline, signal);
-        case "cancel-pending":
-          // A cancellation still being settled. Nothing here submits: the key is fenced or its
-          // run is cancelled, and only once that is authoritative may a new generation start.
-          if (!(await this.settleCancel(receipt, deadline, signal))) await wait("an earlier cancellation");
-          continue;
-        case "settled": {
-          if (receipt.outcome === "succeeded" && receipt.remoteRunId) return receipt;
-          // The earlier run is verified ended without success, or verified never admitted.
-          const generation = receipt.generation + 1;
-          const next = this.store({
-            profile: this.options.profile,
-            parentRunId,
-            delegationId,
-            generation,
-            key: delegationKey(parentRunId, delegationId, generation),
-            state: "submitting",
-          });
-          return this.submit(next, task, deadline, signal);
-        }
+        return this.submit(next, task, deadline, signal);
       }
     }
   }
@@ -624,7 +671,7 @@ class DaemonSession implements AgentSession {
   async sweep(): Promise<void> {
     let pending: DelegationReceipt[];
     try {
-      pending = this.options.receipts.cancelPending(this.options.profile);
+      pending = this.options.receipts.cancelPending(this.options.binding);
     } catch {
       return;
     }

@@ -25,6 +25,7 @@ import {
   delegationKey,
   DelegationReceipts,
   openDaemonSession,
+  ReceiptConflict,
   type DelegationTransport,
   type OpenDaemonSessionOptions,
 } from "@orca/daemon";
@@ -249,9 +250,28 @@ edges:
     expect(((await call(remote, "runs.list", {})).runs as unknown[]).length).toBe(0);
   }, 120_000);
 
+  it("refuses to enroll a host whose key nobody vouched for, before sending the credential", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const auditLines = async () =>
+      (await readFile(join(remote.dir, "auth", "audit.jsonl"), "utf8").catch(() => "")).length;
+    const before = await auditLines();
+    // No pin and no fingerprint: refused before ssh starts.
+    const blind = cli(parent, ["remote", "enroll", "remote-box"]);
+    expect(blind.status).not.toBe(0);
+    expect(blind.stderr).toContain("--host-key");
+    // A fingerprint the host's key does not have: refused once ssh shows the key, before HTTP.
+    const wrong = cli(parent, ["remote", "enroll", "remote-box", "--host-key", `SHA256:${"A".repeat(43)}`]);
+    expect(wrong.status).not.toBe(0);
+    expect(wrong.stderr).toContain("not a fingerprint you gave");
+    await expect(readFile(knownHostsPath(), "utf8")).rejects.toThrow();
+    await expect(readFile(enrollmentPath(), "utf8")).rejects.toThrow();
+    // The remote daemon never saw a request (its audit log did not grow).
+    expect(await auditLines()).toBe(before);
+  }, 120_000);
+
   it("enrolls the remote: pins its host keys and records its workspace and principal", async (ctx) => {
     if (!sshd) return ctx.skip();
-    const out = cli(parent, ["remote", "enroll", "remote-box", "--json"]);
+    const out = cli(parent, ["remote", "enroll", "remote-box", "--json", "--host-key", sshd.hostKeyFingerprint]);
     expect(out.status, out.stderr).toBe(0);
     const record = JSON.parse(out.stdout) as Record<string, string>;
     const discovered = (await call(remote, "operator.discover", {})).target as { workspaceId: string };
@@ -392,7 +412,7 @@ describe("delegation through a proxy the test controls (#883)", () => {
   let remote: TestDaemon;
   let token: string;
   let work: string;
-  let expected: OpenDaemonSessionOptions["expected"];
+  let binding: OpenDaemonSessionOptions["binding"];
 
   beforeAll(async () => {
     remote = await remoteDaemon();
@@ -403,7 +423,12 @@ describe("delegation through a proxy the test controls (#883)", () => {
       ok: true;
       result: { principalId: string; target: { workspaceId: string } };
     };
-    expected = { principalId: discovery.result.principalId, workspaceId: discovery.result.target.workspaceId };
+    binding = {
+      principalId: discovery.result.principalId,
+      workspaceId: discovery.result.target.workspaceId,
+      enrollment: "enrollment-1",
+      target: "target-1",
+    };
   }, 60_000);
   afterAll(async () => {
     await remote?.close();
@@ -562,7 +587,7 @@ describe("delegation through a proxy the test controls (#883)", () => {
       remoteName: "direct",
       transport,
       token,
-      expected,
+      binding,
       receipts,
       pollMs: 100,
       ...extra,
@@ -748,13 +773,56 @@ describe("delegation through a proxy the test controls (#883)", () => {
     const proxy = await proxied();
     const before = (await runsOf("remote-task")).length;
     const error = await open(proxy.transport(), new DelegationReceipts(join(work, "receipts-scope")), {
-      expected: { ...expected, principalId: "someone-else" },
+      binding: { ...binding, principalId: "someone-else" },
     }).catch((e: unknown) => e);
     expect(isOrcaError(error, "DELEGATION_REFUSED")).toBe(true);
     expect((error as { details: { reason: string } }).details.reason).toBe("scope-changed");
     expect(await runsOf("remote-task")).toHaveLength(before);
     await proxy.close();
   }, 60_000);
+
+  it("never acts on a receipt made under another enrollment or configuration", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-rebind"));
+    const before = (await runsOf("remote-task")).length;
+    // A cancellation left pending under the earlier enrollment of this remote.
+    receipts.write({
+      profile: "direct",
+      binding: { ...binding, enrollment: "enrollment-0" },
+      parentRunId: "run_rebind",
+      delegationId: "run_rebind_step1",
+      generation: 0,
+      key: delegationKey("run_rebind", "run_rebind_step1", 0),
+      state: "cancel-pending",
+    });
+    // The sweep at open leaves it alone; the retried step is refused, and nothing is sent.
+    const session = await open(proxy.transport(), receipts);
+    expect(receipts.read("run_rebind", "run_rebind_step1")).toMatchObject({ state: "cancel-pending", revision: 0 });
+    await expect(
+      session.prompt("ignored", { timeoutMs: 30_000, turn: turn("run_rebind", join(work, "rebind", "r.md"), 2) }),
+    ).rejects.toMatchObject({ code: "DELEGATION_REFUSED", details: { reason: "scope-changed" } });
+    expect(await runsOf("remote-task")).toHaveLength(before);
+    await session.close();
+    await proxy.close();
+  }, 60_000);
+
+  it("commits a receipt transition only over the revision it read", () => {
+    const receipts = new DelegationReceipts(join(work, "receipts-cas"));
+    const base = {
+      profile: "direct",
+      binding,
+      parentRunId: "run_cas",
+      delegationId: "run_cas_step1",
+      generation: 0,
+      key: delegationKey("run_cas", "run_cas_step1", 0),
+    };
+    const first = receipts.write({ ...base, state: "cancel-pending" });
+    expect(() => receipts.write({ ...base, state: "submitting" })).toThrow(ReceiptConflict);
+    // Two sessions read revision 0; the first decision wins, the stale one is refused.
+    const newer = receipts.write({ ...first, state: "settled", outcome: "never-admitted" });
+    expect(() => receipts.write({ ...first, state: "cancel-pending", remoteRunId: "run_x" })).toThrow(ReceiptConflict);
+    expect(receipts.read("run_cas", "run_cas_step1")).toMatchObject({ revision: newer.revision, state: "settled" });
+  });
 
   it("keys each generation of a delegation to its own remote admission", () => {
     expect(delegationKey("r", "d", 0)).not.toBe(delegationKey("r", "d", 1));
