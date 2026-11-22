@@ -21,4 +21,29 @@ and on demand.
 
 ## Results
 
-Pending the first CI run.
+Recorded on [run 45004839217](https://github.com/cschadewitz/Project_Orca/actions/runs/45004839217)
+(commit `831d473`): GitHub-hosted `ubuntu-24.04`, Xeon Platinum 8370C, Node 24.22.3, OpenSSH
+on loopback. Medians of three cold runs, in milliseconds.
+
+| Network | Scenario | per-command ssh | SFTP | Speed-up |
+| --- | --- | ---: | ---: | ---: |
+| loopback | pick up 100 small files | 5301 | 208 | 25.5× |
+| loopback | pick up one 50 MB file | 650 | 523 | 1.2× |
+| loopback | write 100 small files | 5133 | 212 | 24.2× |
+| loopback | write one 50 MB file | 413 | 499 | 0.8× |
+| 20 ms RTT | pick up 100 small files | 5690 | 597 | 9.5× |
+| 20 ms RTT | pick up one 50 MB file | 1564 | 1253 | 1.2× |
+| 20 ms RTT | write 100 small files | 5336 | 554 | 9.6× |
+| 20 ms RTT | write one 50 MB file | 1121 | 1205 | 0.9× |
+
+Reading it:
+
+- Many small files is where the old path hurt: each file was a full ssh handshake (about
+  50 ms of CPU-bound key exchange each, even on loopback), and 100 of them at once queue on
+  sshd. One session with every request pipelined removes all but one handshake.
+- One large file is a single stream either way. Pickup is still faster over SFTP because the
+  64-request read window keeps the pipe full. A single large *write* is within 10–20% of
+  `cat > file`: the per-command path is one unframed stream, while SFTP frames and
+  acknowledges every 32 KiB chunk. Writes are not on the pickup path and stay at the same
+  order of magnitude; the commit after this run removed two buffer copies per WRITE packet,
+  and the PR's later benchmark runs show the effect.

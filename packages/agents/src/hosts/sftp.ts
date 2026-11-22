@@ -119,11 +119,14 @@ class Writer {
     this.parts.push(b);
     return this;
   }
+  /** Length-prefixed packet in one allocation: a WRITE's data is copied once, not three times. */
   packet(): Buffer {
-    const body = Buffer.concat(this.parts);
-    const len = Buffer.alloc(4);
-    len.writeUInt32BE(body.length);
-    return Buffer.concat([len, body]);
+    const length = this.parts.reduce((n, b) => n + b.length, 0);
+    const out = Buffer.allocUnsafe(4 + length);
+    out.writeUInt32BE(length, 0);
+    let at = 4;
+    for (const b of this.parts) at += b.copy(out, at);
+    return out;
   }
 }
 
