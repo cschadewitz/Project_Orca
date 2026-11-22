@@ -444,3 +444,25 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+
+  # Hands a successful signing run to Release (attach signed installer). GitHub starts no
+  # `workflow_run` for a run the workflow token dispatched (release-publish.yml's sign job does),
+  # so the attach is dispatched from here; a dispatch is exempt from that rule. The attach waits
+  # for this run to finish and re-checks it (successful, from main, one unexpired signed
+  # artifact) before it reads any draft, and does nothing for a commit with no final draft.
+  # This job checks nothing out and can only dispatch.
+  hand-off:
+    name: dispatch the attach for this signed run
+    needs: [resolve, sign]
+    if: github.ref == 'refs/heads/main' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch Release (attach signed installer)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run release-attach-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f signed_run_id="$GITHUB_RUN_ID"
+          echo "Dispatched Release (attach signed installer) for run \`$GITHUB_RUN_ID\`." >> "$GITHUB_STEP_SUMMARY"

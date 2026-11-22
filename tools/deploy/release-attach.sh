@@ -7,6 +7,9 @@
 #                                       signed; nothing if none. RUN_ID must be a successful
 #                                       windows-signed.yml run of this repository, dispatched
 #                                       from main, with exactly one unexpired signed artifact
+#   release-attach.sh wait-run RUN_ID   wait until run RUN_ID has finished (WAIT_RUN_TRIES polls
+#                                       WAIT_RUN_SECONDS apart, default 30 minutes), whatever its
+#                                       conclusion; fail if it is still running after that
 #   release-attach.sh attach ID SHA VERSION RUN_ID FILE [ARM64_FILE]
 #                                       record RUN_ID and each file's digest in draft ID's notes,
 #                                       then upload FILE (x64) and ARM64_FILE; re-validates the
@@ -427,6 +430,16 @@ case "${1:-}" in
     [[ $# -eq 2 ]] || fail "usage: release-attach.sh run-with-jobs RUN_ID"
     run_with_jobs "$2"
     ;;
+  wait-run)
+    [[ $# -eq 2 && "$2" =~ ^[0-9]+$ ]] || fail "usage: release-attach.sh wait-run RUN_ID"
+    tries=${WAIT_RUN_TRIES:-120}
+    for ((i = 1; ; i++)); do
+      status=$(gh api "repos/$REPO/actions/runs/$2" --jq .status) || fail "could not read run $2"
+      [[ "$status" != "completed" ]] || { note "Run $2 has finished."; exit 0; }
+      ((i < tries)) || fail "run $2 is still $status; attach it later (the reconcile does)"
+      sleep "${WAIT_RUN_SECONDS:-15}"
+    done
+    ;;
   select)
     [[ "${2:-}" =~ ^[0-9]+$ ]] || fail "usage: release-attach.sh select RUN_ID"
     artifact=$(signed_artifact "$2")
@@ -795,5 +808,5 @@ case "${1:-}" in
     [[ "$(gh api "repos/$REPO/releases/latest" --jq .id)" == "$id" ]] || fail "release $id is not latest"
     note "Published v$version (release \`$id\`, \`$sha\`): $deb_name \`$deb\`, $exe_name \`$exe\`${arm:+, $arm_name \`$arm\` (natively accepted)}."
     ;;
-  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE [ARM64_FILE] | reconcile | accept-select [ID] | accept ID SHA VERSION RUN_ID DIGEST | x64-only ID SHA VERSION | upgrade-target ID | upgrade-reconcile | record-upgrade ID SHA VERSION RUN_ID EXE_SHA256 FROM | publish ID VERSION SHA DEB_SHA256 EXE_SHA256 | run-with-jobs RUN_ID | server-receipt ID SHA VERSION DIR | server-target VERSION SHA | server-attach ID SHA VERSION RUN_ID DIR | server-reconcile" ;;
+  *) fail "usage: release-attach.sh wait-run RUN_ID | select RUN_ID | attach ID SHA VERSION RUN_ID FILE [ARM64_FILE] | reconcile | accept-select [ID] | accept ID SHA VERSION RUN_ID DIGEST | x64-only ID SHA VERSION | upgrade-target ID | upgrade-reconcile | record-upgrade ID SHA VERSION RUN_ID EXE_SHA256 FROM | publish ID VERSION SHA DEB_SHA256 EXE_SHA256 | run-with-jobs RUN_ID | server-receipt ID SHA VERSION DIR | server-target VERSION SHA | server-attach ID SHA VERSION RUN_ID DIR | server-reconcile" ;;
 esac
