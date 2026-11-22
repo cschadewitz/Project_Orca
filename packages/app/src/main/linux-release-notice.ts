@@ -125,7 +125,7 @@ export interface ReleaseWatchOptions {
   arch: string;
   fetch: (
     url: string,
-    init: { headers: Record<string, string>; signal: AbortSignal },
+    init: { headers: Record<string, string>; signal: AbortSignal; redirect: "error" },
   ) => Promise<{
     ok: boolean;
     json(): Promise<unknown>;
@@ -177,9 +177,16 @@ export class LinuxReleaseWatch {
       const response = await this.options.fetch(url, {
         headers: { Accept: "application/vnd.github+json", "User-Agent": "ORCA-desktop" },
         signal: AbortSignal.timeout(this.options.timeoutMs ?? 10_000),
+        // The HTTPS-or-loopback rule holds for the URL asked, so no hop may move it
+        // elsewhere: a redirect fails the check, silently, like any other failure.
+        redirect: "error",
       });
       if (!response.ok) return;
-      const notice = newerRelease(await response.json(), this.options.current, this.options.arch, env);
+      const body: unknown = await response.json();
+      // Only a release list is an answer. Any other shape is a malformed check, which keeps
+      // the last answer; an empty list is a real answer and clears it.
+      if (!Array.isArray(body)) return;
+      const notice = newerRelease(body, this.options.current, this.options.arch, env);
       if (this.stopped) return;
       if (JSON.stringify(notice) !== JSON.stringify(this.notice)) {
         this.notice = notice;

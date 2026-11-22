@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { expect, it, vi } from "vitest";
 import {
   compareVersions,
@@ -166,4 +168,66 @@ it("stops scheduling after stop", async () => {
   await Promise.resolve();
   expect(fetch).not.toHaveBeenCalled();
   expect(timers).toHaveLength(1);
+});
+
+it("keeps the last answer on a release list of the wrong shape, and clears it on a real empty list", async () => {
+  const fetch = fakeFetch(() => ok([release("v0.7.1")]));
+  const { w, changed } = watch(fetch);
+  await w.check();
+  expect(w.notice?.version).toBe("0.7.1");
+  for (const body of [{ message: "API rate limit exceeded" }, null, "releases", 7]) {
+    fetch.mockImplementation(() => ok(body));
+    await w.check();
+    expect(w.notice?.version).toBe("0.7.1");
+  }
+  expect(changed).toHaveBeenCalledTimes(1);
+  fetch.mockImplementation(() => ok([]));
+  await w.check();
+  expect(w.notice).toBeUndefined();
+  expect(changed).toHaveBeenLastCalledWith(undefined);
+});
+
+it("refuses to follow a redirect, so a hop cannot move the check off the allowed URL", async () => {
+  const fetch = fakeFetch(() => ok([]));
+  const { w } = watch(fetch);
+  await w.check();
+  expect(fetch.mock.calls[0]![1].redirect).toBe("error");
+
+  // And with a real fetch: a loopback list that redirects to a newer release is a failed check.
+  const server = createServer((request, response) => {
+    if (request.url === "/releases") {
+      response.writeHead(302, { location: "/moved" });
+      response.end();
+    } else {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify([release("v0.7.1")]));
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const changed = vi.fn();
+    const real = new LinuxReleaseWatch({
+      current: "0.7.0",
+      arch: "x64",
+      fetch: (url, init) => globalThis.fetch(url, init),
+      changed,
+      env: { ORCA_RELEASES_URL: `${base}/releases` },
+    });
+    await real.check();
+    expect(real.notice).toBeUndefined();
+    expect(changed).not.toHaveBeenCalled();
+    // The same server without the hop does produce the notice, so the refusal is the redirect.
+    const direct = new LinuxReleaseWatch({
+      current: "0.7.0",
+      arch: "x64",
+      fetch: (url, init) => globalThis.fetch(url, init),
+      changed,
+      env: { ORCA_RELEASES_URL: `${base}/moved` },
+    });
+    await direct.check();
+    expect(direct.notice?.version).toBe("0.7.1");
+  } finally {
+    server.close();
+  }
 });
