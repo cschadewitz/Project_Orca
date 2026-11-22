@@ -1749,7 +1749,12 @@ export class Orchestrator {
           const willRetry = outcome.retryable !== false && attempt < retryBudget(node) && !acted;
           await rc.emit({
             type: "step.failed",
-            payload: { stepRunId, error: outcome.error, willRetry, ...(outcome.effect ? { effect: outcome.effect } : {}) },
+            payload: {
+              stepRunId,
+              error: outcome.error,
+              willRetry,
+              ...(outcome.effect ? { effect: outcome.effect } : {}),
+            },
           });
           if (willRetry) {
             attempt++;
