@@ -94,7 +94,9 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    signed installer)** (`release-attach-signed.yml`, `tools/deploy/release-attach.sh`) with
    its own run id. It is a dispatch, not a `workflow_run`, because GitHub starts no
    `workflow_run` for a run the workflow token dispatched, which is how the sign job starts
-   it. The attach waits for the signing run to finish, then checks the signing run itself: a successful `windows-signed.yml` run of this repository, dispatched from
+   it. A failed dispatch does not fail the signing run: its `hand-off` job shows the failure
+   and the 6-hourly reconcile below attaches that run anyway. The attach waits for the
+   signing run to finish, then checks the signing run itself: a successful `windows-signed.yml` run of this repository, dispatched from
    `main`, with exactly one unexpired signed artifact. It finds the one final draft targeting
    `SHA`, re-checks both installers' (x64 and arm64) signature, timestamp and publisher,
    records the run and each installer's digest in the draft's notes, then uploads them by id
@@ -560,19 +562,20 @@ workflow's `linux-native` job is required for a rehearsal as for a release, and 
 the ref's `.deb` and runs `pnpm run app:linux-native`, which older refs (including rc.2,
 `c2e617af`) do not have, so a rehearsal of one fails there. The upgrade launch check is the
 one step an older ref may lack; it reports not applicable. It runs every job a real release runs (the full check path, the desktop
-artifacts, the smoke and type proof) and then uploads the artifacts to a **draft
-prerelease** called `vX.Y.Z-dryrun.<run number>`, where `X.Y.Z` is the ref's
-`package.json` version without its prerelease suffix. Nothing is tagged, nothing is
-published or marked latest, and no feed step runs. The draft's notes start with a
-dry-run warning.
+artifacts, the smoke and type proof) and then runs a release's asset checks on the
+artifacts as version `vX.Y.Z-dryrun.<run number>`, where `X.Y.Z` is the ref's
+`package.json` version without its prerelease suffix. It creates no release and no draft,
+so nothing is tagged, published or marked latest, no feed step runs, and there is nothing
+to delete afterwards. The checked files stay in the run's `desktop-*` artifacts, and the
+job summary lists them.
 
 Dispatch it with the workflow from `main` (the "Use workflow from" box); the run refuses
 any other. The rehearsed ref is untrusted: its code only ever runs in jobs with a read-only
 token and no saved git credentials, and the smoke runs on GitHub-hosted runners, never the
 self-hosted ones, without the runner health endpoint; the desktop and smoke jobs pick their
-runners with `main`'s tooling, not the ref's. The draft is uploaded by a separate job that
-checks out `main`'s workflow revision, validates the version and commit, and treats the
-artifacts as data. A ref from before the upgrade launch check reports it as not applicable.
+runners with `main`'s tooling, not the ref's. The assets are checked by a separate job,
+with a read-only token, that checks out `main`'s workflow revision, validates the version and
+commit, and treats the artifacts as data. A ref from before the upgrade launch check reports it as not applicable.
 
 A real (non-dry-run) release refuses any commit that is not on `main`, and a manual one must
 also be dispatched with `main`'s workflow: its publish job runs the released commit's own
@@ -581,10 +584,8 @@ qualifies, so fixing forward after a failed publish still works.
 
 Use it before merging a release pull request, or to try a risky change through the
 release graph before it lands. A failure costs nothing, unlike a failed `release-publish`
-after merge, which leaves a bump on `main` with no tag. Nobody deletes the draft by hand:
-once the run has read it back (or if a failed upload left part of one), its last step deletes
-it, together with any other `vX.Y.Z-dryrun.N (dry run)` draft older than a day that a
-canceled run left behind. The built files stay in the run's artifacts. Learned from T3 Code's preview release train (#863).
+after merge, which leaves a bump on `main` with no tag. Dry runs before #950 left a
+`vX.Y.Z-dryrun.N (dry run)` draft each; newer ones leave none. Learned from T3 Code's preview release train (#863).
 
 ## Doing it by hand
 

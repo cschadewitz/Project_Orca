@@ -450,11 +450,14 @@ jobs:
   # so the attach is dispatched from here; a dispatch is exempt from that rule. The attach waits
   # for this run to finish and re-checks it (successful, from main, one unexpired signed
   # artifact) before it reads any draft, and does nothing for a commit with no final draft.
-  # This job checks nothing out and can only dispatch.
+  # This job checks nothing out and can only dispatch. A failed dispatch does not fail the
+  # run (continue-on-error): the signed artifact and the run's success stand on their own, the
+  # job shows the failure, and the attach's 6-hourly reconcile picks this run up anyway.
   hand-off:
     name: dispatch the attach for this signed run
     needs: [resolve, sign]
     if: github.ref == 'refs/heads/main' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'
+    continue-on-error: true
     runs-on: ubuntu-24.04
     permissions:
       actions: write
@@ -464,5 +467,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh workflow run release-attach-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f signed_run_id="$GITHUB_RUN_ID"
+          if ! gh workflow run release-attach-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f signed_run_id="$GITHUB_RUN_ID"; then
+            echo "::warning title=attach not dispatched::the attach for run $GITHUB_RUN_ID was not dispatched; the 6-hourly reconcile attaches it, or dispatch Release (attach signed installer) with this run id"
+            exit 1
+          fi
           echo "Dispatched Release (attach signed installer) for run \`$GITHUB_RUN_ID\`." >> "$GITHUB_STEP_SUMMARY"
