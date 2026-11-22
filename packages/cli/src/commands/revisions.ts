@@ -12,13 +12,13 @@ import {
   OPERATOR_MAX_RESULT_BYTES,
   PendingRevisionTargetSchema,
   PendingRevisionViewSchema,
-  PROTOCOL_VERSION,
+  helloOffer,
   ProtocolFault,
   ReplacePendingRevisionCommandSchema,
   ResponseMessageSchema,
   RevisionCommandSchema,
   RevisionResultSchema,
-  isCompatible,
+  daemonRelation,
   type ProtocolError,
 } from "@orca/protocol";
 import type { CommandContext } from "./index.js";
@@ -119,10 +119,10 @@ class RevisionDaemonClient {
   ) {}
   async connect(): Promise<void> {
     const hello = HelloResultSchema.safeParse(
-      await this.call("hello", { client: "orca-cli/revisions", protocol: PROTOCOL_VERSION }),
+      await this.call("hello", { client: "orca-cli/revisions", ...helloOffer() }),
     );
     if (!hello.success) throw new ProtocolFault("PROTOCOL_MESSAGE", "Invalid daemon handshake");
-    if (!isCompatible(PROTOCOL_VERSION, hello.data.protocol))
+    if (daemonRelation(hello.data.protocol) === undefined)
       throw new ProtocolFault("PROTOCOL_VERSION", "Unsupported daemon protocol version");
     if (!hello.data.identity || !hello.data.methods)
       throw new OrcaError("NOT_SUPPORTED", "Revision commands require an identified authenticated daemon");
