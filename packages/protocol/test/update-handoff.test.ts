@@ -8,7 +8,9 @@ import type { FirstRunWriterHold } from "../src/first-run-fence.js";
 import {
   claimUpdateHandoff,
   HANDOFF_ATTEMPTS,
+  publishUpdateHandoff,
   readUpdateHandoff,
+  spendSameFormatHandoff,
   removeUpdateHandoff,
   UPDATE_HANDOFF_FILE,
   writeUpdateHandoff,
@@ -73,16 +75,14 @@ describe("update handoff (#897)", () => {
       ok: false,
       reason: "other-store",
     });
-    // A reservation in between (any other launch) breaks the chain, as does a first-ever claim.
-    expect(claimUpdateHandoff(f.writer(sha("someone else")).hold, "0.9.0")).toEqual({
-      ok: false,
-      reason: "not-next-reservation",
-    });
+    // A reservation in between (any other launch) breaks the chain: that writer follows another
+    // claim, for which there is no record. A first-ever claim follows none.
+    expect(claimUpdateHandoff(f.writer(sha("someone else")).hold, "0.9.0")).toEqual({ ok: false, reason: "none" });
     expect(claimUpdateHandoff(f.writer(null).hold, "0.9.0")).toEqual({ ok: false, reason: "not-next-reservation" });
     // The version the update did not install (an installer that never ran, then a restart).
     expect(claimUpdateHandoff(f.writer(f.stopped).hold, "0.8.0")).toEqual({ ok: false, reason: "other-version" });
     // None of the refusals changed the record.
-    expect(readUpdateHandoff(f.storeDir)).toEqual(f.handoff);
+    expect(readUpdateHandoff(f.storeDir, f.stopped)).toEqual(f.handoff);
   });
 
   it("moves onto the claiming writer before any copy, so an interrupted carryover retries a bounded number of times", () => {
@@ -93,9 +93,14 @@ describe("update handoff (#897)", () => {
       const { hold } = f.writer(previous);
       const claimed = claimUpdateHandoff(hold, "0.9.0");
       expect(claimed).toMatchObject({ ok: true, handoff: { attempts: attempt, claimHash: hold.claimHash } });
-      expect(readUpdateHandoff(f.storeDir)).toMatchObject({ reservationId: hold.reservationId, attempts: attempt });
-      // The writer that was handed the store before can no longer claim it.
-      expect(claimUpdateHandoff(f.writer(previous).hold, "0.9.0")).toMatchObject({ reason: "not-next-reservation" });
+      expect(readUpdateHandoff(f.storeDir, hold.claimHash)).toMatchObject({
+        reservationId: hold.reservationId,
+        attempts: attempt,
+      });
+      // Moved, not copied: the record it came from is gone, so nothing following that claim can
+      // claim it again.
+      expect(readUpdateHandoff(f.storeDir, previous)).toBeUndefined();
+      expect(claimUpdateHandoff(f.writer(previous).hold, "0.9.0")).toMatchObject({ ok: false, reason: "none" });
       previous = hold.claimHash;
     }
     expect(claimUpdateHandoff(f.writer(previous).hold, "0.9.0")).toEqual({ ok: false, reason: "attempts-exhausted" });
@@ -109,15 +114,41 @@ describe("update handoff (#897)", () => {
     expect(claimUpdateHandoff(hold, "0.9.0")).toEqual({ ok: false, reason: "fence-not-held" });
   });
 
-  it("never trusts a damaged or shared record, and removes it cleanly", () => {
+  it("never trusts a damaged or shared record, or one naming another claim than its path, and removes it cleanly", () => {
     const f = fixture();
-    writeFileSync(join(f.storeDir, UPDATE_HANDOFF_FILE), "{not json", { mode: 0o600 });
-    expect(readUpdateHandoff(f.storeDir)).toBeUndefined();
+    const path = join(f.storeDir, `${UPDATE_HANDOFF_FILE}.${f.stopped}`);
+    writeFileSync(path, "{not json", { mode: 0o600 });
+    expect(readUpdateHandoff(f.storeDir, f.stopped)).toBeUndefined();
+    removeUpdateHandoff(f.storeDir, f.stopped);
     writeUpdateHandoff(f.storeDir, f.handoff);
-    chmodSync(join(f.storeDir, UPDATE_HANDOFF_FILE), 0o644);
-    expect(readUpdateHandoff(f.storeDir)).toBeUndefined();
-    removeUpdateHandoff(f.storeDir);
-    removeUpdateHandoff(f.storeDir);
+    chmodSync(path, 0o644);
+    expect(readUpdateHandoff(f.storeDir, f.stopped)).toBeUndefined();
+    removeUpdateHandoff(f.storeDir, f.stopped);
+    removeUpdateHandoff(f.storeDir, f.stopped);
+    // Another claim's record copied to this claim's path grants nothing.
+    const other = sha("other claim");
+    writeFileSync(path, JSON.stringify({ ...f.handoff, claimHash: other }), { mode: 0o600 });
+    expect(readUpdateHandoff(f.storeDir, f.stopped)).toBeUndefined();
+    removeUpdateHandoff(f.storeDir, f.stopped);
     expect(readdirSync(f.storeDir)).toEqual([]);
+  });
+
+  it("a stale updater can never replace a newer valid handoff", () => {
+    const f = fixture();
+    // The newer update's record, for the claim the next writer follows.
+    const newer = { ...f.handoff, claimHash: sha("newer stopped claim"), to: "1.0.0" };
+    publishUpdateHandoff(f.storeDir, newer);
+    // A stale updater publishes for its own (older) stopped claim: a different path.
+    publishUpdateHandoff(f.storeDir, f.handoff);
+    expect(readUpdateHandoff(f.storeDir, newer.claimHash)).toEqual(newer);
+    // Even one publishing for the newer claim itself cannot replace it.
+    expect(() => publishUpdateHandoff(f.storeDir, { ...newer, to: "0.9.0" })).toThrow(/EEXIST/);
+    expect(readUpdateHandoff(f.storeDir, newer.claimHash)).toEqual(newer);
+    // The next writer follows the newer claim and claims exactly that record.
+    const next = f.writer(newer.claimHash);
+    expect(claimUpdateHandoff(next.hold, "1.0.0")).toMatchObject({ ok: true, handoff: { to: "1.0.0" } });
+    // The stale record is inert for it, and not its to spend.
+    expect(spendSameFormatHandoff(next.hold)).toBe(true);
+    expect(readUpdateHandoff(f.storeDir, f.stopped)).toEqual(f.handoff);
   });
 });

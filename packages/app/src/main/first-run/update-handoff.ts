@@ -9,7 +9,9 @@
  * app's daemon may carry an older-format store forward only if its own claim directly follows
  * this one and it holds the first-run writer fence; otherwise startup keeps refusing.
  *
- * The updater never deletes the record, not even one it just wrote: it holds no fence over the
+ * The record is published at a path named by that claim, created exclusively: the updater never
+ * replaces a record, so whatever it publishes can only concern the daemon it stopped itself.
+ * The updater never deletes the record either, not even one it just wrote: it holds no fence over the
  * store, so it cannot prove that no participating writer reads, moves or replaces the record
  * between its check and an unlink. A record the update did not use is inert instead. Any
  * reservation made after it (the recovered daemon of a cancelled update, or anything launched
@@ -21,7 +23,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { fenceDirectory } from "@orca/protocol/first-run-fence";
-import { writeUpdateHandoff, type UpdateHandoff } from "@orca/protocol/update-handoff";
+import { publishUpdateHandoff, type UpdateHandoff } from "@orca/protocol/update-handoff";
 import { hash, inspectFirstRunOwnership, refuse } from "./ownership.js";
 
 const directChildTerminal = z.object({ observation: z.literal("direct-child-terminal") }).passthrough();
@@ -61,7 +63,9 @@ export function handOffStoreForUpdate(
     attempts: 0,
     createdAt: now().toISOString(),
   };
-  writeUpdateHandoff(storeDir, issued);
+  // Created exclusively at the stopped claim's own path: never over another record, so a stale
+  // updater cannot replace a newer handoff (it names another claim, at another path).
+  publishUpdateHandoff(storeDir, issued);
   afterWrite?.();
   // The journal must still end on the attempt the record names: nothing launched meanwhile.
   // If it moved on, the update is refused and the record left inert (see above).
