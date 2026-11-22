@@ -40,6 +40,13 @@ import { streamTransport, type StreamTransport } from "../client/stream-transpor
 import type { RemoteProfileView } from "../daemon-connection.js";
 import { ConnectionRefusal } from "./connection-target.js";
 import {
+  readSetup,
+  setupCommand,
+  setupProgram,
+  SETUP_TIMEOUT_MS,
+  type SetupOutcome,
+} from "@orca/protocol/server-setup";
+import {
   CredentialRecords,
   CredentialSetupRefusal,
   DEFAULT_CREDENTIAL_POLICY,
@@ -115,6 +122,13 @@ export type CredentialVerdict = "accepted" | "refused" | "unproven" | "unknown";
 export interface HelloAnswer {
   verdict: CredentialVerdict;
   workspaceId?: string | undefined;
+}
+
+/** What setting up a profile's server came to (#881), and whether this computer then signed in. */
+export interface ServerSetupResult {
+  setup: SetupOutcome;
+  /** Set when the setup was `ready`: the first connect signed in (#875), or why it did not. */
+  signIn?: { ok: true } | { ok: false; message: string };
 }
 
 /** What became of the server's credential when its profile was removed. */
@@ -197,6 +211,8 @@ export class RemoteProfiles {
   private readonly generations = new Map<string, number>();
   /** Profiles being removed: their revoke is on the way, nothing may connect meanwhile. */
   private readonly removing = new Set<string>();
+  /** Profiles whose server is being set up (#881): nothing may connect, edit or remove them meanwhile. */
+  private readonly serverSetups = new Set<string>();
   /** Bumped by every edit, removal and pin reset of a profile (in memory: pending work is too). */
   private readonly revisions = new Map<string, number>();
   private closed = false;
@@ -459,6 +475,7 @@ export class RemoteProfiles {
    */
   private assertIdle(id: string, what: "editing" | "removing" | "importing" | "resetting"): void {
     if (this.removing.has(id)) throw new ConnectionRefusal("That profile is being removed.");
+    if (this.serverSetups.has(id)) throw new ConnectionRefusal("That profile's server is being set up.");
     if (this.tunnels.has(id) || this.setups.has(id)) {
       const verb = {
         editing: "editing",
@@ -533,6 +550,56 @@ export class RemoteProfiles {
     }
   }
 
+  /**
+   * Make the profile's machine a managed ORCA server, or verify and repair one this did before
+   * (#881). The setup runs on the server over the profile's own ssh, pinning its host key on
+   * first use as a first connect does; it stages the signed server bundle of `version` (the
+   * app's own). Once the server is ready, the profile runs the server's managed launcher, and
+   * the first connect signs this computer in (#875). Nothing may connect, edit or remove the
+   * profile meanwhile. `scripts`: the directory holding the setup and the managed adapter.
+   */
+  async setUpServer(id: string, options: { version: string; scripts: string }): Promise<ServerSetupResult> {
+    if (this.closed) throw new ConnectionRefusal("The app is closing.");
+    this.assertIdle(id, "editing");
+    const profile = this.get(id);
+    if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
+    const command = setupCommand(options.version, profile.remotePort);
+    const program = setupProgram(options.scripts);
+    const revision = this.revision(id);
+    this.serverSetups.add(id);
+    let setup: SetupOutcome;
+    try {
+      const tunnel = this.newTunnel(profile);
+      try {
+        await tunnel.open();
+        setup = readSetup(await tunnel.exec(command, SETUP_TIMEOUT_MS, program));
+      } finally {
+        await tunnel.close();
+      }
+    } finally {
+      this.serverSetups.delete(id);
+    }
+    if (setup.kind !== "ready") return { setup };
+    if (this.revision(id) !== revision || this.closed)
+      throw new ConnectionRefusal("The profile changed while its server was set up. Set it up again.");
+    // The managed launcher passes the server's config itself, so the profile names none.
+    const latest = this.get(id)!;
+    if (
+      latest.serverCommand !== setup.command ||
+      latest.serverConfig !== undefined ||
+      latest.remotePort !== setup.port
+    ) {
+      const { serverConfig: _config, ...rest } = latest;
+      this.save({ ...rest, serverCommand: setup.command, remotePort: setup.port });
+    }
+    try {
+      await (await this.open(id)).release();
+      return { setup, signIn: { ok: true } };
+    } catch (error) {
+      return { setup, signIn: { ok: false, message: error instanceof Error ? error.message : String(error) } };
+    }
+  }
+
   /** Pin what an import is about to be for, before anything slow (a file picker) runs. */
   ticket(id: string): ProfileTicket {
     const profile = this.get(id);
@@ -599,6 +666,7 @@ export class RemoteProfiles {
     const shared = this.tunnels.get(id);
     if (
       this.setups.has(id) ||
+      this.serverSetups.has(id) ||
       (shared && shared.tunnel.state.phase !== "failed" && shared.tunnel.state.phase !== "closed")
     )
       throw new ConnectionRefusal("Connect to another daemon before forgetting this profile's host key.");
@@ -626,6 +694,7 @@ export class RemoteProfiles {
     const profile = this.get(id);
     if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
     if (this.removing.has(id)) throw new ConnectionRefusal("That profile is being removed.");
+    if (this.serverSetups.has(id)) throw new ConnectionRefusal("That profile's server is being set up.");
     let shared = this.tunnels.get(id);
     if (!shared || shared.tunnel.state.phase === "failed" || shared.tunnel.state.phase === "closed") {
       const tunnel = this.newTunnel(profile);

@@ -30,6 +30,7 @@ import { DaemonSubscription } from "../src/client/subscription.js";
 import { ConnectionTarget, connectionFailure } from "../src/main/connection-target.js";
 import { installationId, principalFor, revokeCommand, type CredentialRecord } from "../src/main/remote-credentials.js";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
 import {
   helloVerdict,
   RemoteProfiles,
@@ -69,8 +70,23 @@ class FakeServer {
   /** Holds every command until released, to look at what happens meanwhile. */
   gate?: Promise<void> | undefined;
   private next = 0;
+  /** Standard input each command was given (the server setup's program, #881). */
+  readonly inputs: string[] = [];
+  /** What `python3 -` (the server setup, #881) prints and exits with. */
+  setup: RemoteResult = {
+    code: 0,
+    stdout: [
+      "Staging v0.8.0 (noise the app never reads)",
+      'orca-setup: {"detail": "", "result": "ok", "step": "platform"}',
+      'orca-setup: {"detail": "v0.8.0 staged from the signed bundle", "result": "changed", "step": "stage"}',
+      'orca-setup: {"detail": "could not enable lingering", "result": "warning", "step": "linger"}',
+      'orca-setup: {"command": "/home/casey/.local/share/orca-server/orca", "done": true, "port": 6722, "root": "/home/casey/.local/share/orca-server", "version": "0.8.0"}',
+    ].join("\n"),
+    serverLines: [],
+  };
   run(command: readonly string[]): RemoteResult {
     this.commands.push([...command]);
+    if (command[0] === "python3") return this.setup;
     if (this.fail) return { code: this.fail.code, stdout: "", serverLines: this.fail.lines };
     const words = [...command];
     const flag = (name: string) => {
@@ -142,9 +158,10 @@ class FakeTunnel {
     private readonly daemonPort?: number,
     private readonly server = new FakeServer(),
   ) {}
-  async exec(command: readonly string[]): Promise<RemoteResult> {
+  async exec(command: readonly string[], _timeoutMs?: number, input?: string): Promise<RemoteResult> {
     await Promise.resolve();
     await this.server.gate;
+    if (input !== undefined) this.server.inputs.push(input);
     return this.server.run(command);
   }
   async runOnce(command: readonly string[]): Promise<RemoteResult> {
@@ -1468,5 +1485,100 @@ describe("server commands (#875)", () => {
     });
     expect(positionals).toEqual(["auth", "revoke", "-7S0Qb1r7CC7"]);
     expect(values).toMatchObject({ json: true, config: "/srv/orca.config.yaml" });
+  });
+});
+
+describe("setting a machine up as a managed server (#881)", () => {
+  const scripts = fileURLToPath(new URL("../../../tools/deploy/", import.meta.url));
+  const managed = "/home/casey/.local/share/orca-server/orca";
+
+  it("runs this build's setup over the profile's ssh, then runs the managed launcher and signs in", async () => {
+    const { profiles, server, tunnels } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab", serverConfig: "/srv/old/orca.config.yaml" });
+    const result = await profiles.setUpServer("lab", { version: "0.8.0", scripts });
+    expect(result.setup).toMatchObject({ kind: "ready", version: "0.8.0", command: managed, port: 6722 });
+    expect(result.setup.steps.map((step) => [step.step, step.result])).toEqual([
+      ["platform", "ok"],
+      ["stage", "changed"],
+      ["linger", "warning"],
+    ]);
+    expect(result.signIn).toEqual({ ok: true });
+    // Exactly `python3 -` with the version and port, and this build's own two files on its input.
+    expect(server.commands[0]).toEqual(["python3", "-", "--version", "0.8.0", "--port", "6722"]);
+    const adapter = readFileSync(join(scripts, "orca-release.py")).toString("base64");
+    expect(server.inputs[0]).toBe(
+      `EMBEDDED_ADAPTER = "${adapter}"\n${readFileSync(join(scripts, "orca-server-setup.py"), "utf8")}`,
+    );
+    // Its own tunnel, closed again; then the sign-in through the managed launcher, which passes
+    // the server's config itself.
+    expect(tunnels[0]!.closed).toBe(1);
+    expect(profiles.list()[0]).toMatchObject({ serverCommand: managed, hasCredential: true });
+    expect(profiles.list()[0]).not.toHaveProperty("serverConfig");
+    const issue = server.commands.find((command) => command[2] === "issue")!;
+    expect(issue[0]).toBe(managed);
+    expect(issue).not.toContain("--config");
+  });
+
+  it("changes nothing on the profile when the setup refuses, fails or cannot say", async () => {
+    for (const [setup, kind] of [
+      [
+        {
+          code: 2,
+          stdout:
+            'orca-setup: {"detail": "Found an ORCA installation this setup did not make: launcher /usr/local/bin/orca. Migrate it by hand first", "result": "refused", "step": "inventory"}',
+          serverLines: [],
+        },
+        "refused",
+      ],
+      [
+        {
+          code: 1,
+          stdout:
+            'orca-setup: {"detail": "no complete server bundle yet; retry later", "result": "failed", "step": "stage"}',
+          serverLines: [],
+        },
+        "failed",
+      ],
+      [{ code: 127, stdout: "", serverLines: ["sh: python3: not found"] }, "no-python"],
+      [
+        { code: 255, stdout: 'orca-setup: {"detail": "", "result": "ok", "step": "platform"}', serverLines: [] },
+        "unknown",
+      ],
+    ] as const) {
+      const { profiles, server } = store();
+      profiles.save({ name: "Lab", destination: "casey@lab" });
+      server.setup = { ...setup, serverLines: [...setup.serverLines] };
+      const result = await profiles.setUpServer("lab", { version: "0.8.0", scripts });
+      expect(result.setup.kind).toBe(kind);
+      expect(result).not.toHaveProperty("signIn");
+      expect(profiles.list()[0]).not.toHaveProperty("serverCommand");
+      expect(server.commands.filter((command) => command[2] === "issue")).toEqual([]);
+    }
+  });
+
+  it("holds the profile while its server is set up: no connect, edit, removal or second setup", async () => {
+    const { profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    let release!: () => void;
+    server.gate = new Promise<void>((resolve) => (release = resolve));
+    const running = profiles.setUpServer("lab", { version: "0.8.0", scripts });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await expect(profiles.open("lab")).rejects.toThrow("being set up");
+    expect(() => profiles.save({ id: "lab", name: "Lab", destination: "casey@other" })).toThrow("being set up");
+    await expect(profiles.remove("lab")).rejects.toThrow("being set up");
+    expect(() => profiles.forgetHostKey("lab")).toThrow();
+    await expect(profiles.setUpServer("lab", { version: "0.8.0", scripts })).rejects.toThrow("being set up");
+    release();
+    server.gate = undefined;
+    await expect(running).resolves.toMatchObject({ setup: { kind: "ready" }, signIn: { ok: true } });
+  });
+
+  it("installs only a release version", async () => {
+    const { profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    await expect(profiles.setUpServer("lab", { version: "0.8.0-dryrun.1", scripts })).rejects.toThrow(
+      "release version",
+    );
+    expect(server.commands).toEqual([]);
   });
 });

@@ -1094,6 +1094,23 @@ ipcMain.handle("orca:profiles.useAutomaticSignIn", (_event, id: unknown) =>
     return remoteProfiles.useAutomaticSignIn(valid);
   }),
 );
+/**
+ * Set up the profile's machine as a managed ORCA server (#881), at this app's own version. The
+ * setup and the adapter it installs are this build's own files: shipped beside app.asar, or
+ * read from the checkout in development.
+ */
+function serverSetupScripts(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, "server-setup")
+    : fileURLToPath(new URL("../../../../tools/deploy/", import.meta.url));
+}
+ipcMain.handle("orca:profiles.setUpServer", (_event, id: unknown) =>
+  profileResult(async () => {
+    const valid = ProfileIdSchema.parse(id);
+    if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before setting up this server.");
+    return remoteProfiles.setUpServer(valid, { version: app.getVersion(), scripts: serverSetupScripts() });
+  }),
+);
 /** Main reads the file the person picks; the token goes from disk to the keychain slot only. */
 ipcMain.handle("orca:profiles.importCredential", (event, id: unknown) =>
   profileResult(async () => {

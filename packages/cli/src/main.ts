@@ -64,6 +64,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         run: { type: "string" },
         host: { type: "string" },
         port: { type: "string" },
+        "ssh-port": { type: "string" },
+        identity: { type: "string" },
         json: { type: "boolean" },
         force: { type: "boolean" },
         quiet: { type: "boolean" },

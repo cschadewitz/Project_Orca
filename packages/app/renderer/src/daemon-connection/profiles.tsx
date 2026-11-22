@@ -6,7 +6,13 @@
  * and a credential imported by hand comes through a file picker that main owns.
  */
 import { useEffect, useRef, useState, type JSX } from "react";
-import type { RemoteProfileInput, RemoteProfilesBridge, RemoteProfileView } from "../../../src/daemon-connection.js";
+import type {
+  RemoteProfileInput,
+  RemoteProfilesBridge,
+  RemoteProfileView,
+  ServerSetupStepView,
+  ServerSetupView,
+} from "../../../src/daemon-connection.js";
 import { useTransientLayer } from "../layers-context.js";
 import { Button, Chip, ConfigField, Text, textClass } from "../ui/index.js";
 
@@ -75,6 +81,52 @@ function toInput(draft: Draft): RemoteProfileInput | string {
   };
 }
 
+/** What a setup run came to, in a sentence; `alert` when the person has something to fix. */
+export function setupSummary(
+  profile: Pick<RemoteProfileView, "name" | "destination">,
+  view: ServerSetupView,
+): { text: string; alert: boolean } {
+  const { setup, signIn } = view;
+  switch (setup.kind) {
+    case "ready":
+      return signIn && !signIn.ok
+        ? {
+            text: `${profile.name} is set up as an ORCA server (v${setup.version ?? "?"}), but signing in failed: ${signIn.message}`,
+            alert: true,
+          }
+        : {
+            text: `${profile.name} is an ORCA server (v${setup.version ?? "?"}), and this computer is signed in.`,
+            alert: false,
+          };
+    case "refused":
+      return { text: `ORCA was not set up on ${profile.name}: ${setup.detail ?? ""}`, alert: true };
+    case "failed":
+      return {
+        text: `Setting up ${profile.name} failed at "${setup.step ?? "?"}": ${setup.detail ?? ""} Nothing it started was left enabled; set it up again once this is fixed.`,
+        alert: true,
+      };
+    case "no-python":
+      return {
+        text: `${profile.destination} has no python3. Install Python 3.8 or newer there, then set it up again.`,
+        alert: true,
+      };
+    default:
+      return {
+        text: `Setting up ${profile.name} did not report how it ended (the connection may have dropped). Set it up again: it picks up where it stopped.`,
+        alert: true,
+      };
+  }
+}
+
+const STEP_RESULT: Record<ServerSetupStepView["result"], string> = {
+  ok: "already done",
+  changed: "done",
+  repaired: "repaired",
+  warning: "warning",
+  refused: "refused",
+  failed: "failed",
+};
+
 function credentialChip(profile: RemoteProfileView): string {
   if (!profile.hasCredential) return "Signs in on first connect";
   if (profile.credentialImported) return "Imported credential";
@@ -99,6 +151,11 @@ export function ConnectionProfiles({
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [working, setWorking] = useState(false);
+  /** A profile whose server is being set up, and what the last setup reported. */
+  const [settingUp, setSettingUp] = useState<string>();
+  const [steps, setSteps] = useState<ServerSetupStepView[]>([]);
+  /** The editor was opened by "Add a machine": saving it also sets the server up. */
+  const [addingMachine, setAddingMachine] = useState(false);
   const live = useRef(true);
   /** The armed removal row: Keep takes focus when it appears (RULES.md 17). */
   const armedRow = useRef<HTMLDivElement>(null);
@@ -133,6 +190,21 @@ export function ConnectionProfiles({
     setList(await profiles.list());
   };
   const disabled = busy || working;
+  const setUpServer = profiles.setUpServer;
+  const setUp = (profile: Pick<RemoteProfileView, "id" | "name" | "destination">) => {
+    if (!setUpServer) return;
+    setSettingUp(profile.id);
+    setSteps([]);
+    void run(
+      () => setUpServer(profile.id),
+      (view) => {
+        setSteps(view.setup.steps);
+        const summary = setupSummary(profile, view);
+        if (summary.alert) setError(summary.text);
+        else setNotice(summary.text);
+      },
+    ).finally(() => live.current && setSettingUp(undefined));
+  };
 
   return (
     <section className="orca-field" aria-labelledby="daemon-profiles-title">
@@ -220,6 +292,16 @@ export function ConnectionProfiles({
               >
                 Import credential…
               </Button>
+              {setUpServer && (
+                <Button
+                  size="sm"
+                  disabled={disabled || current === profile.id}
+                  disabledReason="Connect to another daemon first"
+                  onClick={() => setUp(profile)}
+                >
+                  Set up ORCA server
+                </Button>
+              )}
               {profile.credentialImported && (
                 <Button
                   size="sm"
@@ -278,7 +360,10 @@ export function ConnectionProfiles({
         <ProfileEditor
           draft={editing}
           disabled={disabled}
-          cancel={() => setEditing(undefined)}
+          cancel={() => {
+            setEditing(undefined);
+            setAddingMachine(false);
+          }}
           save={(draft) => {
             const input = toInput(draft);
             if (typeof input === "string") {
@@ -287,16 +372,64 @@ export function ConnectionProfiles({
             }
             void run(
               () => profiles.save(input),
-              () => setEditing(undefined),
+              (view) => {
+                setEditing(undefined);
+                if (addingMachine) setUp(view);
+                setAddingMachine(false);
+              },
             );
           }}
         />
       ) : (
         <div className="orca-dialog__actions">
-          <Button size="sm" disabled={disabled} onClick={() => setEditing(EMPTY)}>
+          <Button
+            size="sm"
+            disabled={disabled}
+            onClick={() => {
+              setAddingMachine(false);
+              setEditing(EMPTY);
+            }}
+          >
             Add profile…
           </Button>
+          {setUpServer && (
+            <Button
+              size="sm"
+              disabled={disabled}
+              onClick={() => {
+                setAddingMachine(true);
+                setEditing(EMPTY);
+              }}
+            >
+              Add a machine…
+            </Button>
+          )}
         </div>
+      )}
+      {addingMachine && editing && (
+        <Text style="caption" as="p">
+          Saving sets the machine up as a managed ORCA server over SSH: it installs this version&apos;s signed server
+          bundle and a systemd user service, then signs this computer in. It refuses a machine that already has an ORCA
+          it did not install. Linux x64 with Python 3.8 or newer.
+        </Text>
+      )}
+      {settingUp && (
+        <Text style="caption" as="p" role="status">
+          Setting up the ORCA server on {list.find((p) => p.id === settingUp)?.destination ?? "the machine"}. This takes
+          a few minutes.
+        </Text>
+      )}
+      {steps.length > 0 && (
+        <ul aria-label="Server setup steps">
+          {steps.map((step) => (
+            <li key={step.step}>
+              <Text style="caption" as="span">
+                {step.step}: {STEP_RESULT[step.result]}
+                {step.detail ? ` (${step.detail})` : ""}
+              </Text>
+            </li>
+          ))}
+        </ul>
       )}
       {error && (
         <Text style="caption" as="p" role="alert">

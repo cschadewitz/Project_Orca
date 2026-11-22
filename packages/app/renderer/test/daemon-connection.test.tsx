@@ -232,6 +232,82 @@ it("saves a profile's sign-in settings and says when it signs in (#875)", async 
   h.dispose();
 });
 
+it("adds a machine: saves the profile, sets its server up, and says what each step did (#881)", async () => {
+  stubMatchMedia(1200);
+  const h = harness();
+  const r = rig();
+  const saved = {
+    id: "lab",
+    name: "Lab",
+    destination: "casey@lab",
+    remotePort: 6722,
+    hasCredential: false,
+    hostKeyPinned: false,
+  };
+  let views: (typeof saved)[] = [];
+  let finish!: (value: unknown) => void;
+  const profiles = {
+    list: vi.fn(async () => views),
+    save: vi.fn(async () => {
+      views = [saved];
+      return { ok: true as const, value: saved };
+    }),
+    remove: vi.fn(),
+    importCredential: vi.fn(),
+    forgetHostKey: vi.fn(),
+    useAutomaticSignIn: vi.fn(),
+    setUpServer: vi.fn(() => new Promise((resolve) => (finish = resolve))),
+  };
+  render(
+    <h.Providers>
+      <ConnectionDialog bridge={{ ...r.bridge, profiles } as never} target={r.target} close={() => {}} />
+    </h.Providers>,
+  );
+  fireEvent.click(await screen.findByText("Add a machine…"));
+  await screen.findByText(/sets the machine up as a managed ORCA server/);
+  const inputs = [...screen.getByRole("group", { name: "New profile" }).querySelectorAll("input")];
+  fireEvent.change(inputs[0]!, { target: { value: "Lab" } });
+  fireEvent.change(inputs[1]!, { target: { value: "casey@lab" } });
+  fireEvent.click(screen.getByText("Save profile"));
+  await waitFor(() => expect(profiles.setUpServer).toHaveBeenCalledWith("lab"));
+  await screen.findByText(/Setting up the ORCA server on casey@lab/);
+  finish({
+    ok: true,
+    value: {
+      setup: {
+        kind: "ready",
+        version: "0.8.0",
+        steps: [
+          { step: "stage", result: "changed", detail: "v0.8.0 staged from the signed bundle" },
+          { step: "linger", result: "warning", detail: "could not enable lingering" },
+        ],
+      },
+      signIn: { ok: true },
+    },
+  });
+  await screen.findByText("Lab is an ORCA server (v0.8.0), and this computer is signed in.");
+  await screen.findByText("stage: done (v0.8.0 staged from the signed bundle)");
+  await screen.findByText("linger: warning (could not enable lingering)");
+
+  // Set up again from the profile's row: a refusal says what to do, as an alert.
+  profiles.setUpServer.mockImplementation(async () => ({
+    ok: true,
+    value: {
+      setup: {
+        kind: "refused",
+        step: "inventory",
+        detail: "Found an ORCA installation this setup did not make: launcher /usr/local/bin/orca.",
+        steps: [{ step: "inventory", result: "refused", detail: "Found an ORCA installation" }],
+      },
+    },
+  }));
+  fireEvent.click(screen.getByText("Set up ORCA server"));
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "ORCA was not set up on Lab: Found an ORCA installation",
+  );
+  h.dispose();
+});
+
 it("shows a profile connection by name in the Config header (#874)", () => {
   const r = rig();
   const bridge = {

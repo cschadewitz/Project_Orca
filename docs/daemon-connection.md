@@ -252,6 +252,35 @@ logged.
   configure it as an SSH host in the workflow config instead
   ([integrations](INTEGRATIONS.md)).
 
+### Add a machine: one-step server setup (#881)
+
+A reachable Linux x64 machine with Python 3.8+ and a systemd user manager becomes a managed
+ORCA server in one step, from either side:
+
+- **App:** in the connection dialog, fill in a new profile and choose **Add a machine…**, or
+  choose **Set up ORCA server** on a saved profile. The app saves the profile, sets the server
+  up over the profile's own pinned SSH connection, points the profile at the managed launcher
+  it installed, and then signs in automatically (#875).
+- **CLI, from a source checkout:** `orca remote add [user@]host [--ssh-port N] [--identity FILE]
+  [--port N] [--json]`. It pins the host key in `~/.config/orca/known_hosts/<profile>` on first
+  use, prints each step and the server command to use, and issues no credential: sign in from
+  the app.
+
+Both run `tools/deploy/orca-server-setup.py` on the server (sent over ssh as `python3 -`, with
+the managed adapter embedded), which installs what the bootstrap in
+[UPDATING](UPDATING.md#prebuilt-server-bundle) describes under `~/.local/share/orca-server`:
+the adapter, `deployment.json`, the `orca`/`orca-acp` wrappers, this version's signed server
+bundle (verified against its pinned signer, #876), `current`, and the `orca.service` user unit
+with lingering. It then starts the unit and checks the daemon's hello.
+
+Every step is idempotent. A re-run on a healthy server changes nothing; a stopped or disabled
+unit, a missing wrapper or a missing `current` link is repaired. A server already on another
+version keeps it (updating is #879's job). A machine with an ORCA installation the setup did
+not make (a launcher, unit, process or directory) is refused with the
+[inventory guidance](UPDATING.md#debian-inventory-before-migration) and left untouched. A run
+that fails after it created `current` or the unit takes both back, so a failed first setup
+leaves no half-written link and no enabled unit. The update timer (#878) is not enabled here.
+
 ## Target identity and drafts
 
 Authenticated hello can include `{ identity: { workspaceId, instanceId } }`.

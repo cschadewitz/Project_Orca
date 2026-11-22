@@ -25,6 +25,7 @@ export default defineConfig({
       "@orca/protocol/update-window": src("protocol", "update-window"),
       "@orca/protocol/first-run-fence": src("protocol", "first-run-fence"),
       "@orca/protocol/remote-access": src("protocol", "remote-access"),
+      "@orca/protocol/server-setup": src("protocol", "server-setup"),
       "@orca/protocol": pkg("protocol"),
       "@orca/daemon": pkg("daemon"),
       "@orca/design": pkg("design"),

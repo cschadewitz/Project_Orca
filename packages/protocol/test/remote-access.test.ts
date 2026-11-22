@@ -664,6 +664,27 @@ describe("commands on the server (#875)", () => {
     expect(sessions()).toEqual([]);
   });
 
+  it("hands a command its standard input when given one, and an empty one otherwise (#881)", async () => {
+    const pins = pinned();
+    const { tunnel, spawned } = fakeTunnel(
+      (ssh) => {
+        ssh.say(authed);
+        if (ssh.stdin.writableFinished) setImmediate(() => ssh.exit(0));
+        else ssh.stdin.on("finish", () => setImmediate(() => ssh.exit(0)));
+      },
+      { knownHostsFile: pins },
+    );
+    await tunnel.open();
+    await expect(tunnel.exec(["python3", "-", "--version", "0.8.0"], 1_000, "print('setup')\n")).resolves.toMatchObject(
+      {
+        code: 0,
+      },
+    );
+    await expect(tunnel.exec(["orca", "auth", "list"], 1_000)).resolves.toMatchObject({ code: 0 });
+    expect(spawned.slice(1).map((ssh) => ssh.received)).toEqual(["print('setup')\n", ""]);
+    await tunnel.close();
+  });
+
   it.each([
     [[]],
     [["orca", "a b"]],

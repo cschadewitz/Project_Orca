@@ -70,6 +70,28 @@ export type DaemonConnectionRequest = string | null | { profile: string };
 
 export type ProfileResult<T> = { ok: true; value: T } | { ok: false; message: string };
 
+/** One step of setting up a server (#881), as the server reported it. */
+export interface ServerSetupStepView {
+  step: string;
+  result: "ok" | "changed" | "repaired" | "warning" | "refused" | "failed";
+  detail: string;
+}
+/**
+ * What setting up a profile's server came to: `ready`, `refused` (an unmanaged installation,
+ * say: nothing changed for it), `failed` (what that run created was taken back), `no-python`,
+ * or `unknown` (it did not say how it ended: run it again). Then whether this computer signed in.
+ */
+export interface ServerSetupView {
+  setup: {
+    kind: "ready" | "refused" | "failed" | "no-python" | "unknown";
+    steps: ServerSetupStepView[];
+    step?: string;
+    detail?: string;
+    version?: string;
+  };
+  signIn?: { ok: true } | { ok: false; message: string };
+}
+
 /** Profile management. Every call is main-process work; secrets never cross this bridge. */
 export interface RemoteProfilesBridge {
   list(this: void): Promise<RemoteProfileView[]>;
@@ -80,6 +102,11 @@ export interface RemoteProfilesBridge {
   forgetHostKey(this: void, id: string): Promise<ProfileResult<RemoteProfileView>>;
   /** Drop an imported credential, so the next connect signs in automatically. */
   useAutomaticSignIn(this: void, id: string): Promise<ProfileResult<RemoteProfileView>>;
+  /**
+   * Make the profile's machine a managed ORCA server, or verify and repair it (#881), then sign
+   * in. Runs for minutes; absent in builds without server setup.
+   */
+  setUpServer?(this: void, id: string): Promise<ProfileResult<ServerSetupView>>;
 }
 export interface DaemonConnectionBridge {
   read(this: void): DaemonTargetSnapshot;

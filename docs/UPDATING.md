@@ -575,6 +575,10 @@ admission to reopen. All runtime parts and shipped assets move together.
 
 ### Prebuilt server bundle
 
+For a new machine, the app's **Add a machine** and `orca remote add user@host` do the whole
+bootstrap below from the bundle in one idempotent step, and refuse a machine that already has an
+unmanaged installation ([daemon connection](daemon-connection.md#add-a-machine-one-step-server-setup-881)).
+
 From the 0.8 release line (0.8.0's release candidates on), every release also publishes a
 signed prebuilt server, `orca-server-X.Y.Z-linux-x64.tar.xz`, beside its manifest and signature
 ([RELEASING.md](RELEASING.md#the-server-bundle)). Staging from it needs no toolchain, clone or
