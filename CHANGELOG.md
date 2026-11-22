@@ -29,6 +29,79 @@ Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; prep
 release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
 to read them as they stand.
 
+## 0.7.1 - 2026-11-22
+
+### Store format
+
+Stores now record their format and the ORCA version that last wrote them in
+`store-format.json`. The store epoch stays `operator-journals-v4`, so upgrading from 0.7.0
+needs nothing: a 0.7.0 store (same format, no marker yet) is stamped on first open with
+nothing else changed, and builds before 0.7.1 ignore the marker.
+
+Ordinary startup never converts a store. A store written in an older format is refused
+(`STORE_FORMAT` / `CARRYOVER_REQUIRED`) without being changed; no 0.7.x store is in an older
+format. Converting one takes `orca store carry-forward`, run once offline with every other
+ORCA stopped. In this build it refuses on Windows
+(`BACKUPS_UNSAFE`, before any copy), and the Ubuntu desktop `.deb` does not ship the CLI.
+The command refuses unless no run lease is live, a whole-store copy into `format-backups/`
+matches byte for byte, the store did not change during the copy, and every run log,
+collection and plan journal reads under the new build; only then is the backup published
+(the newest two verified backups are kept) and the format stamped. A store written by a newer
+format, or older than the previous release's, is refused without being changed.
+
+### Added
+
+#### app
+
+- Groundwork for connecting to a daemon one protocol major behind: the app can show a bar saying the daemon is a version behind and that newer features are off until it is updated. This build opens no such window (see Protocol 2.1 below); it connects to existing 2.0 daemons as before.
+- the Linux `.deb` says when a newer release is out. About 15 seconds after start
+  and every six hours it reads the public release list and, when a newer stable release has
+  a `.deb` for the machine, shows a notice in the title bar with the release page and the
+  `apt` command. It never downloads or installs anything, an offline or failed check is
+  silent, prereleases are offered only with `ORCA_UPDATE_PRERELEASE=1` as on Windows, and
+  `ORCA_UPDATE_CHECK=0` turns the check off.
+- Windows arm64 installs get updates. Finals now attach the signed arm64 installer beside
+  x64, and the desktop feed offers arm64 only for a release whose exact signed arm64
+  installer passed automatic native acceptance on a Windows arm64 machine (signature,
+  install, ARM64 binary, app reaches its bundled daemon). x64 feeding is unchanged. 0.7.1 is
+  the first final with a signed arm64 installer, so its acceptance is a fresh install of
+  those exact bytes; later verified arm64 releases can be accepted as upgrades over an
+  accepted 0.7.1. Windows users with a workspace from 0.6.0 should keep that workspace and the
+  matching 0.6.0 installer until a supported migration exists: 0.7.1 cannot open that older
+  store directly, and the Windows converter (`orca store carry-forward`) refuses.
+
+#### cli
+
+- `orca store format` shows a store's recorded format; `orca store carry-forward`
+  converts an older-format store once, offline, after a verified backup and read check (#566).
+  It refuses on Windows in this build (`BACKUPS_UNSAFE`), and the Ubuntu desktop `.deb` does
+  not include the CLI.
+
+#### protocol
+
+- Protocol 2.1. `hello` negotiates across a one-release compatibility window: a client may offer a `fallback` version from the previous major, and the daemon answers in the highest protocol both sides share. A daemon accepts the current and previous major once a release opens a window; N-2 is refused with a message naming what the daemon accepts. 2.x opens no window, so 1.10 peers stay refused, but a 2.1 daemon is the first that a future 3.0 app can fall back to. Clients offer the oldest minor they need (2.0), so an updated 2.1 desktop still connects to shipped 2.0 daemons.
+
+#### store
+
+- every store open checks the store format marker and refuses a store from a newer
+  ORCA or an older format, without changing it (#566).
+
+### Changed
+
+#### agents
+
+- ACP client SDK `@agentclientprotocol/sdk` 1.8.0 → 2.8.0, keeping the patch that leaves peer payloads out of SDK stderr diagnostics.
+- SSH hosts read and write files over one persistent SFTP session per host instead of an `ssh` process per call, which makes artifact pickup from remote agents much faster. A session that drops is re-established once; a host without the SFTP subsystem falls back to the per-command path.
+
+### Fixed
+
+#### plan
+
+- the critical path no longer counts overlapping work in full. Along a
+  later-phase dependency (`other#build`) the first half of the dependent overlaps the
+  upstream item, an item already underway counts half its estimate, and a dependency already satisfied
+  (a produced stage) no longer counts toward the path at all (#108).
+
 ## 0.7.0 - 2026-11-21
 
 ### Store format
