@@ -389,9 +389,10 @@ which first checks, with `main`'s copy of `release-lane.js`:
   into V's lane, `package.json` saying V at both the reviewed head and the merge commit, and
   the merge commit's tree equal to that head's tree (keep the branch up to date before
   merging);
-- on a line, also: the release line check passed on that exact head, posted by GitHub Actions
-  from `main`'s `release-line-guard.yml` on a `pull_request_target` event. A check run with the
-  right name from anywhere else does not count.
+- on a line, also: the newest release line check recorded for this pull request into this
+  line, on that exact head, passed, posted by GitHub Actions from `main`'s
+  `release-line-guard.yml` on a `pull_request_target` event. An older pass does not outlive a
+  later failure, and a check run with the right name from anywhere else does not count.
 
 A final then goes through the same draft, signing, acceptance, upgrade check and publish-final
 chain ([Publishing a final](#publishing-a-final)). **Windows signed (spike)** compares a patch's
