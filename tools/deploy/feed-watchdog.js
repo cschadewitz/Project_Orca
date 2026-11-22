@@ -20,7 +20,10 @@
  * It cannot read rings.json (that needs the bucket credential, which stays in the protected
  * desktop-feed environment), so it checks what a ring is offered, not what it should be offered.
  * The canary tokens live in the `feed-canary` environment, which only main can deploy to.
- * Tokens are only ever sent as Authorization headers; nothing here prints them.
+ * Tokens are only ever sent as Authorization headers; nothing here prints them. It does print
+ * the canary map's digest (the SHA-256 of `{ sha256(token): { ring } }` with hashes sorted, the
+ * form the Worker's FEED_TOKENS uses), so whoever runs the Worker can tie its token registry to
+ * the canaries this run proved against the live feed. The digest reveals no token.
  */
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
@@ -106,6 +109,18 @@ export function channelProblems(ring, arch, channel) {
   if (channel.path !== entry.url || channel.sha512 !== entry.sha512)
     problems.push(`${where}: legacy path/sha512 disagree with files[0]`);
   return problems;
+}
+
+/** The SHA-256 (hex) of the canonical canary map: sorted token hashes to exactly { ring }. */
+export function canaryMapDigest(tokens) {
+  const entries = Object.entries(tokens).map(([ring, token]) => [
+    createHash("sha256").update(token).digest("hex"),
+    ring,
+  ]);
+  entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const map = {};
+  for (const [hash, ring] of entries) map[hash] = { ring };
+  return createHash("sha256").update(JSON.stringify(map)).digest("hex");
 }
 
 /**
@@ -240,5 +255,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   });
   for (const line of report) console.log(line);
   for (const problem of problems) console.error(`::error::${problem}`);
+  if (problems.length === 0) console.log(`canary map sha256: ${canaryMapDigest(tokens)}`);
   process.exit(problems.length ? 1 : 0);
 }

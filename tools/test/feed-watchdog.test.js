@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { channelProblems, parseChannel, watch } from "../deploy/feed-watchdog.js";
+import { canaryMapDigest, channelProblems, parseChannel, watch } from "../deploy/feed-watchdog.js";
 
 const TOKENS = { internal: "i".repeat(43), stable: "s".repeat(43) };
 const sha512 = (text) => createHash("sha512").update(text).digest("base64");
@@ -236,5 +236,28 @@ describe("feed-watchdog.yml", () => {
     expect(text).not.toMatch(/desktop-feed|ORCA_FEED_ACCESS_KEY|ORCA_FEED_SECRET/);
     expect(text).toContain("FEED_CANARY_TOKENS: ${{ secrets.ORCA_FEED_CANARY_TOKENS }}");
     expect(text).toContain("run: node tools/deploy/feed-watchdog.js");
+  });
+});
+
+const VECTOR = "5d3f25569a9aa339f4cd723849053e73975eef8b2ff42a2cf3cc8a2daf8e1a16";
+
+describe("canaryMapDigest", () => {
+  it("hashes the canonical { sha256(token): { ring } } map with sorted hashes", () => {
+    const hash = (t) => createHash("sha256").update(t).digest("hex");
+    const map = Object.fromEntries(
+      Object.entries(TOKENS)
+        .map(([ring, token]) => [hash(token), { ring }])
+        .sort(([a], [b]) => a.localeCompare(b)),
+    );
+    expect(canaryMapDigest(TOKENS)).toBe(createHash("sha256").update(JSON.stringify(map)).digest("hex"));
+    expect(canaryMapDigest({ stable: TOKENS.stable, internal: TOKENS.internal })).toBe(canaryMapDigest(TOKENS));
+  });
+
+  it("matches a fixed vector shared with the Worker's registry tooling", () => {
+    // Tokens of 32 bytes of 0x01 / 0x02 / 0xff as base64url, one per ring.
+    const b64 = (byte) => Buffer.alloc(32, byte).toString("base64url");
+    const digest = canaryMapDigest({ internal: b64(1), preview: b64(2), stable: b64(255) });
+    expect(digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(digest).toBe(VECTOR);
   });
 });
