@@ -33,10 +33,10 @@ export class GitWorktreeProvider implements WorkspaceProvider {
   constructor(private readonly o: GitWorktreeProviderOptions) {}
 
   /** Only an owned root (`isolateRoots`) takes a named ref: each such run gets its own checkout. */
-  async checkRef(ref: string): Promise<void> {
+  async checkRef(ref: string): Promise<string> {
     if (!this.o.isolateRoots)
       throw gitRefRefusal(ref, "the remote's workspace gives runs their own checkout only with isolateRoots");
-    await new OwnedRootWorktree(this.o).checkRef(ref);
+    return new OwnedRootWorktree(this.o).checkRef(ref);
   }
 
   async provision(input: ProvisionInput): Promise<Workspace> {

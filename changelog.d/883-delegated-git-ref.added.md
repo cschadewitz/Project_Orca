@@ -3,6 +3,7 @@
   (protocol 2.7, listed in `hello.admitFields`, optional `gitRef` on `runs.admit`). The remote
   daemon admits only refs its administrator lists in `workspace.allowedRefs` (none by
   default), checks the ref on its `fetchRemote` (default `origin`) with no prompts and a
-  deadline, fetches it, and gives the run its own checkout of that commit (`git-worktree` with
+  deadline, fetches exactly the object it checked (refusing a ref that moved meanwhile) without
+  touching remote-tracking refs, and gives the run its own checkout of that commit (`git-worktree` with
   `isolateRoots`), running no hook, fsmonitor command or filter driver. A remote that cannot
   fails the step with `DELEGATION_REFUSED` and reason `git-ref`.

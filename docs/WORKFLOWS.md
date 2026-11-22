@@ -527,7 +527,11 @@ workspace:
 ```
 
 The remote checks the ref under exactly its name on the fetch remote (never Git's suffix
-matching) and fetches only that ref, without tags or submodules. Listing and fetching run
+matching) and remembers the object it names (for an annotated tag, the tag object). It then
+fetches only that ref, into a run-private ref, and refuses the run if the fetched object is
+not the one it checked (the ref moved: admit the run again). The fetch leaves the rest of the
+repository alone: no remote-tracking refs, pruning, `FETCH_HEAD`, tags, submodules or automatic
+maintenance. Listing and fetching run
 with no prompts (no terminal, askpass or credential-manager prompt, and batch-mode SSH unless
 `core.sshCommand` is set) and a deadline (30 seconds to list, 2 minutes to fetch); a remote
 that does not answer refuses the ref. The checkout is prepared outside any agent sandbox, so

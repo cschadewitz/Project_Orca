@@ -563,7 +563,13 @@ export class Orchestrator {
   async validateStartRun(
     opts: StartRunOptions,
     supplied?: GenerationMaterial,
-  ): Promise<{ definition: WorkflowDefinition; vars: Record<string, unknown>; generation?: GenerationMaterial }> {
+  ): Promise<{
+    definition: WorkflowDefinition;
+    vars: Record<string, unknown>;
+    generation?: GenerationMaterial;
+    /** The object `gitRef` named when checked; provisioning refuses if the ref has moved since. */
+    gitRefObject?: string;
+  }> {
     if (
       opts.requestAdmissionId !== undefined &&
       (!opts.requestAdmissionId || !opts.requestId || !opts.actor || opts.parentRunId)
@@ -609,7 +615,8 @@ export class Orchestrator {
           : this.workspaceProvider;
       if (!provider.checkRef)
         throw gitRefRefusal(opts.gitRef, `the '${provider.name}' workspace does not give runs a checkout of a ref`);
-      await provider.checkRef(opts.gitRef);
+      const gitRefObject = await provider.checkRef(opts.gitRef);
+      return { definition: def, vars: inputs.vars, ...(generation ? { generation } : {}), gitRefObject };
     }
     return { definition: def, vars: inputs.vars, ...(generation ? { generation } : {}) };
   }
@@ -623,7 +630,7 @@ export class Orchestrator {
       throw new OrcaError("RUN_STATE", "associated work item is unavailable");
     if (associatedRequest && item && item.requestId !== associatedRequest.id)
       throw new OrcaError("RUN_STATE", "Request and work item associations do not match");
-    const { definition: def, vars, generation } = await this.validateStartRun(opts, supplied);
+    const { definition: def, vars, generation, gitRefObject } = await this.validateStartRun(opts, supplied);
     const provenance = generation
       ? launchProvenance(generation, def, vars, opts.vars ?? {}, opts.overrides, opts.itemWorkflowSource)
       : undefined;
@@ -704,7 +711,7 @@ export class Orchestrator {
         request,
         workItem,
         parent: opts.parentRunId ? (await this.executionState(opts.parentRunId)).run.workspace : undefined,
-        ...(opts.gitRef !== undefined ? { gitRef: opts.gitRef } : {}),
+        ...(opts.gitRef !== undefined ? { gitRef: opts.gitRef, gitRefObject } : {}),
       }));
     // A provider that ignored the ref must not leave the run on some other checkout.
     if (opts.gitRef !== undefined && workspace.rootProvisioning?.ref !== opts.gitRef)

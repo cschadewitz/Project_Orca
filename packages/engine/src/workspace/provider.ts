@@ -24,6 +24,12 @@ export interface ProvisionInput {
    * Only a provider with `checkRef` takes one, and only a ref its administrator allowed.
    */
   gitRef?: string | undefined;
+  /**
+   * The object `checkRef` saw `gitRef` name (a commit, or an annotated tag's tag object). The
+   * provider fetches the ref and refuses when it now names anything else: the ref moved since
+   * it was checked, and the caller must check it again.
+   */
+  gitRefObject?: string | undefined;
 }
 
 /**
@@ -55,9 +61,10 @@ export interface WorkspaceProvider {
   provision(input: ProvisionInput): Promise<Workspace>;
   /**
    * Side-effect-free check, before a run naming `ref` is admitted, that this provider can give
-   * it a checkout of that ref (#883). Absent: the provider refuses every ref.
+   * it a checkout of that ref (#883). Resolves to the object the ref names now, which
+   * provisioning is then bound to (`ProvisionInput.gitRefObject`). Absent: every ref is refused.
    */
-  checkRef?(ref: string): Promise<void>;
+  checkRef?(ref: string): Promise<string>;
   /** Recheck owned registration before attaching execution; never repairs or cleans up. */
   validate?(workspace: Workspace): Promise<void>;
   /** Optional cleanup hook (e.g. remove worktree) - never called automatically. */

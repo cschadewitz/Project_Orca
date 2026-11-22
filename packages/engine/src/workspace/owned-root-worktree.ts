@@ -20,6 +20,11 @@ const Receipt = z.strictObject({
   path: z.string(),
   /** The named ref the run was given (#883), fetched once; `baseCommit` is what it named then. */
   ref: z.string().optional(),
+  /** The object the ref named when checked and fetched (an annotated tag's tag object, else `baseCommit`). */
+  refObject: z
+    .string()
+    .regex(/^[a-f0-9]{40,64}$/)
+    .optional(),
 });
 type Receipt = z.infer<typeof Receipt>;
 const refuse = () =>
@@ -190,9 +195,9 @@ export class OwnedRootWorktree {
    * remote under exactly that name. Run before admission; it fails closed when the remote
    * cannot be checked.
    */
-  async checkRef(ref: string): Promise<void> {
+  async checkRef(ref: string): Promise<string> {
     await this.admissible(ref);
-    await this.advertised(resolve(this.o.repo), ref);
+    return this.advertised(resolve(this.o.repo), ref);
   }
 
   private async admissible(ref: string): Promise<void> {
@@ -219,26 +224,57 @@ export class OwnedRootWorktree {
       .split("\n")
       .map((line) => line.split("\t"))
       .filter((cols) => cols[1] === ref);
-    if (exact.length !== 1) throw gitRefRefusal(ref, `the '${this.remote}' remote does not have it`);
+    if (exact.length !== 1 || !/^[a-f0-9]{40,64}$/.test(exact[0]![0]!))
+      throw gitRefRefusal(ref, `the '${this.remote}' remote does not have it`);
     return exact[0]![0]!;
   }
 
-  /** The commit `ref` names on the fetch remote now, fetched under a run-private ref. */
-  private async fetchRef(repo: string, runId: string, ref: string): Promise<string> {
+  /**
+   * Fetch `ref` under a run-private ref and return the commit it names, refusing unless the
+   * fetched object is exactly `expected`, the object `checkRef` saw (#883). The fetch writes
+   * nothing else: no configured refspec mapping (remote-tracking refs), no pruning, no
+   * FETCH_HEAD, no tags, submodules, commit-graph or automatic maintenance.
+   */
+  private async fetchRef(
+    repo: string,
+    runId: string,
+    ref: string,
+    expected: string | undefined,
+  ): Promise<{
+    object: string;
+    commit: string;
+  }> {
     // Rechecked at provision: the allowlist may have changed since admission.
     await this.admissible(ref);
+    if (expected === undefined || !/^[a-f0-9]{40,64}$/.test(expected))
+      throw gitRefRefusal(ref, "it was not checked before provisioning");
     const local = `refs/orca/fetched/${runId}`;
     try {
       await this.remoteGit(repo, ref, FETCH_MS, "fetching it from", [
+        "-c",
+        "fetch.writeCommitGraph=false",
+        "-c",
+        `remote.${this.remote}.followRemoteHEAD=never`,
         "fetch",
+        "--refmap=",
+        "--no-prune",
         "--no-tags",
         "--no-write-fetch-head",
         "--no-recurse-submodules",
+        "--no-auto-maintenance",
+        "--no-write-commit-graph",
         "--",
         this.remote,
         `+${ref}:${local}`,
       ]);
-      return await git(repo, "rev-parse", "--verify", "--end-of-options", `${local}^{commit}`);
+      const object = await git(repo, "rev-parse", "--verify", "--end-of-options", local);
+      if (object !== expected)
+        throw gitRefRefusal(ref, `it moved on '${this.remote}' after it was checked; admit the run again`);
+      // A branch names a commit; an annotated tag names a tag object, peeled here explicitly.
+      const commit = await git(repo, "rev-parse", "--verify", "--end-of-options", `${object}^{commit}`).catch(() => {
+        throw gitRefRefusal(ref, "it does not name a commit");
+      });
+      return { object, commit };
     } catch (error) {
       if (error instanceof OrcaError) throw error;
       throw gitRefRefusal(ref, `fetching it from '${this.remote}' failed`);
@@ -260,9 +296,10 @@ export class OwnedRootWorktree {
     }
     // A named ref is fetched before the reservation: a fetch changes no worktree, and the
     // commit it named is frozen in the receipt, so a retry never fetches again.
-    const baseCommit = input.gitRef
-      ? await this.fetchRef(repo, input.runId, input.gitRef)
-      : await git(repo, "rev-parse", "--verify", "--end-of-options", `${this.o.baseBranch ?? "main"}^{commit}`);
+    const fetched = input.gitRef ? await this.fetchRef(repo, input.runId, input.gitRef, input.gitRefObject) : undefined;
+    const baseCommit =
+      fetched?.commit ??
+      (await git(repo, "rev-parse", "--verify", "--end-of-options", `${this.o.baseBranch ?? "main"}^{commit}`));
     const receipt = Receipt.parse({
       version: 1,
       runId: input.runId,
@@ -271,7 +308,7 @@ export class OwnedRootWorktree {
       baseCommit,
       branch,
       path,
-      ...(input.gitRef ? { ref: input.gitRef } : {}),
+      ...(input.gitRef && fetched ? { ref: input.gitRef, refObject: fetched.object } : {}),
     });
     if (await exists(path)) throw refuse();
     if ((await git(repo, "for-each-ref", "--format=%(refname)", `refs/heads/${branch}`)).length) throw refuse();
