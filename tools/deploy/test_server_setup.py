@@ -35,6 +35,10 @@ state = json.loads(state_file.read_text()) if state_file.exists() else {}
 args = [a for a in sys.argv[1:] if a != "--user"]
 state.setdefault("calls", []).append(args)
 code = 0
+if args[0] in state.get("broken", []):
+    state_file.write_text(json.dumps(state))
+    print("systemctl: " + args[0] + " is broken", file=sys.stderr)
+    sys.exit(1)
 if args[0] == "show-environment":
     code = 0 if state.get("manager", True) else 1
 elif args[0] == "is-enabled":
@@ -45,6 +49,8 @@ elif args[0] == "enable":
     state["enabled"] = True
 elif args[0] == "start":
     state["active"] = True
+elif args[0] == "stop":
+    state["active"] = False
 elif args[0] == "disable":
     state["enabled"] = False
     if "--now" in args: state["active"] = False
@@ -53,7 +59,19 @@ elif args[0] == "show":
 state_file.write_text(json.dumps(state))
 sys.exit(code)
 """
-LOGINCTL = "#!/bin/sh\n[ \"$1\" = show-user ] && echo yes\nexit 0\n"
+LOGINCTL = """#!/usr/bin/env python3
+import json, sys
+from pathlib import Path
+state_file = Path(__file__).with_name("loginctl.json")
+state = json.loads(state_file.read_text()) if state_file.exists() else {"linger": True}
+if sys.argv[1] == "show-user":
+    print("yes" if state["linger"] else "no")
+elif sys.argv[1] == "enable-linger":
+    state["linger"] = True
+elif sys.argv[1] == "disable-linger":
+    state["linger"] = False
+state_file.write_text(json.dumps(state))
+"""
 
 
 class ServerSetupTests(unittest.TestCase):
@@ -89,6 +107,16 @@ class ServerSetupTests(unittest.TestCase):
         path = self.bin / "systemd.json"
         return json.loads(path.read_text()) if path.exists() else {}
 
+    def set_linger(self, value):
+        (self.bin / "loginctl.json").write_text(json.dumps({"linger": value}))
+
+    def linger(self):
+        path = self.bin / "loginctl.json"
+        return json.loads(path.read_text())["linger"] if path.exists() else True
+
+    def step(self, lines, name):
+        return next(line for line in lines if line.get("step") == name)
+
     def set_systemd(self, **values):
         state = self.systemd()
         state.update(values)
@@ -118,6 +146,7 @@ class ServerSetupTests(unittest.TestCase):
         made = Under(None, version, 6722, ADAPTER, home=self.home, systemctl=str(self.bin / "systemctl"),
                      expect_account=expect_account)
         made.proc = self.proc
+        made.loginctl_bin = str(self.bin / "loginctl")
         return made
 
     def run_setup(self, version="0.8.0", inspect=False, expect_account=None):
@@ -134,12 +163,14 @@ class ServerSetupTests(unittest.TestCase):
     def test_a_clean_machine_becomes_a_managed_server(self):
         code, lines = self.run_setup()
         self.assertEqual(code, 0, lines)
-        self.assertEqual(self.results(lines), {"account": "ok", "platform": "ok", "inventory": "ok", "existing": "ok",
+        self.assertEqual(self.results(lines), {"account": "ok", "platform": "ok", "inventory": "ok", "fence": "ok",
+                                               "recover": "ok", "existing": "ok",
                                                "adapter": "changed", "files": "changed",
                                                "stage": "changed", "select": "changed", "unit": "changed", "linger": "ok",
                                                "start": "changed"})
         self.assertEqual(lines[-1], {"done": True, "root": str(self.root), "command": str(self.root / "orca"),
-                                     "version": "0.8.0", "port": 6722})
+                                     "account": setup_module.getpass.getuser(), "version": "0.8.0", "port": 6722})
+        self.assertFalse((self.root / ".setup-journal.json").exists())
         self.assertEqual(self.staged, ["0.8.0"])
         self.assertEqual(os.readlink(self.root / "current"), str((self.root / "releases" / "v0.8.0").resolve()))
         self.assertEqual((self.root / "orca-release.py").read_text(), ADAPTER)
@@ -182,13 +213,17 @@ class ServerSetupTests(unittest.TestCase):
     def snapshot(self):
         files = {str(p.relative_to(self.home)): (p.read_bytes() if p.is_file() and not p.is_symlink() else os.readlink(p)
                                                  if p.is_symlink() else None)
-                 for p in sorted(self.home.rglob("*"))}
+                 for p in sorted(self.home.rglob("*")) if not p.name.endswith(".lock")}  # empty lock files
         return files, {k: v for k, v in self.systemd().items() if k != "calls"}
 
     def assert_refused_unchanged(self, before, lines, code, step, words):
         self.assertEqual(code, 2, lines)
+        if lines[-1].get("step") == "cleanup":  # refused after the journal: put back, and said so
+            self.assertEqual(lines[-1]["result"], "ok", lines)
+            lines = lines[:-1]
         self.assertEqual((lines[-1]["step"], lines[-1]["result"]), (step, "refused"), lines)
         self.assertIn(words, lines[-1]["detail"])
+        self.assertFalse((self.root / ".setup-journal.json").exists())
         self.assertEqual(self.snapshot(), before)
 
     def test_a_server_on_another_version_is_refused_not_started_or_changed(self):
@@ -334,9 +369,13 @@ class ServerSetupTests(unittest.TestCase):
 
     def test_a_failed_first_setup_leaves_no_current_link_or_enabled_unit(self):
         self.healthy = False
+        self.set_linger(False)
         code, lines = self.run_setup()
         self.assertEqual(code, 1)
-        self.assertEqual((lines[-1]["step"], lines[-1]["result"]), ("start", "failed"))
+        self.assertEqual(self.step(lines, "start")["result"], "failed")
+        self.assertEqual((lines[-1]["step"], lines[-1]["result"]), ("cleanup", "ok"))
+        self.assertFalse(self.linger())  # lingering, enabled by this run, is off again
+        self.assertFalse((self.root / ".setup-journal.json").exists())
         self.assertFalse(os.path.lexists(self.root / "current"))
         self.assertFalse((self.home / ".config" / "systemd" / "user" / "orca.service").exists())
         self.assertFalse(self.systemd()["enabled"])
@@ -351,21 +390,103 @@ class ServerSetupTests(unittest.TestCase):
         self.stage_fails = True
         code, lines = self.run_setup()
         self.assertEqual(code, 1)
-        self.assertEqual((lines[-1]["step"], lines[-1]["result"]), ("stage", "failed"))
-        self.assertIn("retry later", lines[-1]["detail"])
+        self.assertEqual(self.step(lines, "stage")["result"], "failed")
+        self.assertIn("retry later", self.step(lines, "stage")["detail"])
+        self.assertEqual(lines[-1]["step"], "cleanup")
         self.assertFalse(os.path.lexists(self.root / "current"))
         self.assertFalse(self.systemd().get("enabled"))
 
     def test_a_failed_repair_leaves_the_installation_as_it_found_it(self):
         self.assertEqual(self.run_setup()[0], 0)
+        unit = self.home / ".config" / "systemd" / "user" / "orca.service"
+        # An enabled but stopped unit, with an older unit file of this setup's.
         self.set_systemd(active=False)
+        older = unit.read_text().replace("TimeoutStopSec=20", "TimeoutStopSec=10")
+        unit.write_text(older)
         self.healthy = False
         code, lines = self.run_setup()
         self.assertEqual(code, 1)
-        # The link and unit it did not create this run stay: it only failed to start.
-        self.assertTrue(os.path.lexists(self.root / "current"))
-        self.assertTrue((self.home / ".config" / "systemd" / "user" / "orca.service").exists())
+        self.assertEqual((lines[-1]["step"], lines[-1]["result"]), ("cleanup", "ok"), lines)
+        # Started for the repair, health failed: stopped again, not left running.
+        self.assertFalse(self.systemd()["active"])
         self.assertTrue(self.systemd()["enabled"])
+        self.assertEqual(unit.read_text(), older)
+        self.assertTrue(os.path.lexists(self.root / "current"))
+
+    def test_an_unconfirmed_cleanup_says_so_and_the_next_run_finishes_it(self):
+        self.healthy = False
+        self.set_systemd(broken=["stop", "disable"])
+        code, lines = self.run_setup()
+        self.assertEqual(code, 1)
+        self.assertEqual((lines[-1]["step"], lines[-1]["result"]), ("cleanup", "failed"), lines)
+        self.assertIn("active is not back", lines[-1]["detail"])
+        self.assertTrue((self.root / ".setup-journal.json").exists())
+        # Fixed: the next run first puts back what the last one left, then sets up.
+        self.set_systemd(broken=[])
+        self.healthy = True
+        code, lines = self.run_setup()
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.results(lines)["recover"], "repaired")
+        self.assertFalse((self.root / ".setup-journal.json").exists())
+
+    def test_a_run_cut_off_midway_is_put_back_by_the_next(self):
+        """The process dies (the session's end, a kill) before it can put anything back: the
+        journal it wrote before its first change lets the next run do it."""
+        self.set_linger(False)
+        test = self
+
+        class Killed(BaseException):
+            pass
+
+        def die():
+            raise Killed()
+        made = self.setup()
+        made.check_health = die
+        with redirect_stdout(io.StringIO()), self.assertRaises(Killed):
+            made.run()
+        self.assertTrue(self.systemd()["active"])
+        self.assertTrue(self.linger())
+        journal = json.loads((self.root / ".setup-journal.json").read_text())["before"]
+        self.assertEqual(journal, {"unit": None, "enabled": False, "active": False, "current": None, "linger": False})
+        # The next run (unhealthy too) first puts back what the cut-off one changed.
+        test.healthy = False
+        code, lines = self.run_setup()
+        self.assertEqual(self.results(lines)["recover"], "repaired")
+        self.assertEqual((code, lines[-1]["step"], lines[-1]["result"]), (1, "cleanup", "ok"))
+        self.assertEqual((self.systemd()["active"], self.systemd()["enabled"], self.linger()), (False, False, False))
+        self.assertFalse(os.path.lexists(self.root / "current"))
+
+    def test_fenced_against_a_concurrent_setup_or_update(self):
+        import fcntl
+        self.assertEqual(self.run_setup()[0], 0)
+        for name, plant in (
+            ("admission.lock", "Another setup, an update or an ORCA command is running"),
+            ("update.lock", "An update is running"),
+        ):
+            with self.subTest(name), open(self.root / name, "a+") as held:
+                fcntl.flock(held, fcntl.LOCK_EX)
+                self.set_systemd(active=False)
+                before = self.snapshot()
+                code, lines = self.run_setup()
+                self.assert_refused_unchanged(before, lines, code, "fence", plant)
+        (self.root / "activation.json").write_text("{}")
+        before = self.snapshot()
+        code, lines = self.run_setup()
+        self.assert_refused_unchanged(before, lines, code, "fence", "orca-release.py recover")
+
+    def test_a_session_that_goes_away_loses_output_not_the_run(self):
+        class Gone(io.StringIO):
+            def write(self, text):
+                raise BrokenPipeError()
+        saved = sys.stdout
+        sys.stdout = Gone()
+        try:
+            code = self.setup().run()
+        finally:
+            sys.stdout = saved
+        self.assertEqual(code, 0)
+        self.assertTrue(self.systemd()["active"])
+        self.assertFalse((self.root / ".setup-journal.json").exists())
 
     def test_refuses_what_cannot_run_a_server(self):
         with patch.object(setup_module.platform, "machine", lambda: "aarch64"):

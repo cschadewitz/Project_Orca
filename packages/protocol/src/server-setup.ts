@@ -81,21 +81,38 @@ const DoneSchema = z.object({
   done: z.literal(true),
   root: z.string().max(1024),
   command: z.string().max(1024),
+  account: z.string().max(64),
   version: z.string().regex(VERSION),
   port: z.number().int().min(1024).max(65535),
 });
 
 /** What one run of the setup made of the server. */
 export type SetupOutcome =
-  | { kind: "ready"; steps: SetupStep[]; command: string; version: string; port: number }
+  | {
+      kind: "ready";
+      steps: SetupStep[];
+      command: string;
+      version: string;
+      port: number;
+      account: string;
+      root: string;
+    }
+  /**
+   * The server reported something other than what was confirmed (another version, port,
+   * account, directory or launcher): nothing is saved from it, and nothing signs in.
+   */
+  | { kind: "mismatch"; steps: SetupStep[]; detail: string }
   /** Something only the person can resolve (an unmanaged installation, say): nothing changed for it. */
   | { kind: "refused"; steps: SetupStep[]; step: string; detail: string }
   /** A step failed; what this run created was taken back. */
   | { kind: "failed"; steps: SetupStep[]; step: string; detail: string }
   /** No Python 3 on the server. */
   | { kind: "no-python"; steps: SetupStep[] }
-  /** The setup did not report how it ended (the session was lost, say): run it again. */
-  | { kind: "unknown"; steps: SetupStep[] };
+  /**
+   * The setup did not report how it ended (the session was lost, say), or could not confirm
+   * that a failed run put everything back (`detail`): run it again, which finishes that first.
+   */
+  | { kind: "unknown"; steps: SetupStep[]; detail?: string };
 
 const InspectedSchema = z.object({
   inspected: z.literal(true),
@@ -107,7 +124,8 @@ export type Inspected = z.infer<typeof InspectedSchema>;
 
 /** What a read-only inspection found: ready to confirm, or why not. */
 export type InspectOutcome =
-  { kind: "inspected"; steps: SetupStep[]; inspected: Inspected } | Exclude<SetupOutcome, { kind: "ready" }>;
+  | { kind: "inspected"; steps: SetupStep[]; inspected: Inspected }
+  | Exclude<SetupOutcome, { kind: "ready" } | { kind: "mismatch" }>;
 
 function readLines(result: RemoteResult): { steps: SetupStep[]; values: unknown[] } {
   const steps: SetupStep[] = [];
@@ -127,10 +145,20 @@ function readLines(result: RemoteResult): { steps: SetupStep[]; values: unknown[
   return { steps, values };
 }
 
-function notReady(result: RemoteResult, steps: SetupStep[]): Exclude<SetupOutcome, { kind: "ready" }> {
-  const last = steps.at(-1);
+function notReady(
+  result: RemoteResult,
+  steps: SetupStep[],
+): Exclude<SetupOutcome, { kind: "ready" } | { kind: "mismatch" }> {
+  // After a failure the setup puts back what it changed and says whether that is confirmed.
+  const cleanup = steps.at(-1)?.step === "cleanup" ? steps.at(-1) : undefined;
+  const last = cleanup ? steps.at(-2) : steps.at(-1);
+  if (cleanup && cleanup.result !== "ok") return { kind: "unknown", steps, detail: cleanup.detail };
   if (last?.result === "refused") return { kind: "refused", steps, step: last.step, detail: last.detail };
-  if (last?.result === "failed") return { kind: "failed", steps, step: last.step, detail: last.detail };
+  // Failed is only failed once the put-back is confirmed; otherwise nobody knows the state.
+  if (last?.result === "failed")
+    return cleanup
+      ? { kind: "failed", steps, step: last.step, detail: last.detail }
+      : { kind: "unknown", steps, detail: last.detail };
   // `python3` not found by the remote shell: 127, and nothing of ours was printed.
   if (!steps.length && result.code === 127) return { kind: "no-python", steps };
   return { kind: "unknown", steps };
@@ -143,8 +171,48 @@ export function readSetup(result: RemoteResult): SetupOutcome {
   const { steps, values } = readLines(result);
   const done = values.map((value) => DoneSchema.safeParse(value)).findLast((parsed) => parsed.success)?.data;
   if (result.code === 0 && done && !ended(steps))
-    return { kind: "ready", steps, command: done.command, version: done.version, port: done.port };
+    return {
+      kind: "ready",
+      steps,
+      command: done.command,
+      version: done.version,
+      port: done.port,
+      account: done.account,
+      root: done.root,
+    };
   return notReady(result, steps);
+}
+
+/** The managed launcher a setup in `root` installs: derived here, never taken from the server. */
+export function managedLauncher(root: string): string {
+  return `${root.replace(/\/+$/, "")}/orca`;
+}
+
+/**
+ * A ready result counts only as the setup that was confirmed: exactly the version, daemon
+ * port, account and directory, and the launcher derived from that directory here. Anything
+ * else is a `mismatch`, from which nothing may be saved or signed in to.
+ */
+export function confirmedResult(
+  outcome: SetupOutcome,
+  expected: { version: string; port: number; account: string; root: string },
+): SetupOutcome {
+  if (outcome.kind !== "ready") return outcome;
+  const differs = [
+    outcome.version !== expected.version && `version ${outcome.version}, not ${expected.version}`,
+    outcome.port !== expected.port && `port ${outcome.port}, not ${expected.port}`,
+    outcome.account !== expected.account && `account ${outcome.account}, not ${expected.account}`,
+    outcome.root !== expected.root && `directory ${outcome.root}, not ${expected.root}`,
+    outcome.command !== managedLauncher(expected.root) &&
+      `launcher ${outcome.command}, not ${managedLauncher(expected.root)}`,
+  ].filter((item): item is string => typeof item === "string");
+  return differs.length
+    ? {
+        kind: "mismatch",
+        steps: outcome.steps,
+        detail: `The server reported a setup other than the one confirmed (${differs.join("; ")}).`,
+      }
+    : outcome;
 }
 
 /** Read an `--inspect` run's lines. */

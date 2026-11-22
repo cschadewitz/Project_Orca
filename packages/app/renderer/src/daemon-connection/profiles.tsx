@@ -103,7 +103,12 @@ export function setupSummary(
       return { text: `ORCA was not set up on ${profile.name}: ${setup.detail ?? ""}`, alert: true };
     case "failed":
       return {
-        text: `Setting up ${profile.name} failed at "${setup.step ?? "?"}": ${setup.detail ?? ""} Nothing it started was left enabled; set it up again once this is fixed.`,
+        text: `Setting up ${profile.name} failed at "${setup.step ?? "?"}": ${setup.detail ?? ""} Everything it changed is back as it was; set it up again once this is fixed.`,
+        alert: true,
+      };
+    case "mismatch":
+      return {
+        text: `${setup.detail ?? "The server reported a setup other than the one confirmed."} ${profile.name} was not changed and nothing signed in.`,
         alert: true,
       };
     case "no-python":
@@ -113,7 +118,9 @@ export function setupSummary(
       };
     default:
       return {
-        text: `Setting up ${profile.name} did not report how it ended (the connection may have dropped). Set it up again: it picks up where it stopped.`,
+        text: setup.detail
+          ? `Setting up ${profile.name} could not confirm that everything is back as it was: ${setup.detail}`
+          : `Setting up ${profile.name} did not report how it ended (the connection may have dropped). Set it up again: it first puts back anything an unfinished run changed.`,
         alert: true,
       };
   }

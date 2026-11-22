@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import { ConnectionProfileSchema } from "../src/remote-access.js";
 import {
   confirmationCode,
+  confirmedResult,
+  readSetup,
   inspectCommand,
   keyFingerprints,
   readInspection,
@@ -85,5 +87,49 @@ describe("server setup confirmation (#881)", () => {
     expect(readInspection({ code: 0, serverLines: [], stdout: line({ ...inspected, account: "a b" }) }).kind).toBe(
       "unknown",
     );
+  });
+
+  it("calls a failure failed only once its put-back is confirmed", () => {
+    const line = (value: unknown) => `orca-setup: ${JSON.stringify(value)}`;
+    const failed = line({ step: "start", result: "failed", detail: "unhealthy" });
+    const read = (...lines: string[]) => readSetup({ code: 1, serverLines: [], stdout: lines.join("\n") });
+    expect(read(failed, line({ step: "cleanup", result: "ok", detail: "" }))).toMatchObject({
+      kind: "failed",
+      step: "start",
+      detail: "unhealthy",
+    });
+    expect(read(failed, line({ step: "cleanup", result: "failed", detail: "active is not back" }))).toMatchObject({
+      kind: "unknown",
+      detail: "active is not back",
+    });
+    expect(read(failed)).toMatchObject({ kind: "unknown" });
+    const refused = line({ step: "files", result: "refused", detail: "owned key" });
+    expect(read(refused, line({ step: "cleanup", result: "ok", detail: "" })).kind).toBe("refused");
+    expect(read(refused).kind).toBe("refused");
+    expect(read(refused, line({ step: "cleanup", result: "failed", detail: "x" })).kind).toBe("unknown");
+  });
+
+  it("accepts a ready result only as exactly the setup confirmed", () => {
+    const root = "/home/dev/.local/share/orca-server";
+    const ready = {
+      kind: "ready" as const,
+      steps: [],
+      command: `${root}/orca`,
+      version: "0.8.0",
+      port: 6722,
+      account: "dev",
+      root,
+    };
+    const expected = { version: "0.8.0", port: 6722, account: "dev", root };
+    expect(confirmedResult(ready, expected)).toBe(ready);
+    for (const changed of [
+      { port: 7000 },
+      { version: "0.8.1" },
+      { account: "root" },
+      { root: "/tmp/x" },
+      { command: "/tmp/orca" },
+      { command: `${root}/../orca` },
+    ])
+      expect(confirmedResult({ ...ready, ...changed }, expected).kind).toBe("mismatch");
   });
 });

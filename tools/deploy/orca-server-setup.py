@@ -30,11 +30,20 @@ docs/UPDATING.md describes, with the managed adapter (`orca-release.py`) doing t
 7. unit        The systemd user unit, enabled; lingering, so it runs without a login.
 8. start       The unit started, and the daemon's hello checked against the release.
 
+Each run holds the deployment's admission lock exclusively from its first change to its end
+(and refuses while an update holds the update lock, or an interrupted activation is pending),
+so a second setup, an update, a recovery or a CLI launch cannot run inside it. Before its
+first change it records the state it found, the unit file, whether the unit was enabled and
+active, `current` and lingering, in `<root>/.setup-journal.json`. A run that fails puts all of
+that back, checks that it is back, and reports a `cleanup` step: `ok`, or `failed` with what it
+could not confirm. A run that never got to (the session was cut, say) leaves the journal, and
+the next run puts that state back first (`recover`), before anything else.
+
 It prints one `orca-setup: {json}` line per step, `{"step", "result", "detail"}` with result
 `ok` (already as it should be), `changed`, `repaired`, `warning`, `refused` or `failed`, and
-one last `{"done": ...}` line. Nothing else it prints is meant to be read. A run that fails
-after it created `current` or the unit takes both back, so a failed first setup leaves no
-half-written link and no enabled unit.
+one last `{"done": ...}` line. Nothing else it prints is meant to be read. A failed first
+setup leaves no half-written link and no enabled unit. Output to a session that went away is
+dropped, never fatal: the run still finishes, or puts things back.
 
 `--inspect` changes nothing: it runs the platform, inventory and existing checks and prints
 one `{"inspected": true, "account", "root", "current"}` line, which the app and CLI show the
@@ -45,6 +54,7 @@ sends it over ssh as `python3 - ...` with the adapter embedded (`EMBEDDED_ADAPTE
 third-party modules.
 """
 import argparse
+import fcntl
 import base64
 import getpass
 import hashlib
@@ -55,6 +65,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -78,8 +89,19 @@ class Refused(Exception):
     """Something only the person can resolve: nothing was changed for it."""
 
 
+def emit(value):
+    """One line for the client. A session that went away loses the line, not the run."""
+    try:
+        print("orca-setup: " + json.dumps(value, sort_keys=True), flush=True)
+    except (BrokenPipeError, OSError):
+        try:
+            sys.stdout = open(os.devnull, "w")
+        except OSError:
+            pass
+
+
 def report(step, result, detail=""):
-    print("orca-setup: " + json.dumps({"step": step, "result": result, "detail": detail}, sort_keys=True), flush=True)
+    emit({"step": step, "result": result, "detail": detail})
 
 
 def write_file(path, text, mode):
@@ -124,6 +146,9 @@ class Setup:
         self.systemctl_bin = systemctl or "systemctl"
         self.proc = Path("/proc")
         self.expect_account = expect_account
+        self.loginctl_bin = "loginctl"
+        self.fence = None
+        self.before = None
         # What this run created, to take back if a later step fails.
         self.created_current = False
         self.created_unit = False
@@ -156,6 +181,14 @@ class Setup:
     @property
     def adapter(self):
         return self.root / "orca-release.py"
+
+    @property
+    def journal(self):
+        return self.root / ".setup-journal.json"
+
+    @property
+    def user(self):
+        return os.environ.get("USER") or str(os.getuid())
 
     @property
     def release(self):
@@ -283,10 +316,124 @@ class Setup:
         else:
             report("existing", "ok", "nothing selected yet")
 
-    def install_adapter(self):
+    def take_fence(self):
+        """Hold the admission lock exclusively for the rest of the run: no second setup, no
+        update activation or recovery, no CLI or ACP launch inside it. An update that holds the
+        update lock (staging, say), or an interrupted activation, refuses instead."""
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         if not self.marker.is_file():
             write_file(self.marker, json.dumps({"by": SETUP_MARKER, "version": 1}) + "\n", 0o600)
+        fd = os.open(self.root / "admission.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            raise Refused("Another setup, an update or an ORCA command is running on this server. "
+                          "Run the setup again once it has finished.") from None
+        self.fence = fd
+        probe = os.open(self.root / "update.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refused("An update is running on this server. Run the setup again once it has finished.") from None
+        finally:
+            os.close(probe)
+        if os.path.lexists(self.root / "activation.json"):
+            raise Refused("An interrupted update is pending on this server: run orca-release.py recover first "
+                          "(docs/UPDATING.md).")
+        report("fence", "ok", "no setup or update is running")
+
+    def release_fence(self):
+        if self.fence is not None:
+            os.close(self.fence)
+            self.fence = None
+
+    def state(self):
+        """The service, link and lingering state this setup may change, as it is now."""
+        def query(*args):
+            return self.systemctl(*args, check=False).stdout.strip()
+        linger = subprocess.run([self.loginctl_bin, "show-user", self.user, "--property=Linger", "--value"],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        current = self.root / "current"
+        return {
+            "unit": self.unit.read_text() if self.unit.is_file() else None,
+            "enabled": query("is-enabled", SERVICE) == "enabled",
+            "active": query("is-active", SERVICE) == "active",
+            "current": os.readlink(current) if os.path.islink(current) else None,
+            "linger": (linger.stdout.strip() == "yes") if linger.returncode == 0 else None,
+        }
+
+    def recover(self):
+        """A run that ended before it could finish or put things back: back to what it found."""
+        if not os.path.lexists(self.journal):
+            report("recover", "ok", "no interrupted setup")
+            return
+        try:
+            before = json.loads(self.journal.read_text())["before"]
+        except (OSError, ValueError, KeyError, TypeError):
+            raise RuntimeError(f"{self.journal} is unreadable; inspect the server and remove it by hand") from None
+        problems = self.restore(before)
+        if problems:
+            raise RuntimeError("Could not put back what an interrupted setup changed: " + "; ".join(problems))
+        self.journal.unlink()
+        report("recover", "repaired", "put back what an interrupted setup had changed")
+
+    def begin(self):
+        """The state found, recorded before the first change, so a failure can put it back."""
+        self.before = self.state()
+        write_file(self.journal, json.dumps({"by": SETUP_MARKER, "before": self.before}, sort_keys=True) + "\n", 0o600)
+
+    def restore(self, before):
+        """Put the unit, link and lingering back as `before`, then check. Returns what could
+        not be put back or confirmed (empty: all of it was)."""
+        problems = []
+
+        def attempt(what, action):
+            try:
+                action()
+            except Exception as error:  # noqa: BLE001 - collected, reported
+                problems.append(f"{what}: {str(error)[:200]}")
+
+        now = self.state()
+        # The link: only ever created by setup, so put back means removed or re-pointed.
+        if now["current"] != before["current"]:
+            def link():
+                current = self.root / "current"
+                if os.path.lexists(current):
+                    current.unlink()
+                if before["current"] is not None:
+                    current.symlink_to(before["current"], target_is_directory=True)
+            attempt("current", link)
+        if now["active"] and not before["active"]:
+            attempt("stop", lambda: self.systemctl("stop", SERVICE))
+        if now["enabled"] != before["enabled"]:
+            attempt("enable" if before["enabled"] else "disable",
+                    lambda: self.systemctl("enable" if before["enabled"] else "disable", SERVICE))
+        if now["unit"] != before["unit"]:
+            def unit():
+                if before["unit"] is None:
+                    self.unit.unlink(missing_ok=True)
+                else:
+                    write_file(self.unit, before["unit"], 0o644)
+                self.systemctl("daemon-reload")
+            attempt("unit file", unit)
+        if before["active"] and not now["active"]:
+            attempt("start", lambda: self.systemctl("start", SERVICE))
+        if before["linger"] is False and now["linger"] is True:
+            def linger():
+                if subprocess.run([self.loginctl_bin, "disable-linger", self.user], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL).returncode != 0:
+                    raise RuntimeError("loginctl disable-linger failed")
+            attempt("lingering", linger)
+        after = self.state()
+        for key in ("unit", "enabled", "active", "current", "linger"):
+            if key == "linger" and before[key] is None:
+                continue  # Unknown before: nothing to compare with, and setup leaves it be.
+            if after[key] != before[key]:
+                problems.append(f"{key} is not back as it was")
+        return problems
+
+    def install_adapter(self):
         changed = write_file(self.adapter, self.adapter_source, 0o755)
         digest = hashlib.sha256(self.adapter_source.encode()).hexdigest()[:12]
         report("adapter", "changed" if changed else "ok", f"orca-release.py sha256:{digest}")
@@ -409,12 +556,12 @@ class Setup:
             self.enabled_unit = True
         report("unit", "changed" if changed or not enabled else "ok", SERVICE)
         # Without lingering the user manager, and the daemon, stop at logout.
-        user = os.environ.get("USER") or str(os.getuid())
-        linger = subprocess.run(["loginctl", "show-user", user, "--property=Linger", "--value"],
+        user = self.user
+        linger = subprocess.run([self.loginctl_bin, "show-user", user, "--property=Linger", "--value"],
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         if linger.returncode == 0 and linger.stdout.strip() == "yes":
             report("linger", "ok", "the daemon runs without a login")
-        elif subprocess.run(["loginctl", "enable-linger", user], stdout=subprocess.DEVNULL,
+        elif subprocess.run([self.loginctl_bin, "enable-linger", user], stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL).returncode == 0:
             report("linger", "changed", "the daemon runs without a login")
         else:
@@ -430,14 +577,17 @@ class Setup:
                f"daemon healthy on 127.0.0.1:{self.port}")
 
     def take_back(self):
-        """After a failure: what this run created goes, so nothing half-made stays enabled."""
-        if self.enabled_unit or self.created_unit:
-            self.systemctl("disable", "--now", SERVICE, check=False)
-        if self.created_unit:
-            self.unit.unlink(missing_ok=True)
-            self.systemctl("daemon-reload", check=False)
-        if self.created_current:
-            (self.root / "current").unlink(missing_ok=True)
+        """After a failure: everything back as this run found it, checked, and reported as
+        the `cleanup` step. Unconfirmed, the journal stays for the next run to finish it."""
+        if self.before is None:
+            return
+        problems = self.restore(self.before)
+        if problems:
+            report("cleanup", "failed", "Could not confirm everything is back as it was: " + "; ".join(problems)
+                   + ". The next setup run puts it back first.")
+            return
+        self.journal.unlink(missing_ok=True)
+        report("cleanup", "ok", "everything this run changed is back as it was")
 
     def inspect(self):
         """Read only: what the person confirms before anything is changed."""
@@ -453,30 +603,35 @@ class Setup:
             report(step, "failed", str(error)[:2000])
             return 1
         current = self.root / "current"
-        print("orca-setup: " + json.dumps({"inspected": True, "account": getpass.getuser(), "root": str(self.root),
-                                           "current": self.version if os.path.lexists(current) else None},
-                                          sort_keys=True), flush=True)
+        emit({"inspected": True, "account": getpass.getuser(), "root": str(self.root),
+              "current": self.version if os.path.lexists(current) else None})
         return 0
 
     def run(self):
+        # The session can end mid-run: finish, or put back, regardless.
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
         step = "account"
         try:
             for step, action in (("account", self.check_account), ("platform", self.check_platform),
-                                 ("inventory", self.check_inventory), ("existing", self.check_existing),
-                                 ("adapter", self.install_adapter), ("files", self.install_files),
-                                 ("stage", self.stage), ("select", self.select), ("unit", self.install_unit),
-                                 ("start", self.start)):
+                                 ("inventory", self.check_inventory), ("fence", self.take_fence),
+                                 ("recover", self.recover), ("existing", self.check_existing),
+                                 ("journal", self.begin), ("adapter", self.install_adapter),
+                                 ("files", self.install_files), ("stage", self.stage), ("select", self.select),
+                                 ("unit", self.install_unit), ("start", self.start)):
                 action()
         except Refused as error:
             report(step, "refused", str(error))
+            self.take_back()
             return 2
         except Exception as error:  # noqa: BLE001 - every failure is a typed result
-            self.take_back()
             report(step, "failed", str(error)[:2000])
+            self.take_back()
             return 1
-        print("orca-setup: " + json.dumps({"done": True, "root": str(self.root), "command": str(self.root / "orca"),
-                                           "version": (self.root / "current").resolve().name[1:], "port": self.port},
-                                          sort_keys=True), flush=True)
+        finally:
+            self.release_fence()
+        self.journal.unlink(missing_ok=True)
+        emit({"done": True, "root": str(self.root), "command": str(self.root / "orca"), "account": getpass.getuser(),
+              "version": (self.root / "current").resolve().name[1:], "port": self.port})
         return 0
 
 

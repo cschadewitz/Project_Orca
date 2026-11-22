@@ -24,10 +24,12 @@ import { OrcaError } from "@orca/core";
 import { ConnectionProfileSchema, profileIdFor, SshTunnel } from "@orca/protocol/remote-access";
 import {
   confirmationCode,
+  confirmedResult,
   discoverServer,
   dropDiscovery,
   enrollDiscovered,
   keyFingerprints,
+  managedLauncher,
   readSetup,
   setupCommand,
   setupProgram,
@@ -168,8 +170,10 @@ export async function remoteCommand(
   let outcome: SetupOutcome;
   try {
     await tunnel.open();
-    outcome = readSetup(
-      await tunnel.exec(setupCommand(version, profile.remotePort, account), SETUP_TIMEOUT_MS, program),
+    // Only the setup that was confirmed counts: what the server reports must match it.
+    outcome = confirmedResult(
+      readSetup(await tunnel.exec(setupCommand(version, profile.remotePort, account), SETUP_TIMEOUT_MS, program)),
+      { version, port: profile.remotePort, account, root },
     );
   } finally {
     await tunnel.close();
@@ -189,7 +193,7 @@ function finish(ctx: CommandContext, destination: string, outcome: SetupOutcome 
     case "ready":
       if (!ctx.flags.json)
         ctx.out(
-          `${destination} is a managed ORCA server (v${outcome.version}). To connect and sign in, add an SSH profile for it in the desktop app with server command ${outcome.command}, or use Add a machine there.`,
+          `${destination} is a managed ORCA server (v${outcome.version}). To connect and sign in, add an SSH profile for it in the desktop app with server command ${managedLauncher(outcome.root)}, or use Add a machine there.`,
         );
       return 0;
     case "refused":
@@ -197,15 +201,20 @@ function finish(ctx: CommandContext, destination: string, outcome: SetupOutcome 
       return 2;
     case "failed":
       ctx.err(
-        `Setup failed at "${outcome.step}": ${outcome.detail} Nothing it started was left enabled; run it again once this is fixed.`,
+        `Setup failed at "${outcome.step}": ${outcome.detail} Everything it changed is back as it was; run it again once this is fixed.`,
       );
+      return 1;
+    case "mismatch":
+      ctx.err(`${outcome.detail} Use none of it; check the server.`);
       return 1;
     case "no-python":
       ctx.err(`${destination} has no python3. Install Python 3.8 or newer there, then run this again.`);
       return 1;
     default:
       ctx.err(
-        "The setup did not report how it ended (the connection may have dropped). Run it again: it picks up where it stopped.",
+        outcome.kind === "unknown" && outcome.detail
+          ? `The setup could not confirm that everything is back as it was: ${outcome.detail}`
+          : "The setup did not report how it ended (the connection may have dropped). Run it again: it first puts back anything an unfinished run changed.",
       );
       return 1;
   }

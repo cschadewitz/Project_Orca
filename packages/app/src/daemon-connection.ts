@@ -78,12 +78,14 @@ export interface ServerSetupStepView {
 }
 /**
  * What setting up a profile's server came to: `ready`, `refused` (an unmanaged installation,
- * say: nothing changed for it), `failed` (what that run created was taken back), `no-python`,
- * or `unknown` (it did not say how it ended: run it again). Then whether this computer signed in.
+ * say: nothing changed for it), `failed` (put back as it was, and confirmed), `mismatch` (the
+ * server reported other than what was confirmed: nothing saved, no sign-in), `no-python`, or
+ * `unknown` (it did not say how it ended, or could not confirm the put-back: run it again).
+ * Then whether this computer signed in.
  */
 export interface ServerSetupView {
   setup: {
-    kind: "ready" | "refused" | "failed" | "no-python" | "unknown";
+    kind: "ready" | "refused" | "failed" | "mismatch" | "no-python" | "unknown";
     steps: ServerSetupStepView[];
     step?: string;
     detail?: string;

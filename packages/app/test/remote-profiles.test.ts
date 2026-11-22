@@ -80,7 +80,7 @@ class FakeServer {
       'orca-setup: {"detail": "", "result": "ok", "step": "platform"}',
       'orca-setup: {"detail": "v0.8.0 staged from the signed bundle", "result": "changed", "step": "stage"}',
       'orca-setup: {"detail": "could not enable lingering", "result": "warning", "step": "linger"}',
-      'orca-setup: {"command": "/home/casey/.local/share/orca-server/orca", "done": true, "port": 6722, "root": "/home/casey/.local/share/orca-server", "version": "0.8.0"}',
+      'orca-setup: {"account": "casey", "command": "/home/casey/.local/share/orca-server/orca", "done": true, "port": 6722, "root": "/home/casey/.local/share/orca-server", "version": "0.8.0"}',
     ].join("\n"),
     serverLines: [],
   };
@@ -1646,11 +1646,33 @@ describe("setting a machine up as a managed server (#881)", () => {
       [
         {
           code: 1,
-          stdout:
+          stdout: [
             'orca-setup: {"detail": "no complete server bundle yet; retry later", "result": "failed", "step": "stage"}',
+            'orca-setup: {"detail": "everything this run changed is back as it was", "result": "ok", "step": "cleanup"}',
+          ].join("\n"),
           serverLines: [],
         },
         "failed",
+      ],
+      [
+        {
+          code: 1,
+          stdout: [
+            'orca-setup: {"detail": "health failed", "result": "failed", "step": "start"}',
+            'orca-setup: {"detail": "Could not confirm everything is back: active is not back as it was", "result": "failed", "step": "cleanup"}',
+          ].join("\n"),
+          serverLines: [],
+        },
+        "unknown",
+      ],
+      [
+        // Failed, and then the session ended before the put-back was reported.
+        {
+          code: 255,
+          stdout: 'orca-setup: {"detail": "health failed", "result": "failed", "step": "start"}',
+          serverLines: [],
+        },
+        "unknown",
       ],
       [{ code: 127, stdout: "", serverLines: ["sh: python3: not found"] }, "no-python"],
       [
@@ -1665,6 +1687,37 @@ describe("setting a machine up as a managed server (#881)", () => {
       expect(result.setup.kind).toBe(kind);
       expect(result).not.toHaveProperty("signIn");
       expect(profiles.list()[0]).not.toHaveProperty("serverCommand");
+      expect(server.commands.filter((command) => command[2] === "issue")).toEqual([]);
+    }
+  });
+
+  it("saves nothing and signs in nowhere when the server reports other than what was confirmed", async () => {
+    const done = (fields: Record<string, unknown>) =>
+      `orca-setup: ${JSON.stringify({
+        done: true,
+        account: "casey",
+        command: managed,
+        root: "/home/casey/.local/share/orca-server",
+        version: "0.8.0",
+        port: 6722,
+        ...fields,
+      })}`;
+    for (const [fields, words] of [
+      [{ port: 7000 }, "port 7000, not 6722"],
+      [{ version: "0.8.1" }, "version 0.8.1, not 0.8.0"],
+      [{ account: "root" }, "account root, not casey"],
+      [{ command: "/tmp/evil" }, "launcher /tmp/evil"],
+      [{ root: "/srv/other", command: "/srv/other/orca" }, "directory /srv/other"],
+    ] as const) {
+      const { profiles, server, dir } = store();
+      profiles.save({ name: "Lab", destination: "casey@lab", serverConfig: "/srv/old/orca.config.yaml" });
+      server.setup = { code: 0, stdout: done(fields), serverLines: [] };
+      const result = await inspectAndSetUp(profiles);
+      expect(result.setup).toMatchObject({ kind: "mismatch", detail: expect.stringContaining(words) });
+      expect(result).not.toHaveProperty("signIn");
+      expect(profiles.list()[0]).toMatchObject({ remotePort: 6722, serverConfig: "/srv/old/orca.config.yaml" });
+      expect(profiles.list()[0]).not.toHaveProperty("serverCommand");
+      expect(pinState(join(dir, "known_hosts", "lab"))).toBe("pinned");
       expect(server.commands.filter((command) => command[2] === "issue")).toEqual([]);
     }
   });

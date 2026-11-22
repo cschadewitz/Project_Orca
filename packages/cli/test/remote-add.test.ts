@@ -78,6 +78,7 @@ const READY: RemoteResult = {
     line({ step: "stage", result: "changed", detail: "" }),
     line({
       done: true,
+      account: "dev",
       root: "/home/dev/.local/share/orca-server",
       command: "/home/dev/.local/share/orca-server/orca",
       version: "0.8.0",
@@ -232,13 +233,34 @@ describe("orca remote add (#881)", () => {
     ({ code, run } = await confirmed({
       code: 1,
       serverLines: [],
-      stdout: line({ step: "start", result: "failed", detail: "The unit did not start." }),
+      stdout: [
+        line({ step: "start", result: "failed", detail: "The unit did not start." }),
+        line({ step: "cleanup", result: "ok", detail: "" }),
+      ].join("\n"),
     }));
     expect(code).toBe(1);
     expect(run.errs.at(-1)).toContain('Setup failed at "start"');
     ({ code, run } = await confirmed({ code: 255, serverLines: [], stdout: "" }));
     expect(code).toBe(1);
     expect(run.errs.at(-1)).toContain("did not report how it ended");
+    ({ code, run } = await confirmed({
+      code: 1,
+      serverLines: [],
+      stdout: [
+        line({ step: "start", result: "failed", detail: "health" }),
+        line({ step: "cleanup", result: "failed", detail: "active is not back as it was" }),
+      ].join("\n"),
+    }));
+    expect(code).toBe(1);
+    expect(run.errs.at(-1)).toContain("could not confirm that everything is back");
+    // A result other than the one confirmed: none of it is used.
+    ({ code, run } = await confirmed({
+      ...READY,
+      stdout: READY.stdout.replace('"port":6722', '"port":7000'),
+    }));
+    expect(code).toBe(1);
+    expect(run.errs.at(-1)).toContain("port 7000, not 6722");
+    expect(run.lines.join("\n")).not.toContain("is a managed ORCA server");
 
     // A refusal found by the inspection itself: before any confirmation.
     const { make } = fakeServer({

@@ -41,10 +41,12 @@ import type { RemoteProfileView } from "../daemon-connection.js";
 import { ConnectionRefusal } from "./connection-target.js";
 import {
   confirmationCode,
+  confirmedResult,
   discoverServer,
   dropDiscovery,
   enrollDiscovered,
   keyFingerprints,
+  managedLauncher,
   readSetup,
   setupCommand,
   setupProgram,
@@ -253,7 +255,15 @@ export class RemoteProfiles {
   /** The inspection each profile's confirmation was given for (#881): one at a time, used once. */
   private readonly inspections = new Map<
     string,
-    { code: string; discovery: Discovery; account: string; version: string; revision: number; until: number }
+    {
+      code: string;
+      discovery: Discovery;
+      account: string;
+      root: string;
+      version: string;
+      revision: number;
+      until: number;
+    }
   >();
   /** Bumped by every edit, removal and pin reset of a profile (in memory: pending work is too). */
   private readonly revisions = new Map<string, number>();
@@ -637,6 +647,7 @@ export class RemoteProfiles {
       code,
       discovery,
       account,
+      root,
       version: options.version,
       revision,
       until: Date.now() + CONFIRMATION_MS,
@@ -712,7 +723,13 @@ export class RemoteProfiles {
       const tunnel = this.newTunnel(profile, true, pending.discovery.keys);
       try {
         await tunnel.open();
-        setup = readSetup(await tunnel.exec(command, SETUP_TIMEOUT_MS, program));
+        // Only the setup that was confirmed counts: what the server reports must match it.
+        setup = confirmedResult(readSetup(await tunnel.exec(command, SETUP_TIMEOUT_MS, program)), {
+          version: options.version,
+          port: profile.remotePort,
+          account: pending.account,
+          root: pending.root,
+        });
       } finally {
         await tunnel.close();
       }
@@ -722,15 +739,21 @@ export class RemoteProfiles {
     if (setup.kind !== "ready") return { setup };
     if (this.revision(id) !== revision || this.closed)
       throw new ConnectionRefusal("The profile changed while its server was set up. Set it up again.");
-    // The managed launcher passes the server's config itself, so the profile names none.
+    // Still pinned to exactly the confirmed keys: what signs in is the server that was set up.
+    if (this.hostKeys(profile) !== pending.discovery.keys)
+      throw new ConnectionRefusal(
+        "The profile's pinned host keys changed while its server was set up. Set it up again.",
+      );
+    // Repointed only at the launcher derived here from the confirmed directory, on the same
+    // server and port (so the verified pins stay). The managed launcher passes the server's
+    // config itself, so the profile names none.
     const latest = this.get(id)!;
-    if (
-      latest.serverCommand !== setup.command ||
-      latest.serverConfig !== undefined ||
-      latest.remotePort !== setup.port
-    ) {
+    const launcher = managedLauncher(pending.root);
+    if (latest.serverCommand !== launcher || latest.serverConfig !== undefined) {
       const { serverConfig: _config, ...rest } = latest;
-      this.save({ ...rest, serverCommand: setup.command, remotePort: setup.port });
+      this.save({ ...rest, serverCommand: launcher });
+      if (this.hostKeys(profile) !== pending.discovery.keys)
+        throw new ConnectionRefusal("The profile's pinned host keys changed while its server was set up.");
     }
     try {
       await (await this.open(id)).release();

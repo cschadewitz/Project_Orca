@@ -301,8 +301,19 @@ Every step is idempotent, and a re-run only verifies and repairs what the setup 
 - A machine with an ORCA installation the setup did not make (a launcher, unit, process or
   directory) is refused with the
   [inventory guidance](UPDATING.md#debian-inventory-before-migration) and left untouched.
-- A run that fails after it created `current` or the unit takes both back, so a failed first
-  setup leaves no half-written link and no enabled unit.
+- A run holds the deployment's admission lock from its first change to its end, so a second
+  setup, an update, a recovery or an ORCA command cannot run inside it; it refuses while an
+  update holds the update lock or an interrupted activation is pending.
+- Before its first change, a run records the state it found (the unit file, whether the unit
+  was enabled and running, `current`, lingering) in `<root>/.setup-journal.json`. A run that
+  fails puts all of it back (a unit that was stopped is stopped again), checks it, and only
+  then reports a failure; if it cannot confirm that, the result is "unknown" with what is not
+  back. A run cut off before it could (the session ended) leaves the journal, and the next run
+  puts that state back first. A failed first setup leaves no link and no enabled unit.
+- The result counts only as the setup that was confirmed: the version, daemon port, account
+  and directory must match, and the launcher the profile is pointed at is derived from the
+  confirmed directory, not taken from the server. Anything else is a mismatch: nothing is
+  saved, the profile's port and pins stay as they were, and nothing signs in.
 
 The update timer (#878) is not enabled here.
 
