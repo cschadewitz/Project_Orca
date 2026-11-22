@@ -16,7 +16,8 @@
  *
  * Before converting, the daemon moves the record onto its own claim (bounded by
  * {@link HANDOFF_ATTEMPTS}), so a carryover interrupted by a crash is retried by the next start
- * under the same proof. A finished or refused carryover removes the record.
+ * under the same proof. A finished or refused carryover removes the record. Only a writer that
+ * holds the fence ever removes it ({@link spendUpdateHandoff}); the updater never does.
  */
 import { randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, lstatSync, openSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -118,17 +119,6 @@ export function removeUpdateHandoff(storeDir: string): void {
     throw error;
   }
   syncDirectory(storeDir);
-}
-
-/**
- * Remove the handoff only when the record on disk is exactly `issued` (the receipt its writer
- * kept); a replacement, or a record moved onto a later claim, is left. Returns whether it was
- * removed.
- */
-export function removeIssuedUpdateHandoff(storeDir: string, issued: UpdateHandoff): boolean {
-  if (!same(readUpdateHandoff(storeDir), issued)) return false;
-  removeUpdateHandoff(storeDir);
-  return true;
 }
 
 /**
