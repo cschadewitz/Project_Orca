@@ -108,3 +108,19 @@ export function recordRevisionVersion(
   const rest = history.filter((item) => item.key !== key);
   return [entry, ...rest].slice(0, REVISION_HISTORY_LIMIT);
 }
+
+/**
+ * Remove text copied from a protected read once that read is no longer authority for it
+ * (#398 review). Each copied segment is taken out verbatim, leaving what the person wrote.
+ * A segment the person has since edited can no longer be told apart from their own words, so
+ * then the whole draft goes: the protected text must not outlive its access.
+ */
+export function stripImported(text: string, segments: readonly string[]): string {
+  let rest = text;
+  for (const segment of segments) {
+    const at = rest.indexOf(segment);
+    if (at < 0) return "";
+    rest = rest.slice(0, at) + rest.slice(at + segment.length);
+  }
+  return rest.replace(/\n{3,}/g, "\n\n").replace(/^\n+|\s+$/g, "");
+}

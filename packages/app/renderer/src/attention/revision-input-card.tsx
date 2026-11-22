@@ -24,6 +24,7 @@ import {
   REVISION_REASONS,
   type RevisionComposeMode,
   type RevisionVersionSeen,
+  stripImported,
 } from "./revision-input-model.js";
 
 export interface RevisionInputCardProps {
@@ -50,21 +51,36 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
   const [history, setHistory] = useState<readonly RevisionVersionSeen[]>(() =>
     recordRevisionVersion([], props.pending),
   );
-  // History is protected content like the pending read it came from: when that read no longer
-  // supplies content (denied, unavailable) or the connection/target changes, it is dropped.
+  // Text copied into the draft from the protected read (current or earlier versions), verbatim.
+  const [imported, setImported] = useState<readonly string[]>([]);
+  const [sourceScope, setSourceScope] = useState(scope);
+  const [revoked, setRevoked] = useState(0);
+  const intent = useRef<{ command: string; key: string } | undefined>(undefined);
+  // History and copied text are protected content like the read they came from. When that read
+  // stops supplying content (denied, unavailable) or the connection/target changes, both go in
+  // this same render, before anything commits, and the retry intent that may carry them with it.
+  const authorized = Boolean(props.pending?.payload) && sourceScope === scope;
+  if (!authorized) {
+    if (history.length) setHistory([]);
+    if (imported.length) {
+      setText((draft) => stripImported(draft, imported));
+      setImported([]);
+      setRevoked((count) => count + 1);
+      intent.current = undefined;
+    }
+    if (sourceScope !== scope) setSourceScope(scope);
+  } else {
+    const next = recordRevisionVersion(history, props.pending);
+    if (next !== history) setHistory(next);
+  }
   useEffect(() => {
-    setHistory((seen) => (props.pending?.payload ? recordRevisionVersion(seen, props.pending) : []));
-  }, [props.pending]);
-  const historyScope = useRef(scope);
-  useEffect(() => {
-    if (historyScope.current === scope) return;
-    historyScope.current = scope;
-    setHistory([]);
-  }, [scope]);
+    if (!revoked) return;
+    setOutcome("Copied correction text was removed because it is no longer available. Your own text is kept.");
+    props.announce("Copied correction text removed. Your own text is kept.");
+  }, [revoked]);
   const [reviewedVersion, setReviewedVersion] = useState(
     props.pending?.expectedRevision ?? props.boundary.target.expectedRevision,
   );
-  const intent = useRef<{ command: string; key: string } | undefined>(undefined);
   const activeScope = useRef(scope);
   activeScope.current = scope;
   const mounted = useRef(true);
@@ -95,7 +111,7 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
   const currentKey = props.pending
     ? JSON.stringify([props.pending.target.revisionId, props.pending.expectedRevision])
     : undefined;
-  const earlier = history.filter((entry) => entry.key !== currentKey);
+  const earlier = authorized ? history.filter((entry) => entry.key !== currentKey) : [];
   const moved = scope !== draftScope;
   const reason = !writable.can
     ? writable.reason
@@ -136,6 +152,7 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
       props.onReceipt(result);
       if (result.state === "resolved") {
         setText("");
+        setImported([]);
         intent.current = undefined;
         setOutcome(
           `${REVISION_LABELS[result.result.state]} correction. It applies only to the displayed destination and attempt.`,
@@ -203,9 +220,10 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
               );
             }}
             onCopyCurrent={() => {
-              setText((draft) =>
-                kind === "values" && draft.trim() ? draft : addToDraft(draft, revisionPayloadText(pendingPayload)),
-              );
+              if (kind === "values" && text.trim()) return;
+              const copied = revisionPayloadText(pendingPayload);
+              setText(addToDraft(text, copied));
+              setImported((segments) => [...segments, copied]);
               setMode("replace");
               props.announce("Current correction copied into the draft. Submitting replaces the pending correction.");
             }}
@@ -223,7 +241,13 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
             aria-label="Correction"
             value={text}
             readOnly={busy}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => {
+              const next = event.target.value;
+              setText(next);
+              // Emptying the draft empties what was copied into it. A copied segment the person
+              // edited stays tracked, so losing its source clears the draft (stripImported).
+              setImported((segments) => (next.trim() ? segments : []));
+            }}
           />
         </label>
         {result.error && <Text style="caption">{result.error}</Text>}
@@ -259,6 +283,7 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
             disabledReason="Wait for the outstanding correction request."
             onClick={() => {
               setText("");
+              setImported([]);
               setDraftScope(scope);
               setStale(false);
               setReviewedVersion(version);
@@ -276,13 +301,10 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
             disabled={busy}
             draftEmpty={!text.trim()}
             onUse={(entry) => {
-              setText((draft) =>
-                entry.payload.kind === "values"
-                  ? draft.trim()
-                    ? draft
-                    : revisionPayloadText(entry.payload)
-                  : addToDraft(draft, revisionPayloadText(entry.payload)),
-              );
+              if (entry.payload.kind === "values" && text.trim()) return;
+              const copied = revisionPayloadText(entry.payload);
+              setText(addToDraft(text, copied));
+              setImported((segments) => [...segments, copied]);
               props.announce("Earlier correction added to the draft. Nothing is sent until you submit.");
             }}
           />

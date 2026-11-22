@@ -228,6 +228,70 @@ describe("composing in the card", () => {
     expect(screen.queryByRole("region", { name: "Earlier corrections" })).toBeNull();
   });
 
+  describe("copied text does not outlive access to its source", () => {
+    const denied = (): Pending => ({ ...pendingText("", "v1"), payload: undefined, replacementAllowed: false });
+
+    it("copy-current then same-target access loss removes the copied text and keeps the person's own", async () => {
+      const p = props();
+      const view = render(<RevisionInputCard {...p} />);
+      type("My own words.");
+      fireEvent.click(screen.getByRole("button", { name: "Edit a copy of the current correction" }));
+      expect(draft().value).toBe("My own words.\n\nKeep the retry budget at two.");
+      view.rerender(<RevisionInputCard {...p} pending={denied()} />);
+      expect(draft().value).toBe("My own words.");
+      expect(screen.queryByText(/Keep the retry budget at two/)).toBeNull();
+      await screen.findByText(/Copied correction text was removed/);
+      expect(p.announce).toHaveBeenCalledWith("Copied correction text removed. Your own text is kept.");
+      fireEvent.click(screen.getByRole("button", { name: "Replace pending correction" }));
+      expect(p.onReplace).not.toHaveBeenCalled();
+    });
+
+    it("copy-history then access loss removes it from the draft, preview and history in the same render", () => {
+      const p = props();
+      const view = render(<RevisionInputCard {...p} />);
+      view.rerender(<RevisionInputCard {...p} pending={pendingText("Newer note.", "v2", "revision-2")} />);
+      const earlier = screen.getByRole("region", { name: "Earlier corrections" });
+      fireEvent.click(within(earlier).getByRole("button", { name: "Add to draft" }));
+      expect(draft().value).toBe("Keep the retry budget at two.");
+      view.rerender(
+        <RevisionInputCard {...p} pending={{ ...pendingText("", "v2", "revision-2"), payload: undefined }} />,
+      );
+      expect(draft().value).toBe("");
+      expect(screen.queryByText(/Keep the retry budget at two/)).toBeNull();
+      expect(screen.queryByText(/Newer note/)).toBeNull();
+      expect(screen.getByRole("button", { name: "Replace pending correction" }).getAttribute("aria-disabled")).toBe(
+        "true",
+      );
+    });
+
+    it("an edited copy cannot be told from the person's words, so the whole draft goes", () => {
+      const p = props();
+      const view = render(<RevisionInputCard {...p} />);
+      fireEvent.click(screen.getByRole("button", { name: "Edit a copy of the current correction" }));
+      type("Keep the retry budget at three. Mine too.");
+      view.rerender(<RevisionInputCard {...p} pending={denied()} />);
+      expect(draft().value).toBe("");
+    });
+
+    it("a retry after access loss is a new intent, never the old copied payload's key", async () => {
+      const p = props();
+      p.onReplace = vi.fn().mockRejectedValue(new Error("lost"));
+      const view = render(<RevisionInputCard {...p} />);
+      type("Mine.");
+      fireEvent.click(screen.getByRole("button", { name: "Edit a copy of the current correction" }));
+      fireEvent.click(screen.getByRole("button", { name: "Replace pending correction" }));
+      await screen.findByText(/retry identity are preserved/);
+      view.rerender(<RevisionInputCard {...p} pending={denied()} />);
+      view.rerender(<RevisionInputCard {...p} pending={pendingText("Keep the retry budget at two.", "v1")} />);
+      expect(draft().value).toBe("Mine.");
+      fireEvent.click(screen.getByRole("button", { name: "Replace pending correction" }));
+      await waitFor(() => expect(p.onReplace).toHaveBeenCalledTimes(2));
+      const calls = vi.mocked(p.onReplace).mock.calls;
+      expect(calls[1]![0].payload).toEqual({ kind: "text", text: "Mine." });
+      expect(calls[1]![1]).not.toBe(calls[0]![1]);
+    });
+  });
+
   it("delivered corrections cannot be composed onto", () => {
     const p = props({
       ...pendingText("Already sent."),
