@@ -90,7 +90,7 @@ export function snapshotArches(text, version) {
   if (
     record.format !== 2 ||
     !Array.isArray(arches) ||
-    !arches.includes("x64") ||
+    arches.length === 0 ||
     new Set(arches).size !== arches.length ||
     !arches.every((arch) => SERVED_ARCHES.includes(arch))
   )
