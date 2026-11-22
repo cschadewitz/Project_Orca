@@ -115,6 +115,11 @@ const DaemonUrlSchema = z.string().refine((value) => {
 
 export const PreferencesSchema = z.object({
   daemonUrl: DaemonUrlSchema.optional(),
+  /** The saved SSH connection profile's id (#874). Main-only, like `daemonUrl`; never both. */
+  daemonProfile: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
+    .optional(),
   theme: ThemePreferenceSchema.default("system"),
   /** Density per surface id (`data-surface`), so the run tree can be compact while the config form stays comfortable. */
   density: z.record(z.string(), DensitySchema).default({}),
@@ -190,6 +195,7 @@ export function mergePreferences(current: Preferences, patch: PreferencesPatch):
   const canvases = mergeCanvases(current.canvases, patch.canvases);
   return {
     ...(current.daemonUrl ? { daemonUrl: current.daemonUrl } : {}),
+    ...(current.daemonProfile ? { daemonProfile: current.daemonProfile } : {}),
     theme: patch.theme ?? current.theme,
     density: { ...current.density, ...(patch.density ?? {}) },
     panes: mergePanes(current.panes, patch.panes),

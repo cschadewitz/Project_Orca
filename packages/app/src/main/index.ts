@@ -34,7 +34,8 @@ import { AdmissionIntents, AdmissionIntentController, protectedStorageBridgeErro
 import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
 import type { LaunchReview, PreflightParams } from "../configuration-launch-contract.js";
 import { RunsAdmitResultSchema } from "@orca/protocol";
-import { ConnectionTarget, connectionFailure, callInConnection } from "./connection-target.js";
+import { ConnectionTarget, ConnectionRefusal, connectionFailure, callInConnection } from "./connection-target.js";
+import { RemoteProfiles } from "./remote-profiles.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates } from "./updates.js";
 import { MacUpdateWindows } from "./mac-update-windows.js";
@@ -45,6 +46,7 @@ import { createManagedMacNativeProviders } from "./mac-native-providers.js";
 import { updateDriver } from "./update-driver.js";
 import { isDebInstall, LinuxReleaseWatch } from "./linux-release-notice.js";
 import { basename, dirname, join } from "node:path";
+import { readFileSync, statSync } from "node:fs";
 import { windowIcon } from "./window-icon.js";
 import { revealWhenReady } from "./window-reveal.js";
 import { fileURLToPath } from "node:url";
@@ -72,7 +74,7 @@ import { callTemplate } from "../client/template-client.js";
 import type { TemplateMethod } from "../template-bridge.js";
 import type { WorkflowDraftMethodName } from "../workflow-draft-bridge.js";
 import { callWorkflowDraft } from "../client/workflow-draft-client.js";
-import { daemonEndpoint } from "../daemon-connection.js";
+import { daemonEndpoint, type DaemonConnectionRequest, type ProfileResult } from "../daemon-connection.js";
 import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
@@ -188,6 +190,16 @@ async function offerUpdateProtectionReset(startup: NonNullable<typeof macReplace
 }
 
 const preferences = new PreferencesFile(join(app.getPath("userData"), "preferences.json"));
+/** Saved SSH profiles, their pinned host keys and sealed credentials (#874). Main only. */
+const remoteProfiles = new RemoteProfiles({
+  dir: join(app.getPath("userData"), "remote-daemons"),
+  cipher: safeStorage,
+  // Phase and refusal code only: ssh's own output never reaches the console or the renderer.
+  onTunnelState: (id, state) => {
+    if (state.phase === "reconnecting" || state.phase === "failed")
+      console.error(`ssh tunnel for profile ${id}: ${state.phase} (${state.refusal})`);
+  },
+});
 
 /** The dev server's URL when `scripts/dev.js` started one; undefined in a packaged app. */
 const rendererUrl = process.env.ORCA_RENDERER_URL;
@@ -668,14 +680,18 @@ const workspace = new Workspace({
     }
     const candidate = new DaemonClient(url, fetch, {
       requireAuthentication: options.bundled || !isLoopbackDaemon(url),
-      auth: new LocalDaemonToken({
-        url,
-        workspace: options.workspace,
-        ...(options.tokenFile ? { tokenFile: options.tokenFile } : {}),
-        // A spawned daemon issues its own token. A remote override in the app's environment
-        // belongs to the explicitly connected daemon, never to a newly opened local store.
-        ...(options.bundled ? { env: {} } : {}),
-      }),
+      // A profile's credential comes from its keychain slot and always requires authentication.
+      ...(options.auth ? { requireAuthentication: true } : {}),
+      auth:
+        options.auth ??
+        new LocalDaemonToken({
+          url,
+          workspace: options.workspace,
+          ...(options.tokenFile ? { tokenFile: options.tokenFile } : {}),
+          // A spawned daemon issues its own token. A remote override in the app's environment
+          // belongs to the explicitly connected daemon, never to a newly opened local store.
+          ...(options.bundled ? { env: {} } : {}),
+        }),
       onAuthFailure: () => {
         if (workspace.client === candidate) connection.authenticationFailed();
       },
@@ -722,6 +738,11 @@ const workspace = new Workspace({
     console.error(cause instanceof Error ? cause.message : String(cause));
   },
   savedUrl: preferences.read().daemonUrl,
+  savedProfile: (() => {
+    const id = preferences.read().daemonProfile;
+    return id && remoteProfiles.get(id) ? id : undefined;
+  })(),
+  openProfile: (id) => remoteProfiles.open(id),
   onTarget: (target) => {
     // The first verified hello enriches the current epoch. It must not erase alerts
     // already supplied by that epoch's renderer while verification was in flight.
@@ -977,9 +998,10 @@ let connectionDraftRelease: (() => void) | undefined;
 const targets = new ConnectionTarget({
   explicitUrl: process.env.ORCA_DAEMON_URL,
   prepare: (url, source) => workspace.prepareConnection(url, source),
-  save: (url) => {
+  save: (request) => {
     assertOrdinaryStartup();
-    preferences.saveDaemonUrl(url);
+    if (request !== null && typeof request === "object") preferences.saveDaemonProfile(request.profile);
+    else preferences.saveDaemonUrl(request);
   },
   guard: async () => {
     connectionDraftRelease = await guardConnectionDrafts();
@@ -998,8 +1020,9 @@ ipcMain.on("orca:daemon.cancel", () => {
   targets.cancel();
   firstRunConnectionAttempt++;
 });
-ipcMain.handle("orca:daemon.connect", async (event, url: unknown, epoch: number) => {
-  if (url !== null && typeof url !== "string") return { ok: false, message: "Invalid daemon URL" };
+ipcMain.handle("orca:daemon.connect", async (event, target: unknown, epoch: number) => {
+  const url = connectionRequest(target);
+  if (url === undefined) return { ok: false, message: "Invalid daemon URL" };
   try {
     assertOrdinaryStartup();
     if (macUpdateWindows.active || firstRun.isBusy) throw new Error("Setup or update preparation is in progress");
@@ -1015,6 +1038,73 @@ ipcMain.handle("orca:daemon.connect", async (event, url: unknown, epoch: number)
     return { ok: false, message: connectionFailure(error) };
   }
 });
+
+/** `orca:daemon.connect`'s argument: a URL, `null` (bundled), or `{ profile }`. */
+function connectionRequest(value: unknown): DaemonConnectionRequest | undefined {
+  if (value === null || typeof value === "string") return value;
+  const parsed = z
+    .object({ profile: z.string().max(64) })
+    .strict()
+    .safeParse(value);
+  return parsed.success ? { profile: parsed.data.profile } : undefined;
+}
+async function profileResult<T>(run: () => T | Promise<T>): Promise<ProfileResult<T>> {
+  try {
+    return { ok: true, value: await run() };
+  } catch (error) {
+    return { ok: false, message: connectionFailure(error) };
+  }
+}
+const ProfileIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
+/** The profile the current connection runs through: never edited or removed underneath it. */
+function profileInUse(id: string): boolean {
+  return workspace.connectionTarget.profile?.id === id;
+}
+ipcMain.handle("orca:profiles.list", () => remoteProfiles.list());
+ipcMain.handle("orca:profiles.save", (_event, input: unknown) => profileResult(() => remoteProfiles.save(input)));
+ipcMain.handle("orca:profiles.remove", (_event, id: unknown) =>
+  profileResult(() => {
+    const valid = ProfileIdSchema.parse(id);
+    if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before removing this profile.");
+    remoteProfiles.remove(valid);
+    if (preferences.read().daemonProfile === valid) preferences.saveDaemonProfile(null);
+    return null;
+  }),
+);
+ipcMain.handle("orca:profiles.forgetHostKey", (_event, id: unknown) =>
+  profileResult(() => {
+    const valid = ProfileIdSchema.parse(id);
+    if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before forgetting this key.");
+    remoteProfiles.forgetHostKey(valid);
+    const view = remoteProfiles.describe(valid);
+    if (!view) throw new ConnectionRefusal("That profile no longer exists.");
+    return view;
+  }),
+);
+/** Main reads the file the person picks; the token goes from disk to the keychain slot only. */
+ipcMain.handle("orca:profiles.importCredential", (event, id: unknown) =>
+  profileResult(async () => {
+    const valid = ProfileIdSchema.parse(id);
+    if (!remoteProfiles.get(valid)) throw new ConnectionRefusal("That profile no longer exists.");
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options: Electron.OpenDialogOptions = {
+      title: "Import daemon credential",
+      buttonLabel: "Import",
+      properties: ["openFile"],
+    };
+    const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
+    const path = picked.canceled ? undefined : picked.filePaths[0];
+    if (!path) return null;
+    let token: string;
+    try {
+      if (statSync(path).size > 8192) throw new Error("too large");
+      token = readFileSync(path, "utf8");
+    } catch {
+      throw new ConnectionRefusal("That file could not be read as a daemon credential.");
+    }
+    return remoteProfiles.importCredential(valid, token);
+  }),
+);
 
 /* Updates use their own IPC and never wait on daemon readiness to check/download. */
 let windowsDraftRelease: (() => void) | undefined;
@@ -1387,7 +1477,10 @@ if (!primary) {
       .run(() =>
         startFirstRunWorkspace(firstRun, {
           explicitTarget: Boolean(
-            process.env.ORCA_DAEMON_URL || process.env.ORCA_WORKSPACE || preferences.read().daemonUrl,
+            process.env.ORCA_DAEMON_URL ||
+            process.env.ORCA_WORKSPACE ||
+            preferences.read().daemonUrl ||
+            workspace.connectionTarget.source === "saved",
           ),
           connectExplicit: () => workspace.connect(),
           assertCurrent: () => workspace.assertEpoch(startupEpoch),
@@ -1449,6 +1542,8 @@ app.on("will-quit", (event) => {
     () => true,
     () => false,
   );
+  // Tunnels close after the workspace has let go of its client; nothing waits on them.
+  void workspaceClosed.finally(() => remoteProfiles.close().catch(() => undefined));
   void Promise.race([
     appWriters.pause(
       async () => {

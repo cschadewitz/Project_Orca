@@ -16,15 +16,16 @@ for the remaining combined validation gates.
 ## Connecting
 
 **File ▸ Connect to a daemon…**, the status-bar action, and
-Config's connection header open the same dialog. Enter the local end of the
-supported SSH tunnel, such as `http://127.0.0.1:6722`. A successful authenticated
+Config's connection header open the same dialog. Choose a saved SSH profile (below),
+or enter a URL such as the local end of an SSH tunnel you run yourself,
+`http://127.0.0.1:6722`. A successful authenticated
 `hello` must advertise read and subscription capabilities before the app changes
 its saved endpoint or detaches the current stream. Failed, cancelled, incompatible
 or unauthorized probes leave the previous connection and preference intact.
 Dialog probe errors are shown inline, with authentication required, invalid/revoked credentials,
 access refusal, protocol mismatch and unreachability distinguished.
 
-Precedence at launch is **ORCA_DAEMON_URL > saved endpoint > bundled daemon >
+Precedence at launch is **ORCA_DAEMON_URL > saved endpoint or SSH profile > bundled daemon >
 development loopback fallback**. Config and the dialog show the source. An explicit
 environment override disables both connection changes and **Use the bundled
 daemon**; unset it and restart to enable these actions. After **Open a store…**,
@@ -42,8 +43,9 @@ return, so changing the view does not stop its work. The app still owns its shut
 when the app quits. If a bundled daemon is retained in the background, return to
 it before updating the app so the existing updater can check its active work.
 
-Credentials remain main-process-only. Use the existing `ORCA_DAEMON_TOKEN_FILE`
-(or `ORCA_DAEMON_TOKEN`) setup from [daemon security](daemon-security.md).
+Credentials remain main-process-only. A URL connection uses the existing
+`ORCA_DAEMON_TOKEN_FILE` (or `ORCA_DAEMON_TOKEN`) setup from
+[daemon security](daemon-security.md); an SSH profile uses its keychain slot.
 Ordinary app preferences contain only the endpoint. URLs reject user information,
 query strings and fragments. Remote targets require an explicit credential and
 HTTPS; redirects are refused. Automatically discovered local-owner credentials
@@ -54,6 +56,59 @@ not itself replace a run's execution actor. A new local ACP submission intent ca
 its existing same-principal credential; historical daemon execution instead uses the
 explicit current-authority `runs.resume` boundary documented in
 [live input continuity](live-input-continuity.md#expiration-reconnect-and-other-processes).
+
+## SSH connection profiles (#874)
+
+The default way to reach a daemon on another machine is a saved **SSH profile**: the
+app runs the tunnel itself and the daemon stays bound to the server's loopback. In
+the connection dialog, **Add profile…** takes a name, `user@host`, an optional SSH
+port, optional ProxyJump hops and the daemon's port on the server (default 6722).
+**Import credential…** opens a file picker in the main process and seals the chosen
+daemon credential (for example one printed by `orca auth issue … --preset client` on
+the server) into the profile's slot in the OS keychain; the token never reaches the
+renderer, the preferences file or a log. **Connect** then probes the daemon through
+the tunnel with the same authenticated `hello`, draft check and refusal rules as a
+URL, and a refused probe closes the candidate tunnel and leaves the previous
+connection and saved target as they were.
+
+The main process owns each tunnel:
+`ssh -N -L 127.0.0.1:<ephemeral>:127.0.0.1:<daemon port> [user@]host` with
+`BatchMode=yes` (your existing keys and agent, never a prompt) and
+`ExitOnForwardFailure=yes`. The server's host key is pinned in a per-profile
+known-hosts file on the first successful connect (`StrictHostKeyChecking=accept-new`)
+and enforced afterwards (`yes`). If the tunnel drops while in use, ssh is restarted
+with backoff (1 s doubling to 30 s) on the same local port, so the connection shows
+reconnecting and the stream resumes under the existing epoch and cursor rules; no
+operation is reissued. A changed host key, failed authentication or a missing ssh
+stops the restarts. Leaving the profile, removing it or quitting stops its tunnel.
+
+Each failure has its own message: no ssh client, changed host key (with **Forget
+host key** for a server that was deliberately rebuilt), failed SSH authentication,
+unreachable server, a local tunnel port that could not be bound, a timeout, and an
+SSH connection that works with no daemon listening on the server. Removing a profile
+deletes its keychain credential and pinned key. Editing a profile to point at a
+different server or daemon port forgets both.
+
+Profiles live in `<userData>/remote-daemons/` (`profiles.json`, `known_hosts/`,
+`credentials/`); the saved target is the profile's id in the app preferences, and it
+replaces a saved URL. `ORCA_DAEMON_URL` and `ORCA_DAEMON_TOKEN_FILE` keep their
+precedence: an environment override still pins the launch and disables profile
+switching. Extra ssh options a profile carries are limited to `-o Key=Value`, `-i`,
+`-F`, `-4`, `-6` and `-C`, and may not override the options above. The tunnel and the
+credential slots live in `@orca/protocol/remote-access`, which the daemon can import
+for delegation (#883). Windows uses the built-in OpenSSH client (`ssh.exe`).
+
+### Choosing a remote access path
+
+- **App-managed SSH profile (default).** Nothing listens beyond the server's
+  loopback, the only network service is sshd, and the app manages the tunnel, host
+  key and credential.
+- **Overlay network plus a TLS reverse proxy.** For clients that cannot use SSH:
+  terminate HTTPS at a proxy you run, list it in `trustedProxies`, and connect with a
+  URL and `ORCA_DAEMON_TOKEN_FILE` (see [daemon security](daemon-security.md)).
+- **Plain `SshHost`.** When a machine only runs agents and has no daemon of its own,
+  configure it as an SSH host in the workflow config instead
+  ([integrations](INTEGRATIONS.md)).
 
 ## Target identity and drafts
 

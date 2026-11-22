@@ -16,7 +16,7 @@
  * repo-wide and forbids `import … from` in a file that emits CommonJS, so the value import
  * is written in the form the emit actually has; the type imports are erased either way.
  */
-import type { DaemonTargetSnapshot } from "../daemon-connection.js";
+import type { DaemonTargetSnapshot, ProfileResult, RemoteProfileView } from "../daemon-connection.js";
 // A CommonJS file under `verbatimModuleSyntax` has no other way to spell a value import,
 // and emitting CommonJS is the whole point of this file — see the header.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -207,11 +207,20 @@ const bridge: OrcaBridge = {
         ipcRenderer.off("orca:daemon.show", forward);
       };
     },
-    connect: (url) =>
-      ipcRenderer.invoke("orca:daemon.connect", url, targetEpoch) as Promise<
+    connect: (target) =>
+      ipcRenderer.invoke("orca:daemon.connect", target, targetEpoch) as Promise<
         { ok: true } | { ok: false; message: string }
       >,
     cancel: () => ipcRenderer.send("orca:daemon.cancel"),
+    profiles: {
+      list: () => ipcRenderer.invoke("orca:profiles.list") as Promise<RemoteProfileView[]>,
+      save: (input) => ipcRenderer.invoke("orca:profiles.save", input) as Promise<ProfileResult<RemoteProfileView>>,
+      remove: (id) => ipcRenderer.invoke("orca:profiles.remove", id) as Promise<ProfileResult<null>>,
+      importCredential: (id) =>
+        ipcRenderer.invoke("orca:profiles.importCredential", id) as Promise<ProfileResult<RemoteProfileView | null>>,
+      forgetHostKey: (id) =>
+        ipcRenderer.invoke("orca:profiles.forgetHostKey", id) as Promise<ProfileResult<RemoteProfileView>>,
+    },
   },
   updates: {
     read: () => ipcRenderer.sendSync("orca:update.read") as UpdateSnapshot,

@@ -8,7 +8,8 @@ export function ConnectionSource({ bridge }: { bridge: DaemonConnectionBridge })
   return (
     <div className="orca-banner">
       <Text style="caption">
-        Daemon: {target.url} · Source: {target.source}
+        Daemon: {target.profile ? `${target.profile.name} (ssh ${target.profile.destination})` : target.url} · Source:{" "}
+        {target.source}
       </Text>
       <Button size="sm" onClick={() => bridge.show()}>
         Connect to a daemon…
