@@ -30,7 +30,11 @@ It offers the release page and the command to run once you have downloaded the p
 sudo apt install ./ORCA-X.Y.Z-linux-amd64.deb   # upgrades orca-desktop in place
 ```
 
-Nothing is downloaded or installed until you do that. A check that fails or finds you
+Nothing is downloaded or installed until you do that. If ORCA is open while `apt` upgrades it,
+the title bar then shows **Restart to finish update to X.Y.Z** (#905). It waits until no drafts
+are unsaved and no run is active, stops ORCA's background service cleanly, hands your
+workspace's data over to the new version and starts it. Use it rather than quitting and reopening, so the new version can carry
+your data forward if its storage format changed. A check that fails or finds you
 offline says nothing and never delays startup. Release candidates are offered only when
 `ORCA_UPDATE_PRERELEASE=1` is set, the same rule as the Windows updater, and
 `ORCA_UPDATE_CHECK=0` turns the check off. Only the installed package checks: the archive

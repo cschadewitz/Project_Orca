@@ -39,7 +39,7 @@ import { ConnectionTarget, ConnectionRefusal, connectionFailure, callInConnectio
 import { RemoteProfiles } from "./remote-profiles.js";
 import { ServerUpdater } from "./server-update.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
-import { Updates } from "./updates.js";
+import { Updates, type UpdateGuards } from "./updates.js";
 import { MacUpdateWindows } from "./mac-update-windows.js";
 import { MacUpdateGuards } from "./mac-update-guards.js";
 import { installMacUpdateIPC } from "./mac-update-application.js";
@@ -47,6 +47,7 @@ import { createManagedMacUpdateApplication } from "./mac-managed-update-applicat
 import { createManagedMacNativeProviders } from "./mac-native-providers.js";
 import { updateDriver } from "./update-driver.js";
 import { isDebInstall, LinuxReleaseWatch } from "./linux-release-notice.js";
+import { LinuxPackageRestart, readInstalledDebVersion } from "./linux-package-restart.js";
 import { basename, dirname, join } from "node:path";
 import { readFileSync, statSync } from "node:fs";
 import { windowIcon } from "./window-icon.js";
@@ -1498,43 +1499,46 @@ ipcMain.handle("orca:profiles.importCredential", (event, id: unknown) =>
 
 /* Updates use their own IPC and never wait on daemon readiness to check/download. */
 let windowsDraftRelease: (() => void) | undefined;
+/** The restart guards: the Windows updater's, and the Linux `.deb` restart's (#905). */
+const updateGuards: UpdateGuards = {
+  prepareDrafts: async () => {
+    const relinquish = macUpdateWindows.beginLegacy();
+    if (!relinquish) throw new Error("Window draft preparation is busy");
+    windowsDraftRelease = () => {
+      try {
+        send("orca:update.prepare", null);
+      } finally {
+        relinquish();
+      }
+    };
+    await prepareDrafts({
+      ids: BrowserWindow.getAllWindows().map((win) => win.webContents.id),
+      send: (nonce) => send("orca:update.prepare", nonce),
+      listen: (callback) => {
+        const listener = (event: Electron.IpcMainEvent, value: unknown) => {
+          if (event.senderFrame === event.sender.mainFrame) callback(event.sender.id, value);
+        };
+        ipcMain.on("orca:update.prepared", listener);
+        return () => {
+          ipcMain.off("orca:update.prepared", listener);
+        };
+      },
+    });
+  },
+  prepareDaemon: (token) => workspace.prepareUpdate(token),
+  stopDaemon: (token) => workspace.stopForUpdate(token),
+  handOff: (token, from, to) => workspace.handOffForUpdate(token, from, to),
+  resume: (token) => workspace.cancelUpdate(token),
+  releaseDrafts: () => {
+    windowsDraftRelease?.();
+    windowsDraftRelease = undefined;
+  },
+};
 const updates = new Updates(
   updateDriver(app.isPackaged, process.platform, process.arch),
   app.getVersion(),
-  {
-    prepareDrafts: async () => {
-      const relinquish = macUpdateWindows.beginLegacy();
-      if (!relinquish) throw new Error("Window draft preparation is busy");
-      windowsDraftRelease = () => {
-        try {
-          send("orca:update.prepare", null);
-        } finally {
-          relinquish();
-        }
-      };
-      await prepareDrafts({
-        ids: BrowserWindow.getAllWindows().map((win) => win.webContents.id),
-        send: (nonce) => send("orca:update.prepare", nonce),
-        listen: (callback) => {
-          const listener = (event: Electron.IpcMainEvent, value: unknown) => {
-            if (event.senderFrame === event.sender.mainFrame) callback(event.sender.id, value);
-          };
-          ipcMain.on("orca:update.prepared", listener);
-          return () => {
-            ipcMain.off("orca:update.prepared", listener);
-          };
-        },
-      });
-    },
-    prepareDaemon: (token) => workspace.prepareUpdate(token),
-    stopDaemon: (token) => workspace.stopForUpdate(token),
-    handOff: (token, from, to) => workspace.handOffForUpdate(token, from, to),
-    resume: (token) => workspace.cancelUpdate(token),
-    releaseDrafts: () => {
-      windowsDraftRelease?.();
-      windowsDraftRelease = undefined;
-    },
-  },
+  updateGuards,
+
   (state) => send("orca:update", state),
 );
 ipcMain.on("orca:update.read", (event) => {
@@ -1563,6 +1567,36 @@ const linuxReleases = isDebInstall(app.isPackaged, process.platform, process.exe
       changed: (notice) => send("orca:linuxUpdate", notice ?? null),
     })
   : undefined;
+/* The `.deb` upgraded beneath this app (#905): restart through the same guards as the Windows
+   updater, hand the store to the installed version, and start it. */
+const linuxRestart = isDebInstall(app.isPackaged, process.platform, process.execPath)
+  ? new LinuxPackageRestart({
+      current: app.getVersion(),
+      readInstalled: () => readInstalledDebVersion(),
+      guards: updateGuards,
+      relaunch: () => {
+        // process.execPath is /opt/ORCA/orca-desktop, which apt replaced with the new binary.
+        app.relaunch();
+        app.quit();
+      },
+      changed: (state) => send("orca:linuxRestart", state ?? null),
+    })
+  : undefined;
+ipcMain.on("orca:linuxRestart.read", (event) => {
+  event.returnValue = linuxRestart?.state ?? null;
+});
+ipcMain.handle("orca:linuxRestart.restart", async (event) => {
+  if (
+    !linuxRestart ||
+    updates.state.phase === "restarting" ||
+    macUpdateWindows.active ||
+    firstRun.isBusy ||
+    !BrowserWindow.getAllWindows().some((win) => win.webContents === event.sender) ||
+    event.senderFrame !== event.sender.mainFrame
+  )
+    return { ok: false, error: { code: "UPDATE", message: "No restart to finish an update is available" } };
+  return { ok: true, result: (await linuxRestart.restart()) ?? null };
+});
 ipcMain.on("orca:linuxUpdate.read", (event) => {
   event.returnValue = linuxReleases?.notice ?? null;
 });
@@ -1911,6 +1945,7 @@ if (!primary) {
       );
     createWindow();
     linuxReleases?.start();
+    linuxRestart?.start();
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
@@ -1926,6 +1961,7 @@ app.on("before-quit", () => {
   stopDiagnosticObservations();
   targets.cancel();
   linuxReleases?.stop();
+  linuxRestart?.stop();
   serverUpdater.stop();
   connection.close();
   alerts.close();

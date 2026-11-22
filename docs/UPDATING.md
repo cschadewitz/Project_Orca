@@ -993,8 +993,16 @@ copies), at most three times. Without the record, or with any part of the proof 
 keeps refusing (`CARRYOVER_REQUIRED`) exactly as before, and `orca store carry-forward` remains
 the way through. This covers app-owned workspaces updated by the Windows in-app updater, where
 the carryover itself is refused (`UNDURABLE`, above) until #910 lands. The Linux `.deb` has no
-in-app updater and no `orca` command, so the store format must not change for it until it has a
-supported carryover route (#905).
+in-app updater and no `orca` command; its route is **Restart to finish update** (#905). While the
+app runs, it reads dpkg's status every 30 seconds, and once `apt` has fully installed an
+`orca-desktop` version other than the running one, the title bar offers that restart. It runs
+exactly the Windows sequence above (drafts prepared, admission closed and drained, the exact
+daemon stopped and its exit observed, `update-handoff.json` written naming the installed
+version) and then starts the installed binary, whose bundled daemon carries the store forward
+under the same proof. A failure before the stop resumes the running version's daemon and offers
+the restart again. Quitting ORCA and opening it again without that restart writes no record, so
+an older-format store is then refused (`CARRYOVER_REQUIRED`) until the app is reopened through
+the restart.
 
 The backup covers the store directory only: not the config file, the permission sidecar or
 `auth/` beside the config. Agents cannot read `format-backups/`, which holds copies of the
