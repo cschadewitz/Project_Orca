@@ -2,7 +2,7 @@
 // from `main`, so work merged for the next minor cannot ship in it. What is protected here is
 // that choice of branch, the gate that keeps minor work off a line, the reviewed-commit check
 // a real release makes, and main's record of a patch it never merged.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,9 @@ import { checkLinePullRequest, inLine, lineOf, referencedIssues } from "../relea
 import {
   ACTIONS_APP_ID,
   GUARD_WORKFLOW,
+  RECEIPT_TITLE,
+  guardBinding,
+  receiptMessage,
   LINE_CHECKS,
   guardRunProblems,
   laneOf,
@@ -301,32 +304,120 @@ describe("the lane policy", () => {
 
   describe("whose release line check counts", () => {
     const head = "a".repeat(40);
-    const linked = [{ number: 906, base: { ref: "release/0.7" }, head: { sha: head } }];
     const pr = { number: 906, base: "release/0.7" };
-    const checkRun = { conclusion: "success", head_sha: head, app: { slug: "github-actions" }, pull_requests: linked };
-    const workflowRun = { path: GUARD_WORKFLOW, event: "pull_request_target", head_sha: head };
+    const receipt = (over = {}) => [
+      {
+        annotation_level: "notice",
+        title: RECEIPT_TITLE,
+        message: receiptMessage({ number: 906, base: "release/0.7", head, ...over }),
+      },
+    ];
+    // As GitHub reports a pull_request_target run: no pull_requests, and the display title is
+    // the pull request's own title.
+    const checkRun = { conclusion: "success", head_sha: head, app: { slug: "github-actions" }, pull_requests: [] };
+    const workflowRun = {
+      path: GUARD_WORKFLOW,
+      event: "pull_request_target",
+      head_sha: head,
+      display_title: "release line check: #906 into release/0.7",
+      pull_requests: [],
+    };
 
-    it("is main's guard workflow, run by Actions on the exact head", () => {
-      expect(guardRunProblems(checkRun, workflowRun, head, pr)).toEqual([]);
+    it("is main's guard workflow, run by Actions on the exact head, with its receipt for this PR", () => {
+      expect(guardRunProblems(checkRun, workflowRun, receipt(), head, pr)).toEqual([]);
     });
 
     it.each([
-      ["a failure", { ...checkRun, conclusion: "failure" }, workflowRun, /did not succeed/],
-      ["another head", { ...checkRun, head_sha: "b".repeat(40) }, workflowRun, /ran on b+/],
-      ["another app", { ...checkRun, app: { slug: "someone" } }, workflowRun, /posted by someone/],
-      ["another workflow", checkRun, { ...workflowRun, path: ".github/workflows/ci.yml" }, /came from/],
-      ["the pull request's own code", checkRun, { ...workflowRun, event: "pull_request" }, /pull_request event/],
-      ["no workflow run", checkRun, undefined, /no workflow/],
-      ["another pull request's", { ...checkRun, pull_requests: [{ ...linked[0], number: 907 }] }, workflowRun, /#906/],
+      ["this pull request's receipt", checkRun, receipt(), "this"],
       [
-        "for another line",
-        { ...checkRun, pull_requests: [{ ...linked[0], base: { ref: "release/0.6" } }] },
-        workflowRun,
-        /into release\/0\.7/,
+        "GitHub's link to this pull request",
+        { ...checkRun, pull_requests: [{ number: 906, base: { ref: "release/0.7" }, head: { sha: head } }] },
+        [],
+        "this",
       ],
-      ["linked to no pull request", { ...checkRun, pull_requests: [] }, workflowRun, /not linked/],
-    ])("is not %s", (_, run, workflow, message) => {
-      expect(guardRunProblems(run, workflow, head, pr).join("; ")).toMatch(message);
+      ["another pull request's receipt", checkRun, receipt({ number: 907 }), "other"],
+      [
+        "GitHub's link to another pull request",
+        { ...checkRun, pull_requests: [{ number: 907, base: { ref: "release/0.7" } }] },
+        [],
+        "other",
+      ],
+      [
+        "no receipt and no link: failed or cancelled before writing it",
+        { ...checkRun, conclusion: "failure" },
+        [],
+        "unbound",
+      ],
+      ["a receipt that is not JSON", checkRun, [{ ...receipt()[0], message: "{pr:906" }], "unbound"],
+      [
+        "a receipt with a missing field",
+        checkRun,
+        [{ ...receipt()[0], message: '{"pr":907,"base":"release/0.7"}' }],
+        "unbound",
+      ],
+      [
+        "a receipt with an extra field",
+        checkRun,
+        [{ ...receipt()[0], message: receipt()[0].message.replace("}", ',"x":1}') }],
+        "unbound",
+      ],
+      [
+        "a receipt whose number is a string",
+        checkRun,
+        [{ ...receipt()[0], message: receipt()[0].message.replace("906", '"907"') }],
+        "unbound",
+      ],
+      [
+        "receipts naming both this and another pull request",
+        checkRun,
+        [...receipt(), ...receipt({ number: 907 })],
+        "unbound",
+      ],
+      ["a link without a number", { ...checkRun, pull_requests: [{ base: { ref: "release/0.7" } }] }, [], "unbound"],
+    ])("binds an attempt with %s as %s", (_, run, annotations, binding) => {
+      expect(guardBinding(run, annotations, head, pr)).toBe(binding);
+    });
+
+    it("still accepts GitHub's own pull_requests link where it is filled", () => {
+      const linked = [{ number: 906, base: { ref: "release/0.7" }, head: { sha: head } }];
+      expect(guardRunProblems({ ...checkRun, pull_requests: linked }, workflowRun, [], head, pr)).toEqual([]);
+    });
+
+    it.each([
+      ["a failure", { ...checkRun, conclusion: "failure" }, workflowRun, receipt(), /did not succeed/],
+      ["another head", { ...checkRun, head_sha: "b".repeat(40) }, workflowRun, receipt(), /ran on b+/],
+      ["another app", { ...checkRun, app: { slug: "someone" } }, workflowRun, receipt(), /posted by someone/],
+      ["another workflow", checkRun, { ...workflowRun, path: ".github/workflows/ci.yml" }, receipt(), /came from/],
+      [
+        "the pull request's own code",
+        checkRun,
+        { ...workflowRun, event: "pull_request" },
+        receipt(),
+        /pull_request event/,
+      ],
+      ["no workflow run", checkRun, undefined, receipt(), /no workflow/],
+      // A run from before the receipt: its display title is whatever the PR was titled, which
+      // its author chose, so a matching title proves nothing.
+      ["a legacy run titled like a binding, without a receipt", checkRun, workflowRun, [], /not linked/],
+      ["another pull request's receipt", checkRun, workflowRun, receipt({ number: 907 }), /not linked to #906/],
+      ["another line's receipt", checkRun, workflowRun, receipt({ base: "release/0.6" }), /into release\/0\.7/],
+      ["another head's receipt", checkRun, workflowRun, receipt({ head: "c".repeat(40) }), /not linked/],
+      [
+        "a receipt with another title",
+        checkRun,
+        workflowRun,
+        [{ ...receipt()[0], title: "release line receipt v0" }],
+        /not linked/,
+      ],
+      [
+        "a receipt that is not a notice",
+        checkRun,
+        workflowRun,
+        [{ ...receipt()[0], annotation_level: "failure" }],
+        /not linked/,
+      ],
+    ])("is not %s", (_, run, workflow, annotations, message) => {
+      expect(guardRunProblems(run, workflow, annotations, head, pr).join("; ")).toMatch(message);
     });
   });
 
@@ -403,12 +494,13 @@ describe("a real release's reviewed-commit check", () => {
     // The minor commit is reachable from nowhere on origin but exists in the clone's objects.
     git(clone, "fetch", "-q", origin, commits.minorOnLine);
     git(clone, "fetch", "-q", origin, commits.patchOnMain);
-    // gh answers the rules API from RULES, check runs from CHECKS and workflow runs from RUNS.
+    // gh answers the rules API from RULES, check runs from CHECKS, a check run's annotations from
+    // ANN_<id> (else ANN) and workflow runs from RUNS_<suite> (else RUNS).
     bin = join(work, "bin");
     mkdirSync(bin);
     writeFileSync(
       join(bin, "gh"),
-      '#!/bin/sh\ncase "$*" in *rules/branches*) printf "%s" "$RULES";; *check-runs*) printf "%s" "$CHECKS";; *actions/runs*) printf "%s" "$RUNS";; *) exit 1;; esac\n',
+      '#!/bin/sh\ncase "$*" in *check-runs/*/annotations*) id=$(echo "$*" | sed -n "s/.*check-runs\\/\\([0-9]*\\)\\/annotations.*/\\1/p"); eval "v=\\${ANN_$id:-\\$ANN}"; printf "%s" "$v";; *rules/branches*) printf "%s" "$RULES";; *check-runs*) printf "%s" "$CHECKS";; *actions/runs*) id=$(echo "$*" | sed -n "s/.*check_suite_id=\\([0-9]*\\).*/\\1/p"); eval "v=\\${RUNS_$id:-\\$RUNS}"; printf "%s" "$v";; *) exit 1;; esac\n',
       { mode: 0o755 },
     );
   });
@@ -420,6 +512,9 @@ describe("a real release's reviewed-commit check", () => {
     rules = protectedRules,
     checks,
     runs,
+    suites = {},
+    receipts = {},
+    annotations,
     eventFile,
   }) =>
     execFileSync("bash", ["-c", step.run], {
@@ -434,6 +529,9 @@ describe("a real release's reviewed-commit check", () => {
         RULES: rules,
         CHECKS: checks ?? guardChecks(),
         RUNS: runs ?? guardRuns(),
+        ...Object.fromEntries(Object.entries(suites).map(([id, run]) => [`RUNS_${id}`, run])),
+        ANN: annotations ?? receiptFor(906),
+        ...Object.fromEntries(Object.entries(receipts).map(([id, ann]) => [`ANN_${id}`, ann])),
         GITHUB_EVENT_PATH: eventFile ?? "/dev/null",
         GITHUB_REPOSITORY: "o/r",
         RUNNER_TEMP: work,
@@ -452,15 +550,34 @@ describe("a real release's reviewed-commit check", () => {
           head_sha: commits.line,
           app: { slug: "github-actions" },
           check_suite: { id: 2 },
-          pull_requests: [{ number: 906, base: { ref: "release/0.7" }, head: { sha: commits.line } }],
+          // As GitHub reports a pull_request_target run: no pull_requests; the receipt binds it.
+          pull_requests: [],
           ...over,
         },
       ],
     });
   const guardRuns = (over = {}) =>
     JSON.stringify({
-      workflow_runs: [{ path: GUARD_WORKFLOW, event: "pull_request_target", head_sha: commits.line, ...over }],
+      workflow_runs: [
+        {
+          path: GUARD_WORKFLOW,
+          event: "pull_request_target",
+          head_sha: commits.line,
+          display_title: "the pull request's own title",
+          pull_requests: [],
+          ...over,
+        },
+      ],
     });
+  // The receipt main's guard writes on its check run for #906 at the reviewed head.
+  const receiptFor = (number, head = commits.line) =>
+    JSON.stringify([
+      {
+        annotation_level: "notice",
+        title: RECEIPT_TITLE,
+        message: receiptMessage({ number, base: "release/0.7", head }),
+      },
+    ]);
   const refused = (fn) => {
     try {
       fn();
@@ -532,7 +649,7 @@ describe("a real release's reviewed-commit check", () => {
       "whose guard check another app posted",
       {},
       () => guardChecks({ app: { slug: "impostor" } }),
-      /posted by impostor/,
+      /no release line check, as main runs it, for #906/,
     ],
     [
       "whose version is not the one package.json holds",
@@ -547,15 +664,18 @@ describe("a real release's reviewed-commit check", () => {
     ).toMatch(message);
   });
 
-  const runsOf = (...entries) =>
-    JSON.stringify({
-      check_runs: entries.map(([id, conclusion, number]) => ({
+  // Check runs, each with the receipt for the pull request it judged.
+  const runsOf = (...entries) => ({
+    checks: JSON.stringify({
+      check_runs: entries.map(([id, conclusion]) => ({
         ...JSON.parse(guardChecks()).check_runs[0],
         id,
         conclusion,
-        pull_requests: [{ number, base: { ref: "release/0.7" }, head: { sha: commits.line } }],
+        check_suite: { id: id + 100 },
       })),
-    });
+    }),
+    receipts: Object.fromEntries(entries.map(([id, , number]) => [id, number ? receiptFor(number) : "[]"])),
+  });
 
   it("counts only this pull request's newest guard result: a later failure outlives an older pass", () => {
     const eventFile = merged();
@@ -565,7 +685,7 @@ describe("a real release's reviewed-commit check", () => {
           sha: commits.line,
           event: "pull_request",
           eventFile,
-          checks: runsOf([1, "success", 906], [3, "failure", 906]),
+          ...runsOf([1, "success", 906], [3, "failure", 906]),
         }),
       ),
     ).toMatch(/newest result for #906, check run 3: it did not succeed/);
@@ -575,12 +695,54 @@ describe("a real release's reviewed-commit check", () => {
         sha: commits.line,
         event: "pull_request",
         eventFile,
-        checks: runsOf([1, "success", 906], [5, "failure", 907]),
+        ...runsOf([1, "success", 906], [5, "failure", 907]),
       }),
     ).toMatch(/from release\/0\.7/);
     expect(
-      refused(() => run({ sha: commits.line, event: "pull_request", eventFile, checks: runsOf([5, "success", 907]) })),
-    ).toMatch(/no release line check for #906 into release\/0\.7/);
+      refused(() => run({ sha: commits.line, event: "pull_request", eventFile, ...runsOf([5, "success", 907]) })),
+    ).toMatch(/no release line check, as main runs it, for #906 into release\/0\.7/);
+  });
+
+  it("treats a newer attempt that failed before its receipt as inconclusive, never falling back to an older pass", () => {
+    const eventFile = merged();
+    expect(
+      refused(() =>
+        run({
+          sha: commits.line,
+          event: "pull_request",
+          eventFile,
+          ...runsOf([1, "success", 906], [4, "failure", null]),
+        }),
+      ),
+    ).toMatch(/check run 4, failure\) left no receipt, so whether #906 into release\/0\.7 passed is inconclusive/);
+    expect(
+      refused(() =>
+        run({
+          sha: commits.line,
+          event: "pull_request",
+          eventFile,
+          ...runsOf([1, "success", 906], [4, "cancelled", null]),
+        }),
+      ),
+    ).toMatch(/check run 4, cancelled\) left no receipt/);
+    // A newer attempt shown to be another pull request's does not hide this one's pass.
+    expect(
+      run({ sha: commits.line, event: "pull_request", eventFile, ...runsOf([1, "success", 906], [4, "failure", 907]) }),
+    ).toMatch(/from release\/0\.7/);
+  });
+
+  it("refuses a legacy guard pass that has no receipt, whatever its run is titled", () => {
+    expect(
+      refused(() =>
+        run({
+          sha: commits.line,
+          event: "pull_request",
+          eventFile: merged(),
+          annotations: "[]",
+          runs: guardRuns({ display_title: "release line check: #906 into release/0.7" }),
+        }),
+      ),
+    ).toMatch(/left no receipt, so whether #906 into release\/0\.7 passed is inconclusive/);
   });
 
   it("refuses a release line check that main's guard did not run", () => {
@@ -593,7 +755,7 @@ describe("a real release's reviewed-commit check", () => {
           runs: guardRuns({ event: "pull_request", path: ".github/workflows/other.yml" }),
         }),
       ),
-    ).toMatch(/as main runs it, did not pass/);
+    ).toMatch(/no release line check, as main runs it, for #906/);
   });
 
   it("binds a minor's release pull request on main to its version and reviewed tree too", () => {
@@ -799,5 +961,77 @@ describe("Release (sync main) on a rerun", () => {
     }
     expect(out).toMatch(/is at f+, not/);
     expect(calls()).not.toContain("pr merge");
+  });
+});
+
+describe("the guard's receipt", () => {
+  it("is written first, for the pull request, line and head it judged, even when it refuses", () => {
+    const event = join(work, "pr.json");
+    writeFileSync(
+      event,
+      JSON.stringify({
+        pull_request: {
+          number: 77,
+          body: "",
+          labels: [],
+          milestone: null,
+          base: { ref: "release/0.7", sha: "b".repeat(40) },
+          head: { ref: "fix", sha: "c".repeat(40), repo: { full_name: "o/r" } },
+        },
+      }),
+    );
+    const guard = spawnSync(process.execPath, [fileURLToPath(new URL("../release-line-guard.js", import.meta.url))], {
+      env: { ...process.env, GITHUB_EVENT_PATH: event, GITHUB_REPOSITORY: "o/r" },
+      encoding: "utf8",
+    });
+    expect(guard.status).toBe(1);
+    const [first, ...rest] = guard.stdout.trim().split("\n");
+    expect(first).toBe(
+      `::notice title=${RECEIPT_TITLE}::${receiptMessage({ number: 77, base: "release/0.7", head: "c".repeat(40) })}`,
+    );
+    expect(rest.join("\n")).toMatch(/::error::name the 0\.7\.x issue/);
+  });
+});
+
+describe("the guard's release-preparation check", () => {
+  it("reads the diff pinned to the event's base and head, never the live file list", () => {
+    const [base, head] = ["b".repeat(40), "c".repeat(40)];
+    const event = join(work, "release-pr.json");
+    writeFileSync(
+      event,
+      JSON.stringify({
+        pull_request: {
+          number: 78,
+          body: "",
+          labels: [{ name: "release" }],
+          milestone: null,
+          base: { ref: "release/0.7", sha: base },
+          head: { ref: "release/v0.7.2", sha: head, repo: { full_name: "o/r" } },
+        },
+      }),
+    );
+    const bin = join(work, "guard-bin");
+    mkdirSync(bin);
+    const pkg = (version) => Buffer.from(JSON.stringify({ name: "orca", version })).toString("base64");
+    writeFileSync(
+      join(bin, "gh"),
+      `#!/bin/sh\necho "$*" >> "${join(work, "guard-gh.log")}"\ncase "$*" in *compare/*) printf '%s' '${JSON.stringify({
+        total_commits: 1,
+        files: [
+          { filename: "package.json", status: "modified" },
+          { filename: "CHANGELOG.md", status: "modified" },
+        ],
+      })}';; *contents/package.json?ref=${base}*) printf '{"content":"${pkg("0.7.1")}"}';; *contents/package.json?ref=${head}*) printf '{"content":"${pkg("0.7.2")}"}';; *) exit 1;; esac\n`,
+      { mode: 0o755 },
+    );
+    const guard = spawnSync(process.execPath, [fileURLToPath(new URL("../release-line-guard.js", import.meta.url))], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_EVENT_PATH: event, GITHUB_REPOSITORY: "o/r" },
+      encoding: "utf8",
+    });
+    expect(guard.stdout).toContain("release line check passed");
+    expect(guard.status).toBe(0);
+    const calls = readFileSync(join(work, "guard-gh.log"), "utf8");
+    expect(calls).toContain(`repos/o/r/compare/${base}...${head}`);
+    expect(calls).not.toContain("/files");
   });
 });

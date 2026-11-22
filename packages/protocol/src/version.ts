@@ -168,7 +168,12 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * `admissions.reconcile` takes an optional `kind` (`run.recover`) and refuses any other kind
  * before it reconciles; a 2.4 daemon rejects the unknown field, so it fails closed.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 5 };
+/**
+ * 2.6 adds secret reference metadata (#336): `secrets.list` and `secrets.check`, two reads
+ * under the new `secrets.read` permission that never return a value. New method names in
+ * `hello.methods`: a 2.5 client never calls them.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 6 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is
