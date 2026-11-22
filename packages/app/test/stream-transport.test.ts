@@ -46,7 +46,7 @@ async function backend(handler: (request: IncomingMessage, response: ServerRespo
 
 describe("streamTransport.fetch", () => {
   it("sends method, path, headers and body over a connect() stream and returns the response", async () => {
-    const seen: { method?: string; url?: string; auth?: string; body: string }[] = [];
+    const seen: { method: string | undefined; url: string | undefined; auth: string | undefined; body: string }[] = [];
     const { connect, url } = await backend((request, response) => {
       let body = "";
       request.on("data", (chunk: Buffer) => (body += chunk.toString()));
