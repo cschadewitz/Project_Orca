@@ -462,8 +462,8 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
 - **The remote run records where it came from.** A remote whose `hello` lists `origin` in
   `admitFields` (protocol 2.6) records
   this daemon's workspace id, the parent run and the step as the run's `origin` (on
-  `runs.list` and `runs.get`), and its audit record of the admission carries them as
-  `originWorkspaceId`, `originRunId` and `originStepRunId`. The origin is what the admitting
+  `runs.list` and `runs.get`); its audit record of the admission names the principal and that
+  run (the origin itself stays out of the audit log). The origin is what the admitting
   principal stated; the principal is what the remote authenticated. Only canonical ids are
   taken, and an origin a remote secret happens to match is left off the remote's public view.
   A remote that does not list it is delegated to without one; a step whose earlier admission

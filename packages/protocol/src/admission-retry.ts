@@ -20,7 +20,7 @@ export const RunOriginParamsSchema = RunOriginSchema;
 export const RunsAdmitParamsSchema = RunsStartParamsSchema.extend({
   expectedScope: AdmissionExpectedScopeSchema.optional(),
   idempotencyKey: RetryKeySchema.optional(),
-  /** Recorded on the run and in the audit record; the admitting principal's statement, not authority. */
+  /** Recorded on the run (not in the audit log); the admitting principal's statement, not authority. */
   origin: RunOriginParamsSchema.optional(),
 }).strict();
 export const AdmissionsGetParamsSchema = z.strictObject({

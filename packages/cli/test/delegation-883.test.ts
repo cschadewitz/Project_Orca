@@ -318,8 +318,9 @@ edges:
       audit.some((r) => JSON.stringify(r).includes("parent-daemon") && JSON.stringify(r).includes("runs.admit")),
     ).toBe(true);
 
-    // The remote run records the parent workspace, run and step as its origin, and so does the
-    // remote's audit record of the admission.
+    // The remote run records the parent workspace, run and step as its origin. The remote's
+    // audit record of the admission names the authenticated principal and the run it made;
+    // the caller-stated origin stays out of the audit log (it is not redacted there).
     const parentWorkspace = ((await call(parent, "operator.discover", {})).target as { workspaceId: string })
       .workspaceId;
     const remoteRun = (await call(remote, "runs.get", { runId: delegated[0]!.id })).run as {
@@ -328,13 +329,13 @@ edges:
     expect(remoteRun.origin).toMatchObject({ workspaceId: parentWorkspace, runId });
     expect(typeof remoteRun.origin!.stepRunId).toBe("string");
     const admission = audit.find(
-      (r) => r.operation === "runs.admit" && (r.target as Record<string, string> | undefined)?.originRunId === runId,
+      (r) =>
+        r.operation === "runs.admit" &&
+        Object.values((r.target as Record<string, string> | undefined) ?? {}).includes(delegated[0]!.id),
     );
-    expect(admission?.target).toMatchObject({
-      originWorkspaceId: parentWorkspace,
-      originRunId: runId,
-      originStepRunId: remoteRun.origin!.stepRunId,
-    });
+    expect(admission).toMatchObject({ outcome: "succeeded", actor: { principal: "parent-daemon" } });
+    const log = JSON.stringify(audit);
+    for (const value of [parentWorkspace, runId, remoteRun.origin!.stepRunId!]) expect(log).not.toContain(value);
   }, 120_000);
 
   it("forwards a remote gate to the parent and sends the parent's answer back", async (ctx) => {
@@ -1091,6 +1092,9 @@ describe("delegation through a proxy the test controls (#883)", () => {
       expect(answer.ok).toBe(false);
     }
     expect(await runsOf("remote-task")).toHaveLength(before);
+    // Refused admissions are audited without the origin they stated.
+    const audit = await readFile(join(remote.dir, "auth", "audit.jsonl"), "utf8");
+    for (const value of ["not-a-uuid", "run_<script>", "private-token-value"]) expect(audit).not.toContain(value);
   });
 
   it("states an origin only to a daemon whose hello lists it", () => {

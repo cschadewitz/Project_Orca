@@ -14,7 +14,6 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { chmodSync, closeSync, openSync } from "node:fs";
 import { dirname } from "node:path";
-import { RunOriginSchema } from "@orca/core";
 import type { Principal } from "./principal.js";
 
 export type AuditEvent = "authn.denied" | "authz.denied" | "operation" | "connection.closed" | "secret.use";
@@ -78,14 +77,6 @@ export function targetOf(
     // A standing-permission answer is recorded as such: which decision, never the answer text.
     const always = (params as { always?: { decision?: unknown } }).always;
     if (always && typeof always.decision === "string") out.always = always.decision;
-    // A delegated admission's stated parent (#883): which workspace, run and step asked for it.
-    // Canonical ids only, the same check as the admission's own; anything else is left out.
-    const origin = RunOriginSchema.safeParse((params as { origin?: unknown }).origin);
-    if (origin.success) {
-      out.originWorkspaceId = origin.data.workspaceId;
-      out.originRunId = origin.data.runId;
-      if (origin.data.stepRunId) out.originStepRunId = origin.data.stepRunId;
-    }
   }
   for (const [key, value] of Object.entries(extra ?? {})) if (value !== undefined) out[key] = value.slice(0, 200);
   return Object.keys(out).length ? out : undefined;

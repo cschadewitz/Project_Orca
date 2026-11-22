@@ -493,10 +493,11 @@ line has this shape:
 | `connection.closed` | A socket closed because its credential lapsed.                            |
 
 Targets are identifiers only: run, workflow, request, work item, artifact, plan, document,
-subscription, and which `always` decision was chosen. A `runs.admit` that states an
-`origin` (protocol 2.6, a delegating daemon's workspace, run and step) records it as
-`originWorkspaceId`, `originRunId` and `originStepRunId`: a statement by the authenticated
-principal, not something the daemon verified. A record never contains vars, notes,
+subscription, and which `always` decision was chosen. The `origin` a `runs.admit` states
+(protocol 2.6, a delegating daemon's workspace, run and step) is not recorded: it is
+caller-supplied and the audit log applies no secret redaction. The admission's record names
+the authenticated principal and the run it made, and that run's `origin` is read from the
+run itself (`runs.get`), where it is redacted like any event value. A record never contains vars, notes,
 answer text, configuration text, params payloads, URLs, or any credential secret. The
 credential id is public and is the only credential-related value recorded. If an append
 fails, the error is reported on stderr and the next append is still attempted.

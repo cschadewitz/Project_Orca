@@ -171,7 +171,7 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * 2.6 (#883) adds an optional `origin` ({ workspaceId, runId, stepRunId? }, canonical ids
  * only) to `runs.admit`: the parent workspace, run and step a delegated run was started for.
  * The daemon records it on the run (`origin` on `RunSummaryView`; left off the public
- * projection if a secret touched it) and in the audit record of the admission. It is the
+ * projection if a secret touched it). The audit log leaves it out. It is the
  * admitting principal's statement, never authority. `runs.admit` params are strict, so a
  * daemon that takes the field says so in `hello.admitFields` (also new), and a caller sends
  * it only to a daemon that lists it there, never on the strength of the minor alone.
