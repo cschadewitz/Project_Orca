@@ -11,6 +11,7 @@
       "@orca/agents": ["./packages/agents/src/index.ts"],
       "@orca/engine": ["./packages/engine/src/index.ts"],
       "@orca/testing/child-bundle": ["./packages/testing/src/child-bundle.ts"],
+      "@orca/testing/two-daemons": ["./packages/testing/src/two-daemons.ts"],
       "@orca/testing": ["./packages/testing/src/index.ts"],
       "@orca/integrations/mcp": ["./packages/integrations/src/mcp/index.ts"],
       "@orca/integrations": ["./packages/integrations/src/index.ts"],
