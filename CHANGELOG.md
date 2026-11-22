@@ -53,6 +53,8 @@ format, or older than the previous release's, is refused without being changed.
 
 #### app
 
+- the command palette searches event text and artifact contents through the daemon, and each hit opens its run, step or artifact. Against a daemon without `search` the palette keeps searching names only.
+- A pending text correction can be composed before it is replaced: **Add after pending** keeps the pending text and adds the draft after it, **Replace pending** (still the default) sends the draft alone, and either way the card shows the whole payload the next agent will receive with a line diff against the pending correction. **Edit a copy of the current correction** starts the draft from it, and earlier versions read in the same window can be copied into the draft. Nothing is sent, answered or granted until the submit button; submission keeps the one pending correction and the existing stale-version checks.
 - Groundwork for connecting to a daemon one protocol major behind: the app can show a bar saying the daemon is a version behind and that newer features are off until it is updated. This build opens no such window (see Protocol 2.1 below); it connects to existing 2.0 daemons as before.
 - the Linux `.deb` says when a newer release is out. About 15 seconds after start
   and every six hours it reads the public release list and, when a newer stable release has
@@ -73,8 +75,22 @@ format, or older than the previous release's, is refused without being changed.
   It refuses on Windows in this build (`BACKUPS_UNSAFE`), and the Ubuntu desktop `.deb` does
   not include the CLI.
 
+#### daemon
+
+- `search` reads the runs the caller may see, newest first, within a hit limit and a deadline. Only text artifacts are read, secrets are redacted before matching, and artifact hits need `artifacts.read`.
+
+#### engine
+
+- optional caps on concurrent agent sessions: `limits.maxAgentSessions` for the
+  whole daemon, `agents[].maxSessions` for one agent and `hosts[].maxSessions` for one host.
+  Unlimited unless set. A step that would exceed a cap waits before it opens a session, shown
+  as blocked with the cap and its use (`waiting for an agent slot: 3 of 3 in use on host
+  box-b`) in the timeline and in `orca plan explain`; `hello` and `agents.list` report caps,
+  sessions open and queue depth.
+
 #### protocol
 
+- a `search` read method (protocol 2.2) that finds event text and artifact contents and answers with places: a run and the step an event belongs to, or a run, an artifact name and a version.
 - Protocol 2.1. `hello` negotiates across a one-release compatibility window: a client may offer a `fallback` version from the previous major, and the daemon answers in the highest protocol both sides share. A daemon accepts the current and previous major once a release opens a window; N-2 is refused with a message naming what the daemon accepts. 2.x opens no window, so 1.10 peers stay refused, but a 2.1 daemon is the first that a future 3.0 app can fall back to. Clients offer the oldest minor they need (2.0), so an updated 2.1 desktop still connects to shipped 2.0 daemons.
 
 #### store
