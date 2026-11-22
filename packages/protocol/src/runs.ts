@@ -16,6 +16,7 @@ import { z } from "zod";
 import { RunOutcomeSchema, WorkspaceSchema, OrcaEventSchema } from "@orca/core/schemas";
 import { DisplayStatusSchema } from "./status.js";
 import { ArtifactViewSchema, ViewErrorSchema, WorkItemViewSchema } from "./views.js";
+import { ProtocolVersionSchema } from "./version.js";
 
 export const RUNS_LIST_METHOD = "runs.list";
 export const RUNS_GET_METHOD = "runs.get";
@@ -331,6 +332,11 @@ export const RunsEventsParamsSchema = z
      * as an AND, and an unknown step run matches nothing rather than failing.
      */
     stepRunId: z.string().min(1).optional(),
+    /**
+     * Protocol 2.5: the protocol this client reads events in. Event types added after it are
+     * withheld (`EVENT_TYPES_SINCE`); absent means 2.0. Cursors are unaffected.
+     */
+    protocol: ProtocolVersionSchema.optional(),
     limit: z.number().int().positive().max(500).default(200),
   })
   .refine((p) => p.after === undefined || p.before === undefined, {

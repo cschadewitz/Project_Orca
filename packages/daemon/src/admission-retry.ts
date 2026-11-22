@@ -214,6 +214,21 @@ export class AdmissionRetryModel {
       return raced;
     }
   }
+  /**
+   * The operator endpoints carry request and direct receipts only: a checkpoint attempt's
+   * (`run.recover`) is refused there before any lookup that could reconcile it (#357), and
+   * stays on `admissions.get` / `admissions.reconcile`.
+   */
+  async refuseCheckpointReceipt(operationId: string, authorities: AdmissionAuthorities): Promise<void> {
+    await authorities.check();
+    if ((await this.options.claims.operationKind(operationId, authorities)) === "run.recover")
+      throw new OrcaError(
+        "NOT_SUPPORTED",
+        "A checkpoint attempt's receipt is read and reconciled through admissions.get and admissions.reconcile",
+        { operationId },
+      );
+  }
+
   inspect(operationId: string, authorities: AdmissionAuthorities): Promise<RetryResult<unknown>> {
     return this.receipt(operationId, authorities, false);
   }

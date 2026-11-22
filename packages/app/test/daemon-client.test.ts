@@ -231,7 +231,8 @@ describe("the read methods", () => {
     expect(seen[5]!.params).toEqual({ query: "connection", limit: 20 });
     // Params travel as given, with the schema's paging defaults filled in by the daemon.
     expect(seen[0]!.params).toEqual({ roots: true, limit: 100, offset: 0 });
-    expect(seen[2]!.params).toEqual({ runId: "run-1", after: 3, limit: 200 });
+    // runs.events names the client's protocol so the daemon withholds event types it cannot parse.
+    expect(seen[2]!.params).toEqual({ protocol: PROTOCOL_VERSION, runId: "run-1", after: 3, limit: 200 });
     expect(seen[3]!.params).toEqual({ kind: ["decision"] });
   });
 });

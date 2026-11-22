@@ -59,16 +59,17 @@ export function createOperatorMutationMethods(ctx: MethodContext): MethodTable {
       const authorities = await ctx.admissionAuthorities!(call);
       return ctx.admissionRetries!.admitRetry(p.command, p.retry, await authorities.direct());
     });
-    add("operator.admission", async (p, call) =>
-      ctx.admissionRetries!.inspect(p.operationId, await ctx.admissionAuthorities!(call)),
-    );
+    add("operator.admission", async (p, call) => {
+      const authorities = await ctx.admissionAuthorities!(call);
+      await ctx.admissionRetries!.refuseCheckpointReceipt(p.operationId, authorities);
+      return ctx.admissionRetries!.inspect(p.operationId, authorities);
+    });
     add("operator.reconcileAdmission", async (p, call) => {
+      const authorities = await ctx.admissionAuthorities!(call);
+      // Refused before the effectful reconcile: its result contract has no checkpoint variant.
+      await ctx.admissionRetries!.refuseCheckpointReceipt(p.operationId, authorities);
       const response = OperatorMutationContracts["operator.reconcileAdmission"].result.parse(
-        await ctx.admissionRetries!.reconcile(
-          p.operationId,
-          await ctx.admissionAuthorities!(call),
-          newAdmissionFence(ctx.maintenance),
-        ),
+        await ctx.admissionRetries!.reconcile(p.operationId, authorities, newAdmissionFence(ctx.maintenance)),
       );
       if (response.state === "resolved" && response.result.state === "accepted" && "requestId" in response.result) {
         if (!ctx.requestSubmissions || !ctx.requestSubmissionAuthority)

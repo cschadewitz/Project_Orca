@@ -9,6 +9,7 @@
  * hands back a stream that reconnects and resumes on its own. Both halves are the same
  * daemon on the same port; a client that only reads never opens a socket.
  */
+import { PROTOCOL_VERSION } from "@orca/protocol";
 import { RevisionResultSchema, PendingRevisionViewSchema } from "@orca/protocol";
 import { MaintenanceResultSchema, type MaintenanceParams, type MaintenanceResult } from "@orca/protocol";
 import {
@@ -381,7 +382,8 @@ export class DaemonClient {
   }
 
   runsEvents(params: Params<RunsEventsParams> & { runId: string }): Promise<RunsEventsResult> {
-    return this.call(RUNS_EVENTS_METHOD, params, RunsEventsResultSchema);
+    // This build's event schema reads every type up to its own protocol (#357).
+    return this.call(RUNS_EVENTS_METHOD, { protocol: PROTOCOL_VERSION, ...params }, RunsEventsResultSchema);
   }
 
   inputsRevise(params: import("@orca/protocol").InputsReviseParams) {

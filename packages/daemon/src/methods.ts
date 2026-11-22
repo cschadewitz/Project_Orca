@@ -69,6 +69,7 @@ import {
   type AdmissionAuthorities,
 } from "./admission-retry.js";
 import {
+  eventTypeReadable,
   RUNS_RECOVER_METHOD,
   RUNS_RECOVERY_METHOD,
   RUNS_REVIEW_EFFECT_METHOD,
@@ -495,7 +496,11 @@ export const runsGet: Method<Parameters<ReadModel["runsGet"]>[0], RunsGetResult>
 /** `runs.events`: one page of a run's log, by sequence number, forwards or backwards. */
 export const runsEvents: Method<Parameters<ReadModel["runsEvents"]>[0], RunsEventsResult> = {
   params: RunsEventsParamsSchema,
-  handle: (params, ctx) => reads(ctx).runsEvents(params),
+  handle: async (params, ctx) => {
+    const page = await reads(ctx).runsEvents(params);
+    // Withhold event types newer than the client's event schema; the cursors stay (#357).
+    return { ...page, events: page.events.filter((e) => eventTypeReadable(e.type, params.protocol)) };
+  },
 };
 
 /** `inputs.list`: the gates and permission asks waiting on a person. */

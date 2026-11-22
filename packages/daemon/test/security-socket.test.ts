@@ -6,7 +6,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import type { OrcaEventInput } from "@orca/core";
-import { STEP_CHANGED } from "@orca/protocol";
+import { z } from "zod";
+import { OrcaEventSchema } from "@orca/core";
+import { PROTOCOL_VERSION, RunsEventsResultSchema, STEP_CHANGED } from "@orca/protocol";
 import { CredentialStore } from "../src/auth/index.js";
 import { harness, recordGateArtifact, recordJsonArtifact, type Harness } from "./security-harness.js";
 
@@ -276,6 +278,116 @@ describe("notification authorization", () => {
     expect((await bob.call("unsubscribe", { subscriptionId })).result).toEqual({ stopped: false });
     await h.append(scheduled(h.runs.alice, "sr-still"));
     await first.waitFor((f) => f.params?.stepRunId === "sr-still");
+  });
+});
+
+describe("recovery events (#357)", () => {
+  it("withholds a checkpoint attempt's reused artifacts from a reader without artifacts.read", async () => {
+    h = await harness();
+    const attempt = "run_checkpoint_attempt";
+    const at = h.clock.isoNow();
+    h.ownership.record(attempt, "alice");
+    const reader = await connect(h.tokens.runsOnly);
+    const owner = await connect(h.tokens.owner);
+    // Live from before the attempt exists, so its seed (seq 0) arrives as a frame.
+    for (const c of [reader, owner]) await c.call("subscribe", { methods: ["event.appended"] });
+    await h.append({
+      type: "run.created",
+      runId: attempt,
+      payload: {
+        actor: { principalId: "alice" },
+        workflowId: "gated",
+        workflowVersion: "1",
+        workspace: { kind: "local", path: "/tmp" },
+        vars: {},
+        checkpoint: {
+          runId: h.runs.alice,
+          stepRunId: "source-step",
+          steps: [
+            {
+              stepRunId: "reused-step",
+              from: { runId: h.runs.alice, stepRunId: "source-step" },
+              nodeId: "s",
+              nodeType: "start",
+              attempt: 1,
+              result: { artifactIds: ["ckpt-secret-artifact"], data: {} },
+              children: [],
+              completedAt: at,
+            },
+          ],
+          artifacts: [
+            {
+              id: "ckpt-secret-artifact",
+              kind: "spec",
+              name: "spec",
+              path: "/tmp/ckpt.md",
+              mediaType: "text/markdown",
+              contentHash: "0".repeat(64),
+              size: 1,
+              version: 1,
+              producedBy: { runId: h.runs.alice, stepRunId: "source-step" },
+              parents: [],
+              data: {},
+              createdAt: at,
+            },
+          ],
+          vars: {},
+        },
+      },
+    });
+    const page = await reader.call("runs.events", { runId: attempt });
+    expect(page.ok, JSON.stringify(page.error)).toBe(true);
+    expect(JSON.stringify(page.result)).not.toContain("ckpt-secret-artifact");
+    expect(JSON.stringify((await reader.call("runs.get", { runId: attempt })).result)).not.toContain(
+      "ckpt-secret-artifact",
+    );
+    await h.append(scheduled(attempt, "after-seed"));
+    for (const c of [reader, owner]) await c.waitFor((f) => JSON.stringify(f).includes("after-seed"));
+    // The seed reached both; only the artifact reader sees what it reuses.
+    expect(JSON.stringify(reader.frames)).toContain("reused-step");
+    expect(JSON.stringify(reader.frames)).not.toContain("ckpt-secret-artifact");
+    expect(JSON.stringify(owner.frames)).toContain("ckpt-secret-artifact");
+  });
+
+  it("sends a review event only to a client that reads protocol 2.5 events", async () => {
+    h = await harness();
+    // What a 2.0-2.4 client (the released v0.7.0 app) parses: the event union without the review.
+    const legacyEvent = z.discriminatedUnion(
+      "type",
+      OrcaEventSchema.options.filter((o) => o.shape.type.value !== "step.effect.reviewed") as never,
+    );
+    const legacyPage = RunsEventsResultSchema.extend({ events: z.array(legacyEvent) });
+    const review = await h.append({
+      type: "step.effect.reviewed",
+      runId: h.runs.alice,
+      payload: { stepRunId: "made-up", decision: "run-again" },
+    });
+    const legacy = await connect(h.tokens.alice);
+    const current = await connect(h.tokens.alice);
+
+    // History: withheld by default, cursors intact; present when the client reads 2.5.
+    const old = await legacy.call("runs.events", { runId: h.runs.alice, after: review - 1 });
+    expect(legacyPage.parse(old.result).events).toEqual([]);
+    expect(old.result).toMatchObject({ lastSeq: review });
+    const now = RunsEventsResultSchema.parse(
+      (await current.call("runs.events", { runId: h.runs.alice, after: review - 1, protocol: PROTOCOL_VERSION }))
+        .result,
+    );
+    expect(now.events.map((e) => e.type)).toEqual(["step.effect.reviewed"]);
+
+    // Frames: the legacy stream skips it and carries on; the current one receives it.
+    await legacy.call("subscribe", { runId: h.runs.alice, since: review - 1, methods: ["event.appended"] });
+    await current.call("subscribe", {
+      runId: h.runs.alice,
+      since: review - 1,
+      methods: ["event.appended"],
+      protocol: PROTOCOL_VERSION,
+    });
+    await h.append(scheduled(h.runs.alice, "after-review"));
+    for (const c of [legacy, current]) await c.waitFor((f) => JSON.stringify(f).includes("after-review"));
+    for (const f of legacy.notifications("event.appended")) legacyEvent.parse(f.params!.event);
+    expect(JSON.stringify(legacy.frames)).not.toContain("step.effect.reviewed");
+    expect(JSON.stringify(current.frames)).toContain("step.effect.reviewed");
   });
 });
 

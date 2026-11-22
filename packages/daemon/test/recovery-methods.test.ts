@@ -275,6 +275,29 @@ it("keeps a reserved attempt uncreated while new admission is closed, and reconc
   if (first.state !== "recoverable-failure" || !first.runId) throw new Error(JSON.stringify(first));
   const reserved = first.runId;
 
+  // The operator endpoints have no checkpoint receipt: refused before anything can create it.
+  const target = {
+    workspaceId: "11111111-1111-4111-8111-111111111111",
+    instanceId: "22222222-2222-4222-8222-222222222222",
+  };
+  const operator: MethodContext = {
+    ...ctx,
+    identity: { ...target },
+    operatorReads: { methods: [], model: async () => ({}) } as never,
+    operatorMutations: {
+      current: async (invocation) => invocation,
+      invokeLegacy: async () => {
+        throw new Error("not used");
+      },
+    },
+  };
+  for (const method of ["operator.reconcileAdmission", "operator.admission"])
+    expect(await call(operator, method, { target, operationId: first.operationId })).toMatchObject({
+      ok: false,
+      error: { code: "NOT_SUPPORTED" },
+    });
+  expect(await f.stores.events.lastSeq(reserved)).toBeUndefined();
+
   // A drain closes new admission: reconciling would create the run, so it is refused.
   open = false;
   expect(await call(ctx, "admissions.reconcile", { operationId: first.operationId })).toMatchObject({

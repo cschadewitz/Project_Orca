@@ -26,6 +26,22 @@ export function eventWithoutArtifacts(event: OrcaEvent): OrcaEvent {
       return { ...event, payload: { ...event.payload, inputArtifactIds: [] } };
     case "step.completed":
       return { ...event, payload: { ...event.payload, result: { ...event.payload.result, artifactIds: [] } } };
+    case "run.created": {
+      // A checkpoint attempt's seed (#357) carries the reused artifacts and their references.
+      const checkpoint = event.payload.checkpoint;
+      if (!checkpoint) return event;
+      return {
+        ...event,
+        payload: {
+          ...event.payload,
+          checkpoint: {
+            ...checkpoint,
+            artifacts: [],
+            steps: checkpoint.steps.map((step) => ({ ...step, result: { ...step.result, artifactIds: [] } })),
+          },
+        },
+      };
+    }
     default:
       return event;
   }

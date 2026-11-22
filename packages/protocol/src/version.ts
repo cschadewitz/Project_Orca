@@ -159,6 +159,12 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * `admissions.get`/`admissions.reconcile`), plus optional `checkpoint` on `RunSummaryView` and
  * `reusedFrom`, `reusedChildren` and `effectReview` on `StepView`. New method names and optional
  * fields: a 2.4 client never calls them and strips the fields.
+ *
+ * Events are the exception a closed union makes: `step.effect.reviewed` is a type a 2.0-2.4
+ * client cannot parse. A client now says which protocol it reads events in (optional
+ * `protocol` on `runs.events` and `subscribe`), and a daemon withholds later types
+ * (`EVENT_TYPES_SINCE`) from any client that does not, keeping cursors. `operator.admission`
+ * and `operator.reconcileAdmission` refuse a checkpoint receipt; it stays on `admissions.*`.
  */
 export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 5 };
 

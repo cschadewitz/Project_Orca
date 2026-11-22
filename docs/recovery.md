@@ -207,7 +207,12 @@ Protocol 2.5 carries the same three actions for the app:
   refused like `runs.recover`; `admissions.get` stays open and read-only.
 
 Run views say where a run and its steps came from: `checkpoint` on a run summary, and
-`reusedFrom`, `reusedChildren` and `effectReview` on a step.
+`reusedFrom`, `reusedChildren` and `effectReview` on a step. In history pages and event frames,
+a caller without `artifacts.read` gets a checkpoint attempt's `run.created` without the reused
+artifact records or ids. A `step.effect.reviewed` event reaches only a client that reads
+protocol 2.5 events (`protocol` on `runs.events` and `subscribe`); an older client's pages and
+streams skip it and keep their cursors. A checkpoint receipt is not carried by
+`operator.admission` or `operator.reconcileAdmission`, which refuse it before doing anything.
 
 ## Drift
 
