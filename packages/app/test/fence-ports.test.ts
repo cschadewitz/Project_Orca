@@ -39,8 +39,9 @@ linuxIt("an outgoing loopback connection takes its local port from the autobind 
   }
 });
 
-linuxIt("most hashed fence slots overlap the autobind range, so unselected fixtures can collide", () => {
-  const [low, high] = autobindRange();
+it("most hashed fence slots overlap Linux's default autobind range, so unselected fixtures can collide", () => {
+  // An explicit fixture range (the Linux default), not the runner's sysctl: hosts may differ.
+  const [low, high] = [32768, 60999];
   // Slot ranges start at 20000 + 8k for k < 5000: count those touching [low, high].
   let overlapping = 0;
   for (let k = 0; k < 5000; k++) {
