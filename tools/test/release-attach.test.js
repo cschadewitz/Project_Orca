@@ -151,11 +151,14 @@ const serverRun = (version = "0.8.0", sha = SHA) => ({
   conclusion: "success",
   display_title: `Release (server bundle) v${version} at ${sha}`,
 });
-const SERVER_JOBS = [
-  "sign the manifest (keyless, GitHub OIDC)",
-  "stage --bundle on a clean host",
-  "attach it to the release",
-].map((name) => ({ name, status: "completed", conclusion: "success" }));
+const serverReceipt = (id = 7, version = "0.8.0", sha = SHA, files = SERVER) =>
+  `server bundle receipt: release ${id} v${version} ${sha} ` +
+  sha256(
+    `orca-server-receipt/1 release=${id} version=${version} sha=${sha} files=${files.map((a) => a.digest).join(" ")}`,
+  );
+const SERVER_JOBS = ["sign the manifest (keyless, GitHub OIDC)", "stage --bundle on a clean host", serverReceipt()].map(
+  (name) => ({ name, status: "completed", conclusion: "success" }),
+);
 const draft = (over = {}) => ({
   id: 7,
   tag_name: "v0.8.0",
@@ -860,6 +863,15 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     };
     const publishFinal = (f) => f.run(ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest]);
 
+    it("prints the digests and the receipt for exactly the files it is given", () => {
+      const f = setup();
+      const b = bundleDir();
+      const result = f.run(ATTACH, ["server-receipt", "7", SHA, "0.8.0", b.dir]);
+      expect(result.status, result.stderr).toBe(0);
+      const receipt = serverReceipt(7, "0.8.0", SHA, serverFiles()).split(" ").at(-1);
+      expect(result.stdout).toBe(`digests=${b.digests.join(" ")}\nreceipt=${receipt}\n`);
+    });
+
     it("targets the one final draft or published prerelease at a commit on main", () => {
       const f = setup({ releases: [bare(), prerelease()] });
       f.edit((st) => {
@@ -1023,6 +1035,21 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
         "no successful 'stage --bundle on a clean host' job",
       ],
       ["an unknown run", (st) => delete st.runs["55"], "cannot be read"],
+      [
+        "a receipt for another release",
+        (st) => (st.jobs["55"][2].name = serverReceipt(8)),
+        "has no successful 'server bundle receipt: release 7",
+      ],
+      [
+        "a receipt for other bytes",
+        (st) => (st.jobs["55"][2].name = serverReceipt(7, "0.8.0", SHA, serverFiles("0.8.0", SHA, "other"))),
+        "has no successful 'server bundle receipt: release 7",
+      ],
+      [
+        "a receipt job that did not pass",
+        (st) => (st.jobs["55"][2].conclusion = "failure"),
+        "has no successful 'server bundle receipt: release 7",
+      ],
     ])("refuses to publish a final with %s", (_label, change, message) => {
       const f = setup();
       ready(f);

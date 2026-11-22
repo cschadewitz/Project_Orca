@@ -546,7 +546,8 @@ A tampered archive, another signer, or a manifest for another version stops here
 empty `.staging-*` directory left for inspection. Only then is the archive unpacked, by hand:
 regular files and directories under the one expected root, nothing else, bounded in size. The
 release records its own `runtime/bin/node` and `orca-daemon.mjs` relative to itself
-(`.orca-release.json` `"source": "bundle"`), and the same compiled-version, demo, config
+(`.orca-release.json` `"source": "bundle"`; only exactly these two paths are ever run for a
+bundle release, whatever a manifest or record says), and the same compiled-version, demo, config
 validation and temporary-daemon hello checks as a source stage run before the rename into
 `releases/vX.Y.Z`. Source-built and bundle-built releases activate and roll back into each
 other; the store-epoch rule is unchanged.

@@ -284,7 +284,7 @@ it("signs the server bundle only from main, in a job that runs none of the relea
     expect(job.steps[0].with).toEqual({ ref: "${{ github.sha }}", "persist-credentials": false });
 
   // The clean-host check gates the attach, and the attach shares the draft-writes queue.
-  expect(verify.needs).toBe("sign");
+  expect(verify.needs).toEqual(["resolve", "sign"]);
   expect(attach.needs).toEqual(["resolve", "verify"]);
   expect(attach.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
   const staging = verify.steps.find((step) => step.name === "Stage it with Python 3 alone").run;
@@ -360,5 +360,16 @@ it("binds each server bundle run to its version and commit (#876)", () => {
   const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
   expect(script).toContain("|Release (server bundle) v$version at $sha");
   // The receipt names the jobs exactly as the workflow does.
-  for (const job of ["sign", "verify", "attach"]) expect(script).toContain(`"${file.jobs[job].name}"`);
+  for (const job of ["sign", "verify"]) expect(script).toContain(`"${file.jobs[job].name}"`);
+  expect(file.jobs.attach.name).toBe(
+    "server bundle receipt: release ${{ needs.resolve.outputs.id }} v${{ inputs.version }} ${{ inputs.source_sha }} ${{ needs.verify.outputs.receipt }}",
+  );
+  expect(script).toContain('receipt="server bundle receipt: release $id v$version $sha $(receipt_hash');
+  // The receipt is computed only after the clean-host stage, and the attach uploads only those bytes.
+  const steps = file.jobs.verify.steps.map((step) => step.name ?? step.uses);
+  expect(steps.indexOf("The receipt for exactly these bytes")).toBeGreaterThan(
+    steps.indexOf("Stage it with Python 3 alone"),
+  );
+  expect(file.jobs.attach.needs).toEqual(["resolve", "verify"]);
+  expect(file.jobs.attach.steps.at(-1).env.VERIFIED).toBe("${{ needs.verify.outputs.digests }}");
 });

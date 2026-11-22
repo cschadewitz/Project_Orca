@@ -228,6 +228,39 @@ class ServerBundleTests(unittest.TestCase):
         order = ["0.7.0", "0.8.0-rc.1", "0.8.0-rc.2", "0.8.0-rc.10", "0.8.0", "0.8.1", "0.10.0"]
         self.assertEqual(sorted(reversed(order), key=release.version_key), order)
 
+    def test_a_manifest_naming_another_runtime_or_entry_is_refused_before_unpacking(self):
+        path = self.files / "orca-server-0.8.0-linux-x64.manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["entry"] = "../../usr/bin/evil.mjs"
+        path.write_text(json.dumps(manifest))
+        self.refused("unexpected runtime or entry")
+
+    def test_bundle_records_run_only_the_fixed_runtime_and_entry(self):
+        path = self.deployment.root / "releases" / "v0.8.0"
+        (path / "runtime" / "bin").mkdir(parents=True)
+        (path / "runtime" / "bin" / "node").write_text("")
+        (path / "orca-daemon.mjs").write_text("")
+        for node, entry in (("runtime/bin/node", "packages/cli/dist/main.js"), (sys.executable, "orca-daemon.mjs"),
+                            ("runtime/bin/node", "../orca-daemon.mjs")):
+            release.write_json(path / ".orca-release.json", {"version": "0.8.0", "source": "bundle", "node": node,
+                                                              "entry": entry, "compatibility": {}})
+            with self.assertRaisesRegex(RuntimeError, "unexpected runtime or entry"):
+                release.metadata(path)
+        (path / "orca-daemon.mjs").unlink()
+        (path / "orca-daemon.mjs").symlink_to("/etc/passwd")
+        release.write_json(path / ".orca-release.json", {"version": "0.8.0", "source": "bundle", "node": "runtime/bin/node",
+                                                          "entry": "orca-daemon.mjs", "compatibility": {}})
+        with self.assertRaisesRegex(RuntimeError, "is a link"):
+            release.metadata(path)
+
+    def test_source_records_keep_the_source_layout_only(self):
+        path = self.deployment.root / "releases" / "v0.7.1"
+        path.mkdir()
+        for record in ({"node": "runtime/bin/node"}, {"node": sys.executable, "entry": "orca-daemon.mjs"}):
+            release.write_json(path / ".orca-release.json", {"version": "0.7.1", "compatibility": {}, **record})
+            with self.assertRaisesRegex(RuntimeError, "unexpected runtime or entry"):
+                release.metadata(path)
+
     def test_source_stage_records_still_resolve(self):
         path = self.deployment.root / "releases" / "v0.7.0"
         path.mkdir()

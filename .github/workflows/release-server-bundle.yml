@@ -175,10 +175,13 @@ jobs:
 
   verify:
     name: stage --bundle on a clean host
-    needs: sign
+    needs: [resolve, sign]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+    outputs:
+      digests: ${{ steps.receipt.outputs.digests }}
+      receipt: ${{ steps.receipt.outputs.receipt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -228,8 +231,21 @@ jobs:
           fi
           echo "Staged v$VERSION from the signed bundle on a clean host (Python 3 only)." >> "$GITHUB_STEP_SUMMARY"
 
+      # Only after the clean-host stage passed: the receipt commits to the release id, version,
+      # commit and the exact digests of the three files this job verified. The attach job
+      # uploads only those bytes and carries the receipt in its own name, which is what
+      # release-attach.sh publish requires before a final goes public.
+      - name: The receipt for exactly these bytes
+        id: receipt
+        env:
+          ID: ${{ needs.resolve.outputs.id }}
+          SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+        run: bash tools/deploy/release-attach.sh server-receipt "$ID" "$SHA" "$VERSION" "$RUNNER_TEMP/clean/bundle" >> "$GITHUB_OUTPUT"
+
   attach:
-    name: attach it to the release
+    # The receipt: release-attach.sh publish requires a successful job of exactly this name.
+    name: "server bundle receipt: release ${{ needs.resolve.outputs.id }} v${{ inputs.version }} ${{ inputs.source_sha }} ${{ needs.verify.outputs.receipt }}"
     needs: [resolve, verify]
     runs-on: ubuntu-24.04
     # Shared with the signed-installer attach and the final's publication.
@@ -256,7 +272,13 @@ jobs:
           ID: ${{ needs.resolve.outputs.id }}
           SHA: ${{ inputs.source_sha }}
           VERSION: ${{ inputs.version }}
-        run: bash tools/deploy/release-attach.sh server-attach "$ID" "$SHA" "$VERSION" "$GITHUB_RUN_ID" bundle
+          VERIFIED: ${{ needs.verify.outputs.digests }}
+        run: |
+          set -euo pipefail
+          # The bytes the clean-host job verified, and nothing else.
+          [ "$(bash tools/deploy/release-attach.sh server-receipt "$ID" "$SHA" "$VERSION" bundle | sed -n 's/^digests=//p')" = "$VERIFIED" ] ||
+            { echo "::error::the files to attach are not the ones the clean-host job verified"; exit 1; }
+          bash tools/deploy/release-attach.sh server-attach "$ID" "$SHA" "$VERSION" "$GITHUB_RUN_ID" bundle
 
   reconcile:
     name: dispatch bundles still missing

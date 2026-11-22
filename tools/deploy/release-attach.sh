@@ -51,6 +51,10 @@
 #                                       release before every write. Only an interrupted attach
 #                                       (server files, no record at all) is replaced; a recorded,
 #                                       duplicated or malformed record is never touched
+#   release-attach.sh server-receipt ID SHA VERSION DIR
+#                                       print digests= (DIR's three files, record order) and
+#                                       receipt= (sha256 of the canonical receipt line committing
+#                                       to ID, VERSION, SHA and those digests)
 #   release-attach.sh server-reconcile  dispatch release-server-bundle.yml for every release on a
 #                                       version line newer than Latest (final drafts, published
 #                                       prereleases) that has no server record
@@ -181,6 +185,11 @@ server_state() {
   elif [[ "$strict" -eq 1 && "$loose" -eq 1 ]]; then echo one
   else echo bad; fi
 }
+# receipt_hash ID VERSION SHA "ARCHIVE MANIFEST SIGNATURE": the canonical receipt's digest.
+receipt_hash() {
+  printf 'orca-server-receipt/1 release=%s version=%s sha=%s files=%s' "$1" "$2" "$3" "$4" |
+    sha256sum | awk '{print "sha256:" $1}'
+}
 # server_record BODY: the one record's "RUN archive manifest signature".
 server_record() { records "$SERVER_RE" <<<"$1" | awk '{print $3, $4, $5, $6}'; }
 # server_digests VERSION < JSON: the three server files' digests in record order ("" if absent).
@@ -240,12 +249,24 @@ server_receipt() {
     ".github/workflows/release-server-bundle.yml|$REPO|$REPO|workflow_dispatch|main|completed|success|Release (server bundle) v$version at $sha" ]] ||
     fail "release $id's server bundle run $run is not a successful Release (server bundle) dispatch from main for v$version at $sha"
   jobs=$(jq -r '[.jobs[] | select(.conclusion == "success") | .name] | sort | join("|")' <<<"$facts")
-  for job in "sign the manifest (keyless, GitHub OIDC)" "stage --bundle on a clean host" "attach it to the release"; do
+  receipt="server bundle receipt: release $id v$version $sha $(receipt_hash "$id" "$version" "$sha" "$want")"
+  for job in "sign the manifest (keyless, GitHub OIDC)" "stage --bundle on a clean host" "$receipt"; do
     [[ "|$jobs|" == *"|$job|"* ]] || fail "release $id's server bundle run $run has no successful '$job' job"
   done
 }
 
 case "${1:-}" in
+  server-receipt)
+    [[ $# -eq 5 && "$2" =~ ^[0-9]+$ && "$3" =~ ^[0-9a-f]{40}$ ]] || fail "usage: release-attach.sh server-receipt ID SHA VERSION DIR"
+    read -r -a names <<<"$(server_names "$4")"
+    digests=""
+    for name in "${names[@]}"; do
+      [[ -f "$5/$name" && ! -L "$5/$name" ]] || fail "$5/$name is missing"
+      digests="$digests sha256:$(sha256sum "$5/$name" | cut -d' ' -f1)"
+    done
+    digests=${digests# }
+    printf 'digests=%s\nreceipt=%s\n' "$digests" "$(receipt_hash "$2" "$4" "$3" "$digests")"
+    ;;
   server-target)
     [[ $# -eq 3 && "$2" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ && "$3" =~ ^[0-9a-f]{40}$ ]] ||
       fail "usage: release-attach.sh server-target VERSION SHA"
@@ -600,5 +621,5 @@ case "${1:-}" in
     [[ "$(gh api "repos/$REPO/releases/latest" --jq .id)" == "$id" ]] || fail "release $id is not latest"
     note "Published v$version (release \`$id\`, \`$sha\`): $deb_name \`$deb\`, $exe_name \`$exe\`${arm:+, $arm_name \`$arm\` (natively accepted)}."
     ;;
-  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE [ARM64_FILE] | reconcile | accept-select [ID] | accept ID SHA VERSION RUN_ID DIGEST | x64-only ID SHA VERSION | publish ID VERSION SHA DEB_SHA256 EXE_SHA256 | run-with-jobs RUN_ID | server-target VERSION SHA | server-attach ID SHA VERSION RUN_ID DIR | server-reconcile" ;;
+  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE [ARM64_FILE] | reconcile | accept-select [ID] | accept ID SHA VERSION RUN_ID DIGEST | x64-only ID SHA VERSION | publish ID VERSION SHA DEB_SHA256 EXE_SHA256 | run-with-jobs RUN_ID | server-receipt ID SHA VERSION DIR | server-target VERSION SHA | server-attach ID SHA VERSION RUN_ID DIR | server-reconcile" ;;
 esac

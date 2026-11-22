@@ -147,10 +147,10 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    equal to the signing record. It also needs either the arm64 installer the same signing
    run recorded, with acceptance verified against the acceptance run and its evidence
    (`tools/deploy/feed-arches.js verify`), or the x64-only decision with no arm64 installer,
-   and the server bundle with its receipt: the three files with exactly the digests its one
-   record names, the signed manifest naming this version, commit and archive digest, and the
-   recorded Release (server bundle) run a successful dispatch from `main` for this version and
-   commit whose signing, clean-host and attach jobs passed. It refuses a version that is not newer than the current
+   and the server bundle with its receipt ([The server bundle](#the-server-bundle)): the three
+   files with exactly the digests its one record names, the signed manifest naming this
+   version, commit and archive digest, and a successful receipt job of the recorded Release
+   (server bundle) run committing to this release id, version, commit and those digests. It refuses a version that is not newer than the current
    Latest and an existing tag at another commit, publishes with the tag and target stated
    explicitly, and reads back the published digests, the tag and Latest. It shares one queue
    with the attach, so the two never interleave; publish only through it, not by editing the
@@ -200,8 +200,13 @@ receipt is the one well-formed record (a missing record waits; a duplicate or ma
 is a stop to fix by hand, and is never written over), the three files with exactly the
 recorded digests, the signed manifest itself naming this version, commit and archive digest,
 and the recorded run: a successful Release (server bundle) dispatch from `main` of this
-repository whose run name is `Release (server bundle) vX.Y.Z at SHA` and whose signing,
-clean-host and attach jobs passed. A **release candidate** is different: it is published as
+repository whose run name is `Release (server bundle) vX.Y.Z at SHA`, whose signing and
+clean-host jobs passed, and whose attach job passed under the name
+`server bundle receipt: release ID vX.Y.Z SHA sha256:R`. `R` is the SHA-256 of
+`orca-server-receipt/1 release=ID version=X.Y.Z sha=SHA files=A M S` (the three files' digests,
+`sha256:`-prefixed, archive first), computed by the clean-host job from the exact files it
+verified, only after it passed; the attach job uploads only files with those digests. So the
+receipt is evidence from the trusted run itself, independent of the notes and the draft. A **release candidate** is different: it is published as
 soon as Release (publish) finishes, and its bundle is attached asynchronously by the run that
 job dispatches (normally within half an hour). Until the record is in its notes the rc has no
 usable bundle, and `orca-release.py stage --bundle` refuses it with "no complete server bundle

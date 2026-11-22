@@ -59,6 +59,10 @@ COSIGN_SHA256 = {
     "aarch64": ("cosign-linux-arm64", "ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2"),
 }
 SOURCE_ENTRY = "packages/cli/dist/main.js"
+# A bundle's runtime and entry are fixed, inside the release; nothing from a manifest or a
+# record can point them anywhere else.
+BUNDLE_NODE = "runtime/bin/node"
+BUNDLE_ENTRY = "orca-daemon.mjs"
 
 def run(args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
@@ -222,17 +226,22 @@ def rpc(url, method, params, token_file=None, use_environment=True):
 
 def metadata(release):
     """The staged release's record. A source stage records an absolute Node outside the
-    release; a bundle stage records the runtime and entry inside it, relative, so the record
-    stays true after the staging directory is renamed into place."""
+    release and runs the source layout's entry. A bundle stage runs exactly BUNDLE_NODE and
+    BUNDLE_ENTRY inside the release (relative, so the record stays true after the staging
+    directory is renamed into place); any other value is refused, never resolved."""
     result = json.loads((release / ".orca-release.json").read_text())
-    for key in ("node", "entry"):
-        value = result.get(key, SOURCE_ENTRY if key == "entry" else None)
-        path = Path(value)
-        if not path.is_absolute():
-            if ".." in path.parts:
-                raise RuntimeError(f"Release record {key} escapes the release")
-            path = Path(release) / path
-        result[key] = str(path)
+    if result.get("source") == "bundle":
+        if result.get("node") != BUNDLE_NODE or result.get("entry") != BUNDLE_ENTRY:
+            raise RuntimeError("Bundle release record names an unexpected runtime or entry; restage the release")
+        result["node"] = str(Path(release) / BUNDLE_NODE)
+        result["entry"] = str(Path(release) / BUNDLE_ENTRY)
+        for key in ("node", "entry"):
+            if Path(result[key]).is_symlink():
+                raise RuntimeError(f"Bundle {key} is a link; restage the release")
+    else:
+        if not Path(result["node"]).is_absolute() or result.get("entry", SOURCE_ENTRY) != SOURCE_ENTRY:
+            raise RuntimeError("Source release record names an unexpected runtime or entry; restage the release")
+        result["entry"] = str(Path(release) / SOURCE_ENTRY)
     if not Path(result["node"]).is_file():
         raise RuntimeError("Pinned Node executable is missing; restage the release")
     return result
@@ -602,6 +611,8 @@ class Deployment:
         for key, value in expected.items():
             if manifest.get(key) != value:
                 raise RuntimeError(f"Bundle manifest {key} is {manifest.get(key)!r}, expected {value!r}")
+        if manifest.get("entry") != BUNDLE_ENTRY or (manifest.get("node") or {}).get("path") != BUNDLE_NODE:
+            raise RuntimeError("Bundle manifest names an unexpected runtime or entry")
         if not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("sourceSha"))):
             raise RuntimeError("Bundle manifest has no source commit")
         listed = manifest.get("archive") or {}
@@ -652,14 +663,18 @@ class Deployment:
             self.typed_dispatch(unpack_bundle, downloads / manifest["archive"]["name"], manifest["root"], stage)
         finally:
             shutil.rmtree(downloads, ignore_errors=True)
+        for relative in (BUNDLE_NODE, BUNDLE_ENTRY):
+            path = stage / relative
+            if path.is_symlink() or not path.is_file():
+                raise RuntimeError(f"Bundle has no regular {relative}")
         inside = json.loads((stage / "orca-server.json").read_text())
         contract = json.loads((stage / "release-compatibility.json").read_text())
         if (inside.get("version") != version or inside.get("sourceSha") != manifest["sourceSha"]
                 or inside.get("entry") != manifest["entry"] or inside.get("node") != manifest["node"]["path"]
                 or contract != manifest["compatibility"]):
             raise RuntimeError("Unpacked bundle disagrees with its signed manifest")
-        record = {"version": version, "sha": manifest["sourceSha"], "node": manifest["node"]["path"],
-                  "entry": manifest["entry"], "source": "bundle", "compatibility": contract,
+        record = {"version": version, "sha": manifest["sourceSha"], "node": BUNDLE_NODE,
+                  "entry": BUNDLE_ENTRY, "source": "bundle", "compatibility": contract,
                   "bundle": {"archiveSha256": manifest["archive"]["sha256"]}}
         # The release's own shipped workflows and templates, also for the demo.
         env = {key: value for key, value in os.environ.items() if key != "ORCA_RELEASE"}
