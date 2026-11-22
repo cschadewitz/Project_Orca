@@ -83,9 +83,9 @@ describe("reading a skill for delivery (#337)", () => {
     await mkdir(join(dir, "s"));
     await writeFile(join(dir, "s", "a.md"), "12345");
     await writeFile(join(dir, "s", "b.md"), "67890");
-    const read = readSkillFiles({ path: "s" }, dir, 10);
+    const read = readSkillFiles({ path: "s" }, dir, { maxBytes: 10 });
     expect("files" in read && read.files.map((f) => f.bytes.toString())).toEqual(["12345", "67890"]);
-    expect(readSkillFiles({ path: "s" }, dir, 9)).toEqual({
+    expect(readSkillFiles({ path: "s" }, dir, { maxBytes: 9 })).toEqual({
       error: expect.stringMatching(/larger than 9/),
       tooLarge: true,
     });
@@ -107,6 +107,36 @@ describe("reading a skill for delivery (#337)", () => {
       if (existsSync(join(dir, "piped", "fifo")))
         expect(readSkillFiles({ path: "piped" }, dir)).toEqual({ error: expect.stringMatching(/neither a file/) });
     }
+  });
+
+  it("bounds how many files a skill may bring, empty ones included", async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, "many"));
+    for (let i = 0; i < 64; i++) await writeFile(join(dir, "many", `f${i}.md`), "");
+    // 64 empty files and the directory itself: one entry too many for delivery.
+    expect(readSkillForDelivery("many", { path: "many" }, dir, undefined)).toEqual({
+      error: expect.stringMatching(/more than 64 files and directories/),
+    });
+    expect(readSkillFiles({ path: "many" }, dir)).toHaveProperty("files");
+  });
+
+  it("delivers only from under directories that only root or the daemon's account can change", async () => {
+    if (process.platform === "win32") return;
+    const dir = await tempDir();
+    await mkdir(join(dir, "shared", "review"), { recursive: true });
+    await writeFile(join(dir, "shared", "review", "SKILL.md"), "x");
+    expect(readSkillForDelivery("review", { path: "shared/review" }, dir, undefined)).toHaveProperty("files");
+    // Group-writable and not sticky: someone else could swap what is below it.
+    await chmod(join(dir, "shared"), 0o775);
+    expect(readSkillForDelivery("review", { path: "shared/review" }, dir, undefined)).toEqual({
+      error: expect.stringMatching(/someone other than root or the daemon's account can change/),
+    });
+    // A sticky one is fine: others cannot rename or remove what they do not own.
+    await chmod(join(dir, "shared"), 0o1777);
+    expect(readSkillForDelivery("review", { path: "shared/review" }, dir, undefined)).toHaveProperty("files");
+    // Reached through a link above it, it is read at its real place.
+    await symlink(join(dir, "shared"), join(dir, "alias"));
+    expect(readSkillForDelivery("review", { path: "alias/review" }, dir, undefined)).toHaveProperty("files");
   });
 
   it("keeps a leading byte-order mark, so the text sent is the bytes the digest names", async () => {

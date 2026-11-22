@@ -13,9 +13,10 @@ import {
   openSync,
   readdirSync,
   readSync,
+  realpathSync,
   type Stats,
 } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   OrcaError,
   resolveCapabilities,
@@ -36,6 +37,8 @@ import type { AgentRegistry } from "@orca/agents";
 
 /** A skill larger than this is refused rather than hashed: skills are instructions, not data. */
 const SKILL_MAX_BYTES = 16 * 1024 * 1024;
+/** Files and directories a skill may hold: each file becomes a block, even an empty one. */
+const SKILL_MAX_ENTRIES = 1024;
 
 /** One file of a skill as read: its path inside the skill (POSIX separators) and its bytes. */
 export interface SkillFile {
@@ -90,26 +93,67 @@ function readBounded(fd: number, sizeHint: number, budget: number, what: string)
 }
 
 /**
- * Read a skill's files, at most `maxBytes` together. Each file and directory is opened without
- * following a symbolic link (`O_NOFOLLOW`), checked by its descriptor to be the regular file
- * or directory the walk found (same device and inode), and read through that descriptor with
- * the remaining budget as the bound. On Linux the walk goes through each directory's open
- * descriptor, so nothing outside the skill is ever opened, whatever is renamed meanwhile;
- * elsewhere the descriptor checks refuse anything swapped between finding and opening it.
- * A single-file skill is one file named by its own name. Sorted by path.
+ * Whether no one but root or the daemon's own account can replace anything at `dir` or above
+ * it: each directory up to `/` is owned by one of them and writable by neither group nor
+ * others, unless it is sticky (like `/tmp`), where others cannot rename or remove what they
+ * do not own.
+ */
+function trustedAncestors(dir: string): boolean {
+  const uid = process.getuid?.();
+  for (let at = dir; ; at = dirname(at)) {
+    const info = lstatSync(at);
+    if (!info.isDirectory()) return false;
+    if (info.uid !== 0 && info.uid !== uid) return false;
+    if ((info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0) return false;
+    if (at === dirname(at)) return true;
+  }
+}
+
+export interface ReadSkillOptions {
+  /** The most content bytes, all files together; the read stops past it. */
+  maxBytes?: number;
+  /** The most files and directories together. */
+  maxEntries?: number;
+  /**
+   * For delivery: walk only in ways that cannot be led outside the skill, and refuse where
+   * that is not possible. The configured path is resolved once to its real path, every
+   * directory above it must be one only root or the daemon's account can change, and a
+   * directory skill is walked through its open directory descriptors (Linux). Elsewhere only
+   * a single-file skill can be delivered, and on Windows none.
+   */
+  anchored?: boolean;
+}
+
+/**
+ * Read a skill's files, within `maxBytes` and `maxEntries`. Each file and directory is opened
+ * without following a symbolic link (`O_NOFOLLOW`), checked by its descriptor to be the
+ * regular file or directory the walk found (same device and inode), and read through that
+ * descriptor with the remaining budget as the bound. On Linux the walk goes through each
+ * directory's open descriptor, so nothing outside the skill is ever opened, whatever is
+ * renamed meanwhile. See `ReadSkillOptions.anchored` for what delivery requires. A
+ * single-file skill is one file named by its own name. Sorted by path.
  */
 export function readSkillFiles(
   skill: SkillDefinition,
   baseDir: string | undefined,
-  maxBytes: number = SKILL_MAX_BYTES,
+  options: ReadSkillOptions = {},
 ): { files: SkillFile[] } | { error: string; tooLarge?: true } {
+  const maxBytes = options.maxBytes ?? SKILL_MAX_BYTES;
+  const maxEntries = options.maxEntries ?? SKILL_MAX_ENTRIES;
   if (!isAbsolute(skill.path) && baseDir === undefined)
     return { error: `skill path '${skill.path}' is relative, and no config directory is known to resolve it against` };
-  const root = isAbsolute(skill.path) ? skill.path : resolve(baseDir!, skill.path);
+  const configured = isAbsolute(skill.path) ? skill.path : resolve(baseDir!, skill.path);
+  let root = configured;
   const tooLarge = `skill '${skill.path}' is larger than ${maxBytes} bytes`;
   const files: SkillFile[] = [];
   let total = 0;
+  let entries = 0;
+  const count = () => {
+    if (++entries > maxEntries)
+      throw new SkillReadRefusal(`skill '${skill.path}' has more than ${maxEntries} files and directories`);
+  };
   const readFile = (path: string, rel: string, found: Stats) => {
+    count();
     const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
     try {
       const opened = fstatSync(fd);
@@ -123,6 +167,7 @@ export function readSkillFiles(
     }
   };
   const visit = (path: string, rel: string, found: Stats): void => {
+    count();
     const fd = O_DIRECTORY ? openSync(path, fsConstants.O_RDONLY | O_DIRECTORY | O_NOFOLLOW) : undefined;
     try {
       if (fd !== undefined && !sameObject(fstatSync(fd), found))
@@ -146,10 +191,27 @@ export function readSkillFiles(
     }
   };
   try {
-    const top = lstatSync(root);
-    if (top.isSymbolicLink())
+    const named = lstatSync(configured);
+    if (named.isSymbolicLink())
       return { error: `skill '${skill.path}' contains a symbolic link, which ORCA does not follow` };
-    if (top.isFile()) readFile(root, relative(resolve(root, ".."), root).split(sep).join("/"), top);
+    if (options.anchored) {
+      if (process.platform === "win32")
+        return {
+          error: `skill '${skill.path}' cannot be delivered from a Windows daemon: ORCA cannot read it safely there`,
+        };
+      root = realpathSync(configured);
+      if (!trustedAncestors(dirname(root)))
+        return {
+          error: `skill '${skill.path}' is under a directory that someone other than root or the daemon's account can change, so it cannot be delivered`,
+        };
+      if (named.isDirectory() && !PROC_FD)
+        return {
+          error: `skill '${skill.path}' is a directory, which ORCA can deliver safely only from a Linux daemon; use a single-file skill here`,
+        };
+    }
+    const top = lstatSync(root);
+    if (!sameObject(top, named)) return { error: `skill '${skill.path}' changed while it was read` };
+    if (top.isFile()) readFile(root, relative(resolve(configured, ".."), configured).split(sep).join("/"), top);
     else if (top.isDirectory()) visit(root, "", top);
     else return { error: `skill path '${skill.path}' contains something that is neither a file nor a directory` };
   } catch (error) {
@@ -262,6 +324,8 @@ export function deliveryIssues(
 
 /** The most skill content one step may carry inline in its prompts. */
 export const SKILL_DELIVERY_MAX_BYTES = 256 * 1024;
+/** The most files and directories one skill may bring to a step's prompts. */
+export const SKILL_DELIVERY_MAX_FILES = 64;
 
 /**
  * A selected skill as it will be delivered: its files read once, digest computed over the
@@ -277,7 +341,11 @@ export function readSkillForDelivery(
   /** What is left of the step's `SKILL_DELIVERY_MAX_BYTES`: the read stops past it. */
   budget: number = SKILL_DELIVERY_MAX_BYTES,
 ): { files: { rel: string; text: string }[]; digest: string; bytes: number } | { error: string; tooLarge?: true } {
-  const read = readSkillFiles(skill, baseDir, budget);
+  const read = readSkillFiles(skill, baseDir, {
+    maxBytes: budget,
+    maxEntries: SKILL_DELIVERY_MAX_FILES,
+    anchored: true,
+  });
   if ("error" in read) return read;
   const digest = skillFilesDigest(read.files);
   if (expected !== undefined && digest !== expected)

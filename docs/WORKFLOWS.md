@@ -637,11 +637,15 @@ on the daemon's machine reaches an agent on an SSH host the same way.
   new grant; `--skill '*'` (and the `owner` preset) covers every skill. A wildcard is per
   kind: `--mcp-server '*'` grants no skill, and `--skill '*'` no server.
 - The skill is read once at session open, hashed over exactly the bytes that are sent, and
-  refused if that is not what the launch recorded. Each file and directory is opened
-  without following a symbolic link and checked, by the open descriptor, to be the regular
-  file or directory the walk found (on Linux the walk goes through the directories' open
-  descriptors, so a rename meanwhile cannot lead it outside the skill). Each read stops at
-  what is left of the step's budget: a step's skills together may be at most 256 KiB.
+  refused if that is not what the launch recorded. The configured path is resolved to its
+  real place once, and every directory above it must be one only root or the daemon's
+  account can change (owned by one of them, writable by no one else unless sticky, like
+  `/tmp`). The walk goes through each directory's open descriptor, so a rename meanwhile
+  cannot lead it outside the skill; every file and directory is opened without following a
+  symbolic link and checked by its descriptor to be what the walk found. That walk needs a
+  Linux daemon: elsewhere only a single-file skill can be delivered, and on Windows none.
+  Each read stops at what is left of the step's budget: a step's skills together may be at
+  most 256 KiB, and one skill at most 64 files and directories.
   Every file must be UTF-8 text; a leading byte-order mark is kept in the text, so what is
   sent is exactly the bytes the digest names.
 - The use decision is asked again before every prompt that carries the skills, so a grant
