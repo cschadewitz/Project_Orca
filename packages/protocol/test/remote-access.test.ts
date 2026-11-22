@@ -764,9 +764,9 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
     });
     tunnels.push(tunnel);
     const url = await tunnel.open();
-    await expect(fetch(url)).rejects.toThrow();
+    await expect(fetch(url, { signal: AbortSignal.timeout(20_000) })).rejects.toThrow();
     // Windows retries a refused loopback connect for about two seconds before giving up.
-    for (let i = 0; i < 6_000 && !tunnel.remoteRefused(); i++) await new Promise((r) => setTimeout(r, 5));
+    for (let i = 0; i < 4_000 && !tunnel.remoteRefused(); i++) await new Promise((r) => setTimeout(r, 5));
     expect(
       tunnel.remoteRefused(),
       said
