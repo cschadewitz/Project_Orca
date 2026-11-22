@@ -24,7 +24,7 @@ import {
   type SecretsConfig,
   type SessionConfigOption,
 } from "@orca/core";
-import { redactingLogger, resolveSessionSecrets } from "./secrets.js";
+import { fillMcpSecrets, planSessionSecrets, redactError, redactingLogger } from "./secrets.js";
 import { processCleanup } from "./process-cleanup.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
@@ -140,13 +140,32 @@ function withinRoots(path: string, roots: string[]): boolean {
 
 export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSession> {
   if (opts.requireContextRecovery && !opts.resumeSessionId?.trim()) throw contextRecoveryFailure("missing-session-id");
-  // Secret references (#336) are read first, on the session's own host: a reference that
-  // cannot be read refuses the session before any process exists.
-  const sessionSecrets = await resolveSessionSecrets(opts.host, opts.agent, opts.secrets);
-  opts.onSecretValues?.(sessionSecrets.values);
+  // Secret references (#336) are checked before anything starts; the host reads them as part
+  // of starting the agent. From then on every error this session throws, the handshake's
+  // and each later call's, has the values redacted, stderr tails included, so a caller can
+  // return or write it as it is.
+  const secretPlan = planSessionSecrets(opts.host, opts.agent, opts.secrets);
+  const values: string[] = [];
+  const redacted = <T>(work: () => Promise<T>) =>
+    work().catch((error: unknown) => {
+      throw redactError(error, values);
+    });
+  const session = await redacted(() => openPlanned(opts, secretPlan, values));
+  for (const method of ["prompt", "setConfigOption", "cancel", "close"] as const) {
+    const original = session[method].bind(session) as (...args: unknown[]) => Promise<unknown>;
+    (session as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => redacted(() => original(...args));
+  }
+  return session;
+}
+
+async function openPlanned(
+  opts: OpenSessionOptions,
+  secretPlan: ReturnType<typeof planSessionSecrets>,
+  values: string[],
+): Promise<AgentSession> {
   const logger = redactingLogger(
     (opts.logger ?? silentLogger).child({ agent: opts.agent.id, host: opts.host.id }),
-    sessionSecrets.values,
+    () => values,
   );
   const clock = opts.clock ?? systemClock;
   const roots = [opts.cwd, ...(opts.additionalDirectories ?? [])];
@@ -208,11 +227,16 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     throw acp.RequestError.invalidParams({ path, reason: "protected: ORCA's own files are not open to agents" });
   };
 
-  const proc: AgentProcessHandle = await opts.host.spawnAgent(sessionSecrets.agent, {
+  const proc: AgentProcessHandle = await opts.host.spawnAgent(secretPlan.agent, {
     cwd: opts.cwd,
     ...(opts.env ? { env: opts.env } : {}),
-    ...(Object.keys(sessionSecrets.secretEnv).length ? { secretEnv: sessionSecrets.secretEnv } : {}),
+    ...(secretPlan.deliveries.length ? { secrets: secretPlan.deliveries } : {}),
+    ...(secretPlan.withheldEnv.length ? { withheldEnv: secretPlan.withheldEnv } : {}),
   });
+  const secretValues = proc.secretValues ?? new Map<string, string>();
+  values.push(...secretValues.values());
+  if (values.length) opts.onSecretValues?.([...values]);
+  const mcpServers = fillMcpSecrets(secretPlan, secretValues);
 
   const app = acp
     .client({ name: ORCA_CLIENT_INFO.name })
@@ -382,7 +406,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     logger.debug("initialized", { protocolVersion: init.protocolVersion, agentInfo: init.agentInfo });
     const newSession: acp.NewSessionRequest = {
       cwd: opts.cwd,
-      mcpServers: sessionSecrets.agent.mcpServers.map((m) => ({
+      mcpServers: mcpServers.map((m) => ({
         name: m.name,
         command: m.command,
         args: m.args,

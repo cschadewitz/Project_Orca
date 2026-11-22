@@ -522,15 +522,25 @@ agents:
   anything is spawned (`secret 'github-token' is unavailable: environment variable
   GITHUB_TOKEN is not set on host 'local'`). A `per-run` session keeps the values it was
   started with for its lifetime; a step that needs a fresh value needs a fresh session.
-- **Never on a command line.** On a local host the values are in the agent process's
-  environment only. Over SSH they are sent on the connection's standard input, read by the
-  remote shell and exported before the agent starts, so neither machine's process list shows
-  them. The remote host needs `base64` (coreutils), which decodes them.
+- **Read and delivered in one step, on one connection.** A local host reads the values in
+  the daemon immediately before it starts the agent. Over SSH, the remote shell that is about
+  to start the agent reads them itself, exports them, reports them back to ORCA on that same
+  connection (for redaction and for MCP server env), and then becomes the agent: the machine
+  that read a value is always the machine the agent runs on, never a second connection to
+  something with the same host name. The remote host needs `base64` and `printenv`
+  (coreutils).
+- **Never on a command line.** Values travel through environment and shell variables only,
+  so neither machine's process list shows them.
+- **Only through a reference.** Every environment variable a secret on a host is read from
+  (`provider: env`) is removed from what each agent on that host inherits, the
+  `orca agent ping` check included. An agent gets a credential only under the variables
+  whose references name it.
 - **Never written.** Config, drafts, launch records, provenance, events and logs hold the
   reference (`{ secret: github-token }`), never the value. As defense in depth, a value ORCA
   read is replaced with `[REDACTED]` in every event and log line the run writes afterwards,
-  the run's parents included, and in every artifact body ORCA records from then on, before
-  it is stored, hashed, parsed for structured data or handed to planning. This catches the
+  the run's parents included, in every artifact body ORCA records from then on (before it is
+  stored, hashed, parsed for structured data or handed to planning), and in every error the
+  session reports, its stderr tail included, before it is returned or written. This catches the
   value copied verbatim, not encodings, transformations or fragments of it, and it does not
   rewrite the files an agent leaves in its own workspace.
 - **Moving from literal values.** A literal in `env` keeps working, but it is stored in

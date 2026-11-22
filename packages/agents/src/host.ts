@@ -28,6 +28,16 @@ export interface AgentProcessHandle {
   /** Last lines of stderr, for diagnostics when a handshake fails. */
   stderrTail(): string;
   kill(signal?: NodeJS.Signals): void;
+  /** Each delivered secret's value by id, as the host read it to start this process (#336). */
+  secretValues?: ReadonlyMap<string, string>;
+}
+
+/** One secret a host reads and delivers when it starts an agent (#336). */
+export interface SecretDelivery {
+  id: string;
+  source: SecretSource;
+  /** Agent environment variables it fills; may be empty when only MCP servers use it. */
+  env: string[];
 }
 
 export interface ExecResult {
@@ -55,11 +65,13 @@ export interface SpawnAgentOptions {
   cwd: string;
   env?: Record<string, string>;
   /**
-   * Environment variables whose values are resolved secrets (#336). A host must never put
-   * these in a process argument list: a local host sets them in the child's environment,
-   * an SSH host sends them over the session's own stdin.
+   * Secrets to read and deliver as part of starting the agent (#336). The host reads each
+   * one where the agent will run, immediately before starting it, and returns the values on
+   * the handle. A value is never put in a process argument list on either machine.
    */
-  secretEnv?: Record<string, string>;
+  secrets?: SecretDelivery[];
+  /** Variables the agent must not inherit from the host's environment (#336). */
+  withheldEnv?: string[];
 }
 
 export interface AgentHost {
@@ -72,10 +84,10 @@ export interface AgentHost {
   /** Join path segments using the host's conventions. */
   joinPath(...parts: string[]): string;
   /**
-   * Read one secret's value on this host (#336), or throw `CONFIG_INVALID` naming why. A host
-   * without it cannot run a session that uses a secret reference.
+   * True when `spawnAgent` honours `secrets` and `withheldEnv` (#336). A host without it
+   * cannot run a session that uses a secret reference.
    */
-  readSecret?(id: string, source: SecretSource): Promise<string>;
+  readonly deliversSecrets?: boolean;
 }
 
 /**
@@ -135,6 +147,12 @@ export function stdioAcpStream(input: Readable, output: Writable): acp.Stream {
 export interface WrapAgentProcessOptions {
   /** Turns a spawn failure into the host-specific error to throw. */
   onSpawnError(error: Error): Error;
+  /**
+   * Runs once the child has spawned and before its stdout becomes the ACP stream: a host
+   * that has the process say something first (an SSH host reporting the secrets it read)
+   * consumes it here. If it throws, the child is killed and the error is the spawn's.
+   */
+  beforeStream?(child: PipedChildProcess): Promise<void>;
 }
 
 /**
@@ -161,6 +179,13 @@ export async function wrapAgentProcess(
   }).catch((e: unknown) => {
     throw options.onSpawnError(e instanceof Error ? e : new Error(String(e)));
   });
+  if (options.beforeStream)
+    try {
+      await options.beforeStream(child);
+    } catch (error) {
+      killIfRunning(child, "SIGKILL");
+      throw error;
+    }
   return {
     stream: stdioAcpStream(child.stdout, child.stdin),
     pid: child.pid,

@@ -1,27 +1,32 @@
 /**
- * Secret references at the execution boundary (#336): read on the session's own host, at each
- * open, refused rather than borrowed from anywhere else, and never put on a command line.
+ * Secret references at the execution boundary (#336): checked against the catalog, read by
+ * the host as part of starting the agent, refused rather than borrowed from anywhere else,
+ * never on a command line, never inherited without a reference, and redacted from errors.
  */
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentSpecSchema, HostSpecSchema, type Logger, type SecretsConfig } from "@orca/core";
+import { AgentSpecSchema, HostSpecSchema, OrcaError, type Logger, type SecretsConfig } from "@orca/core";
 import {
   LocalHost,
   openAcpSession,
+  planSessionSecrets,
+  redactError,
   redactingLogger,
-  resolveSessionSecrets,
   SshHost,
   type AgentHost,
+  type AgentProcessHandle,
   type AgentSession,
 } from "@orca/agents";
 
 const dirs: string[] = [];
 const sessions: AgentSession[] = [];
+const procs: AgentProcessHandle[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
   for (const s of sessions.splice(0)) await s.close();
+  for (const p of procs.splice(0)) p.kill("SIGKILL");
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 const tempDir = async () => {
@@ -29,87 +34,142 @@ const tempDir = async () => {
   dirs.push(dir);
   return dir;
 };
+const exists = (path: string) =>
+  stat(path).then(
+    () => true,
+    () => false,
+  );
+const waitFor = async (path: string) => {
+  for (let i = 0; i < 300; i++) {
+    if (await exists(path)) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`${path} never appeared`);
+};
 
 const local = () => new LocalHost({ id: "local", type: "local" });
 const agent = (env: object, mcpServers: object[] = []) =>
   AgentSpecSchema.parse({ id: "claude", command: "claude", env, mcpServers });
 
-describe("resolveSessionSecrets", () => {
+/** A node agent that writes the named variables to `out`, then echoes the first line it is sent. */
+const envReporter = (out: string, names: string[]) =>
+  `const pick = Object.fromEntries(${JSON.stringify(names)}.map((n) => [n, process.env[n] ?? null]));` +
+  `require("node:fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify(pick));` +
+  `require("node:readline").createInterface({ input: process.stdin }).once("line", (l) => { process.stdout.write(l + "\\n"); });`;
+
+async function firstMessage(proc: AgentProcessHandle): Promise<unknown> {
+  const reader = proc.stream.readable.getReader();
+  const { value } = await reader.read();
+  reader.releaseLock();
+  return value;
+}
+
+describe("planSessionSecrets", () => {
   const secrets: SecretsConfig = {
     token: { host: "local", provider: "env", name: "ORCA_TEST_TOKEN" },
-    remote: { host: "build-box", provider: "env", name: "ORCA_TEST_TOKEN" },
+    other: { host: "local", provider: "env", name: "ORCA_OTHER_TOKEN" },
+    file: { host: "local", provider: "file", path: "/etc/orca/file" },
+    remote: { host: "build-box", provider: "env", name: "ORCA_REMOTE_TOKEN" },
   };
 
-  it("resolves the agent's references into its secret env and its servers' env, and keeps literals", async () => {
-    vi.stubEnv("ORCA_TEST_TOKEN", "tok-1234567890");
-    const out = await resolveSessionSecrets(
+  it("splits literals from references, plans one read per secret, and withholds every env source on this host", () => {
+    const plan = planSessionSecrets(
       local(),
-      agent({ PLAIN: "1", TOKEN: { secret: "token" } }, [
-        { name: "gh", command: "gh-mcp", env: { GH: { secret: "token" }, MODE: "ro" } },
+      agent({ PLAIN: "1", TOKEN: { secret: "token" }, AGAIN: { secret: "token" } }, [
+        { name: "gh", command: "gh-mcp", env: { GH: { secret: "file" }, MODE: "ro" } },
       ]),
       secrets,
     );
-    expect(out.agent.env).toEqual({ PLAIN: "1" });
-    expect(out.secretEnv).toEqual({ TOKEN: "tok-1234567890" });
-    expect(out.agent.mcpServers[0]!.env).toEqual({ MODE: "ro", GH: "tok-1234567890" });
-    // Read once per open, even when two variables name it.
-    expect(out.values).toEqual(["tok-1234567890"]);
+    expect(plan.agent.env).toEqual({ PLAIN: "1" });
+    expect(plan.agent.mcpServers[0]!.env).toEqual({ MODE: "ro" });
+    expect(plan.deliveries).toEqual([
+      { id: "token", source: { provider: "env", name: "ORCA_TEST_TOKEN" }, env: ["TOKEN", "AGAIN"] },
+      { id: "file", source: { provider: "file", path: "/etc/orca/file" }, env: [] },
+    ]);
+    expect(plan.mcpSecrets).toEqual([{ server: 0, name: "GH", secret: "file" }]);
+    // `other` is not referenced and still withheld; `remote` belongs to another host's environment.
+    expect(plan.withheldEnv).toEqual(["ORCA_TEST_TOKEN", "ORCA_OTHER_TOKEN"]);
   });
 
-  it("refuses a reference bound to another host, even when this host has the same variable", async () => {
-    vi.stubEnv("ORCA_TEST_TOKEN", "local-value-must-not-be-used");
-    const read = vi.fn();
-    const host = Object.assign(local(), { readSecret: read });
-    await expect(resolveSessionSecrets(host, agent({ T: { secret: "remote" } }), secrets)).rejects.toMatchObject({
-      code: "CONFIG_INVALID",
-      details: { secret: "remote", reason: "wrong-host", hostId: "local" },
-    });
-    expect(read).not.toHaveBeenCalled();
-  });
-
-  it("refuses an undefined secret and a host that cannot read one", async () => {
-    await expect(resolveSessionSecrets(local(), agent({ T: { secret: "nope" } }), secrets)).rejects.toMatchObject({
-      details: { reason: "undefined" },
-    });
+  it("refuses a reference bound to another host, an undefined one, and a host that cannot deliver", () => {
+    expect(() => planSessionSecrets(local(), agent({ T: { secret: "remote" } }), secrets)).toThrow(
+      expect.objectContaining({
+        code: "CONFIG_INVALID",
+        details: { secret: "remote", reason: "wrong-host", hostId: "local" },
+      }),
+    );
+    expect(() => planSessionSecrets(local(), agent({ T: { secret: "nope" } }), secrets)).toThrow(
+      expect.objectContaining({ details: expect.objectContaining({ reason: "undefined" }) }),
+    );
     const bare = { id: "local" } as unknown as AgentHost;
-    await expect(resolveSessionSecrets(bare, agent({ T: { secret: "token" } }), secrets)).rejects.toMatchObject({
-      details: { reason: "unsupported" },
-    });
-  });
-
-  it("reads nothing when there are no references", async () => {
-    const read = vi.fn();
-    const host = Object.assign(local(), { readSecret: read });
-    const out = await resolveSessionSecrets(host, agent({ A: "1" }), undefined);
-    expect(out).toMatchObject({ secretEnv: {}, values: [] });
-    expect(read).not.toHaveBeenCalled();
+    expect(() => planSessionSecrets(bare, agent({ T: { secret: "token" } }), secrets)).toThrow(
+      expect.objectContaining({ details: expect.objectContaining({ reason: "unsupported" }) }),
+    );
+    expect(planSessionSecrets(bare, agent({ A: "1" }), undefined)).toMatchObject({ deliveries: [], withheldEnv: [] });
   });
 });
 
-describe("LocalHost.readSecret", () => {
-  it("reads the daemon's environment, and refuses a variable that is unset or empty", async () => {
-    vi.stubEnv("ORCA_TEST_TOKEN", "abc");
-    expect(await local().readSecret("t", { provider: "env", name: "ORCA_TEST_TOKEN" })).toBe("abc");
-    vi.stubEnv("ORCA_TEST_TOKEN", "");
-    await expect(local().readSecret("t", { provider: "env", name: "ORCA_TEST_TOKEN" })).rejects.toMatchObject({
-      message: "secret 't' is unavailable: environment variable ORCA_TEST_TOKEN is not set on host 'local'",
-      details: { secret: "t", reason: "missing" },
+describe("LocalHost delivery", () => {
+  it("delivers a value only under the variables that reference it, and withholds its source", async () => {
+    vi.stubEnv("ORCA_TEST_TOKEN", "tok-1234567890");
+    vi.stubEnv("ORCA_UNRELATED", "kept");
+    const dir = await tempDir();
+    const out = join(dir, "seen");
+    const proc = await local().spawnAgent(
+      AgentSpecSchema.parse({
+        id: "a",
+        command: process.execPath,
+        args: ["-e", envReporter(out, ["TOKEN", "ORCA_TEST_TOKEN", "ORCA_UNRELATED"])],
+      }),
+      {
+        cwd: dir,
+        secrets: [{ id: "token", source: { provider: "env", name: "ORCA_TEST_TOKEN" }, env: ["TOKEN"] }],
+        withheldEnv: ["ORCA_TEST_TOKEN"],
+      },
+    );
+    procs.push(proc);
+    expect(proc.secretValues).toEqual(new Map([["token", "tok-1234567890"]]));
+    await waitFor(out);
+    expect(JSON.parse(await readFile(out, "utf8"))).toEqual({
+      TOKEN: "tok-1234567890",
+      ORCA_TEST_TOKEN: null,
+      ORCA_UNRELATED: "kept",
     });
   });
 
-  it("reads a file whole, drops one trailing newline, and refuses a missing file", async () => {
+  it("reads a file whole and drops one trailing newline; refuses a missing or empty source without spawning", async () => {
     const dir = await tempDir();
     await writeFile(join(dir, "token"), "line one\nline two\n\n");
-    expect(await local().readSecret("t", { provider: "file", path: join(dir, "token") })).toBe("line one\nline two\n");
-    await expect(local().readSecret("t", { provider: "file", path: join(dir, "absent") })).rejects.toMatchObject({
+    const out = join(dir, "seen");
+    const spec = AgentSpecSchema.parse({ id: "a", command: process.execPath, args: ["-e", envReporter(out, ["T"])] });
+    const file = (path: string) => [{ id: "t", source: { provider: "file" as const, path }, env: ["T"] }];
+    const proc = await local().spawnAgent(spec, { cwd: dir, secrets: file(join(dir, "token")) });
+    procs.push(proc);
+    expect(proc.secretValues?.get("t")).toBe("line one\nline two\n");
+    await waitFor(out);
+    await rm(out);
+
+    await expect(local().spawnAgent(spec, { cwd: dir, secrets: file(join(dir, "absent")) })).rejects.toMatchObject({
+      message: `secret 't' is unavailable: file ${join(dir, "absent")} does not exist or cannot be read on host 'local'`,
       details: { reason: "missing" },
     });
+    vi.stubEnv("ORCA_TEST_TOKEN", "");
+    await expect(
+      local().spawnAgent(spec, {
+        cwd: dir,
+        secrets: [{ id: "t", source: { provider: "env", name: "ORCA_TEST_TOKEN" }, env: ["T"] }],
+      }),
+    ).rejects.toMatchObject({
+      message: "secret 't' is unavailable: environment variable ORCA_TEST_TOKEN is not set on host 'local'",
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await exists(out)).toBe(false);
   });
 });
 
 /**
- * An `ssh` stand-in: records its arguments, then runs the remote command the way sshd does,
- * by joining everything after `--` into one string for a shell.
+ * An `ssh` stand-in: records its arguments, prints a login banner, then runs the remote command
+ * the way sshd does, by joining everything after `--` into one string for a shell.
  */
 async function fakeSsh(dir: string): Promise<string> {
   const bin = join(dir, "ssh");
@@ -119,6 +179,7 @@ async function fakeSsh(dir: string): Promise<string> {
 printf '%s\\n' "$@" >> "${join(dir, "argv")}"
 while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
 shift
+printf 'Welcome to the build box (no newline)'
 exec /bin/sh -c "$*"
 `,
   );
@@ -137,62 +198,108 @@ const sshHost = (sshBinary: string) =>
     { sftp: false },
   );
 
-describe("SshHost secrets", () => {
-  it("delivers values on stdin, never in either command line, and the agent still gets the rest of stdin", async () => {
+describe("SshHost delivery", () => {
+  it("reads and delivers in the agent's own connection, never in argv, and ACP still flows both ways", async () => {
     const dir = await tempDir();
     const host = sshHost(await fakeSsh(dir));
     const value = "s3cr3t 'quoted' $(not-run) \\ end";
+    await writeFile(join(dir, "file-secret"), "from a file\r\n");
     const out = join(dir, "seen");
-    const script = `require("node:readline").createInterface({ input: process.stdin }).once("line", (input) => { require("node:fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify({ token: process.env.TOKEN, other: process.env.OTHER, plain: process.env.PLAIN, input })); process.exit(0); });`;
+    vi.stubEnv("ORCA_REMOTE_TOKEN", value);
+    vi.stubEnv("ORCA_REMOTE_OTHER", "withheld-value");
     const proc = await host.spawnAgent(
-      AgentSpecSchema.parse({ id: "a", command: process.execPath, args: ["-e", script], env: { PLAIN: "p" } }),
-      { cwd: dir, secretEnv: { TOKEN: value, OTHER: "second-value" } },
+      AgentSpecSchema.parse({
+        id: "a",
+        command: process.execPath,
+        args: ["-e", envReporter(out, ["TOKEN", "FROM_FILE", "PLAIN", "ORCA_REMOTE_TOKEN", "ORCA_REMOTE_OTHER"])],
+        env: { PLAIN: "p" },
+      }),
+      {
+        cwd: dir,
+        secrets: [
+          { id: "token", source: { provider: "env", name: "ORCA_REMOTE_TOKEN" }, env: ["TOKEN"] },
+          { id: "file", source: { provider: "file", path: join(dir, "file-secret") }, env: ["FROM_FILE"] },
+          { id: "mcp-only", source: { provider: "file", path: join(dir, "file-secret") }, env: [] },
+        ],
+        withheldEnv: ["ORCA_REMOTE_TOKEN", "ORCA_REMOTE_OTHER"],
+      },
+    );
+    procs.push(proc);
+    expect(proc.secretValues).toEqual(
+      new Map([
+        ["token", value],
+        ["file", "from a file"],
+        ["mcp-only", "from a file"],
+      ]),
     );
     const writer = proc.stream.writable.getWriter();
     await writer.write({ jsonrpc: "2.0", method: "ping" } as never);
-    await proc.exited;
+    writer.releaseLock();
+    expect(await firstMessage(proc)).toEqual({ jsonrpc: "2.0", method: "ping" });
     expect(JSON.parse(await readFile(out, "utf8"))).toEqual({
-      token: value,
-      other: "second-value",
-      plain: "p",
-      input: JSON.stringify({ jsonrpc: "2.0", method: "ping" }),
+      TOKEN: value,
+      FROM_FILE: "from a file",
+      PLAIN: "p",
+      ORCA_REMOTE_TOKEN: null,
+      ORCA_REMOTE_OTHER: null,
     });
     const argv = await readFile(join(dir, "argv"), "utf8");
-    expect(argv).not.toContain("s3cr3t");
-    expect(argv).not.toContain(Buffer.from(value).toString("base64"));
-    expect(argv).not.toContain("second-value");
+    for (const needle of ["s3cr3t", Buffer.from(value).toString("base64"), "from a file", "withheld-value"])
+      expect(argv).not.toContain(needle);
   });
 
-  it("refuses a variable name that is not one before connecting", async () => {
-    const host = sshHost("orca-no-such-ssh-binary");
-    expect(() =>
-      host.spawnAgent(AgentSpecSchema.parse({ id: "a", command: "x" }), { cwd: "/", secretEnv: { "A;rm": "v" } }),
-    ).toThrow(/cannot carry a secret/);
+  it("drops exactly one trailing newline from a remote file, as a local host does", async () => {
+    const dir = await tempDir();
+    const host = sshHost(await fakeSsh(dir));
+    await writeFile(join(dir, "s"), "two\n\n");
+    const proc = await host.spawnAgent(AgentSpecSchema.parse({ id: "a", command: "true" }), {
+      cwd: dir,
+      secrets: [{ id: "s", source: { provider: "file", path: join(dir, "s") }, env: [] }],
+    });
+    procs.push(proc);
+    expect(proc.secretValues?.get("s")).toBe("two\n");
   });
 
-  it("reads a remote variable or file after the marker, ignoring profile output", async () => {
-    const host = sshHost("unused");
-    const exec = vi
-      .spyOn(host, "exec")
-      .mockResolvedValue({ code: 0, stdout: "welcome banner\n__orca_secret_value__\nremote-value\n", stderr: "" });
-    expect(await host.readSecret("t", { provider: "env", name: "TOKEN" })).toBe("remote-value");
-    expect(exec.mock.calls[0]![0]).toContain("printenv TOKEN");
-    await host.readSecret("t", { provider: "file", path: "/etc/orca/it's" });
-    expect(exec.mock.calls[1]![0]).toContain("cat -- '/etc/orca/it'\\''s'");
-  });
-
-  it("refuses an unset remote value or a failed read, with no local fallback", async () => {
-    vi.stubEnv("TOKEN", "local-value-must-not-be-used");
-    const host = sshHost("unused");
-    const exec = vi.spyOn(host, "exec").mockResolvedValue({ code: 1, stdout: "__orca_secret_value__\n", stderr: "" });
-    await expect(host.readSecret("t", { provider: "env", name: "TOKEN" })).rejects.toMatchObject({
-      message: "secret 't' is unavailable: environment variable TOKEN is not set on host 'build-box'",
+  it("refuses a missing remote value before the agent starts, with no local fallback", async () => {
+    const dir = await tempDir();
+    const host = sshHost(await fakeSsh(dir));
+    const out = join(dir, "seen");
+    const spec = AgentSpecSchema.parse({ id: "a", command: process.execPath, args: ["-e", envReporter(out, [])] });
+    await expect(
+      host.spawnAgent(spec, {
+        cwd: dir,
+        secrets: [{ id: "t", source: { provider: "env", name: "ORCA_UNSET_REMOTE" }, env: ["T"] }],
+      }),
+    ).rejects.toMatchObject({
+      message: "secret 't' is unavailable: environment variable ORCA_UNSET_REMOTE is not set on host 'build-box'",
       details: { reason: "missing", hostId: "build-box" },
     });
-    exec.mockResolvedValue({ code: 255, stdout: "", stderr: "connection refused" });
-    await expect(host.readSecret("t", { provider: "file", path: "/x" })).rejects.toMatchObject({
-      details: { reason: "missing" },
-    });
+    await expect(
+      host.spawnAgent(spec, {
+        cwd: dir,
+        secrets: [{ id: "f", source: { provider: "file", path: join(dir, "absent") }, env: ["F"] }],
+      }),
+    ).rejects.toMatchObject({ details: { secret: "f", reason: "missing" } });
+    expect(await exists(out)).toBe(false);
+  });
+
+  it("refuses a variable name that is not one before connecting, and a connection that ends early", async () => {
+    await expect(
+      sshHost("orca-no-such-ssh-binary").spawnAgent(AgentSpecSchema.parse({ id: "a", command: "x" }), {
+        cwd: "/",
+        secrets: [{ id: "t", source: { provider: "env", name: "OK" }, env: ["A;rm"] }],
+      }),
+    ).rejects.toThrow(/cannot carry a secret/);
+    const dir = await tempDir();
+    const bin = join(dir, "ssh");
+    await writeFile(bin, "#!/bin/sh\nexit 255\n");
+    await chmod(bin, 0o755);
+    await expect(
+      sshHost(bin).spawnAgent(AgentSpecSchema.parse({ id: "a", command: "x" }), {
+        cwd: "/",
+        secrets: [{ id: "t", source: { provider: "env", name: "OK" }, env: ["T"] }],
+      }),
+    ).rejects.toMatchObject({ code: "AGENT_TRANSPORT", message: expect.stringMatching(/ended \(exit 255\)/) });
   });
 });
 
@@ -211,6 +318,12 @@ rl.on("line", (line) => {
 setInterval(() => {}, 1000);
 `;
 
+/** An agent that prints its credential to stderr and fails the handshake. */
+const leakingAgent = `
+process.stderr.write("auth failed for " + process.env.TOKEN + "\\n");
+setTimeout(() => process.exit(3), 50);
+`;
+
 describe("openAcpSession with secret references", () => {
   it("reads at every open, so a rotated value is used next time, and hands the values over for redaction", async () => {
     const dir = await tempDir();
@@ -225,12 +338,13 @@ describe("openAcpSession with secret references", () => {
       mcpServers: [{ name: "gh", command: "gh-mcp", env: { GH_TOKEN: { secret: "token" } } }],
     });
     const lines: string[] = [];
+    const record = (m: string, f?: object) => lines.push(`${m} ${JSON.stringify(f ?? {})}`);
     const logger: Logger = {
-      log: (_l, m, f) => lines.push(`${m} ${JSON.stringify(f ?? {})}`),
-      debug: (m, f) => lines.push(`${m} ${JSON.stringify(f ?? {})}`),
-      info: (m, f) => lines.push(`${m} ${JSON.stringify(f ?? {})}`),
-      warn: (m, f) => lines.push(`${m} ${JSON.stringify(f ?? {})}`),
-      error: (m, f) => lines.push(`${m} ${JSON.stringify(f ?? {})}`),
+      log: (_l, m, f) => record(m, f),
+      debug: record,
+      info: record,
+      warn: record,
+      error: record,
       child: () => logger,
     };
     for (const value of ["first-value-111", "rotated-value-222"]) {
@@ -258,23 +372,66 @@ describe("openAcpSession with secret references", () => {
     expect(lines.join("\n")).not.toMatch(/first-value-111|rotated-value-222/);
   });
 
+  it("redacts the value from a failed handshake's error and stderr tail", async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, "token"), "leaky-value-333\n");
+    const error = await openAcpSession({
+      host: local(),
+      agent: AgentSpecSchema.parse({
+        id: "leaky",
+        command: process.execPath,
+        args: ["-e", leakingAgent],
+        env: { TOKEN: { secret: "token" } },
+      }),
+      cwd: dir,
+      secrets: { token: { host: "local", provider: "file", path: join(dir, "token") } },
+    }).then(
+      () => undefined,
+      (e: unknown) => e as OrcaError,
+    );
+    expect(error).toBeInstanceOf(OrcaError);
+    const shown = JSON.stringify({ ...error!.toJSON(), stack: error!.stack, cause: String(error!.cause) });
+    expect(shown).toContain("[REDACTED]");
+    expect(shown).not.toContain("leaky-value-333");
+  });
+
+  it("keeps a configured env secret out of an agent that does not reference it (the ping path included)", async () => {
+    vi.stubEnv("ORCA_TEST_TOKEN", "daemon-held-444");
+    const dir = await tempDir();
+    const out = join(dir, "seen");
+    const opened = openAcpSession({
+      host: local(),
+      agent: AgentSpecSchema.parse({
+        id: "plain",
+        command: process.execPath,
+        args: ["-e", envReporter(out, ["ORCA_TEST_TOKEN"])],
+      }),
+      cwd: dir,
+      secrets: { token: { host: "local", provider: "env", name: "ORCA_TEST_TOKEN" } },
+      handshakeTimeoutMs: 300,
+    });
+    await waitFor(out);
+    expect(JSON.parse(await readFile(out, "utf8"))).toEqual({ ORCA_TEST_TOKEN: null });
+    await opened.then(
+      (s) => s.close(),
+      () => undefined,
+    );
+  });
+
   it("refuses before anything is spawned when a value cannot be read", async () => {
-    const host = local();
-    const spawn = vi.spyOn(host, "spawnAgent");
     await expect(
       openAcpSession({
-        host,
+        host: local(),
         agent: AgentSpecSchema.parse({ id: "r", command: "never", env: { TOKEN: { secret: "token" } } }),
         cwd: process.cwd(),
         secrets: { token: { host: "local", provider: "file", path: "/nonexistent/orca/token" } },
       }),
     ).rejects.toMatchObject({ code: "CONFIG_INVALID", details: { secret: "token", reason: "missing" } });
-    expect(spawn).not.toHaveBeenCalled();
   });
 });
 
-describe("redactingLogger", () => {
-  it("redacts messages, fields and child bindings, and is the logger itself with no values", () => {
+describe("redaction helpers", () => {
+  it("redactingLogger redacts messages, fields and child bindings, reading the values when it logs", () => {
     const seen: unknown[] = [];
     const inner: Logger = {
       log: (...a) => seen.push(a),
@@ -284,8 +441,9 @@ describe("redactingLogger", () => {
       error: (...a) => seen.push(a),
       child: (f) => (seen.push(["child", f]), inner),
     };
-    expect(redactingLogger(inner, [])).toBe(inner);
-    const log = redactingLogger(inner, ["pw-123"]);
+    const values: string[] = [];
+    const log = redactingLogger(inner, () => values);
+    values.push("pw-123");
     log.info("got pw-123", { v: "pw-123" });
     log.log("warn", "pw-123");
     log.debug("pw-123");
@@ -293,5 +451,16 @@ describe("redactingLogger", () => {
     log.error("pw-123");
     log.child({ k: "pw-123" }).info("x");
     expect(JSON.stringify(seen)).not.toContain("pw-123");
+  });
+
+  it("redactError rewrites message, stack, details and the cause chain in place", () => {
+    const cause = new Error("inner pw-123");
+    const error = new OrcaError("AGENT_PROTOCOL", "outer pw-123", { stderr: "pw-123\n" }, { cause });
+    expect(redactError(error, ["pw-123"])).toBe(error);
+    expect(error.message).toBe("outer [REDACTED]");
+    expect(error.details).toEqual({ stderr: "[REDACTED]\n" });
+    expect(cause.message).toBe("inner [REDACTED]");
+    expect(String(error.stack)).not.toContain("pw-123");
+    expect(redactError("plain pw-123", ["pw-123"])).toBe("plain pw-123");
   });
 });
