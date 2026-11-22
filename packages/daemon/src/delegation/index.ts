@@ -31,7 +31,7 @@ import {
   type TunnelRefusalCode,
 } from "@orca/protocol/remote-access";
 import { delegationRefusal, openDaemonSession, type DelegationTransport } from "./daemon-session.js";
-import { credentialIdOf, enrollmentFile, readEnrollment, type Enrollment } from "./enrollment.js";
+import { credentialIdOf, enrollmentFile, readEnrollment, routeOf, sameRoute, type Enrollment } from "./enrollment.js";
 import { DelegationReceipts, type DelegationBinding } from "./receipts.js";
 
 export {
@@ -261,7 +261,14 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
     const files = remoteFiles(options.configDir, remote);
     const token = readRemoteCredential(remote, files.credentialFile);
     const enrollment = enrolled(remote, files);
-    // The bearer goes only where enrollment proved it belongs: this credential, these keys.
+    // The bearer goes only where enrollment proved it belongs: this route, these keys, this
+    // credential. Each is checked before ssh starts.
+    if (!sameRoute(routeOf(profile), enrollment.route))
+      throw delegationRefusal(
+        id,
+        "not-enrolled",
+        `Remote ${id} is configured to a different address, port or jump host than it was enrolled over. Nothing was sent. Run \`orca remote enroll ${id}\` to enroll the new route.`,
+      );
     if (credentialIdOf(token) !== enrollment.credentialId)
       throw delegationRefusal(
         id,

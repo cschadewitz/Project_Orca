@@ -965,7 +965,11 @@ export function methodsFor(ctx: MethodContext): MethodTable {
     };
     table["admissions.get"] = {
       params: AdmissionsGetParamsSchema,
-      handle: async (params, invocation) => model.inspect(params.operationId, await authorities(invocation)),
+      handle: async (params, invocation) => {
+        const authority = await authorities(invocation);
+        await checkAdmissionScope(params.expectedScope, authority);
+        return model.inspect(params.operationId, authority);
+      },
     };
     table["admissions.find"] = {
       params: AdmissionsFindParamsSchema,
@@ -985,7 +989,11 @@ export function methodsFor(ctx: MethodContext): MethodTable {
     };
     table["admissions.reconcile"] = {
       params: AdmissionsReconcileParamsSchema,
-      handle: async (params, invocation) => model.reconcile(params.operationId, await authorities(invocation)),
+      handle: async (params, invocation) => {
+        const authority = await authorities(invocation);
+        await checkAdmissionScope(params.expectedScope, authority);
+        return model.reconcile(params.operationId, authority);
+      },
     };
   }
   if (ctx.continuationAdmissions && ctx.continuationAccess) {

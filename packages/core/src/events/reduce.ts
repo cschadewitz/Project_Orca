@@ -51,6 +51,12 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       break;
     case "run.paused":
       state.run.status = "paused";
+      // The open attempt paused on purpose; resume re-attempts it by design (#357).
+      for (const id of state.stepOrder) {
+        const open = state.steps[id];
+        if (open && (open.status === "scheduled" || open.status === "running" || open.status === "waiting"))
+          open.parked = true;
+      }
       break;
     case "run.resumed":
       state.run.status = "running";
@@ -137,6 +143,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       const s = step(e.payload.stepRunId);
       s.status = "failed";
       s.error = e.payload.error;
+      if (e.payload.effect === "none") s.noEffect = true;
       s.completedAt = e.at;
       delete s.waitingOn;
       delete s.waitingDetail;
@@ -155,10 +162,24 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       s.completedAt = e.at;
       break;
     }
+    case "step.effect.reviewed": {
+      const s = step(e.payload.stepRunId);
+      s.effectReview = {
+        decision: e.payload.decision,
+        at: e.at,
+        ...(e.payload.note !== undefined ? { note: e.payload.note } : {}),
+        ...(e.payload.actor ? { actor: e.payload.actor } : {}),
+      };
+      break;
+    }
     case "agent.session.opened":
       step(e.payload.stepRunId).agentSessionId = e.payload.sessionId;
       break;
     case "agent.turn.started":
+      // Recorded before the prompt is sent, on whichever step the (possibly pooled) session
+      // serves: durable evidence this attempt dispatched work to an agent (#357).
+      step(e.payload.stepRunId).dispatched = true;
+      break;
     case "agent.update":
     case "agent.permission":
     case "agent.turn.completed":

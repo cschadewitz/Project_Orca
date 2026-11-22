@@ -257,6 +257,82 @@ logged.
   configure it as an SSH host in the workflow config instead
   ([integrations](INTEGRATIONS.md)).
 
+### Add a machine: one-step server setup (#881)
+
+A reachable Linux x64 machine with Python 3.8+ and a systemd user manager becomes a managed
+ORCA server in one step, from either side:
+
+- **App:** in the connection dialog, fill in a new profile and choose **Add a machine…**, or
+  choose **Set up ORCA server** on a saved profile. The app first checks the machine and
+  shows what it found; once you choose **Set up**, it installs the server, points the profile
+  at the managed launcher it installed, and signs in automatically (#875).
+- **CLI, from a source checkout:** `orca remote add [user@]host [--ssh-port N] [--identity FILE]
+  [--port N] [--json]`. The first run only checks, prints what it found and a confirmation
+  code, and exits 3; run it again with `--confirm CODE` to set the machine up. Host keys are
+  pinned in `~/.config/orca/known_hosts/<profile>`. It issues no credential: sign in from the
+  app.
+
+**Nothing is installed on a key nobody confirmed.** The check connects without pinning a
+host key it has not seen before (it is held in a scratch file), and runs the setup with
+`--inspect`, which changes nothing on the server. You confirm exactly what it shows: the
+SHA-256 fingerprints of the server's host keys (and the jump host's), the account it runs as,
+the version and the directory, and what it will do (install and start the service; in the app,
+also sign in). Check a first-seen key against `ssh-keygen -lf` on the server. The app's
+confirmation is used once, for that profile as it was (any edit, removal or host key reset
+voids it), and for 15 minutes; the CLI's code is checked against a fresh check of the server
+and refused if the keys, account or version differ. Only then are those keys pinned, and the
+setup runs over a connection that refuses any other key. On the server, before it changes
+anything and again under its lock, the setup refuses unless it runs as the confirmed effective
+account, in the confirmed canonical directory, as the confirmed kind of run (a first install
+or a repair).
+
+The setup runs `tools/deploy/orca-server-setup.py` on the server (sent over ssh as
+`python3 -`, with the managed adapter embedded), which installs what the bootstrap in
+[UPDATING](UPDATING.md#prebuilt-server-bundle) describes under `~/.local/share/orca-server`:
+the adapter, `deployment.json`, the `orca`/`orca-acp` wrappers, this version's signed server
+bundle (verified against its pinned signer, #876) with a receipt of the whole release as
+verified (every file, link and mode),
+`current`, and the `orca.service` user unit with lingering. It then starts the unit and checks
+the daemon's hello.
+
+Every step is idempotent, and a re-run only verifies and repairs what the setup owns:
+
+- A re-run on a healthy server changes nothing. A stopped or disabled unit, a missing wrapper or
+  a missing `current` link is repaired.
+- `deployment.json` is written once. A re-run checks the keys the setup owns (`root`,
+  `service`, `userService`, `setup`, `url`), adds any that are missing, and keeps every other
+  setting as the operator left it. A changed owned key is refused for you to repair.
+- A release is started only if this setup staged it from the verified bundle, for exactly the
+  version asked for: the receipt of every file it holds must still match, and it must be a directory of
+  `<root>/releases`. A `current` on another version, or a release the setup did not stage or
+  that changed since, is refused for separate reconciliation with `orca-release.py` (updating
+  is #879's job), and nothing is started.
+- A machine with an ORCA installation the setup did not make (a launcher, unit, process or
+  directory) is refused with the
+  [inventory guidance](UPDATING.md#debian-inventory-before-migration) and left untouched.
+- A run holds the deployment's admission lock from its first change to its end, so a second
+  setup, an update, a recovery or an ORCA command cannot run inside it; it refuses while an
+  update holds the update lock or an interrupted activation is pending.
+- Before its first change, a run records the state it found (the unit file, whether the unit
+  was enabled and running, `current`, lingering, and the files it writes in its directory) in
+`<root>/.setup-journal.json`, and stages a release into its own scratch directory (named there first), publishing it into
+`releases/` with its receipt only while it holds the update lock, so no other writer can
+publish meanwhile. A run that
+  fails puts all of it back (a unit that was stopped is stopped again), checks it, and only
+  then reports a failure; if it cannot confirm that, the result is "unknown" with what is not
+  back. A run cut off before it could (the session ended) leaves the journal, and the next run
+  puts that state back first (and removes its own staging scratch, never a release in
+`releases/`, whose ownership it cannot prove). Inspection reports the state as it will be once that is put back, so a link only an
+interrupted run made never turns a confirmed install into a repair. Lingering whose state
+cannot be read is left as it is. A successful run retires its journal before it lets go of
+its lock. A failed first setup leaves no link and no enabled unit.
+- The result counts only as the setup that was confirmed: the version, daemon port, account
+  and directory must match, and the launcher the profile is pointed at is derived from the
+  confirmed directory, not taken from the server. Anything else is a mismatch: nothing is
+  saved, the profile's port and pins stay as they were, and nothing signs in.
+
+The update timer (#878) is not enabled here.
+
 ## Target identity and drafts
 
 Authenticated hello can include `{ identity: { workspaceId, instanceId } }`.

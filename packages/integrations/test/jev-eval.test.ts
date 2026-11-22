@@ -4,7 +4,7 @@
  * downstream routing that reads the answers. No network anywhere.
  */
 import { describe, expect, it } from "vitest";
-import { parseFrontMatter, parseWorkflow, validateWorkflow } from "@orca/core";
+import { needsEffectReview, parseFrontMatter, parseWorkflow, validateWorkflow } from "@orca/core";
 import { NodeExecutorRegistry } from "@orca/engine";
 import {
   JevHttpProvider,
@@ -188,6 +188,9 @@ describe("custom:jev-eval", () => {
     ]);
     expect(artifactsOfKind(state, "evaluation")).toHaveLength(0);
     expect(stepFor(state, "jev")?.attempt).toBe(1); // not retryable
+    // The request was answered, so nothing is claimed about its effect: it waits for review (#357).
+    expect(stepFor(state, "jev")?.noEffect).toBeUndefined();
+    expect(needsEffectReview(stepFor(state, "jev")!)).toBe(true);
   });
 
   it("refuses a choice outside the options even when maxAttempts would allow a retry", async () => {
@@ -211,10 +214,43 @@ describe("custom:jev-eval", () => {
       code: "JEV_MODEL_MISMATCH",
       details: { requested: "jev-1.13.0", resolved: "jev-1.14.0" },
     });
+    expect(stepFor(state, "jev")?.noEffect).toBeUndefined();
+    expect(needsEffectReview(stepFor(state, "jev")!)).toBe(true);
+  });
+
+  it("repeats a sent request only when the node is marked repeatable (#357)", async () => {
+    const yaml = ROUTED.replace("model: jev-1.13.0", "model: jev-1.13.0\n    maxAttempts: 2");
+    const flaky = new ScriptedJevProvider(
+      { throws: new JevProviderError("HTTP 429", true, 429) },
+      { body: GOOD_ANSWERS },
+    );
+    const state = await jevHarness(yaml, { provider: flaky }).run("routed", { acceptance: ACCEPTANCE });
+    expect(state.run.status).toBe("failed");
+    expect(state.run.error).toMatchObject({ code: "JEV_PROVIDER" });
+    expect(flaky.requests).toHaveLength(1);
+    expect(stepFor(state, "jev")).toMatchObject({ attempt: 1 });
+    expect(stepFor(state, "jev")?.noEffect).toBeUndefined();
+  });
+
+  it("repeatable permits repeats within the budget but claims no effect once it is spent (#357)", async () => {
+    const yaml = ROUTED.replace("model: jev-1.13.0", "model: jev-1.13.0\n    maxAttempts: 2\n    repeatable: true");
+    const busy = new ScriptedJevProvider(
+      { throws: new JevProviderError("HTTP 429", true, 429) },
+      { throws: new JevProviderError("HTTP 429", true, 429) },
+    );
+    const state = await jevHarness(yaml, { provider: busy }).run("routed", { acceptance: ACCEPTANCE });
+    expect(state.run.status).toBe("failed");
+    expect(busy.requests).toHaveLength(2);
+    const attempts = state.stepOrder.map((id) => state.steps[id]!).filter((s) => s.nodeId === "jev");
+    expect(attempts.map((s) => [s.attempt, s.noEffect])).toEqual([
+      [1, undefined],
+      [2, undefined],
+    ]);
+    expect(needsEffectReview(attempts[1]!)).toBe(true);
   });
 
   it("retries a retryable provider failure within maxAttempts and gives up on a non-retryable one", async () => {
-    const yaml = ROUTED.replace("model: jev-1.13.0", "model: jev-1.13.0\n    maxAttempts: 2");
+    const yaml = ROUTED.replace("model: jev-1.13.0", "model: jev-1.13.0\n    maxAttempts: 2\n    repeatable: true");
     const flaky = new ScriptedJevProvider(
       { throws: new JevProviderError("HTTP 429", true, 429) },
       { body: GOOD_ANSWERS },

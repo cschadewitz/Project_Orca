@@ -61,6 +61,13 @@ export const JevEvalNodeSchema = z.strictObject({
    * Neither ever yields an answer that was not returned.
    */
   onError: z.enum(["fail", "record"]).default("fail"),
+  /**
+   * `true` states that asking the model again is safe: an evaluation changes nothing outside
+   * ORCA. Only then may `maxAttempts` repeat an attempt whose request was already sent (a timeout
+   * or lost response leaves its outcome unknown). Failures before the request is sent are
+   * retried either way (#357).
+   */
+  repeatable: z.boolean().optional(),
   produces: z
     .strictObject({
       kind: z.string().min(1).default("evaluation"),

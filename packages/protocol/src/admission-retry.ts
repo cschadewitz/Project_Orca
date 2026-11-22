@@ -19,7 +19,11 @@ export const RunsAdmitParamsSchema = RunsStartParamsSchema.extend({
   expectedScope: AdmissionExpectedScopeSchema.optional(),
   idempotencyKey: RetryKeySchema.optional(),
 }).strict();
-export const AdmissionsGetParamsSchema = z.strictObject({ operationId: z.string().regex(/^retry_[a-f0-9-]{36}$/) });
+export const AdmissionsGetParamsSchema = z.strictObject({
+  operationId: z.string().regex(/^retry_[a-f0-9-]{36}$/),
+  /** Protocol 2.4 (#883): refuse unless the daemon is this workspace and principal. */
+  expectedScope: AdmissionExpectedScopeSchema.optional(),
+});
 export const AdmissionsReconcileParamsSchema = AdmissionsGetParamsSchema;
 /**
  * `admissions.find` (#883): a direct admission's receipt by its idempotency key, without

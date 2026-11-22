@@ -217,6 +217,11 @@ const MAX_PAGES_PER_ROUND = 50;
 /** How deep a remote input's run may sit below the delegated run. */
 const MAX_CHILD_DEPTH = 8;
 
+/** The workspace and principal every remote mutation for a receipt is scoped to. */
+function scopeOf(receipt: DelegationReceipt): { workspaceId: string; principalId: string } {
+  return { workspaceId: receipt.binding.workspaceId, principalId: receipt.binding.principalId };
+}
+
 /** Why a remote artifact's copy does not match its record, or undefined when it does. */
 function artifactMismatch(listed: ArtifactView, got: ArtifactView, text: string): string | undefined {
   if (got.id !== listed.id || got.name !== listed.name || got.kind !== listed.kind) return "identity";
@@ -651,7 +656,7 @@ class DaemonSession implements AgentSession {
         {
           idempotencyKey: receipt.key,
           workflowId: receipt.binding.workflowId,
-          expectedScope: { workspaceId: receipt.binding.workspaceId, principalId: receipt.binding.principalId },
+          expectedScope: scopeOf(receipt),
         },
         this.bounded(deadline, signal),
       );
@@ -670,7 +675,7 @@ class DaemonSession implements AgentSession {
       try {
         const reconciled = (await this.client.call(
           "admissions.reconcile",
-          { operationId: found.operationId },
+          { operationId: found.operationId, expectedScope: scopeOf(receipt) },
           this.bounded(deadline, signal),
         )) as { state?: string; result?: { state?: unknown; runId?: unknown } };
         if (reconciled.state !== "resolved" || !reconciled.result) return "pending";
@@ -721,7 +726,7 @@ class DaemonSession implements AgentSession {
       workflowId: receipt.binding.workflowId,
       vars: { [this.options.agent.promptVar ?? "prompt"]: task },
       idempotencyKey: receipt.key,
-      expectedScope: { workspaceId: receipt.binding.workspaceId, principalId: receipt.binding.principalId },
+      expectedScope: scopeOf(receipt),
     };
     const admitted = (runId: string) => this.store({ ...receipt, state: "admitted", remoteRunId: runId });
     for (let attempt = 0; ; attempt++) {
@@ -746,7 +751,7 @@ class DaemonSession implements AgentSession {
           const method = answer.state === "recoverable-failure" ? "admissions.reconcile" : "admissions.get";
           const settled = (await this.client.call(
             method,
-            { operationId: answer.operationId },
+            { operationId: answer.operationId, expectedScope: scopeOf(receipt) },
             this.bounded(deadline, signal),
           )) as { state: string; result?: unknown };
           // The retained result carries no operation id; the receipt's is the same operation.

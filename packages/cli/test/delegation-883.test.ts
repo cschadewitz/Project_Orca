@@ -13,10 +13,10 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { connect, createServer, type Server, type Socket } from "node:net";
-import { tmpdir, userInfo } from "node:os";
+import { hostname, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AgentSpecSchema, isOrcaError } from "@orca/core";
@@ -389,6 +389,28 @@ edges:
     try {
       const run = await finished(parent, await admit(parent, "delegate", { city: "Elsewhere" }));
       expect(run).toMatchObject({ status: "failed", error: { code: "DELEGATION_REFUSED" } });
+    } finally {
+      writeFileSync(file, good, { mode: 0o600 });
+    }
+    expect(((await call(remote, "runs.list", {})).runs as unknown[]).length).toBe(before);
+  }, 120_000);
+
+  it("refuses a route other than the enrolled one before using the credential", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const file = enrollmentPath();
+    const good = await readFile(file, "utf8");
+    const before = ((await call(remote, "runs.list", {})).runs as unknown[]).length;
+    // Same pinned host, another daemon port: as a config edit would retarget it.
+    const record = JSON.parse(good) as { route: { remotePort: number } };
+    writeFileSync(file, JSON.stringify({ ...record, route: { ...record.route, remotePort: remote.port + 1 } }), {
+      mode: 0o600,
+    });
+    try {
+      const run = await finished(parent, await admit(parent, "delegate", { city: "Elsewhere" }));
+      expect(run).toMatchObject({
+        status: "failed",
+        error: { code: "DELEGATION_REFUSED", message: expect.stringContaining("different address, port or jump host") },
+      });
     } finally {
       writeFileSync(file, good, { mode: 0o600 });
     }
@@ -849,6 +871,33 @@ describe("delegation through a proxy the test controls (#883)", () => {
       result: { state: "absent" },
     });
   }, 60_000);
+
+  it("breaks a receipt lock only when its owner is provably gone", () => {
+    const receipts = new DelegationReceipts(join(work, "receipts-lock"));
+    const base = {
+      profile: "direct",
+      binding,
+      parentRunId: "run_lock",
+      delegationId: "run_lock_step1",
+      generation: 0,
+      key: delegationKey("run_lock", "run_lock_step1", 0),
+      state: "submitting" as const,
+    };
+    const first = receipts.write(base);
+    const lock = `${join(
+      receipts.dir,
+      readdirSync(receipts.dir).find((n) => n.endsWith(".json"))!,
+    )}.lock`;
+    // A lock held by a live process (this host's init) is never broken: the writer gives up.
+    writeFileSync(lock, JSON.stringify({ token: "other", pid: 1, host: hostname() }));
+    expect(() => receipts.write({ ...first, state: "admitted", remoteRunId: "run_a" })).toThrow(ReceiptConflict);
+    expect(readFileSync(lock, "utf8")).toContain('"other"');
+    // One whose process is gone is set aside, and the write goes through.
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" });
+    writeFileSync(lock, JSON.stringify({ token: "gone", pid: Number(dead.stdout), host: hostname() }));
+    expect(receipts.write({ ...first, state: "admitted", remoteRunId: "run_a" })).toMatchObject({ revision: 1 });
+    expect(existsSync(lock)).toBe(false);
+  }, 30_000);
 
   it("keys each generation of a delegation to its own remote admission", () => {
     expect(delegationKey("r", "d", 0)).not.toBe(delegationKey("r", "d", 1));

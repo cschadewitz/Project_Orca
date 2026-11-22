@@ -152,6 +152,18 @@ async function until(what: string, ok: () => boolean): Promise<void> {
   throw new Error(`timed out waiting for ${what}`);
 }
 
+/**
+ * The dead interpreter was inside a step that may have acted. A successor refuses to run it
+ * again, writing nothing, until an operator reviews it (#357).
+ */
+async function reviewInterrupted(orchestrator: Orchestrator, runId: string): Promise<void> {
+  const before = await orchestrator.events(runId);
+  await expect(orchestrator.run(runId)).rejects.toMatchObject({ code: "EFFECT_REVIEW_REQUIRED" });
+  expect(await orchestrator.events(runId)).toEqual(before);
+  const state = await orchestrator.getState(runId);
+  await orchestrator.reviewEffect(runId, state.stepOrder.at(-1)!, "run-again");
+}
+
 describe("run leases", () => {
   it("persistent renewal errors stop execution at TTL without corrupting the successor's log", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -165,6 +177,7 @@ describe("run leases", () => {
     await vi.advanceTimersByTimeAsync(21);
     expect(first.logged.filter((line) => line === "run lease lost; stopping this interpreter")).toHaveLength(1);
     const successor = make(stores, noWait);
+    await reviewInterrupted(successor.orchestrator, runId);
     expect((await successor.orchestrator.run(runId)).run.status).toBe("completed");
     const events = await stores.events.read(runId);
     g.release();
@@ -183,6 +196,7 @@ describe("run leases", () => {
     await g.entered;
     const successor = make(stores, noWait);
     await successor.orchestrator.breakLease(runId, { force: true });
+    await reviewInterrupted(successor.orchestrator, runId);
     await successor.orchestrator.run(runId);
     const events = await stores.events.read(runId);
     g.release();
@@ -245,6 +259,8 @@ describe("run leases", () => {
     await new Promise((r) => setTimeout(r, 60));
     const second = make(first.stores, noWait);
     expect((await second.orchestrator.listLeases())[0]!.lapsed).toBe(true);
+    // Taking the run over is silent; running its interrupted step again is not (#357).
+    await reviewInterrupted(second.orchestrator, runId);
     expect((await second.orchestrator.run(runId)).run.status).toBe("completed");
     expect(await first.stores.leases.list()).toEqual([]);
   });

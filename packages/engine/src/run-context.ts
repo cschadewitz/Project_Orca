@@ -214,6 +214,16 @@ export class RunContext {
     // The returned event is public; the interpreter keeps its exact authoritative payload.
     applyEvent(this.state, { ...e, payload: input.payload } as OrcaEvent);
     applyEvent(this.publicProjection, e);
+    // A turn record is the evidence that a prompt may have been sent, and the prompt goes out
+    // right after it: it must survive a crash or power loss first, or a lost record would
+    // let a step that acted look as if it never had (#357). A store that cannot sync an exact
+    // event cannot carry that evidence, so the prompt is not sent. The record is applied first:
+    // it is in the log either way, so a failed sync never lets this attempt look undispatched.
+    if (e.type === "agent.turn.started") {
+      if (!this.deps.stores.events.synchronizeEvent)
+        throw new OrcaError("NOT_SUPPORTED", "this event store cannot make an agent turn durable before it is sent");
+      await this.deps.stores.events.synchronizeEvent(e);
+    }
     if (BRANCH_EVENTS.has(e.type)) await this.syncWorkItemsOwned();
     return e;
   }

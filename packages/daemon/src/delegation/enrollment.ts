@@ -45,10 +45,47 @@ import {
 } from "@orca/protocol/remote-access";
 import { RemoteDaemonClient } from "./remote-client.js";
 
+/**
+ * The route a remote was enrolled over: where ssh goes (and through which jump host) and which
+ * daemon port and server it reaches there. A session over any other route is refused before
+ * the bearer is used, even on the same pinned host.
+ */
+export const EnrolledRouteSchema = z
+  .object({
+    destination: z.string().min(1),
+    sshPort: z.number().int().nullable(),
+    jump: z
+      .object({ destination: z.string().min(1), sshPort: z.number().int().nullable() })
+      .strict()
+      .nullable(),
+    remotePort: z.number().int().nullable(),
+    serverCommand: z.string().nullable(),
+    serverConfig: z.string().nullable(),
+  })
+  .strict();
+export type EnrolledRoute = z.infer<typeof EnrolledRouteSchema>;
+
+/** A profile's route, as enrollment records and sessions compare it. */
+export function routeOf(profile: ConnectionProfile): EnrolledRoute {
+  return {
+    destination: profile.destination,
+    sshPort: profile.sshPort ?? null,
+    jump: profile.jump ? { destination: profile.jump.destination, sshPort: profile.jump.sshPort ?? null } : null,
+    remotePort: profile.remotePort ?? null,
+    serverCommand: profile.serverCommand ?? null,
+    serverConfig: profile.serverConfig ?? null,
+  };
+}
+
+export function sameRoute(a: EnrolledRoute, b: EnrolledRoute): boolean {
+  return JSON.stringify(EnrolledRouteSchema.parse(a)) === JSON.stringify(EnrolledRouteSchema.parse(b));
+}
+
 export const EnrollmentSchema = z
   .object({
     version: z.literal(1),
     profile: z.string().min(1),
+    route: EnrolledRouteSchema,
     /** `SshTunnel.pinnedKeys` after the enrolling connect: the server's (and jump host's) keys. */
     keys: z.string().min(1),
     workspaceId: z.string().min(1),
@@ -243,6 +280,7 @@ export async function enrollRemote(options: EnrollOptions): Promise<Enrollment> 
     const record: Enrollment = {
       version: 1,
       profile: id,
+      route: routeOf(options.profile),
       keys,
       workspaceId: discovery.target.workspaceId,
       principalId: discovery.principalId,

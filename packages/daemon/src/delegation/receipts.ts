@@ -38,6 +38,7 @@ import {
   fsyncSync,
   mkdirSync,
   openSync,
+  linkSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -45,6 +46,7 @@ import {
   statSync,
   writeSync,
 } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -100,6 +102,52 @@ function pause(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** Set aside a lock whose owner is provably gone; leave every other lock alone. */
+function breakIfAbandoned(file: string): void {
+  let text: string;
+  let modified: number;
+  try {
+    text = readFileSync(file, "utf8");
+    modified = statSync(file).mtimeMs;
+  } catch {
+    return;
+  }
+  let owner: { pid?: unknown; host?: unknown } | undefined;
+  try {
+    owner = JSON.parse(text) as { pid?: unknown; host?: unknown };
+  } catch {
+    owner = undefined;
+  }
+  const abandoned =
+    owner && typeof owner.pid === "number"
+      ? owner.host === hostname() && owner.pid !== process.pid && !alive(owner.pid)
+      : Date.now() - modified > LOCK_STALE_MS;
+  if (!abandoned) return;
+  // Move it aside atomically, then make sure it is the lock that was judged; a lock taken in
+  // between goes back where it was.
+  const aside = `${file}.${randomUUID()}.abandoned`;
+  try {
+    renameSync(file, aside);
+  } catch {
+    return;
+  }
+  try {
+    if (readFileSync(aside, "utf8") !== text) linkSync(aside, file);
+  } catch {
+    // Put back if it could be; a lock that cannot be restored was a new one the owner re-takes.
+  }
+  rmSync(aside, { force: true });
+}
+
 export class DelegationReceipts {
   constructor(readonly dir: string) {}
 
@@ -150,24 +198,40 @@ export class DelegationReceipts {
     }
   }
 
-  /** An exclusive lock file beside the receipt; one left by a dead writer goes stale. */
+  /**
+   * An exclusive lock file beside the receipt, naming its owner (a random token, this process
+   * and host). Released only by its owner, and only while it still holds the owner's token. A
+   * lock is broken only when its owner is provably gone: a process on this host that no longer
+   * exists, or a lock that never got its owner written and is older than `LOCK_STALE_MS`.
+   */
   private lock(target: string): () => void {
     const file = `${target}.lock`;
+    const body = JSON.stringify({ token: randomUUID(), pid: process.pid, host: hostname() });
     const until = Date.now() + LOCK_WAIT_MS;
     for (;;) {
+      let fd: number;
       try {
-        closeSync(openSync(file, "wx", 0o600));
-        return () => rmSync(file, { force: true });
+        fd = openSync(file, "wx", 0o600);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        try {
-          if (Date.now() - statSync(file).mtimeMs > LOCK_STALE_MS) rmSync(file, { force: true });
-        } catch {
-          // Gone already.
-        }
+        breakIfAbandoned(file);
         if (Date.now() > until) throw new ReceiptConflict();
         pause(10);
+        continue;
       }
+      try {
+        writeSync(fd, body);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      return () => {
+        try {
+          if (readFileSync(file, "utf8") === body) rmSync(file);
+        } catch {
+          // Already gone; nothing of ours to remove.
+        }
+      };
     }
   }
 

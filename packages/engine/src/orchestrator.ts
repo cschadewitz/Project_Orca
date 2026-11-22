@@ -22,7 +22,10 @@ import { applyModel, currentModel, selectedModel } from "./session-model.js";
 import {
   describeError,
   evaluateCondition,
+  effectAbandoned,
   evaluateExpression,
+  mayHaveActed,
+  needsEffectReview,
   newId,
   OrcaError,
   outgoing,
@@ -44,6 +47,7 @@ import {
   type AgentSelector,
   type AgentSpec,
   type CapabilityScope,
+  type EffectReviewDecision,
   type Artifact,
   type ArtifactRef,
   type RunOverrides,
@@ -326,6 +330,29 @@ function inlineDefinition(
     edges: graph.edges,
     ...(capabilities ? { capabilities } : {}),
   };
+}
+
+/**
+ * Refuse to re-attempt a run's last step when it may have acted and nobody has reviewed it, or an
+ * operator abandoned it (#357). An abandon decision is a denial on its own: it holds even when
+ * the cancellation that should follow it never landed.
+ */
+function assertLastStepReviewed(state: RunState): void {
+  const last = state.steps[state.stepOrder.at(-1) ?? ""];
+  if (last && effectAbandoned(last))
+    throw new OrcaError(
+      "EFFECT_ABANDONED",
+      `step '${last.nodeId}' (${last.id}) of run ${state.run.id} was abandoned after side-effect review and must not run again. ` +
+        `Record the same review again to finish ending the run ('orca recovery review ${state.run.id} ${last.id} --abandon'), or start a new run.`,
+      { runId: state.run.id, stepRunId: last.id, nodeId: last.nodeId },
+    );
+  if (last && needsEffectReview(last))
+    throw new OrcaError(
+      "EFFECT_REVIEW_REQUIRED",
+      `step '${last.nodeId}' (${last.id}) of run ${state.run.id} started and never finished, and it may have changed the workspace or external systems. ` +
+        `Check what it did, then mark it to run again or abandon the run ('orca recovery review ${state.run.id} ${last.id} --run-again|--abandon').`,
+      { runId: state.run.id, stepRunId: last.id, nodeId: last.nodeId },
+    );
 }
 
 function versionCollision(def: WorkflowDefinition): OrcaError {
@@ -628,7 +655,10 @@ export class Orchestrator {
     const inflight = this.running.get(runId);
     if (inflight) return inflight;
     const release = this.runtimeActivity?.enter("execution");
-    const p = this.executeLeased(runId, recovery)
+    // Driving a run re-attaches to every unfinished run below it. Refuse before any of them is
+    // touched, rather than letting one refuse mid-way and fail the container step waiting on it.
+    const p = this.assertEffectsReviewed(runId)
+      .then(() => this.executeLeased(runId, recovery))
       .then(async () => {
         const projected = this.live.get(runId)?.publicState() ?? (await this.getState(runId));
         if (isTerminal(projected)) this.cacheTerminalState(runId, projected);
@@ -923,6 +953,117 @@ export class Orchestrator {
   }
 
   /**
+   * Record an operator's review of a step attempt that may have acted and never reported an
+   * outcome (#357). `run-again` lets resume attempt the step again; `abandon` ends the run
+   * there, cancelled, and nothing runs the step again. The same review again is a no-op, so a
+   * retried request is safe; a different decision, or a step that needs no review (it settled,
+   * parked on purpose, or was never uncertain) is refused rather than recorded.
+   */
+  async reviewEffect(
+    runId: string,
+    stepRunId: string,
+    decision: EffectReviewDecision,
+    options: { actor?: MutationActor; note?: string } = {},
+  ): Promise<RunState> {
+    if (this.running.has(runId) || this.live.has(runId))
+      throw new OrcaError("RUN_LEASED", `run ${runId} is being driven in this process; review it once it stops`, {
+        runId,
+      });
+    const holder = newId("orc", this.clock.now());
+    const lease = await this.stores.leases.acquire({
+      resource: runLeaseResource(runId),
+      holder,
+      ttlMs: this.leaseTtlMs,
+      note: "effect review",
+    });
+    if (!ownsLease(lease, holder))
+      throw new OrcaError(
+        "RUN_LEASED",
+        `run ${runId} is being interpreted by pid ${lease.pid} on ${lease.host}: review it once that stops`,
+        { runId, ...describeLease(lease) },
+      );
+    const reason = "abandoned after side-effect review";
+    let children: string[] = [];
+    try {
+      await this.stores.leases.withOwnership(lease, async () => {
+        const state = reduceRun(await this.stores.events.read(runId));
+        const step = state.steps[stepRunId];
+        if (!step) throw new OrcaError("RUN_STATE", `run ${runId} has no step run ${stepRunId}`, { runId, stepRunId });
+        const recorded = step.effectReview?.decision;
+        if (recorded !== undefined && recorded !== decision)
+          throw new OrcaError("RUN_STATE", `step run ${stepRunId} was already reviewed: ${recorded}`, {
+            runId,
+            stepRunId,
+            decision: recorded,
+          });
+        if (recorded === undefined) {
+          if (!needsEffectReview(step))
+            throw new OrcaError(
+              "RUN_STATE",
+              `step run ${stepRunId} needs no effect review: it ${step.parked ? "paused on purpose" : `is ${step.status}`}`,
+              { runId, stepRunId, status: step.status },
+            );
+          if (decision === "abandon" && isTerminal(state))
+            throw new OrcaError("RUN_STATE", `run ${runId} has already ended; there is nothing to abandon`, { runId });
+          // From this append on, the abandon decision alone refuses every execution entry
+          // (assertLastStepReviewed), even if the cancellation below never lands.
+          await this.stores.events.append({
+            type: "step.effect.reviewed",
+            runId,
+            payload: {
+              stepRunId,
+              decision,
+              ...(options.note ? { note: options.note } : {}),
+              ...(options.actor ? { actor: options.actor } : {}),
+            },
+          });
+        }
+        // The same review again records nothing new; an abandon that did not finish ending the
+        // run (a crash after the decision) finishes it here.
+        if (decision !== "abandon" || isTerminal(state)) return;
+        // End the run under the same ownership that recorded the decision, so no other
+        // interpreter can attach in between.
+        for (const open of openSteps(state))
+          await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: open.id } });
+        await this.stores.events.append({
+          type: "run.cancelled",
+          runId,
+          payload: { reason, ...(options.actor ? { actor: options.actor } : {}) },
+        });
+        children = Object.values(state.steps).flatMap((s) => s.childRunIds);
+      });
+    } finally {
+      await this.stores.leases.release(lease);
+    }
+    // The children it was waiting on, each under its own lease, as cancel does. A crash here
+    // leaves them for the same review again, or an ordinary cancel, to close.
+    for (const child of children) await this.cancel(child, reason, options.actor);
+    return this.getState(runId);
+  }
+
+  /**
+   * Every unfinished run from `rootId` down that nobody else is driving: none may hold an
+   * interrupted step nobody reviewed. Read-only; the interpreter checks again under the lease.
+   */
+  private async assertEffectsReviewed(rootId: string): Promise<void> {
+    const queue = [rootId];
+    const seen = new Set<string>();
+    while (queue.length) {
+      const id = queue.shift()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      // A run another interpreter is driving right now is that interpreter's: its open step is
+      // in flight, not interrupted, and taking the lease refuses this attach on its own.
+      const lease = await this.stores.leases.get(runLeaseResource(id));
+      if (lease && lease.holder !== this.leaseHolder && !lapsed(lease, this.clock.now())) continue;
+      const state = await this.getState(id);
+      if (isTerminal(state)) continue;
+      assertLastStepReviewed(state);
+      for (const step of Object.values(state.steps)) queue.push(...step.childRunIds);
+    }
+  }
+
+  /**
    * Internal durable-continuation attachment. The acknowledgement waits only for the
    * fenced durable transition, never for execution. The callback already owns the
    * mutation fence: use rc.emitOwned, not rc.emit/withOwnership or public answer/resume.
@@ -978,6 +1119,8 @@ export class Orchestrator {
         rc.leaseLost = true;
         throw new OrcaError("RUN_LEASED", "continuation execution lease was lost");
       }
+      // Every execution entry enforces the review fence, this one included (#357).
+      assertLastStepReviewed(rc.state);
       const context = rc;
       await context.withOwnership(async () => {
         const first = (await this.stores.events.readRange(runId, { limit: 1 }))[0];
@@ -1450,6 +1593,9 @@ export class Orchestrator {
       }
       // Terminal again only if it finished between the summary and here; releasing is enough.
       if (isTerminal(rc.state)) return rc.state;
+      // An interrupted step that may have acted is never attempted again on its own (#357).
+      // Refused before anything is written, so the run stays as it was for an operator.
+      assertLastStepReviewed(rc.state);
       const context = rc;
       await context.withOwnership(async () => {
         await this.liveInput?.prepareExecution?.(runId);
@@ -1620,8 +1766,24 @@ export class Orchestrator {
           return rc.state;
         }
         if (outcome.kind === "failed") {
-          const willRetry = outcome.retryable !== false && attempt < retryBudget(node);
-          await rc.emit({ type: "step.failed", payload: { stepRunId, error: outcome.error, willRetry } });
+          // A retry budget repeats an attempt only when the log durably shows it never acted
+          // outside ORCA: no agent turn was sent, and a node that leaves no such evidence said so
+          // itself. One that may have acted fails the run instead, for an operator's review (#357).
+          const step = rc.state.steps[stepRunId]!;
+          // `repeatable` permits a repeat without claiming anything about the effect: only `none`
+          // is recorded, so an attempt left over when the budget is spent still needs review.
+          const acted = mayHaveActed(outcome.effect === "none" ? { ...step, noEffect: true } : step);
+          const repeatable = outcome.effect === "repeatable" && step.dispatched !== true;
+          const willRetry = outcome.retryable !== false && attempt < retryBudget(node) && (!acted || repeatable);
+          await rc.emit({
+            type: "step.failed",
+            payload: {
+              stepRunId,
+              error: outcome.error,
+              willRetry,
+              ...(outcome.effect === "none" ? { effect: "none" as const } : {}),
+            },
+          });
           if (willRetry) {
             attempt++;
             continue;
