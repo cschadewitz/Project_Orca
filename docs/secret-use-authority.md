@@ -166,9 +166,11 @@ point where the servers are delivered or used:
    grant probes nothing (this one is a precondition, not the decision that counts);
 2. after the probe, with what it found (below);
 3. after any wait for a session slot, before the agent is spawned;
-4. immediately before `session/new` (or `session/load`) hands the initialized agent its
-   servers (`OpenSessionOptions.authorizeCapabilityDelivery`); a refusal there stops the
-   process and is not recorded against the agent's health;
+4. immediately before each request that hands the initialized agent its servers
+   (`OpenSessionOptions.authorizeCapabilityDelivery`): before `session/load`, and again
+   before a `session/new` that follows a load that failed or timed out. A refusal there
+   stops the process, is never treated as a failed load to fall back from, and is not
+   recorded against the agent's health;
 5. before every prompt of the step, on the session it opened or took from the pool. A
    pooled session refused there is closed and removed from the pool, never given to
    another step.
@@ -200,6 +202,11 @@ command, arguments and environment, with secret references as references).
   - it and every directory above it up to `/` are owned by root or by the account the agent
     runs as on that host (`id -u` there), not group- or world-writable, with no ACL (`+` in
     `ls -ldn`).
+
+  The check's own tools (`id`, `ls`) are found on a fixed `PATH=/usr/bin:/bin`, through
+  `command` so no shell function stands in, in the C locale. The server's or agent's
+  configured `PATH` is used only for the ordinary lookup of a bare name, which never
+  confers trust.
 
   The definition digest pins the command text; this policy is what makes that text name
   one program: only that host's administrator, or the agent's own account, which already

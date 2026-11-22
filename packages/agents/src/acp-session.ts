@@ -434,14 +434,15 @@ async function openPlanned(
       })),
     };
     if (opts.additionalDirectories) newSession.additionalDirectories = opts.additionalDirectories;
-    // Nothing waits between this and the request that delivers the servers.
-    await opts.authorizeCapabilityDelivery?.();
     let loaded = false;
     let continuity: SessionContinuity = { mode: "fresh", reason: "new" };
     if (opts.resumeSessionId) {
       continuity = { mode: "fresh", reason: "load-unsupported" };
       if (init.agentCapabilities?.loadSession) {
         const timeoutFailure = opts.requireContextRecovery ? contextRecoveryFailure("load-timeout") : undefined;
+        // Outside the `try`: a denial is the open's failure, never a failed load to fall back from.
+        // Nothing waits between this and the request that delivers the servers.
+        await opts.authorizeCapabilityDelivery?.();
         try {
           const restored = await withTimeout(
             conn.agent.request(acp.methods.agent.session.load, { ...newSession, sessionId: opts.resumeSessionId }),
@@ -463,6 +464,8 @@ async function openPlanned(
       } else if (opts.requireContextRecovery) throw contextRecoveryFailure("load-unsupported");
     }
     if (!loaded) {
+      // Asked again here: a `session/load` that failed or timed out may have taken a while.
+      await opts.authorizeCapabilityDelivery?.();
       const created = await withTimeout(
         conn.agent.request(acp.methods.agent.session.new, newSession),
         handshakeTimeout,
