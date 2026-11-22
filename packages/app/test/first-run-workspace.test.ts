@@ -559,11 +559,10 @@ it("preflight evidence for another token cannot revoke an existing exact claim",
   await f.workspace.close();
 });
 
-it("hands the stopped daemon's store off only after the exact stop, once, and withdraws it on non-launch (#897)", async () => {
+it("hands the stopped daemon's store off only after the exact stop, once, and never deletes it itself (#897)", async () => {
   const receipt = { reservationId: "receipt" } as unknown as UpdateHandoff;
   const handOffStore = vi.fn(() => receipt);
-  const withdrawHandoff = vi.fn(() => true);
-  const f = rig({ handOffStore, withdrawHandoff });
+  const f = rig({ handOffStore });
   (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
   vi.spyOn(f.workspace.client, "maintenance").mockResolvedValue({ ready: true, active: [] });
   await expect(f.workspace.handOffForUpdate("owner", "0.8.0", "0.9.0")).rejects.toThrow("not prepared");
@@ -575,9 +574,9 @@ it("hands the stopped daemon's store off only after the exact stop, once, and wi
   await f.workspace.handOffForUpdate("owner", "0.8.0", "0.9.0");
   expect(handOffStore).toHaveBeenCalledExactlyOnceWith(selectedPath, "0.8.0", "0.9.0");
   await expect(f.workspace.handOffForUpdate("owner", "0.8.0", "0.9.0")).rejects.toThrow("not available");
-  // The installer never ran: the handoff goes before any recovery is attempted.
+  // The installer never ran: recovery proceeds, and the record is left for the recovered
+  // daemon to spend under its own fence (packages/app/test/store-carryover).
   await expect(f.workspace.cancelUpdate("owner")).rejects.toThrow();
-  expect(withdrawHandoff).toHaveBeenCalledExactlyOnceWith(selectedPath, receipt);
   await f.workspace.close();
 });
 

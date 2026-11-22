@@ -17,7 +17,7 @@ import { serverKey } from "./remote-credentials.js";
 import type { RemoteCommand } from "@orca/protocol/remote-access";
 import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
-import { handOffStoreForUpdate, withdrawUpdateHandoff } from "./first-run/update-handoff.js";
+import { handOffStoreForUpdate } from "./first-run/update-handoff.js";
 import type { UpdateHandoff } from "@orca/protocol/update-handoff";
 import {
   MAINTENANCE_RUNTIME_METHOD,
@@ -77,7 +77,7 @@ interface WindowsUpdateAttempt {
   storeDir: string | undefined;
   target: WorkspaceTarget;
   stopAttempted: boolean;
-  /** The store handoff written for the version being installed, kept to withdraw exactly it (#897). */
+  /** The store handoff written for the version being installed, once per attempt (#897). */
   handedOff: UpdateHandoff | undefined;
   recovering: boolean;
   busy: boolean;
@@ -149,7 +149,6 @@ export interface WorkspaceDeps {
   setupBusy?: () => boolean;
   /** Injected for tests; default to the first-run journal's update handoff (#897). */
   handOffStore?: (path: string, from: string, to: string) => UpdateHandoff;
-  withdrawHandoff?: (path: string, issued: UpdateHandoff) => boolean;
   /** Saved-receipt verification must bind this exact path before requesting its candidate. */
   recoverFirstRun?: (
     path: string,
@@ -1258,11 +1257,10 @@ export class Workspace {
         }
       } else if (attempt.daemon) {
         if (attempt.daemon.exited !== true) throw new Error("Exact child termination is uncertain");
-        // Nothing was installed: the store goes back to this version, so its handoff is withdrawn.
-        if (attempt.handedOff && attempt.firstRun) {
-          (this.deps.withdrawHandoff ?? withdrawUpdateHandoff)(attempt.firstRun.path, attempt.handedOff);
-          attempt.handedOff = undefined;
-        }
+        // Nothing was installed. The handoff stays on disk, inert: the recovered daemon's claim
+        // follows the stopped one, so it spends the record under its own fence, and its version
+        // is not the one the record names, so it never carries under it (#897).
+        attempt.handedOff = undefined;
         attempt.ownership?.check();
         if (attempt.ownership && !attempt.ownership.complete()) throw new FirstRunOwnershipRefusal();
         // The old captured child is now settled. Generic reconnect cannot authorize a new writer.
