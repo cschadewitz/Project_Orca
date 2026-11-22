@@ -129,7 +129,9 @@ class AutoUpdateTests(unittest.TestCase):
         self.calls = []
         self.deployment.inspect_processes = lambda: 42
         self.deployment.systemctl = lambda *args: self.calls.append(args)
-        self.deployment.health = lambda path: self.calls.append(("health", path.name))
+        self.deployment.health = lambda path, **_: self.calls.append(("health", path.name))
+        self.identity = {"pid": 42, "invocation": "i1", "restarts": "0", "started": "100", "boot": "b"}
+        self.deployment.service_identity = lambda: dict(self.identity)
         self.deployment.barrier = lambda action, token: self.calls.append((action,))
         self.files = bundle_files("0.8.1")
         self.offer = channel_text("0.8.1", self.files)
@@ -252,7 +254,7 @@ class AutoUpdateTests(unittest.TestCase):
 
     def test_a_broken_build_is_rolled_back_before_admission_reopens(self):
         settled = 0
-        def health(path):
+        def health(path, **_):
             nonlocal settled
             if path.name == "v0.8.1":
                 settled += 1
@@ -283,6 +285,69 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(self.run_check(), (False, "blocked"))
         with self.assertRaisesRegex(RuntimeError, "pending"):
             self.deployment.launch("cli", ["run"])
+
+    def test_the_settled_check_holds_to_the_process_that_passed(self):
+        pids = []
+        self.deployment.health = lambda path, pid=None: (pids.append(pid), self.calls.append(("health", path.name)))
+        identities = iter([dict(self.identity), {**self.identity, "invocation": "i2", "restarts": "1"}])
+        self.deployment.service_identity = lambda: next(identities)
+        # A supervisor restart between the probes: the restarted daemon answers healthy hellos,
+        # but it is not the process that passed, so it is rolled back before admission reopens.
+        self.assertEqual(self.run_check(), (False, "rolled-back"))
+        self.assertIn("restarted while settling (invocation, restarts changed)", self.status()["detail"])
+        self.assertEqual(self.current(), "v0.8.0")
+        self.assertEqual(pids[2:4], [42, 42])
+        self.assertNotIn("resume", [c[0] for c in self.calls][:-1])
+
+    def test_service_identity_reads_the_unit_invocation_process_start_and_boot(self):
+        shown = f"MainPID={os.getpid()}\nInvocationID=abc\nNRestarts=2\n"
+        self.deployment.systemctl = lambda *args: shown
+        identity = release.Deployment.service_identity(self.deployment)
+        stat = Path(f"/proc/{os.getpid()}/stat").read_text()
+        self.assertEqual(identity, {"pid": os.getpid(), "invocation": "abc", "restarts": "2",
+                                    "started": stat[stat.rindex(")") + 2:].split()[19],
+                                    "boot": Path("/proc/sys/kernel/random/boot_id").read_text().strip()})
+        for shown in ("MainPID=0\nInvocationID=abc\n", f"MainPID={os.getpid()}\nInvocationID=\n"):
+            with self.assertRaisesRegex(RuntimeError, "no running main process"):
+                release.Deployment.service_identity(self.deployment)
+
+    def test_a_failure_removing_the_journal_is_its_own_outcome(self):
+        sync = release.sync_dir
+        failed = []
+        def flaky(path):
+            # The journal is already unlinked; syncing its directory fails once.
+            if ("resume",) in self.calls and not self.deployment.pending.exists() and not failed:
+                failed.append(path)
+                raise OSError(5, "Input/output error")
+            sync(path)
+        with patch.object(release, "sync_dir", flaky):
+            self.assertEqual(self.run_check(), (False, "finalize-failed"))
+        self.assertTrue(failed)
+        self.assertEqual(self.current(), "v0.8.1")
+        # Written again durably before it is claimed: launches and updates stay blocked.
+        journal = json.loads(self.deployment.pending.read_text())
+        self.assertIn("Input/output error", journal["finalizeFailed"])
+        self.assertTrue(journal["opened"])
+        self.assertIn("written again durably", self.status()["detail"])
+        self.assertNotIn("rolled back", self.status()["detail"])
+        self.assertEqual(self.run_check(), (False, "blocked"))
+
+    def test_a_journal_that_cannot_be_written_again_is_reported_as_unknown(self):
+        sync, write = release.sync_dir, release.write_json
+        failed = []
+        def flaky(path):
+            if ("resume",) in self.calls and not self.deployment.pending.exists() and not failed:
+                failed.append(path)
+                raise OSError(5, "Input/output error")
+            sync(path)
+        def refuse_rewrite(path, value):
+            if "finalizeFailed" in value:
+                raise OSError(28, "No space left on device")
+            write(path, value)
+        with patch.object(release, "sync_dir", flaky), patch.object(release, "write_json", refuse_rewrite):
+            self.assertEqual(self.run_check(), (False, "finalize-failed"))
+        self.assertIn("survives a restart is unknown", self.status()["detail"])
+        self.assertEqual(self.current(), "v0.8.1")
 
     def test_a_store_format_change_is_never_activated_unattended(self):
         self.epoch = "v2"

@@ -513,6 +513,10 @@ class FeedStopped(RuntimeError):
     """The feed's servers' stop switch (rings.json serverStop): nothing may be activated."""
 
 
+class ActivationFinalizeFailed(RuntimeError):
+    """Admission reopened on the new release, but removing the activation journal failed."""
+
+
 class AutoRollbackRefused(RuntimeError):
     """A failure after admission reopened: the candidate may already hold newer work."""
 
@@ -706,7 +710,7 @@ class Deployment(BundleSource):
 
     def health(self, release, url=None, pid=None, token_file=None):
         meta = metadata(release)
-        if url is None:
+        if url is None and pid is None:
             pid = int(self.systemctl("show", self.config["service"], "--property=MainPID", "--value"))
         last = None
         for _ in range(20):
@@ -889,11 +893,55 @@ class Deployment(BundleSource):
             raise RuntimeError("Managed daemon lacks the persistent admission guard; migrate its launcher first")
         return service_pid
 
+    def service_identity(self):
+        """Which service process runs now: its PID, the unit's invocation (new on every start or
+        supervisor restart), the process's start time (against PID reuse) and the boot."""
+        shown = self.systemctl("show", self.config["service"], "--property=MainPID,InvocationID,NRestarts")
+        fields = dict(line.split("=", 1) for line in (shown or "").splitlines() if "=" in line)
+        pid = int(fields.get("MainPID") or 0)
+        if pid <= 0 or not fields.get("InvocationID"):
+            raise RuntimeError("The service has no running main process to hold to")
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        started = stat[stat.rindex(")") + 2:].split()[19]
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        return {"pid": pid, "invocation": fields["InvocationID"], "restarts": fields.get("NRestarts"),
+                "started": started, "boot": boot}
+
     def smoke(self, candidate):
-        """After the first good hello, and before admission reopens: the daemon must still be
-        the same healthy process a moment later (a crash loop or a late failure shows here)."""
+        """After the first good hello, and before admission reopens: the very same service
+        process (PID, invocation, start time, boot) must answer a healthy hello now and again
+        after `settle` seconds. A supervisor restart in between is a failure, even if the
+        restarted daemon is healthy: a crash loop or a late failure shows here."""
+        before = self.service_identity()
+        self.health(candidate, pid=before["pid"])
         time.sleep(getattr(self, "settle", 0))
-        self.health(candidate)
+        self.health(candidate, pid=before["pid"])
+        after = self.service_identity()
+        if after != before:
+            changed = ", ".join(key for key in before if before[key] != after.get(key))
+            raise RuntimeError(f"The service was restarted while settling ({changed} changed); not the process that passed")
+
+    def finish_activation(self, record):
+        """Remove the activation journal once admission reopened. A failure here is its own
+        outcome: the journal is written again durably (it blocks launches and updates until
+        recover) before that is claimed, and if even that fails, the report says it is unknown."""
+        try:
+            self.typed_dispatch(self.pending.unlink)
+            self.typed_dispatch(sync_dir, self.root)
+            return
+        except Exception as error:
+            failure = error
+        version = metadata(Path(record["candidate"]))["version"]
+        try:
+            self.typed_dispatch(write_json, self.pending, {**record, "finalizeFailed": str(failure)})
+        except Exception as keep_error:
+            raise ActivationFinalizeFailed(
+                f"{version} is active and admission reopened, but removing the activation journal failed ({failure})"
+                f" and it could not be written again ({keep_error}): whether {self.pending} survives a restart is"
+                " unknown. Check it: while it exists, launches and updates are blocked until recover") from failure
+        raise ActivationFinalizeFailed(
+            f"{version} is active and admission reopened, but removing the activation journal failed ({failure});"
+            f" it was written again durably, so launches and updates are blocked. Inspect it, then run recover") from failure
 
     @typed_operation("update")
     def activate(self, candidate, auto=False):
@@ -935,8 +983,6 @@ class Deployment(BundleSource):
                 record["opened"] = True
                 self.typed_dispatch(write_json, self.pending, record)
                 self.barrier("resume", token)
-                self.typed_dispatch(self.pending.unlink)
-                self.typed_dispatch(sync_dir, self.root)
             except Exception as error:
                 if auto and record["opened"]:
                     # Admission reopened (or its resume is uncertain), so the new release may
@@ -953,6 +999,8 @@ class Deployment(BundleSource):
                         f" automatically; {closed}. Inspect it, then run recover: {error}") from error
                 self.restore(record)
                 raise RuntimeError(f"Activation failed; previous release restored and healthy: {error}") from error
+            # Resume succeeded: the activation is done; only the journal's removal remains.
+            self.finish_activation(record)
 
     @typed_operation("rollback")
     def restore(self, record):
@@ -1137,6 +1185,8 @@ class Deployment(BundleSource):
             self.activate(candidate, auto=True)
         except AutoRollbackRefused as error:
             return finish("failed-not-rolled-back", str(error), False)
+        except ActivationFinalizeFailed as error:
+            return finish("finalize-failed", str(error), False)
         except RuntimeError as error:
             message = str(error)
             if message.startswith(("Daemon busy:", "Unmanaged ORCA process blocks activation", "Busy: ")):

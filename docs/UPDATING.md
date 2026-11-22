@@ -704,8 +704,12 @@ A run does the following:
    gives `stopped`, quiet hours defer, and an offer that is gone or differs in any byte gives
    `withdrawn` (exit 0); the staged release is kept, and nothing is activated.
 6. Activates through the [normal update](#normal-update) path, with closed admission, the
-   exact version/protocol/capability hello, and a second hello after `settleSeconds` from
-   the same service process, all before admission reopens.
+   exact version/protocol/capability hello, and a second hello after `settleSeconds`, all
+   before admission reopens. Both settled hellos must come from the very same service
+   process: its PID, the unit's invocation ID (new on every start, including a supervisor
+   restart), the process's start time and the boot are recorded before the first and must
+   be unchanged after the second. A restart while settling is a failure even if the
+   restarted daemon answers healthy hellos, so it is rolled back.
    - **Work is never cancelled.** Active daemon work, open CLI/ACP processes or quiet hours
      **defer** the activation (exit 0, retried next run). Past `maxDeferralHours` the run
      reports `overdue` with a nonzero exit, so the failed unit shows in `systemctl --user
@@ -718,6 +722,11 @@ A run does the following:
      baseline). The run closes admission again if the daemon allows it, keeps the
      activation journal (which blocks launches and further updates), and reports
      `failed-not-rolled-back`. Inspect it, then run `recover`.
+   - **Removing the activation journal can fail on its own** (`finalize-failed`, nonzero
+     exit): the new release is active and admission is open. The journal is then written
+     again durably, so launches and updates stay blocked until you inspect it and run
+     `recover`. Only if even that write fails does the report say so: whether the journal
+     survives a restart is then unknown, so check it.
    - **A release with another store epoch is never activated unattended** (`refused`). Use
      the [documented migration](#recovery-and-store-compatibility).
 7. After a successful update, keeps exactly two complete releases (the new `current` and
@@ -727,8 +736,8 @@ A run does the following:
 Every run writes its outcome to `auto-update.json` in the deployment root and to the
 journal (`journalctl --user -u orca-auto-update`). The file records the time, `current`,
 the offered version, the outcome (`none`, `current`, `updated`, `deferred`, `overdue`,
-`stopped`, `withdrawn`, `rolled-back`, `failed-not-rolled-back`, `refused`, `blocked` or
-`failed`) and a detail line. The feed's pause switch (`ORCA_FEED_PAUSE`) stops new versions
+`stopped`, `withdrawn`, `rolled-back`, `failed-not-rolled-back`, `finalize-failed`,
+`refused`, `blocked` or `failed`) and a detail line. The feed's pause switch (`ORCA_FEED_PAUSE`) stops new versions
 from being offered; the servers' stop switch also stops servers acting on what they were
 offered before. To stop one server's updates, create `auto-update.stop` in its deployment
 root (remove it to resume), or run `systemctl --user disable --now orca-auto-update.timer`.
