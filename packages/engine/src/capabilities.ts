@@ -195,7 +195,7 @@ export function readSkillFiles(
     if (named.isSymbolicLink())
       return { error: `skill '${skill.path}' contains a symbolic link, which ORCA does not follow` };
     if (options.anchored) {
-      if (process.platform === "win32")
+      if (process.platform === "win32" || O_NOFOLLOW === 0)
         return {
           error: `skill '${skill.path}' cannot be delivered from a Windows daemon: ORCA cannot read it safely there`,
         };
