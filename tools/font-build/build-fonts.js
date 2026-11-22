@@ -111,6 +111,7 @@ const SYMBOLS = chars(
 const SYMBOLS_MATH = chars(
   0x2298, // ⊘ cancelled
   0x2293, // ⊓ object kind gate
+  0x29c9, // ⧉ surface machines (#882)
 );
 
 /* ---------- what to build ---------- */

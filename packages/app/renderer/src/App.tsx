@@ -1,7 +1,7 @@
 /**
  * The window chrome: title bar, sidebar, primary pane, docked panel, status bar and the
  * command palette, per docs/design/10-information-architecture.md. Routing here is which
- * of the six surfaces (`chrome/surfaces.ts`, from `semantics.json`'s `surface` map) is
+ * of the surfaces (`chrome/surfaces.ts`, from `semantics.json`'s `surface` map) is
  * active, and what a deep link or the palette asked each one to show.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
@@ -23,6 +23,7 @@ import { CommandPalette } from "./palette/command-palette.js";
 import { useCommandPalette } from "./palette/use-command-palette.js";
 import { RunsSurface } from "./runs/runs-surface.js";
 import { AgentsSurface } from "./agents/agents-surface.js";
+import { MachinesSurface } from "./machines/machines-surface.js";
 import { ConfigProvider } from "./config/config-context.js";
 import { ConfigSurface } from "./config/config-surface.js";
 import { AttentionSurface } from "./attention/attention-surface.js";
@@ -228,7 +229,10 @@ export function App(): JSX.Element {
     useCallback(
       (activation: AlertActivation) => {
         const item = activation.item;
-        if (item?.inputId) navigate(gateUrl(item.inputId));
+        // An alert from a machine that is not focused cannot open a route here: every route
+        // reads the focused daemon. Machines is where that machine's work is (#882).
+        if (item?.machine && !item.machine.focused) selectSurface("machines");
+        else if (item?.inputId) navigate(gateUrl(item.inputId));
         else if (item?.runId) navigate(runUrl(item.runId));
         else selectSurface("attention");
       },
@@ -379,6 +383,13 @@ export function App(): JSX.Element {
                 ? { launch: <GuidedLaunchRoute onConfiguration={() => navigate(configUrl())} onClose={closeLaunch} /> }
                 : {})}
               {...(route?.kind === "config" ? { open: route.document } : {})}
+            />
+          ) : activeSurface.id === "machines" ? (
+            /* Every daemon at once (#882). Only the focused one's objects open, through the
+               same route table as everywhere else; the rest are read-only rows. */
+            <MachinesSurface
+              onOpenRun={(runId) => navigate(runUrl(runId))}
+              onOpenInput={(inputId) => navigate(gateUrl(inputId))}
             />
           ) : (
             <StateView kind="empty" title={activeSurface.label} body="This surface has not been built yet." />

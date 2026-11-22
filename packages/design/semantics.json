@@ -142,6 +142,11 @@
       "word": "Config",
       "glyph": "❋",
       "note": "Radial, in the place a cog would sit: U+2699 is in no OFL face ORCA bundles, so a cog here would be the OS's drawing on every platform."
+    },
+    "machines": {
+      "word": "Machines",
+      "glyph": "⧉",
+      "note": "Two joined squares: more than one machine, seen together (#882). Last in the rail so no existing shortcut moves. From the Math face, like the gate's ⊓."
     }
   },
   "objectKind": {

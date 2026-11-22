@@ -16,7 +16,7 @@
  * repo-wide and forbids `import … from` in a file that emits CommonJS, so the value import
  * is written in the form the emit actually has; the type imports are erased either way.
  */
-import type { DaemonTargetSnapshot, ProfileResult, RemoteProfileView } from "../daemon-connection.js";
+import type { DaemonTargetSnapshot, FleetSnapshot, ProfileResult, RemoteProfileView } from "../daemon-connection.js";
 // A CommonJS file under `verbatimModuleSyntax` has no other way to spell a value import,
 // and emitting CommonJS is the whole point of this file — see the header.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -220,6 +220,17 @@ const bridge: OrcaBridge = {
         ipcRenderer.invoke("orca:profiles.importCredential", id) as Promise<ProfileResult<RemoteProfileView | null>>,
       forgetHostKey: (id) =>
         ipcRenderer.invoke("orca:profiles.forgetHostKey", id) as Promise<ProfileResult<RemoteProfileView>>,
+    },
+    fleet: {
+      read: () => ipcRenderer.sendSync("orca:fleet.read") as FleetSnapshot,
+      subscribe: (listener) => {
+        const forward = (_event: unknown, snapshot: FleetSnapshot) => listener(snapshot);
+        ipcRenderer.on("orca:fleet", forward);
+        return () => {
+          ipcRenderer.off("orca:fleet", forward);
+        };
+      },
+      watch: (id, watched) => ipcRenderer.invoke("orca:fleet.watch", id, watched) as Promise<ProfileResult<null>>,
     },
   },
   updates: {

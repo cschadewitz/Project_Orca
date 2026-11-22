@@ -558,3 +558,20 @@ describe("saved profile preference", () => {
     expect(file.read().daemonProfile).toBeUndefined();
   });
 });
+
+describe("watched profiles preference (#882)", () => {
+  it("is main-only, survives a renderer patch and a focus change, and refuses junk", () => {
+    const file = new PreferencesFile(join(mkdtempSync(join(tmpdir(), "orca-prefs-")), "preferences.json"));
+    file.saveWatchedProfiles(["lab", "build-box", "lab"]);
+    expect(file.read().watchedProfiles).toEqual(["lab", "build-box"]);
+    // A renderer patch cannot name it, and writing anything else keeps it.
+    file.write({ theme: "dark", watchedProfiles: ["evil"] });
+    expect(file.read().watchedProfiles).toEqual(["lab", "build-box"]);
+    // Focusing a profile is a separate choice from watching one.
+    file.saveDaemonProfile("lab");
+    expect(file.read().watchedProfiles).toEqual(["lab", "build-box"]);
+    expect(() => file.saveWatchedProfiles(["../etc"])).toThrow();
+    file.saveWatchedProfiles([]);
+    expect(file.read()).not.toHaveProperty("watchedProfiles");
+  });
+});

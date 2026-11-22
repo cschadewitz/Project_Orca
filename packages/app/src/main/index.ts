@@ -85,6 +85,8 @@ import { ConnectionMachine } from "./connection-state.js";
 import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./deep-link.js";
 import { findBundledDaemon, startBundledDaemon } from "./daemon-process.js";
 import { storeRoot, Workspace } from "./workspace.js";
+import { Fleet, labelAlerts, type FleetTarget, type FocusedMachine } from "./fleet.js";
+import { MAX_WATCHED_PROFILES } from "../preferences/schema.js";
 
 // Mount synchronously before producers. Selected workspace/configuration roots are
 // enrolled before their first producer; replacement activation remains held below.
@@ -584,6 +586,137 @@ function broadcast(notification: NotificationMessage): void {
   send("orca:notification", notification);
 }
 
+/* ---------- watched machines (#882) ---------- */
+
+/**
+ * Every daemon on the Machines surface that is not the focused one: saved profiles a person
+ * chose to watch, and the bundled daemon the workspace parked when focus moved elsewhere.
+ * Each has its own client, stream and credential and is only ever read (`./fleet.ts`);
+ * writes go to the focused daemon alone, through the workspace. Declared before the
+ * connection machine and the workspace because both tell it when focus or state changes;
+ * its own dependencies are read at call time.
+ */
+const fleet = new Fleet({
+  open: async (target, hooks) => {
+    if (target.kind === "profile") {
+      const lease = await remoteProfiles.open(target.id);
+      try {
+        const reader = new DaemonClient(daemonEndpoint(lease.url), lease.transport.fetch, {
+          socket: lease.transport.socket,
+          requireAuthentication: true,
+          auth: lease.auth,
+          onHello: hooks.onHello,
+        });
+        return {
+          client: reader,
+          explainFailure: () =>
+            lease.remoteRefused()
+              ? `SSH to ${lease.profile.destination} works, but no ORCA daemon is listening on its port ${lease.profile.remotePort}.`
+              : undefined,
+          release: () => lease.release(),
+        };
+      } catch (error) {
+        await lease.release();
+        throw error;
+      }
+    }
+    const url = daemonEndpoint(target.url);
+    return {
+      client: new DaemonClient(url, fetch, {
+        requireAuthentication: true,
+        auth: new LocalDaemonToken({
+          url,
+          workspace: target.workspace,
+          ...(target.tokenFile ? { tokenFile: target.tokenFile } : {}),
+          env: {},
+        }),
+        onHello: hooks.onHello,
+      }),
+      // The workspace owns the parked daemon's process; the fleet only lets go of its reads.
+      release: async () => undefined,
+    };
+  },
+  focusedReader: () =>
+    connection.current.state === "live" || connection.current.state === "file"
+      ? { reader: workspace.client, epoch: workspace.connectionTarget.epoch }
+      : undefined,
+  onChange: (snapshot) => send("orca:fleet", snapshot),
+  onAlerts: (update) => {
+    fleetAlerts = update;
+    publishAlerts();
+  },
+  onError: (message) => console.error(message),
+});
+
+/** The focused daemon as the Machines surface names it. Its key matches a watched member's. */
+function focusedMachine(): FocusedMachine | undefined {
+  const target = workspace.connectionTarget;
+  const state = connection.current;
+  if (!target.url && !target.profile) return undefined;
+  const bundled = target.source === "bundled";
+  return {
+    key: target.profile ? `profile:${target.profile.id}` : bundled ? "bundled" : `url:${target.url}`,
+    name: target.profile?.name ?? (bundled ? "This computer" : target.url),
+    detail: target.profile
+      ? `ssh ${target.profile.destination}`
+      : bundled
+        ? "Bundled daemon"
+        : target.source === "env"
+          ? "ORCA_DAEMON_URL"
+          : "Daemon URL",
+    epoch: target.epoch,
+    state: state.state,
+    since: state.since,
+  };
+}
+
+/** What the fleet should watch: the saved choice of profiles, plus a parked bundled daemon. */
+function fleetTargets(): FleetTarget[] {
+  const targets: FleetTarget[] = [];
+  const parked = workspace.parkedBundled;
+  if (parked) targets.push({ kind: "bundled", ...parked });
+  for (const id of preferences.read().watchedProfiles ?? []) {
+    const profile = remoteProfiles.get(id);
+    if (profile) targets.push({ kind: "profile", id, name: profile.name, destination: profile.destination });
+  }
+  return targets;
+}
+/**
+ * Off until startup has built the workspace, the connection machine and the alerts: both of
+ * the first two report changes while they are still being constructed, and nothing here may
+ * read them before they exist.
+ */
+let fleetStarted = false;
+function refreshFleet(): void {
+  if (!fleetStarted) return;
+  fleet.setFocused(focusedMachine());
+  fleet.setTargets(fleetTargets());
+}
+function syncFocus(): void {
+  if (fleetStarted) fleet.setFocused(focusedMachine());
+}
+
+/**
+ * The renderer states the focused daemon's alerts; the fleet states every other machine's.
+ * Both are labelled with their machine here, so an alert keeps one id when focus moves to or
+ * from its machine and is never posted twice. The badge stays the focused daemon's count, the
+ * same one number the title bar and the sidebar carry (docs/design/20-attention-and-gates.md).
+ */
+let focusedAlerts: AlertsUpdate = { waiting: 0, items: [] };
+let fleetAlerts: AlertsUpdate = { waiting: 0, items: [] };
+function publishAlerts(): void {
+  if (!fleetStarted) {
+    alerts.update(focusedAlerts);
+    return;
+  }
+  const focused = focusedMachine();
+  const named = fleetAlerts.items.length > 0 || fleet.snapshot.machines.length > 1;
+  const own = focused
+    ? labelAlerts(focusedAlerts.items, { key: focused.key, name: focused.name, focused: true }, named)
+    : [...focusedAlerts.items];
+  alerts.update({ waiting: focusedAlerts.waiting, items: [...own, ...fleetAlerts.items] });
+}
+
 /* ---------- the connection state ---------- */
 
 /**
@@ -600,7 +733,10 @@ const connection = new ConnectionMachine({
     // identified post-subscribe reply may reveal a boot change, but only after fencing.
     if (hello.identity) workspace.observeHello(workspace.client, hello);
   },
-  onChange: (snapshot) => send("orca:connection", snapshot),
+  onChange: (snapshot) => {
+    send("orca:connection", snapshot);
+    syncFocus();
+  },
   onDiagnostic: observeDiagnostic,
 });
 
@@ -719,6 +855,7 @@ const workspace = new Workspace({
         if (workspace.client === daemonClient && n.method === "run.changed" && n.params.event === "run.failed")
           observeDiagnostic("run", "run_failed");
         broadcast({ kind: "notification", method: n.method, params: n.params });
+        if (fleetStarted && workspace.client === daemonClient) fleet.focusedChanged(n);
         // The cursor the stream would resume from. A sequence number is per-run, so this
         // store-wide subscription has none and the status bar shows no event number — see
         // the note on `ConnectionMachine.sawCursor`.
@@ -748,15 +885,18 @@ const workspace = new Workspace({
     return id && remoteProfiles.get(id) ? id : undefined;
   })(),
   openProfile: (id) => remoteProfiles.open(id),
+  onParked: () => refreshFleet(),
   onTarget: (target) => {
     // The first verified hello enriches the current epoch. It must not erase alerts
     // already supplied by that epoch's renderer while verification was in flight.
     if (target.epoch !== alertsEpoch) {
       diagnostics.revokeExportAuthority();
       alertsEpoch = target.epoch;
-      alerts.update({ waiting: 0, items: [] });
+      focusedAlerts = { waiting: 0, items: [] };
+      publishAlerts();
     }
     send("orca:daemon.target", target);
+    syncFocus();
   },
   explicitUrl: process.env.ORCA_DAEMON_URL,
   defaultUrl: DEFAULT_DAEMON_URL,
@@ -1066,13 +1206,43 @@ function profileInUse(id: string): boolean {
   return workspace.connectionTarget.profile?.id === id;
 }
 ipcMain.handle("orca:profiles.list", () => remoteProfiles.list());
-ipcMain.handle("orca:profiles.save", (_event, input: unknown) => profileResult(() => remoteProfiles.save(input)));
+// Synchronous, like `daemon.read`: the Machines surface draws from it on its first pass.
+ipcMain.on("orca:fleet.read", (event) => {
+  event.returnValue = fleet.snapshot;
+});
+/** Watch or stop watching a saved profile. Reads only; focusing one is `daemon.connect`. */
+ipcMain.handle("orca:fleet.watch", (_event, id: unknown, watched: unknown) =>
+  profileResult(() => {
+    const valid = ProfileIdSchema.parse(id);
+    if (typeof watched !== "boolean") throw new ConnectionRefusal("Say whether to watch the machine.");
+    const current = preferences.read().watchedProfiles ?? [];
+    if (watched) {
+      if (!remoteProfiles.get(valid)) throw new ConnectionRefusal("That profile no longer exists.");
+      if (!current.includes(valid) && current.length >= MAX_WATCHED_PROFILES)
+        throw new ConnectionRefusal(`The app watches at most ${MAX_WATCHED_PROFILES} machines at once.`);
+      if (!current.includes(valid)) preferences.saveWatchedProfiles([...current, valid]);
+    } else preferences.saveWatchedProfiles(current.filter((other) => other !== valid));
+    refreshFleet();
+    return null;
+  }),
+);
+ipcMain.handle("orca:profiles.save", (_event, input: unknown) =>
+  profileResult(() => {
+    const saved = remoteProfiles.save(input);
+    // A renamed or re-pointed watched profile reconnects under its new name.
+    refreshFleet();
+    return saved;
+  }),
+);
 ipcMain.handle("orca:profiles.remove", (_event, id: unknown) =>
   profileResult(() => {
     const valid = ProfileIdSchema.parse(id);
     if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before removing this profile.");
     remoteProfiles.remove(valid);
     if (preferences.read().daemonProfile === valid) preferences.saveDaemonProfile(null);
+    const watched = preferences.read().watchedProfiles ?? [];
+    if (watched.includes(valid)) preferences.saveWatchedProfiles(watched.filter((id) => id !== valid));
+    refreshFleet();
     return null;
   }),
 );
@@ -1080,6 +1250,7 @@ ipcMain.handle("orca:profiles.forgetHostKey", (_event, id: unknown) =>
   profileResult(() => {
     const valid = ProfileIdSchema.parse(id);
     if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before forgetting this key.");
+    if (fleet.usesProfile(valid)) throw new ConnectionRefusal("Stop watching this machine before forgetting its key.");
     remoteProfiles.forgetHostKey(valid);
     const view = remoteProfiles.describe(valid);
     if (!view) throw new ConnectionRefusal("That profile no longer exists.");
@@ -1274,9 +1445,17 @@ function focusedWindow(): BrowserWindow | undefined {
 
 /** Tell every open window a person clicked a notification, or that Attention should come forward. */
 function activate(item: AlertItem | undefined): void {
+  const current = item && withFocus(item);
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send("orca:alerts.activate", item ? { item } : {});
+    if (!win.isDestroyed()) win.webContents.send("orca:alerts.activate", current ? { item: current } : {});
   }
+}
+
+/** Whether the alert's machine is the focused one *now*, not when it was posted (#882). */
+function withFocus(item: AlertItem): AlertItem {
+  return item.machine
+    ? { ...item, machine: { ...item.machine, focused: item.machine.key === fleet.focusedKey } }
+    : item;
 }
 
 const alerts = createAlerts(
@@ -1312,13 +1491,15 @@ const alerts = createAlerts(
     // Inside the focused window only, and never `show()`: a permission ask may take the
     // person's attention where they already are, and may not move a window at them
     // (docs/design/20-attention-and-gates.md).
-    focusAttention: (item) => focusedWindow()?.webContents.send("orca:alerts.activate", { item }),
+    focusAttention: (item) => focusedWindow()?.webContents.send("orca:alerts.activate", { item: withFocus(item) }),
   },
   () => preferences.read().alerts,
 );
 
 ipcMain.on("orca:alerts.update", (_event, update: AlertsUpdate, epoch: number) => {
-  if (epoch === workspace.connectionTarget.epoch) alerts.update(update);
+  if (epoch !== workspace.connectionTarget.epoch) return;
+  focusedAlerts = update;
+  publishAlerts();
 });
 
 app.on("browser-window-focus", () => alerts.focusChanged(true));
@@ -1477,6 +1658,9 @@ if (!primary) {
         ),
       ),
     );
+    // Watched machines connect beside the focused one; none of them waits on it.
+    fleetStarted = true;
+    refreshFleet();
     // Not awaited: the shell paints while the daemon starts, and a call that arrives in
     // that second or two waits on `workspace.ready()` rather than going to the wrong URL.
     const startupEpoch = workspace.connectionTarget.epoch;
@@ -1550,7 +1734,9 @@ app.on("will-quit", (event) => {
     () => false,
   );
   // Tunnels close after the workspace has let go of its client; nothing waits on them.
-  void workspaceClosed.finally(() => remoteProfiles.close().catch(() => undefined));
+  void Promise.allSettled([workspaceClosed, fleet.close()]).finally(() =>
+    remoteProfiles.close().catch(() => undefined),
+  );
   void Promise.race([
     appWriters.pause(
       async () => {

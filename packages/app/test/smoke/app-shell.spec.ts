@@ -163,7 +163,12 @@ const AUDITED = [
      Every surface in `SURFACE_IDS` is here, and "no surface is passed off as unbuilt" fails
      on a new one until it is. */
   { id: "workflows", ready: ".orca-wflist__table tbody tr" },
-] as const satisfies readonly { id: SurfaceId; ready: string }[];
+  /* Machines (#882): a row in the focused machine's section, which only exists once the fleet
+     has read the focused daemon's runs and asks — the fixture's parked gate is one. With the
+     one daemon this smoke runs, its whole content fits a 340px window, so the short-window
+     check asks that the last section is on screen rather than that something overflowed. */
+  { id: "machines", ready: ".orca-machine--focused .orca-machine__row", fitsWhenShort: true },
+] as const satisfies readonly { id: SurfaceId; ready: string; fitsWhenShort?: true }[];
 
 let daemon: Daemon;
 let app: ElectronApplication;
@@ -266,6 +271,8 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     // #702/#706's opaque review commands (3f72ee46), validated by the closed main-process
     // dispatcher. This bridge does not register the family on the production daemon.
     "scopedPermissions",
+    // The daemon's `search` method behind the palette (#255), recorded late here (#882).
+    "search",
     "templates",
     // `updates` is v0.6.0's desktop updater (#306): read, act, subscribe and the unsaved-
     // draft challenge. No feed URL, credential or install command crosses it.
@@ -532,6 +539,18 @@ test.describe("a window too short for what is in it", () => {
       await expect(page.locator(surface.ready).first()).toBeVisible();
 
       const proofs = await scrollProofs(`main.orca-main[data-surface="${surface.id}"]`);
+      if ("fitsWhenShort" in surface && proofs.length === 0) {
+        /* Nothing to scroll: then all of it has to be on screen, its last section included. */
+        const fits = await page.evaluate((selector) => {
+          const main = document.querySelector(selector);
+          const sections = main ? [...main.querySelectorAll("section")] : [];
+          const last = sections.at(-1)?.getBoundingClientRect();
+          const box = main?.getBoundingClientRect();
+          return Boolean(last && box && last.bottom <= box.bottom + 2 && last.top >= box.top - 2);
+        }, `main.orca-main[data-surface="${surface.id}"]`);
+        expect(fits, `${surface.id}: its last section is cut off with nothing to scroll`).toBe(true);
+        return;
+      }
       /* Not "a region exists" but "a region overflowed": at this height every surface has
          more content than window, so a surface with nothing overflowing is a surface whose
          content went somewhere other than into the box that scrolls. */

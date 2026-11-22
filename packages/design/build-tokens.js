@@ -323,7 +323,7 @@ ${presentation(S.stateView, true)}
 export type SurfaceId = ${union(Object.keys(S.surface))};
 export const SURFACE_IDS: readonly SurfaceId[] = [${Object.keys(S.surface).map(quote).join(", ")}] as const;
 /**
- * The six top-level surfaces, in sidebar order (docs/design/10-information-architecture.md).
+ * The top-level surfaces, in sidebar order (docs/design/10-information-architecture.md).
  * Word and glyph are not optional: below the sidebar breakpoint the label is hidden and the
  * glyph is the whole of the navigation, so the word stays on as the accessible name (#261).
  */

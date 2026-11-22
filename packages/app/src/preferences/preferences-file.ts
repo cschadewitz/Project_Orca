@@ -53,6 +53,15 @@ export class PreferencesFile {
     this.persist(next);
   }
 
+  /** Main-process only: the profiles the Machines surface watches (#882). Empty removes the field. */
+  saveWatchedProfiles(ids: readonly string[]): void {
+    const next = { ...this.read() };
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) delete next.watchedProfiles;
+    else next.watchedProfiles = PreferencesSchema.shape.watchedProfiles.unwrap().parse(unique);
+    this.persist(next);
+  }
+
   private persist(next: Preferences): void {
     mkdirSync(dirname(this.path), { recursive: true });
     const tmp = `${this.path}.${process.pid}.tmp`;

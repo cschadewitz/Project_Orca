@@ -144,6 +144,45 @@ for delegation (#883). Windows uses the built-in OpenSSH client (`ssh.exe`).
   configure it as an SSH host in the workflow config instead
   ([integrations](INTEGRATIONS.md)).
 
+## Watching several daemons (#882)
+
+The app connects to one daemon at a time for everything it shows and writes: the
+**focused** target above. The **Machines** surface (`⌘7`) adds read-only connections
+beside it, so several daemons can be watched at once without the daemons talking to
+each other:
+
+- **What is watched.** Saved SSH profiles a person adds with **Watch a machine…**
+  (stored main-only as `watchedProfiles` in the preferences file, at most 16), and the
+  bundled daemon whenever the app has parked it because focus moved to another daemon.
+  The focused daemon is always listed first.
+- **One connection each.** Every watched machine has its own client, push stream,
+  cursor and credential (a profile lease over its own `ssh -W` streams), managed in
+  `packages/app/src/main/fleet.ts`. Each connection has a generation that every frame
+  and read captures, and each identity seen on it a scope, so a late reply or frame
+  from an old connection or another store is dropped instead of shown under this
+  machine. A reconnect reads `runs.list` and `inputs.list` again rather than replaying
+  frames, so nothing appears twice.
+- **Read-only.** A watched connection only calls `hello`, `runs.list`, `inputs.list`
+  and `subscribe`. Its rows name the work and do not open it. **Focus** goes through
+  the same path as the connection dialog (authenticated probe, then the all-window
+  draft check), after which the fleet closes its own connection to that machine so it
+  is never streamed twice, and reopens the one it stopped focusing if it is watched.
+- **Freshness.** A machine shows the design's connection states with the same five
+  quiet seconds as the status bar. One that drops out keeps its last answer under
+  "Last heard …"; one that has never answered says "Not read yet", and the summary's
+  counts leave it out, so a missing machine never reads as zero work. A tunnel that
+  will not open is retried with backoff up to once a minute.
+- **Slots.** When a daemon reports `hello.sessionSlots` (#873), its section shows
+  sessions in use against the cap and the queue depth.
+- **Notifications.** Waiting gates, permission asks and failures it saw happen on a
+  watched machine post OS notifications that name the machine ("Build is waiting on
+  build-box"). Alert ids are scoped by machine, so moving focus does not post the same
+  alert twice. Clicking one from an unfocused machine opens Machines. The dock badge
+  stays the focused daemon's count, the same number as the title bar.
+
+Not here yet: observe-only profiles with read-only credentials wait on #875's
+credential bootstrap.
+
 ## Target identity and drafts
 
 Authenticated hello can include `{ identity: { workspaceId, instanceId } }`.

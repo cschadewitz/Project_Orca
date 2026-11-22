@@ -217,6 +217,12 @@ export interface AlertItem {
   inputId?: string;
   /** ISO 8601: when the ask was made. The gate delay is measured from it, not from arrival. */
   since: string;
+  /**
+   * The machine it is on (#882), set by the main process. `focused` is decided again when a
+   * person clicks: an alert from a machine that is not focused opens Machines, never a route
+   * on whichever daemon happens to be focused.
+   */
+  machine?: { key: string; name: string; focused: boolean };
 }
 
 /** Everything open, as one statement. Absent items have gone away. */

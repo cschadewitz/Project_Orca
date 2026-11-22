@@ -288,10 +288,10 @@ export const STATE_VIEW_PRESENTATION: Record<StateViewKind, {
   'no-results': { word: 'no results', glyph: '◌', fg: 'var(--ink-tertiary)', fgToken: 'ink-tertiary' },
 };
 
-export type SurfaceId = 'attention' | 'runs' | 'plan' | 'workflows' | 'agents' | 'config';
-export const SURFACE_IDS: readonly SurfaceId[] = ['attention', 'runs', 'plan', 'workflows', 'agents', 'config'] as const;
+export type SurfaceId = 'attention' | 'runs' | 'plan' | 'workflows' | 'agents' | 'config' | 'machines';
+export const SURFACE_IDS: readonly SurfaceId[] = ['attention', 'runs', 'plan', 'workflows', 'agents', 'config', 'machines'] as const;
 /**
- * The six top-level surfaces, in sidebar order (docs/design/10-information-architecture.md).
+ * The top-level surfaces, in sidebar order (docs/design/10-information-architecture.md).
  * Word and glyph are not optional: below the sidebar breakpoint the label is hidden and the
  * glyph is the whole of the navigation, so the word stays on as the accessible name (#261).
  */
@@ -302,6 +302,7 @@ export const SURFACE_PRESENTATION: Record<SurfaceId, { word: string; glyph: stri
   workflows: { word: 'Workflows', glyph: '⑂' },
   agents: { word: 'Agents', glyph: '◉' },
   config: { word: 'Config', glyph: '❋' },
+  machines: { word: 'Machines', glyph: '⧉' },
 };
 
 export type ObjectKind = 'run' | 'workItem' | 'request' | 'step' | 'gate' | 'event';
