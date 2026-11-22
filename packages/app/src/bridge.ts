@@ -142,6 +142,13 @@ type Params<T> = Partial<T>;
 export interface ConnectionSnapshot {
   /** Successful subscription attachments; independent of the visible quiet window. */
   generation?: number;
+  /**
+   * The app's current grant on this daemon (#882): absent from an authentication refusal
+   * until a fresh hello grants a new number. The renderer stamps its alert report with the
+   * grant its reads ran under, and the main process accepts a report only under that same
+   * grant, so nothing read before a refusal is posted after the next hello.
+   */
+  authority?: number;
   /** One of the design system's five. `file` arrives with workspace selection (#164). */
   state: ConnectionState;
   /** ISO 8601: when the app entered this state — the indicator's elapsed/last-seen reading. */
@@ -227,9 +234,11 @@ export interface AlertItem {
    * The machine it is on (#882), set by the main process. `focused` is decided again when a
    * person clicks: an alert from a machine that is not focused opens Machines, never a route
    * on whichever daemon happens to be focused. `workspaceId` is the store the alert was
-   * verified on; a click is dropped once that machine no longer reaches that store.
+   * verified on; a click is dropped once that machine no longer reaches that store. `grant`
+   * is the authority the alert was read under (the focused connection's grant, or a watched
+   * machine's), and a click is dropped once that grant is gone, even on the same store.
    */
-  machine?: { key: string; name: string; focused: boolean; workspaceId?: string };
+  machine?: { key: string; name: string; focused: boolean; workspaceId?: string; grant?: number };
 }
 
 /** Everything open, as one statement. Absent items have gone away. */
@@ -503,7 +512,7 @@ export interface OrcaBridge {
      * What is open right now, and the daemon's own count of it. Sent on every change; the
      * main process diffs it, so re-sending the same set posts nothing.
      */
-    update: (update: AlertsUpdate) => void;
+    update: (update: AlertsUpdate, authority: number | undefined) => void;
     /**
      * The person clicked a notification. Today every activation opens Attention; the
      * `item` on it is the card's identity, which is what turns into an `orca://` route

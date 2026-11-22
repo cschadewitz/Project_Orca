@@ -166,8 +166,9 @@ export class ConnectionMachine {
    * The app's current authority on this daemon, as a grant number (#882): undefined from an
    * authentication refusal until a `hello` answered after that refusal grants a new one. A
    * reconnecting link alone does not restore it. Anything read or posted under one grant is
-   * not shown under another. Not part of the snapshot the renderer sees; the main process
-   * fences the focused machine's alerts, reads and clicks by it.
+   * not shown under another. The snapshot carries it so the renderer can stamp what it
+   * reports with the grant it read under; the main process fences the focused machine's
+   * alerts, reads and clicks by it.
    */
   get authority(): number | undefined {
     return this.grant;
@@ -418,6 +419,7 @@ export class ConnectionMachine {
     return {
       state: this.state,
       generation: this.generation,
+      ...(this.grant !== undefined ? { authority: this.grant } : {}),
       since: new Date(this.since).toISOString(),
       ...(this.cursor !== undefined ? { eventCursor: this.cursor } : {}),
       ...(this.daemonProtocol !== undefined

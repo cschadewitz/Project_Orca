@@ -9,7 +9,7 @@ import { PROTOCOL_VERSION } from "@orca/protocol";
 import type { DaemonClient } from "../src/client/daemon-client.js";
 import type { Workspace } from "../src/main/workspace.js";
 import { DaemonSubscription } from "../src/client/subscription.js";
-import type { AlertsUpdate, BridgeResult, WorkspaceSnapshot } from "../src/bridge.js";
+import type { AlertsUpdate, BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../src/bridge.js";
 import type { DaemonTargetSnapshot } from "../src/daemon-connection.js";
 import type { OwnedDiagnosticObserver } from "../src/main/diagnostics/source-producers.js";
 
@@ -637,8 +637,13 @@ it.each(["env", "bundled", "store"] as const)(
         },
       ],
     };
+    const grant = () => {
+      const event = { returnValue: undefined as unknown };
+      shell.events!.emit("orca:connection.read", event);
+      return (event.returnValue as ConnectionSnapshot).authority;
+    };
     const publish = (atEpoch = workspace.connectionTarget.epoch) =>
-      shell.events!.emit("orca:alerts.update", {}, update, atEpoch);
+      shell.events!.emit("orca:alerts.update", {}, update, atEpoch, grant());
     // Model inputs.list finishing while the subscription's verify hello is pending.
     publish();
     expect(shell.badge).toHaveBeenLastCalledWith(1);
@@ -692,14 +697,76 @@ it.each(["env", "bundled", "store"] as const)(
       {},
       { waiting: 1, items: [{ ...update.items[0]!, id: "permission-2", inputId: "permission-2" }] },
       workspace.connectionTarget.epoch,
+      grant(),
     );
     expect(shell.notificationShow).toHaveBeenCalledTimes(2);
     const closed = shell.notificationClose.mock.calls.length;
-    shell.events!.emit("orca:alerts.update", {}, { waiting: 0, items: [] }, workspace.connectionTarget.epoch);
+    shell.events!.emit("orca:alerts.update", {}, { waiting: 0, items: [] }, workspace.connectionTarget.epoch, grant());
     expect(shell.badge).toHaveBeenLastCalledWith(0);
     expect(shell.notificationClose).toHaveBeenCalledTimes(closed + 1);
   },
 );
+
+it("drops a report read under a grant a refusal ended, even after a same-store hello grants a new one (#882)", async () => {
+  const { DaemonClient } = await import("../src/client/daemon-client.js");
+  directory = await mkdtemp(join(tmpdir(), "orca-alert-grant-"));
+  shell.userData = directory;
+  vi.stubEnv("ORCA_DAEMON_URL", "http://localhost:9999");
+  vi.spyOn(DaemonClient.prototype, "subscribe").mockReturnValue({ close: vi.fn() } as unknown as DaemonSubscription);
+  await import("../src/main/index.js");
+  const workspace = shell.workspace!;
+  await workspace.connect();
+  const client = workspace.client as unknown as {
+    options: { onAuthFailure: () => void; onHello: (hello: Awaited<ReturnType<DaemonClient["hello"]>>) => void };
+  };
+  const hello: Awaited<ReturnType<DaemonClient["hello"]>> = {
+    protocol: PROTOCOL_VERSION,
+    orcaVersion: "test",
+    capabilities: ["runs.read", "runs.subscribe"],
+    identity: { workspaceId: "workspace-1", instanceId: "boot-1" },
+  };
+  client.options.onHello(hello);
+  const read = () => {
+    const event = { returnValue: undefined as unknown };
+    shell.events!.emit("orca:connection.read", event);
+    return event.returnValue as ConnectionSnapshot;
+  };
+  const epoch = workspace.connectionTarget.epoch;
+  const old = read().authority;
+  expect(old).toBeDefined();
+  const ask = (id: string): AlertsUpdate => ({
+    waiting: 1,
+    items: [
+      {
+        id,
+        tier: "permission",
+        title: "Permission needed",
+        body: "A run is waiting",
+        runId: "run-1",
+        inputId: id,
+        since: new Date().toISOString(),
+      },
+    ],
+  });
+  // Refused, then answered again by the same store: same epoch, a new grant.
+  client.options.onAuthFailure();
+  expect(read().authority).toBeUndefined();
+  client.options.onHello(hello);
+  expect(workspace.connectionTarget.epoch).toBe(epoch);
+  const fresh = read().authority;
+  expect(fresh).toBeDefined();
+  expect(fresh).not.toBe(old);
+  // A late report from a read that ran under the old grant: not posted, no badge.
+  shell.events!.emit("orca:alerts.update", {}, ask("stale"), epoch, old);
+  // An unstamped one is not either.
+  shell.events!.emit("orca:alerts.update", {}, ask("stale"), epoch, undefined);
+  expect(shell.notificationShow).not.toHaveBeenCalled();
+  expect(shell.badge).not.toHaveBeenLastCalledWith(1);
+  // Read under the new grant: posted.
+  shell.events!.emit("orca:alerts.update", {}, ask("fresh"), epoch, fresh);
+  expect(shell.notificationShow).toHaveBeenCalledOnce();
+  expect(shell.badge).toHaveBeenLastCalledWith(1);
+});
 
 it.each(["localhost:6722", "not-a-url-private-token", "https://owner:private-token@host"])(
   "installs synchronous IPC and disconnects safely for malformed configuration %s",

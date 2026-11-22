@@ -707,8 +707,10 @@ describe("an alert changing hands (#882)", () => {
       t,
       shown,
       attention,
+      /** What a click resolves to, the way index.ts's `activate` does: as stated now, else as posted. */
+      click: (item: AlertItem) => t.fleet.routeAlert(manager.current(item.id) ?? item),
       /** What the renderer reports for the focused daemon, labelled the way index.ts labels it. */
-      focusedReports: (items: AlertItem[], workspaceId: string | undefined) => {
+      focusedReports: (items: AlertItem[], workspaceId: string | undefined, grant = 1) => {
         focusedItems = labelAlerts(
           items,
           {
@@ -717,6 +719,7 @@ describe("an alert changing hands (#882)", () => {
             focused: true,
             scope: alertScope(workspaceId, "profile:alpha"),
             workspaceId,
+            grant,
           },
           false,
         );
@@ -768,24 +771,55 @@ describe("an alert changing hands (#882)", () => {
     daemon.live(ID_A);
     await settle(0);
     const item = w.shown[0]!.item;
-    expect(w.t.fleet.routeAlert(item)?.machine).toMatchObject({ key: "profile:alpha", focused: false });
+    expect(w.click(item)?.machine).toMatchObject({ key: "profile:alpha", focused: false });
 
-    // Focused on the same store: routed as focused.
+    // Focused on the same store: the watched grant is not the focused one, so the old
+    // statement alone routes nowhere; once the focused report states it, the click goes there.
     w.t.fleet.setFocused(focusOn("profile:alpha", 2, ID_A.workspaceId));
-    expect(w.t.fleet.routeAlert(item)?.machine?.focused).toBe(true);
-    // The profile now reaches another store: the old click goes nowhere.
-    w.t.fleet.setFocused(focusOn("profile:alpha", 3, ID_B.workspaceId));
     expect(w.t.fleet.routeAlert(item)).toBeUndefined();
+    w.focusedReports([{ ...item, id: "in-Run rm?", inputId: "in-Run rm?" }], ID_A.workspaceId);
+    expect(w.click(item)?.machine?.focused).toBe(true);
+    // The profile now reaches another store: the old click goes nowhere.
+    w.focusedReports([], undefined);
+    w.t.fleet.setFocused(focusOn("profile:alpha", 3, ID_B.workspaceId));
+    expect(w.click(item)).toBeUndefined();
     // Watched again, but verified on another store: still stale.
     w.t.fleet.setFocused(undefined);
     await settle(0);
     daemon.live(ID_B);
     expect(w.t.fleet.routeAlert(item)).toBeUndefined();
-    // Refused: stale as well.
+    // Back on the store it came from (another store answered in between, so what was
+    // retained was dropped): the old notification's grant is gone, the ask as stated now is not.
     daemon.live(ID_A);
-    expect(w.t.fleet.routeAlert(item)).toBeDefined();
-    daemon.stream.onState("auth-failed", { consecutive: 1, atCap: 0 });
+    await settle(0);
     expect(w.t.fleet.routeAlert(item)).toBeUndefined();
+    const restated = w.click(item);
+    expect(restated?.machine).toMatchObject({ key: "profile:alpha", focused: false });
+    // Refused: stale as well.
+    daemon.stream.onState("auth-failed", { consecutive: 1, atCap: 0 });
+    expect(w.click(item)).toBeUndefined();
+    expect(w.t.fleet.routeAlert(restated!)).toBeUndefined();
+  });
+
+  it("drops a watched machine's old click after a refusal, though the same store verifies again", async () => {
+    const w = wired();
+    w.t.fleet.setTargets([profile("alpha", "Alpha")]);
+    await settle(0);
+    const daemon = w.t.daemons.get("alpha")!;
+    daemon.inputs = permission("Run rm?");
+    daemon.live(ID_A);
+    await settle(0);
+    const posted = w.shown[0]!.item;
+    expect(w.click(posted)).toBeDefined();
+    daemon.stream.onState("auth-failed", { consecutive: 1, atCap: 0 });
+    // The same store answers again on this connection: what the old notification was read
+    // under is gone, so its record routes nowhere even before anything is read again.
+    daemon.live(ID_A);
+    expect(w.t.fleet.routeAlert(posted)).toBeUndefined();
+    // Read again under the new grant: the ask as stated now routes.
+    await settle(0);
+    expect(w.click(posted)?.machine).toMatchObject({ key: "profile:alpha", focused: false });
+    expect(w.t.fleet.routeAlert(posted)).toBeUndefined();
   });
 
   it("routes nothing on the focused machine once it refuses the credential, though the workspace still matches", async () => {
@@ -796,19 +830,29 @@ describe("an alert changing hands (#882)", () => {
     daemon.inputs = permission("Run rm?");
     daemon.live(ID_A);
     await settle(0);
-    const item = w.shown[0]!.item;
+    const watched = w.shown[0]!.item;
+    const ask = { ...watched, id: "in-Run rm?", inputId: "in-Run rm?" };
     w.t.fleet.setFocused({ ...focusOn("profile:alpha", 2, ID_A.workspaceId), authority: 1 });
-    expect(w.t.fleet.routeAlert(item)?.machine?.focused).toBe(true);
-    // The focused stream is refused; no reconnect, same cached workspace id.
+    w.focusedReports([ask], ID_A.workspaceId, 1);
+    const posted = w.click(watched)!;
+    expect(posted.machine).toMatchObject({ focused: true, grant: 1 });
+    // The focused stream is refused; no reconnect, same cached workspace id. index.ts drops
+    // the focused report on the loss.
     w.t.fleet.setFocused({
       ...focusOn("profile:alpha", 2, ID_A.workspaceId),
       state: "disconnected",
       authority: undefined,
     });
-    expect(w.t.fleet.routeAlert(item)).toBeUndefined();
-    // Authorized again on the same workspace: routed again.
-    w.t.fleet.setFocused({ ...focusOn("profile:alpha", 2, ID_A.workspaceId), authority: 1 });
-    expect(w.t.fleet.routeAlert(item)?.machine?.focused).toBe(true);
+    w.focusedReports([], undefined);
+    expect(w.click(posted)).toBeUndefined();
+    // A hello on the same workspace grants a new authority. The old click, posted under the
+    // grant the refusal ended, still routes nowhere, as does one stated again under it.
+    w.t.fleet.setFocused({ ...focusOn("profile:alpha", 2, ID_A.workspaceId), authority: 2 });
+    expect(w.click(posted)).toBeUndefined();
+    expect(w.t.fleet.routeAlert({ ...posted, machine: { ...posted.machine!, grant: 1 } })).toBeUndefined();
+    // Read and reported under the new grant: the same ask routes again.
+    w.focusedReports([ask], ID_A.workspaceId, 2);
+    expect(w.click(posted)?.machine).toMatchObject({ focused: true, grant: 2 });
   });
 
   it("passes an alert with no machine straight through", () => {

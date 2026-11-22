@@ -77,6 +77,14 @@ export interface AlertsPort {
 export interface Alerts {
   /** What is open right now, from the renderer. Diffed against what was open before. */
   update: (update: AlertsUpdate) => void;
+  /**
+   * The newest statement of an item that is still open, or undefined once it is not. A click
+   * resolves through this first, so a notification posted before focus moved, or before a
+   * refusal and a fresh grant, routes by what is true now: an item still open under the
+   * current authority carries that authority, and one no longer stated keeps the grant it
+   * was posted under, which routes nowhere once that grant is gone (#882).
+   */
+  current: (id: string) => AlertItem | undefined;
   /** The window gained or lost focus: what the unfocused escalation is measured from. */
   focusChanged: (focused: boolean) => void;
   /** Drop every timer. Called on quit; nothing posts after it. */
@@ -196,6 +204,8 @@ export function createAlerts(port: AlertsPort, preferences: () => AlertPreferenc
   }
 
   return {
+    current: (id) => (closed ? undefined : tracked.get(id)?.item),
+
     update({ waiting, items }) {
       if (closed) return;
       // The daemon's own number, not a recount of `items`: a failure is in `items` and is

@@ -72,6 +72,21 @@ export function useMethodPresent(method: string): boolean {
 }
 
 /** Reconcile on transport attachment even when its outage never showed a banner. */
+/**
+ * The app's current grant on the focused daemon (#882), or undefined while it is refused.
+ * A hook that reads under one grant restarts when it moves, and stamps what it reports with
+ * the grant it read under, so a read from before a refusal never counts after the next hello.
+ */
+export function useAuthority(): number | undefined {
+  const [authority, setAuthority] = useState(() => window.orca.connection.read().authority);
+  useEffect(() => {
+    const off = window.orca.connection.subscribe((snapshot) => setAuthority(snapshot.authority));
+    setAuthority(window.orca.connection.read().authority);
+    return off;
+  }, []);
+  return authority;
+}
+
 export function useSubscriptionGeneration(): number {
   const [generation, setGeneration] = useState(() => window.orca.connection.read().generation ?? 0);
   useEffect(() => {

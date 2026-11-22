@@ -714,6 +714,8 @@ function syncFocus(): void {
  * same one number the title bar and the sidebar carry (docs/design/20-attention-and-gates.md).
  */
 let focusedAlerts: AlertsUpdate = { waiting: 0, items: [] };
+/** The grant the focused report was read under; its alerts and their clicks carry it. */
+let focusedAlertsGrant: number | undefined;
 let fleetAlerts: AlertsUpdate = { waiting: 0, items: [] };
 function publishAlerts(): void {
   if (!fleetStarted) {
@@ -731,6 +733,7 @@ function publishAlerts(): void {
           focused: true,
           scope: alertScope(focused.workspaceId, focused.key),
           workspaceId: focused.workspaceId,
+          grant: focusedAlertsGrant,
         },
         named,
       )
@@ -762,7 +765,10 @@ const connection = new ConnectionMachine({
   // authority the app no longer has, and the renderer's next report after a fresh hello
   // states them again (#882).
   onAuthority: (authority) => {
-    if (authority === undefined) focusedAlerts = { waiting: 0, items: [] };
+    if (authority !== focusedAlertsGrant) {
+      focusedAlerts = { waiting: 0, items: [] };
+      focusedAlertsGrant = undefined;
+    }
     if (!fleetStarted) return;
     syncFocus();
     publishAlerts();
@@ -1582,7 +1588,8 @@ function focusedWindow(): BrowserWindow | undefined {
 
 /** Tell every open window a person clicked a notification, or that Attention should come forward. */
 function activate(item: AlertItem | undefined): void {
-  const current = item && withFocus(item);
+  // The item as it is stated now if it is still open, else as it was posted (#882).
+  const current = item && withFocus(alerts.current(item.id) ?? item);
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send("orca:alerts.activate", current ? { item: current } : {});
   }
@@ -1641,11 +1648,14 @@ const alerts = createAlerts(
   () => preferences.read().alerts,
 );
 
-ipcMain.on("orca:alerts.update", (_event, update: AlertsUpdate, epoch: number) => {
+ipcMain.on("orca:alerts.update", (_event, update: AlertsUpdate, epoch: number, authority: unknown) => {
   if (epoch !== workspace.connectionTarget.epoch) return;
-  // Read before or during a refusal: not shown until a fresh hello grants authority again.
-  if (!connection.authorized) return;
+  // The renderer stamps a report with the grant its reads ran under. One read before or
+  // during a refusal is not shown, not even after a hello on the same store grants a new
+  // one: only a report read under the current grant is (#882).
+  if (typeof authority !== "number" || authority !== connection.authority) return;
   focusedAlerts = update;
+  focusedAlertsGrant = authority;
   publishAlerts();
 });
 

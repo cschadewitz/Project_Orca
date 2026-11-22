@@ -173,7 +173,14 @@ export function alertScope(workspaceId: string | undefined, key: string): string
  */
 export function labelAlerts(
   items: readonly AlertItem[],
-  machine: { key: string; name: string; focused: boolean; scope: string; workspaceId?: string | undefined },
+  machine: {
+    key: string;
+    name: string;
+    focused: boolean;
+    scope: string;
+    workspaceId?: string | undefined;
+    grant?: number | undefined;
+  },
   named: boolean,
 ): AlertItem[] {
   return items.map((item) => ({
@@ -185,6 +192,7 @@ export function labelAlerts(
       name: machine.name,
       focused: machine.focused,
       ...(machine.workspaceId ? { workspaceId: machine.workspaceId } : {}),
+      ...(machine.grant !== undefined ? { grant: machine.grant } : {}),
     },
   }));
 }
@@ -234,6 +242,12 @@ async function readWork(reader: FleetReader, failedIds: ReadonlySet<string> | un
 class Member {
   generation = 0;
   scope = 0;
+  /**
+   * What this member's alerts were read under. It moves whenever what was retained is
+   * dropped (a refusal, another store, no identity), so a notification posted before that
+   * routes nowhere after it, even once the same store is verified again.
+   */
+  grant = 1;
   connection: FleetConnection | undefined;
   stream: { close(): void; readonly lastSeq?: number | undefined } | undefined;
   link: SubscriptionState = "connecting";
@@ -314,6 +328,12 @@ export class Fleet {
     if (!machine) return item;
     const focused = this.focused?.key === machine.key;
     if (focused && this.focused?.authority === undefined) return undefined;
+    // The click belongs to the authority that read it: the focused connection's grant or the
+    // watched member's, never the other's (their numbers are separate counters). One read
+    // under a grant that has since been lost (a refusal, even one a same-store hello answered
+    // again) is stale too. Callers resolve a still-open item to its newest statement first.
+    const grant = focused ? this.focused?.authority : this.members.get(machine.key)?.grant;
+    if (machine.focused !== focused || machine.grant === undefined || machine.grant !== grant) return undefined;
     const now = focused ? this.focused?.workspaceId : this.verifiedOn(machine.key);
     if (now !== machine.workspaceId || (!focused && now === undefined)) return undefined;
     return { ...item, machine: { ...machine, focused } };
@@ -485,6 +505,7 @@ export class Fleet {
   /** Drop everything a member retained: another store, no identity, or no authority. */
   private forget(member: Member): void {
     member.scope += 1;
+    member.grant += 1;
     member.retained = undefined;
     member.failedIds = new Set();
   }
@@ -791,6 +812,7 @@ export class Fleet {
             focused: false,
             scope: alertScope(shown.workspaceId, member.key),
             workspaceId: shown.workspaceId,
+            grant: member.grant,
           },
           true,
         ),

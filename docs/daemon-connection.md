@@ -389,8 +389,15 @@ each other:
   (`ConnectionMachine.authority`). A refusal ends that authority even though the last
   workspace id is still known: the focused machine's alerts and its Machines section
   are cleared, reads and renderer reports in flight are dropped, and only a `hello`
-  answered after the refusal grants a new one (a reconnecting socket does not); a
-  click on an alert from a repointed, refused or unwatched machine just brings the
+  answered after the refusal grants a new one (a reconnecting socket does not). The
+  grant is a number the connection snapshot carries: the renderer's Attention reads
+  restart when it moves, and its alert report is stamped with the grant those reads
+  ran under, so a report from before a refusal is dropped even after a same-store
+  `hello` grants a new one. Each alert records the grant it was read under (the
+  focused connection's, or the watched machine's, which moves whenever what it
+  retained is dropped), and a click resolves to the alert as it is stated now when it
+  is still open, else as it was posted, which routes nowhere once its grant is gone.
+  A click on an alert from a repointed, refused or unwatched machine just brings the
   window forward. Clicking one from an unfocused machine opens Machines. The dock badge
   stays the focused daemon's count, the same number as the title bar.
 - **Changing a watched profile.** A profile is not edited, removed, reset or given a
