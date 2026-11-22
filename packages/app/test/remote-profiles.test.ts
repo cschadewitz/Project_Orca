@@ -28,7 +28,8 @@ import { DaemonClient } from "../src/client/daemon-client.js";
 import { CredentialTransportUnavailable, type DaemonTokenSource } from "../src/client/auth.js";
 import { DaemonSubscription } from "../src/client/subscription.js";
 import { ConnectionTarget, connectionFailure } from "../src/main/connection-target.js";
-import { installationId, principalFor, type CredentialRecord } from "../src/main/remote-credentials.js";
+import { installationId, principalFor, revokeCommand, type CredentialRecord } from "../src/main/remote-credentials.js";
+import { parseArgs } from "node:util";
 import {
   helloVerdict,
   RemoteProfiles,
@@ -76,7 +77,9 @@ class FakeServer {
       const at = words.indexOf(name);
       return at < 0 ? undefined : words[at + 1];
     };
-    const [, , sub, subject] = words;
+    const [, , sub] = words;
+    // The subject: after `--` when there is one (a revoke), else the word after the subcommand.
+    const subject = words.includes("--") ? words[words.indexOf("--") + 1] : words[3];
     const gone = { code: 1, stdout: "", serverLines: [`error: no live credential ${subject}`] };
     if (sub === "issue" || sub === "rotate") {
       let principal = subject!;
@@ -1072,7 +1075,7 @@ describe("automatic sign-in keeps every credential accounted for (#875 review)",
     ).toMatchObject({ hasCredential: false, pendingRevocations: 1 });
     await (await profiles.open("lab")).release();
     const revoke = server.commands.find((c) => c[2] === "revoke")!;
-    expect(revoke[3]).toBe(old);
+    expect(revoke.at(-1)).toBe(old);
     expect(revoke[revoke.indexOf("--config") + 1]).toBe("/srv/a/orca.config.yaml");
     expect(server.commands[1]![server.commands[1]!.indexOf("--config") + 1]).toBe("/srv/b/orca.config.yaml");
     expect(profiles.list()[0]).not.toHaveProperty("pendingRevocations");
@@ -1447,5 +1450,23 @@ describe("credentials travel only through verified keys, and no slot is swept on
     restart();
     expect(existsSync(stray)).toBe(false);
     expect(readdirSync(vault)).toEqual(own);
+  });
+});
+
+describe("server commands (#875)", () => {
+  it("revokes a credential whose id starts with a dash: never read as an option", () => {
+    const command = revokeCommand(
+      { server: "lab", hostKeys: "[]", serverConfig: "/srv/orca.config.yaml" },
+      "-7S0Qb1r7CC7",
+    );
+    // As the CLI parses its arguments (node's parseArgs, strict).
+    const { positionals, values } = parseArgs({
+      args: command.slice(1),
+      options: { json: { type: "boolean" }, config: { type: "string" } },
+      allowPositionals: true,
+      strict: true,
+    });
+    expect(positionals).toEqual(["auth", "revoke", "-7S0Qb1r7CC7"]);
+    expect(values).toMatchObject({ json: true, config: "/srv/orca.config.yaml" });
   });
 });

@@ -200,7 +200,8 @@ export function issueCommand(profile: ConnectionProfile, principal: string, expi
 
 /** Revoke where it was issued: that CLI, that workspace config. */
 export function revokeCommand(target: CredentialTarget, credentialId: string): string[] {
-  return [target.serverCommand ?? "orca", "auth", "revoke", credentialId, ...configArgs(target), "--json"];
+  // A credential id may start with `-`: after `--`, so it is never read as an option.
+  return [target.serverCommand ?? "orca", "auth", "revoke", ...configArgs(target), "--json", "--", credentialId];
 }
 
 const CREDENTIAL_ID = /^[A-Za-z0-9_-]{12}$/;
