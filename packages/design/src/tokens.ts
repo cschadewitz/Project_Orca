@@ -302,7 +302,7 @@ export const SURFACE_PRESENTATION: Record<SurfaceId, { word: string; glyph: stri
   workflows: { word: 'Workflows', glyph: '⑂' },
   agents: { word: 'Agents', glyph: '◉' },
   config: { word: 'Config', glyph: '❋' },
-  machines: { word: 'Machines', glyph: '⧉' },
+  machines: { word: 'Machines', glyph: '❐' },
 };
 
 export type ObjectKind = 'run' | 'workItem' | 'request' | 'step' | 'gate' | 'event';

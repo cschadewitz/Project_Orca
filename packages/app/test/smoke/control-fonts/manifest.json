@@ -5,7 +5,7 @@
     "weight": "400",
     "source": "DejaVuSans.ttf",
     "sourceSha256": "57f73e11f51999432bf7ab22ce55b6f945d5eca1bf824404cfa9ec2e3718c84e",
-    "sha256": "b3c3edb1ef255645082329623885caa26472dae1255d7c51650d171966c2de03",
+    "sha256": "8fb02b59a766a6cb2f32e02286597ecc49f8c29601b32c6dd67026bdd1fd34ec",
     "fontFamily": "DejaVu Sans"
   },
   {
@@ -14,7 +14,7 @@
     "weight": "500 700",
     "source": "DejaVuSans-Bold.ttf",
     "sourceSha256": "a4c5bc453ca281d90ea079e596da7ae0dfeb5777497c29ec254e76d97ff6f890",
-    "sha256": "6a5087229efe60b68ec49a0e4f854d470196e6e673146a467a9663398ee87a55",
+    "sha256": "953dacd45fc774b31929725272ba6542d8e6a0eab0e8e79b43fa8338e192b899",
     "fontFamily": "DejaVu Sans"
   },
   {
@@ -23,7 +23,7 @@
     "weight": "400",
     "source": "DejaVuSansMono.ttf",
     "sourceSha256": "54bf827eb99404e8f430c330ad30f063334f637eba0109b6a18d4f566a8e9dd8",
-    "sha256": "6f90e222b5063a3f6c5d3822c98d42fe334310351019168ee24d6917c140b51f",
+    "sha256": "05355227861b7c04f654ee31a1d1f8f885d9e861bb6eb1dfe753defe7b979b1c",
     "fontFamily": "DejaVu Sans Mono"
   },
   {
@@ -32,7 +32,7 @@
     "weight": "500 700",
     "source": "DejaVuSansMono-Bold.ttf",
     "sourceSha256": "0d3c03d1b667192f91223660a3163325cf83132662fe4d9f7d6e596bf7a995c2",
-    "sha256": "18e4ada59ef35aa22d4d7b3e211c2704f4d10008d5d50b076026752f6ba3e358",
+    "sha256": "2f8badfca8f83607960692622c706b743b4be4030a9809a2d9b2ed7d504d45a2",
     "fontFamily": "DejaVu Sans Mono"
   },
   {

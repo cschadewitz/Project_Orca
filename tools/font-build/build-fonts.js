@@ -99,6 +99,7 @@ const SYMBOLS = chars(
   0x2442, // ⑂ surface workflows
   0x25c9, // ◉ surface agents
   0x274b, // ❋ surface config
+  0x2750, // ❐ surface machines (#882): one screen in front of others
   /* The object kinds an id token leads with (semantics.json `objectKind`). ☰ and ⬡ above
      are the run's and the work item's, reused from the rail on purpose; these are the rest,
      and the gate's ⊓ is in the Math face below. None of them is a status glyph. */
@@ -111,7 +112,6 @@ const SYMBOLS = chars(
 const SYMBOLS_MATH = chars(
   0x2298, // ⊘ cancelled
   0x2293, // ⊓ object kind gate
-  0x29c9, // ⧉ surface machines (#882)
 );
 
 /* ---------- what to build ---------- */

@@ -68,7 +68,7 @@ boundary and none of them has to draw its own.
 | **Workflows** | ⑂ | What the workflows are, and changing them | Added with the editor (#181): the list, the viewer (#177) and the editor (#180–#182) |
 | **Agents** | ◉ | Who is doing the work and are they healthy | 1 read, 2 write — both shipped |
 | **Config** | ❋ | How the system is wired | 2 — shipped in v0.5.0 (#175, #266); the configuration studio, guided launch, templates and first-run setup in 0.7.0 |
-| **Machines** | ⧉ | What every daemon I run is doing, side by side | Added in 0.8.0 (#882): watched machines, read-only, one focused for writes |
+| **Machines** | ❐ | What every daemon I run is doing, side by side | Added in 0.8.0 (#882): watched machines, read-only, one focused for writes |
 
 **Workflows is the sixth surface, added with the editor.** The design had five, with the
 workflow viewer living under Config, reached only by link, from the palette, or from a run's
