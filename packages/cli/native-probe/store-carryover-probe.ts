@@ -19,10 +19,10 @@
  * (BACKUPS_UNSAFE) with no marker written. Prints one JSON result; exits non-zero on failure.
  */
 import { execFileSync } from "node:child_process";
-import { readdirSync, lstatSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, lstatSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { windowsPrivateChild } from "@orca/protocol/first-run-fence";
+import { dirname, join } from "node:path";
+import { windowsDirectory, windowsPrivateChild } from "@orca/protocol/first-run-fence";
 import { carryStoreForward, readStoreFormat, STORE_FORMAT_BACKUP_DIR, STORE_FORMAT_EPOCH } from "@orca/store";
 import { windowsPrivateCopy } from "../src/store-privacy.js";
 
@@ -106,7 +106,47 @@ function appStore(name: string): string {
 }
 const grantEveryone = (path: string) => execFileSync("icacls", [path, "/grant", "*S-1-1-0:(R)"], { stdio: "ignore" });
 
-const store = appStore("orca-carryover-probe");
+/** Which existing ancestor the boundary refuses, when it refuses one: printed, then rethrown. */
+function diagnose(error: unknown, path: string): never {
+  const chain: string[] = [];
+  for (let p = path; ;) {
+    chain.unshift(p);
+    const parent = dirname(p);
+    if (parent === p) break;
+    p = parent;
+  }
+  const report = chain.map((p) => {
+    if (!existsSync(p)) return { path: p, exists: false };
+    try {
+      windowsDirectory(p, "parent");
+      return { path: p, parent: "ok" };
+    } catch {
+      return { path: p, parent: "refused", owner: owner(p) };
+    }
+  });
+  process.stderr.write(JSON.stringify({ home: homedir(), user: me, report }, null, 2) + "\n");
+  throw error;
+}
+function owner(path: string): string {
+  try {
+    return execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", `(Get-Acl -LiteralPath '${path}').Sddl`],
+      { encoding: "utf8" },
+    ).trim();
+  } catch {
+    return "unreadable";
+  }
+}
+const safely = (name: string) => {
+  try {
+    return appStore(name);
+  } catch (error) {
+    return diagnose(error, join(homedir(), name));
+  }
+};
+
+const store = safely("orca-carryover-probe");
 // A source file readable by Everyone: its copy must not carry that ACE.
 grantEveryone(join(store, "runs", "run_old.jsonl"));
 const outcome = await carryStoreForward(store, { appVersion: "0.0.0-probe", privacy: windowsPrivateCopy });
@@ -135,7 +175,7 @@ for (const entry of entries) {
 }
 
 // An existing backups folder that others can read is refused before anything is copied.
-const shared = appStore("orca-carryover-probe-shared");
+const shared = safely("orca-carryover-probe-shared");
 mkdirSync(join(shared, STORE_FORMAT_BACKUP_DIR));
 grantEveryone(join(shared, STORE_FORMAT_BACKUP_DIR));
 const refusal = await carryStoreForward(shared, { appVersion: "0.0.0-probe", privacy: windowsPrivateCopy }).then(
