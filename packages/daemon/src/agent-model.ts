@@ -17,7 +17,7 @@
  * They are projected by `ReadModel` so there is one `ClaimView` in the daemon and not two.
  */
 import type { AgentRegistry, AgentHealth } from "@orca/agents";
-import { describeError, resolveCapabilities, type Clock } from "@orca/core";
+import { describeError, resolveCapabilities, secretRefs, type Clock } from "@orca/core";
 import type { Orchestrator } from "@orca/engine";
 import type {
   AgentsListResult,
@@ -107,6 +107,22 @@ export class AgentModel {
     // A selector that resolves to nothing *is* an error: there is no agent to report on.
     const { agent, host } = registry.resolve(params.agentId);
     const cwd = params.cwd ?? host.spec.workspaceRoot ?? (host.spec.type === "local" ? process.cwd() : "/tmp");
+    // A diagnostic ping has no server-verified use check for secret references (#336), so it
+    // never delivers one: an agent that uses one is not started, and its health is not
+    // touched, since nothing about the agent was learned.
+    const refs = [agent.env, ...agent.mcpServers.map((m) => m.env)].flatMap((env) => secretRefs(env));
+    if (refs.length)
+      return {
+        agent: agentView(registry.health.get(agent.id), registry),
+        ok: false,
+        error: {
+          code: "CONFIG_INVALID",
+          message: `agent '${agent.id}' uses secret references (${[
+            ...new Set(refs.map((r) => `'${r.ref.secret}'`)),
+          ].join(", ")}), which a ping does not deliver; it is not started`,
+        },
+        asOf: this.clock.isoNow(),
+      };
     const handshake = registry.health.begin(agent.id);
     try {
       // The agent's own scope (#335): what a step with no workflow or node selection would get.
@@ -116,6 +132,7 @@ export class AgentModel {
         // Catalog servers are not delivered to sessions yet (#337), so a ping does not start them.
         agent: { ...agent, mcpServers: scoped.manifest.mcpServers.filter((m) => !m.catalog).map((m) => m.server) },
         cwd,
+        secrets: registry.secrets(),
         logger: this.orc.logger,
         clock: this.clock,
       });

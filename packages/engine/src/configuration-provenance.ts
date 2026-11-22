@@ -1,5 +1,6 @@
 /** Build metadata only; all input values are withheld, including artifact references. */
 import {
+  literalEnv,
   sha256,
   templateReferences,
   type RunOverrides,
@@ -168,7 +169,7 @@ export function configuredGenerationSecrets(material: GenerationMaterial): strin
   const catalogServers = Object.values(material.agents.capabilities().catalog.mcpServers);
   for (const agent of material.agents.listAgents()) {
     for (const spec of [agent, ...agent.mcpServers, ...catalogServers]) {
-      for (const [key, value] of Object.entries(spec.env)) {
+      for (const [key, value] of Object.entries(literalEnv(spec.env))) {
         if (credentialKey(key)) add(value);
         inspect(value);
       }

@@ -20,7 +20,8 @@
  */
 import { spawn } from "node:child_process";
 import { posix } from "node:path";
-import { OrcaError, type AgentSpec, type SshHost as SshHostSpec } from "@orca/core";
+import { OrcaError, literalEnv, type AgentSpec, type SshHost as SshHostSpec } from "@orca/core";
+import { sourceMissing } from "../secrets.js";
 import {
   collectChildProcess,
   killIfRunning,
@@ -32,6 +33,7 @@ import {
   type AgentProcessHandle,
   type ExecResult,
   type HostFileSystem,
+  type SecretDelivery,
   type SpawnAgentOptions,
 } from "../host.js";
 
@@ -126,14 +128,38 @@ export class SshHost implements AgentHost {
     return [shell!, ...shellArgs, shellQuote(script)];
   }
 
-  spawnAgent(agent: AgentSpec, options: SpawnAgentOptions): Promise<AgentProcessHandle> {
-    const env = { ...agent.env, ...(options.env ?? {}) };
+  readonly deliversSecrets = true;
+
+  /**
+   * Secrets (#336) are read by the same remote shell that then execs the agent, over this one
+   * SSH connection: the machine that read a value is the machine the agent runs on, whatever
+   * a host label resolves to at another moment. The shell reads each source, removes every
+   * variable a secret on this host is read from, exports the agent's own, reports the values
+   * back on stdout (base64, after a marker) for redaction, and execs the agent, whose stdout
+   * is ACP from then on. Values go through shell variables and builtins only, never an
+   * argument list, on either machine.
+   */
+  async spawnAgent(agent: AgentSpec, options: SpawnAgentOptions): Promise<AgentProcessHandle> {
+    const env = { ...literalEnv(agent.env), ...(options.env ?? {}) };
     const envPrefix = Object.entries(env)
       .map(([k, v]) => `${k}=${shellQuote(v)}`)
       .join(" ");
-    const script =
-      `cd ${shellQuote(options.cwd)} && exec ${envPrefix ? `env ${envPrefix} ` : ""}${shellQuote(agent.command)} ${agent.args.map(shellQuote).join(" ")}`.trim();
-    return wrapAgentProcess(this.spawnSsh(script), {
+    const deliveries = options.secrets ?? [];
+    const names = [
+      ...deliveries.flatMap((d) => [...d.env, ...(d.source.provider === "env" ? [d.source.name] : [])]),
+      ...(options.withheldEnv ?? []),
+    ];
+    for (const name of names)
+      if (!VARIABLE.test(name))
+        throw new OrcaError("CONFIG_INVALID", `environment variable name '${name}' cannot carry a secret`, {
+          hostId: this.id,
+        });
+    const script = `${secretPreamble(deliveries, options.withheldEnv ?? [])}cd ${shellQuote(options.cwd)} && exec ${
+      envPrefix ? `env ${envPrefix} ` : ""
+    }${shellQuote(agent.command)} ${agent.args.map(shellQuote).join(" ")}`.trim();
+    const child = this.spawnSsh(script);
+    const values = new Map<string, string>();
+    const handle = await wrapAgentProcess(child, {
       onSpawnError: (e) =>
         new OrcaError(
           "AGENT_TRANSPORT",
@@ -141,6 +167,80 @@ export class SshHost implements AgentHost {
           { hostId: this.id },
           { cause: e },
         ),
+      ...(deliveries.length
+        ? { beforeStream: (c: PipedChildProcess) => this.readReported(c, deliveries, values) }
+        : {}),
+    });
+    if (values.size) handle.secretValues = values;
+    return handle;
+  }
+
+  /** Consume the preamble's report from stdout, leaving the rest of it for ACP. */
+  private readReported(
+    child: PipedChildProcess,
+    deliveries: SecretDelivery[],
+    values: Map<string, string>,
+  ): Promise<void> {
+    const ready = Buffer.from(`\n${READY}\n`);
+    return new Promise<void>((resolve, reject) => {
+      let buffered = Buffer.alloc(0);
+      const finish = (error?: Error) => {
+        clearTimeout(timer);
+        child.stdout.off("data", onData);
+        child.off("exit", onExit);
+        if (error) reject(error);
+        else resolve();
+      };
+      const parse = (text: string) => {
+        let missing: number | undefined;
+        for (const line of text.split("\n")) {
+          const [marker, index, encoded] = line.split(" ");
+          const d = deliveries[Number(index)];
+          if (!d) continue;
+          if (marker === VALUE_MARKER && encoded !== undefined)
+            values.set(d.id, Buffer.from(encoded, "base64").toString("utf8"));
+          else if (marker === MISSING_MARKER) missing = Number(index);
+        }
+        return missing;
+      };
+      const onData = (chunk: Buffer) => {
+        buffered = Buffer.concat([buffered, chunk]);
+        const at = buffered.indexOf(ready);
+        if (at < 0) return;
+        child.stdout.pause();
+        parse(buffered.subarray(0, at).toString("utf8"));
+        const rest = buffered.subarray(at + ready.length);
+        finish(
+          deliveries.every((d) => values.has(d.id))
+            ? undefined
+            : new OrcaError("AGENT_TRANSPORT", `host '${this.id}' did not report every secret it read`, {
+                hostId: this.id,
+              }),
+        );
+        if (rest.length) child.stdout.unshift(rest);
+      };
+      const onExit = (code: number | null) => {
+        const missing = parse(buffered.toString("utf8"));
+        const d = missing === undefined ? undefined : deliveries[missing];
+        finish(
+          d
+            ? sourceMissing(d.id, d.source, this.id)
+            : new OrcaError(
+                "AGENT_TRANSPORT",
+                `the connection to host '${this.id}' ended (exit ${code}) before the agent started`,
+                { hostId: this.id },
+              ),
+        );
+      };
+      const timer = setTimeout(
+        () =>
+          finish(
+            new OrcaError("AGENT_TRANSPORT", `host '${this.id}' did not start the agent in time`, { hostId: this.id }),
+          ),
+        this.spec.connectTimeoutMs + 15_000,
+      );
+      child.stdout.on("data", onData);
+      child.once("exit", onExit);
     });
   }
 
@@ -456,4 +556,48 @@ class SftpFileSystem implements HostFileSystem {
     }
     return client;
   }
+}
+
+const VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const VALUE_MARKER = "__orca_secret_value__";
+const MISSING_MARKER = "__orca_secret_missing__";
+const READY = "__orca_ready__";
+
+/**
+ * The remote half of secret delivery (#336), in POSIX sh. Each source is read into a shell
+ * variable (the `x` sentinel keeps trailing newlines, so exactly one is dropped, as a local
+ * host does); a missing or empty one reports its index and exits. Then every withheld
+ * variable is removed, the agent's own are exported, and each value is reported in base64.
+ * Leading newlines keep each marker at the start of a line whatever a login profile printed.
+ */
+export function secretPreamble(deliveries: readonly SecretDelivery[], withheld: readonly string[]): string {
+  const parts: string[] = [];
+  if (deliveries.length) parts.push(`__orca_nl='\n'`, `__orca_cr=$(printf '\\r')`);
+  deliveries.forEach((d, i) => {
+    const missing = `{ printf '\\n${MISSING_MARKER} ${i}\\n'; exit 97; }`;
+    const read =
+      d.source.provider === "env"
+        ? `printenv ${d.source.name} && printf x`
+        : `cat -- ${shellQuote(d.source.path)} 2>/dev/null && printf x`;
+    parts.push(
+      `__orca_v=$(${read}) || ${missing}`,
+      `__orca_v=\${__orca_v%x}`,
+      d.source.provider === "env"
+        ? `__orca_v=\${__orca_v%"$__orca_nl"}`
+        : `case $__orca_v in *"$__orca_cr$__orca_nl") __orca_v=\${__orca_v%??};; *"$__orca_nl") __orca_v=\${__orca_v%?};; esac`,
+      `[ -n "$__orca_v" ] || ${missing}`,
+      `__orca_s${i}=$__orca_v`,
+    );
+  });
+  if (withheld.length) parts.push(`unset ${withheld.join(" ")}`);
+  deliveries.forEach((d, i) => {
+    for (const name of d.env) parts.push(`${name}=$__orca_s${i}`, `export ${name}`);
+    parts.push(`printf '\\n${VALUE_MARKER} ${i} %s\\n' "$(printf '%s' "$__orca_s${i}" | base64 | tr -d '\\n')"`);
+  });
+  if (deliveries.length)
+    parts.push(
+      `unset __orca_v __orca_nl __orca_cr ${deliveries.map((_, i) => `__orca_s${i}`).join(" ")}`,
+      `printf '\\n${READY}\\n'`,
+    );
+  return parts.map((p) => `${p}; `).join("");
 }
