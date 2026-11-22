@@ -2,11 +2,13 @@
 # Audited ordinary prose retains the named verdict with lightweight documentation checks.
 name: CI
 
+# Release line branches (`release/X.Y`, docs/RELEASING.md "Release lines") get the same
+# checks as main, so a fix backported to a line is verified before it can ship in a patch.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, "release/[0-9]*"]
   push:
-    branches: [main]
+    branches: [main, "release/[0-9]*"]
 
 permissions:
   contents: read
