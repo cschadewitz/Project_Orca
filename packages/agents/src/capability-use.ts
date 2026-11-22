@@ -141,15 +141,19 @@ export const TRUSTED_EXECUTABLE_POLICY = "absolute-canonical-admin-owned";
  * otherwise. Run in a subshell: they set options and exit.
  */
 const TRUST_CHECK = [
+  // The verdict must not depend on the environment being judged: the configured `PATH` (or
+  // a function from a login profile) could otherwise supply its own `ls` or `id`. Tools are
+  // found on a fixed system `PATH` only, through `command` (never a function), in the C locale.
+  "PATH=/usr/bin:/bin; export PATH; LC_ALL=C; export LC_ALL",
   "set -f",
   "case $p in /*) ;; *) exit 5 ;; esac",
   '[ -f "$p" ] && [ ! -L "$p" ] && [ -x "$p" ] || exit 5',
   'd=$(cd -P -- "${p%/*}/" && pwd -P) || exit 5',
   '[ "${d%/}/${p##*/}" = "$p" ] || exit 5',
-  "u=$(id -u) || exit 5",
+  "u=$(command id -u) || exit 5",
   "x=$p",
   "while :; do",
-  '  l=$(ls -ldn -- "$x") || exit 5',
+  '  l=$(command ls -ldn -- "$x") || exit 5',
   "  set -- $l",
   '  [ "$3" = 0 ] || [ "$3" = "$u" ] || exit 5',
   "  case $1 in ?????w* | ????????w* | ??????????+*) exit 5 ;; esac",

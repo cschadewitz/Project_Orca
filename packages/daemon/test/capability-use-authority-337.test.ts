@@ -390,6 +390,20 @@ describe("resolveMcpServerCommand", () => {
           found("/usr/bin/../bin/env"),
         );
       }
+      // A configured search path cannot change the verdict: its own `ls` and `id` claim every
+      // file is root's and unwritable, and are never asked.
+      const fake = join(dir, "fake-bin");
+      await mkdir(fake);
+      for (const [name, body] of [
+        ["ls", "echo '-rwxr-xr-x 1 0 0 0 Jan 1 00:00 x'"],
+        ["id", "echo 0"],
+      ] as const) {
+        await writeFile(join(fake, name), `#!/bin/sh\n${body}\n`);
+        await chmod(join(fake, name), 0o755);
+      }
+      expect(
+        await resolveMcpServerCommand(box, { command: tool, env: { PATH: `${fake}:/usr/bin:/bin` } }, ctx),
+      ).toEqual(found(tool));
       await symlink(tool, join(dir, "link"));
       expect(await resolveMcpServerCommand(box, { command: join(dir, "link"), env: {} }, ctx)).toEqual(
         found(join(dir, "link")),
