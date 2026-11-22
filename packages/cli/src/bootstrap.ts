@@ -11,9 +11,8 @@ import {
 } from "./update-bootstrap.js";
 import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
-import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR, enterStoreFormat } from "@orca/store";
-import { removeUpdateHandoff } from "@orca/protocol/update-handoff";
-import { desktopCarryover } from "./desktop-carryover.js";
+import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
+import { enterDaemonStoreFormat } from "./desktop-carryover.js";
 import { readOrcaVersion } from "./version.js";
 import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
 
@@ -343,14 +342,12 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   // on the first start after an update while it holds the store's writer fence (#897). Closed
   // update validation only checks; an ephemeral bootstrap never opens the store at all.
   if (!opts.ephemeral) {
-    const version = storeWriterVersion();
-    await enterStoreFormat(resolve(configDir, config.storeDir), {
-      appVersion: version,
-      mode: isClosedUpdateBootstrap() ? "read" : "write",
-      ...(writer ? { carryover: () => Promise.resolve(desktopCarryover(writer, version)) } : {}),
-    });
-    // A handoff for an update that kept the format is spent once its daemon holds the store.
-    if (writer?.check()) removeUpdateHandoff(writer.storeDir);
+    await enterDaemonStoreFormat(
+      resolve(configDir, config.storeDir),
+      writer,
+      storeWriterVersion(),
+      isClosedUpdateBootstrap() ? "read" : "write",
+    );
   }
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config);

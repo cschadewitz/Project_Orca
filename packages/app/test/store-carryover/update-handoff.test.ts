@@ -10,7 +10,7 @@ import { expect, it } from "vitest";
 import { enterFirstRunWriter } from "@orca/protocol/first-run-fence";
 import { readUpdateHandoff, UPDATE_HANDOFF_FILE, writeUpdateHandoff } from "@orca/protocol/update-handoff";
 import { enterStoreFormat, readStoreFormat, STORE_FORMAT_EPOCH, STORE_UPDATE_HANDOFF_FILE } from "@orca/store";
-import { desktopCarryover } from "../../../cli/src/desktop-carryover.js";
+import { desktopCarryover, enterDaemonStoreFormat } from "../../../cli/src/desktop-carryover.js";
 import { handOffStoreForUpdate, withdrawUpdateHandoff } from "../../src/main/first-run/update-handoff.js";
 import {
   OWNERSHIP_DIRECTORY,
@@ -124,6 +124,52 @@ it("settles only the exact handoff it claimed, and only while its fence holds", 
   expect(hold!.check()).toBe(false);
   await authority.settle("carried");
   expect(readUpdateHandoff(store)).toEqual(claimed);
+}, 30000);
+
+it("the daemon's gate leaves a record it did not claim, after a carryover", async () => {
+  const path = await selected();
+  launch(path);
+  const store = join(path, ".orca");
+  await legacy(store);
+  handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  const owner = reserveFirstRunOwnership(path);
+  const hold = await enterFirstRunWriter(path, store, owner.launchToken!());
+  // While this writer copies, the record on disk is replaced: the fence still holds, but the
+  // record is no longer the one it claimed, so neither settle nor the gate may delete it.
+  const outcome = await enterDaemonStoreFormat(store, hold, "0.9.0", "write", () => {
+    writeUpdateHandoff(store, { ...readUpdateHandoff(store)!, createdAt: "2026-01-01T00:00:00.000Z" });
+    return Promise.resolve();
+  });
+  expect(outcome).toMatchObject({ status: "carried" });
+  expect(hold!.check()).toBe(true);
+  expect(readUpdateHandoff(store)).toMatchObject({ createdAt: "2026-01-01T00:00:00.000Z" });
+}, 30000);
+
+it("the daemon's gate spends a same-format update's record only when this writer owns it", async () => {
+  const path = await selected();
+  launch(path);
+  const store = join(path, ".orca");
+  await mkdir(store, { recursive: true });
+  // A store already in this build's format: the update keeps it.
+  await enterStoreFormat(store, { appVersion: "0.8.0", mode: "write" });
+  handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  const handoff = readUpdateHandoff(store)!;
+  const owner = reserveFirstRunOwnership(path);
+  const hold = await enterFirstRunWriter(path, store, owner.launchToken!());
+  // A record for another claim (not the one this writer follows) stays.
+  const foreign = { ...handoff, claimHash: "0".repeat(64) };
+  writeUpdateHandoff(store, foreign);
+  expect(await enterDaemonStoreFormat(store, hold, "0.9.0", "write")).toMatchObject({ status: "current" });
+  expect(readUpdateHandoff(store)).toEqual(foreign);
+  // The record for the daemon this writer directly follows is spent.
+  writeUpdateHandoff(store, handoff);
+  expect(await enterDaemonStoreFormat(store, hold, "0.9.0", "write")).toMatchObject({ status: "current" });
+  expect(readUpdateHandoff(store)).toBeUndefined();
+  // Without the fence, nothing is removed, even that record.
+  writeUpdateHandoff(store, handoff);
+  mkdirSync(join(path, OWNERSHIP_DIRECTORY, nextAttempt(path)), { mode: 0o700 });
+  await enterDaemonStoreFormat(store, hold, "0.9.0", "write");
+  expect(readUpdateHandoff(store)).toEqual(handoff);
 }, 30000);
 
 it("keeps refusing without the proof: another launch in between, or the version that was not installed", async () => {

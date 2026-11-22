@@ -120,6 +120,34 @@ export function removeUpdateHandoff(storeDir: string): void {
   syncDirectory(storeDir);
 }
 
+/**
+ * Remove the handoff only under proof this writer owns it: the fence holds, and the record on
+ * disk satisfies `owns`, with the fence re-checked immediately before the unlink (no await in
+ * between). Otherwise nothing in the store is changed. Returns whether it was removed.
+ */
+export function spendUpdateHandoff(hold: FirstRunWriterHold, owns: (handoff: UpdateHandoff) => boolean): boolean {
+  if (!hold.check()) return false;
+  const current = readUpdateHandoff(hold.storeDir);
+  if (!current || !owns(current) || !hold.check()) return false;
+  removeUpdateHandoff(hold.storeDir);
+  return true;
+}
+
+/**
+ * A handoff for an update that kept the store format, once its daemon holds the store: one that
+ * names this exact store and either the claim this writer directly follows (the stopped daemon's)
+ * or this writer's own claim (an earlier start of this writer moved it). Anything else is left.
+ */
+export function spendSameFormatHandoff(hold: FirstRunWriterHold): boolean {
+  return spendUpdateHandoff(
+    hold,
+    (handoff) =>
+      same(handoff.store, hold.store) &&
+      same(handoff.workspace, hold.workspace) &&
+      (handoff.claimHash === hold.claimHash || (hold.previous !== null && handoff.claimHash === hold.previous)),
+  );
+}
+
 export type HandoffRefusal =
   | "none"
   | "not-first-run"
