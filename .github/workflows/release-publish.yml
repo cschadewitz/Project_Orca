@@ -69,6 +69,10 @@ permissions:
 jobs:
   check:
     name: verify the merge commit
+    # checks: read, for the release line check's result on a release pull request's head.
+    permissions:
+      contents: read
+      checks: read
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged && contains(github.event.pull_request.labels.*.name, 'release'))
@@ -104,43 +108,44 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # A real release runs the released commit's own tooling with a write token (the
-      # `publish` job), so that commit must already be reviewed: on the default branch, or on
-      # the protected release line branch of its own version (`release/X.Y` for X.Y.Z, where
-      # patches are cut; docs/RELEASING.md "Release lines"), and dispatched with the default
-      # branch's workflow. Any commit on them qualifies, which keeps the fix-forward path
-      # (publish again from a later reviewed commit) open. A dry run may rehearse anything,
-      # because its writer runs none of the ref's code.
-      - name: A real release builds a reviewed commit from the default branch or its line
+      # `publish` job), so that commit must already be reviewed, from the one lane its version
+      # may come from (tools/release-lane.js, read from main, not from the commit): `main` for
+      # a new minor or major, the protected line `release/X.Y` for a patch (docs/RELEASING.md
+      # "Release lines"). It is dispatched with main's workflow. Any commit on its lane
+      # qualifies, which keeps the fix-forward path open. A merged release pull request must
+      # also be the release preparation the guard passed, merged exactly as reviewed. A dry
+      # run may rehearse anything, because its writer runs none of the ref's code.
+      - name: A real release builds a reviewed commit from its lane
         if: ${{ !inputs.dry_run }}
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SHA: ${{ steps.sha.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
             echo "::error::dispatch a release with the workflow from $DEFAULT_BRANCH (it was $REF)"
             exit 1
           fi
-          if git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"; then
-            echo "releasing $SHA from $DEFAULT_BRANCH"
-            exit 0
-          fi
+          policy="$RUNNER_TEMP/release-lane.js"
+          git show "refs/remotes/origin/$DEFAULT_BRANCH:tools/release-lane.js" > "$policy"
           version=$(git show "$SHA:package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::package.json version is not a semver version; nothing built"
             exit 1
           fi
-          line="release/$(cut -d. -f1-2 <<<"${version%%-*}")"
-          if git rev-parse -q --verify "refs/remotes/origin/$line^{commit}" >/dev/null &&
-            git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$line"; then
-            echo "releasing $SHA (v$version) from its line $line"
-            echo "Released from the release line \`$line\`, not $DEFAULT_BRANCH." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          if ! node "$policy" verify "$SHA" "$version" > "$RUNNER_TEMP/lane"; then
+            cat "$RUNNER_TEMP/lane"
+            exit 1
           fi
-          echo "::error::$SHA is not on $DEFAULT_BRANCH or $line; release a reviewed commit, or tick dry_run to rehearse this one"
-          exit 1
+          read -r lane _ < "$RUNNER_TEMP/lane"
+          if [ "$EVENT" = "pull_request" ]; then
+            node "$policy" release-pr "$GITHUB_EVENT_PATH" "$SHA"
+          fi
+          echo "releasing $SHA (v$version) from $lane"
+          echo "Released v$version from \`$lane\`." >> "$GITHUB_STEP_SUMMARY"
 
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
@@ -443,9 +448,13 @@ jobs:
 
   # A patch released from its line branch (`release/X.Y`) never merges into main, so main
   # would neither list it in CHANGELOG.md nor know its changelog.d/ fragments were released:
-  # the next minor would repeat them. This records the release's section on main and deletes
-  # the fragments the line consumed, in a pull request that touches nothing else, and merges
-  # it. It runs main's tooling only; the released commit is read as data.
+  # the next minor would repeat them. This opens a pull request on main that adds the
+  # release's section and deletes exactly the fragments this release consumed, each only
+  # where main's copy is byte-identical to the one released (a differing copy is kept and
+  # named). The pull request goes through main's normal review and checks; auto-merge is
+  # requested. A rerun finds an open sync pull request for the version and reuses it when it
+  # holds the same change, and stops when it does not. It runs main's tooling only; the
+  # released commit is read as data.
   sync-main:
     name: record a line release on main
     needs: [check, publish]
@@ -455,6 +464,14 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - name: Release bot token (optional)
+        id: app
+        if: ${{ vars.ORCA_RELEASE_APP_ID != '' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.ORCA_RELEASE_APP_ID }}
+          private-key: ${{ secrets.ORCA_RELEASE_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
@@ -467,7 +484,7 @@ jobs:
 
       - name: Record the release on main
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
           REPO: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SHA: ${{ needs.check.outputs.sha }}
@@ -480,13 +497,21 @@ jobs:
           fi
           git show "$SHA:CHANGELOG.md" > "$RUNNER_TEMP/line-CHANGELOG.md"
           node tools/release.js sync "$VERSION" "$RUNNER_TEMP/line-CHANGELOG.md"
-          # Every fragment the line deleted since it left main, i.e. rendered into one of its
-          # releases, that main still holds.
-          fork=$(git merge-base "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH")
-          git log --diff-filter=D --name-only --format= "$fork..$SHA" -- changelog.d/ | sort -u |
-            while IFS= read -r file; do
-              if [ -n "$file" ] && [ -f "$file" ]; then git rm -q -- "$file"; fi
-            done
+          # The fragments this release consumed: deleted by the release commit itself. Each is
+          # removed from main only when main's copy is the exact blob that was released.
+          kept=()
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            [ -f "$file" ] || continue
+            if [ "$(git rev-parse "$SHA^1:$file")" = "$(git hash-object -- "$file")" ]; then
+              git rm -q -- "$file"
+            else
+              kept+=("$file")
+            fi
+          done < <(git diff --diff-filter=D --name-only "$SHA^1" "$SHA" -- changelog.d/)
+          for file in "${kept[@]}"; do
+            echo "::warning::kept $file on $DEFAULT_BRANCH: it differs from the copy v$VERSION released"
+          done
           git add CHANGELOG.md
           if git diff --cached --quiet; then
             echo "main already records v$VERSION; nothing to do."
@@ -499,20 +524,36 @@ jobs:
             echo "$changed"
             exit 1
           fi
-          branch="release-sync/v$VERSION"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -q -c "$branch"
           git commit -qm "changelog: record v$VERSION, released from its line"
-          git push -q "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" "HEAD:refs/heads/$branch"
-          url=$(gh pr create --repo "$REPO" --base "$DEFAULT_BRANCH" --head "$branch" --label no-changelog \
-            --title "changelog: record v$VERSION" \
-            --body "v$VERSION was released from its release line at \`$SHA\`. This adds its CHANGELOG section to $DEFAULT_BRANCH and deletes the changelog.d/ fragments it released, so the next minor does not repeat them. Opened and merged by Release (publish); it changes nothing else.")
-          if gh pr merge "$url" --squash --delete-branch; then
-            echo "Recorded v$VERSION on $DEFAULT_BRANCH: $url" >> "$GITHUB_STEP_SUMMARY"
+          tree=$(git rev-parse "HEAD^{tree}")
+          title="changelog: record v$VERSION"
+          # A rerun: reuse an open sync pull request with the same change, stop on another.
+          existing=$(gh pr list --repo "$REPO" --state open --base "$DEFAULT_BRANCH" --search "\"$title\" in:title" \
+            --json url,headRefOid,title --jq ".[] | select(.title == \"$title\") | \"\(.url) \(.headRefOid)\"")
+          if [ -n "$existing" ]; then
+            read -r url head <<<"$existing"
+            git fetch -q origin "$head"
+            change() { git diff "$1" "$2" | git patch-id --stable | cut -d' ' -f1; }
+            if [ "$(change "$(git merge-base "refs/remotes/origin/$DEFAULT_BRANCH" "$head")" "$head")" != \
+              "$(change "refs/remotes/origin/$DEFAULT_BRANCH" HEAD)" ]; then
+              echo "::error::$url already records v$VERSION differently; reconcile it by hand"
+              exit 1
+            fi
+            echo "Reusing $url for v$VERSION." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning::could not merge $url; merge it by hand (it only records v$VERSION's notes)"
-            echo "Opened $url; it did not merge automatically." >> "$GITHUB_STEP_SUMMARY"
+            branch="release-sync/v$VERSION-$GITHUB_RUN_ID"
+            git push -q "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" "HEAD:refs/heads/$branch"
+            body="v$VERSION was released from its release line at \`$SHA\`. This adds its CHANGELOG section to $DEFAULT_BRANCH and deletes the changelog.d/ fragments it released (only where $DEFAULT_BRANCH's copy is identical), so the next minor does not repeat them. It changes nothing else."
+            if [ ${#kept[@]} -gt 0 ]; then body+=$'\n\n'"Kept because they differ from the released copy: ${kept[*]}"; fi
+            url=$(gh pr create --repo "$REPO" --base "$DEFAULT_BRANCH" --head "$branch" --label no-changelog \
+              --title "$title" --body "$body")
+            echo "Opened $url (tree $tree)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # Through main's normal review and checks: auto-merge, never a direct merge.
+          if ! gh pr merge "$url" --auto --squash; then
+            echo "::warning::could not enable auto-merge on $url; it waits for review"
           fi
 
   # The rehearsal's writer. It runs none of the rehearsed ref's code: it checks out this

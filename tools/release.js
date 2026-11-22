@@ -18,6 +18,7 @@
 // The versioning policy it implements is documented in docs/RELEASING.md.
 import { readFileSync, writeFileSync } from "node:fs";
 import { FRAGMENT_DIR, deleteFragments, readFragments, renderEntries } from "./changelog.js";
+import { laneOf } from "./release-lane.js";
 
 const PKG = "package.json";
 const CHANGELOG = "CHANGELOG.md";
@@ -143,17 +144,6 @@ function prepare(version) {
   );
 }
 
-/**
- * The branch a version is cut from (docs/RELEASING.md, "Release lines"). A new minor or
- * major (`X.Y.0`, and its release candidates) comes from `main`; a patch (`X.Y.Z`, Z > 0)
- * comes from the protected line branch `release/X.Y`, so work merged to `main` for the next
- * minor never ships in it.
- */
-function releaseLine(version) {
-  const { major, minor, patch } = parse(version);
-  return patch === 0 ? "main" : `release/${major}.${minor}`;
-}
-
 const compare = (a, b) => {
   const x = parse(a);
   const y = parse(b);
@@ -252,7 +242,12 @@ switch (command) {
     else notes(rest[0] ?? die("usage: node tools/release.js notes <version> | notes --unreleased"));
     break;
   case "line":
-    console.log(releaseLine(rest[0] ?? die("usage: node tools/release.js line <version>")));
+    // The policy itself lives in release-lane.js, shared by prepare, publish and signing.
+    try {
+      console.log(laneOf(rest[0] ?? die("usage: node tools/release.js line <version>")));
+    } catch (err) {
+      die(err.message);
+    }
     break;
   case "sync":
     if (rest.length !== 2) die("usage: node tools/release.js sync <version> <source CHANGELOG.md>");

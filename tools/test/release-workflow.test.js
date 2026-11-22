@@ -129,9 +129,11 @@ it("never hands a write token to the ref under test (#863)", () => {
   // fix-forward release still works). release-lines.test.js runs the check itself.
   const sha = release.findIndex((s) => s.id === "sha");
   const reviewed = release[sha + 1];
-  expect(reviewed.name).toBe("A real release builds a reviewed commit from the default branch or its line");
+  expect(reviewed.name).toBe("A real release builds a reviewed commit from its lane");
   expect(reviewed.if).toBe("${{ !inputs.dry_run }}");
-  expect(reviewed.run).toContain('git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"');
+  // The lane policy is main's copy, never the released commit's.
+  expect(reviewed.run).toContain('git show "refs/remotes/origin/$DEFAULT_BRANCH:tools/release-lane.js" > "$policy"');
+  expect(reviewed.run).toContain('node "$policy" verify "$SHA" "$version"');
   expect(reviewed.run).toContain('if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]');
   expect(release.findIndex((s) => s.run === "pnpm install --frozen-lockfile")).toBeGreaterThan(sha + 1);
 
@@ -144,7 +146,9 @@ it("never hands a write token to the ref under test (#863)", () => {
         ? { actions: "write" }
         : name === "sync-main"
           ? { contents: "write", "pull-requests": "write" }
-          : null;
+          : name === "check"
+            ? { contents: "read", checks: "read" }
+            : null;
     expect(job.permissions ?? null, name).toEqual(expected);
     for (const step of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@")))
       expect(step.with["persist-credentials"], name).toBe(false);

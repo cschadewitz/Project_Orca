@@ -108,7 +108,7 @@ jobs:
           # against the chosen branch's package.json, CHANGELOG.md and changelog.d/.
           tools="$RUNNER_TEMP/release-tools"
           mkdir -p "$tools"
-          cp tools/release.js tools/changelog.js tools/release-pr-body.js "$tools/"
+          cp tools/release.js tools/release-lane.js tools/changelog.js tools/release-pr-body.js "$tools/"
           target="$pin"
           if [ -z "$target" ]; then
             target=$(grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' <<<"$title" | sed 's/^v//' || true)
@@ -136,6 +136,8 @@ jobs:
               git fetch -q origin "$base"
               echo "Created \`$base\` from \`$from\`." >> "$GITHUB_STEP_SUMMARY"
             fi
+            # Only a protected line is a release source (tools/release-lane.js).
+            node "$tools/release-lane.js" verify "$(git rev-parse "refs/remotes/origin/$base")" "$target" >/dev/null
             git checkout -q --detach "refs/remotes/origin/$base"
           fi
           version=$(node "$tools/release.js" version --bump "$bump" ${pin:+--pin "$pin"})

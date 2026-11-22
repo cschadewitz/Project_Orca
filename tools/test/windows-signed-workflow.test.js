@@ -203,12 +203,31 @@ describe("the source commit the run builds", () => {
     git(cwd, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", file);
     return git(cwd, "rev-parse", "HEAD");
   };
-  const resolveWith = (requested, githubSha) => {
+  // What the rules API reports for a release line: protected unless a case says otherwise.
+  const protectedRules = JSON.stringify([
+    { type: "pull_request" },
+    { type: "non_fast_forward" },
+    { type: "deletion" },
+    {
+      type: "required_status_checks",
+      parameters: { required_status_checks: [{ context: "check (node 24)" }, { context: "release line check" }] },
+    },
+  ]);
+  const resolveWith = (requested, githubSha, rules = protectedRules) => {
     const out = join(work, `out-${Math.random().toString(16).slice(2)}`);
     writeFileSync(out, "");
     execFileSync("bash", ["-c", script], {
       cwd: clone,
-      env: { ...process.env, REQUESTED: requested, GITHUB_SHA: githubSha, GITHUB_OUTPUT: out },
+      env: {
+        ...process.env,
+        PATH: `${join(work, "bin")}:${process.env.PATH}`,
+        RULES: rules,
+        GITHUB_REPOSITORY: "o/r",
+        RUNNER_TEMP: work,
+        REQUESTED: requested,
+        GITHUB_SHA: githubSha,
+        GITHUB_OUTPUT: out,
+      },
       stdio: "pipe",
     });
     return readFileSync(out, "utf8");
@@ -226,6 +245,14 @@ describe("the source commit the run builds", () => {
 
   beforeEach(() => {
     work = mkdtempSync(join(tmpdir(), "orca-resolve-"));
+    mkdirSync(join(work, "bin"));
+    writeFileSync(
+      join(work, "bin", "gh"),
+      '#!/bin/sh\ncase "$*" in *rules/branches*) printf "%s" "$RULES";; *) exit 1;; esac\n',
+      {
+        mode: 0o755,
+      },
+    );
     origin = join(work, "origin");
     mkdirSync(origin);
     git(origin, "init", "-q", "-b", "main");
@@ -235,6 +262,7 @@ describe("the source commit the run builds", () => {
       ["packages/app/package.json", '{"name":"app"}\n'],
       ["packages/app/electron-builder.yml", "appId: orca\n"],
       ["packages/app/scripts/stage-native.js", "// v1\n"],
+      ["tools/release-lane.js", readFileSync(new URL("../release-lane.js", import.meta.url), "utf8")],
     ])
       commit(origin, file, content);
     commit(origin, "tools/packaged-windows/build-bundle.js", "v1\n");
@@ -270,6 +298,9 @@ describe("the source commit the run builds", () => {
     git(origin, "checkout", "-qb", "line-moved", commits.linePatch);
     git(origin, "checkout", "-q", "release/0.6");
     commits.lineHead = commit(origin, "packages/app/src/later.ts", "export const later = 1;\n");
+    // A 0.6.x patch that only main holds: never released from main.
+    git(origin, "checkout", "-qb", "patchOnMain", main);
+    commits.patchOnMain = commit(origin, "package.json", rootManifest("0.6.2"));
     // A 0.7.x version on the 0.6 line: never compared with release/0.6.
     git(origin, "checkout", "-qb", "wrongLine", commits.linePatch);
     commits.wrongLine = commit(origin, "package.json", rootManifest("0.7.1"));
@@ -306,18 +337,36 @@ describe("the source commit the run builds", () => {
   });
 
   it.each([
-    ["a patch the line has since moved past in source", () => commits.linePatch],
-    ["the line's release notes commit once the line moved on", () => commits.lineNotes],
-    ["a version whose own line does not contain it", () => commits.wrongLine],
-  ])("refuses %s", (_, requested) => {
+    [
+      "a patch the line has since moved past in source",
+      () => commits.linePatch,
+      protectedRules,
+      /differs from release\/0\.6/,
+    ],
+    [
+      "the line's notes commit once the line moved on",
+      () => commits.lineNotes,
+      protectedRules,
+      /differs from release\/0\.6/,
+    ],
+    [
+      "a version whose own line does not exist",
+      () => commits.wrongLine,
+      protectedRules,
+      /release\/0\.7, the only branch/,
+    ],
+    ["a patch on a line that is not protected", () => commits.lineHead, "[]", /not protected as a release line/],
+    ["a patch that is only on main", () => commits.patchOnMain, protectedRules, /is not on release\/0\.6/],
+  ])("refuses %s", (_, requested, rules, message) => {
     let failure;
     try {
-      resolveWith(requested(), main);
+      resolveWith(requested(), main, rules);
     } catch (error) {
       failure = error;
     }
     expect(failure?.status).toBe(1);
-    expect(String(failure.stdout)).toMatch(/^::error::.* differs from /m);
+    expect(String(failure.stdout)).toMatch(/^::error::/m);
+    expect(String(failure.stdout)).toMatch(message);
   });
 
   it("accepts changes to docs, workflow files and test files", () => {
