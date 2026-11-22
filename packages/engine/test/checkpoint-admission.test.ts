@@ -6,7 +6,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { AgentRegistry } from "@orca/agents";
 import {
   OrcaError,
@@ -184,4 +184,63 @@ it("refuses before any claim when the run cannot be recovered", async () => {
   // Refused intents left no claim behind: the same keys work once the intent is valid.
   const retried = await f.service.startAttempt({ runId: f.source.run.id }, { idempotencyKey: "other" }, f.authority);
   expect(retried).toMatchObject({ state: "resolved", result: { state: "accepted" } });
+});
+
+/** An admission interrupted between naming its attempt and creating it (#357 review). */
+async function interrupted() {
+  const f = await fixture();
+  const crash = vi.spyOn(f.orc, "startRun").mockRejectedValueOnce(new Error("interrupted"));
+  const first = await f.service.startAttempt({ runId: f.source.run.id }, { idempotencyKey: "k1" }, f.authority);
+  crash.mockRestore();
+  if (first.state !== "resolved" || first.result.state !== "recoverable-failure" || !first.result.runId)
+    throw new Error(JSON.stringify(first));
+  const reserved = first.result.runId;
+  expect(await f.stores.events.lastSeq(reserved)).toBeUndefined();
+  expect((await checkpointAttempts(f.stores, f.source.run.id)).map((a) => a.runId)).toEqual([reserved]);
+  // The pending reservation keeps the workspace: a second key cannot start another attempt.
+  await expect(
+    f.service.startAttempt({ runId: f.source.run.id }, { idempotencyKey: "k2" }, f.authority),
+  ).rejects.toMatchObject({ code: "RUN_STATE", details: { attemptRunId: reserved } });
+  return { ...f, first, reserved };
+}
+
+it("keeps an interrupted reservation exclusive until its own admission is reconciled", async () => {
+  const f = await interrupted();
+  const reconciled = await f.service.reconcile(f.first.operationId, f.authority);
+  expect(reconciled).toMatchObject({ state: "resolved", result: { state: "accepted", runId: f.reserved } });
+  expect((await f.orc.getState(f.reserved)).run.checkpoint?.runId).toBe(f.source.run.id);
+  expect((await checkpointAttempts(f.stores, f.source.run.id)).map((a) => a.runId)).toEqual([f.reserved]);
+  // Still the only attempt while it has not finished.
+  await expect(
+    f.service.startAttempt({ runId: f.source.run.id }, { idempotencyKey: "k3" }, f.authority),
+  ).rejects.toMatchObject({ code: "RUN_STATE", details: { attemptRunId: f.reserved } });
+  expect((await f.orc.run(f.reserved)).run.status).toBe("completed");
+});
+
+it("lets a retired reservation go: its admission can never create it, and another key may start", async () => {
+  const f = await interrupted();
+  await f.orc.retireCheckpointReservation(f.source.run.id, f.reserved);
+  const reconciled = await f.service.reconcile(f.first.operationId, f.authority);
+  expect(reconciled).toMatchObject({ state: "resolved", result: { state: "recoverable-failure" } });
+  expect(await f.stores.events.lastSeq(f.reserved)).toBeUndefined();
+
+  // The second key's claim was bound when it was refused; replaying it now admits it.
+  const second = await f.service.startAttempt({ runId: f.source.run.id }, { idempotencyKey: "k2" }, f.authority);
+  if (second.state !== "resolved" || second.result.state !== "accepted") throw new Error(JSON.stringify(second));
+  expect((await checkpointAttempts(f.stores, f.source.run.id)).map((a) => a.runId)).toEqual([
+    f.reserved,
+    second.result.runId,
+  ]);
+  // Reconciling the retired admission again still creates nothing.
+  expect(await f.service.reconcile(f.first.operationId, f.authority)).toMatchObject({
+    result: { state: "recoverable-failure" },
+  });
+  expect(await f.stores.events.lastSeq(f.reserved)).toBeUndefined();
+  // Only the latest reservation, and only one that was never created, may be retired.
+  await expect(f.orc.retireCheckpointReservation(f.source.run.id, f.reserved)).rejects.toMatchObject({
+    code: "RUN_STATE",
+  });
+  await expect(f.orc.retireCheckpointReservation(f.source.run.id, second.result.runId)).rejects.toMatchObject({
+    code: "RUN_STATE",
+  });
 });

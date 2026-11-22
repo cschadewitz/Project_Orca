@@ -284,6 +284,15 @@ export interface CheckpointAttemptOptions {
 export const checkpointAttemptKey = (sourceRunId: string, n: number): string =>
   `checkpoint-attempt:${sourceRunId}:${n}`;
 
+/** A reserved checkpoint attempt that was retired before it was created (#357). */
+const checkpointRetiredKey = (attemptRunId: string): string => `checkpoint-attempt-retired:${attemptRunId}`;
+export async function checkpointReservationRetired(
+  stores: Pick<Stores, "execution">,
+  attemptRunId: string,
+): Promise<boolean> {
+  return (await stores.execution.getGeneration(checkpointRetiredKey(attemptRunId))) !== undefined;
+}
+
 /** The checkpoint attempts started from a run, oldest first. */
 export async function checkpointAttempts(
   stores: Pick<Stores, "execution">,
@@ -751,12 +760,31 @@ export class Orchestrator {
       return await this.stores.leases.withOwnership(lease, async () => {
         const attempts = await checkpointAttempts(this.stores, sourceRunId);
         const prior = attempts.at(-1);
-        if (prior && (await this.stores.events.lastSeq(prior.runId)) !== undefined) {
-          const summary = await this.getSummary(prior.runId);
-          if (!isTerminalStatus(summary.status))
+        const own = opts.admissionRunId !== undefined && prior?.runId === opts.admissionRunId;
+        if (opts.admissionRunId !== undefined && (await checkpointReservationRetired(this.stores, opts.admissionRunId)))
+          throw new OrcaError(
+            "RUN_STATE",
+            `checkpoint attempt ${opts.admissionRunId} was retired before it was created`,
+            {
+              runId: sourceRunId,
+              attemptRunId: opts.admissionRunId,
+            },
+          );
+        if (prior && !own) {
+          if ((await this.stores.events.lastSeq(prior.runId)) !== undefined) {
+            const summary = await this.getSummary(prior.runId);
+            if (!isTerminalStatus(summary.status))
+              throw new OrcaError(
+                "RUN_STATE",
+                `checkpoint attempt ${prior.runId} of run ${sourceRunId} has not finished; recover from it, or wait`,
+                { runId: sourceRunId, attemptRunId: prior.runId },
+              );
+          } else if (!(await checkpointReservationRetired(this.stores, prior.runId)))
+            // Reserved but never created (interrupted): its admission may still create it, so
+            // it keeps the workspace until that admission completes or the reservation is retired.
             throw new OrcaError(
               "RUN_STATE",
-              `checkpoint attempt ${prior.runId} of run ${sourceRunId} has not finished; recover from it, or wait`,
+              `checkpoint attempt ${prior.runId} of run ${sourceRunId} was reserved and not created; reconcile its admission, or retire it with 'orca recovery retire ${sourceRunId} ${prior.runId}'`,
               { runId: sourceRunId, attemptRunId: prior.runId },
             );
         }
@@ -779,7 +807,7 @@ export class Orchestrator {
         const runId = opts.admissionRunId ?? newId("run", this.clock.now());
         // Named before the run exists, so a crash in between still keeps a second attempt out.
         // An admission recovering its own reserved attempt finds it already named.
-        if (prior?.runId !== runId)
+        if (!own)
           await this.stores.execution.putGeneration(checkpointAttemptKey(sourceRunId, attempts.length + 1), {
             runId,
             sourceRunId,
@@ -802,6 +830,57 @@ export class Orchestrator {
           },
           generation,
         );
+      });
+    } finally {
+      await this.stores.leases.release(lease).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Retire a checkpoint attempt that was reserved and never created (an interruption between
+   * the two), so another attempt of its source may start (#357). Only the source's latest
+   * reservation, and only while it has no log; afterwards its admission can never create it.
+   */
+  async retireCheckpointReservation(sourceRunId: string, attemptRunId: string): Promise<void> {
+    const holder = newId("orc", this.clock.now());
+    const lease = await this.stores.leases.acquire({
+      resource: runLeaseResource(sourceRunId),
+      holder,
+      ttlMs: this.leaseTtlMs,
+      note: "retire checkpoint reservation",
+    });
+    if (!ownsLease(lease, holder))
+      throw new OrcaError(
+        "RUN_LEASED",
+        `run ${sourceRunId} is being interpreted by pid ${lease.pid} on ${lease.host}`,
+        {
+          runId: sourceRunId,
+          ...describeLease(lease),
+        },
+      );
+    try {
+      await this.stores.leases.withOwnership(lease, async () => {
+        const latest = (await checkpointAttempts(this.stores, sourceRunId)).at(-1);
+        if (latest?.runId !== attemptRunId)
+          throw new OrcaError(
+            "RUN_STATE",
+            `${attemptRunId} is not the latest checkpoint attempt of run ${sourceRunId}`,
+            {
+              runId: sourceRunId,
+              attemptRunId,
+            },
+          );
+        if ((await this.stores.events.lastSeq(attemptRunId)) !== undefined)
+          throw new OrcaError(
+            "RUN_STATE",
+            `checkpoint attempt ${attemptRunId} was created; it is a run, not a reservation`,
+            {
+              runId: sourceRunId,
+              attemptRunId,
+            },
+          );
+        if (!(await checkpointReservationRetired(this.stores, attemptRunId)))
+          await this.stores.execution.putGeneration(checkpointRetiredKey(attemptRunId), { sourceRunId });
       });
     } finally {
       await this.stores.leases.release(lease).catch(() => undefined);

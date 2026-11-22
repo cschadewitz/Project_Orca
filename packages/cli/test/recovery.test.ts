@@ -279,4 +279,12 @@ edges:
   ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
   expect(await stores.events.listRuns()).toHaveLength(runs.length);
   expect(await main(["recovery", "start", runId, "--checkpoint", "mark", "--quiet", "--cwd", dir])).toBe(2);
+  // Retire is only for a reservation that was never created: a created attempt is a run.
+  const latest = (await stores.events.listRuns()).find((id) => id !== runId && id !== attemptId)!;
+  await expect(commands.recovery!.run(ctx(dir, ["retire", runId, latest]).context)).rejects.toMatchObject({
+    code: "RUN_STATE",
+  });
+  await expect(commands.recovery!.run(ctx(dir, ["retire", runId]).context)).rejects.toMatchObject({
+    code: "CONFIG_INVALID",
+  });
 });

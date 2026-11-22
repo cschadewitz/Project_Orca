@@ -16,7 +16,7 @@ import type {
   RetryOptions,
   RetryResult,
 } from "../../core/src/model/admission-retry.js";
-import type { Orchestrator } from "./orchestrator.js";
+import { checkpointAttempts, type Orchestrator } from "./orchestrator.js";
 import { canonicalJson, type RegisteredRetryClaims } from "./admission-retry.js";
 import {
   publishAdmissionExecutionPolicy,
@@ -115,6 +115,25 @@ export class CheckpointAdmissionService {
     );
   }
 
+  /**
+   * Finish an admission that returned a recoverable failure: create its reserved attempt if it
+   * is still the source's pending reservation, or keep failing if that reservation was retired.
+   */
+  reconcile(
+    operationId: string,
+    authority: CheckpointAdmissionAuthority,
+  ): Promise<RetryResult<CheckpointAdmissionResult>> {
+    return this.authorities.run(authority, async () => {
+      const scope = {
+        principalId: authority.actor.principalId,
+        workspaceId: authority.workspaceId,
+        authorize: (value: unknown) => authority.authorize(value as CheckpointAdmissionCommand),
+      };
+      if ((await this.options.retries.operationKind(operationId, scope)) !== "run.recover") throw unavailable();
+      return (await this.options.retries.reconcile(operationId, scope)) as RetryResult<CheckpointAdmissionResult>;
+    });
+  }
+
   private authority(): CheckpointAdmissionAuthority {
     const authority = this.authorities.getStore();
     if (!authority) throw unavailable();
@@ -208,10 +227,13 @@ export class CheckpointAdmissionService {
       return await this.accept(binding, context, material);
     } catch (error) {
       // A refusal before anything was written is the caller's answer, not a reconciliation.
+      // A reservation already names this attempt: only reconciling (or retiring) it ends it.
+      const { stores } = this.options.orchestrator;
       if (
         error instanceof OrcaError &&
-        (await this.options.orchestrator.stores.events.lastSeq(binding.runId)) === undefined &&
-        !(await this.options.orchestrator.stores.execution.getInputs(binding.runId))
+        (await stores.events.lastSeq(binding.runId)) === undefined &&
+        !(await stores.execution.getInputs(binding.runId)) &&
+        !(await checkpointAttempts(stores, material.command.runId)).some((a) => a.runId === binding.runId)
       )
         throw error;
       return { state: "recoverable-failure", admissionId: binding.admissionId, runId: binding.runId, failure };

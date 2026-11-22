@@ -16,6 +16,7 @@ orca recovery <runId> --json                # the RecoveryAssessment, for tools
 orca recovery review <runId> <stepRunId> --run-again [--note text]  # checked it; it may run again
 orca recovery review <runId> <stepRunId> --abandon [--note text]    # it must not; end the run here
 orca recovery start <runId> [--checkpoint <stepRunId|nodeId>] [--idempotency-key k]  # start a checkpoint attempt and follow it
+orca recovery retire <runId> <attemptRunId> # retire an attempt that was reserved and never created
 ```
 
 The preview does not go through `bootstrap`: it takes no writer claim, stamps no store format,
@@ -164,13 +165,18 @@ checkpoint as in the preview; without it, the latest one that is not blocked is 
   and writes nothing.
 - **One at a time.** It is created under the source's run lease. Each attempt is recorded
   against its source in the execution store (`checkpointAttempts`), and a new one is refused
-  while the last one has not finished, because they share the workspace. The source's log is
-  never changed.
+  while the last one has not finished, because they share the workspace. The record is written
+  before the attempt's run, so an attempt that was reserved and never created (the process
+  stopped in between) also holds the workspace: only its own admission, reconciled, creates
+  it, or `orca recovery retire <runId> <attemptRunId>` retires it, after which its admission can
+  never create it and another attempt may start. The source's log is never changed.
 - **Retry-safe.** With a persistent store, the command goes through retry-safe admission
   (`run.recover`, `CheckpointAdmissionService`). It reserves the run id before anything is
   written, and the attempt runs under the same bounded first-attachment policy as a direct run.
   The printed retry key, given again with `--idempotency-key`, returns the same attempt rather
-  than starting another, and the same key with a different run or checkpoint is a conflict. A
+  than starting another, and the same key with a different run or checkpoint is a conflict. An
+  admission that was interrupted after reserving its attempt is reconciled by the command (the
+  same key, or the next run of it), which creates exactly that attempt. A
   run that recorded no configuration generation has nothing to pin an admission to, so it is
   started directly.
 

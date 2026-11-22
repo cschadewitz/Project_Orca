@@ -104,18 +104,37 @@ export async function checkpointSeed(
       stepRunId: checkpointStepRunId,
       steps,
       artifacts,
-      vars: varsAt(events, checkpointStepRunId, source),
+      vars: await varsAt(
+        stores,
+        events,
+        source.steps[checkpointStepRunId]!.reusedFrom ?? {
+          runId: sourceRunId,
+          stepRunId: checkpointStepRunId,
+        },
+      ),
     },
     source,
     assessment,
   };
 }
 
-/** The run's vars as they stood when the checkpoint step completed. */
-function varsAt(events: OrcaEvent[], stepRunId: string, source: RunState): Record<string, unknown> {
-  const completed = events.findIndex((e) => e.type === "step.completed" && e.payload.stepRunId === stepRunId);
-  // A step this run reused itself has no completion here: its vars are the ones it was created with.
-  if (completed < 0 && !source.steps[stepRunId]?.reusedFrom)
-    throw new OrcaError("RUN_STATE", `run ${source.run.id} has no completion for ${stepRunId}`);
-  return structuredClone(reduceRun(events.slice(0, completed < 0 ? 1 : completed + 1)).run.vars);
+/**
+ * The vars as they stood when the checkpoint step completed, in the run that ran it. A step the
+ * source itself reused never completed there, so its snapshot is read from the attempt that
+ * ran it, not from the source's seed (which holds the vars of the source's own checkpoint).
+ */
+async function varsAt(
+  stores: Stores,
+  sourceEvents: OrcaEvent[],
+  origin: { runId: string; stepRunId: string },
+): Promise<Record<string, unknown>> {
+  const first = sourceEvents[0];
+  const events =
+    first?.type === "run.created" && first.runId === origin.runId
+      ? sourceEvents
+      : await executionEvents(await stores.events.read(origin.runId), stores.execution);
+  const completed = events.findIndex((e) => e.type === "step.completed" && e.payload.stepRunId === origin.stepRunId);
+  if (completed < 0)
+    throw new OrcaError("RUN_STATE", `run ${origin.runId} has no completion for ${origin.stepRunId}`, { ...origin });
+  return structuredClone(reduceRun(events.slice(0, completed + 1)).run.vars);
 }

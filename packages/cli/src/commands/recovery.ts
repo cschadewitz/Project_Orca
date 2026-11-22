@@ -9,6 +9,9 @@
  * `orca recovery start <runId> [--checkpoint <stepRunId|nodeId>] [--idempotency-key k]` - start a
  * checkpoint attempt of a failed run and follow it, as `orca run` does (#357, phase 2).
  *
+ * `orca recovery retire <runId> <attemptRunId>` - retire a checkpoint attempt that was reserved
+ * and never created (an interrupted admission), so another attempt of the run may start.
+ *
  * The preview is read-only: it takes no lease and writes nothing. It lists Resume, New run and
  * Checkpoint attempt with why each is or is not available, the steps whose effects are
  * uncertain, and for each completed step of a failed run which steps a checkpoint attempt would
@@ -36,6 +39,7 @@ import { localDirectAdmissionAuthority } from "../local-submission-authority.js"
 export async function recoveryCommand(ctx: CommandContext): Promise<number> {
   if (ctx.positionals[0] === "review") return reviewCommand(ctx);
   if (ctx.positionals[0] === "start") return startCommand(ctx);
+  if (ctx.positionals[0] === "retire") return retireCommand(ctx);
   const runId = ctx.positionals[0];
   if (!runId) throw new OrcaError("CONFIG_INVALID", "recovery needs a run id");
   const checkpoint = typeof ctx.flags.checkpoint === "string" ? ctx.flags.checkpoint : undefined;
@@ -75,13 +79,26 @@ async function startCommand(ctx: CommandContext): Promise<number> {
         ...direct,
         authorize: () => direct.authorize({ workflowId: source.workflowId }),
       };
-      const response = await app.checkpointAdmissions.startAttempt(
+      let response = await app.checkpointAdmissions.startAttempt(
         { runId, ...(checkpoint ? { checkpoint } : {}) },
         retry,
         authority,
       );
-      if (response.state !== "resolved" || response.result.state !== "accepted")
-        throw new OrcaError("RUN_STATE", "Checkpoint admission requires reconciliation", { ...response });
+      // An interrupted admission is reconciled here, once: it creates its own reserved attempt.
+      if (response.state === "resolved" && response.result.state === "recoverable-failure")
+        response = await app.checkpointAdmissions.reconcile(response.operationId, authority);
+      if (response.state !== "resolved" || response.result.state !== "accepted") {
+        const reserved = response.state === "resolved" ? response.result.runId : undefined;
+        throw new OrcaError(
+          "RUN_STATE",
+          `Checkpoint admission requires reconciliation${
+            reserved
+              ? `; if attempt ${reserved} should never start, retire it with 'orca recovery retire ${runId} ${reserved}'`
+              : ""
+          }`,
+          { ...response },
+        );
+      }
       attemptId = response.result.runId;
     } else {
       if (key !== undefined)
@@ -95,7 +112,21 @@ async function startCommand(ctx: CommandContext): Promise<number> {
   }
 }
 
-/** The one writing subcommand: it takes the run's lease, appends the review, and nothing else. */
+/**
+ * Retire the source's latest checkpoint attempt when it was reserved and never created, so its
+ * admission can never create it and another attempt may start. A created attempt is refused.
+ */
+async function retireCommand(ctx: CommandContext): Promise<number> {
+  const [, runId, attemptRunId] = ctx.positionals;
+  if (!runId || !attemptRunId)
+    throw new OrcaError("CONFIG_INVALID", "recovery retire needs a run id and the reserved attempt's run id");
+  const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
+  await app.orchestrator.retireCheckpointReservation(runId, attemptRunId);
+  ctx.out(`Retired checkpoint attempt ${attemptRunId} of ${runId}: it will never be created.`);
+  return 0;
+}
+
+/** A writing subcommand: it takes the run's lease, appends the review, and nothing else. */
 async function reviewCommand(ctx: CommandContext): Promise<number> {
   const [, runId, stepRunId] = ctx.positionals;
   const runAgain = Boolean(ctx.flags["run-again"]);
