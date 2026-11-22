@@ -32,6 +32,7 @@ access invite developer insight; they do not require code changes or host access
 | [Request submission](request-submission.md) / [retry receipts](admission-retry.md) | separate Request/direct launch, acceptance, execution attachment and lost-response retry |
 | [Live input](live-input-continuity.md) / [human revisions](revision-input.md) | understand owner-local callbacks, durable gates and protected correction delivery |
 | [Protected execution storage](protected-execution-storage.md) / [replay errors](protected-replay-error-contract.md) | inspect privacy, complete backup/key boundaries and fail-closed error behavior |
+| [Recovering interrupted work](recovery.md) | preview resume, new run and checkpoint attempts with uncertain-effect review before anything runs |
 | [Owned root worktrees](root-worktree-isolation.md) | understand opt-in local Linux isolation and retained-evidence recovery limits |
 | [Integrations](INTEGRATIONS.md) | separate inbound MCP, ACP/Kepler, downstream servers, SSH and JEV; T3 Code transport is groundwork |
 | [MCP operator](mcp-operator.md) / [production acceptance](mcp-operator-production-acceptance.md) | inspect supported tools and reference-client evidence versus actual-Cal acceptance |
