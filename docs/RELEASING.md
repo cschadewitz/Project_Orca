@@ -122,20 +122,25 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    The arm64 `.exe` is accepted **automatically** (#889): when the attach completes,
    **Release (accept Windows arm64)** (`release-accept-arm64.yml`) downloads the draft's
    exact arm64 bytes, and on a GitHub-hosted Windows arm64 machine re-checks the signature,
-   installs it silently over the current Latest release's arm64 build when there is one,
-   checks the reported version, that the installed `ORCA.exe` is a signed ARM64 binary, and
-   that the app starts and reaches a live connection to its bundled daemon. Only then does
-   it record `<!-- orca-arm64-accepted: RUN sha256:… -->` in the draft's notes. It retries
-   after every attach run (including the 6-hourly reconcile) and can be dispatched from
-   `main` with a `release_id`. If it keeps failing and the release must not wait, delete the
-   draft's arm64 asset: the release is then published, and fed, x64 only.
+   installs it silently over the newest earlier published final that has an arm64 installer
+   (a fresh install only when the full release list, read successfully, has none), checks
+   the reported version, that the installed `ORCA.exe` is a signed ARM64 binary, and that
+   the app starts and reaches a live connection to its bundled daemon. Only then does it
+   keep an `arm64-acceptance-evidence` artifact (release id, version, commit, digest, mode,
+   prior version and digest; 90 days) and record `<!-- orca-arm64-accepted: RUN sha256:… -->`
+   in the draft's notes, pointing at that run. It retries after every attach run (including
+   the 6-hourly reconcile) and can be dispatched from `main` with a `release_id`. If it keeps
+   failing and the release must not wait, dispatch it with `x64_only` and the `release_id`:
+   that records `<!-- orca-x64-only -->` in the draft and removes its arm64 installer, and
+   attach, reconcile, acceptance, publication and the feed all keep to that decision.
 6. Publish by dispatching **Release (publish final)** (`release-publish-final.yml`) from
    `main` with `release_id=$ID`, `version=$V`, and what step 5 accepted: `source_sha=$SHA`,
    `deb_sha256` and `exe_sha256` (the digests of the exact files that passed). Immediately
    before publishing it compares all of them with the draft: still a draft, named `v$V`,
    targeting `SHA`, exactly those two assets with those digests, and the installer's digest
-   equal to the signing record; an attached arm64 installer must be the one the same signing
-   run recorded and must carry its acceptance record. It refuses a version that is not newer than the current
+   equal to the signing record. It also needs either the arm64 installer the same signing
+   run recorded, with acceptance verified against the acceptance run and its evidence
+   (`tools/deploy/feed-arches.js verify`), or the x64-only decision with no arm64 installer. It refuses a version that is not newer than the current
    Latest and an existing tag at another commit, publishes with the tag and target stated
    explicitly, and reads back the published digests, the tag and Latest. It shares one queue
    with the attach, so the two never interleave; publish only through it, not by editing the

@@ -15,12 +15,13 @@
 # environment (deployments from main only); see docs/UPDATING.md.
 #
 # Architectures: FEED_ARCHES below is what this workflow may ever serve, and equals the
-# Worker's SERVED_ARCHES. x64 is always fed. arm64 is fed only for a release whose published
-# arm64 installer carries a signing record and a native acceptance record for its exact digest
-# (tools/deploy/feed-arches.js; `Release (accept Windows arm64)` writes the acceptance record,
-# #889). Otherwise the signed artifact's arm64 installer is never uploaded, the snapshot has
-# no latest-arm64.yml, and arm64 clients are offered nothing new by it (docs/UPDATING.md,
-# architecture gate).
+# Worker's SERVED_ARCHES. x64 is always fed. arm64 is fed only for a final whose published
+# arm64 installer has verified native acceptance (tools/deploy/feed-arches.js: the release's
+# record points at a successful Release (accept Windows arm64) run whose evidence artifact
+# names this release, commit, digest and upgrade baseline, #889). Otherwise the signed
+# artifact's arm64 installer is never uploaded, and the snapshot's complete.json lists x64
+# only, so the Worker serves no arm64 object of this version (docs/UPDATING.md, architecture
+# gate).
 #
 # Rerunning after an interruption resumes: identical objects are skipped and different ones
 # refused. feed-promote.yml moves the version on from internal.
@@ -102,7 +103,10 @@ jobs:
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
           echo "Feeding published v$VERSION ($sha) from signed run $RUN_ID" >> "$GITHUB_STEP_SUMMARY"
 
-      # x64 always; arm64 only with a native acceptance record for the published installer.
+      # x64 always; arm64 only when the release's acceptance record points at a successful
+      # acceptance run whose evidence names this release, commit, installer and baseline.
+      # An attached, undeclined arm64 installer whose acceptance cannot be verified fails the
+      # job rather than feeding x64 alone: a snapshot's architectures never change later.
       - name: Choose the architectures to serve
         id: arches
         env:
@@ -111,9 +115,18 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          gh api "repos/$REPO/releases/tags/v$VERSION" > release.json
-          arches=$(node tools/deploy/feed-arches.js "$VERSION" release.json)
-          rm -f release.json
+          evidence=$(mktemp -d)
+          gh api "repos/$REPO/releases/tags/v$VERSION" > "$evidence/release.json"
+          gh api --paginate "repos/$REPO/releases" --jq '.[]' | jq -s . > "$evidence/releases.json"
+          run=$(node tools/deploy/feed-arches.js acceptance-run "$VERSION" "$evidence/release.json")
+          if [[ -n "$run" ]]; then
+            gh api "repos/$REPO/actions/runs/$run" > "$evidence/run.json" || echo '{}' > "$evidence/run.json"
+            gh run download "$run" --repo "$REPO" --name arm64-acceptance-evidence --dir "$evidence/artifact" ||
+              echo "::warning::could not download run $run's acceptance evidence"
+          fi
+          arches=$(node tools/deploy/feed-arches.js serve "$VERSION" "$REPO" "$evidence/release.json" \
+            "$evidence/releases.json" "$evidence/run.json" "$evidence/artifact/evidence.json")
+          rm -rf "$evidence"
           for arch in $arches; do
             [[ " $FEED_ARCHES " == *" $arch "* ]] || { echo "::error::$arch is not in FEED_ARCHES"; exit 1; }
           done

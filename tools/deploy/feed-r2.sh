@@ -111,7 +111,10 @@ case "${1:-}" in
     done
     # The completion record, written only once every object above is in place. The Worker
     # serves nothing from a snapshot without it, payload included.
-    printf '{"format":1,"version":"%s"}\n' "$version" >"$work/complete.json"
+    # It lists the architectures published, which the Worker serves for this version and no
+    # others (#889); it is written once, so a snapshot's architectures never change.
+    printf '{"format":2,"version":"%s","arches":[%s]}\n' "$version" \
+      "$(printf '"%s",' "${arches[@]}" | sed 's/,$//')" >"$work/complete.json"
     put_once "$version/complete.json" "$work/complete.json" application/json
     update_rings publish "$version"
     ;;

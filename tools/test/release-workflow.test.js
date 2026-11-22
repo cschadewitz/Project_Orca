@@ -273,4 +273,22 @@ it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unatten
   // The downloaded bytes are the recorded ones, checked before anything runs them.
   expect(text).toContain('== "$DIGEST" ]] || { echo "::error::downloaded bytes are not $DIGEST"; exit 1; }');
   expect(text).not.toMatch(/secrets\.|draft=false|make_latest|feed-r2/);
+  // The baseline is read from the full release list, failing closed; the evidence is kept
+  // before the record that points at it.
+  expect(text).toContain("gh api --paginate \"repos/$REPO/releases\" --jq '.[]' | jq -s . > releases.json");
+  expect(text).toContain('node tools/deploy/feed-arches.js baseline "$VERSION" releases.json');
+  expect(text).not.toContain("releases/latest");
+  const record = wf.jobs.record.steps.map((s) => s.name ?? s.uses);
+  expect(record.indexOf("Keep the evidence with this run")).toBeLessThan(
+    record.indexOf("Record it, re-validating the draft first"),
+  );
+  const keep = wf.jobs.record.steps.find((s) => s.name === "Keep the evidence with this run");
+  expect(keep.with).toMatchObject({ name: "arm64-acceptance-evidence", "retention-days": 90, overwrite: true });
+  // The x64-only decision: dispatch only, from main, in the draft-writes queue.
+  expect(wf.jobs["x64-only"].if).toBe(
+    "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.x64_only",
+  );
+  expect(wf.jobs["x64-only"].concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  expect(wf.jobs["x64-only"].steps.at(-1).run).toContain('bash tools/deploy/release-attach.sh x64-only "$ID" "$sha"');
+  expect(wf.jobs.select.if).toContain("!inputs.x64_only");
 });

@@ -18,14 +18,14 @@ import { RINGS, validateRings, versionFor } from "./rings.js";
 const CHANNEL = /^latest-(x64|arm64)\.yml$/;
 const PAYLOAD = /^ORCA-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-win-(x64|arm64)\.exe(?:\.blockmap)?$/;
 /**
- * Architectures the feed can serve, matching `FEED_ARCHES` in feed-publish.yml; anything else
- * answers 404 even if the bucket holds it. Which architectures a given version offers is
- * decided when it is published: feed-publish.yml uploads arm64 only for a release whose arm64
- * installer passed native acceptance (#889), so a snapshot without `latest-arm64.yml` offers
- * arm64 clients nothing new. Changing this list is a reviewed change here and there, then a
- * Worker deploy.
+ * Architectures the feed can serve at all, matching `FEED_ARCHES` in feed-publish.yml;
+ * anything else answers 404 even if the bucket holds it. Which of them one version serves is
+ * that snapshot's own immutable record: `complete.json` lists the architectures feed-r2.sh
+ * published (#889), and a record without the list (every snapshot written before it)
+ * serves x64 only. That holds for channel files and for direct installer and blockmap reads.
  */
 export const SERVED_ARCHES = Object.freeze(["x64", "arm64"]);
+const LEGACY_ARCHES = Object.freeze(["x64"]);
 const TOKEN = /^Bearer ([A-Za-z0-9_-]{32,256})$/;
 
 function respond(status, extra = {}, body = null) {
@@ -71,9 +71,36 @@ function contentType(name) {
   return "application/octet-stream";
 }
 
-/** feed-r2.sh writes VERSION/complete.json last; until then nothing of VERSION is served. */
-async function complete(bucket, version) {
-  return Boolean(await bucket.head(`${version}/complete.json`));
+/**
+ * The architectures VERSION's snapshot was published with, from VERSION/complete.json, which
+ * feed-r2.sh writes last: undefined (serve nothing) until it exists or if it is not a record
+ * this feed writes. A record without `arches` predates #889 and serves x64 only.
+ */
+export function snapshotArches(text, version) {
+  let record;
+  try {
+    record = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!record || typeof record !== "object" || Array.isArray(record)) return undefined;
+  if (record.version !== undefined && record.version !== version) return undefined;
+  if (record.arches === undefined) return record.format === 2 ? undefined : LEGACY_ARCHES;
+  const { arches } = record;
+  if (
+    record.format !== 2 ||
+    !Array.isArray(arches) ||
+    !arches.includes("x64") ||
+    new Set(arches).size !== arches.length ||
+    !arches.every((arch) => SERVED_ARCHES.includes(arch))
+  )
+    return undefined;
+  return arches;
+}
+
+async function published(bucket, version) {
+  const object = await bucket.get(`${version}/complete.json`);
+  return object ? snapshotArches(await object.text(), version) : undefined;
 }
 
 async function readRings(bucket) {
@@ -143,7 +170,7 @@ export async function handle(request, env) {
       return respond(503);
     }
     const version = rings && (await versionFor(rings, caller.ring, caller.hash));
-    if (!version || !(await complete(env.FEED, version))) return respond(404);
+    if (!version || !(await published(env.FEED, version))?.includes(channel[1])) return respond(404);
     // An rc snapshot carries prerelease-ARCH.yml; the client always asks for latest-ARCH.yml.
     for (const file of [`latest-${channel[1]}.yml`, `prerelease-${channel[1]}.yml`]) {
       if (await env.FEED.head(`${version}/${file}`)) return serve(env.FEED, `${version}/${file}`, name, request);
@@ -156,7 +183,7 @@ export async function handle(request, env) {
   const payload = PAYLOAD.exec(name);
   if (payload) {
     if (!SERVED_ARCHES.includes(payload[2])) return respond(404);
-    if (!(await complete(env.FEED, payload[1]))) return respond(404);
+    if (!(await published(env.FEED, payload[1]))?.includes(payload[2])) return respond(404);
     return serve(env.FEED, `${payload[1]}/${name}`, name, request);
   }
   return respond(404);

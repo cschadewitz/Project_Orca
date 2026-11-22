@@ -261,18 +261,21 @@ For a final the order is:
    automatically, in **Release (accept Windows arm64)**), and only then is the draft
    published (which creates the tag). RELEASING.md has the steps and checks.
 3. **Architecture gate.** Rings select versions, not architectures, so each version's
-   snapshot must leave out any architecture without native acceptance. `feed-publish.yml`
-   always serves x64 and serves arm64 only when the published release carries the signed
-   arm64 installer with both its signing record and its acceptance record for that exact
-   digest (`tools/deploy/feed-arches.js`, #889). Otherwise the signed run's arm64 installer
-   is never uploaded, the snapshot has no `latest-arm64.yml`, and an arm64 client is offered
-   nothing new by it (every version fed before #889, v0.7.0 included, is x64 only). The
-   Worker's `SERVED_ARCHES` (`tools/deploy/feed-worker/worker.js`) equals `FEED_ARCHES`:
-   any other architecture answers 404 even if the bucket holds it. Changing either list is a
-   reviewed change to both, then a Worker deploy; do not rely on ring assignment to scope
-   architecture. **Desktop feed (update test)** updates an installed N to N+1 through the
-   Worker's own handler on both x64 and a native arm64 runner for every change to the feed
-   or the updater.
+   snapshot carries its own architectures. `feed-publish.yml` always serves x64 and serves
+   arm64 only for a final whose published arm64 installer has verified native acceptance:
+   its notes point at a successful **Release (accept Windows arm64)** run on `main` whose
+   evidence artifact names that release, commit, installer digest and upgrade baseline
+   (`tools/deploy/feed-arches.js`, #889). An attached arm64 installer that is not declined
+   (`<!-- orca-x64-only -->`) and does not verify fails the feed run instead of feeding x64
+   alone. `feed-r2.sh` lists the published architectures in the snapshot's write-once
+   `complete.json`, and the Worker serves a version's channel files, installers and
+   blockmaps only for the architectures listed there; a record without the list (every
+   version fed before #889, v0.7.0 included) serves x64 only. `SERVED_ARCHES` in
+   `tools/deploy/feed-worker/worker.js` equals `FEED_ARCHES` and bounds both: any other
+   architecture answers 404. Changing either list is a reviewed change to both, then a
+   Worker deploy; do not rely on ring assignment to scope architecture. **Desktop feed
+   (update test)** updates an installed N to N+1 through the Worker's own handler on both
+   x64 and a native arm64 runner for every change to the feed or the updater.
 4. **Desktop feed (automatic)** (`feed-auto.yml`, on while `ORCA_FEED_AUTO` is `true`)
    dispatches **Desktop feed (publish signed)** (`feed-publish.yml`) from main when the
    release is published, with the signing run that **Release (attach signed installer)**

@@ -49,10 +49,12 @@ describe("desktop feed workflows", () => {
       expect(read(name)).toContain("PAUSE: ${{ vars.ORCA_FEED_PAUSE }}");
   });
 
-  it("serves x64, and arm64 only when the release records its acceptance, matching the published release", () => {
+  it("serves x64, and arm64 only with verified acceptance, matching the published release", () => {
     const feed = read("feed-publish.yml");
     expect(feed).toMatch(/^env:\n {2}FEED_ARCHES: x64 arm64\n/m);
-    expect(feed).toContain('arches=$(node tools/deploy/feed-arches.js "$VERSION" release.json)');
+    expect(feed).toContain('arches=$(node tools/deploy/feed-arches.js serve "$VERSION" "$REPO"');
+    expect(feed).toContain("--name arm64-acceptance-evidence");
+    expect(feed).toContain("gh api --paginate \"repos/$REPO/releases\" --jq '.[]' | jq -s .");
     // Every step after the choice uses the chosen list, never the upper bound.
     const after = feed.slice(feed.indexOf("Choose the architectures to serve"));
     expect(after.match(/ARCHES: \$\{\{ steps\.arches\.outputs\.arches \}\}/g)).toHaveLength(4);

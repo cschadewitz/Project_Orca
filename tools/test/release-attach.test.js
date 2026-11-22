@@ -21,6 +21,14 @@ const args = process.argv.slice(2);
 const log = (entry) => fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify(entry) + "\n");
 if (args[0] === "workflow") { log(args); process.exit(0); }
 const state = JSON.parse(fs.readFileSync(process.env.FAKE_STATE, "utf8"));
+if (args[0] === "run" && args[1] === "download") {
+  const evidence = (state.evidence || {})[args[2]];
+  if (!evidence) { process.stderr.write("no artifact\n"); process.exit(1); }
+  const dir = args[args.indexOf("--dir") + 1];
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(dir + "/evidence.json", JSON.stringify(evidence));
+  process.exit(0);
+}
 const save = () => fs.writeFileSync(process.env.FAKE_STATE, JSON.stringify(state));
 const x = args.indexOf("-X");
 const method = x < 0 ? "GET" : args[x + 1];
@@ -34,10 +42,15 @@ if (process.env.FAKE_ERROR_PATH && new RegExp(process.env.FAKE_ERROR_PATH).test(
 const byId = (id) => state.releases.find((r) => String(r.id) === id);
 let out;
 let m;
-if (method === "POST" && (m = path.match(/^releases\/(\d+)\/assets\?name=(.+)$/))) {
+if (method === "DELETE" && (m = path.match(/^releases\/assets\/(\d+)$/))) {
+  for (const r of state.releases) r.assets = r.assets.filter((a) => String(a.id) !== m[1]);
+  log(["delete", m[1]]);
+  out = {};
+} else if (method === "POST" && (m = path.match(/^releases\/(\d+)\/assets\?name=(.+)$/))) {
   const r = byId(m[1]);
   const digest = "sha256:" + crypto.createHash("sha256").update(input()).digest("hex");
-  r.assets.push({ name: m[2], digest });
+  state.nextAsset = (state.nextAsset || 1000) + 1;
+  r.assets.push({ id: state.nextAsset, name: m[2], digest });
   log(["upload", m[1], m[2]]);
   out = {};
 } else if ((m = path.match(/^releases\/(\d+)$/))) {
@@ -167,7 +180,50 @@ function setup({
   const marker = (runId = 100) => `<!-- orca-signed-run: ${runId} ${digest} -->`;
   const armMarker = (runId = 100) => `<!-- orca-signed-run-arm64: ${runId} ${armDigest} -->`;
   const acceptMarker = (runId = 900, d = armDigest) => `<!-- orca-arm64-accepted: ${runId} ${d} -->`;
-  return { run, attach, attachBoth, accept, state, edit, writes, digest, armDigest, marker, armMarker, acceptMarker };
+  // What a real acceptance run leaves: its run facts and its evidence artifact.
+  const evidence = (over = {}) => ({
+    format: 1,
+    run_id: "900",
+    release_id: "7",
+    version: "0.8.0",
+    source_sha: SHA,
+    digest: armDigest,
+    mode: "fresh",
+    previous: null,
+    ...over,
+  });
+  const acceptRun = (over = {}) => ({
+    ...goodRun,
+    id: 900,
+    path: ".github/workflows/release-accept-arm64.yml",
+    event: "workflow_run",
+    ...over,
+  });
+  const accepted = (env, { run: runOver = {}, evidence: evidenceOver = {} } = {}) => {
+    const result = accept(env);
+    edit((st) => {
+      st.runs["900"] = acceptRun(runOver);
+      st.evidence = { 900: evidence(evidenceOver) };
+    });
+    return result;
+  };
+  const x64Only = () => run(ATTACH, ["x64-only", "7", SHA, "0.8.0"]);
+  return {
+    run,
+    attach,
+    attachBoth,
+    accept,
+    accepted,
+    x64Only,
+    state,
+    edit,
+    writes,
+    digest,
+    armDigest,
+    marker,
+    armMarker,
+    acceptMarker,
+  };
 }
 
 const UPLOAD = ["upload", "7", "ORCA-0.8.0-win-x64.exe"];
@@ -302,8 +358,8 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
 
     // arm64's native acceptance is recorded, then publication through the workflow's script,
     // then the feed takes exactly run 100.
-    const accepted = f.accept();
-    expect(accepted.status, accepted.stderr).toBe(0);
+    const acceptance = f.accepted();
+    expect(acceptance.status, acceptance.stderr).toBe(0);
     expect(f.writes().slice(3)).toEqual([RECORD]);
     const published = f.run(ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest]);
     expect(published.status, published.stderr).toBe(0);
@@ -414,12 +470,13 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(f.attachBoth().status).toBe(0);
     const result = f.run(ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest]);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("has not passed native acceptance");
+    expect(result.stderr).toContain("no single native acceptance record");
+    expect(result.stderr).toContain("has no verified native acceptance");
     expect(f.state().releases[0].draft).toBe(true);
     // Acceptance of other bytes does not count either.
     f.edit((st) => (st.releases[0].body += `\n\n${f.acceptMarker(900, "sha256:" + "8".repeat(64))}`));
     expect(f.run(ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest]).stderr).toContain(
-      "has not passed native acceptance",
+      "has no verified native acceptance",
     );
   });
 
@@ -514,27 +571,30 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
   ])("refuses to publish with %s", (_label, change, message) => {
     const f = setup();
     expect(f.attach().status).toBe(0);
+    expect(f.x64Only().status).toBe(0);
     f.edit(change);
     const result = f.run(ATTACH, accepted(f));
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(message);
-    expect(f.writes()).toHaveLength(2);
+    expect(f.writes()).toHaveLength(3);
     expect(f.state().releases.find((r) => r.id === 7).draft).toBe(true);
   });
 
   it.each([["releases/latest"], ["git/ref/tags/"]])("stops before writing when %s cannot be read", (path) => {
     const f = setup();
     expect(f.attach().status).toBe(0);
+    expect(f.x64Only().status).toBe(0);
     const result = f.run(ATTACH, accepted(f), { FAKE_ERROR_PATH: `^${path}` });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("nothing written");
-    expect(f.writes()).toHaveLength(2);
+    expect(f.writes()).toHaveLength(3);
     expect(f.state().releases[0].draft).toBe(true);
   });
 
   it("publishes the first release when there is no Latest and no tag yet", () => {
     const f = setup();
     expect(f.attach().status).toBe(0);
+    expect(f.x64Only().status).toBe(0);
     const result = f.run(ATTACH, accepted(f));
     expect(result.status, result.stderr).toBe(0);
     expect(f.state().latest).toBe(7);
@@ -543,15 +603,17 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
   it("refuses digests other than the accepted ones", () => {
     const f = setup();
     expect(f.attach().status).toBe(0);
+    expect(f.x64Only().status).toBe(0);
     const result = f.run(ATTACH, ["publish", "7", "0.8.0", SHA, "sha256:" + "9".repeat(64), f.digest]);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("not exactly the accepted");
-    expect(f.writes()).toHaveLength(2);
+    expect(f.writes()).toHaveLength(3);
   });
 
   it("publishes over an older Latest and reads the accepted digests back", () => {
     const f = setup();
     expect(f.attach().status).toBe(0);
+    expect(f.x64Only().status).toBe(0);
     f.edit((st) => {
       st.releases.push({ ...draft({ id: 5, tag_name: "v0.7.9", name: "v0.7.9", draft: false }) });
       st.latest = 5;
@@ -560,5 +622,115 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(f.state().latest).toBe(7);
     expect(f.state().tags["v0.8.0"]).toBe(SHA);
+  });
+
+  const publish = (f) => f.run(ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest]);
+
+  it.each([
+    ["a run of another workflow", { run: { path: ".github/workflows/ci.yml" } }, "is not a successful"],
+    ["a failed run", { run: { conclusion: "failure" } }, "is not a successful"],
+    ["a run on another branch", { run: { head_branch: "topic" } }, "is not a successful"],
+    ["evidence for another release", { evidence: { release_id: "8" } }, "release_id"],
+    ["evidence for another commit", { evidence: { source_sha: OTHER } }, "source_sha"],
+    ["evidence for other bytes", { evidence: { digest: "sha256:" + "8".repeat(64) } }, "digest"],
+    ["evidence from another run", { evidence: { run_id: "901" } }, "run_id"],
+    ["an upgrade claimed without a prior arm64 release", { evidence: { mode: "upgrade" } }, "mode"],
+  ])("refuses to publish arm64 accepted by %s", (_label, over, message) => {
+    const f = setup();
+    expect(f.attachBoth().status).toBe(0);
+    expect(f.accepted({}, over).status).toBe(0);
+    const result = publish(f);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
+    expect(result.stderr).toContain("has no verified native acceptance");
+    expect(f.state().releases[0].draft).toBe(true);
+  });
+
+  it("refuses to publish arm64 whose acceptance run left no evidence", () => {
+    const f = setup();
+    expect(f.attachBoth().status).toBe(0);
+    expect(f.accepted().status).toBe(0);
+    f.edit((st) => (st.evidence = {}));
+    expect(publish(f).stderr).toContain("no arm64-acceptance-evidence artifact");
+  });
+
+  it("requires the evidence's baseline to be the newest prior published arm64 release", () => {
+    const prior = (id, version, digest) => ({
+      ...draft({
+        id,
+        tag_name: `v${version}`,
+        name: `v${version}`,
+        draft: false,
+        published_at: "2026-11-01T00:00:00Z",
+      }),
+      assets: [{ id: id * 10, name: `ORCA-${version}-win-arm64.exe`, digest }],
+    });
+    const OLD = "sha256:" + "1".repeat(64);
+    const NEWER = "sha256:" + "2".repeat(64);
+    const setupPrior = () => {
+      const f = setup();
+      f.edit((st) =>
+        st.releases.push(
+          prior(3, "0.7.2", OLD),
+          prior(4, "0.7.10", NEWER),
+          prior(5, "0.9.0", OLD),
+          prior(6, "0.7.11-rc.1", OLD),
+        ),
+      );
+      expect(f.attachBoth().status).toBe(0);
+      return f;
+    };
+    const fresh = setupPrior();
+    expect(fresh.accepted().status).toBe(0);
+    expect(publish(fresh).stderr).toContain('mode "fresh", not "upgrade"');
+    const stale = setupPrior();
+    expect(
+      stale.accepted({}, { evidence: { mode: "upgrade", previous: { version: "0.7.2", digest: OLD } } }).status,
+    ).toBe(0);
+    expect(publish(stale).stderr).toContain("previous");
+    const right = setupPrior();
+    expect(
+      right.accepted({}, { evidence: { mode: "upgrade", previous: { version: "0.7.10", digest: NEWER } } }).status,
+    ).toBe(0);
+    const published = publish(right);
+    expect(published.status, published.stderr).toBe(0);
+  });
+
+  it("refuses to publish without arm64 unless x64-only was decided", () => {
+    const f = setup();
+    expect(f.attach().status).toBe(0);
+    const result = publish(f);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("no x64-only decision");
+  });
+
+  it("keeps an x64-only decision: removes arm64, and attach, reconcile and accept leave it out", () => {
+    const f = setup();
+    expect(f.attachBoth().status).toBe(0);
+    const decided = f.x64Only();
+    expect(decided.status, decided.stderr).toBe(0);
+    const r = f.state().releases[0];
+    expect(r.assets.map((a) => a.name)).toEqual([DEB.name, "ORCA-0.8.0-win-x64.exe"]);
+    expect(r.body).toContain("<!-- orca-x64-only -->");
+    const before = f.writes().length;
+    expect(f.x64Only().status).toBe(0);
+    expect(f.writes()).toHaveLength(before);
+    // Reconcile sees nothing missing; a rerun of the attach does not bring arm64 back.
+    expect(f.run(ATTACH, ["reconcile"]).status).toBe(0);
+    expect(f.attachBoth().status).toBe(0);
+    expect(f.writes()).toHaveLength(before);
+    expect(f.state().releases[0].assets).toHaveLength(2);
+    expect(f.run(ATTACH, ["accept-select"]).stdout).toBe("");
+    expect(f.accept().stderr).toContain("marked x64-only");
+    const published = publish(f);
+    expect(published.status, published.stderr).toBe(0);
+    expect(f.state().releases[0].draft).toBe(false);
+  });
+
+  it("refuses to publish an x64-only draft that still has arm64", () => {
+    const f = setup();
+    expect(f.attachBoth().status).toBe(0);
+    f.edit((st) => (st.releases[0].body += "\n\n<!-- orca-x64-only -->"));
+    expect(publish(f).stderr).toContain("marked x64-only but still has");
   });
 });

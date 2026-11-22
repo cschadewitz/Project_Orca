@@ -93,7 +93,9 @@ export function snapshot(root, version, files) {
   const dir = join(root, version);
   mkdirSync(dir, { recursive: true });
   for (const file of files) copyFileSync(file, join(dir, basename(file)));
-  writeFileSync(join(dir, "complete.json"), `${JSON.stringify({ format: 1, version })}\n`);
+  // The architectures whose installers were laid out, as feed-r2.sh records them (#889).
+  const arches = ["x64", "arm64"].filter((arch) => files.some((file) => basename(file).endsWith(`-win-${arch}.exe`)));
+  writeFileSync(join(dir, "complete.json"), `${JSON.stringify({ format: 2, version, arches })}\n`);
 }
 
 export function writeRings(root, value) {

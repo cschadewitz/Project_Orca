@@ -21,12 +21,17 @@
 #   release-attach.sh accept ID SHA VERSION RUN_ID DIGEST
 #                                       record that RUN_ID's native acceptance passed on draft
 #                                       ID's arm64 installer, whose digest must be DIGEST
+#   release-attach.sh x64-only ID SHA VERSION
+#                                       record the decision to release draft ID without arm64,
+#                                       then remove its arm64 installer if attached; attach,
+#                                       reconcile, accept, publish and the feed all honor it
 #   release-attach.sh publish ID VERSION SHA DEB_SHA256 EXE_SHA256
 #                                       publish draft ID as vVERSION only if it targets SHA and
 #                                       holds exactly the accepted .deb and x64 installer (the
-#                                       recorded one), plus, if attached, the recorded arm64
-#                                       installer with its acceptance record, and VERSION is
-#                                       newer than Latest
+#                                       recorded one), plus either the recorded arm64 installer
+#                                       with verified native acceptance (tools/deploy/
+#                                       feed-arches.js verify) or the x64-only decision, and
+#                                       VERSION is newer than Latest
 #
 # Every write is preceded by a fresh read of the exact draft: still a draft, the same target
 # and name, only the expected assets, and no other record. The records are written before the
@@ -40,6 +45,8 @@ note() { echo "$*" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}" >&2; }
 MARK_RE='<!-- orca-signed-run: [0-9]+ sha256:[0-9a-f]{64} -->'
 ARM_RE='<!-- orca-signed-run-arm64: [0-9]+ sha256:[0-9a-f]{64} -->'
 ACCEPT_RE='<!-- orca-arm64-accepted: [0-9]+ sha256:[0-9a-f]{64} -->'
+X64_ONLY='<!-- orca-x64-only -->'
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # records RE: the body's records matching RE, one per line (read from stdin).
 records() { grep -oE "$1" || true; }
 
@@ -154,6 +161,11 @@ case "${1:-}" in
       arm_want="sha256:$(sha256sum "$arm_file" | cut -d' ' -f1)"
       arm_marker="<!-- orca-signed-run-arm64: $run $arm_want -->"
     fi
+    # An operator's x64-only decision stands: arm64 is neither recorded nor uploaded again.
+    if [[ -n "$arm_file" && "$(gh api "repos/$REPO/releases/$id" --jq '.body // ""')" == *"$X64_ONLY"* ]]; then
+      note "Draft v$version (release \`$id\`) is marked x64-only; the arm64 installer is not attached."
+      arm_file="" arm_want="" arm_marker=""
+    fi
     # The records first: if anything interrupts an upload, the draft already names this run,
     # so reconcile resumes with it and no other run's bytes can be attached.
     body=$(validate "$id" "$sha" "$version" "$marker" "$arm_marker")
@@ -190,8 +202,10 @@ case "${1:-}" in
       --jq '.workflow_runs[].id')
     while IFS=$'\t' read -r id sha name attached arm_attached; do
       [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
-      records=$(gh api "repos/$REPO/releases/$id" --jq '.body // ""' | records "$MARK_RE")
+      body=$(gh api "repos/$REPO/releases/$id" --jq '.body // ""')
+      records=$(records "$MARK_RE" <<<"$body")
       count=$(grep -c . <<<"$records" || true)
+      [[ "$body" != *"$X64_ONLY"* ]] || arm_attached=true
       if [[ "$count" -gt 1 ]]; then
         note "$name (release $id): more than one signing record; fix by hand."
         continue
@@ -234,6 +248,10 @@ case "${1:-}" in
       version=${name#v}
       json=$(gh api "repos/$REPO/releases/$id")
       body=$(jq -r '.body // ""' <<<"$json")
+      if grep -qF "$X64_ONLY" <<<"$body"; then
+        note "$name (release $id): marked x64-only; nothing to accept."
+        continue
+      fi
       arm=$(records "$ARM_RE" <<<"$body")
       [[ $(grep -c . <<<"$arm") -eq 1 ]] || { note "$name (release $id): no single arm64 signing record; nothing to accept."; continue; }
       digest=$(awk '{print $4}' <<<"$arm")
@@ -258,6 +276,7 @@ case "${1:-}" in
     check_accept() {
       local body arm accepted
       body=$(validate "$id" "$sha" "$version" "" "") || exit 1
+      ! grep -qF "$X64_ONLY" <<<"$body" || fail "release $id is marked x64-only; nothing written"
       arm=$(records "$ARM_RE" <<<"$body")
       [[ $(grep -c . <<<"$arm") -eq 1 && "$(awk '{print $4}' <<<"$arm")" == "$digest" ]] ||
         fail "release $id's arm64 signing record is not $digest; nothing written"
@@ -280,6 +299,24 @@ case "${1:-}" in
     [[ "$(gh api "repos/$REPO/releases/$id" --jq "[.draft, ((.body // \"\") | contains(\"$marker\"))] | map(tostring) | join(\" \")")" == "true true" ]] ||
       fail "draft $id does not read back with its arm64 acceptance record"
     note "Recorded native acceptance of $arm_name (\`$digest\`, run $run) on draft v$version (release \`$id\`)."
+    ;;
+  x64-only)
+    [[ $# -eq 4 && "$2" =~ ^[0-9]+$ && "$3" =~ ^[0-9a-f]{40}$ && "$4" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+      fail "usage: release-attach.sh x64-only ID SHA VERSION"
+    id=$2 sha=$3 version=$4 arm_name="ORCA-$4-win-arm64.exe"
+    # The decision first, so a concurrent attach or reconcile honors it before the asset goes.
+    body=$(validate "$id" "$sha" "$version" "" "")
+    if ! grep -qF "$X64_ONLY" <<<"$body"; then
+      jq -n --arg body "$body"$'\n\n'"$X64_ONLY" '{body: $body}' |
+        gh api -X PATCH "repos/$REPO/releases/$id" --input - >/dev/null
+    fi
+    validate "$id" "$sha" "$version" "" "" >/dev/null
+    asset=$(gh api "repos/$REPO/releases/$id" --jq "[.assets[] | select(.name == \"$arm_name\") | .id] | .[0] // \"\"")
+    [[ -z "$asset" ]] || gh api -X DELETE "repos/$REPO/releases/assets/$asset" >/dev/null
+    check=$(gh api "repos/$REPO/releases/$id" --jq \
+      "[.draft, ([.assets[] | select(.name == \"$arm_name\")] | length == 0), ((.body // \"\") | contains(\"$X64_ONLY\"))] | map(tostring) | join(\" \")")
+    [[ "$check" == "true true true" ]] || fail "draft $id does not read back x64-only ($check)"
+    note "Draft v$version (release \`$id\`) is marked x64-only: it is published and fed without arm64."
     ;;
   publish)
     # The operator states what native acceptance passed on: the source commit and both
@@ -306,21 +343,35 @@ case "${1:-}" in
     records=$(records "$MARK_RE" <<<"$body")
     [[ $(grep -c . <<<"$records") -eq 1 ]] || fail "release $id has no single signing record"
     [[ "$(awk '{print $4}' <<<"$records")" == "$exe" ]] || fail "release $id's signing record is not the accepted installer $exe"
-    # arm64 is optional; when attached it must be the recorded installer of the same signing
-    # run and carry its native acceptance record (Release (accept Windows arm64)).
+    # arm64: either the recorded installer of the same signing run with verified native
+    # acceptance (its run and evidence, tools/deploy/feed-arches.js), or an explicit x64-only
+    # decision with no arm64 installer attached.
     arm_name="ORCA-$version-win-arm64.exe"
     arm=$(jq -r --arg n "$arm_name" '[.assets[] | select(.name == $n) | .digest] | .[0] // ""' <<<"$json")
     arm_records=$(records "$ARM_RE" <<<"$body")
-    if [[ -n "$arm" ]]; then
+    if grep -qF "$X64_ONLY" <<<"$body"; then
+      [[ -z "$arm" ]] || fail "release $id is marked x64-only but still has $arm_name"
+      arm_records=""
+    else
+      [[ -n "$arm" ]] ||
+        fail "release $id has no $arm_name and no x64-only decision; let the attach finish, or dispatch Release (accept Windows arm64) with x64_only"
       [[ $(grep -c . <<<"$arm_records") -eq 1 && "$(awk '{print $4}' <<<"$arm_records")" == "$arm" &&
         "$(awk '{print $3}' <<<"$arm_records")" == "$(awk '{print $3}' <<<"$records")" ]] ||
         fail "release $id's $arm_name ($arm) is not the one its signing run recorded"
-      accepted=$(records "$ACCEPT_RE" <<<"$body")
-      [[ $(grep -c . <<<"$accepted") -eq 1 && "$(awk '{print $4}' <<<"$accepted")" == "$arm" ]] ||
-        fail "release $id's $arm_name ($arm) has not passed native acceptance; wait for Release (accept Windows arm64), or delete that asset to publish x64 only"
+      evidence=$(mktemp -d)
+      printf '%s' "$json" >"$evidence/release.json"
+      gh api --paginate "repos/$REPO/releases" --jq '.[]' | jq -s . >"$evidence/releases.json" ||
+        fail "could not read the releases; nothing written"
+      run=$(node "$HERE/feed-arches.js" acceptance-run "$version" "$evidence/release.json")
+      if [[ -n "$run" ]]; then
+        gh api "repos/$REPO/actions/runs/$run" >"$evidence/run.json" 2>/dev/null || true
+        gh run download "$run" --repo "$REPO" --name arm64-acceptance-evidence --dir "$evidence/artifact" >/dev/null 2>&1 || true
+      fi
+      node "$HERE/feed-arches.js" verify "$version" "$REPO" "$evidence/release.json" "$evidence/releases.json" \
+        "$evidence/run.json" "$evidence/artifact/evidence.json" ||
+        fail "release $id's $arm_name ($arm) has no verified native acceptance; wait for Release (accept Windows arm64), or dispatch it with x64_only to publish without arm64"
+      rm -rf "$evidence"
       arm_records=$(head -n1 <<<"$arm_records")
-    else
-      arm_records=""
     fi
     json=$(validate "$id" "$sha" "$version" "$records" "$arm_records" >/dev/null && gh api "repos/$REPO/releases/$id") || exit 1
     digests() { jq -r --arg d "$deb_name" --arg e "$exe_name" --arg a "$arm_name" '[(.assets | length), ([.assets[] | select(.name == $d) | .digest] | .[0] // ""), ([.assets[] | select(.name == $e) | .digest] | .[0] // ""), ([.assets[] | select(.name == $a) | .digest] | .[0] // "")] | map(tostring) | join(" ")'; }
@@ -336,5 +387,5 @@ case "${1:-}" in
     [[ "$(gh api "repos/$REPO/releases/latest" --jq .id)" == "$id" ]] || fail "release $id is not latest"
     note "Published v$version (release \`$id\`, \`$sha\`): $deb_name \`$deb\`, $exe_name \`$exe\`${arm:+, $arm_name \`$arm\` (natively accepted)}."
     ;;
-  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE [ARM64_FILE] | reconcile | accept-select [ID] | accept ID SHA VERSION RUN_ID DIGEST | publish ID VERSION SHA DEB_SHA256 EXE_SHA256" ;;
+  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE [ARM64_FILE] | reconcile | accept-select [ID] | accept ID SHA VERSION RUN_ID DIGEST | x64-only ID SHA VERSION | publish ID VERSION SHA DEB_SHA256 EXE_SHA256" ;;
 esac

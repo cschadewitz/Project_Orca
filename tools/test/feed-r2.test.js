@@ -190,8 +190,9 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
       expect(existsSync(f.object(`0.7.1-rc.1/prerelease-${arch}.yml`))).toBe(true);
     }
     expect(JSON.parse(readFileSync(f.object("0.7.1-rc.1/complete.json"), "utf8"))).toEqual({
-      format: 1,
+      format: 2,
       version: "0.7.1-rc.1",
+      arches: ["x64", "arm64"],
     });
     expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8")).rings.internal).toEqual({
       version: "0.7.1-rc.1",
