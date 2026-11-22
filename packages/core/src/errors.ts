@@ -56,6 +56,12 @@ export type OrcaErrorCode =
   | "STORE_LOCK_TIMEOUT"
   /** An append the step depended on failed: a torn log, a full disk, a store directory that went away. */
   | "STORE_WRITE"
+  /**
+   * The store's recorded format cannot be opened by this build (#566): written by a newer ORCA,
+   * older than the supported window, or a damaged marker. `details.reason` says which; the store
+   * is left unchanged.
+   */
+  | "STORE_FORMAT"
   | "INTERNAL";
 
 export class OrcaError extends Error {

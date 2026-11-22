@@ -499,9 +499,11 @@ remain conditional on installed providers and caller authority, not new globally
 release capabilities.
 
 The epoch check belongs to the **managed release updater**, which refuses activation and
-recovery across different epochs. Direct CLI and daemon startup do **not** enforce
-`release-compatibility.json`; successfully starting an old binary is not proof it can read
-or safely write an upgraded store. Old full-schema event readers throw on a valid but
+recovery across different epochs. Direct CLI and daemon startup do **not** read
+`release-compatibility.json`; from 0.7.1 they enforce the store's own format marker instead
+(see [Store format carryover](#store-format-carryover) below). Builds before 0.7.1 ignore that
+marker, so successfully starting an old binary is still not proof it can read or safely write
+an upgraded store. Old full-schema event readers throw on a valid but
 unknown event such as `revision.recorded`; filtered readers may bypass that event and
 appear to work. Neither outcome is a supported downgrade or a compatibility guarantee.
 
@@ -523,6 +525,31 @@ stores**, plan journals, artifacts, permission sidecars and configs, and explici
 and restore validation. Never copy a live event store as a purported consistent backup.
 Reverting binaries cannot undo incompatible writes. Restore the complete matching backup
 before starting the old release; account for work performed since that backup separately.
+
+### Store format carryover
+
+From 0.7.1 every store records the format (store epoch) and the ORCA version that last wrote
+it in `store-format.json` at the top of the store. Every command that opens the store, the
+desktop app's bundled daemon included, checks it first (#566):
+
+| The store was written in | What this build does |
+| --- | --- |
+| Its own format | Opens it in place. Updates that keep the format, such as 0.7.0 to 0.7.1, need nothing else. |
+| The previous release's format, or before the marker existed | Copies the whole store to `format-backups/<time>-from-<format>/` inside the store, then stamps the current format and opens it in place. The newest two backups are kept. |
+| An older format than that | Refuses, naming the release line to open it with first. |
+| A format it does not know (a newer ORCA) | Refuses for reads and writes alike and changes nothing. The message names the version that wrote it and, when there is one, the backup that version made. |
+| A damaged marker | Refuses until the marker is restored or repaired with ORCA stopped. |
+
+The supported window is this release's format and the one before it, so a store carries
+forward across one format change at a time. Closed update validation (`serve --read-only
+--no-resume` under an update fence) only checks; it never writes the marker or a backup.
+`validate` does not open the store and is unaffected.
+
+The automatic backup covers the store directory only: not the config file, the permission
+sidecar or `auth/` beside the config. Agents cannot read `format-backups/`, which holds copies
+of the store's private directories. To go back to the older release after a format change,
+stop ORCA, move the store aside, copy the backup back in its place, and start the older
+release. Work done after the backup is not in it.
 
 During compatible activation, `activation.json` is fsynced before any service/pointer change.
 Failed startup/hello restores the previous pointer, restarts it closed, validates its hello,
