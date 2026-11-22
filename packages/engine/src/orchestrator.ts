@@ -1700,7 +1700,11 @@ export class Orchestrator {
         kind: "failed",
         error: err,
         retryable:
-          err.code !== "WORKFLOW_INVALID" && err.code !== "NOT_SUPPORTED" && err.code !== "AGENT_MODEL_NOT_FOUND",
+          err.code !== "WORKFLOW_INVALID" &&
+          err.code !== "NOT_SUPPORTED" &&
+          err.code !== "AGENT_MODEL_NOT_FOUND" &&
+          // A delegated step the remote refuses for good (#883): a retry meets the same refusal.
+          err.code !== "DELEGATION_REFUSED",
       };
     }
   }
