@@ -73,21 +73,25 @@ function secretGrant(ctx: CommandContext, config: OrcaConfig): SecretGrant | und
  *   command, or a host pointed elsewhere, is not covered.
  * - A skill must be in the catalog and readable now; the grant records its content digest,
  *   so an edited skill is not covered until it is granted again.
- * - `'*'` grants every catalog server and skill.
+ * - `--mcp-server '*'` grants every catalog server and `--skill '*'` every catalog skill. Each
+ *   is its own explicit entry: one never grants the other kind, and each is given alone among
+ *   the flags of its own kind.
  */
 function capabilityGrant(ctx: CommandContext, config: OrcaConfig, configDir: string): CapabilityGrant | undefined {
   const servers = (ctx.flags["mcp-server"] as string[] | undefined) ?? [];
   const skills = (ctx.flags.skill as string[] | undefined) ?? [];
   if (!servers.length && !skills.length) return undefined;
-  if (servers.includes("*") || skills.includes("*")) {
-    if (servers.length + skills.length > 1)
+  for (const [flag, values] of [
+    ["--mcp-server", servers],
+    ["--skill", skills],
+  ] as const)
+    if (values.includes("*") && values.length > 1)
       throw new OrcaError(
         "CONFIG_INVALID",
-        "'*' grants every catalog MCP server and skill; give it alone, to --mcp-server or --skill",
+        `${flag} '*' grants every catalog ${flag === "--skill" ? "skill" : "MCP server"}; give it alone among the ${flag} flags`,
       );
-    return "*";
-  }
   const serverGrants = servers.map((value) => {
+    if (value === "*") return { kind: "mcpServer" as const, any: true as const };
     const at = value.lastIndexOf("@");
     if (at <= 0 || at === value.length - 1)
       throw new OrcaError("CONFIG_INVALID", `--mcp-server takes <id>@<host> or '*', not '${value}'`);
@@ -118,6 +122,7 @@ function capabilityGrant(ctx: CommandContext, config: OrcaConfig, configDir: str
     };
   });
   const skillGrants = skills.map((id) => {
+    if (id === "*") return { kind: "skill" as const, any: true as const };
     const skill = config.capabilities?.skills[id];
     if (!skill) throw new OrcaError("CONFIG_INVALID", `--skill names '${id}', which is not a catalog skill`);
     const digest = skillDigest(skill, configDir);
@@ -134,13 +139,14 @@ function capabilityGrant(ctx: CommandContext, config: OrcaConfig, configDir: str
     throw new OrcaError("CONFIG_INVALID", "--mcp-server and --skill ids use letters, digits, '.', '_' and '-'");
   const seen = new Set<string>();
   return (parsed.data as Exclude<CapabilityGrant, "*">).filter((g) => {
-    const key = g.kind === "skill" ? `skill:${g.id}` : `mcpServer:${g.id}@${g.host}`;
+    const key = grantLabel(g);
     return !seen.has(key) && (seen.add(key), true);
   });
 }
 
 /** How `auth list` shows a capability grant entry. */
 function grantLabel(g: Exclude<CapabilityGrant, "*">[number]): string {
+  if ("any" in g) return g.kind === "skill" ? "skill:*" : "mcpServer:*";
   return g.kind === "skill" ? `skill:${g.id}` : `${g.id}@${g.host}`;
 }
 
@@ -213,7 +219,7 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
               ? "expired"
               : "active";
           ctx.out(
-            `${c.id} ${c.principal} ${state} workflows=${c.scope.workflows === "*" ? "*" : c.scope.workflows.join(",")} runs=${c.scope.runs}${c.secrets === undefined ? "" : ` secrets=${c.secrets === "*" ? "*" : c.secrets.map((g) => `${g.secret}(${g.provider})@${g.host}`).join(",")}`}${c.capabilities === undefined ? "" : ` capabilities=${c.capabilities === "*" ? "*" : c.capabilities.map(grantLabel).join(",")}`}${c.expiresAt ? ` expires=${c.expiresAt}` : ""}${c.label ? ` label=${c.label}` : ""}`,
+            `${c.id} ${c.principal} ${state} workflows=${c.scope.workflows === "*" ? "*" : c.scope.workflows.join(",")} runs=${c.scope.runs}${c.secrets === undefined ? "" : ` secrets=${c.secrets === "*" ? "*" : c.secrets.map((g) => `${g.secret}(${g.provider})@${g.host}`).join(",")}`}${c.capabilities === undefined ? "" : ` capabilities=${c.capabilities === "*" ? "mcpServer:*" : c.capabilities.map(grantLabel).join(",")}`}${c.expiresAt ? ` expires=${c.expiresAt}` : ""}${c.label ? ` label=${c.label}` : ""}`,
           );
         }
       return 0;

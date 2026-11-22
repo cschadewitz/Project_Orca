@@ -2522,20 +2522,23 @@ export class Orchestrator {
     let skillBytes = 0;
     for (const skill of selected) {
       const definition = definitions.skills[skill.id];
+      // Each read is bounded by what is left of the step's budget, not checked after it.
       const read = definition
-        ? readSkillForDelivery(skill.id, definition, baseDir, skill.digest)
+        ? readSkillForDelivery(skill.id, definition, baseDir, skill.digest, SKILL_DELIVERY_MAX_BYTES - skillBytes)
         : { error: `skill '${skill.id}' is no longer in the catalog` };
+      if ("tooLarge" in read) {
+        unreadable.push({
+          path: `${nodePath}.capabilities.skills`,
+          message: `the selected skills are more than the ${SKILL_DELIVERY_MAX_BYTES} bytes together a step may carry in its prompts`,
+        });
+        break;
+      }
       if ("error" in read) unreadable.push({ path: `${nodePath}.capabilities.skills`, message: read.error });
       else {
         skillBytes += read.bytes;
         skills.push({ id: skill.id, digest: read.digest, files: read.files });
       }
     }
-    if (skillBytes > SKILL_DELIVERY_MAX_BYTES)
-      unreadable.push({
-        path: `${nodePath}.capabilities.skills`,
-        message: `the selected skills are ${skillBytes} bytes together, more than the ${SKILL_DELIVERY_MAX_BYTES} a step may carry in its prompts`,
-      });
     if (unreadable.length) throw capabilityRefusal(step.nodeId, unreadable);
     const hostBinding = secretHostBinding(host.spec);
     const uses = (trusted: (m: ResolvedMcpServer) => boolean): CapabilityUse[] => [

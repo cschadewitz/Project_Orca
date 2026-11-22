@@ -88,7 +88,8 @@ describe("auth issue --mcp-server", () => {
 
   it("grants every server with '*', and none without the flag", async () => {
     expect(await issue("all", { "mcp-server": ["*"] })).toBe(0);
-    expect(stored("all").capabilities).toBe("*");
+    // An explicit entry for servers only: it grants no skill.
+    expect(stored("all").capabilities).toEqual([{ kind: "mcpServer", any: true }]);
     expect(await issue("none", {})).toBe(0);
     expect(stored("none").capabilities).toBeUndefined();
     expect(stored("none").permissions).not.toContain("capabilities.use");
@@ -119,10 +120,19 @@ describe("auth issue --mcp-server", () => {
     await expect(issue("f", { skill: ["absent"] })).rejects.toMatchObject({
       message: "--skill names 'absent', which is not a catalog skill",
     });
-    await expect(issue("g", { skill: ["*"], "mcp-server": ["github@local"] })).rejects.toMatchObject({
-      code: "CONFIG_INVALID",
-    });
+    await expect(issue("g", { skill: ["*", "review"] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    // Each kind's '*' is its own explicit entry; neither grants the other kind.
     expect(await issue("h", { skill: ["*"] })).toBe(0);
-    expect(stored("h").capabilities).toBe("*");
+    expect(stored("h").capabilities).toEqual([{ kind: "skill", any: true }]);
+    expect(await issue("i", { skill: ["*"], "mcp-server": ["github@local"] })).toBe(0);
+    expect(stored("i").capabilities).toEqual([
+      expect.objectContaining({ kind: "mcpServer", id: "github" }),
+      { kind: "skill", any: true },
+    ]);
+    expect(await issue("j", { skill: ["*"], "mcp-server": ["*"] })).toBe(0);
+    expect(stored("j").capabilities).toEqual([
+      { kind: "mcpServer", any: true },
+      { kind: "skill", any: true },
+    ]);
   });
 });

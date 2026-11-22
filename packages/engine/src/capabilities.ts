@@ -4,7 +4,17 @@
  * session open - turns an agent step into a resolved manifest.
  */
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readSync,
+  type Stats,
+} from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   OrcaError,
@@ -34,61 +44,128 @@ export interface SkillFile {
 }
 
 /**
- * Read a skill's files, refusing a symbolic link rather than following it, so a skill is
- * always files that are inside it. A single-file skill is one file named by its own name.
- * Sorted by path.
+ * Linux only: `/proc/self/fd/<fd>` names the very directory an open descriptor holds, so a
+ * walk through it is `openat`: renaming or replacing a directory on the path after it was
+ * opened cannot move the walk elsewhere.
+ */
+const PROC_FD = process.platform === "linux" && existsSync("/proc/self/fd");
+const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+const O_DIRECTORY = fsConstants.O_DIRECTORY ?? 0;
+const O_NONBLOCK = fsConstants.O_NONBLOCK ?? 0;
+
+class SkillReadRefusal extends Error {
+  constructor(
+    message: string,
+    readonly tooLarge = false,
+  ) {
+    super(message);
+  }
+}
+
+/** The same filesystem object, by device and inode. */
+function sameObject(a: { dev: number; ino: number }, b: { dev: number; ino: number }): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+/**
+ * Read at most `budget` bytes from `fd`, failing once there would be more: the allocation is
+ * bounded by the budget, never by what the file says its size is.
+ */
+function readBounded(fd: number, sizeHint: number, budget: number, what: string): Buffer {
+  let buf = Buffer.allocUnsafe(Math.min(Math.max(sizeHint, 0), budget) + 1);
+  let length = 0;
+  for (;;) {
+    if (length === buf.length) {
+      if (buf.length > budget) throw new SkillReadRefusal(what, true);
+      const grown = Buffer.allocUnsafe(Math.min(buf.length * 2, budget + 1));
+      buf.copy(grown, 0, 0, length);
+      buf = grown;
+    }
+    const n = readSync(fd, buf, length, buf.length - length, null);
+    if (n === 0) break;
+    length += n;
+    if (length > budget) throw new SkillReadRefusal(what, true);
+  }
+  return Buffer.from(buf.subarray(0, length));
+}
+
+/**
+ * Read a skill's files, at most `maxBytes` together. Each file and directory is opened without
+ * following a symbolic link (`O_NOFOLLOW`), checked by its descriptor to be the regular file
+ * or directory the walk found (same device and inode), and read through that descriptor with
+ * the remaining budget as the bound. On Linux the walk goes through each directory's open
+ * descriptor, so nothing outside the skill is ever opened, whatever is renamed meanwhile;
+ * elsewhere the descriptor checks refuse anything swapped between finding and opening it.
+ * A single-file skill is one file named by its own name. Sorted by path.
  */
 export function readSkillFiles(
   skill: SkillDefinition,
   baseDir: string | undefined,
-): { files: SkillFile[] } | { error: string } {
+  maxBytes: number = SKILL_MAX_BYTES,
+): { files: SkillFile[] } | { error: string; tooLarge?: true } {
   if (!isAbsolute(skill.path) && baseDir === undefined)
     return { error: `skill path '${skill.path}' is relative, and no config directory is known to resolve it against` };
   const root = isAbsolute(skill.path) ? skill.path : resolve(baseDir!, skill.path);
-  const found: { rel: string; abs: string; size: number }[] = [];
+  const tooLarge = `skill '${skill.path}' is larger than ${maxBytes} bytes`;
+  const files: SkillFile[] = [];
   let total = 0;
-  const visit = (abs: string, rel: string): string | undefined => {
-    const stat = lstatSync(abs);
-    if (stat.isSymbolicLink())
-      return `skill '${rel || skill.path}' contains a symbolic link, which ORCA does not follow`;
-    if (stat.isDirectory()) {
-      for (const name of readdirSync(abs).sort()) {
-        const problem = visit(join(abs, name), rel ? `${rel}/${name}` : name);
-        if (problem) return problem;
-      }
-      return undefined;
+  const readFile = (path: string, rel: string, found: Stats) => {
+    const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    try {
+      const opened = fstatSync(fd);
+      if (!opened.isFile() || !sameObject(opened, found))
+        throw new SkillReadRefusal(`skill '${rel || skill.path}' changed while it was read`);
+      const bytes = readBounded(fd, opened.size, maxBytes - total, tooLarge);
+      total += bytes.length;
+      files.push({ rel, bytes });
+    } finally {
+      closeSync(fd);
     }
-    if (!stat.isFile()) return `skill path '${skill.path}' contains something that is neither a file nor a directory`;
-    total += stat.size;
-    if (total > SKILL_MAX_BYTES) return `skill '${skill.path}' is larger than ${SKILL_MAX_BYTES} bytes`;
-    found.push({ rel, abs, size: stat.size });
-    return undefined;
+  };
+  const visit = (path: string, rel: string, found: Stats): void => {
+    const fd = O_DIRECTORY ? openSync(path, fsConstants.O_RDONLY | O_DIRECTORY | O_NOFOLLOW) : undefined;
+    try {
+      if (fd !== undefined && !sameObject(fstatSync(fd), found))
+        throw new SkillReadRefusal(`skill '${rel || skill.path}' changed while it was read`);
+      const dir = PROC_FD && fd !== undefined ? `/proc/self/fd/${fd}` : path;
+      for (const name of readdirSync(dir).sort()) {
+        const childRel = rel ? `${rel}/${name}` : name;
+        const child = join(dir, name);
+        const stat = lstatSync(child);
+        if (stat.isSymbolicLink())
+          throw new SkillReadRefusal(`skill '${childRel}' contains a symbolic link, which ORCA does not follow`);
+        if (stat.isDirectory()) visit(child, childRel, stat);
+        else if (stat.isFile()) readFile(child, childRel, stat);
+        else
+          throw new SkillReadRefusal(
+            `skill path '${skill.path}' contains something that is neither a file nor a directory`,
+          );
+      }
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
   };
   try {
     const top = lstatSync(root);
-    const problem = top.isFile()
-      ? (found.push({ rel: relative(resolve(root, ".."), root).split(sep).join("/"), abs: root, size: top.size }),
-        top.size > SKILL_MAX_BYTES ? `skill '${skill.path}' is larger than ${SKILL_MAX_BYTES} bytes` : undefined)
-      : visit(root, "");
-    if (problem) return { error: problem };
+    if (top.isSymbolicLink())
+      return { error: `skill '${skill.path}' contains a symbolic link, which ORCA does not follow` };
+    if (top.isFile()) readFile(root, relative(resolve(root, ".."), root).split(sep).join("/"), top);
+    else if (top.isDirectory()) visit(root, "", top);
+    else return { error: `skill path '${skill.path}' contains something that is neither a file nor a directory` };
   } catch (error) {
+    if (error instanceof SkillReadRefusal)
+      return error.tooLarge ? { error: error.message, tooLarge: true } : { error: error.message };
     const code = (error as NodeJS.ErrnoException).code;
     return {
       error:
         code === "ENOENT"
           ? `skill path '${skill.path}' does not exist`
-          : `skill path '${skill.path}' cannot be read (${code ?? "error"})`,
+          : code === "ELOOP"
+            ? `skill '${skill.path}' contains a symbolic link, which ORCA does not follow`
+            : `skill path '${skill.path}' cannot be read (${code ?? "error"})`,
     };
   }
-  try {
-    return {
-      files: found
-        .sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0))
-        .map((f) => ({ rel: f.rel, bytes: readFileSync(f.abs) })),
-    };
-  } catch (error) {
-    return { error: `skill path '${skill.path}' cannot be read (${(error as NodeJS.ErrnoException).code ?? "error"})` };
-  }
+  return { files: files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0)) };
 }
 
 /**
@@ -197,13 +274,17 @@ export function readSkillForDelivery(
   skill: SkillDefinition,
   baseDir: string | undefined,
   expected: string | undefined,
-): { files: { rel: string; text: string }[]; digest: string; bytes: number } | { error: string } {
-  const read = readSkillFiles(skill, baseDir);
+  /** What is left of the step's `SKILL_DELIVERY_MAX_BYTES`: the read stops past it. */
+  budget: number = SKILL_DELIVERY_MAX_BYTES,
+): { files: { rel: string; text: string }[]; digest: string; bytes: number } | { error: string; tooLarge?: true } {
+  const read = readSkillFiles(skill, baseDir, budget);
   if ("error" in read) return read;
   const digest = skillFilesDigest(read.files);
   if (expected !== undefined && digest !== expected)
     return { error: `skill '${id}' changed since the run was launched (now ${digest}); start a new run to use it` };
-  const decoder = new TextDecoder("utf-8", { fatal: true });
+  // `ignoreBOM` keeps a leading byte-order mark in the text, so the text sent is exactly the
+  // bytes the digest names.
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   const files: { rel: string; text: string }[] = [];
   let bytes = 0;
   for (const file of read.files) {

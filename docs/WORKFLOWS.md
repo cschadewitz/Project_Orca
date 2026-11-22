@@ -634,10 +634,18 @@ on the daemon's machine reaches an agent on an SSH host the same way.
 - The run's owner must hold one current credential with `capabilities.use` whose grant
   covers the step's whole set, servers and skills together. A named skill grant pins the
   content digest (`orca auth issue <principal> --skill review`), so an edited skill needs a
-  new grant; `'*'` (and the `owner` preset) covers every skill.
+  new grant; `--skill '*'` (and the `owner` preset) covers every skill. A wildcard is per
+  kind: `--mcp-server '*'` grants no skill, and `--skill '*'` no server.
 - The skill is read once at session open, hashed over exactly the bytes that are sent, and
-  refused if that is not what the launch recorded. Every file must be UTF-8 text, and a
-  step's skills together may be at most 256 KiB.
+  refused if that is not what the launch recorded. Each file and directory is opened
+  without following a symbolic link and checked, by the open descriptor, to be the regular
+  file or directory the walk found (on Linux the walk goes through the directories' open
+  descriptors, so a rename meanwhile cannot lead it outside the skill). Each read stops at
+  what is left of the step's budget: a step's skills together may be at most 256 KiB.
+  Every file must be UTF-8 text; a leading byte-order mark is kept in the text, so what is
+  sent is exactly the bytes the digest names.
+- The use decision is asked again before every prompt that carries the skills, so a grant
+  revoked while the step waits sends nothing.
 - The agent must say at `initialize` that it accepts embedded context
   (`promptCapabilities.embeddedContext`). One that does not refuses the step: ORCA does not
   fall back to leaving the skill out or pasting it in as plain text.

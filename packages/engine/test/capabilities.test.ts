@@ -1,5 +1,7 @@
 /** Scoped capabilities (#335): skill digests, validation, launch preflight, provenance and session open. */
 import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -26,6 +28,8 @@ import {
   capabilityChecker,
   ConfigurationGenerations,
   launchProvenance,
+  readSkillFiles,
+  readSkillForDelivery,
   LocalWorkspaceProvider,
   Orchestrator,
   PausingHumanInput,
@@ -70,6 +74,50 @@ describe("skillDigest", () => {
     expect(skillDigest({ path: "linked" }, dir)).toEqual({ error: expect.stringMatching(/symbolic link/) });
     expect(skillDigest({ path: "missing" }, dir)).toEqual({ error: "skill path 'missing' does not exist" });
     expect(skillDigest({ path: "style.md" }, undefined)).toEqual({ error: expect.stringMatching(/relative/) });
+  });
+});
+
+describe("reading a skill for delivery (#337)", () => {
+  it("reads within the byte budget, through the opened file, and refuses past it", async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, "s"));
+    await writeFile(join(dir, "s", "a.md"), "12345");
+    await writeFile(join(dir, "s", "b.md"), "67890");
+    const read = readSkillFiles({ path: "s" }, dir, 10);
+    expect("files" in read && read.files.map((f) => f.bytes.toString())).toEqual(["12345", "67890"]);
+    expect(readSkillFiles({ path: "s" }, dir, 9)).toEqual({
+      error: expect.stringMatching(/larger than 9/),
+      tooLarge: true,
+    });
+    // The step's budget left over is what the next skill may use.
+    expect(readSkillForDelivery("s", { path: "s" }, dir, undefined, 9)).toMatchObject({ tooLarge: true });
+  });
+
+  it("refuses a link at the top or inside, and anything that is not a regular file", async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, "real.md"), "x");
+    await symlink(join(dir, "real.md"), join(dir, "top.md"));
+    expect(readSkillFiles({ path: "top.md" }, dir)).toEqual({ error: expect.stringMatching(/symbolic link/) });
+    await mkdir(join(dir, "outer"));
+    await symlink(dir, join(dir, "outer", "inner"));
+    expect(readSkillFiles({ path: "outer" }, dir)).toEqual({ error: expect.stringMatching(/symbolic link/) });
+    if (process.platform !== "win32") {
+      await mkdir(join(dir, "piped"));
+      spawnSync("mkfifo", [join(dir, "piped", "fifo")]);
+      if (existsSync(join(dir, "piped", "fifo")))
+        expect(readSkillFiles({ path: "piped" }, dir)).toEqual({ error: expect.stringMatching(/neither a file/) });
+    }
+  });
+
+  it("keeps a leading byte-order mark, so the text sent is the bytes the digest names", async () => {
+    const dir = await tempDir();
+    const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("# Review\n")]);
+    await writeFile(join(dir, "bom.md"), bytes);
+    const read = readSkillForDelivery("bom", { path: "bom.md" }, dir, undefined);
+    if ("error" in read) throw new Error(read.error);
+    expect(read.files[0]!.text.startsWith("\uFEFF")).toBe(true);
+    expect(Buffer.from(read.files[0]!.text, "utf8")).toEqual(bytes);
+    expect(skillDigest({ path: "bom.md" }, dir)).toEqual({ digest: read.digest });
   });
 });
 

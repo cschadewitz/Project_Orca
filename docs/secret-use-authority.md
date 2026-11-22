@@ -180,11 +180,16 @@ Each use is
 `mcpServerDefinitionDigest` (`m1:` plus 32 hex digits of a sha256 over the server's
 command, arguments and environment, with secret references as references).
 
-- A credential's optional `capabilities` grant is `"*"` or a list of `{ kind: "mcpServer",
-  id, host, binding, definition }`. The `owner` preset grants `"*"`; no other preset grants
-  any. `orca auth issue --mcp-server <id>@<host>` (repeatable) or `--mcp-server '*'` writes
-  it and adds the `capabilities.use` permission; the definition and binding are taken from
-  the config at that moment.
+- A credential's optional `capabilities` grant is a list of entries: `{ kind: "mcpServer",
+  id, host, binding, definition }`, `{ kind: "skill", id, digest }`, or every entry of one
+  kind, `{ kind: "mcpServer" | "skill", any: true }`. A wildcard never crosses kinds:
+  `--mcp-server '*'` writes the server entry and grants no skill, `--skill '*'` writes the
+  skill entry and grants no server, and a credential gets both only when both are given.
+  The bare `"*"` a credential may already hold keeps the meaning `--mcp-server '*'` first
+  gave it: every MCP server, no skill. The `owner` preset (and loopback and standalone
+  mode) holds both entries; no other preset grants any. `orca auth issue --mcp-server
+  <id>@<host>` (repeatable) or `--mcp-server '*'` writes it and adds the `capabilities.use`
+  permission; the definition and binding are taken from the config at that moment.
 - Steps 1 to 5 above apply, with `capabilities.use` in place of `secrets.use` and the grant
   naming that server id, defined exactly that way, on the agent's host and its current
   endpoint, with one difference: **one** current credential must cover the whole selected
@@ -227,7 +232,8 @@ command, arguments and environment, with secret references as references).
   digest }`, the content digest of exactly what will be sent; a grant entry is `{ kind:
   "skill", id, digest }`, written by `orca auth issue --skill <id>` from the skill as it is
   on disk then (refused if the catalog pins another digest). A skill's content travels in
-  the prompt, so it has no host binding. `'*'` covers every skill.
+  the prompt, so it has no host binding. Only `{ kind: "skill", any: true }` (`--skill '*'`,
+  and the `owner` preset) covers every skill; a server wildcard does not.
 - `agents.ping` has no run and so no owner: it starts only the agent's own inline servers.
 
 ## Ping

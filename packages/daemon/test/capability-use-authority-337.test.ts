@@ -24,6 +24,7 @@ import {
   MemoryAuditSink,
   OwnershipStore,
   PRESETS,
+  type CapabilityGrant,
   credentialCapabilityUse,
   loopbackCapabilityUse,
   type ResourceResolver,
@@ -226,8 +227,40 @@ describe("capability use authority", () => {
     expect(f.audit.records.map((r) => r.reason)).toEqual([undefined, "no current grant", "run has no recorded owner"]);
   });
 
+  it("never lets a wildcard for one kind grant the other", async () => {
+    const skill = { kind: "skill" as const, id: "review", digest: `sha256:${"a".repeat(64)}` };
+    // A server-only wildcard: the stored "*" that `--mcp-server '*'` first wrote, and its
+    // explicit entry. Neither grants a skill.
+    for (const capabilities of ["*", [{ kind: "mcpServer", any: true }]] satisfies CapabilityGrant[]) {
+      const f = fixture();
+      f.ownership.record("root", "ci-bot");
+      await f.credentials.issue({
+        principal: "ci-bot",
+        permissions: client,
+        scope: PRESETS.client.scope,
+        capabilities,
+      });
+      await f.check({ runId: "root", uses: [use({ trustedExecutable: false })] });
+      await expect(f.check({ runId: "root", uses: [skill] })).rejects.toMatchObject(unauthorized);
+    }
+    // And every skill grants no server.
+    const g = fixture();
+    g.ownership.record("root", "ci-bot");
+    await g.credentials.issue({
+      principal: "ci-bot",
+      permissions: client,
+      scope: PRESETS.client.scope,
+      capabilities: [{ kind: "skill", any: true }],
+    });
+    await g.check({ runId: "root", uses: [skill] });
+    await expect(g.check({ runId: "root", uses: [use()] })).rejects.toMatchObject(unauthorized);
+  });
+
   it("is granted everything by the owner preset and loopback mode, and nothing by other presets", async () => {
-    expect(PRESETS.owner.capabilities).toBe("*");
+    expect(PRESETS.owner.capabilities).toEqual([
+      { kind: "mcpServer", any: true },
+      { kind: "skill", any: true },
+    ]);
     for (const preset of ["operator", "viewer", "client"] as const)
       expect("capabilities" in PRESETS[preset]).toBe(false);
     await loopbackCapabilityUse(LOCAL_PRINCIPAL)({ runId: "any", uses: [use()] });

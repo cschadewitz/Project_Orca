@@ -14,6 +14,7 @@ import type { CredentialStore } from "./credentials.js";
 import type { OwnershipStore } from "./ownership.js";
 import {
   capabilityGrantCovers,
+  grantsEvery,
   grantCovers,
   holds,
   workflowAllowed,
@@ -238,7 +239,11 @@ export function credentialSecretUse(opts: {
 
 /** Loopback compatibility mode for catalog capabilities (#337): every run may be given every one. */
 export function loopbackCapabilityUse(principal: Principal, audit?: AuditSink): CapabilityUseCheck {
-  if (principal.capabilities !== "*" || !isUnrestricted(principal.scope))
+  if (
+    !grantsEvery(principal.capabilities, "mcpServer") ||
+    !grantsEvery(principal.capabilities, "skill") ||
+    !isUnrestricted(principal.scope)
+  )
     throw new Error("loopback capability use needs an unrestricted principal granted every capability");
   return capabilityUseAuthority({
     root: async (runId) => ({ rootRunId: runId, workflowId: "*" }),
