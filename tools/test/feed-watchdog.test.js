@@ -404,7 +404,8 @@ describe("server bundle channel (#877)", () => {
       const d = world();
       const s = serverWorld({ servers });
       // Server paths and the 0.8 releases come from the server world, the rest from the desktop one.
-      const server = (url) => new URL(String(url)).pathname.startsWith("/server/") || String(url).includes("/tags/v0.8");
+      const server = (url) =>
+        new URL(String(url)).pathname.startsWith("/server/") || String(url).includes("/tags/v0.8");
       return { fetch: (url, init) => (server(url) ? s.fetch(url, init) : d.fetch(url, init)) };
     };
 
