@@ -106,7 +106,8 @@ tunnel.
 Each failure has its own message: no ssh client, changed host key (with **Forget
 host key** for a server that was deliberately rebuilt), failed SSH authentication,
 unreachable server, a local address that could not be held, a timeout, and an
-SSH connection that works with no daemon listening on the server. Removing a profile
+SSH connection that works with no daemon listening on the server (a Windows OpenSSH
+server does not refuse that channel, so there it shows as a timeout). Removing a profile
 deletes its keychain credential and pinned key. Editing a profile to point at a
 different server or daemon port forgets both.
 
