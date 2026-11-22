@@ -4,22 +4,54 @@
  * offers the two things a person needs and nothing more: the release page, and the `apt`
  * command to run once the `.deb` is downloaded. Both are main's strings; this only asks
  * main to open or copy them.
+ *
+ * Once `apt` has upgraded the package beneath this app, the notice gives way to "Restart to
+ * finish update" (#905): main hands the store to the installed version and starts it.
  */
 import { useEffect, useState, type JSX } from "react";
-import type { LinuxUpdateAction } from "../../../src/linux-update-contract.js";
+import type { LinuxRestartState, LinuxUpdateAction } from "../../../src/linux-update-contract.js";
 import { useAnnounce } from "../a11y/announce-context.js";
-import { MachineText, Menu, textClass, type MenuItem } from "../ui/index.js";
+import { Button, MachineText, Menu, textClass, type MenuItem } from "../ui/index.js";
 
 const ITEMS: readonly MenuItem[] = [
   { id: "open", label: "Open release page" },
   { id: "copy", label: "Copy install command" },
 ];
 
+function LinuxRestartControl({ state }: { state: LinuxRestartState }): JSX.Element | null {
+  const bridge = window.orca.linuxRestart;
+  const announce = useAnnounce();
+  useEffect(() => {
+    if (state.message) announce(state.message);
+  }, [state.message, announce]);
+  if (!bridge) return null;
+  const busy = state.phase === "restarting";
+  return (
+    <Button
+      tone="ghost"
+      size="sm"
+      data-app-region="no-drag"
+      disabled={busy}
+      title={state.message ?? `ORCA ${state.installed} is installed. Restart to finish the update.`}
+      onClick={() => {
+        void bridge.restart().then((result) => {
+          if (!result.ok) announce(result.error.message);
+        });
+      }}
+    >
+      {busy ? "Preparing restart" : `Restart to finish update to ${state.installed}`}
+    </Button>
+  );
+}
+
 export function LinuxUpdateNotice(): JSX.Element | null {
   const bridge = window.orca.linuxUpdates;
   const [notice, setNotice] = useState(() => bridge?.read() ?? null);
+  const [installed, setInstalled] = useState(() => window.orca.linuxRestart?.read() ?? null);
   const announce = useAnnounce();
   useEffect(() => bridge?.subscribe(setNotice), [bridge]);
+  useEffect(() => window.orca.linuxRestart?.subscribe(setInstalled), []);
+  if (installed) return <LinuxRestartControl state={installed} />;
   if (!bridge || !notice) return null;
   return (
     <span data-app-region="no-drag">

@@ -12,3 +12,15 @@ export interface LinuxUpdateNotice {
   installCommand: string;
 }
 export type LinuxUpdateAction = "open" | "copy";
+
+/**
+ * "Restart to finish update" for the `.deb` (#905): dpkg reports `installed`, another version
+ * than the running `current`, so `apt` upgraded the package beneath this app. Restarting hands
+ * the store to the installed version, as the Windows updater does, then starts it.
+ */
+export interface LinuxRestartState {
+  phase: "ready" | "restarting" | "error";
+  current: string;
+  installed: string;
+  message?: string;
+}
