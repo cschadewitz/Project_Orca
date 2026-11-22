@@ -7,6 +7,8 @@
 //   node tools/release.js prepare 0.2.0                             -> rewrites package.json + CHANGELOG.md
 //   node tools/release.js notes 0.2.0                               -> prints that release's CHANGELOG body
 //   node tools/release.js notes --unreleased                        -> prints what changelog.d/ holds
+//   node tools/release.js line 0.7.1                                -> prints the branch it is cut from
+//   node tools/release.js sync 0.7.1 <other CHANGELOG.md>           -> copies that section into CHANGELOG.md
 //
 // The notes themselves are not written here: a pull request drops a fragment into
 // `changelog.d/` (tools/changelog.js) and `prepare` renders the lot into the dated
@@ -141,6 +143,72 @@ function prepare(version) {
   );
 }
 
+/**
+ * The branch a version is cut from (docs/RELEASING.md, "Release lines"). A new minor or
+ * major (`X.Y.0`, and its release candidates) comes from `main`; a patch (`X.Y.Z`, Z > 0)
+ * comes from the protected line branch `release/X.Y`, so work merged to `main` for the next
+ * minor never ships in it.
+ */
+function releaseLine(version) {
+  const { major, minor, patch } = parse(version);
+  return patch === 0 ? "main" : `release/${major}.${minor}`;
+}
+
+const compare = (a, b) => {
+  const x = parse(a);
+  const y = parse(b);
+  for (const key of ["major", "minor", "patch"]) if (x[key] !== y[key]) return x[key] - y[key];
+  // A prerelease sorts below its final (0.7.1-rc.1 < 0.7.1); two prereleases by text.
+  if (x.pre === y.pre) return 0;
+  if (x.pre === undefined) return 1;
+  if (y.pre === undefined) return -1;
+  return x.pre < y.pre ? -1 : 1;
+};
+
+/** A version's `## X.Y.Z - date` section as lines (heading included), or undefined. */
+function sectionOf(lines, version) {
+  const start = lines.findIndex((l) => l.startsWith(`## ${version} `));
+  if (start === -1) return undefined;
+  let end = lines.findIndex((l, i) => i > start && /^## /.test(l));
+  if (end === -1) end = lines.length;
+  return { start, end };
+}
+
+/**
+ * Copies `version`'s section from a line branch's CHANGELOG into this one, in version
+ * order, so `main` records a patch that was released from `release/X.Y`. Running it again
+ * changes nothing; a different section already here for the version is a stop.
+ */
+function sync(version, sourcePath) {
+  parse(version);
+  const source = readFileSync(sourcePath, "utf8").split("\n");
+  const found = sectionOf(source, version);
+  if (!found) die(`${sourcePath} has no section for ${version}`);
+  const section = source.slice(found.start, found.end);
+  while (section.length && section[section.length - 1].trim() === "") section.pop();
+
+  const lines = readFileSync(CHANGELOG, "utf8").split("\n");
+  const here = sectionOf(lines, version);
+  if (here) {
+    const existing = lines.slice(here.start, here.end);
+    while (existing.length && existing[existing.length - 1].trim() === "") existing.pop();
+    if (existing.join("\n") === section.join("\n")) {
+      console.error(`${CHANGELOG} already has the ${version} section; nothing changed`);
+      return;
+    }
+    die(`${CHANGELOG} already has a different ${version} section; reconcile it by hand`);
+  }
+  // Before the first released section older than this version, after `## Unreleased`.
+  unreleasedSection(lines);
+  let at = lines.findIndex((l) => {
+    const m = /^## (\d+\.\d+\.\d+(?:-\S+)?) /.exec(l);
+    return m && compare(m[1], version) < 0;
+  });
+  if (at === -1) at = lines.length;
+  writeFileSync(CHANGELOG, [...lines.slice(0, at), ...section, "", ...lines.slice(at)].join("\n"));
+  console.error(`${CHANGELOG}: added the ${version} section from ${sourcePath}`);
+}
+
 /** What `prepare` would render today, without writing anything. */
 function unreleasedNotes() {
   const fragments = pending();
@@ -183,6 +251,13 @@ switch (command) {
     if (rest.includes("--unreleased")) unreleasedNotes();
     else notes(rest[0] ?? die("usage: node tools/release.js notes <version> | notes --unreleased"));
     break;
+  case "line":
+    console.log(releaseLine(rest[0] ?? die("usage: node tools/release.js line <version>")));
+    break;
+  case "sync":
+    if (rest.length !== 2) die("usage: node tools/release.js sync <version> <source CHANGELOG.md>");
+    sync(rest[0], rest[1]);
+    break;
   default:
-    die("usage: node tools/release.js <version|prepare|notes> [...]  (see the header comment)");
+    die("usage: node tools/release.js <version|prepare|notes|line|sync> [...]  (see the header comment)");
 }

@@ -39,12 +39,16 @@
 # Source commit. By default the run builds the `main` commit it was dispatched from. A
 # `source_sha` input names another commit to build instead (a release candidate on its own
 # branch), and the `resolve` job accepts it only if it is a full SHA, some branch of this
-# repository contains it, and its tree matches the dispatching `main` commit everywhere except
-# release notes (CHANGELOG.md, changelog.d), docs, workflow files, tools/test/*.test.js and
-# the root package.json version, which must be plain semver. That is exactly what a
-# release-prepare commit changes, so the candidate is built and signed from main's reviewed
-# code and configuration. The workflow that runs is always `main`'s, and the job summary
-# shows the protected environment's reviewer which commit and version they are approving.
+# repository contains it, and its tree matches a reviewed reference everywhere except release
+# notes (CHANGELOG.md, changelog.d), docs, workflow files, tools/test/*.test.js and the root
+# package.json version, which must be plain semver. That is exactly what a release-prepare
+# commit changes, so the candidate is built and signed from reviewed code and configuration.
+# The reference is the dispatching `main` commit, or, for a commit on the protected release
+# line branch of its own version (`release/X.Y` for X.Y.Z; docs/RELEASING.md "Release
+# lines"), that branch's head: a patch carries only what was merged to its line, never what
+# `main` gained for the next minor. The workflow that runs is always `main`'s, and the job
+# summary shows the protected environment's reviewer which commit and version they are
+# approving.
 #
 # Manual dispatch from `main` only. The output is an artifact for inspection on a clean
 # Windows VM (runbook "Future step 4"); nothing here creates a release, uploads to a feed or
@@ -110,34 +114,44 @@ jobs:
           if [ -z "$branches" ]; then
             echo "::error::$source is not on any branch of this repository"; exit 1
           fi
-          # The source tree may differ from the dispatching main commit only where nothing the
-          # token-holding sign job reads or runs can be affected: release notes, docs, workflow
-          # files (the workflow always runs from main and uses no local actions) and test files.
-          # Everything else, from workspace manifests and their bins to builder config and its
-          # electron-builder.env, must be main's reviewed copy. An allowlist, not a denylist,
-          # so a newly read path is pinned by default.
-          allowed=(':(exclude)CHANGELOG.md' ':(exclude)changelog.d' ':(exclude)docs'
-            ':(exclude).github' ':(exclude,glob)tools/test/*.test.js' ':(exclude)package.json')
-          if ! git diff --quiet "$GITHUB_SHA" "$source" -- . "${allowed[@]}"; then
-            echo "::error::$source differs from main $GITHUB_SHA outside release notes, docs and tests:"
-            git diff --name-only "$GITHUB_SHA" "$source" -- . "${allowed[@]}"
-            exit 1
-          fi
-          # The root manifest may differ from main only in its version (a release prepare).
-          if ! node -e '
-            const [a, b] = process.argv.slice(1).map((text) => { const j = JSON.parse(text); delete j.version; return JSON.stringify(j); });
-            process.exit(a === b ? 0 : 1);
-          ' "$(git show "$GITHUB_SHA:package.json")" "$(git show "$source:package.json")"; then
-            echo "::error::$source changes the root package.json beyond its version"; exit 1
-          fi
           version=$(git show "$source:package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
             echo "::error::$source has version '${version//[^0-9A-Za-z.+-]/?}', which is not a plain semver"; exit 1
           fi
+          # The reviewed reference: main, or the head of the version's own release line when
+          # the source is on it. Only `release/X.Y` for this version's X.Y is considered.
+          reference="$GITHUB_SHA"
+          reference_name="main"
+          line="release/$(cut -d. -f1-2 <<<"${version%%-*}")"
+          if line_head=$(git rev-parse -q --verify "refs/remotes/origin/$line^{commit}") &&
+            git merge-base --is-ancestor "$source" "$line_head"; then
+            reference="$line_head"
+            reference_name="$line"
+          fi
+          # The source tree may differ from the reference only where nothing the token-holding
+          # sign job reads or runs can be affected: release notes, docs, workflow files (the
+          # workflow always runs from main and uses no local actions) and test files.
+          # Everything else, from workspace manifests and their bins to builder config and its
+          # electron-builder.env, must be the reference's reviewed copy. An allowlist, not a
+          # denylist, so a newly read path is pinned by default.
+          allowed=(':(exclude)CHANGELOG.md' ':(exclude)changelog.d' ':(exclude)docs'
+            ':(exclude).github' ':(exclude,glob)tools/test/*.test.js' ':(exclude)package.json')
+          if ! git diff --quiet "$reference" "$source" -- . "${allowed[@]}"; then
+            echo "::error::$source differs from $reference_name $reference outside release notes, docs and tests:"
+            git diff --name-only "$reference" "$source" -- . "${allowed[@]}"
+            exit 1
+          fi
+          # The root manifest may differ from the reference only in its version (a release prepare).
+          if ! node -e '
+            const [a, b] = process.argv.slice(1).map((text) => { const j = JSON.parse(text); delete j.version; return JSON.stringify(j); });
+            process.exit(a === b ? 0 : 1);
+          ' "$(git show "$reference:package.json")" "$(git show "$source:package.json")"; then
+            echo "::error::$source changes the root package.json beyond its version"; exit 1
+          fi
           {
             echo "### Signing source"
             echo "- source commit: \`$source\` (version \`$version\`)"
-            echo "- workflow and signing inputs from main: \`$GITHUB_SHA\`"
+            echo "- workflow from main: \`$GITHUB_SHA\`; reviewed reference: $reference_name \`$reference\`"
             echo "- on branches: $(echo $branches)"
             echo "- commits in source not on main: $(git rev-list --count "$GITHUB_SHA..$source"); on main not in source: $(git rev-list --count "$source..$GITHUB_SHA")"
           } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
