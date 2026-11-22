@@ -1,6 +1,10 @@
 /** "Restart to finish update" for the Linux `.deb` (#905). */
 import { describe, expect, it, vi } from "vitest";
-import { installedDebVersion, LinuxPackageRestart } from "../src/main/linux-package-restart.js";
+import {
+  executableMatchesPackage,
+  installedDebVersion,
+  LinuxPackageRestart,
+} from "../src/main/linux-package-restart.js";
 import { UpdatePreflightRefusal, type UpdateGuards } from "../src/main/updates.js";
 import type { LinuxRestartState } from "../src/linux-update-contract.js";
 
@@ -24,6 +28,8 @@ describe("installedDebVersion", () => {
 
 function rig(options: { installed?: string; guards?: Partial<UpdateGuards> } = {}) {
   let installed: string | undefined = options.installed ?? "0.9.0";
+  /** Whether the executable on disk is the installed package's file. */
+  let binaryOk = true;
   const calls: string[] = [];
   const guards: UpdateGuards = {
     prepareDrafts: vi.fn(async () => void calls.push("prepareDrafts")),
@@ -39,6 +45,10 @@ function rig(options: { installed?: string; guards?: Partial<UpdateGuards> } = {
   const restart = new LinuxPackageRestart({
     current: "0.8.0",
     readInstalled: () => installed,
+    verifyTarget: (version) => {
+      calls.push("verify");
+      return installed === version && binaryOk;
+    },
     guards,
     relaunch,
     changed: (state) => states.push(state),
@@ -52,6 +62,9 @@ function rig(options: { installed?: string; guards?: Partial<UpdateGuards> } = {
     states,
     install: (version: string | undefined) => {
       installed = version;
+    },
+    tamper: () => {
+      binaryOk = false;
     },
   };
 }
@@ -76,7 +89,16 @@ describe("LinuxPackageRestart", () => {
     const f = rig();
     f.restart.check();
     await f.restart.restart();
-    expect(f.calls).toEqual(["prepareDrafts", "prepareDaemon:36", "stopDaemon", "handOff:0.8.0->0.9.0", "relaunch"]);
+    expect(f.calls).toEqual([
+      "verify",
+      "prepareDrafts",
+      "prepareDaemon:36",
+      "stopDaemon",
+      "verify",
+      "handOff:0.8.0->0.9.0",
+      "verify",
+      "relaunch",
+    ]);
     expect(f.restart.state).toMatchObject({ phase: "restarting", message: "Starting ORCA 0.9.0" });
     // Held: nothing more runs, and checks no longer change the state.
     f.install("1.0.0");
@@ -91,19 +113,46 @@ describe("LinuxPackageRestart", () => {
     f.restart.check();
     f.install("1.0.0");
     await f.restart.restart();
-    expect(f.calls).toEqual([]);
+    expect(f.calls).toEqual(["verify"]);
     expect(f.restart.state).toMatchObject({ phase: "ready", installed: "1.0.0" });
   });
 
-  it("still relaunches when the handoff is refused: the new version then refuses to convert by itself", async () => {
+  it("a refused handoff after the stop starts nothing and never restarts the running version", async () => {
     const f = rig({ guards: { handOff: vi.fn(() => Promise.reject(new Error("refused"))) } });
     f.restart.check();
+    expect(await f.restart.restart()).toMatchObject({
+      phase: "error",
+      message: expect.stringContaining("reinstall ORCA 0.8.0"),
+    });
+    expect(f.relaunch).not.toHaveBeenCalled();
+    expect(f.guards.resume).not.toHaveBeenCalled();
     await f.restart.restart();
-    expect(f.relaunch).toHaveBeenCalledOnce();
+    expect(f.guards.prepareDrafts).toHaveBeenCalledOnce();
   });
 
-  it("resumes this version's daemon when the daemon cannot be prepared or stopped, and offers the restart again", async () => {
-    for (const step of ["prepareDaemon", "stopDaemon"] as const) {
+  it("a package or binary that moves during the restart is not started, before or after the handoff", async () => {
+    // apt installs another version while the daemon drains: no handoff, nothing started.
+    const moved = rig({
+      guards: { stopDaemon: vi.fn(async () => void moved.install("1.0.0")) },
+    });
+    moved.restart.check();
+    expect(await moved.restart.restart()).toMatchObject({
+      phase: "error",
+      message: expect.stringContaining("changed"),
+    });
+    expect(moved.guards.handOff).not.toHaveBeenCalled();
+    expect(moved.relaunch).not.toHaveBeenCalled();
+    expect(moved.guards.resume).not.toHaveBeenCalled();
+    // The executable stops matching the package after the handoff: the record stays inert
+    // (it names 0.9.0), and nothing is started.
+    const tampered = rig({ guards: { handOff: vi.fn(async () => void tampered.tamper()) } });
+    tampered.restart.check();
+    expect(await tampered.restart.restart()).toMatchObject({ phase: "error" });
+    expect(tampered.relaunch).not.toHaveBeenCalled();
+  });
+
+  it("reopens admission on the running daemon when it cannot be prepared, and offers the restart again", async () => {
+    for (const step of ["prepareDaemon"] as const) {
       const f = rig({ guards: { [step]: vi.fn(() => Promise.reject(new Error("busy"))) } });
       f.restart.check();
       const state = await f.restart.restart();
@@ -134,16 +183,41 @@ describe("LinuxPackageRestart", () => {
     expect(f.restart.state).toMatchObject({ phase: "ready" });
   });
 
-  it("an uncertain recovery keeps admission closed and the restart held", async () => {
+  it("an uncertain stop keeps admission closed and the restart held, with no resume of the old version", async () => {
     const f = rig({
       guards: {
         stopDaemon: vi.fn(() => Promise.reject(new Error("exit uncertain"))),
-        resume: vi.fn(() => Promise.reject(new Error("uncertain"))),
       },
     });
     f.restart.check();
     expect(await f.restart.restart()).toMatchObject({ phase: "error" });
+    expect(f.guards.resume).not.toHaveBeenCalled();
+    expect(f.relaunch).not.toHaveBeenCalled();
     await f.restart.restart();
     expect(f.guards.prepareDrafts).toHaveBeenCalledOnce();
+  });
+});
+
+describe("executableMatchesPackage", () => {
+  const files = (binary: string, sums: string) => (path: string) =>
+    Buffer.from(path.endsWith(".md5sums") ? sums : binary);
+  it("matches only dpkg's recorded checksum for opt/ORCA/orca-desktop", async () => {
+    const { createHash } = await import("node:crypto");
+    const real = createHash("md5").update("new binary").digest("hex");
+    const sums = `${"0".repeat(32)}  opt/ORCA/libffmpeg.so\n${real}  opt/ORCA/orca-desktop\n`;
+    expect(executableMatchesPackage("/opt/ORCA/orca-desktop", "x.md5sums", files("new binary", sums))).toBe(true);
+    expect(executableMatchesPackage("/opt/ORCA/orca-desktop", "x.md5sums", files("old binary", sums))).toBe(false);
+    expect(
+      executableMatchesPackage(
+        "/opt/ORCA/orca-desktop",
+        "x.md5sums",
+        files("new binary", `${"1".repeat(32)}  opt/other\n`),
+      ),
+    ).toBe(false);
+    expect(
+      executableMatchesPackage("/opt/ORCA/orca-desktop", "x.md5sums", () => {
+        throw new Error("ENOENT");
+      }),
+    ).toBe(false);
   });
 });

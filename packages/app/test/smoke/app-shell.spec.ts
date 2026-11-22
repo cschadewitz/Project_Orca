@@ -258,6 +258,9 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     "guidedLaunch",
     "hello",
     "inputs",
+    // #905's "Restart to finish update" for the `.deb`: read, subscribe, and a restart that
+    // carries no argument. Main alone decides the target, from dpkg and the package checksum.
+    "linuxRestart",
     // #888's Linux `.deb` release notice: read, subscribe, and open/copy of the release page
     // and `apt` command main built. The renderer cannot pass a URL or a command across it.
     "linuxUpdates",

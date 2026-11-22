@@ -15,6 +15,11 @@
  *   it does only under the proof: it holds the first-run fence, its claim follows the stopped
  *   daemon's, and it is the version the record names.
  *
+ * A second launch, with no app workspace to hand off, follows the offer as apt moves the package
+ * up, back and up again, then clicks it: the handoff is refused after the stop, so nothing new
+ * starts, the old app stays with admission closed, and its message names the recovery
+ * (quit and reopen; else reinstall the running version with apt).
+ *
  * The original package is reinstalled afterwards, so the other specs see the version under test.
  */
 import { test, expect } from "@playwright/test";
@@ -132,6 +137,49 @@ function defineUpgradeTest(): void {
         for (const pid of await installedProcesses()) process.kill(pid, "SIGKILL");
         throw error;
       });
+    } finally {
+      await launched.app.close().catch(() => undefined);
+      for (const pid of await installedProcesses()) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+      await apt(CURRENT_DEB!);
+    }
+  });
+
+  test("the offer follows apt, and a restart the handoff refuses starts nothing and keeps the app", async () => {
+    test.setTimeout(420_000);
+    const next = await debVersion(NEXT_DEB!);
+    await noneLeft();
+    const profile = await mkdtemp(join(session.root, "profile-refused-"));
+    // No first-run setup: there is no app-owned workspace whose daemon could be handed off.
+    const launched = await launchInstalled(session, profile, "x11");
+    const oldPid = launched.app.process().pid!;
+    try {
+      const current = await launched.app.evaluate(({ app }) => app.getVersion());
+      const offer = launched.page.getByRole("button", { name: `Restart to finish update to ${next}` });
+      await apt(NEXT_DEB!);
+      await expect(offer).toBeVisible({ timeout: 75_000 });
+      // apt moves back to the running version: the offer goes away.
+      await apt(CURRENT_DEB!);
+      await expect(offer).toHaveCount(0, { timeout: 75_000 });
+      await apt(NEXT_DEB!);
+      await expect(offer).toBeVisible({ timeout: 75_000 });
+      await offer.click();
+      // Refused after the stop: nothing starts, the old app stays, and the person is told how
+      // to recover without assuming this version can be reopened from /opt/ORCA.
+      await expect(launched.page.getByRole("button", { name: `Restart to finish update to ${next}` })).toHaveAttribute(
+        "title",
+        new RegExp(`could not be given this workspace's data safely.*reinstall ORCA ${current.replace(/\./g, "\\.")}`),
+        { timeout: 30_000 },
+      );
+      await sleep(5_000);
+      expect(await mainProcesses(oldPid)).toEqual([]);
+      expect(launched.app.process().exitCode).toBeNull();
+      await test.info().attach("refused-handoff", { body: await launched.page.screenshot(), contentType: "image/png" });
     } finally {
       await launched.app.close().catch(() => undefined);
       for (const pid of await installedProcesses()) {

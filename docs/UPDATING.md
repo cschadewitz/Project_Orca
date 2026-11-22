@@ -1003,9 +1003,13 @@ exactly the Windows sequence above (drafts prepared, admission closed and draine
 daemon stopped and its exit observed, `update-handoff.json` written naming the installed
 version) and then starts the installed binary, whose bundled daemon carries the store forward
 under the same proof. A failure before the stop resumes the running version's daemon and offers
-the restart again. Quitting ORCA and opening it again without that restart writes no record, so
-an older-format store is then refused (`CARRYOVER_REQUIRED`) until the app is reopened through
-the restart.
+the restart again. The target is bound at the click, after the stop and just before the launch:
+dpkg must still report the offered version fully installed, and `/opt/ORCA/orca-desktop` must
+match the package's recorded checksum. After the stop the running version is never restarted
+(apt may already have removed its files): a moved target, a refused handoff or an uncertain stop
+starts nothing, keeps admission closed and tells the person to quit and reopen, and, if the
+workspace then refuses (`CARRYOVER_REQUIRED`), to reinstall the previous package
+(docs/INSTALL-LINUX.md). Quitting and reopening without the restart writes no record either.
 
 The backup covers the store directory only: not the config file, the permission sidecar or
 `auth/` beside the config. Agents cannot read `format-backups/`, which holds copies of the

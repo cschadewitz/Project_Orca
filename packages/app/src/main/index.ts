@@ -47,7 +47,7 @@ import { createManagedMacUpdateApplication } from "./mac-managed-update-applicat
 import { createManagedMacNativeProviders } from "./mac-native-providers.js";
 import { updateDriver } from "./update-driver.js";
 import { isDebInstall, LinuxReleaseWatch } from "./linux-release-notice.js";
-import { LinuxPackageRestart, readInstalledDebVersion } from "./linux-package-restart.js";
+import { executableMatchesPackage, LinuxPackageRestart, readInstalledDebVersion } from "./linux-package-restart.js";
 import { basename, dirname, join } from "node:path";
 import { readFileSync, statSync } from "node:fs";
 import { windowIcon } from "./window-icon.js";
@@ -1573,10 +1573,13 @@ const linuxRestart = isDebInstall(app.isPackaged, process.platform, process.exec
   ? new LinuxPackageRestart({
       current: app.getVersion(),
       readInstalled: () => readInstalledDebVersion(),
+      verifyTarget: (installed) =>
+        readInstalledDebVersion() === installed && executableMatchesPackage(process.execPath),
       guards: updateGuards,
       relaunch: () => {
-        // process.execPath is /opt/ORCA/orca-desktop, which apt replaced with the new binary.
-        app.relaunch();
+        // process.execPath is /opt/ORCA/orca-desktop (isDebInstall), now the installed package's
+        // binary, just verified against dpkg's checksum.
+        app.relaunch({ execPath: process.execPath, args: process.argv.slice(1) });
         app.quit();
       },
       changed: (state) => send("orca:linuxRestart", state ?? null),

@@ -9,10 +9,17 @@
  *
  * The new app's bundled daemon then carries an older-format store forward under the same proof
  * as on Windows: it holds the first-run writer fence, its journal claim directly follows the
- * stopped daemon's, and it is the version the handoff names. Anything that fails before the
- * stop resumes this version's daemon, as on Windows. Electron-free: tests drive it with fakes.
+ * stopped daemon's, and it is the version the handoff names.
+ *
+ * The target is bound three times: dpkg must still report the offered version fully installed,
+ * and the executable must be that package's own file (dpkg's checksum), at the click, after the
+ * stop and immediately before the launch. A failure before the stop reopens admission on the
+ * running daemon, as on Windows. After the stop nothing restarts the running version, whose
+ * files apt may already have removed: a moved target, a refused handoff or an uncertain stop
+ * leaves admission closed and says how to recover (quit and reopen; if the workspace then
+ * refuses, reinstall the previous package). Electron-free: tests drive it with fakes.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { LinuxRestartState } from "../linux-update-contract.js";
 import { compareVersions, parseVersion } from "./linux-release-notice.js";
@@ -50,9 +57,37 @@ export function readInstalledDebVersion(path = DPKG_STATUS): string | undefined 
   }
 }
 
+export const DPKG_MD5SUMS = "/var/lib/dpkg/info/orca-desktop.md5sums";
+/** The packaged executable, as dpkg lists it in the md5sums file (no leading slash). */
+const EXECUTABLE_ENTRY = "opt/ORCA/orca-desktop";
+
+/** Whether `executable` is byte-for-byte the file the installed package recorded. */
+export function executableMatchesPackage(
+  executable = "/opt/ORCA/orca-desktop",
+  md5sums = DPKG_MD5SUMS,
+  read: (path: string) => Buffer = (path) => readFileSync(path),
+): boolean {
+  try {
+    const line = read(md5sums)
+      .toString("utf8")
+      .split("\n")
+      .find((entry) => entry.trim().endsWith(`  ${EXECUTABLE_ENTRY}`));
+    const expected = line?.trim().split(/\s+/)[0];
+    return !!expected && createHash("md5").update(read(executable)).digest("hex") === expected;
+  } catch {
+    return false;
+  }
+}
+
 export interface LinuxPackageRestartOptions {
   current: string;
   readInstalled: () => string | undefined;
+  /**
+   * That dpkg still reports `installed` fully installed and the executable to be started is that
+   * package's own file (dpkg's recorded checksum). Checked at the offer, after the daemon stops,
+   * and immediately before the launch.
+   */
+  verifyTarget: (installed: string) => boolean;
   guards: UpdateGuards;
   /** Starts the installed binary once this process exits, then quits. */
   relaunch: () => void;
@@ -115,7 +150,7 @@ export class LinuxPackageRestart {
     if (this.busy || this.held || this.state?.phase !== "ready") return this.state;
     const { installed, current } = this.state;
     // The package must still be the one offered: apt may have moved on meanwhile.
-    if (this.options.readInstalled() !== installed) {
+    if (!this.options.verifyTarget(installed)) {
       this.check();
       return this.state;
     }
@@ -125,22 +160,33 @@ export class LinuxPackageRestart {
     const guards = this.options.guards;
     let daemonAttempted = false;
     let daemonPrepared = false;
+    let stopping = false;
     try {
       this.set({ phase: "restarting", current, installed, message: "Checking drafts and bundled daemon activity" });
       await guards.prepareDrafts();
       daemonAttempted = true;
       await guards.prepareDaemon(token);
       daemonPrepared = true;
+      stopping = true;
       await guards.stopDaemon(token);
-      // Best effort, as on Windows: without it the new version still opens a store of its own
-      // format, and refuses to convert an older one automatically.
-      await guards.handOff?.(token, current, installed).catch(() => undefined);
+      // From here the running version's daemon is gone, and its files may be too: apt replaced
+      // them. Nothing below resumes it; every failure stops with admission closed (`stranded`).
+      if (!this.options.verifyTarget(installed)) return this.stranded("changed");
+      if (!guards.handOff) return this.stranded("handoff");
+      try {
+        await guards.handOff(token, current, installed);
+      } catch {
+        return this.stranded("handoff");
+      }
+      // Bound again at the launch: the record names `installed`, and only that binary may start.
+      if (!this.options.verifyTarget(installed)) return this.stranded("changed");
       this.set({ phase: "restarting", current, installed, message: `Starting ORCA ${installed}` });
       this.options.relaunch();
       return this.state;
     } catch (error) {
-      // As on Windows: a claimed attempt is resumed (after an observed stop, through saved-receipt
-      // recovery, which withdraws the handoff); a refused preflight claimed nothing.
+      if (stopping) return this.stranded("stop");
+      // Before the stop, as on Windows: a claimed attempt reopens admission on the running
+      // daemon (no new process is started); a refused preflight claimed nothing.
       try {
         const unclaimed =
           daemonAttempted && !daemonPrepared && error instanceof UpdatePreflightRefusal && error.token === token;
@@ -148,14 +194,7 @@ export class LinuxPackageRestart {
         guards.releaseDrafts();
         this.held = false;
       } catch {
-        this.set({
-          phase: "error",
-          current,
-          installed,
-          message:
-            "Recovery failed or is uncertain. Admission remains closed. Quit ORCA and open it again to finish the update.",
-        });
-        return this.state;
+        return this.stranded("stop");
       }
       this.set({
         phase: "ready",
@@ -168,5 +207,26 @@ export class LinuxPackageRestart {
     } finally {
       this.busy = false;
     }
+  }
+
+  /**
+   * After the stop, or when admission cannot be reopened: held, with admission closed. The
+   * running version is not restarted, because its daemon may no longer exist on disk.
+   */
+  private stranded(why: "changed" | "handoff" | "stop"): LinuxRestartState {
+    const { current, installed } = this.state!;
+    const cause =
+      why === "changed"
+        ? `The installed ORCA package changed while ${installed} was being prepared, so it was not started.`
+        : why === "handoff"
+          ? `ORCA ${installed} could not be given this workspace's data safely, so it was not started.`
+          : "The background service could not be stopped or resumed with certainty.";
+    this.set({
+      phase: "error",
+      current,
+      installed,
+      message: `${cause} Nothing was converted. Quit ORCA and open it again; if the workspace then refuses to open, reinstall ORCA ${current} with apt (docs/INSTALL-LINUX.md).`,
+    });
+    return this.state!;
   }
 }
