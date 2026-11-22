@@ -29,6 +29,7 @@ import {
   OrcaError,
   parseDependencyRef,
   PlanSchema,
+  reduceRun,
   RiskMatrixConfigSchema,
   SchedulingPolicySchema,
   silentLogger,
@@ -1179,6 +1180,42 @@ export class PlanService {
       );
     for (const r of snap.risks.filter((r) => r.affects.includes(item.id)))
       lines.push(`risk ${r.key}: ${r.status} (L${r.likelihood} x I${r.impact})`);
+    if (item.runId && item.status === "in-progress") lines.push(...(await this.agentSlotWaits(item.runId)));
+    return lines;
+  }
+
+  /**
+   * Steps of an item's run, or of the child runs it is waiting on, that are queued for an
+   * agent session slot (#873), each with the cap and its use as the engine recorded them. A
+   * dispatched item is `running` in the schedule, so this is the only place `plan explain` can
+   * say that it is in fact waiting, and for what. Bounded: a run tree wider than 64 runs is
+   * not walked further.
+   */
+  async agentSlotWaits(runId: string): Promise<string[]> {
+    const lines: string[] = [];
+    const seen = new Set<string>();
+    const queue = [runId];
+    while (queue.length && seen.size < 64) {
+      const id = queue.shift()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const events = await this.stores.events.read(id).catch(() => []);
+      let state: ReturnType<typeof reduceRun>;
+      try {
+        state = reduceRun(events);
+      } catch {
+        continue;
+      }
+      if (state.run.status === "completed" || state.run.status === "failed" || state.run.status === "cancelled")
+        continue;
+      for (const stepId of state.stepOrder) {
+        const step = state.steps[stepId];
+        if (!step) continue;
+        if (step.status === "waiting" && step.waitingOn === "agent-slot")
+          lines.push(`${step.nodeId}: ${step.waitingDetail ?? "waiting for an agent slot"}`);
+        if (step.status === "running" || step.status === "waiting") queue.push(...step.childRunIds);
+      }
+    }
     return lines;
   }
 

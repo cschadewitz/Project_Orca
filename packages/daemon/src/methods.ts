@@ -392,6 +392,7 @@ export const hello: Method<HelloParams, HelloResult> = {
       ...(ctx.processId === undefined ? {} : { processId: ctx.processId }),
       ...(ctx.identity ? { identity: ctx.identity } : {}),
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
+      ...(ctx.agents ? { sessionSlots: ctx.agents.sessionSlotsSummary() } : {}),
       capabilities: [
         ...(Object.keys(createOperatorMutationMethods(ctx)) as DaemonCapability[]),
         ...(ctx.hostResourceRead ? ["operator.hostResources" as const] : []),

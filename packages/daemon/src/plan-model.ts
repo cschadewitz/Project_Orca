@@ -457,6 +457,7 @@ export class PlanModel {
       );
     for (const r of snap.risks.filter((r) => r.affects.includes(item.id)))
       lines.push(`risk ${r.key}: ${r.status} (L${r.likelihood} x I${r.impact})`);
+    if (item.runId && item.status === "in-progress") lines.push(...(await this.svc.agentSlotWaits(item.runId)));
     return { lines, asOf: pass.asOf };
   }
 

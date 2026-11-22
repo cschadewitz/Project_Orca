@@ -60,6 +60,24 @@ export const OrcaConfigSchema = z.object({
       maxClaimsPerPrincipal: z.number().int().positive().default(10_000),
     })
     .optional(),
+  /**
+   * Daemon-wide ceilings (#873). Absent means unlimited, the default: a cap applies only when
+   * it is written here, and none is derived from the machine. Per-agent and per-host caps are
+   * `agents[].maxSessions` and `hosts[].maxSessions`.
+   */
+  limits: z
+    .object({
+      /** At most this many agent sessions open at once in this daemon, across every run. */
+      maxAgentSessions: z.number().int().positive().optional(),
+      /**
+       * How long a step may wait for an agent slot before it fails with `STEP_TIMEOUT`. Absent
+       * means no deadline: a long queue drains however long the turns ahead of it take. Set it
+       * to bound waits the queue reports as possibly never granted (per-run sessions of runs
+       * that are themselves waiting).
+       */
+      agentSlotWaitMs: z.number().int().positive().optional(),
+    })
+    .optional(),
   hosts: z.array(HostSpecSchema).default([{ id: LOCAL_HOST_ID, type: "local" }]),
   agents: z.array(AgentSpecSchema).default([]),
   /** Explicit role -> agent id mapping. Falls back to the first agent listing the role. */

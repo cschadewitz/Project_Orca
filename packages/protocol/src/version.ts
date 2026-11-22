@@ -118,6 +118,12 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * `fallback`, the previous-major version a client can also speak, and a daemon answers in
  * the highest protocol both sides share. An optional parameter, so a 2.0 daemon ignores it
  * and a 2.0 client never sends it; nothing sent before is sent differently.
+ *
+ * 2.1 also carries agent session slots (#873), unreleased alongside it: optional
+ * `sessionSlots` on `hello` and `agents.list`, and the `agent-slot` value of
+ * `step.waiting.on` (a plain string). Optional fields on open objects, so a 2.0 client strips
+ * them and a 2.0 daemon never sends them. No capability is minted, because a 2.0 client parses
+ * `hello.capabilities` with a closed enum; the fields' presence says whether a daemon has them.
  */
 export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 1 };
 
