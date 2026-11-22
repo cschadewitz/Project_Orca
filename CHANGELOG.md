@@ -60,11 +60,15 @@ format, or older than the previous release's, is refused without being changed.
   `apt` command. It never downloads or installs anything, an offline or failed check is
   silent, prereleases are offered only with `ORCA_UPDATE_PRERELEASE=1` as on Windows, and
   `ORCA_UPDATE_CHECK=0` turns the check off.
-- Windows arm64 installs get updates. Finals now attach the signed arm64 installer
-  beside x64, accept it automatically on a native Windows arm64 machine (signature, install
-  over the previous arm64 release, ARM64 binary, app reaches its bundled daemon), and the
-  desktop feed serves arm64 for any release whose arm64 installer passed that acceptance.
-  x64 feeding is unchanged.
+- Windows arm64 installs get updates. Finals now attach the signed arm64 installer beside
+  x64, and the desktop feed offers arm64 only for a release whose exact signed arm64
+  installer passed automatic native acceptance on a Windows arm64 machine (signature,
+  install, ARM64 binary, app reaches its bundled daemon). x64 feeding is unchanged. 0.7.1 is
+  the first final with a signed arm64 installer, so its acceptance is a fresh install of
+  those exact bytes; later verified arm64 releases can be accepted as upgrades over an
+  accepted 0.7.1. Windows users with a workspace from 0.6.0 should keep that workspace and the
+  matching 0.6.0 installer until a supported migration exists: 0.7.1 cannot open that older
+  store directly, and the Windows converter (`orca store carry-forward`) refuses.
 
 #### cli
 
