@@ -348,6 +348,32 @@ describe("the lane policy", () => {
         [],
         "unbound",
       ],
+      ["a receipt that is not JSON", checkRun, [{ ...receipt()[0], message: "{pr:906" }], "unbound"],
+      [
+        "a receipt with a missing field",
+        checkRun,
+        [{ ...receipt()[0], message: '{"pr":907,"base":"release/0.7"}' }],
+        "unbound",
+      ],
+      [
+        "a receipt with an extra field",
+        checkRun,
+        [{ ...receipt()[0], message: receipt()[0].message.replace("}", ',"x":1}') }],
+        "unbound",
+      ],
+      [
+        "a receipt whose number is a string",
+        checkRun,
+        [{ ...receipt()[0], message: receipt()[0].message.replace("906", '"907"') }],
+        "unbound",
+      ],
+      [
+        "receipts naming both this and another pull request",
+        checkRun,
+        [...receipt(), ...receipt({ number: 907 })],
+        "unbound",
+      ],
+      ["a link without a number", { ...checkRun, pull_requests: [{ base: { ref: "release/0.7" } }] }, [], "unbound"],
     ])("binds an attempt with %s as %s", (_, run, annotations, binding) => {
       expect(guardBinding(run, annotations, head, pr)).toBe(binding);
     });
@@ -964,5 +990,48 @@ describe("the guard's receipt", () => {
       `::notice title=${RECEIPT_TITLE}::${receiptMessage({ number: 77, base: "release/0.7", head: "c".repeat(40) })}`,
     );
     expect(rest.join("\n")).toMatch(/::error::name the 0\.7\.x issue/);
+  });
+});
+
+describe("the guard's release-preparation check", () => {
+  it("reads the diff pinned to the event's base and head, never the live file list", () => {
+    const [base, head] = ["b".repeat(40), "c".repeat(40)];
+    const event = join(work, "release-pr.json");
+    writeFileSync(
+      event,
+      JSON.stringify({
+        pull_request: {
+          number: 78,
+          body: "",
+          labels: [{ name: "release" }],
+          milestone: null,
+          base: { ref: "release/0.7", sha: base },
+          head: { ref: "release/v0.7.2", sha: head, repo: { full_name: "o/r" } },
+        },
+      }),
+    );
+    const bin = join(work, "guard-bin");
+    mkdirSync(bin);
+    const pkg = (version) => Buffer.from(JSON.stringify({ name: "orca", version })).toString("base64");
+    writeFileSync(
+      join(bin, "gh"),
+      `#!/bin/sh\necho "$*" >> "${join(work, "guard-gh.log")}"\ncase "$*" in *compare/*) printf '%s' '${JSON.stringify({
+        total_commits: 1,
+        files: [
+          { filename: "package.json", status: "modified" },
+          { filename: "CHANGELOG.md", status: "modified" },
+        ],
+      })}';; *contents/package.json?ref=${base}*) printf '{"content":"${pkg("0.7.1")}"}';; *contents/package.json?ref=${head}*) printf '{"content":"${pkg("0.7.2")}"}';; *) exit 1;; esac\n`,
+      { mode: 0o755 },
+    );
+    const guard = spawnSync(process.execPath, [fileURLToPath(new URL("../release-line-guard.js", import.meta.url))], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_EVENT_PATH: event, GITHUB_REPOSITORY: "o/r" },
+      encoding: "utf8",
+    });
+    expect(guard.stdout).toContain("release line check passed");
+    expect(guard.status).toBe(0);
+    const calls = readFileSync(join(work, "guard-gh.log"), "utf8");
+    expect(calls).toContain(`repos/o/r/compare/${base}...${head}`);
+    expect(calls).not.toContain("/files");
   });
 });

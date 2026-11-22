@@ -149,20 +149,6 @@ export const GUARD_WORKFLOW = ".github/workflows/release-line-guard.yml";
 export const RECEIPT_TITLE = "release line receipt v1";
 export const receiptMessage = ({ number, base, head }) => JSON.stringify({ pr: number, base, head });
 
-/** Whether a guard result was recorded for pull request `pr.number` into `pr.base` at `headSha`. */
-export function linkedTo(checkRun, annotations, headSha, pr = {}) {
-  if (
-    (checkRun?.pull_requests ?? []).some(
-      (p) => p?.number === pr.number && p?.base?.ref === pr.base && (p?.head?.sha ?? headSha) === headSha,
-    )
-  )
-    return true;
-  const expected = receiptMessage({ number: pr.number, base: pr.base, head: headSha });
-  return (annotations ?? []).some(
-    (a) => a?.annotation_level === "notice" && a?.title === RECEIPT_TITLE && a?.message === expected,
-  );
-}
-
 /**
  * Whether a check run is the release line guard as main runs it: by GitHub Actions, from
  * main's release-line-guard.yml on a pull_request_target event, attached to exactly `headSha`,
@@ -176,7 +162,7 @@ export function guardRunProblems(checkRun, workflowRun, annotations, headSha, pr
   problems.push(...guardSourceProblems(checkRun, workflowRun, headSha));
   // For this pull request into this line, at this head: a pass for another pull request that
   // shares the commit, or for the same commit aimed at another branch, is not this one's.
-  if (!linkedTo(checkRun, annotations, headSha, pr))
+  if (guardBinding(checkRun, annotations, headSha, pr) !== "this")
     problems.push(`it is not linked to #${pr.number} into ${pr.base} at ${headSha}`);
   return problems;
 }
@@ -194,14 +180,45 @@ export function guardSourceProblems(checkRun, workflowRun, headSha) {
 
 /**
  * Which pull request a trusted guard attempt is shown to belong to: "this" (its receipt or
- * GitHub's link names this pull request, line and head), "other" (they name something else),
- * or "unbound" (neither: it failed or was cancelled before writing its receipt, and GitHub left
- * no link). An unbound attempt could be this pull request's, so it is never skipped over.
+ * GitHub's link names this pull request, line and head, and nothing names anything else),
+ * "other" (every piece of evidence is well formed and names another pull request, line or
+ * head), or "unbound": no evidence (it failed or was cancelled before writing its receipt and
+ * GitHub left no link), malformed evidence, or evidence that names both. An unbound attempt
+ * could be this pull request's, so it is never skipped over.
  */
 export function guardBinding(checkRun, annotations, headSha, pr = {}) {
-  if (linkedTo(checkRun, annotations, headSha, pr)) return "this";
-  const receipts = (annotations ?? []).filter((a) => a?.annotation_level === "notice" && a?.title === RECEIPT_TITLE);
-  return receipts.length || (checkRun?.pull_requests ?? []).length ? "other" : "unbound";
+  const named = [];
+  for (const a of annotations ?? []) {
+    if (a?.annotation_level !== "notice" || a?.title !== RECEIPT_TITLE) continue;
+    let receipt;
+    try {
+      receipt = JSON.parse(a.message);
+    } catch {
+      return "unbound";
+    }
+    const keys = Object.keys(receipt ?? {})
+      .sort()
+      .join(",");
+    if (
+      keys !== "base,head,pr" ||
+      !Number.isInteger(receipt.pr) ||
+      typeof receipt.base !== "string" ||
+      !/^[0-9a-f]{40}$/.test(receipt.head ?? "")
+    )
+      return "unbound";
+    named.push({ number: receipt.pr, base: receipt.base, head: receipt.head });
+  }
+  for (const link of checkRun?.pull_requests ?? []) {
+    const head = link?.head?.sha ?? headSha;
+    if (!Number.isInteger(link?.number) || typeof link?.base?.ref !== "string" || typeof head !== "string")
+      return "unbound";
+    named.push({ number: link.number, base: link.base.ref, head });
+  }
+  const isThis = (n) => n.number === pr.number && n.base === pr.base && n.head === headSha;
+  if (!named.length) return "unbound";
+  if (named.every(isThis)) return "this";
+  if (named.some(isThis)) return "unbound";
+  return "other";
 }
 
 const versionAt = (sha) => {

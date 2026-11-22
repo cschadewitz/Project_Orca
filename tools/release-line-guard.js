@@ -119,11 +119,15 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     sameRepository: p.head.repo?.full_name === process.env.GITHUB_REPOSITORY,
   };
   if (pr.labels.includes("release") || /^release\/v/.test(pr.head)) {
-    // Read through the API: nothing from the pull request is checked out or run.
-    const files = api(`pulls/${p.number}/files?per_page=100`, "--paginate", "--jq", ".[] | {filename, status}")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
+    // Read through the API: nothing from the pull request is checked out or run. Pinned to the
+    // event's base and head commits, the very head this run's receipt names, never the pull
+    // request's live file list, which may already describe a newer push.
+    const compare = JSON.parse(api(`compare/${p.base.sha}...${p.head.sha}`));
+    if (compare.files?.length >= 300 || compare.total_commits === undefined) {
+      console.log(`::error::the diff ${p.base.sha}...${p.head.sha} could not be read whole; nothing is passed`);
+      process.exit(1);
+    }
+    const files = compare.files.map(({ filename, status }) => ({ filename, status }));
     pr.release = { files, basePackage: pkg(p.base.sha), headPackage: pkg(p.head.sha) };
   }
   const issues = {};
