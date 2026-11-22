@@ -636,10 +636,13 @@ export function secretPreamble(deliveries: readonly SecretDelivery[], withheld: 
   deliveries.forEach((d, i) => {
     for (const name of d.env)
       parts.push(`export ${name}="$__orca_s${i}" || ${failed}`, `[ "\${${name}-}" = "$__orca_s${i}" ] || ${failed}`);
-    // An encoder that is missing or fails leaves nothing to report: stop rather than start an
-    // agent whose value the wrapper could not redact.
+    // An encoder that is missing or fails, whatever it printed, leaves nothing trustworthy to
+    // report: stop rather than start an agent whose value the wrapper could not redact.
     parts.push(
-      `__orca_e=$(printf '%s' "$__orca_s${i}" | base64 | tr -d '\\n') || ${failed}`,
+      // Encode, then normalize, as two steps: a pipeline's status is its last command's, so
+      // the encoder's own failure is only seen when it is the last command.
+      `__orca_e=$(printf '%s' "$__orca_s${i}" | base64) || ${failed}`,
+      `__orca_e=$(printf '%s' "$__orca_e" | tr -d '\\n') || ${failed}`,
       `[ -n "$__orca_e" ] || ${failed}`,
       `printf '\\n${VALUE_MARKER} ${i} %s\\n' "$__orca_e"`,
     );

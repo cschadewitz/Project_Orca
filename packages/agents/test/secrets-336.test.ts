@@ -389,11 +389,11 @@ describe("SshHost secret reports", () => {
   const value = "report-value-0123456789";
   const secrets = [{ id: "token", source: { provider: "env" as const, name: "ORCA_REMOTE_TOKEN" }, env: ["TOKEN"] }];
 
-  /** A remote `base64` that prints `output` instead of encoding. */
-  async function brokenEncoder(dir: string, output: string): Promise<string> {
+  /** A remote `base64` that prints `output` instead of encoding, and exits with `status`. */
+  async function brokenEncoder(dir: string, output: string, status = 0): Promise<string> {
     const bin = join(dir, "bin");
     await mkdir(bin);
-    await writeFile(join(bin, "base64"), `#!/bin/sh\ncat >/dev/null\nprintf '%s' '${output}'\n`);
+    await writeFile(join(bin, "base64"), `#!/bin/sh\ncat >/dev/null\nprintf '%s' '${output}'\nexit ${status}\n`);
     await chmod(join(bin, "base64"), 0o755);
     return `PATH=${bin}:$PATH; `;
   }
@@ -412,6 +412,24 @@ describe("SshHost secret reports", () => {
         { cwd: dir, secrets, withheldEnv: ["ORCA_REMOTE_TOKEN"] },
       ),
     ).rejects.toMatchObject({ code: "AGENT_TRANSPORT", details: { reason } });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await exists(out)).toBe(false);
+  });
+
+  it("does not start the agent when the encoder fails, even with a canonical report on stdout", async () => {
+    const dir = await tempDir();
+    // Exactly what a working encoder prints for this value, but with a failing status.
+    const host = sshHost(
+      await tracingSsh(dir, "/bin/sh", await brokenEncoder(dir, Buffer.from(value).toString("base64"), 1)),
+    );
+    vi.stubEnv("ORCA_REMOTE_TOKEN", value);
+    const out = join(dir, "seen");
+    await expect(
+      host.spawnAgent(
+        AgentSpecSchema.parse({ id: "a", command: process.execPath, args: ["-e", envReporter(out, ["TOKEN"])] }),
+        { cwd: dir, secrets, withheldEnv: ["ORCA_REMOTE_TOKEN"] },
+      ),
+    ).rejects.toMatchObject({ code: "AGENT_TRANSPORT", details: { reason: "environment" } });
     await new Promise((r) => setTimeout(r, 100));
     expect(await exists(out)).toBe(false);
   });
