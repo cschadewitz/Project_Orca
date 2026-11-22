@@ -129,8 +129,10 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    The arm64 `.exe` is accepted **automatically** (#889): when the attach completes,
    **Release (accept Windows arm64)** (`release-accept-arm64.yml`) downloads the draft's
    exact arm64 bytes, and on a GitHub-hosted Windows arm64 machine re-checks the signature,
-   installs it silently over the newest earlier published final that has an arm64 installer
-   (a fresh install only when the full release list, read successfully, has none), checks
+   installs it silently over the newest earlier published final from 0.7.1 on that has an
+   arm64 installer (a fresh install only when the full release list, read successfully, has
+   none; finals before 0.7.1, whose arm64 installers carry no signing or acceptance records,
+   are never the baseline, so 0.7.1 itself is accepted as a fresh install), checks
    the reported version, that the installed `ORCA.exe` is a signed ARM64 binary, and that
    the app starts and reaches a live connection to its bundled daemon. Only then does it
    keep an `arm64-acceptance-evidence` artifact (release id, version, commit, digest, mode,

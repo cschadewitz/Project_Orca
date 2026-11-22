@@ -5,7 +5,8 @@
  *
  *   feed-arches.js baseline-run VERSION RELEASES_JSON
  *       print the acceptance run id of VERSION's upgrade baseline candidate (the newest
- *       published final older than VERSION, not marked x64-only, with an arm64 installer),
+ *       published final older than VERSION, from ARM64_EVIDENCE_FROM on, not marked x64-only,
+ *       with an arm64 installer),
  *       or nothing; the caller fetches that run, with its jobs under "jobs", for the commands
  *       below (BASELINE_RUN_JSON)
  *   feed-arches.js baseline VERSION REPO RELEASES_JSON BASELINE_RUN_JSON
@@ -31,6 +32,12 @@
  * successful acceptance run on main whose receipt job names that release, commit and
  * digest; a candidate without them stops the check rather than passing as a fresh install
  * or falling back to an older release.
+ *
+ * Finals before ARM64_EVIDENCE_FROM are never candidates. No release before it could carry
+ * that proof: the signing and acceptance records start with #889, and v0.6.0's arm64
+ * installer is unsigned. Excluding them by version, a fixed fact about the release list
+ * rather than anything a release's notes say, keeps the no-fallback rule intact, and the
+ * first arm64 final is accepted as a fresh install.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -43,6 +50,8 @@ const ACCEPTED_ARM64 = /<!-- orca-arm64-accepted: ([0-9]+) (sha256:[0-9a-f]{64})
 export const X64_ONLY = "<!-- orca-x64-only -->";
 export const ACCEPT_WORKFLOW = ".github/workflows/release-accept-arm64.yml";
 export const EVIDENCE_ARTIFACT = "arm64-acceptance-evidence";
+/** The first final that can carry signed arm64 and acceptance records (#889). */
+export const ARM64_EVIDENCE_FROM = "0.7.1";
 
 const compare = (a, b) => {
   const [x, y] = [a, b].map((v) => v.split(".").map(Number));
@@ -61,8 +70,9 @@ export function arm64Asset(version, release) {
 export const declined = (release) => (release?.body ?? "").includes(X64_ONLY);
 
 /**
- * The newest published, non-prerelease final older than VERSION that is not marked x64-only
- * and carries an arm64 installer: the release an arm64 acceptance upgrades from. It is
+ * The newest published, non-prerelease final older than VERSION, from ARM64_EVIDENCE_FROM on,
+ * that is not marked x64-only and carries an arm64 installer: the release an arm64
+ * acceptance upgrades from. It is
  * chosen before its proof is looked at, so a missing proof never falls back to an older one.
  */
 export function baselineCandidate(version, releases) {
@@ -70,7 +80,7 @@ export function baselineCandidate(version, releases) {
   for (const release of releases ?? []) {
     const tag = /^v(.+)$/.exec(release?.tag_name ?? "")?.[1];
     if (!tag || !FINAL.test(tag) || release.draft !== false || release.prerelease || !release.published_at) continue;
-    if (compare(tag, version) >= 0 || declined(release)) continue;
+    if (compare(tag, version) >= 0 || compare(tag, ARM64_EVIDENCE_FROM) < 0 || declined(release)) continue;
     if (!(release.assets ?? []).some((a) => a.name === arm64Name(tag))) continue;
     if (!best || compare(tag, best.version) > 0) best = { version: tag, release };
   }
