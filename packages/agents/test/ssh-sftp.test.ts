@@ -158,3 +158,74 @@ it("closes an idle session and opens a new one on demand", async () => {
   await h.fs.mkdirp(p("y"));
   expect(await sessions()).toBe(2);
 });
+
+it("settles every waiter when a request misses its deadline, retries once, then fails typed", async () => {
+  await writeFile(p("f"), "content");
+  // Session 1 answers the handshake and then nothing; session 2 is healthy.
+  const healed = host((n) => (n === 1 ? { FAKE_SFTP_HANG_AFTER: "0" } : {}), { requestTimeoutMs: 200 });
+  const started = Date.now();
+  expect(await healed.fs.readFile(p("f"))).toBe("content");
+  expect(Date.now() - started).toBeLessThan(5_000);
+
+  const hung = host(() => ({ FAKE_SFTP_HANG_AFTER: "0" }), { requestTimeoutMs: 200 });
+  await expect(hung.fs.readFile(p("f"))).rejects.toMatchObject({
+    code: "AGENT_TRANSPORT",
+    message: expect.stringContaining("timed out after 200 ms"),
+  });
+  // Nothing is left in flight: the idle timer can close the session again.
+  expect(await hung.fs.existsMany([p("f"), p("g")])).toEqual([false, false]);
+  expect(await sessions()).toBe(2 + 4);
+});
+
+it("fails the session on an undecodable reply instead of stranding the request", async () => {
+  await writeFile(p("f"), "content");
+  const h = host((n) => (n === 1 ? { FAKE_SFTP_MALFORMED_AFTER: "0" } : {}), { requestTimeoutMs: 30_000 });
+  const started = Date.now();
+  expect(await h.fs.exists(p("f"))).toBe(true);
+  expect(Date.now() - started).toBeLessThan(5_000); // settled by the session failure, not the deadline
+  expect(await sessions()).toBe(2);
+
+  const bad = host(() => ({ FAKE_SFTP_MALFORMED_AFTER: "0" }), { requestTimeoutMs: 30_000 });
+  await expect(bad.fs.mkdirp(p("d"))).rejects.toMatchObject({
+    code: "AGENT_TRANSPORT",
+    message: expect.stringContaining("malformed sftp packet"),
+  });
+});
+
+it("bounds reads by a byte budget instead of trusting the stat size", async () => {
+  await writeFile(p("big"), "x".repeat(4_000));
+  const capped = host(undefined, { maxReadBytes: 1_000 });
+  await expect(capped.fs.readFile(p("big"))).rejects.toMatchObject({
+    code: "AGENT_TRANSPORT",
+    message: expect.stringContaining("4000 bytes, over the 1000-byte read limit"),
+  });
+  // A size of 2^50 is refused before a single read, and nothing is allocated for it.
+  const huge = host(() => ({ FAKE_SFTP_STAT_SIZE: String(2 ** 50) }));
+  await expect(huge.fs.readFile(p("big"))).rejects.toMatchObject({ message: expect.stringContaining("read limit") });
+  // A stat that under-reports still cannot get past the budget: received bytes count too.
+  const lying = host(() => ({ FAKE_SFTP_STAT_SIZE: "0" }), { maxReadBytes: 1_000 });
+  await expect(lying.fs.readFile(p("big"))).rejects.toMatchObject({
+    message: expect.stringContaining("over the 1000-byte read limit"),
+  });
+  // An under-reported size is otherwise only a hint: the file grows past it and is read whole.
+  const stale = host(() => ({ FAKE_SFTP_STAT_SIZE: "10" }));
+  const content = "y".repeat(200_000);
+  await writeFile(p("grown"), content);
+  expect(await stale.fs.readFile(p("grown"))).toBe(content);
+});
+
+it("stops writing on the first failed chunk and closes only after every write has settled", async () => {
+  const log = join(root, "server.log");
+  const chunks = 200;
+  const h = host(() => ({ FAKE_SFTP_WRITE_FAIL_AT: String(10 * 32 * 1024), FAKE_SFTP_LOG: log }));
+  await expect(h.fs.writeFile(p("out"), "z".repeat(chunks * 32 * 1024))).rejects.toMatchObject({
+    code: "AGENT_TRANSPORT",
+    message: expect.stringContaining("ssh write failed for"),
+  });
+  const lines = (await readFile(log, "utf8")).split("\n").filter(Boolean);
+  const writes = lines.filter((l) => l.startsWith("write "));
+  expect(writes.length).toBeLessThan(chunks / 2); // no new chunks after the failure
+  expect(lines).not.toContain("write-after-close");
+  expect(lines.at(-1)).toBe("close"); // the close came after the last write
+  expect(await sessions()).toBe(1); // a disk-full status is final, not retried
+});

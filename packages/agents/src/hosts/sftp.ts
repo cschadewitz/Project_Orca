@@ -13,6 +13,7 @@
  * (`MAX_PACKET`), so a confused or hostile peer cannot make us buffer without
  * limit.
  */
+import { constants as bufferConstants } from "node:buffer";
 import type { Readable, Writable } from "node:stream";
 
 const SSH_FXP_INIT = 1;
@@ -52,6 +53,15 @@ export const CHUNK = 32 * 1024;
 export const WINDOW = 64;
 /** Largest incoming packet accepted: a full CHUNK of data plus generous headroom. */
 export const MAX_PACKET = 256 * 1024;
+/**
+ * Largest file `readAll` will buffer. `HostFileSystem.readFile` returns a string,
+ * so the per-command path was already bounded by V8's string limit; a UTF-8
+ * buffer no longer than that always decodes, so it is the same limit here,
+ * enforced before reading rather than after.
+ */
+export const MAX_READ_BYTES = bufferConstants.MAX_STRING_LENGTH;
+/** A request with no reply after this long fails the whole session (see `SftpClientOptions`). */
+export const REQUEST_TIMEOUT_MS = 60_000;
 
 const S_IFMT = 0o170000;
 const S_IFDIR = 0o040000;
@@ -93,6 +103,17 @@ type Reply =
 interface Pending {
   resolve(r: Reply): void;
   reject(e: Error): void;
+  timer?: NodeJS.Timeout;
+}
+
+export interface SftpClientOptions {
+  /**
+   * Deadline for every request after the handshake. One that passes fails the
+   * session, which settles every waiter with `SftpConnectionError`; a server
+   * that stops answering cannot leave an operation (and so the session) busy
+   * for ever. Default `REQUEST_TIMEOUT_MS`.
+   */
+  requestTimeoutMs?: number;
 }
 
 class Writer {
@@ -198,10 +219,14 @@ export class SftpClient {
   readonly closed: Promise<SftpConnectionError>;
   private markClosed!: (e: SftpConnectionError) => void;
 
+  private readonly requestTimeoutMs: number;
+
   constructor(
     input: Readable,
     private readonly output: Writable,
+    options: SftpClientOptions = {},
   ) {
+    this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
     this.closed = new Promise((r) => (this.markClosed = r));
     // The owner reports the end of the channel through `fail`, with whatever
     // diagnostics it has (an ssh process's stderr, say).
@@ -232,7 +257,10 @@ export class SftpClient {
     this.failure = e;
     this.version?.reject(e);
     this.version = undefined;
-    for (const p of this.pending.values()) p.reject(e);
+    for (const p of this.pending.values()) {
+      clearTimeout(p.timer);
+      p.reject(e);
+    }
     this.pending.clear();
     this.markClosed(e);
   }
@@ -250,7 +278,13 @@ export class SftpClient {
   /** Data at `offset`, or `null` at end of file. */
   async read(handle: Buffer, offset: number, length: number): Promise<Buffer | null> {
     const r = await this.request(SSH_FXP_READ, (w) => w.str(handle).u64(offset).u32(length));
-    if (r.type === SSH_FXP_DATA) return r.data;
+    if (r.type === SSH_FXP_DATA) {
+      if (r.data.length <= length) return r.data;
+      // More than was asked for: the stream can no longer be trusted.
+      const e = new SftpConnectionError(`sftp server returned ${r.data.length} bytes for a ${length}-byte read`);
+      this.fail(e);
+      throw e;
+    }
     if (r.type === SSH_FXP_STATUS && r.status === SSH_FX_EOF) return null;
     throw this.unexpected(r);
   }
@@ -280,7 +314,12 @@ export class SftpClient {
       if (this.failure) return reject(this.failure);
       const id = this.nextId;
       this.nextId = (this.nextId + 1) >>> 0 || 1;
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(
+        () => this.fail(new SftpConnectionError(`sftp request timed out after ${this.requestTimeoutMs} ms`)),
+        this.requestTimeoutMs,
+      );
+      timer.unref();
+      this.pending.set(id, { resolve, reject, timer });
       this.send(body(new Writer().byte(type).u32(id)).packet());
     });
   }
@@ -336,24 +375,28 @@ export class SftpClient {
     const id = r.u32();
     const p = this.pending.get(id);
     if (!p) throw new SftpConnectionError(`sftp reply for unknown request ${id}`);
+    // Decode while the request is still registered: a malformed reply throws
+    // here, `onData` fails the session, and that settles this waiter too.
+    const reply = this.decode(type, r);
     this.pending.delete(id);
+    clearTimeout(p.timer);
+    p.resolve(reply);
+  }
+
+  private decode(type: number, r: Reader): Reply {
     switch (type) {
       case SSH_FXP_STATUS: {
         const status = r.u32();
         // Version 3 servers send a message and language tag; very old ones may omit them.
         const message = r.remaining >= 4 ? r.str() : "";
-        p.resolve({ type, status, message });
-        return;
+        return { type, status, message };
       }
       case SSH_FXP_HANDLE:
-        p.resolve({ type, handle: Buffer.from(r.bytes()) });
-        return;
+        return { type, handle: Buffer.from(r.bytes()) };
       case SSH_FXP_DATA:
-        p.resolve({ type, data: Buffer.from(r.bytes()) });
-        return;
+        return { type, data: Buffer.from(r.bytes()) };
       case SSH_FXP_ATTRS:
-        p.resolve({ type, attrs: r.attrs() });
-        return;
+        return { type, attrs: r.attrs() };
       default:
         throw new SftpConnectionError(`unexpected sftp packet type ${type}`);
     }
@@ -361,80 +404,105 @@ export class SftpClient {
 }
 
 /**
- * Read a whole file: open and stat together, then keep `WINDOW` reads of
- * `CHUNK` bytes in flight. A short read re-requests the gap; reading past the
- * stat size continues if the file grew. The close is not awaited.
+ * Run `lanes` workers until they all stop, then report the failure that
+ * matters. The first failure stops every lane from starting new work, and
+ * nothing returns until every request already sent has settled, so a caller's
+ * `close` never races a read or write still in flight on the handle. A lost
+ * session wins over a status error: it is the one the caller may retry.
  */
-export async function readAll(c: SftpClient, path: string): Promise<Buffer> {
+async function runLanes(lanes: number, work: (stopped: () => boolean) => Promise<void>): Promise<void> {
+  let failed = false;
+  const results = await Promise.allSettled(
+    Array.from({ length: lanes }, () =>
+      work(() => failed).catch((e: unknown) => {
+        failed = true;
+        throw e;
+      }),
+    ),
+  );
+  const errors = results.flatMap((r) => (r.status === "rejected" ? [r.reason as unknown] : []));
+  if (errors.length === 0) return;
+  const e = errors.find((x) => x instanceof SftpConnectionError) ?? errors[0];
+  throw e instanceof Error ? e : new Error(String(e));
+}
+
+/**
+ * Read a whole file: open and stat together, then `WINDOW` lanes each claim
+ * the next `CHUNK`-sized slice and read it to the end (a short read asks for
+ * the rest). Slices are claimed lazily, so nothing is allocated from the stat
+ * size; it only says how far lanes may read ahead. Past it, one lane at a time
+ * probes for growth. The size and every byte received count against
+ * `maxBytes`. The handle is closed (not awaited) once every read has settled.
+ */
+export async function readAll(c: SftpClient, path: string, maxBytes = MAX_READ_BYTES): Promise<Buffer> {
   const [handle, attrs] = await Promise.all([c.open(path, SSH_FXF_READ), c.stat(path).catch((): SftpAttrs => ({}))]);
   try {
-    const chunks = new Map<number, Buffer>();
+    const hint = attrs.size !== undefined && Number.isSafeInteger(attrs.size) && attrs.size >= 0 ? attrs.size : 0;
+    if (hint > maxBytes)
+      throw new SftpStatusError(SSH_FX_FAILURE, `file is ${hint} bytes, over the ${maxBytes}-byte read limit`);
+    const slices: Buffer[][] = [];
     let eofAt = Infinity;
-    const hint = attrs.size ?? 0;
-    const queue: Array<[number, number]> = [];
-    for (let off = 0; off < hint; off += CHUNK) queue.push([off, Math.min(CHUNK, hint - off)]);
-    queue.push([hint, CHUNK]); // confirms EOF, or picks up growth
-    let next = hint + CHUNK;
-    await new Promise<void>((resolve, reject) => {
-      let inflight = 0;
-      let failed = false;
-      const pump = (): void => {
-        while (!failed && inflight < WINDOW && queue.length) {
-          const [off, len] = queue.shift()!;
-          if (off >= eofAt) continue;
-          inflight++;
-          c.read(handle, off, len).then(
-            (data) => {
-              inflight--;
-              if (data === null || data.length === 0) {
-                eofAt = Math.min(eofAt, off);
-              } else {
-                chunks.set(off, data);
-                if (data.length < len) queue.push([off + data.length, len - data.length]);
-                else if (off + len === next) {
-                  // The tail read came back full: the file is longer than the stat said.
-                  queue.push([next, CHUNK]);
-                  next += CHUNK;
-                }
-              }
-              if (inflight === 0 && !queue.some(([o]) => o < eofAt)) resolve();
-              else pump();
-            },
-            (e: unknown) => {
-              failed = true;
-              reject(e instanceof Error ? e : new Error(String(e)));
-            },
-          );
+    let nextSlice = 0;
+    let probing = false;
+    let received = 0;
+    await runLanes(Math.max(1, Math.min(WINDOW, Math.ceil(hint / CHUNK) + 1)), async (stopped) => {
+      while (!stopped()) {
+        const k = nextSlice;
+        const start = k * CHUNK;
+        if (start >= eofAt) return;
+        const beyond = start >= hint;
+        if (beyond && probing) return; // another lane is already looking past the stat size
+        nextSlice++;
+        if (beyond) probing = true;
+        const parts: Buffer[] = [];
+        let got = 0;
+        while (got < CHUNK && start + got < eofAt && !stopped()) {
+          const data = await c.read(handle, start + got, CHUNK - got);
+          if (data === null || data.length === 0) {
+            eofAt = Math.min(eofAt, start + got);
+            break;
+          }
+          received += data.length;
+          if (received > maxBytes)
+            throw new SftpStatusError(SSH_FX_FAILURE, `file is over the ${maxBytes}-byte read limit`);
+          parts.push(data);
+          got += data.length;
         }
-        if (!failed && inflight === 0 && !queue.some(([o]) => o < eofAt)) resolve();
-      };
-      pump();
+        slices[k] = parts;
+        if (beyond) probing = false;
+      }
     });
-    const ordered = [...chunks.entries()].filter(([o]) => o < eofAt).sort((a, b) => a[0] - b[0]);
     const out: Buffer[] = [];
     let at = 0;
-    for (const [o, d] of ordered) {
-      if (o > at) throw new SftpStatusError(SSH_FX_FAILURE, `sftp read left a gap at offset ${at}`);
-      if (o + d.length <= at) continue;
-      out.push(d.subarray(at - o));
-      at = o + d.length;
+    for (let k = 0; k < slices.length && at < eofAt; k++) {
+      for (const part of slices[k] ?? []) {
+        const take = Math.min(part.length, eofAt - at);
+        out.push(take === part.length ? part : part.subarray(0, take));
+        at += take;
+      }
     }
+    if (at < eofAt && eofAt !== Infinity)
+      throw new SftpStatusError(SSH_FX_FAILURE, `sftp read left a gap at offset ${at}`);
     return Buffer.concat(out);
   } finally {
     c.close(handle).catch(() => {});
   }
 }
 
-/** Write `data` to an open handle with `WINDOW` writes of `CHUNK` bytes in flight. */
+/**
+ * Write `data` to an open handle with up to `WINDOW` writes of `CHUNK` bytes in
+ * flight. On the first failure no further chunk is sent, and the call returns
+ * only after every write already sent has settled, so the caller can close the
+ * handle safely. Which earlier chunks landed is then unknown; callers recover
+ * by rewriting the whole file (`SSH_FXF_TRUNC`), never by resuming.
+ */
 export async function writeAll(c: SftpClient, handle: Buffer, data: Buffer): Promise<void> {
-  const offsets: number[] = [];
-  for (let off = 0; off < data.length; off += CHUNK) offsets.push(off);
-  let i = 0;
-  const lane = async (): Promise<void> => {
-    while (i < offsets.length) {
-      const off = offsets[i++]!;
+  let next = 0;
+  await runLanes(Math.min(WINDOW, Math.ceil(data.length / CHUNK)), async (stopped) => {
+    while (!stopped() && next < data.length) {
+      const off = next;
+      next += CHUNK;
       await c.write(handle, off, data.subarray(off, off + CHUNK));
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(WINDOW, offsets.length) }, lane));
+  });
 }

@@ -61,6 +61,10 @@ export interface SshHostOptions {
   sftp?: boolean;
   idleMs?: number;
   retryMs?: number;
+  /** Deadline for each SFTP request; a miss drops the session (then one retry). Default 60 s. */
+  requestTimeoutMs?: number;
+  /** Largest file `readFile` buffers over SFTP. Default: V8's string limit, as on the per-command path. */
+  maxReadBytes?: number;
 }
 
 export class SshHost implements AgentHost {
@@ -228,7 +232,7 @@ class SftpFileSystem implements HostFileSystem {
   async readFile(path: string): Promise<string> {
     try {
       return await this.run(
-        async (c) => (await readAll(c, path)).toString("utf8"),
+        async (c) => (await readAll(c, path, this.options.maxReadBytes)).toString("utf8"),
         () => this.fallback.readFile(path),
       );
     } catch (e) {
@@ -344,8 +348,16 @@ class SftpFileSystem implements HostFileSystem {
    * (and the next ones, for `retryMs`) down the per-command path. A session
    * that drops under `op` is re-established once and `op` retried; a second
    * loss propagates as the error the caller turns into `AGENT_TRANSPORT`.
-   * Every op here is safe to repeat: reads, stats, mkdir -p, and whole-file
-   * writes that truncate first.
+   *
+   * Only a lost session (`SftpConnectionError`: the channel closed, a request
+   * passed its deadline, a malformed reply) is retried; a status from the
+   * server (no such file, permission denied, disk full) is final. A lost
+   * session leaves the op's outcome ambiguous - a write may have landed in
+   * part - so every op here is one that is safe to repeat from the start:
+   * reads, stats, mkdir -p, and whole-file writes that reopen with TRUNC and
+   * rewrite from offset 0. If the retry is lost too, the caller gets
+   * `AGENT_TRANSPORT` and a written file's content is unspecified, as it is
+   * when `cat > file` dies mid-stream on the per-command path.
    */
   private async run<T>(op: (c: SftpClient) => Promise<T>, fallback: () => Promise<T>): Promise<T> {
     if (Date.now() < this.unavailableUntil) return fallback();
@@ -400,7 +412,11 @@ class SftpFileSystem implements HostFileSystem {
     const tail = new StderrTail(10);
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (d: string) => tail.push(d));
-    const client = new SftpClient(child.stdout, child.stdin);
+    const client = new SftpClient(
+      child.stdout,
+      child.stdin,
+      this.options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: this.options.requestTimeoutMs },
+    );
     onClient(client);
     const lost = (what: string): SftpConnectionError => {
       const diag = tail.text();

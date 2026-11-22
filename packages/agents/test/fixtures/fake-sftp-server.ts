@@ -6,6 +6,11 @@
  * - FAKE_SFTP_REFUSE=1      exit before answering INIT (no sftp subsystem)
  * - FAKE_SFTP_DROP_AFTER=n  exit after answering n requests (a dropped session)
  * - FAKE_SFTP_COUNT_FILE=p  append one line per started session to p
+ * - FAKE_SFTP_HANG_AFTER=n  stop answering (but stay up) after n requests
+ * - FAKE_SFTP_MALFORMED_AFTER=n  answer request n+1 with a truncated ATTRS reply
+ * - FAKE_SFTP_STAT_SIZE=n   report every STAT size as n (a lying or stale size)
+ * - FAKE_SFTP_WRITE_FAIL_AT=n  fail every WRITE at offset >= n with "No space left on device"
+ * - FAKE_SFTP_LOG=p         append "write <offset>", "close" and "write-after-close" lines to p
  */
 import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readSync, statSync, writeSync } from "node:fs";
 
@@ -26,6 +31,14 @@ if (process.env.FAKE_SFTP_REFUSE) {
   process.exit(1);
 }
 let dropAfter = Number(process.env.FAKE_SFTP_DROP_AFTER ?? Infinity);
+let hangAfter = Number(process.env.FAKE_SFTP_HANG_AFTER ?? Infinity);
+let malformedAfter = Number(process.env.FAKE_SFTP_MALFORMED_AFTER ?? Infinity);
+const statSize = process.env.FAKE_SFTP_STAT_SIZE === undefined ? undefined : Number(process.env.FAKE_SFTP_STAT_SIZE);
+const writeFailAt = Number(process.env.FAKE_SFTP_WRITE_FAIL_AT ?? Infinity);
+const log = (line: string) => {
+  if (process.env.FAKE_SFTP_LOG) appendFileSync(process.env.FAKE_SFTP_LOG, `${line}\n`);
+};
+const closedHandles = new Set<string>();
 
 const handles = new Map<string, number>();
 let nextHandle = 1;
@@ -90,6 +103,12 @@ function handle(p: Buffer): void {
   }
   const id = rd32();
   if (dropAfter-- <= 0) process.exit(1);
+  if (hangAfter-- <= 0) return;
+  if (malformedAfter-- <= 0) {
+    // ATTRS that promises a size and then ends: undecodable.
+    send(Buffer.from([ATTRS]), u32(id), u32(0x1));
+    return;
+  }
   try {
     switch (type) {
       case FXP.OPEN: {
@@ -107,6 +126,8 @@ function handle(p: Buffer): void {
         const fd = handles.get(h);
         if (fd === undefined) return status(id, FX_FAILURE, "bad handle");
         handles.delete(h);
+        closedHandles.add(h);
+        log("close");
         closeSync(fd);
         return status(id, FX_OK, "");
       }
@@ -121,9 +142,16 @@ function handle(p: Buffer): void {
         return;
       }
       case FXP.WRITE: {
-        const fd = handles.get(rdBytes().toString())!;
+        const h = rdBytes().toString();
+        const fd = handles.get(h);
         const at = rd64();
         const data = rdBytes();
+        if (fd === undefined) {
+          if (closedHandles.has(h)) log("write-after-close");
+          return status(id, FX_FAILURE, "bad handle");
+        }
+        log(`write ${at}`);
+        if (at >= writeFailAt) return status(id, FX_FAILURE, "No space left on device");
         writeSync(fd, data, 0, data.length, at);
         return status(id, FX_OK, "");
       }
@@ -134,7 +162,7 @@ function handle(p: Buffer): void {
       }
       case FXP.STAT: {
         const st = statSync(rdBytes().toString());
-        send(Buffer.from([ATTRS]), u32(id), attrs(st));
+        send(Buffer.from([ATTRS]), u32(id), attrs(statSize === undefined ? st : { size: statSize, mode: st.mode }));
         return;
       }
       case FXP.MKDIR: {
