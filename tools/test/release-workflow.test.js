@@ -65,12 +65,22 @@ it("rehearses a release on dry_run without tagging, publishing or feeding anythi
   const rehearsal = file.jobs.rehearsal;
   expect(rehearsal.if).toBe("${{ inputs.dry_run }}");
   expect(rehearsal.needs).toEqual(["check", "desktop", "app-verification"]);
-  const upload = named(rehearsal.steps, "Upload the rehearsal to a draft prerelease");
-  expect(upload.run).toContain("--draft --prerelease --latest=false");
-  expect(upload.run).toContain("-dryrun\\.[0-9]+$");
-  expect(upload.run).not.toContain("--draft=false");
-  expect(upload.run).not.toMatch(/git (tag|push)/);
-  expect(upload.run).not.toContain("${{");
+  // It checks the assets and creates no release or draft, so there is nothing to clean up.
+  expect(rehearsal.permissions).toBeUndefined(); // the workflow's read-only token
+  expect(rehearsal.steps.map((s) => s.name ?? s.uses.split("@")[0])).toEqual([
+    "actions/checkout",
+    "Download the desktop artifacts",
+    "Check the rehearsal's release assets",
+  ]);
+  const assets = named(rehearsal.steps, "Check the rehearsal's release assets");
+  expect(assets.env).toEqual({
+    SHA: "${{ needs.check.outputs.sha }}",
+    VERSION: "${{ needs.check.outputs.version }}",
+  });
+  expect(assets.run).toContain("-dryrun\\.[0-9]+$");
+  expect(assets.run).toContain('python3 tools/deploy/release-assets.py artifacts "$VERSION"');
+  expect(assets.run).not.toMatch(/gh |git (tag|push)/);
+  expect(assets.run).not.toContain("${{");
 });
 
 it("drafts a final with the Ubuntu .deb only, leaving tag and publication to a maintainer", () => {
@@ -137,22 +147,23 @@ it("never hands a write token to the ref under test (#863)", () => {
   expect(reviewed.run).toContain('if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]');
   expect(release.findIndex((s) => s.run === "pnpm install --frozen-lockfile")).toBeGreaterThan(sha + 1);
 
-  // Only the two writers get contents write (sign and server-bundle may only dispatch), and
+  // Only the publish job gets contents write (sign and server-bundle may only dispatch), and
   // every checkout drops its credentials.
   for (const [name, job] of Object.entries(file.jobs)) {
     if (job.uses) continue;
-    const expected = ["publish", "rehearsal"].includes(name)
-      ? { contents: "write" }
-      : ["sign", "server-bundle", "record-line-release"].includes(name)
-        ? { actions: "write" }
-        : name === "check"
-          ? { contents: "read", checks: "read" }
-          : null;
+    const expected =
+      name === "publish"
+        ? { contents: "write" }
+        : ["sign", "server-bundle", "record-line-release"].includes(name)
+          ? { actions: "write" }
+          : name === "check"
+            ? { contents: "read", checks: "read" }
+            : null;
     expect(job.permissions ?? null, name).toEqual(expected);
     for (const step of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@")))
       expect(step.with["persist-credentials"], name).toBe(false);
   }
-  // The rehearsal writer runs this workflow's revision, not the rehearsed ref.
+  // The rehearsal's asset check runs this workflow's revision, not the rehearsed ref.
   expect(file.jobs.rehearsal.steps[0].with.ref).toBe("${{ github.sha }}");
 
   // The rehearsed ref is built on hosted runners, without the runner health endpoint.
@@ -193,7 +204,20 @@ it("signs a final's commit right after staging its draft, and only a final", () 
 it("attaches only re-verified signed x64 and arm64 installers, through the re-validating script", () => {
   const text = readFileSync(".github/workflows/release-attach-signed.yml", "utf8");
   const wf = workflow("release-attach-signed.yml");
-  expect(text).toContain('workflows: ["Windows signed (spike)"]');
+  // Dispatched by the signing run's own last job: GitHub starts no workflow_run for a run the
+  // workflow token dispatched, which is how release-publish's sign job starts it.
+  expect(Object.keys(wf.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
+  expect(text).not.toMatch(/^\s+workflow_run:/m);
+  const handOff = workflow("windows-signed.yml").jobs["hand-off"];
+  expect(handOff.needs).toEqual(["resolve", "sign"]);
+  expect(handOff.if).toBe("github.ref == 'refs/heads/main' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
+  expect(handOff.permissions).toEqual({ actions: "write" });
+  // A failed dispatch never fails the signing run, so select and reconcile still accept it.
+  expect(handOff["continue-on-error"]).toBe(true);
+  expect(handOff.steps.every((s) => !s.uses)).toBe(true);
+  expect(handOff.steps[0].run).toContain(
+    'gh workflow run release-attach-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f signed_run_id="$GITHUB_RUN_ID"',
+  );
   // Attachment and publication share one queue, so they never interleave; reconcile, which
   // only dispatches, queues on its own.
   expect(wf.jobs.attach.concurrency).toEqual({
@@ -209,8 +233,23 @@ it("attaches only re-verified signed x64 and arm64 installers, through the re-va
   expect(wf.jobs.reconcile.concurrency.group).toBe("release-attach-reconcile");
   expect(wf.permissions).toEqual({ contents: "read" });
   // The automatic paths are behind their own default-off switch; a dispatch by run id is not.
-  expect(wf.jobs.attach.if).toContain("github.event_name == 'workflow_run' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
-  expect(wf.jobs.attach.if).toContain("github.event.workflow_run.head_branch == 'main'");
+  expect(wf.jobs.attach.if).toBe(
+    "github.event_name == 'workflow_dispatch' && inputs.signed_run_id != '' && github.ref == 'refs/heads/main'",
+  );
+  expect(wf.jobs.attach.env.RUN_ID).toBe("${{ inputs.signed_run_id }}");
+  // It waits for the signing run (which dispatched it) to finish before select checks it.
+  const find = wf.jobs.attach.steps.find((s) => s.id === "find").run;
+  expect(find.indexOf('release-attach.sh wait-run "$RUN_ID"')).toBeGreaterThan(0);
+  expect(find.indexOf('release-attach.sh wait-run "$RUN_ID"')).toBeLessThan(find.indexOf("release-attach.sh select"));
+  // Then it dispatches the arm64 acceptance for the draft it attached to.
+  const accept = wf.jobs["accept-arm64"];
+  expect(accept.needs).toBe("attach");
+  expect(accept.if).toBe("needs.attach.outputs.id != ''");
+  expect(accept.permissions).toEqual({ actions: "write" });
+  expect(accept.steps.every((s) => !s.uses)).toBe(true);
+  expect(accept.steps[0].run).toContain(
+    'gh workflow run release-accept-arm64.yml --repo "$GITHUB_REPOSITORY" --ref main -f release_id="$ID"',
+  );
   expect(wf.jobs.reconcile.if).toContain("github.event_name == 'schedule' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
   const steps = wf.jobs.attach.steps.map((s) => s.name ?? s.uses);
   const verify = steps.indexOf("Verify both installers' signatures, timestamps and publisher");
@@ -221,7 +260,11 @@ it("attaches only re-verified signed x64 and arm64 installers, through the re-va
   expect(wf.jobs.attach.steps[attachStep].run).toContain(
     'bash tools/deploy/release-attach.sh attach "$ID" "$SHA" "$VERSION" "$RUN_ID" "$file" "$arm_file"',
   );
-  expect(wf.jobs.reconcile.steps.at(-2).run).toBe("bash tools/deploy/release-attach.sh reconcile");
+  expect(wf.jobs.reconcile.steps.map((s) => s.run).filter(Boolean)).toEqual([
+    "bash tools/deploy/release-attach.sh reconcile",
+    "bash tools/deploy/release-attach.sh upgrade-reconcile",
+    'gh workflow run release-accept-arm64.yml --repo "$GITHUB_REPOSITORY" --ref main',
+  ]);
   expect(text).not.toMatch(/draft=false|make_latest|feed-r2/);
   const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
   // The signing run itself is checked before any draft is selected, on every path.
@@ -343,11 +386,13 @@ it("pins the same signer identity in the workflow and the adapter (#876)", () =>
 it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unattended (#889)", () => {
   const text = readFileSync(".github/workflows/release-accept-arm64.yml", "utf8");
   const wf = workflow("release-accept-arm64.yml");
-  expect(wf.on.workflow_run).toEqual({ workflows: ["Release (attach signed installer)"], types: ["completed"] });
+  // Dispatched by the attach and its reconcile, never by a workflow_run (which GitHub does not
+  // start for a run the workflow token dispatched).
+  expect(Object.keys(wf.on)).toEqual(["workflow_dispatch"]);
   expect(wf.permissions).toEqual({ contents: "read" });
-  expect(wf.jobs.select.if).toContain("vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
-  expect(wf.jobs.select.if).toContain("github.event.workflow_run.head_branch == 'main'");
-  expect(wf.jobs.select.if).toContain("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'");
+  expect(wf.jobs.select.if).toBe(
+    "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !inputs.x64_only",
+  );
   // Only the jobs that read drafts and write the record may write; the installer runs read-only.
   expect(wf.jobs.select.permissions).toEqual({ contents: "write" });
   expect(wf.jobs.accept.permissions).toBeUndefined();
