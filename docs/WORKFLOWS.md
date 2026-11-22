@@ -413,6 +413,7 @@ agents:
     profile: build-box                    # a remotes[].id
     workflow: build                       # the workflow the remote daemon runs per step
     # promptVar: prompt                   # the remote workflow variable the task arrives in
+    # gitRef: release/0.8                 # a branch, tag or commit the remote run works from
     roles: [builder]
 ```
 
@@ -496,8 +497,32 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
   not be reached. `DELEGATED_RUN_FAILED` means the remote run ended without success; its
   error is in the step's error details.
 
-Not yet: fetching a named git ref on the remote side, issuing the credential automatically
-over SSH, and binary artifacts.
+### Working from a named git ref
+
+With `gitRef`, each remote run works from that branch, tag or full commit id. The remote
+daemon checks the ref before it admits the run, then fetches it from its workspace's fetch
+remote (`workspace.fetchRemote`, default `origin`) and gives the run its own checkout of the
+commit it named, recorded as the run's `workspace.rootProvisioning` (`ref` and
+`baseCommit`). A retried or resumed run keeps that commit; nothing is fetched twice. This
+needs a remote whose workspace gives each run its own checkout:
+
+```yaml
+# the remote daemon's config
+workspace:
+  provider: git-worktree
+  repo: /srv/checkouts/app
+  isolateRoots: true          # each root run gets its own worktree (local Linux host)
+  # fetchRemote: origin
+```
+
+ORCA does not push anything: the ref must already be on that remote (code sync beyond
+fetching a named ref is out of scope). A remote that cannot check the ref out (another
+workspace provider, an unknown ref, a ref that is not a plain branch, tag or commit name)
+fails the step with `DELEGATION_REFUSED` and reason `git-ref` before any run is admitted. A
+remote whose `hello` does not list `gitRef` in `admitFields` (older than protocol 2.7) is
+refused with reason `protocol`, never run without the ref.
+
+Not yet: issuing the credential automatically over SSH, and binary artifacts.
 
 ## MCP servers and skills for agent steps
 

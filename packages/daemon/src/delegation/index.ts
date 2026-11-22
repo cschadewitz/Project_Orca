@@ -39,6 +39,7 @@ export {
   DELEGATION_METHODS,
   openDaemonSession,
   recordsOrigin,
+  takesGitRef,
   type DelegationRefusalReason,
   type DelegationTransport,
   type OpenDaemonSessionOptions,
@@ -161,7 +162,7 @@ export function readRemoteCredential(remote: RemoteDaemonSpec, file: string): st
 export function delegationBinding(
   enrollment: Enrollment,
   profile: ConnectionProfile,
-  agent: Pick<AgentSpec, "workflow" | "promptVar">,
+  agent: Pick<AgentSpec, "workflow" | "promptVar" | "gitRef">,
   configGeneration: string,
 ): DelegationBinding {
   const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -180,6 +181,8 @@ export function delegationBinding(
       serverCommand: profile.serverCommand ?? null,
       serverConfig: profile.serverConfig ?? null,
       promptVar: agent.promptVar ?? "prompt",
+      // Only when set, so a binding made before refs existed keeps its digest.
+      ...(agent.gitRef !== undefined ? { gitRef: agent.gitRef } : {}),
     }),
   };
 }

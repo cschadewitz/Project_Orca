@@ -226,7 +226,41 @@ it("records a stated origin on the admitted run, and a key replayed with another
   expect(await f.orc.listRuns()).toHaveLength(1);
   // Execution's first-attachment fence checks the origin the admission recorded.
   await f.orc.run(runId);
-  expect((await f.orc.getState(runId)).run.status).not.toBe("created");
+  const after = (await f.orc.getState(runId)).run;
+  expect(after).toMatchObject({ status: "completed" });
+});
+
+it("refuses a named git ref the workspace cannot check out, before anything is admitted (#883)", async () => {
+  const f = await fixture();
+  await expect(
+    f.service.admitRun({ workflowId: "program", gitRef: "feature" }, { idempotencyKey: "ref" }, f.authority),
+  ).rejects.toMatchObject({ code: "NOT_SUPPORTED", details: { gitRef: "feature" } });
+  expect(await f.orc.listRuns()).toEqual([]);
+  expect(f.start).not.toHaveBeenCalled();
+});
+
+it("admits a root run on its own checkout of a named git ref, and attaches it (#883)", async () => {
+  const f = await fixture(undefined, true);
+  const run = (cwd: string, ...args: string[]) =>
+    execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const upstream = join(f.dir, "..", `${f.dir.split("/").pop()}-upstream.git`);
+  dirs.push(upstream);
+  run(f.dir, "clone", "-q", "--bare", f.dir, upstream);
+  run(upstream, "branch", "feature", "main");
+  run(f.dir, "remote", "add", "origin", upstream);
+  const admitted = await f.service.admitRun(
+    { workflowId: "program", gitRef: "feature" },
+    { idempotencyKey: "ref-ok" },
+    f.authority,
+  );
+  expect(admitted).toMatchObject({ state: "resolved", result: { state: "accepted" } });
+  const runId = (admitted as { result: { runId: string } }).result.runId;
+  const workspace = (await f.orc.getState(runId)).run.workspace;
+  expect(workspace.rootProvisioning).toMatchObject({ runId, ref: "feature" });
+  expect(run(workspace.cwd, "rev-parse", "HEAD")).toBe(run(upstream, "rev-parse", "feature"));
+  await f.orc.run(runId);
+  const after = (await f.orc.getState(runId)).run;
+  expect(after).toMatchObject({ status: "completed" });
 });
 
 it("refuses an origin that is not canonical ids before anything is claimed or admitted (#883)", async () => {

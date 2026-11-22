@@ -7,7 +7,7 @@ import { LocalHost } from "@orca/agents";
 import { OrcaError, type Workspace } from "@orca/core";
 import { z } from "zod";
 import type { GitWorktreeProviderOptions } from "./git-worktree.js";
-import type { ProvisionInput } from "./provider.js";
+import { COMMIT_ID, GIT_REF, gitRefRefusal, type ProvisionInput } from "./provider.js";
 
 const exec = promisify(execFile);
 const Receipt = z.strictObject({
@@ -18,6 +18,8 @@ const Receipt = z.strictObject({
   baseCommit: z.string().regex(/^[a-f0-9]{40,64}$/),
   branch: z.string(),
   path: z.string(),
+  /** The named ref the run was given (#883), fetched once; `baseCommit` is what it named then. */
+  ref: z.string().optional(),
 });
 type Receipt = z.infer<typeof Receipt>;
 const refuse = () =>
@@ -26,6 +28,15 @@ const refuse = () =>
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const result = await exec("git", args, { cwd });
   return result.stdout.trim();
+}
+
+async function succeeds(cwd: string, ...args: string[]): Promise<boolean> {
+  try {
+    await exec("git", args, { cwd });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -91,24 +102,72 @@ export class OwnedRootWorktree {
     return { repo, root, path, branch, commonDir, receipts, receiptPath: join(receipts, `${runId}.json`) };
   }
 
+  private get remote(): string {
+    return this.o.fetchRemote ?? "origin";
+  }
+
+  /**
+   * Whether `ref` can give a run its own checkout (#883), without changing the repository: a
+   * commit this repository has, or a ref the fetch remote advertises. Run before admission.
+   */
+  async checkRef(ref: string): Promise<void> {
+    if (!GIT_REF.test(ref)) throw gitRefRefusal(ref, "it is not a branch, tag or commit name");
+    if (!this.o.isolateRoots || !(this.o.host instanceof LocalHost) || process.platform !== "linux")
+      throw gitRefRefusal(ref, "owned root worktrees are not available on this daemon");
+    const repo = resolve(this.o.repo);
+    if (COMMIT_ID.test(ref)) {
+      if (await succeeds(repo, "cat-file", "-e", `${ref}^{commit}`)) return;
+      throw gitRefRefusal(ref, "this repository does not have that commit");
+    }
+    if (!(await succeeds(repo, "check-ref-format", "--allow-onelevel", ref)))
+      throw gitRefRefusal(ref, "it is not a valid ref name");
+    if (!(await succeeds(repo, "ls-remote", "--exit-code", "--", this.remote, ref)))
+      throw gitRefRefusal(ref, `the '${this.remote}' remote does not have it`);
+  }
+
+  /** The commit `ref` names now: a known commit as is, else fetched under a run-private ref. */
+  private async fetchRef(repo: string, runId: string, ref: string): Promise<string> {
+    if (COMMIT_ID.test(ref) && (await succeeds(repo, "cat-file", "-e", `${ref}^{commit}`)))
+      return git(repo, "rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`);
+    const local = `refs/orca/fetched/${runId}`;
+    try {
+      await git(repo, "fetch", "--no-tags", "--no-write-fetch-head", "--", this.remote, `+${ref}:${local}`);
+      return await git(repo, "rev-parse", "--verify", "--end-of-options", `${local}^{commit}`);
+    } catch {
+      throw gitRefRefusal(ref, `fetching it from '${this.remote}' failed`);
+    } finally {
+      await git(repo, "update-ref", "-d", local).catch(() => undefined);
+    }
+  }
+
   async provision(input: ProvisionInput): Promise<Workspace> {
     const identity = await this.identity(input.runId);
     const { repo, root, path, branch, commonDir, receipts, receiptPath } = identity;
     // Freeze before any external Git mutation; the receipt is the only source on retry.
     if (await exists(receiptPath)) {
       const receipt = await this.readReceipt(input.runId);
+      if (receipt.ref !== input.gitRef) throw refuse();
       const workspace = this.workspace(receipt);
       await this.validate(workspace);
       return workspace;
     }
-    const baseCommit = await git(
+    if (input.gitRef !== undefined && !GIT_REF.test(input.gitRef))
+      throw gitRefRefusal(input.gitRef, "it is not a branch, tag or commit name");
+    // A named ref is fetched before the reservation: a fetch changes no worktree, and the
+    // commit it named is frozen in the receipt, so a retry never fetches again.
+    const baseCommit = input.gitRef
+      ? await this.fetchRef(repo, input.runId, input.gitRef)
+      : await git(repo, "rev-parse", "--verify", "--end-of-options", `${this.o.baseBranch ?? "main"}^{commit}`);
+    const receipt = Receipt.parse({
+      version: 1,
+      runId: input.runId,
       repo,
-      "rev-parse",
-      "--verify",
-      "--end-of-options",
-      `${this.o.baseBranch ?? "main"}^{commit}`,
-    );
-    const receipt = Receipt.parse({ version: 1, runId: input.runId, repo, commonDir, baseCommit, branch, path });
+      commonDir,
+      baseCommit,
+      branch,
+      path,
+      ...(input.gitRef ? { ref: input.gitRef } : {}),
+    });
     if (await exists(path)) throw refuse();
     if ((await git(repo, "for-each-ref", "--format=%(refname)", `refs/heads/${branch}`)).length) throw refuse();
     await mkdir(receipts, { recursive: true, mode: 0o700 });
@@ -138,7 +197,11 @@ export class OwnedRootWorktree {
       repo: receipt.repo,
       branch: receipt.branch,
       provider: "git-worktree",
-      rootProvisioning: { runId: receipt.runId, baseCommit: receipt.baseCommit },
+      rootProvisioning: {
+        runId: receipt.runId,
+        baseCommit: receipt.baseCommit,
+        ...(receipt.ref ? { ref: receipt.ref } : {}),
+      },
     };
   }
 
@@ -166,7 +229,8 @@ export class OwnedRootWorktree {
       workspace.branch !== receipt.branch ||
       workspace.hostId !== this.o.host.id ||
       workspace.provider !== "git-worktree" ||
-      workspace.rootProvisioning.baseCommit !== receipt.baseCommit
+      workspace.rootProvisioning.baseCommit !== receipt.baseCommit ||
+      workspace.rootProvisioning.ref !== receipt.ref
     )
       throw refuse();
     const { receiptPath } = await this.identity(receipt.runId);

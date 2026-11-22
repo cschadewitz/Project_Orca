@@ -5,7 +5,7 @@
  */
 import { type AgentHost, shellQuote } from "@orca/agents";
 import { OrcaError, type Workspace } from "@orca/core";
-import { type ProvisionInput, WORK_ITEM_BRANCH_PREFIX, type WorkspaceProvider } from "./provider.js";
+import { gitRefRefusal, type ProvisionInput, WORK_ITEM_BRANCH_PREFIX, type WorkspaceProvider } from "./provider.js";
 import { OwnedRootWorktree } from "./owned-root-worktree.js";
 
 export interface GitWorktreeProviderOptions {
@@ -17,14 +17,25 @@ export interface GitWorktreeProviderOptions {
   baseBranch?: string;
   branchPrefix?: string;
   isolateRoots?: boolean;
+  /** The git remote a run's named ref is fetched from (#883). Default `origin`. */
+  fetchRemote?: string;
 }
 
 export class GitWorktreeProvider implements WorkspaceProvider {
   readonly name = "git-worktree";
   constructor(private readonly o: GitWorktreeProviderOptions) {}
 
+  /** Only an owned root (`isolateRoots`) takes a named ref: each such run gets its own checkout. */
+  async checkRef(ref: string): Promise<void> {
+    if (!this.o.isolateRoots)
+      throw gitRefRefusal(ref, "the remote's workspace gives runs their own checkout only with isolateRoots");
+    await new OwnedRootWorktree(this.o).checkRef(ref);
+  }
+
   async provision(input: ProvisionInput): Promise<Workspace> {
     const host = this.o.host;
+    if (input.gitRef && (input.workItem || input.parent || !this.o.isolateRoots))
+      throw gitRefRefusal(input.gitRef, "only a root run of an isolateRoots workspace takes a ref");
     if (!input.workItem && !input.parent && this.o.isolateRoots) return new OwnedRootWorktree(this.o).provision(input);
     // Runs without a work item (e.g. the program run itself) work in the main checkout.
     if (!input.workItem)

@@ -18,11 +18,34 @@ export interface ProvisionInput {
   request?: Request | undefined;
   workItem?: WorkItem | undefined;
   parent?: Workspace | undefined;
+  /**
+   * A named git ref (a branch, tag or commit) the run works from (#883): the provider fetches
+   * it and gives the run its own checkout of it. Only a provider with `checkRef` takes one.
+   */
+  gitRef?: string | undefined;
+}
+
+/**
+ * A git ref a run may name: a branch, tag or full ref name, or a full commit id. Never an
+ * option (`-x`), a revision expression (`a..b`, `@{1}`, `^`, `~`, `:`), or a path a ref
+ * cannot be. The provider still checks it with `git check-ref-format`.
+ */
+export const GIT_REF = /^(?!@$)(?![-/.])(?!.*(?:\.\.|\/\/|@\{|\.lock(?:\/|$)|\/\.|\.$|\/$))[A-Za-z0-9._/+@-]{1,200}$/;
+export const COMMIT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+export function gitRefRefusal(ref: string, why: string): OrcaError {
+  return new OrcaError("NOT_SUPPORTED", `git ref '${ref.slice(0, 200)}' cannot be used: ${why}`, {
+    gitRef: ref.slice(0, 200),
+  });
 }
 
 export interface WorkspaceProvider {
   readonly name: string;
   provision(input: ProvisionInput): Promise<Workspace>;
+  /**
+   * Side-effect-free check, before a run naming `ref` is admitted, that this provider can give
+   * it a checkout of that ref (#883). Absent: the provider refuses every ref.
+   */
+  checkRef?(ref: string): Promise<void>;
   /** Recheck owned registration before attaching execution; never repairs or cleans up. */
   validate?(workspace: Workspace): Promise<void>;
   /** Optional cleanup hook (e.g. remove worktree) - never called automatically. */

@@ -32,6 +32,8 @@ export const DirectAdmissionCommandSchema = z.strictObject({
   requestId: z.string().min(1).optional(),
   workItemId: z.string().min(1).optional(),
   origin: RunOriginSchema.optional(),
+  /** A named git ref the run works from (#883): checked before admission, fetched at creation. */
+  gitRef: z.string().min(1).max(200).optional(),
   fence: z.literal(true).optional(),
 });
 /** Reserved orchestrator/generation integration supplies this explicit capability. */
@@ -178,6 +180,7 @@ export class DirectAdmissionService {
       ...(command.requestId ? { requestId: command.requestId } : {}),
       ...(command.workItemId ? { workItemId: command.workItemId } : {}),
       ...(command.origin ? { origin: command.origin } : {}),
+      ...(command.gitRef !== undefined ? { gitRef: command.gitRef } : {}),
     };
   }
   private async recover(command: DirectAdmissionCommand, context: RetryContext): Promise<DirectAdmissionResult> {
@@ -231,7 +234,8 @@ export class DirectAdmissionService {
       root.parentRunId ||
       root.requestId !== material.command.requestId ||
       root.workItemId !== material.command.workItemId ||
-      canonicalJson(root.origin ?? null) !== canonicalJson(material.command.origin ?? null)
+      canonicalJson(root.origin ?? null) !== canonicalJson(material.command.origin ?? null) ||
+      root.workspace.rootProvisioning?.ref !== material.command.gitRef
     )
       throw unavailable();
     return true;
@@ -297,6 +301,7 @@ export class DirectAdmissionService {
       ...(material.command.requestId ? { requestId: material.command.requestId } : {}),
       ...(material.command.workItemId ? { workItemId: material.command.workItemId } : {}),
       ...(material.command.origin ? { origin: material.command.origin } : {}),
+      ...(material.command.gitRef !== undefined ? { gitRef: material.command.gitRef } : {}),
     };
   }
   private async verifyAccepted(

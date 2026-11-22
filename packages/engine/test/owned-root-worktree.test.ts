@@ -237,3 +237,44 @@ it("refuses remote opt-in roots rather than falling back to the shared checkout"
   await expect(provider.provision(f.input)).rejects.toMatchObject({ code: "RUN_STATE" });
   await expect(fs.stat(f.receipt)).rejects.toMatchObject({ code: "ENOENT" });
 });
+
+/** A repository whose `origin` is a bare repository with a `feature` branch ahead of `main`. */
+async function refFixture() {
+  const f = await rootFixture();
+  const upstream = join(f.dir, "upstream.git");
+  git(f.dir, "clone", "-q", "--bare", f.repo, upstream);
+  const work = join(f.dir, "upstream-work");
+  git(f.dir, "clone", "-q", upstream, work);
+  git(work, "checkout", "-q", "-b", "feature");
+  commit(work);
+  git(work, "push", "-q", "origin", "feature");
+  git(f.repo, "remote", "add", "origin", upstream);
+  return { ...f, feature: git(work, "rev-parse", "HEAD") };
+}
+
+it("checks out a named ref fetched from the remote into a run's own root (#883)", async () => {
+  const f = await refFixture();
+  // The local repository has never seen the branch: checking and provisioning fetch it.
+  await expect(f.provider.checkRef("feature")).resolves.toBeUndefined();
+  const workspace = await f.provider.provision({ ...f.input, gitRef: "feature" });
+  expect(workspace.rootProvisioning).toEqual({ runId: f.input.runId, baseCommit: f.feature, ref: "feature" });
+  expect(git(workspace.cwd, "rev-parse", "HEAD")).toBe(f.feature);
+  // The run-private fetch ref is gone; the run's own branch holds the commit.
+  expect(git(f.repo, "for-each-ref", "refs/orca")).toBe("");
+  // Reuse is from the receipt, never a second fetch, and only for the same ref.
+  expect(await new GitWorktreeProvider(f.options).provision({ ...f.input, gitRef: "feature" })).toEqual(workspace);
+  await expect(new GitWorktreeProvider(f.options).provision(f.input)).rejects.toThrow("unavailable");
+  // A commit the repository now has is taken as is.
+  await expect(f.provider.checkRef(f.feature)).resolves.toBeUndefined();
+});
+
+it("refuses a ref it cannot check out, before anything is fetched or reserved (#883)", async () => {
+  const f = await refFixture();
+  for (const ref of ["-u", "a..b", "main@{1}", "x:y", "nope"])
+    await expect(f.provider.checkRef(ref)).rejects.toMatchObject({ code: "NOT_SUPPORTED", details: { gitRef: ref } });
+  await expect(f.provider.checkRef("0".repeat(40))).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+  const shared = new GitWorktreeProvider({ ...f.options, isolateRoots: false });
+  await expect(shared.checkRef("feature")).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+  await expect(shared.provision({ ...f.input, gitRef: "feature" })).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+  await expect(fs.readdir(join(f.repo, ".git", "orca-root-workspaces"))).rejects.toThrow();
+});

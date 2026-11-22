@@ -30,6 +30,8 @@ export const WorkspaceProviderConfigSchema = z.discriminatedUnion("provider", [
     branchPrefix: z.string().default("orca/"),
     /** Opt-in owned direct/root worktrees on the built-in local Linux host. */
     isolateRoots: z.boolean().optional(),
+    /** The git remote a delegated run's named ref is fetched from (#883). Default `origin`. */
+    fetchRemote: z.string().min(1).optional(),
     hostId: z.string().default(LOCAL_HOST_ID),
   }),
   /** Inside a Kepler task: reuse the task's worktrees. */

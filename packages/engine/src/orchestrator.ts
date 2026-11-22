@@ -113,7 +113,7 @@ import { RunContext } from "./run-context.js";
 import type { LiveHumanInput, ExecutionResumeAuthority, ExecutionActivity } from "./live-input.js";
 import { protectExecutionInputs } from "./execution-inputs.js";
 import { checkpointSeed } from "./checkpoint-attempt.js";
-import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
+import { gitRefRefusal, LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 import {
   capabilityRefusal,
   deliveryIssues,
@@ -253,6 +253,12 @@ export interface StartRunOptions {
   parentStepRunId?: string;
   /** A delegated run's parent workspace, run and step (#883); recorded on `run.created`. */
   origin?: RunOrigin;
+  /**
+   * A named git ref (branch, tag or commit) a root run works from (#883). The workspace
+   * provider checks it before admission and fetches it into the run's own checkout; the run's
+   * `workspace.rootProvisioning` records the ref and the commit it named.
+   */
+  gitRef?: string;
   /**
    * Per-run selection (#186): role -> agent, model, item workflow, template pack. Validated
    * before `run.created` is appended and recorded in it, so a replay resolves the same agents.
@@ -593,6 +599,18 @@ export class Orchestrator {
         { errors, warnings },
       );
     }
+    if (opts.gitRef !== undefined) {
+      // Only a root run with no inherited or supplied workspace gets a checkout of its own.
+      if (opts.workspace || opts.parentRunId || opts.workItemId || opts.requestId || opts.inline || opts.checkpoint)
+        throw gitRefRefusal(opts.gitRef, "only a root run with a workspace of its own takes a ref");
+      const provider =
+        generation && this.generationWorkspaceProvider
+          ? this.generationWorkspaceProvider(generation)
+          : this.workspaceProvider;
+      if (!provider.checkRef)
+        throw gitRefRefusal(opts.gitRef, `the '${provider.name}' workspace does not give runs a checkout of a ref`);
+      await provider.checkRef(opts.gitRef);
+    }
     return { definition: def, vars: inputs.vars, ...(generation ? { generation } : {}) };
   }
 
@@ -686,7 +704,11 @@ export class Orchestrator {
         request,
         workItem,
         parent: opts.parentRunId ? (await this.executionState(opts.parentRunId)).run.workspace : undefined,
+        ...(opts.gitRef !== undefined ? { gitRef: opts.gitRef } : {}),
       }));
+    // A provider that ignored the ref must not leave the run on some other checkout.
+    if (opts.gitRef !== undefined && workspace.rootProvisioning?.ref !== opts.gitRef)
+      throw gitRefRefusal(opts.gitRef, "the workspace provider did not check it out");
     const created: Extract<OrcaEventInput, { type: "run.created" }> = {
       type: "run.created",
       runId,

@@ -387,6 +387,7 @@ export class ConfigurationGenerations {
         directAdmissionId,
         admissionRunId,
         origin,
+        gitRef,
       } = options;
       const requestId = recordedRequestId ?? options.requestId;
       const vars =
@@ -436,6 +437,7 @@ export class ConfigurationGenerations {
         ...(parentStepRunId ? { parentStepRunId } : {}),
         ...(overrides ? { overrides: structuredClone(overrides) } : {}),
         ...(origin ? { origin: structuredClone(origin) } : {}),
+        ...(gitRef !== undefined ? { gitRef } : {}),
       };
     };
     return Object.freeze({

@@ -229,6 +229,7 @@ export function makeWorkspaceProvider(
         baseBranch: ws.baseBranch,
         branchPrefix: ws.branchPrefix,
         ...(ws.isolateRoots !== undefined ? { isolateRoots: ws.isolateRoots } : {}),
+        ...(ws.fetchRemote !== undefined ? { fetchRemote: ws.fetchRemote } : {}),
         ...(ws.worktreeRoot
           ? { worktreeRoot: isAbsolute(ws.worktreeRoot) ? ws.worktreeRoot : resolve(configDir, ws.worktreeRoot) }
           : {}),
