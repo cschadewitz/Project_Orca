@@ -44,6 +44,7 @@ import {
 } from "@orca/core";
 import {
   ConfigurationGenerations,
+  capabilityChecker,
   FileAdmissionStore,
   MemoryAdmissionStore,
   autoHumanInput,
@@ -343,7 +344,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       mode: isClosedUpdateBootstrap() ? "read" : "write",
     });
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
-  const agents = AgentRegistry.fromConfig(config);
+  const agents = AgentRegistry.fromConfig(config, { configDir: resolve(configDir) });
   const assets = await releaseAssets(config);
   const templates = await loadTemplates(assets.templates, configDir);
   const workflows = await loadWorkflows(assets.workflows, configDir);
@@ -466,6 +467,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       hasTemplate: (id) => templates.has(id),
       hasWorkflow: (id) => workflows.has(id),
       hasAgent: (s) => agents.canResolve(s),
+      checkCapabilities: capabilityChecker(agents),
       validateCustomNode: (n) => executors.validateNode(n),
     });
     for (const e of r.errors) problems.push(`${def.id}: ${e.path}: ${e.message}`);

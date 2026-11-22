@@ -124,6 +124,11 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * `step.waiting.on` (a plain string). Optional fields on open objects, so a 2.0 client strips
  * them and a 2.0 daemon never sends them. No capability is minted, because a 2.0 client parses
  * `hello.capabilities` with a closed enum; the fields' presence says whether a daemon has them.
+ *
+ * 2.1 also carries scoped capabilities (#335), unreleased alongside it: an optional
+ * `capabilities` manifest (ids and sources only) on each launch selection in a preflight
+ * result and in run provenance, and optional `capabilities` fields in config and workflow
+ * documents. Optional fields again, stripped by a 2.0 peer.
  */
 /**
  * 2.2 adds the `search` read method (#255): a new name in `READ_METHODS`, answered under

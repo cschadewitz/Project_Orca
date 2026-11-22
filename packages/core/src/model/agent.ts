@@ -6,6 +6,10 @@
  * such as `claude-code-acp`, `codex acp`, `gemini --acp`, `opencode acp`.
  */
 import { z } from "zod";
+import { AuthorityCapabilityScopeSchema } from "./capabilities.js";
+
+// Scoped capabilities (#335) belong with the agent model they select for.
+export * from "./capabilities.js";
 
 export const LOCAL_HOST_ID = "local";
 
@@ -571,8 +575,17 @@ export const AgentSpecSchema = z.object({
    * `effectivePermissionPolicy`.
    */
   permissions: PermissionPolicySchema.default(() => ({ rules: [] })),
-  /** MCP servers passed in `session/new`. */
+  /**
+   * MCP servers passed in `session/new`. The legacy inline form: each one is on for this
+   * agent, as if it were in the catalog and enabled here. `capabilities` below selects from
+   * the shared catalog instead (#335).
+   */
   mcpServers: z.array(McpServerConfigSchema).default([]),
+  /**
+   * This agent's scope over the `capabilities` catalog (#335): what it gets by default, and
+   * (`available`) what workflows and nodes may turn on for it. See `capabilities.ts`.
+   */
+  capabilities: AuthorityCapabilityScopeSchema.optional(),
   /** Reuse one ACP session for a whole run, or open a fresh one per step. */
   sessionMode: z.enum(["per-step", "per-run"]).default("per-step"),
   /** Per-turn wall clock limit. */
