@@ -764,9 +764,14 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
     });
     tunnels.push(tunnel);
     const url = await tunnel.open();
-    await expect(fetch(url, { signal: AbortSignal.timeout(20_000) })).rejects.toThrow();
-    // Windows retries a refused loopback connect for about two seconds before giving up.
-    for (let i = 0; i < 4_000 && !tunnel.remoteRefused(); i++) await new Promise((r) => setTimeout(r, 5));
+    // Either way nothing answers, and the tunnel itself is not at fault.
+    await expect(fetch(url, { signal: AbortSignal.timeout(10_000) })).rejects.toThrow();
+    expect(tunnel.state.phase).toBe("open");
+    // The Windows OpenSSH server never refuses the channel to a closed port (its stdio
+    // forward stays open with nothing behind it), so there is no refusal to tell apart
+    // there; a request simply times out. OpenSSH elsewhere refuses at once.
+    if (process.platform === "win32") return;
+    for (let i = 0; i < 2_000 && !tunnel.remoteRefused(); i++) await new Promise((r) => setTimeout(r, 5));
     expect(
       tunnel.remoteRefused(),
       said
