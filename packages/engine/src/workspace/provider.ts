@@ -19,19 +19,31 @@ export interface ProvisionInput {
   workItem?: WorkItem | undefined;
   parent?: Workspace | undefined;
   /**
-   * A named git ref (a branch, tag or commit) the run works from (#883): the provider fetches
-   * it and gives the run its own checkout of it. Only a provider with `checkRef` takes one.
+   * A fully qualified branch or tag (`refs/heads/…`, `refs/tags/…`) the run works from (#883):
+   * the provider fetches it from its fetch remote and gives the run its own checkout of it.
+   * Only a provider with `checkRef` takes one, and only a ref its administrator allowed.
    */
   gitRef?: string | undefined;
 }
 
 /**
- * A git ref a run may name: a branch, tag or full ref name, or a full commit id. Never an
- * option (`-x`), a revision expression (`a..b`, `@{1}`, `^`, `~`, `:`), or a path a ref
- * cannot be. The provider still checks it with `git check-ref-format`.
+ * A git ref a run may name: a fully qualified branch or tag (`refs/heads/…`, `refs/tags/…`),
+ * so Git's implicit short-name matching never picks between a branch and a tag. Never a
+ * commit id (a commit the repository happens to hold has no provenance from the remote), an
+ * option, a revision expression (`a..b`, `@{1}`, `^`, `~`, `:`), or a path a ref cannot be.
+ * The provider still checks it with `git check-ref-format`.
  */
-export const GIT_REF = /^(?!@$)(?![-/.])(?!.*(?:\.\.|\/\/|@\{|\.lock(?:\/|$)|\/\.|\.$|\/$))[A-Za-z0-9._/+@-]{1,200}$/;
-export const COMMIT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+export const GIT_REF =
+  /^refs\/(?:heads|tags)\/(?![-/.])(?!.*(?:\.\.|\/\/|@\{|\.lock(?:\/|$)|\/\.|\.$|\/$))[A-Za-z0-9._/+@-]{1,190}$/;
+
+/**
+ * Whether the workspace administrator's `allowedRefs` (#883) admit `ref`: a pattern is a fully
+ * qualified ref, matched exactly, or a prefix ending in `/*`, matching every ref under it.
+ * No patterns admit nothing, so a `runs.admit` grant alone never selects a ref.
+ */
+export function refAllowed(ref: string, patterns: readonly string[] | undefined): boolean {
+  return (patterns ?? []).some((p) => (p.endsWith("/*") ? ref.startsWith(p.slice(0, -1)) : ref === p));
+}
 export function gitRefRefusal(ref: string, why: string): OrcaError {
   return new OrcaError("NOT_SUPPORTED", `git ref '${ref.slice(0, 200)}' cannot be used: ${why}`, {
     gitRef: ref.slice(0, 200),

@@ -23,7 +23,7 @@ export const RunsAdmitParamsSchema = RunsStartParamsSchema.extend({
   /** Recorded on the run (not in the audit log); the admitting principal's statement, not authority. */
   origin: RunOriginParamsSchema.optional(),
   /**
-   * Protocol 2.7 (#883): a named git ref (branch, tag or commit) the run works from. The
+   * Protocol 2.7 (#883): a named git ref (a fully qualified branch or tag) the run works from. The
    * daemon's workspace checks it before admitting and fetches it into the run's own checkout.
    */
   gitRef: z.string().min(1).max(200).optional(),

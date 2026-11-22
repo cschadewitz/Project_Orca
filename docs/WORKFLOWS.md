@@ -413,7 +413,7 @@ agents:
     profile: build-box                    # a remotes[].id
     workflow: build                       # the workflow the remote daemon runs per step
     # promptVar: prompt                   # the remote workflow variable the task arrives in
-    # gitRef: release/0.8                 # a branch, tag or commit the remote run works from
+    # gitRef: refs/heads/release/0.8      # a full branch or tag the remote allows (below)
     roles: [builder]
 ```
 
@@ -499,12 +499,20 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
 
 ### Working from a named git ref
 
-With `gitRef`, each remote run works from that branch, tag or full commit id. The remote
-daemon checks the ref before it admits the run, then fetches it from its workspace's fetch
-remote (`workspace.fetchRemote`, default `origin`) and gives the run its own checkout of the
-commit it named, recorded as the run's `workspace.rootProvisioning` (`ref` and
-`baseCommit`). A retried or resumed run keeps that commit; nothing is fetched twice. This
-needs a remote whose workspace gives each run its own checkout:
+With `gitRef`, each remote run works from that branch or tag, named in full
+(`refs/heads/feature/login`, `refs/tags/v1.2.0`): a short name could match a branch and a tag,
+and a commit id is not accepted because a commit the remote's repository happens to hold says
+nothing about where it came from. The remote daemon checks the ref before it admits the run,
+then fetches it from its workspace's fetch remote (`workspace.fetchRemote`, default `origin`)
+and gives the run its own checkout of the commit it named, recorded as the run's
+`workspace.rootProvisioning` (`ref` and `baseCommit`). A retried or resumed run keeps that
+commit; nothing is fetched twice.
+
+Choosing a ref replaces the remote's default checkout, so it is the remote administrator's
+decision, not the caller's: a `runs.admit` grant alone never lets a caller pick one. The remote
+names the refs it allows in `workspace.allowedRefs`, each a full ref or a prefix ending in
+`/*`, and refuses every other ref (and every ref when the list is absent or empty). It also
+needs a workspace that gives each run its own checkout:
 
 ```yaml
 # the remote daemon's config
@@ -512,15 +520,28 @@ workspace:
   provider: git-worktree
   repo: /srv/checkouts/app
   isolateRoots: true          # each root run gets its own worktree (local Linux host)
+  allowedRefs:                # the refs a delegated run may name; none by default
+    - refs/heads/main
+    - refs/heads/release/*
   # fetchRemote: origin
 ```
 
+The remote checks the ref under exactly its name on the fetch remote (never Git's suffix
+matching) and fetches only that ref, without tags or submodules. Listing and fetching run
+with no prompts (no terminal, askpass or credential-manager prompt, and batch-mode SSH unless
+`core.sshCommand` is set) and a deadline (30 seconds to list, 2 minutes to fetch); a remote
+that does not answer refuses the ref. The checkout is prepared outside any agent sandbox, so
+it runs no repository hook, fsmonitor command or submodule recursion, and every configured
+filter driver is switched off: files are written as stored (a Git LFS file arrives as its
+pointer).
+
 ORCA does not push anything: the ref must already be on that remote (code sync beyond
 fetching a named ref is out of scope). A remote that cannot check the ref out (another
-workspace provider, an unknown ref, a ref that is not a plain branch, tag or commit name)
-fails the step with `DELEGATION_REFUSED` and reason `git-ref` before any run is admitted. A
-remote whose `hello` does not list `gitRef` in `admitFields` (older than protocol 2.7) is
-refused with reason `protocol`, never run without the ref.
+workspace provider, a ref it does not allow, an unknown ref, a ref that is not a full branch
+or tag name, a fetch remote that fails or times out) fails the step with `DELEGATION_REFUSED`
+and reason `git-ref` before any run is admitted. A remote whose `hello` does not list `gitRef`
+in `admitFields` (older than protocol 2.7) is refused with reason `protocol`, never run
+without the ref.
 
 Not yet: issuing the credential automatically over SSH, and binary artifacts.
 

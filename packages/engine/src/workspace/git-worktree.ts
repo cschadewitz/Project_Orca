@@ -19,6 +19,13 @@ export interface GitWorktreeProviderOptions {
   isolateRoots?: boolean;
   /** The git remote a run's named ref is fetched from (#883). Default `origin`. */
   fetchRemote?: string;
+  /**
+   * The refs a delegated run may name (#883): fully qualified refs, or prefixes ending in `/*`.
+   * Empty or absent, every ref is refused.
+   */
+  allowedRefs?: readonly string[];
+  /** Deadline for each remote Git operation a ref needs. Default 30s to list, 120s to fetch. */
+  remoteTimeoutMs?: number;
 }
 
 export class GitWorktreeProvider implements WorkspaceProvider {

@@ -1089,7 +1089,7 @@ describe("delegation through a proxy the test controls (#883)", () => {
       type: "orca-daemon",
       profile: "direct",
       workflow: "remote-task",
-      gitRef: "feature/x",
+      gitRef: "refs/heads/feature/x",
     });
     const session = await open(proxy.transport(), receipts, { agent });
     const before = (await runsOf("remote-task")).length;
@@ -1100,7 +1100,7 @@ describe("delegation through a proxy the test controls (#883)", () => {
     expect(isOrcaError(error, "DELEGATION_REFUSED")).toBe(true);
     expect((error as { details: { reason: string; gitRef: string } }).details).toMatchObject({
       reason: "git-ref",
-      gitRef: "feature/x",
+      gitRef: "refs/heads/feature/x",
     });
     expect(await runsOf("remote-task")).toHaveLength(before);
     await session.close();
@@ -1114,7 +1114,10 @@ describe("delegation through a proxy the test controls (#883)", () => {
     expect(
       AgentSpecSchema.safeParse({ id: "a", type: "orca-daemon", profile: "p", workflow: "w", gitRef: "a..b" }).success,
     ).toBe(false);
-    expect(AgentSpecSchema.safeParse({ id: "a", command: "x", gitRef: "main" }).success).toBe(false);
+    expect(
+      AgentSpecSchema.safeParse({ id: "a", type: "orca-daemon", profile: "p", workflow: "w", gitRef: "main" }).success,
+    ).toBe(false);
+    expect(AgentSpecSchema.safeParse({ id: "a", command: "x", gitRef: "refs/heads/main" }).success).toBe(false);
   });
 
   it("refuses an origin that is not canonical ids, before anything is admitted", async () => {

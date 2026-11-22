@@ -37,6 +37,7 @@ async function fixture(failAt?: "inputs" | "created" | "ownership" | "publicatio
       repo: dir,
       worktreeRoot: join(dir, "trees"),
       isolateRoots: true,
+      allowedRefs: ["refs/heads/*"],
     });
   }
   const faults = {
@@ -233,8 +234,8 @@ it("records a stated origin on the admitted run, and a key replayed with another
 it("refuses a named git ref the workspace cannot check out, before anything is admitted (#883)", async () => {
   const f = await fixture();
   await expect(
-    f.service.admitRun({ workflowId: "program", gitRef: "feature" }, { idempotencyKey: "ref" }, f.authority),
-  ).rejects.toMatchObject({ code: "NOT_SUPPORTED", details: { gitRef: "feature" } });
+    f.service.admitRun({ workflowId: "program", gitRef: "refs/heads/feature" }, { idempotencyKey: "ref" }, f.authority),
+  ).rejects.toMatchObject({ code: "NOT_SUPPORTED", details: { gitRef: "refs/heads/feature" } });
   expect(await f.orc.listRuns()).toEqual([]);
   expect(f.start).not.toHaveBeenCalled();
 });
@@ -249,14 +250,14 @@ it("admits a root run on its own checkout of a named git ref, and attaches it (#
   run(upstream, "branch", "feature", "main");
   run(f.dir, "remote", "add", "origin", upstream);
   const admitted = await f.service.admitRun(
-    { workflowId: "program", gitRef: "feature" },
+    { workflowId: "program", gitRef: "refs/heads/feature" },
     { idempotencyKey: "ref-ok" },
     f.authority,
   );
   expect(admitted).toMatchObject({ state: "resolved", result: { state: "accepted" } });
   const runId = (admitted as { result: { runId: string } }).result.runId;
   const workspace = (await f.orc.getState(runId)).run.workspace;
-  expect(workspace.rootProvisioning).toMatchObject({ runId, ref: "feature" });
+  expect(workspace.rootProvisioning).toMatchObject({ runId, ref: "refs/heads/feature" });
   expect(run(workspace.cwd, "rev-parse", "HEAD")).toBe(run(upstream, "rev-parse", "feature"));
   await f.orc.run(runId);
   const after = (await f.orc.getState(runId)).run;

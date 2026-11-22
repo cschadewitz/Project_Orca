@@ -254,7 +254,7 @@ export interface StartRunOptions {
   /** A delegated run's parent workspace, run and step (#883); recorded on `run.created`. */
   origin?: RunOrigin;
   /**
-   * A named git ref (branch, tag or commit) a root run works from (#883). The workspace
+   * A named git ref (a fully qualified branch or tag) a root run works from (#883). The workspace
    * provider checks it before admission and fetches it into the run's own checkout; the run's
    * `workspace.rootProvisioning` records the ref and the commit it named.
    */

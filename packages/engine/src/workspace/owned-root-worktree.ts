@@ -7,7 +7,7 @@ import { LocalHost } from "@orca/agents";
 import { OrcaError, type Workspace } from "@orca/core";
 import { z } from "zod";
 import type { GitWorktreeProviderOptions } from "./git-worktree.js";
-import { COMMIT_ID, GIT_REF, gitRefRefusal, type ProvisionInput } from "./provider.js";
+import { GIT_REF, gitRefRefusal, type ProvisionInput, refAllowed } from "./provider.js";
 
 const exec = promisify(execFile);
 const Receipt = z.strictObject({
@@ -37,6 +37,53 @@ async function succeeds(cwd: string, ...args: string[]): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Preparing a caller-selected ref (#883) happens outside any agent sandbox, so no repository
+ * hook (checkout, reference-transaction), fsmonitor command or submodule recursion may run.
+ * Filter drivers are switched off separately, by name (`noFilters`).
+ */
+const CONTAINED = [
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "submodule.recurse=false",
+  "-c",
+  "fetch.recurseSubmodules=false",
+];
+/** Default deadlines for the remote operations a ref needs; past them the ref is refused. */
+const LS_REMOTE_MS = 30_000;
+const FETCH_MS = 120_000;
+
+/**
+ * `-c` options that switch off every filter driver (clean, smudge, process) the configuration
+ * at `cwd` names, so content a caller selected is written as stored, with no driver command
+ * run outside the agent sandbox. A driver name `-c` cannot carry refuses provisioning.
+ */
+async function noFilters(cwd: string): Promise<string[]> {
+  let keys: string;
+  try {
+    keys = (await exec("git", ["config", "--name-only", "--get-regexp", "^filter\\."], { cwd })).stdout;
+  } catch (error) {
+    // `git config --get-regexp` exits 1 when nothing matches; anything else is not a clean answer.
+    if ((error as { code?: unknown }).code === 1) return [];
+    throw refuse();
+  }
+  const drivers = new Set<string>();
+  for (const key of keys.split("\n").filter(Boolean)) {
+    const dot = key.lastIndexOf(".");
+    if (dot <= "filter".length) continue; // `filter.<variable>` names no driver
+    const name = key.slice("filter.".length, dot);
+    if (!name || /[=\r\n]/.test(name)) throw refuse();
+    drivers.add(name);
+  }
+  return [...drivers].flatMap((d) => [
+    ...["clean", "smudge", "process"].flatMap((v) => ["-c", `filter.${d}.${v}=`]),
+    ...["-c", `filter.${d}.required=false`],
+  ]);
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -107,36 +154,96 @@ export class OwnedRootWorktree {
   }
 
   /**
-   * Whether `ref` can give a run its own checkout (#883), without changing the repository: a
-   * commit this repository has, or a ref the fetch remote advertises. Run before admission.
+   * A remote Git operation: noninteractive (no terminal, askpass or credential-manager
+   * prompt, batch-mode SSH unless the administrator configured `core.sshCommand`), with no
+   * stdin, and killed at its deadline. Every failure, a timeout included, refuses the ref.
    */
-  async checkRef(ref: string): Promise<void> {
-    if (!GIT_REF.test(ref)) throw gitRefRefusal(ref, "it is not a branch, tag or commit name");
-    if (!this.o.isolateRoots || !(this.o.host instanceof LocalHost) || process.platform !== "linux")
-      throw gitRefRefusal(ref, "owned root worktrees are not available on this daemon");
-    const repo = resolve(this.o.repo);
-    if (COMMIT_ID.test(ref)) {
-      if (await succeeds(repo, "cat-file", "-e", `${ref}^{commit}`)) return;
-      throw gitRefRefusal(ref, "this repository does not have that commit");
+  private async remoteGit(repo: string, ref: string, deadline: number, what: string, args: string[]): Promise<string> {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_ASKPASS: "",
+      SSH_ASKPASS: "",
+      GCM_INTERACTIVE: "never",
+    };
+    if (!env.GIT_SSH_COMMAND && !env.GIT_SSH && !(await succeeds(repo, "config", "--get", "core.sshCommand")))
+      env.GIT_SSH_COMMAND = "ssh -o BatchMode=yes";
+    const timeout = this.o.remoteTimeoutMs ?? deadline;
+    try {
+      const pending = exec("git", [...CONTAINED, ...args], { cwd: repo, env, timeout, killSignal: "SIGKILL" });
+      pending.child.stdin?.end();
+      return (await pending).stdout;
+    } catch (error) {
+      const timedOut = (error as { killed?: boolean }).killed === true;
+      throw gitRefRefusal(
+        ref,
+        timedOut
+          ? `${what} '${this.remote}' did not finish within ${Math.round(timeout / 1000)}s`
+          : `${what} '${this.remote}' failed`,
+      );
     }
-    if (!(await succeeds(repo, "check-ref-format", "--allow-onelevel", ref)))
-      throw gitRefRefusal(ref, "it is not a valid ref name");
-    if (!(await succeeds(repo, "ls-remote", "--exit-code", "--", this.remote, ref)))
-      throw gitRefRefusal(ref, `the '${this.remote}' remote does not have it`);
   }
 
-  /** The commit `ref` names now: a known commit as is, else fetched under a run-private ref. */
+  /**
+   * Whether `ref` can give a run its own checkout (#883), without changing the repository:
+   * fully qualified, allowed by the workspace's `allowedRefs`, and advertised by the fetch
+   * remote under exactly that name. Run before admission; it fails closed when the remote
+   * cannot be checked.
+   */
+  async checkRef(ref: string): Promise<void> {
+    await this.admissible(ref);
+    await this.advertised(resolve(this.o.repo), ref);
+  }
+
+  private async admissible(ref: string): Promise<void> {
+    if (!GIT_REF.test(ref))
+      throw gitRefRefusal(ref, "it is not a fully qualified branch or tag (refs/heads/… or refs/tags/…)");
+    if (!this.o.isolateRoots || !(this.o.host instanceof LocalHost) || process.platform !== "linux")
+      throw gitRefRefusal(ref, "owned root worktrees are not available on this daemon");
+    if (!refAllowed(ref, this.o.allowedRefs))
+      throw gitRefRefusal(ref, "the remote's workspace does not allow it (workspace.allowedRefs)");
+    const repo = resolve(this.o.repo);
+    if (!(await succeeds(repo, "check-ref-format", ref))) throw gitRefRefusal(ref, "it is not a valid ref name");
+  }
+
+  /** The commit the remote advertises under exactly `ref`; never a suffix match. */
+  private async advertised(repo: string, ref: string): Promise<string> {
+    const out = await this.remoteGit(repo, ref, LS_REMOTE_MS, "listing refs of", [
+      "ls-remote",
+      "--refs",
+      "--",
+      this.remote,
+      ref,
+    ]);
+    const exact = out
+      .split("\n")
+      .map((line) => line.split("\t"))
+      .filter((cols) => cols[1] === ref);
+    if (exact.length !== 1) throw gitRefRefusal(ref, `the '${this.remote}' remote does not have it`);
+    return exact[0]![0]!;
+  }
+
+  /** The commit `ref` names on the fetch remote now, fetched under a run-private ref. */
   private async fetchRef(repo: string, runId: string, ref: string): Promise<string> {
-    if (COMMIT_ID.test(ref) && (await succeeds(repo, "cat-file", "-e", `${ref}^{commit}`)))
-      return git(repo, "rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`);
+    // Rechecked at provision: the allowlist may have changed since admission.
+    await this.admissible(ref);
     const local = `refs/orca/fetched/${runId}`;
     try {
-      await git(repo, "fetch", "--no-tags", "--no-write-fetch-head", "--", this.remote, `+${ref}:${local}`);
+      await this.remoteGit(repo, ref, FETCH_MS, "fetching it from", [
+        "fetch",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--no-recurse-submodules",
+        "--",
+        this.remote,
+        `+${ref}:${local}`,
+      ]);
       return await git(repo, "rev-parse", "--verify", "--end-of-options", `${local}^{commit}`);
-    } catch {
+    } catch (error) {
+      if (error instanceof OrcaError) throw error;
       throw gitRefRefusal(ref, `fetching it from '${this.remote}' failed`);
     } finally {
-      await git(repo, "update-ref", "-d", local).catch(() => undefined);
+      await git(repo, ...CONTAINED, "update-ref", "-d", local).catch(() => undefined);
     }
   }
 
@@ -151,8 +258,6 @@ export class OwnedRootWorktree {
       await this.validate(workspace);
       return workspace;
     }
-    if (input.gitRef !== undefined && !GIT_REF.test(input.gitRef))
-      throw gitRefRefusal(input.gitRef, "it is not a branch, tag or commit name");
     // A named ref is fetched before the reservation: a fetch changes no worktree, and the
     // commit it named is frozen in the receipt, so a retry never fetches again.
     const baseCommit = input.gitRef
@@ -184,7 +289,13 @@ export class OwnedRootWorktree {
     await mkdir(root, { recursive: true });
     await noSymlinks(path);
     if (await exists(path)) throw refuse();
-    await git(repo, "worktree", "add", "-b", branch, "--", path, baseCommit);
+    if (input.gitRef) {
+      // Caller-selected content: register the worktree without writing files, then write them
+      // with no hook, fsmonitor command or filter driver, as configured for that worktree
+      // (conditional includes there may name drivers the main checkout does not).
+      await git(repo, ...CONTAINED, "worktree", "add", "--no-checkout", "-b", branch, "--", path, baseCommit);
+      await git(path, ...CONTAINED, ...(await noFilters(path)), "reset", "-q", "--hard", baseCommit);
+    } else await git(repo, "worktree", "add", "-b", branch, "--", path, baseCommit);
     const gitDir = await this.registration(receipt, true);
     await publish(`${receiptPath}.ready`, { gitDir });
     return this.workspace(receipt);

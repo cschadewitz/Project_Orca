@@ -629,16 +629,17 @@ export const AgentSpecSchema = z
       .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
       .optional(),
     /**
-     * `orca-daemon` only: a git branch, tag or commit the remote run works from. The remote
-     * daemon fetches it from its workspace's fetch remote into the run's own checkout (an
-     * `isolateRoots` git-worktree workspace), and refuses the step when it cannot.
+     * `orca-daemon` only: a fully qualified git branch or tag (`refs/heads/…`, `refs/tags/…`)
+     * the remote run works from. The remote daemon fetches it from its workspace's fetch remote
+     * into the run's own checkout (an `isolateRoots` git-worktree workspace) when its
+     * administrator allows the ref (`workspace.allowedRefs`), and refuses the step otherwise.
      */
     gitRef: z
       .string()
       .min(1)
       .max(200)
-      .regex(/^(?!@$)(?![-/.])(?!.*(?:\.\.|\/\/|@\{|\.lock(?:\/|$)|\/\.|\.$|\/$))[A-Za-z0-9._/+@-]+$/, {
-        message: "a branch, tag or commit name",
+      .regex(/^refs\/(?:heads|tags)\/(?![-/.])(?!.*(?:\.\.|\/\/|@\{|\.lock(?:\/|$)|\/\.|\.$|\/$))[A-Za-z0-9._/+@-]+$/, {
+        message: "a fully qualified branch or tag (refs/heads/… or refs/tags/…)",
       })
       .optional(),
     args: z.array(z.string()).default([]),

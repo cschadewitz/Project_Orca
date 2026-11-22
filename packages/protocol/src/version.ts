@@ -182,7 +182,7 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * `hello.methods`: a 2.5 client never calls them.
  */
 /**
- * 2.7 (#883) adds an optional `gitRef` (a branch, tag or commit) to `runs.admit`, listed in
+ * 2.7 (#883) adds an optional `gitRef` (a fully qualified branch or tag) to `runs.admit`, listed in
  * `hello.admitFields` as `gitRef`: the daemon's workspace checks it before admitting
  * (`NOT_SUPPORTED` with `details.gitRef` when it cannot) and fetches it into the run's own
  * checkout, recorded as `workspace.rootProvisioning.ref`. A delegating daemon whose agent
