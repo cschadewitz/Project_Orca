@@ -132,10 +132,19 @@ How a check works:
 
 - **Local host.** An env variable is set and non-empty; a file is a regular file, readable
   and non-empty.
-- **SSH host.** One command on that host, `set +xv; exec 2>/dev/null` first. An env variable
-  is only counted (`printenv NAME | wc -c`), never compared or printed; a file is tested with
-  `test -f/-r/-s`. Exit 0 is available, the test's own failure is `missing`, anything else
-  (including a connection failure) is `unreachable`. No output is returned.
+- **SSH host.** One command on that host, metadata only there too. It first turns tracing
+  off and sends stderr to `/dev/null` (`{ set +xv && exec 2>/dev/null; } || exit 4`); if
+  the shell cannot do that, the check stops and reports `unreachable`. An env variable is
+  then tested with `sh -c '[ -n "${NAME:+x}" ]'`: a child shell sees exported variables
+  only, as delivery does, and `${NAME:+x}` never expands the value, so it is not printed,
+  piped to another program or compared. A file is tested with `test -f/-r/-s`. Exit 0 is
+  available, 3 (the test failed) is `missing`, anything else (including a connection
+  failure) is `unreachable`. No output is returned.
+
+`available: true` means **present**, nothing more: the variable is set and non-empty, or the
+file is readable and non-empty. It does not prove that the value is right, that it is UTF-8
+text the session can take, or that a run will be allowed to use it: that is the use decision
+at session open, made from the run owner's grant, and delivery can still refuse.
 
 The caller's principal is read at each call: in token mode its credential is re-checked, so
 a revoked or narrowed grant stops showing what it no longer covers. Neither method ever

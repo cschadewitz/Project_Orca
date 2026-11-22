@@ -2,6 +2,7 @@
  * `secrets.list` and `secrets.check` (#336, part B2): metadata only, filtered to the caller's
  * grant, checked on the reference's own host without reading the value.
  */
+import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -121,7 +122,7 @@ describe("secrets.check", () => {
     );
     const all = principal("*");
     expect(await model.check(all, "key")).toEqual({ id: "key", host: "box", available: true });
-    expect(commands[0]).toMatch(/^set \+xv; exec 2>\/dev\/null; /);
+    expect(commands[0]).toMatch(/^\{ set \+xv && exec 2>\/dev\/null; \} \|\| exit 4; /);
     expect(commands[0]).toContain("test -s '/etc/orca/key'");
     code = 3;
     expect((await model.check(all, "key")).reason).toBe("missing");
@@ -130,6 +131,45 @@ describe("secrets.check", () => {
     code = null;
     expect((await model.check(all, "key")).reason).toBe("unreachable");
   });
+
+  it.each(["sh", "bash", "dash"].filter((sh) => spawnSync(sh, ["-c", "true"]).status === 0))(
+    "probes an SSH host's exported variable without the value leaving the shell (%s -x)",
+    async (shell) => {
+      const value = "probe-value-0123456789";
+      let seen = "";
+      // The probe runs in a real login-like shell with tracing on, as a profile might leave it.
+      const exec: AgentHost["exec"] = async (command) => {
+        const run = spawnSync(shell, ["-x", "-c", `${prefix}${command}`], {
+          env: { PATH: process.env.PATH, ORCA_SET: value, ORCA_EMPTY: "" },
+          encoding: "utf8",
+        });
+        // The fixture's own setup assignment is traced too; only the probe's output counts.
+        if (!prefix) seen += run.stdout + run.stderr;
+        return { code: run.status, stdout: run.stdout, stderr: run.stderr };
+      };
+      let prefix = "";
+      const model = new SecretsReadModel(
+        source(
+          {
+            set: { host: "box", provider: "env", name: "ORCA_SET" },
+            empty: { host: "box", provider: "env", name: "ORCA_EMPTY" },
+            unset: { host: "box", provider: "env", name: "ORCA_UNSET" },
+            local: { host: "box", provider: "env", name: "ORCA_SHELL_ONLY" },
+          },
+          exec,
+        ),
+      );
+      const all = principal("*");
+      expect((await model.check(all, "set")).available).toBe(true);
+      expect((await model.check(all, "empty")).reason).toBe("missing");
+      expect((await model.check(all, "unset")).reason).toBe("missing");
+      // A shell variable that is not exported is not what delivery reads: not present.
+      prefix = "ORCA_SHELL_ONLY=shell-only-value; ";
+      expect((await model.check(all, "local")).reason).toBe("missing");
+      prefix = "";
+      expect(seen).not.toContain(value);
+    },
+  );
 
   it("treats a reference outside the grant as not found, and never checks it", async () => {
     const exec = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));

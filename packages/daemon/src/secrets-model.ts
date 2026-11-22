@@ -1,9 +1,10 @@
 /**
  * `secrets.list` and `secrets.check` (#336, part B2): what a principal may know about the
- * secret references this daemon is configured with, and whether one is available on its own
+ * secret references this daemon is configured with, and whether one is present on its own
  * host now. Nothing here reads a value: a local check asks whether a variable is set or a
- * file is readable and non-empty, and an SSH check runs one `test`-style command on that host
- * with tracing and stderr switched off. There is no fallback to any other host.
+ * file is readable and non-empty, and an SSH check runs one quiet predicate on that host.
+ * Present is not valid or deliverable: the value may still be wrong, not UTF-8 text, or
+ * refused by the use decision. There is no fallback to any other host.
  */
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
@@ -83,16 +84,22 @@ export class SecretsReadModel {
         return result(false, "missing");
       }
     }
-    // One command on the bound host. The value never reaches an argument or the output: an
-    // env value is only counted, and stderr and tracing are off before anything expands it.
+    // One command on the bound host, and metadata only even there: an env check asks a child
+    // shell (which sees exported variables only, as delivery does) whether `${NAME:+x}` is
+    // non-empty, so the value is never expanded, printed or piped anywhere; a file check
+    // only tests it. Tracing and stderr go off first, and if either cannot, the probe stops
+    // with its own status and the reference is reported unavailable.
     const test =
       ref.provider === "env"
-        ? `__orca_n=$(printenv ${ref.name} | wc -c) && [ "$__orca_n" -gt 1 ]`
+        ? `sh -c ${shellQuote(`[ -n "\${${ref.name}:+x}" ]`)}`
         : `test -f ${shellQuote(ref.path)} && test -r ${shellQuote(ref.path)} && test -s ${shellQuote(ref.path)}`;
     try {
-      const { code } = await host.exec(`set +xv; exec 2>/dev/null; if ${test}; then exit 0; else exit 3; fi`, {
-        timeoutMs: CHECK_TIMEOUT_MS,
-      });
+      const { code } = await host.exec(
+        `{ set +xv && exec 2>/dev/null; } || exit 4; if ${test}; then exit 0; else exit 3; fi`,
+        {
+          timeoutMs: CHECK_TIMEOUT_MS,
+        },
+      );
       if (code === 0) return result(true);
       if (code === 3) return result(false, "missing");
       return result(false, "unreachable");
