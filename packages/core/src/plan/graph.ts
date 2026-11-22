@@ -7,7 +7,7 @@
  * part of the node set become edges; decisions and externals are leaves the
  * scheduler evaluates separately.
  */
-import type { Dependency, DependencyType } from "../model/plan.js";
+import { DEPENDENCY_START_PHASE, type Dependency, type DependencyType } from "../model/plan.js";
 
 export interface GraphEdge {
   /** Dependent item. */
@@ -17,6 +17,8 @@ export interface GraphEdge {
   type: DependencyType;
   dependencyId: string;
   stage?: string;
+  /** The dependent's phase that waits on this edge; absent for `start` (the whole item waits). */
+  requiredBy?: string;
 }
 
 export interface DependencyGraph {
@@ -52,6 +54,7 @@ export function buildDependencyGraph(
       type: d.type,
       dependencyId: d.id,
       ...(d.target.stage ? { stage: d.target.stage } : {}),
+      ...(d.requiredBy && d.requiredBy !== DEPENDENCY_START_PHASE ? { requiredBy: d.requiredBy } : {}),
     });
   }
   return graphFromEdges(nodes, edges);
@@ -65,6 +68,12 @@ function graphFromEdges(nodes: readonly string[], edges: readonly GraphEdge[]): 
     downstreamOf.get(e.to)!.push(e);
   }
   return { nodes: [...nodes], edges: [...edges], upstreamOf, downstreamOf };
+}
+
+/** The same graph minus the edges `drop` selects. */
+export function withoutEdges(graph: DependencyGraph, drop: (edge: GraphEdge) => boolean): DependencyGraph {
+  const kept = graph.edges.filter((e) => !drop(e));
+  return kept.length === graph.edges.length ? graph : graphFromEdges(graph.nodes, kept);
 }
 
 export interface RelaxedGraph {
@@ -243,21 +252,37 @@ export interface PathInfo {
 export type EdgeLag = (edge: GraphEdge) => number;
 
 /**
+ * Share (0..1) of the *dependent's* weight that can run before `edge` applies:
+ * 0 for an edge the whole item waits on, more for a later-phase edge
+ * (`other#build`), where the dependent starts alongside the upstream and only
+ * its `build` phase waits.
+ */
+export type EdgeLead = (edge: GraphEdge) => number;
+
+/**
  * For each node, the heaviest chain of dependents starting at it. The maximum
  * over all nodes is the plan's critical path. Nodes inside cycles get length 0.
  *
- * A chain through an edge costs `lag(edge) * weight(node) + length(dependent)`
- * and a node alone costs its own weight, so with every lag at 1 (the default)
- * this is the plain longest path over node weights.
+ * A chain through an edge costs
+ * `length(dependent) + max(0, lag(edge) * weight(node) - lead(edge) * weight(dependent))`:
+ * the dependent's waiting part starts once `lag` of the upstream has elapsed, and the
+ * `lead` of the dependent that may run before that overlaps it. The overlap is clamped per
+ * edge because a dependent never starts before its upstream does: the scheduler holds a
+ * later-phase dependent until the upstream is underway (see `computeSchedule`), so an
+ * upstream's own predecessors delay the dependent's start in full. A node alone costs its
+ * own weight, so with every lag at 1 and every lead at 0 (the defaults) this is the plain
+ * longest path over node weights.
  */
 export function longestDownstreamPaths(
   graph: DependencyGraph,
   weight: (id: string) => number,
   lag: EdgeLag = () => 1,
+  lead: EdgeLead = () => 0,
 ): Map<string, PathInfo> {
   const cyclic = new Set(findCycles(graph).flat());
   const memo = new Map<string, PathInfo>();
   const visiting = new Set<string>();
+  const share = (v: number) => Math.min(1, Math.max(0, v));
   const visit = (id: string): PathInfo => {
     const cached = memo.get(id);
     if (cached) return cached;
@@ -272,7 +297,7 @@ export function longestDownstreamPaths(
     let best: PathInfo = { length: own, path: [id] };
     for (const e of graph.downstreamOf.get(id) ?? []) {
       const p = visit(e.from);
-      const length = Math.min(1, Math.max(0, lag(e))) * own + p.length;
+      const length = p.length + Math.max(0, share(lag(e)) * own - share(lead(e)) * weight(e.from));
       if (length > best.length) best = { length, path: [id, ...p.path] };
     }
     visiting.delete(id);

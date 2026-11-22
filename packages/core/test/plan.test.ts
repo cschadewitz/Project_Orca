@@ -362,6 +362,57 @@ describe("dependency graph", () => {
     // When the overlapped chain is lighter than the node itself, the node stands alone (c finishes before b does).
     expect(longestDownstreamPaths(g, weight, () => 0).get("wi_b")).toEqual({ length: 4, path: ["wi_b"] });
   });
+  it("overlaps the dependent's early phases with a later-phase edge", () => {
+    // c needs b only by its build phase: c starts alongside b, and only the part of c from build on waits.
+    const g = buildDependencyGraph(
+      items.map((i) => i.id),
+      [dep("b", "a"), dep("c", "b", { requiredBy: "build" })],
+    );
+    expect(g.edges.map((e) => e.requiredBy)).toEqual([undefined, "build"]);
+    const weight = (id: string) => ({ wi_a: 1, wi_b: 4, wi_c: 2 })[id] ?? 1;
+    const lead = (e: { requiredBy?: string }) => (e.requiredBy ? 0.5 : 0);
+    // a + max(c, b + the second half of c) = 1 + (4 + 1).
+    expect(criticalPath(longestDownstreamPaths(g, weight, undefined, lead))).toEqual({
+      length: 6,
+      path: ["wi_a", "wi_b", "wi_c"],
+    });
+    expect(criticalPath(longestDownstreamPaths(g, weight))).toEqual({ length: 7, path: ["wi_a", "wi_b", "wi_c"] });
+    // A lead longer than the wait hides the upstream entirely: the chain costs no more than c alone.
+    const short = (id: string) => (id === "wi_b" ? 0.5 : weight(id));
+    expect(longestDownstreamPaths(g, short, undefined, lead).get("wi_b")).toEqual({
+      length: 2,
+      path: ["wi_b", "wi_c"],
+    });
+    // Lag and lead combine: c needs b's spec (half of b) by a phase a quarter into c.
+    const long = (id: string) => (id === "wi_c" ? 6 : weight(id));
+    expect(
+      longestDownstreamPaths(
+        g,
+        long,
+        () => 0.5,
+        () => 0.25,
+      ).get("wi_b"),
+    ).toEqual({
+      length: 6.5, // 6 + (0.5 * 4 - 0.25 * 6), not b + c
+      path: ["wi_b", "wi_c"],
+    });
+  });
+  it("holds a later-phase dependent until its upstream starts, so the upstream's predecessors delay it in full", () => {
+    // b waits for all of a; c needs b only by its build phase, halfway in. b runs 10..11, and the
+    // scheduler does not dispatch c before b is underway, so c runs 10..20 (its build half from 15 on
+    // is past b's finish). Starting c at 6 to meet b's finish at its halfway point would occupy a slot
+    // with an item the dispatch rule still holds.
+    const g = buildDependencyGraph(
+      items.map((i) => i.id),
+      [dep("b", "a"), dep("c", "b", { requiredBy: "build" })],
+    );
+    const weight = (id: string) => ({ wi_a: 10, wi_b: 1, wi_c: 10 })[id] ?? 1;
+    const lead = (e: { requiredBy?: string }) => (e.requiredBy ? 0.5 : 0);
+    expect(criticalPath(longestDownstreamPaths(g, weight, undefined, lead))).toEqual({
+      length: 20,
+      path: ["wi_a", "wi_b", "wi_c"],
+    });
+  });
   it("drops the soft edges that close a cycle, keeping the required ones", () => {
     const g = buildDependencyGraph(
       items.map((i) => i.id),
@@ -523,18 +574,19 @@ describe("scheduler", () => {
       },
     ]);
     expect(s.settled.done).toEqual(["wi_done-item"]);
-    // core (M = 2) -> api (S, via core@spec, so only half of core is charged) -> ui (S): 1 + 1 + 1.
-    expect(s.criticalPath).toEqual({ workItemIds: ["wi_core", "wi_api", "wi_ui"], length: 3 });
+    // core (M = 2) -> api (S, via core@spec, so only half of core is charged) -> ui (S, via api#build,
+    // so the first half of ui overlaps api): 1 + (1 - 0.5) + 1.
+    expect(s.criticalPath).toEqual({ workItemIds: ["wi_core", "wi_api", "wi_ui"], length: 2.5 });
     expect(s.priorities["wi_core"]!.reasons).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/unblocks 2 items \(api, ui\)/),
-        "on the critical path (length 3)",
+        "on the critical path (length 2.5)",
         "exposed to low risk: meh",
       ]),
     );
     // Every member of the reported path says so, not only its head.
     for (const id of s.criticalPath.workItemIds)
-      expect(s.priorities[id]!.reasons).toContain("on the critical path (length 3)");
+      expect(s.priorities[id]!.reasons).toContain("on the critical path (length 2.5)");
     expect(s.priorities["wi_risky"]!.reasons.some((r) => r.includes("critical path"))).toBe(false);
     // The "mitigates" reason is backed by a non-zero factor even for a low risk.
     expect(s.priorities["wi_api"]!.reasons).toEqual(expect.arrayContaining(["mitigates meh (low)", "priority high"]));
@@ -545,7 +597,7 @@ describe("scheduler", () => {
         expect.stringMatching(/^api: pending \(priority high\)/),
         "waiting: waiting for core to produce spec",
         "why: priority high",
-        "why: on the critical path (length 3)",
+        "why: on the critical path (length 2.5)",
         "critical path: core -> api -> ui",
         "wave 2 of 3",
       ]),
@@ -565,11 +617,71 @@ describe("scheduler", () => {
     expect(s.settled.done).toEqual(["wi_core", "wi_done-item"]);
     expect(s.waves.flat()).not.toContain("wi_core");
     expect(s.waves).toEqual([["wi_api", "wi_risky", "wi_ext"], ["wi_ui"]]);
-    expect(s.criticalPath).toEqual({ workItemIds: ["wi_api", "wi_ui"], length: 2 });
-    expect(s.priorities["wi_api"]!.reasons).toContain("on the critical path (length 2)");
+    expect(s.criticalPath).toEqual({ workItemIds: ["wi_api", "wi_ui"], length: 1.5 });
+    expect(s.priorities["wi_api"]!.reasons).toContain("on the critical path (length 1.5)");
     expect(explainWorkItem(s, items, "wi_core").some((l) => l.startsWith("wave ") || l.includes("critical path"))).toBe(
       false,
     );
+  });
+
+  it("charges only the remaining work of items already underway", () => {
+    const base = { plan, dependencies: deps, risks: [], decisions: [], now: T };
+    // core (M = 2) is in progress: half of it is left, and half of that gates api (core@spec).
+    const s = computeSchedule({
+      ...base,
+      items: items.map((i) => (i.slug === "core" ? { ...i, status: "in-progress" as const } : i)),
+    });
+    expect(s.criticalPath).toEqual({ workItemIds: ["wi_core", "wi_api", "wi_ui"], length: 2 }); // 0.5 + 1.5
+    // Once core has produced its spec, api no longer waits for any of it.
+    const produced = computeSchedule({
+      ...base,
+      items: items.map((i) =>
+        i.slug === "core" ? { ...i, status: "in-progress" as const, produced: { spec: "art_1" } } : i,
+      ),
+    });
+    expect(produced.criticalPath).toEqual({ workItemIds: ["wi_api", "wi_ui"], length: 1.5 });
+    // A dispatched item counts as underway even before its status flips.
+    expect(computeSchedule({ ...base, items, running: ["wi_ui"] }).criticalPath).toEqual({
+      workItemIds: ["wi_core", "wi_api", "wi_ui"],
+      // 1 (core@spec) + 1 (api) + 0.5 (what is left of ui: its pre-build half is spent, so none overlaps api)
+      length: 2.5,
+    });
+  });
+
+  it("does not overlap a running dependent's pre-phase work a second time", () => {
+    // Both are M (2) and half done. d needs u by its build phase, halfway in: d's first half is
+    // the half already spent, so the whole remaining unit of d waits for u's remaining unit.
+    const s = computeSchedule({
+      plan,
+      items: [item("u", { estimate: "M", status: "in-progress" }), item("d", { estimate: "M", status: "in-progress" })],
+      dependencies: [dep("d", "u", { requiredBy: "build" })],
+      risks: [],
+      decisions: [],
+      now: T,
+    });
+    expect(s.criticalPath).toEqual({ workItemIds: ["wi_u", "wi_d"], length: 2 });
+  });
+
+  it("leaves a satisfied stage edge out of the critical path, with its producer's remaining predecessors", () => {
+    // u is underway and has produced its spec, but still needs p by its build phase. d needs only
+    // u's spec, so nothing ahead delays d: p's wait must not reach d through u.
+    const s = computeSchedule({
+      plan,
+      items: [
+        item("p", { estimate: "8" }),
+        item("u", { estimate: "M", status: "in-progress", produced: { spec: "art_1" } }),
+        item("d", { estimate: "8" }),
+      ],
+      dependencies: [dep("u", "p", { requiredBy: "build" }), dep("d", "u", { stage: "spec" })],
+      risks: [],
+      decisions: [],
+      now: T,
+    });
+    // p (8) then what is left of u (1), all of it past u's build gate: 8 + 1.
+    expect(s.criticalPath).toEqual({ workItemIds: ["wi_p", "wi_u"], length: 9 });
+    // Readiness keeps the full view: d is ready, the edge only stops counting toward the path.
+    expect(s.ready.map((r) => r.slug)).toContain("d");
+    expect(s.waves.flat()).toContain("wi_d");
   });
 
   it("reports what an open decision blocks from the live dependency states", () => {
