@@ -151,7 +151,7 @@ describe("drift since the last candidate (#863)", () => {
       .find((s) => s.name === "Open the release pull request");
     expect(step.run).toContain('if [ "$VERSION" = "$base" ]; then');
     expect(step.run).toContain('git tag -l "v$base-rc.*" --sort=-v:refname | head -n 1');
-    expect(step.run.indexOf("DRIFT_SINCE=")).toBeLessThan(step.run.lastIndexOf("node tools/release-pr-body.js"));
+    expect(step.run.indexOf("DRIFT_SINCE=")).toBeLessThan(step.run.lastIndexOf(`node "$TOOLS/release-pr-body.js"`));
   });
 
   it("compares manifests, the lockfile and root build config, not only sources", () => {

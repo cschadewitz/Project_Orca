@@ -1,0 +1,47 @@
+# The patch-content gate for release line branches (docs/RELEASING.md, "Release lines").
+#
+# A pull request into `release/X.Y` may only carry fixes for that line: every issue it names
+# must sit in an `X.Y.Z` patch milestone and carry no `release:minor` or `release:major`
+# label, so work for the next minor can never reach a patch release. tools/release-line-guard.js
+# holds the rules. Make the `release line check` job a required check on `release/*` branches.
+#
+# `pull_request_target`, so this file and the script always come from `main`: a pull request
+# cannot loosen the rules, and a line branch cut before this check existed is still guarded.
+# It checks out nothing from the pull request and runs none of its code, and its token is
+# read-only.
+name: Release line guard
+
+on:
+  pull_request_target:
+    branches: ["release/[0-9]*"]
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled, milestoned, demilestoned]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: release-line-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: release line check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: tools
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Only patch work for this line
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node tools/release-line-guard.js
