@@ -216,6 +216,16 @@ jobs:
             Format-Table ProcessId, Name, CommandLine -AutoSize -Wrap
           Get-ChildItem "$env:LOCALAPPDATA" -Directory -Filter '*updater*' -ErrorAction SilentlyContinue |
             Get-ChildItem -Recurse -ErrorAction SilentlyContinue | Format-Table FullName, Length -AutoSize
+          # Whether the downloaded installer itself installs, run as the updater runs it: tells an
+          # installer failure apart from one that never started.
+          $pending = Get-ChildItem "$env:LOCALAPPDATA\*updater*\pending\*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($pending) {
+            $run = Start-Process -FilePath $pending.FullName -ArgumentList '--updated', '/S' -PassThru
+            if (-not $run.WaitForExit(300000)) { "the pending installer is still running after 300s"; $run | Stop-Process -Force }
+            else { "the pending installer exited $($run.ExitCode)" }
+            (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+              Where-Object DisplayName -like 'ORCA*').DisplayVersion | ForEach-Object { "Windows now reports $_" }
+          }
 
       - name: Stop anything the update left running
         if: always()
