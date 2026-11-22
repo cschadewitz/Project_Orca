@@ -246,6 +246,87 @@ describe("Windows format carryover into a pre-boot backup slot (#910)", () => {
     await expect(carryStoreForward(dir, { ...windows, bootId: () => 43 })).rejects.toMatchObject({ reason: "NEWER" });
   });
 
+  /** Slots created in boot 41, each then holding a record of the conversion `from` → `to`. */
+  const withRecords = async (dir: string, records: [string, string][]) => {
+    await expect(carryStoreForward(dir, { ...windows, bootId: first })).rejects.toMatchObject({ reason: "UNDURABLE" });
+    for (const [n, [from, to]] of records.entries()) {
+      const path = slot(dir, n as 0 | 1);
+      const manifest = {
+        format: 1,
+        tool: "orca-store-format",
+        from,
+        to,
+        createdAt: new Date(Date.UTC(2026, 10, 22, 0, n)).toISOString(),
+        files: 0,
+        signature: "0".repeat(64),
+        slot: await identityOf(path),
+      };
+      await writeArchiveSlot(path, dir, [], [{ path: STORE_FORMAT_BACKUP_MANIFEST, text: JSON.stringify(manifest) }]);
+    }
+  };
+
+  it.each([
+    [
+      "slot 1 pending, slot 2 newer",
+      [
+        ["unmarked", STORE_FORMAT_EPOCH],
+        ["unmarked", "future-format-v9"],
+      ],
+    ],
+    [
+      "slot 1 newer, slot 2 pending",
+      [
+        ["unmarked", "future-format-v9"],
+        ["unmarked", STORE_FORMAT_EPOCH],
+      ],
+    ],
+  ] as [string, [string, string][]][])(
+    "a newer record is never masked by a pending one (%s): NEWER, switched off or on",
+    async (_, records) => {
+      const dir = await store();
+      await legacy(dir);
+      await withRecords(dir, records);
+      const before = await Promise.all([readFile(slot(dir, 0)), readFile(slot(dir, 1))]);
+      // Every Windows open checks, even with carryover switched off.
+      const off = { appVersion: "0.8.0", platform: "win32" as const, privacy: posixPrivateCopy, bootId: restarted };
+      await expect(enterStoreFormat(dir, { ...off, mode: "write" })).rejects.toMatchObject({ reason: "NEWER" });
+      await expect(enterStoreFormat(dir, { ...off, mode: "read" })).rejects.toMatchObject({ reason: "NEWER" });
+      await expect(carryStoreForward(dir, { ...windows, bootId: restarted })).rejects.toMatchObject({
+        reason: "NEWER",
+        message: expect.stringContaining("future-format-v9"),
+      });
+      expect(await readStoreFormat(dir)).toBeUndefined();
+      expect(await Promise.all([readFile(slot(dir, 0)), readFile(slot(dir, 1))])).toEqual(before);
+    },
+  );
+
+  it("two pending records are ambiguous: refused (INTERRUPTED), both kept", async () => {
+    const dir = await store();
+    await legacy(dir);
+    await withRecords(dir, [
+      ["unmarked", STORE_FORMAT_EPOCH],
+      ["unmarked", STORE_FORMAT_EPOCH],
+    ]);
+    const before = await Promise.all([readFile(slot(dir, 0)), readFile(slot(dir, 1))]);
+    await expect(carryStoreForward(dir, { ...windows, bootId: restarted })).rejects.toMatchObject({
+      reason: "INTERRUPTED",
+      message: expect.stringContaining("Both backups"),
+    });
+    expect(await readStoreFormat(dir)).toBeUndefined();
+    expect(await Promise.all([readFile(slot(dir, 0)), readFile(slot(dir, 1))])).toEqual(before);
+  });
+
+  it("no refusal recommends extracting a backup by hand", async () => {
+    const dir = await store();
+    await legacy(dir);
+    await carriedOnce(dir);
+    await rm(join(dir, STORE_FORMAT_FILE));
+    await writeFile(join(dir, "runs", "run_new.jsonl"), LOG.replaceAll("run_old", "run_new"));
+    const refusal = await carryStoreForward(dir, { ...windows, bootId: () => 43 }).catch((error: Error) => error);
+    expect((refusal as Error).message).toMatch(/Do not extract that backup/);
+    expect((refusal as Error).message).not.toMatch(/Expand-Archive|Extract all/);
+  });
+
   it("chooses an identity-only slot first, then a settled archive, never the marker's own backup", async () => {
     const dir = await store();
     await legacy(dir);

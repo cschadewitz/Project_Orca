@@ -13,8 +13,9 @@
  * itself is a new directory entry and may still be lost to a power cut; the archive is then the
  * durable record of the conversion (store-format-carryover.ts).
  *
- * ZIP, so that restoring needs nothing but Windows itself: Explorer's "Extract all" or
- * PowerShell's `Expand-Archive` turn a slot back into the store directory. ZIP64 fields are
+ * ZIP, a format Windows itself can read and check (`Expand-Archive`). Extracting one by hand is
+ * not a supported restore: it keeps the bytes but not the access rules that keep the store's
+ * private records to the user (#947). ZIP64 fields are
  * written only when a size, offset or count needs them.
  */
 import { createHash } from "node:crypto";

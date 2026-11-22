@@ -406,12 +406,19 @@ const fenceLost = (storeDir: string) =>
 
 const HISTORY = STORE_FORMAT_HISTORY.map((f) => f.epoch);
 
+/**
+ * Restoring a Windows slot archive by hand is not supported: a ZIP round trip keeps the bytes but
+ * not the access rules that keep the execution key and private records to this user.
+ */
+const NO_WINDOWS_RESTORE =
+  "Do not extract that backup into a store by hand: extraction does not restore the access rules that keep the store's private records to you, and ORCA cannot restore it for you yet.";
+
 async function refuseNewerRecord(storeDir: string, marker: StoreFormatMarker | undefined, current: string) {
-  const record = await findRecoveryRecord(storeDir, marker?.epoch, current, HISTORY);
-  if (record?.newer)
+  const { newer } = await findRecoveryRecord(storeDir, marker?.epoch, current, HISTORY);
+  if (newer)
     throw new StoreFormatError(
       "NEWER",
-      `The backup in ${record.path} records that this store was converted to format ${record.manifest.to}, which is newer than this ORCA can open. Nothing was changed. Install the ORCA version that converted it, or restore that backup to use this version (changes made after that backup are not in it).`,
+      `The backup in ${newer.path} records that this store was converted to format ${newer.manifest.to}, which is newer than this ORCA can open. Nothing was changed. Install the ORCA version that converted it. ${NO_WINDOWS_RESTORE}`,
       storeDir,
     );
 }
@@ -457,14 +464,21 @@ async function carryLocked(
     // across a power cut, so the marker may be older than the slot archive written before it.
     // That archive is the durable record: finish its conversion if the store is still exactly
     // what it archived, and otherwise refuse without touching it.
-    const record = await findRecoveryRecord(storeDir, marker?.epoch, current, HISTORY);
-    if (record?.newer) await refuseNewerRecord(storeDir, marker, current);
+    const records = await findRecoveryRecord(storeDir, marker?.epoch, current, HISTORY);
+    if (records.newer) await refuseNewerRecord(storeDir, marker, current);
+    if (records.pending.length > 1)
+      throw new StoreFormatError(
+        "INTERRUPTED",
+        `Both backups in ${join(storeDir, STORE_FORMAT_BACKUP_DIR)} record an unfinished change of this store's format, so which one applies cannot be decided. Nothing was changed, and both backups are kept. Open the store with the ORCA version that last wrote it. ${NO_WINDOWS_RESTORE}`,
+        storeDir,
+      );
+    const record = records.pending[0];
     if (record) {
       fence();
       if (record.manifest.to !== current || !(await storeMatchesArchive(storeDir, record.path)))
         throw new StoreFormatError(
           "INTERRUPTED",
-          `A change of this store's format to ${record.manifest.to} was interrupted, and the store has changed since the backup taken for it in ${record.path}. Nothing was changed, and that backup is kept. Restore it (Expand-Archive) to return to the store as it was before the change, or open the store with the ORCA version that last wrote it.`,
+          `A change of this store's format to ${record.manifest.to} was interrupted, and the store has changed since the backup taken for it in ${record.path}. Nothing was changed, and that backup is kept. Open the store with the ORCA version that last wrote it. ${NO_WINDOWS_RESTORE}`,
           storeDir,
         );
       const now = (options.now ?? (() => new Date()))();

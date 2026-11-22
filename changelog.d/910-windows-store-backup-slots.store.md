@@ -5,5 +5,5 @@ The design writes the backup as one ZIP archive into a backup slot file
 slot's recorded file ID and Windows `BootId`, flushed before the format marker is created. The
 archive names its conversion, so if a power cut loses the marker it either finishes the
 conversion (store unchanged) or refuses (`INTERRUPTED`) and keeps the only pre-upgrade backup.
-Every Windows start creates the two slots if they are missing. Restore a backup with Explorer's
-"Extract all" or `Expand-Archive`.
+Every Windows start creates the two slots if they are missing. There is no supported way to
+restore a slot archive yet: extracting it by hand does not restore the store's access rules.

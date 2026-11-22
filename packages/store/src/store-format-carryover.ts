@@ -624,33 +624,43 @@ export async function chooseBackupSlot(
   return chosen ? { path: chosen.path, identity: chosen.identity } : undefined;
 }
 
+export interface RecoveryRecord {
+  path: string;
+  manifest: Manifest;
+}
+
 /**
  * Windows (#910): a slot archive is the durable record of a carryover across marker loss. It is
  * flushed before the marker is created, and names its conversion (`from`, `to`) and its own
- * slot. A record whose `from` is what the marker says now (or "unmarked" with no marker) and
- * whose `to` is not that is unfinished: the marker may have been lost after it. Returned with
- * whether the store is still byte for byte the archived one (then finishing the carryover is only
- * writing the marker). Also returns any record converting to an epoch outside `history` or after
- * `current`, written by a newer ORCA.
+ * slot. Every slot is examined before anything is returned:
+ *
+ * - `newer`: a record converting to an epoch outside `history` or after `current`, written by a
+ *   newer ORCA. It takes precedence over everything else: the store must not be opened.
+ * - `pending`: every record whose `from` is what the marker says now (or "unmarked" with no
+ *   marker) and whose `to` is not: unfinished, as the marker may have been lost after it. More
+ *   than one is ambiguous, and the caller refuses.
  */
 export async function findRecoveryRecord(
   storeDir: string,
   markerEpoch: string | undefined,
   current: string,
   history: readonly string[],
-): Promise<{ path: string; manifest: Manifest; newer: boolean } | undefined> {
+): Promise<{ newer: RecoveryRecord | undefined; pending: RecoveryRecord[] }> {
   const root = join(storeDir, STORE_FORMAT_BACKUP_DIR);
   const mine = history.indexOf(current);
+  let newer: RecoveryRecord | undefined;
+  const pending: RecoveryRecord[] = [];
   for (const name of STORE_FORMAT_BACKUP_SLOTS) {
     const path = join(root, name);
     const content = await readSlot(path);
     if (content.kind !== "archive" || !(await isThisSlot(path, name, content.identity))) continue;
+    const record = { path, manifest: content.manifest };
     const to = history.indexOf(content.manifest.to);
-    if (to < 0 || to > mine) return { path, manifest: content.manifest, newer: true };
-    if (content.manifest.from === (markerEpoch ?? "unmarked") && content.manifest.to !== markerEpoch)
-      return { path, manifest: content.manifest, newer: false };
+    if (to < 0 || to > mine) newer ??= record;
+    else if (content.manifest.from === (markerEpoch ?? "unmarked") && content.manifest.to !== markerEpoch)
+      pending.push(record);
   }
-  return undefined;
+  return { newer, pending };
 }
 
 /** Whether the store's files are, byte for byte, the ones archived in `slot` (a full read). */

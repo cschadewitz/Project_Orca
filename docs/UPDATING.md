@@ -977,18 +977,24 @@ ZIP archive written into a backup slot that survived a restart:
    `unmarked`) but whose conversion the marker does not show is found first. If the store is
    still byte for byte what it archived, the conversion is finished by writing the marker naming
    that archive, which is not rewritten. Otherwise the store is refused (`INTERRUPTED`) and the
-   archive is kept: restore it, or open the store with the version that last wrote it. Any
-   archive recording a newer format than this ORCA's refuses the store (`NEWER`) whatever the
-   marker says.
+   archive is kept: open the store with the version that last wrote it. Both slots are examined
+   before deciding: any archive recording a newer format than this ORCA's refuses the store
+   (`NEWER`) on every Windows open, whatever the marker says and even with carryover switched
+   off, and takes precedence over an unfinished record in the other slot. Two unfinished records
+   are ambiguous and refuse the store (`INTERRUPTED`), keeping both.
 
-The two slots are the retention on Windows: the marker's backup and the one before it. To go
-back to the older release, stop ORCA, move the store aside, and extract the slot the marker
-names (`backup` in `store-format.json`) with Explorer's "Extract all" or
-`Expand-Archive -LiteralPath <slot> -DestinationPath <store>`. A Windows CI job runs this as a
-standard user on NTFS with the switch on for the probe only: refusal with the switch off,
-refusal with fresh slots recording the real `BootId`, carryover with the next `BootId`, the
-archive finishing the conversion after the marker is deleted, and `Expand-Archive` restoring the
-store's files byte for byte. It stands in for a restart; it does not cut power.
+The two slots are the retention on Windows: the marker's backup and the one before it. **There
+is no supported way to restore a Windows slot archive yet.** Extracting it (Explorer's "Extract
+all", `Expand-Archive`) round-trips the bytes but not the access rules that keep the execution
+key and private records to the user, so ORCA's messages never suggest it. A restore needs a
+verified private destination and owner-only access checked on every restored entry before an
+older build may use it; that comes with turning Windows carryover on (#947).
+
+A Windows CI job runs the design as a standard user on NTFS with the switch on for the probe
+only: refusal with the switch off, refusal with fresh slots recording the real `BootId`,
+carryover with the next `BootId`, the archive finishing the conversion after the marker is
+deleted, and Windows' own `Expand-Archive` reading the archive's bytes back (a format check, not
+a restore path). It stands in for a restart; it does not cut power.
 
 The private-copy path for Windows: the copies hold the execution
 key and private records, and anyone with the default "bypass traverse checking" right can reach

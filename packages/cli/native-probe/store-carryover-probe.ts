@@ -11,7 +11,7 @@
  * created, each recording its NTFS file ID and Windows' real BootId, which must be readable here.
  * Told the BootId has moved on, as after a restart (a real restart is the power-cut test's), it
  * must carry: the backup archived into slot 1, the marker naming it, and Windows' own
- * `Expand-Archive` restoring the store's files byte for byte. With the marker then deleted, as
+ * `Expand-Archive` reading the archived files back byte for byte (a format check only). With the marker then deleted, as
  * after a power cut, the archive finishes the conversion without being rewritten.
  * The private-copy path itself is then exercised directly: the backup is staged and published with `windowsPrivateCopy` (no
  * marker), and every published entry's security descriptor is read back with PowerShell:
@@ -233,7 +233,8 @@ check(
   `carry-forward after a lost marker: ${JSON.stringify(recovered)}`,
 );
 check(readFileSync(slots[0]!).equals(archived), "carry-forward after a lost marker: slot 1 rewritten");
-// Windows' own Expand-Archive restores the backup, byte for byte.
+// Windows' own Expand-Archive reads the archive back, byte for byte: a format check, not a
+// supported restore (extraction does not restore the store's access rules, #947).
 const restored = join(profile, "orca-carryover-probe-restored");
 rmSync(restored, { recursive: true, force: true });
 powershell(`Expand-Archive -LiteralPath '${slots[0]}' -DestinationPath '${restored}'`, []);
