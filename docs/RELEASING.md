@@ -395,7 +395,7 @@ which first checks, with `main`'s copy of `release-lane.js`:
   those runs, and a run's title is the pull request's own, so a result is tied to its pull
   request by the receipt the guard writes on its own check run before judging (a
   `release line receipt v1` notice naming the pull request, line and head). A run without one,
-  such as any from before the receipt, never counts. `node tools/release-lane.js guard-evidence
+  such as any from before the receipt, never counts, and if the newest attempt by main's guard on that head left none (it failed or was cancelled first), the result is inconclusive rather than an older pass. `node tools/release-lane.js guard-evidence
   <pr> <base> <head>` runs the same lookup without publishing anything. An older pass does not outlive a
   later failure, and a check run with the right name from anywhere else does not count.
 

@@ -14,6 +14,7 @@ import {
   ACTIONS_APP_ID,
   GUARD_WORKFLOW,
   RECEIPT_TITLE,
+  guardBinding,
   receiptMessage,
   LINE_CHECKS,
   guardRunProblems,
@@ -326,6 +327,31 @@ describe("the lane policy", () => {
       expect(guardRunProblems(checkRun, workflowRun, receipt(), head, pr)).toEqual([]);
     });
 
+    it.each([
+      ["this pull request's receipt", checkRun, receipt(), "this"],
+      [
+        "GitHub's link to this pull request",
+        { ...checkRun, pull_requests: [{ number: 906, base: { ref: "release/0.7" }, head: { sha: head } }] },
+        [],
+        "this",
+      ],
+      ["another pull request's receipt", checkRun, receipt({ number: 907 }), "other"],
+      [
+        "GitHub's link to another pull request",
+        { ...checkRun, pull_requests: [{ number: 907, base: { ref: "release/0.7" } }] },
+        [],
+        "other",
+      ],
+      [
+        "no receipt and no link: failed or cancelled before writing it",
+        { ...checkRun, conclusion: "failure" },
+        [],
+        "unbound",
+      ],
+    ])("binds an attempt with %s as %s", (_, run, annotations, binding) => {
+      expect(guardBinding(run, annotations, head, pr)).toBe(binding);
+    });
+
     it("still accepts GitHub's own pull_requests link where it is filled", () => {
       const linked = [{ number: 906, base: { ref: "release/0.7" }, head: { sha: head } }];
       expect(guardRunProblems({ ...checkRun, pull_requests: linked }, workflowRun, [], head, pr)).toEqual([]);
@@ -597,7 +623,7 @@ describe("a real release's reviewed-commit check", () => {
       "whose guard check another app posted",
       {},
       () => guardChecks({ app: { slug: "impostor" } }),
-      /posted by impostor/,
+      /no release line check, as main runs it, for #906/,
     ],
     [
       "whose version is not the one package.json holds",
@@ -622,7 +648,7 @@ describe("a real release's reviewed-commit check", () => {
         check_suite: { id: id + 100 },
       })),
     }),
-    receipts: Object.fromEntries(entries.map(([id, , number]) => [id, receiptFor(number)])),
+    receipts: Object.fromEntries(entries.map(([id, , number]) => [id, number ? receiptFor(number) : "[]"])),
   });
 
   it("counts only this pull request's newest guard result: a later failure outlives an older pass", () => {
@@ -648,7 +674,35 @@ describe("a real release's reviewed-commit check", () => {
     ).toMatch(/from release\/0\.7/);
     expect(
       refused(() => run({ sha: commits.line, event: "pull_request", eventFile, ...runsOf([5, "success", 907]) })),
-    ).toMatch(/no release line check for #906 into release\/0\.7/);
+    ).toMatch(/no release line check, as main runs it, for #906 into release\/0\.7/);
+  });
+
+  it("treats a newer attempt that failed before its receipt as inconclusive, never falling back to an older pass", () => {
+    const eventFile = merged();
+    expect(
+      refused(() =>
+        run({
+          sha: commits.line,
+          event: "pull_request",
+          eventFile,
+          ...runsOf([1, "success", 906], [4, "failure", null]),
+        }),
+      ),
+    ).toMatch(/check run 4, failure\) left no receipt, so whether #906 into release\/0\.7 passed is inconclusive/);
+    expect(
+      refused(() =>
+        run({
+          sha: commits.line,
+          event: "pull_request",
+          eventFile,
+          ...runsOf([1, "success", 906], [4, "cancelled", null]),
+        }),
+      ),
+    ).toMatch(/check run 4, cancelled\) left no receipt/);
+    // A newer attempt shown to be another pull request's does not hide this one's pass.
+    expect(
+      run({ sha: commits.line, event: "pull_request", eventFile, ...runsOf([1, "success", 906], [4, "failure", 907]) }),
+    ).toMatch(/from release\/0\.7/);
   });
 
   it("refuses a legacy guard pass that has no receipt, whatever its run is titled", () => {
@@ -662,7 +716,7 @@ describe("a real release's reviewed-commit check", () => {
           runs: guardRuns({ display_title: "release line check: #906 into release/0.7" }),
         }),
       ),
-    ).toMatch(/no release line check for #906 into release\/0\.7/);
+    ).toMatch(/left no receipt, so whether #906 into release\/0\.7 passed is inconclusive/);
   });
 
   it("refuses a release line check that main's guard did not run", () => {
@@ -675,7 +729,7 @@ describe("a real release's reviewed-commit check", () => {
           runs: guardRuns({ event: "pull_request", path: ".github/workflows/other.yml" }),
         }),
       ),
-    ).toMatch(/as main runs it, did not pass/);
+    ).toMatch(/no release line check, as main runs it, for #906/);
   });
 
   it("binds a minor's release pull request on main to its version and reviewed tree too", () => {
