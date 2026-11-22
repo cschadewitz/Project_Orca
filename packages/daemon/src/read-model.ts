@@ -44,7 +44,7 @@ import {
   type WorkflowGraph,
   type WorkItem,
 } from "@orca/core";
-import { workflowRevision, type Orchestrator, type PlanService } from "@orca/engine";
+import { workflowRevision, type HeldRunLease, type Orchestrator, type PlanService } from "@orca/engine";
 import { redactExecutionValue, type WorkItemClaim } from "@orca/store";
 import {
   INLINE_WORKFLOW_SEPARATOR,
@@ -70,6 +70,8 @@ import {
   type RunsGetResult,
   type RunsListParams,
   type RunsListResult,
+  type RunOperationsView,
+  type RunProgressView,
   type RunSummaryView,
   type RunTraversalView,
   type StepView,
@@ -113,11 +115,58 @@ function storedInputDefinition(root: WorkflowDefinition, workflowId: string): Wo
   };
 }
 
-/** The events a listing needs: a summary's, plus the one that says which agent worked the run. */
+/**
+ * The events a listing needs: a summary's, the one that says which agent worked the run, and
+ * the step transitions its progress counts come from (#340). Agent output, the bulk of a log,
+ * is still not read.
+ */
 const LIST_EVENT_TYPES = [
   ...RUN_SUMMARY_EVENT_TYPES,
   "agent.session.opened",
+  "step.scheduled",
+  "step.started",
+  "step.cancelled",
+  "step.skipped",
 ] as const satisfies readonly OrcaEvent["type"][];
+
+type ProgressBucket = Exclude<keyof RunProgressView, "attempts">;
+
+/** Where one step attempt stands, by its last transition, for `RunProgressView`. */
+const STEP_BUCKET: Record<string, ProgressBucket> = {
+  "step.scheduled": "active",
+  "step.started": "active",
+  "step.waiting": "waiting",
+  "step.completed": "completed",
+  "step.failed": "failed",
+  "step.cancelled": "skipped",
+  "step.skipped": "skipped",
+};
+
+/** The same buckets from a projected step's status. */
+const STATUS_BUCKET: Record<StepRun["status"], ProgressBucket> = {
+  scheduled: "active",
+  running: "active",
+  waiting: "waiting",
+  completed: "completed",
+  failed: "failed",
+  cancelled: "skipped",
+  skipped: "skipped",
+};
+
+function progressOf(buckets: Iterable<ProgressBucket>): RunProgressView {
+  const progress: RunProgressView = { attempts: 0, completed: 0, failed: 0, active: 0, waiting: 0, skipped: 0 };
+  for (const bucket of buckets) {
+    progress.attempts++;
+    progress[bucket]++;
+  }
+  return progress;
+}
+
+/** Host load and usage are not measured per run: said, never zeroed (#340). */
+const UNAVAILABLE_FACETS: RunOperationsView["facets"] = {
+  host: { state: "unavailable", reason: "not-collected" },
+  usage: { state: "unavailable", reason: "not-collected" },
+};
 
 /** What the run is parked on right now, as the last unresolved `step.waiting` recorded it. */
 interface WaitFacts {
@@ -133,6 +182,8 @@ interface RunFacts {
   wait?: WaitFacts | undefined;
   agentId?: string | undefined;
   error?: ErrorInfo | undefined;
+  /** Step attempts by where they stand, in scheduling order. */
+  progress: RunProgressView;
 }
 
 function viewError(e: ErrorInfo | undefined): ViewError | undefined {
@@ -213,7 +264,13 @@ function elapsed(from: string | undefined, to: string | number): number | undefi
  */
 function runFacts(events: readonly OrcaEvent[]): RunFacts {
   const summary = reduceRunSummary(events);
-  const facts: RunFacts = { summary };
+  const steps = new Map<string, ProgressBucket>();
+  for (const e of events) {
+    const bucket = STEP_BUCKET[e.type];
+    const stepRunId = bucket ? stepRunIdOf(e) : undefined;
+    if (bucket && stepRunId) steps.set(stepRunId, bucket);
+  }
+  const facts: RunFacts = { summary, progress: progressOf(steps.values()) };
   for (const e of events) {
     switch (e.type) {
       case "step.waiting":
@@ -247,12 +304,24 @@ function runFacts(events: readonly OrcaEvent[]): RunFacts {
 
 /** The same facts from a full projection, for `runs.get`, which has already reduced the log. */
 function factsFromState(state: RunState, agentByStep: ReadonlyMap<string, { agentId: string }>): RunFacts {
-  const facts: RunFacts = { summary: runSummary(state), ...(state.run.error ? { error: state.run.error } : {}) };
+  const progress = progressOf(
+    state.stepOrder.flatMap((id) => (state.steps[id] ? [STATUS_BUCKET[state.steps[id].status]] : [])),
+  );
+  const facts: RunFacts = {
+    summary: runSummary(state),
+    progress,
+    ...(state.run.error ? { error: state.run.error } : {}),
+  };
   for (const id of state.stepOrder) {
     const step = state.steps[id];
     if (!step) continue;
     if (step.status === "waiting" && step.waitingOn)
-      facts.wait = { stepRunId: step.id, on: step.waitingOn, at: step.startedAt ?? step.scheduledAt };
+      facts.wait = {
+        stepRunId: step.id,
+        on: step.waitingOn,
+        at: step.startedAt ?? step.scheduledAt,
+        ...(step.waitingDetail ? { detail: step.waitingDetail } : {}),
+      };
     const agentId = agentByStep.get(step.id)?.agentId;
     if (agentId) facts.agentId = agentId;
   }
@@ -307,7 +376,7 @@ class Pass {
   private readonly requests = new Map<string, Request | undefined>();
   private readonly facts = new Map<string, RunFacts | undefined>();
   private readonly agentSessions = new Map<string, Map<string, AgentSessionRef>>();
-  private leases: Map<string, boolean> | undefined;
+  private leases: Map<string, HeldRunLease> | undefined;
 
   constructor(
     private readonly orc: Orchestrator,
@@ -360,11 +429,36 @@ class Pass {
    */
   async leaseLapsed(summary: RunSummary): Promise<boolean> {
     if (summary.status !== "running" && summary.status !== "waiting") return false;
+    return (await this.lease(summary.id))?.lapsed ?? true;
+  }
+
+  /** The lease on a run, if any process holds one; one listing per call, however many runs. */
+  async lease(runId: string): Promise<HeldRunLease | undefined> {
     if (!this.leases) {
       this.leases = new Map();
-      for (const l of await this.orc.listLeases()) this.leases.set(l.runId, l.lapsed);
+      for (const l of await this.orc.listLeases()) this.leases.set(l.runId, l);
     }
-    return this.leases.get(summary.id) ?? true;
+    return this.leases.get(runId);
+  }
+
+  /**
+   * The operations facts of one row (#340): where its log ends and when, its step counts, and
+   * who holds it. Only asked for the rows a page returns, so a filter over a large store still
+   * reads one event per returned run here, not one per run.
+   */
+  async operations(runId: string, progress: RunProgressView): Promise<RunOperationsView | undefined> {
+    const [last] = await this.orc.stores.events.readRange(runId, { before: Number.MAX_SAFE_INTEGER, limit: 1 });
+    if (!last) return undefined;
+    const lease = await this.lease(runId);
+    return {
+      lastSeq: last.seq,
+      lastActivityAt: last.at,
+      progress,
+      ...(lease
+        ? { owner: { holder: lease.holder, host: lease.host, since: lease.acquiredAt, lapsed: lease.lapsed } }
+        : {}),
+      facets: UNAVAILABLE_FACETS,
+    };
   }
 
   /** The work item a run advances, the request behind it, and what to call the run. */
@@ -445,7 +539,9 @@ export class ReadModel {
   async runsList(params: RunsListParams): Promise<RunsListResult> {
     const pass = this.pass();
     const ids = await this.orc.listRuns();
-    const rows: RunSummaryView[] = [];
+    const from = params.createdFrom === undefined ? undefined : Date.parse(params.createdFrom);
+    const to = params.createdTo === undefined ? undefined : Date.parse(params.createdTo);
+    const rows: { view: RunSummaryView; facts: RunFacts }[] = [];
     for (const id of ids) {
       const facts = await pass.runFacts(id);
       if (!facts) continue;
@@ -454,17 +550,25 @@ export class ReadModel {
       if (params.workItemId && s.workItemId !== params.workItemId) continue;
       if (params.parentRunId && s.parentRunId !== params.parentRunId) continue;
       if (params.roots && s.parentRunId) continue;
+      if (params.workflowId && s.workflowId !== params.workflowId) continue;
+      if (params.workflowVersion && s.workflowVersion !== params.workflowVersion) continue;
+      if (params.outcome?.length && !(s.outcome && params.outcome.includes(s.outcome))) continue;
+      if (from !== undefined && !(Date.parse(s.createdAt) >= from)) continue;
+      if (to !== undefined && !(Date.parse(s.createdAt) < to)) continue;
       const view = await pass.runView(facts);
       if (params.status?.length && !params.status.includes(view.status)) continue;
-      rows.push(view);
+      rows.push({ view, facts });
     }
     // `listRuns` is oldest first and ids are time-ordered, but createdAt is what a client sorts by.
-    rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
-    return {
-      runs: rows.slice(params.offset, params.offset + params.limit),
-      total: rows.length,
-      asOf: pass.asOf,
-    };
+    // The id breaks ties, so a page boundary is the same on every call over the same store.
+    rows.sort((a, b) => b.view.createdAt.localeCompare(a.view.createdAt) || b.view.id.localeCompare(a.view.id));
+    const page = rows.slice(params.offset, params.offset + params.limit);
+    const runs: RunSummaryView[] = [];
+    for (const { view, facts } of page) {
+      const operations = params.operations ? await pass.operations(view.id, facts.progress) : undefined;
+      runs.push(operations ? { ...view, operations } : view);
+    }
+    return { runs, total: rows.length, asOf: pass.asOf };
   }
 
   /** One run, whole: the tree of steps and attempts, its children, its artifacts. */
@@ -472,7 +576,10 @@ export class ReadModel {
     const pass = this.pass();
     const state = await this.orc.getState(params.runId);
     const agentByStep = await this.agentsByStep(params.runId);
-    const run = await pass.runView(factsFromState(state, agentByStep));
+    const facts = factsFromState(state, agentByStep);
+    const view = await pass.runView(facts);
+    const operations = params.operations ? await pass.operations(params.runId, facts.progress) : undefined;
+    const run = operations ? { ...view, operations } : view;
     const steps: StepView[] = [];
     for (const id of state.stepOrder) {
       const step = state.steps[id];

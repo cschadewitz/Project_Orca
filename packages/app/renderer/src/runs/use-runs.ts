@@ -26,6 +26,23 @@ import { applyRunChanged, mergeRun, orderRuns } from "./run-rows.js";
 /** The status half of the filter. `all` is the absence of a filter, not a ninth status. */
 export type StatusFilter = DisplayStatus | "all";
 
+/**
+ * The rest of the daemon-side filter (protocol 2.3, #340): one workflow, and runs created at
+ * or after an instant. Both are `runs.list` parameters, and both are applied again to what
+ * comes back - a 2.2 daemon ignores parameters it does not know and answers unfiltered, and
+ * a run resolved from a notification never went through the daemon's filter at all.
+ */
+export interface RunsQuery {
+  workflowId?: string | undefined;
+  createdFrom?: string | undefined;
+}
+
+function inQuery(run: RunSummaryView, query: RunsQuery): boolean {
+  if (query.workflowId !== undefined && run.workflowId !== query.workflowId) return false;
+  if (query.createdFrom !== undefined && Date.parse(run.createdAt) < Date.parse(query.createdFrom)) return false;
+  return true;
+}
+
 export type RunsState =
   | { phase: "loading" }
   | { phase: "error"; error: ProtocolError }
@@ -42,7 +59,8 @@ export interface RunsFeed {
   reload: () => void;
 }
 
-export function useRuns(status: StatusFilter): RunsFeed {
+export function useRuns(status: StatusFilter, query: RunsQuery = {}): RunsFeed {
+  const { workflowId, createdFrom } = query;
   const stream = useNotifications();
   const generation = useSubscriptionGeneration();
   const [attempt, setAttempt] = useState(0);
@@ -72,8 +90,10 @@ export function useRuns(status: StatusFilter): RunsFeed {
         const row = runs.find((r) => r.id === params.runId);
         if (row && params.seq > (cursors.get(row.id) ?? -1)) runs = mergeRun(runs, applyRunChanged(row, params));
       }
-      if (status !== "all") {
-        const included = runs.filter((r) => r.status === status);
+      if (status !== "all" || workflowId !== undefined || createdFrom !== undefined) {
+        const included = runs.filter(
+          (r) => (status === "all" || r.status === status) && inQuery(r, { workflowId, createdFrom }),
+        );
         total -= runs.length - included.length;
         runs = included;
       }
@@ -100,7 +120,12 @@ export function useRuns(status: StatusFilter): RunsFeed {
       }
       publish();
     });
-    void window.orca.runs.list(status === "all" ? {} : { status: [status] }).then((result) => {
+    const params = {
+      ...(status === "all" ? {} : { status: [status] }),
+      ...(workflowId === undefined ? {} : { workflowId }),
+      ...(createdFrom === undefined ? {} : { createdFrom }),
+    };
+    void window.orca.runs.list(params).then((result) => {
       if (!live) return;
       if (!result.ok) {
         setState({ phase: "error", error: result.error });
@@ -113,6 +138,6 @@ export function useRuns(status: StatusFilter): RunsFeed {
       live = false;
       off();
     };
-  }, [stream, status, attempt, generation]);
+  }, [stream, status, workflowId, createdFrom, attempt, generation]);
   return { state, reload };
 }

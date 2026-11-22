@@ -47,3 +47,4 @@ export * from "./workflow-drafts.js";
 export * from "./first-run-config.js";
 
 export * from "./scoped-permissions.js";
+export * from "./run-follower.js";
