@@ -362,13 +362,16 @@ case "${1:-}" in
       printf '%s' "$json" >"$evidence/release.json"
       gh api --paginate "repos/$REPO/releases" --jq '.[]' | jq -s . >"$evidence/releases.json" ||
         fail "could not read the releases; nothing written"
+      echo '{}' >"$evidence/baseline-run.json"
+      base_run=$(node "$HERE/feed-arches.js" baseline-run "$version" "$evidence/releases.json")
+      [[ -z "$base_run" ]] || gh api "repos/$REPO/actions/runs/$base_run" >"$evidence/baseline-run.json" 2>/dev/null || true
       run=$(node "$HERE/feed-arches.js" acceptance-run "$version" "$evidence/release.json")
       if [[ -n "$run" ]]; then
         gh api "repos/$REPO/actions/runs/$run" >"$evidence/run.json" 2>/dev/null || true
         gh run download "$run" --repo "$REPO" --name arm64-acceptance-evidence --dir "$evidence/artifact" >/dev/null 2>&1 || true
       fi
       node "$HERE/feed-arches.js" verify "$version" "$REPO" "$evidence/release.json" "$evidence/releases.json" \
-        "$evidence/run.json" "$evidence/artifact/evidence.json" ||
+        "$evidence/baseline-run.json" "$evidence/run.json" "$evidence/artifact/evidence.json" ||
         fail "release $id's $arm_name ($arm) has no verified native acceptance; wait for Release (accept Windows arm64), or dispatch it with x64_only to publish without arm64"
       rm -rf "$evidence"
       arm_records=$(head -n1 <<<"$arm_records")

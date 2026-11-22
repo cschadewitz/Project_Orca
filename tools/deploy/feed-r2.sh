@@ -92,6 +92,24 @@ case "${1:-}" in
       *) fail "ARCHES must be \"x64\" or \"x64 arm64\"" ;;
     esac
     channel=$(channel_of "$version")
+    # A snapshot written before #889 carries a format 1 completion record, which the Worker
+    # reads as x64 only. A retry of that snapshot (for example after the first publish stopped
+    # before the ring update) keeps the record as it is, so x64 can still be offered; it is
+    # never extended to arm64, because a snapshot's architectures never change.
+    legacy=
+    if s3 get-object --bucket "$FEED_BUCKET" --key "$version/complete.json" "$work/existing-complete" \
+      >/dev/null 2>"$work/get-error"; then
+      printf '{"format":1,"version":"%s"}\n' "$version" >"$work/legacy-complete"
+      if cmp -s "$work/legacy-complete" "$work/existing-complete"; then
+        [[ "${arches[*]}" == x64 ]] ||
+          fail "$version was published as x64 only before architecture lists existed; it cannot be extended to arm64"
+        legacy=1
+        echo "$version/complete.json is a legacy x64 record; keeping it"
+      fi
+    elif ! grep -Eq '\((404|NoSuchKey)\)|Not Found' "$work/get-error"; then
+      cat "$work/get-error" >&2
+      fail "could not look up $version/complete.json"
+    fi
     # Payload first, then metadata, then the completion record, each written once. Rerunning
     # after an interruption at any point resumes: identical objects are skipped, different
     # ones refused.
@@ -115,7 +133,7 @@ case "${1:-}" in
     # others (#889); it is written once, so a snapshot's architectures never change.
     printf '{"format":2,"version":"%s","arches":[%s]}\n' "$version" \
       "$(printf '"%s",' "${arches[@]}" | sed 's/,$//')" >"$work/complete.json"
-    put_once "$version/complete.json" "$work/complete.json" application/json
+    [[ -n "$legacy" ]] || put_once "$version/complete.json" "$work/complete.json" application/json
     update_rings publish "$version"
     ;;
   promote)

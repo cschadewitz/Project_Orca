@@ -118,6 +118,10 @@ jobs:
           evidence=$(mktemp -d)
           gh api "repos/$REPO/releases/tags/v$VERSION" > "$evidence/release.json"
           gh api --paginate "repos/$REPO/releases" --jq '.[]' | jq -s . > "$evidence/releases.json"
+          echo '{}' > "$evidence/baseline-run.json"
+          base_run=$(node tools/deploy/feed-arches.js baseline-run "$VERSION" "$evidence/releases.json")
+          [[ -z "$base_run" ]] || gh api "repos/$REPO/actions/runs/$base_run" > "$evidence/baseline-run.json" ||
+            echo "::warning::could not read the upgrade baseline's acceptance run $base_run"
           run=$(node tools/deploy/feed-arches.js acceptance-run "$VERSION" "$evidence/release.json")
           if [[ -n "$run" ]]; then
             gh api "repos/$REPO/actions/runs/$run" > "$evidence/run.json" || echo '{}' > "$evidence/run.json"
@@ -125,7 +129,7 @@ jobs:
               echo "::warning::could not download run $run's acceptance evidence"
           fi
           arches=$(node tools/deploy/feed-arches.js serve "$VERSION" "$REPO" "$evidence/release.json" \
-            "$evidence/releases.json" "$evidence/run.json" "$evidence/artifact/evidence.json")
+            "$evidence/releases.json" "$evidence/baseline-run.json" "$evidence/run.json" "$evidence/artifact/evidence.json")
           rm -rf "$evidence"
           for arch in $arches; do
             [[ " $FEED_ARCHES " == *" $arch "* ]] || { echo "::error::$arch is not in FEED_ARCHES"; exit 1; }

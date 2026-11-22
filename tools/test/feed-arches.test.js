@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { acceptanceProblem, baseline, feedArches } from "../deploy/feed-arches.js";
+import { acceptanceProblem, baseline, baselineRun, feedArches } from "../deploy/feed-arches.js";
 
 const ARM = `sha256:${"a".repeat(64)}`;
 const OTHER = `sha256:${"b".repeat(64)}`;
@@ -67,21 +67,64 @@ const published = (version, digest, over = {}) => ({
   id: Number(version.replace(/\D/g, "")),
   ...over,
 });
+// A published release whose arm64 installer passed acceptance in run 6.
+const accepted06 = (version, digest, over = {}) =>
+  published(version, digest, { body: [signed(digest, 5), accepted(digest, 6)].join("\n\n"), ...over });
+const prior = run({ id: 6 });
 
 describe("baseline", () => {
-  it("is the newest published final older than the version with an arm64 installer", () => {
+  it("is the newest published final older than the version with an accepted arm64 installer", () => {
     const releases = [
-      published("0.7.1", OTHER),
+      accepted06("0.7.1", OTHER),
       published("0.7.0", null),
-      published("0.6.9", X64),
-      published("0.6.10", ARM),
-      published("0.6.11", ARM, { prerelease: true }),
-      published("0.6.12", ARM, { draft: true }),
-      { ...published("0.6.13", ARM), tag_name: "v0.6.13-rc.1" },
+      accepted06("0.6.9", X64),
+      accepted06("0.6.10", ARM),
+      accepted06("0.6.11", ARM, { prerelease: true }),
+      accepted06("0.6.12", ARM, { draft: true }),
+      { ...accepted06("0.6.13", ARM), tag_name: "v0.6.13-rc.1" },
     ];
-    expect(baseline("0.7.1", releases)).toEqual({ version: "0.6.10", digest: ARM, asset: 3 });
-    expect(baseline("0.6.10", releases)).toEqual({ version: "0.6.9", digest: X64, asset: 3 });
-    expect(baseline("0.6.9", releases)).toBeNull();
+    expect(baselineRun("0.7.1", releases)).toBe("6");
+    expect(baseline("0.7.1", releases, { repo: REPO, run: prior })).toEqual({
+      version: "0.6.10",
+      digest: ARM,
+      asset: 3,
+    });
+    expect(baseline("0.6.10", releases, { repo: REPO, run: prior })).toEqual({
+      version: "0.6.9",
+      digest: X64,
+      asset: 3,
+    });
+    expect(baseline("0.6.9", releases, { repo: REPO, run: prior })).toEqual({ none: true });
+    expect(baselineRun("0.6.9", releases)).toBeUndefined();
+  });
+
+  it("skips releases marked x64-only", () => {
+    const releases = [accepted06("0.6.9", X64), published("0.7.0", ARM, { body: "<!-- orca-x64-only -->" })];
+    expect(baseline("0.7.1", releases, { repo: REPO, run: prior })).toEqual({
+      version: "0.6.9",
+      digest: X64,
+      asset: 3,
+    });
+  });
+
+  it.each([
+    ["no acceptance record", published("0.7.0", ARM, { body: signed(ARM, 5) }), prior, /native acceptance record/],
+    [
+      "acceptance of other bytes",
+      accepted06("0.7.0", ARM, { body: [signed(ARM, 5), accepted(OTHER, 6)].join("\n") }),
+      prior,
+      /native acceptance record/,
+    ],
+    ["no signing record", published("0.7.0", ARM, { body: accepted(ARM, 6) }), prior, /signing record/],
+    ["an unreadable run", accepted06("0.7.0", ARM), undefined, /could not be read/],
+    ["a failed run", accepted06("0.7.0", ARM), run({ id: 6, conclusion: "failure" }), /not a successful/],
+    ["a run off main", accepted06("0.7.0", ARM), run({ id: 6, head_branch: "x" }), /not a successful/],
+  ])("reports missing proof, not no baseline, for %s", (_label, candidate, baseRun, problem) => {
+    // An older accepted release never stands in for the newest candidate.
+    const result = baseline("0.7.1", [accepted06("0.6.9", X64), candidate], { repo: REPO, run: baseRun });
+    expect(result.none).toBeUndefined();
+    expect(result.problem).toMatch(/^upgrade baseline v0\.7\.0 has no verified arm64 acceptance: /);
+    expect(result.problem).toMatch(problem);
   });
 });
 
@@ -91,10 +134,22 @@ describe("acceptanceProblem", () => {
   });
 
   it("accepts an upgrade over exactly the baseline", () => {
-    const releases = [published("0.7.0", OTHER)];
+    const releases = [accepted06("0.7.0", OTHER)];
     const upgrade = evidence({ mode: "upgrade", previous: { version: "0.7.0", digest: OTHER } });
-    expect(acceptanceProblem(input({ releases, evidence: upgrade }))).toBeUndefined();
-    expect(acceptanceProblem(input({ releases }))).toMatch(/mode "fresh", not "upgrade"/);
+    expect(acceptanceProblem(input({ releases, baselineRun: prior, evidence: upgrade }))).toBeUndefined();
+    expect(acceptanceProblem(input({ releases, baselineRun: prior }))).toMatch(/mode "fresh", not "upgrade"/);
+  });
+
+  it("refuses when the upgrade baseline's own acceptance cannot be verified", () => {
+    const releases = [accepted06("0.7.0", OTHER)];
+    const upgrade = evidence({ mode: "upgrade", previous: { version: "0.7.0", digest: OTHER } });
+    expect(acceptanceProblem(input({ releases, evidence: upgrade }))).toMatch(
+      /upgrade baseline v0\.7\.0 has no verified arm64 acceptance: acceptance run 6 could not be read/,
+    );
+    const unaccepted = [published("0.7.0", OTHER, { body: signed(OTHER, 5) })];
+    expect(acceptanceProblem(input({ releases: unaccepted, baselineRun: prior }))).toMatch(
+      /upgrade baseline v0\.7\.0 has no verified arm64 acceptance/,
+    );
   });
 
   it.each([
@@ -165,20 +220,26 @@ describe("command line", () => {
       const none = write("releases.json", []);
       const runFile = write("run.json", run());
       const ev = write("evidence.json", evidence());
-      expect(cli("baseline", "0.7.1", write("prior.json", [published("0.7.0", OTHER)])).stdout).toBe(
-        `0.7.0 ${OTHER} 3\n`,
-      );
-      expect(cli("baseline", "0.7.1", none).stdout).toBe("");
+      const priors = write("prior.json", [accepted06("0.7.0", OTHER)]);
+      const priorRun = write("prior-run.json", prior);
+      const absent = join(dir, "absent.json");
+      expect(cli("baseline-run", "0.7.1", priors).stdout).toBe("6\n");
+      expect(cli("baseline-run", "0.7.1", none).stdout).toBe("");
+      expect(cli("baseline", "0.7.1", REPO, priors, priorRun).stdout).toBe(`0.7.0 ${OTHER} 3\n`);
+      const unproven = cli("baseline", "0.7.1", REPO, priors, absent);
+      expect([unproven.status, unproven.stdout]).toEqual([1, ""]);
+      expect(unproven.stderr).toMatch(/upgrade baseline v0\.7\.0 has no verified arm64 acceptance/);
+      expect(cli("baseline", "0.7.1", REPO, none, "-").stdout).toBe("");
       expect(cli("acceptance-run", "0.7.1", rel).stdout).toBe("9\n");
-      expect(cli("verify", "0.7.1", REPO, rel, none, runFile, ev).status).toBe(0);
-      const missing = cli("verify", "0.7.1", REPO, rel, none, runFile, join(dir, "absent.json"));
+      expect(cli("verify", "0.7.1", REPO, rel, none, "-", runFile, ev).status).toBe(0);
+      const missing = cli("verify", "0.7.1", REPO, rel, none, "-", runFile, absent);
       expect([missing.status, missing.stderr]).toEqual([1, expect.stringContaining("no arm64-acceptance-evidence")]);
-      expect(cli("serve", "0.7.1", REPO, rel, none, runFile, ev).stdout).toBe("x64 arm64\n");
+      expect(cli("serve", "0.7.1", REPO, rel, none, "-", runFile, ev).stdout).toBe("x64 arm64\n");
       const old = write("old.json", release({ arm: null, body: [] }));
       const x64 = cli("serve", "0.7.1", REPO, old, none);
       expect([x64.status, x64.stdout]).toEqual([0, "x64\n"]);
       expect(x64.stderr).toMatch(/^arm64 not served: /);
-      expect(cli("serve", "0.7.1", REPO, rel, none, runFile, join(dir, "absent.json")).status).toBe(1);
+      expect(cli("serve", "0.7.1", REPO, rel, none, "-", runFile, absent).status).toBe(1);
       expect(cli("serve", "v0.7.1", REPO, rel, none).status).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });

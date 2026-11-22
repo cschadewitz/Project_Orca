@@ -276,7 +276,10 @@ it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unatten
   // The baseline is read from the full release list, failing closed; the evidence is kept
   // before the record that points at it.
   expect(text).toContain("gh api --paginate \"repos/$REPO/releases\" --jq '.[]' | jq -s . > releases.json");
-  expect(text).toContain('node tools/deploy/feed-arches.js baseline "$VERSION" releases.json');
+  expect(text).toContain('node tools/deploy/feed-arches.js baseline-run "$VERSION" releases.json');
+  expect(text).toContain(
+    'node tools/deploy/feed-arches.js baseline "$VERSION" "$REPO" releases.json baseline-run.json',
+  );
   expect(text).not.toContain("releases/latest");
   const record = wf.jobs.record.steps.map((s) => s.name ?? s.uses);
   expect(record.indexOf("Keep the evidence with this run")).toBeLessThan(

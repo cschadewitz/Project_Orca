@@ -654,46 +654,64 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(publish(f).stderr).toContain("no arm64-acceptance-evidence artifact");
   });
 
-  it("requires the evidence's baseline to be the newest prior published arm64 release", () => {
-    const prior = (id, version, digest) => ({
+  it("requires the evidence's baseline to be the newest prior release with verified arm64 acceptance", () => {
+    const prior = (id, version, digest, body) => ({
       ...draft({
         id,
         tag_name: `v${version}`,
         name: `v${version}`,
         draft: false,
         published_at: "2026-11-01T00:00:00Z",
+        body: body ?? `<!-- orca-signed-run-arm64: 700 ${digest} -->\n<!-- orca-arm64-accepted: 800 ${digest} -->`,
       }),
       assets: [{ id: id * 10, name: `ORCA-${version}-win-arm64.exe`, digest }],
     });
     const OLD = "sha256:" + "1".repeat(64);
     const NEWER = "sha256:" + "2".repeat(64);
-    const setupPrior = () => {
+    const priorRun = {
+      ...goodRun,
+      id: 800,
+      path: ".github/workflows/release-accept-arm64.yml",
+      event: "workflow_run",
+    };
+    const setupPrior = (extra = [], run800 = priorRun) => {
       const f = setup();
-      f.edit((st) =>
+      f.edit((st) => {
         st.releases.push(
           prior(3, "0.7.2", OLD),
           prior(4, "0.7.10", NEWER),
           prior(5, "0.9.0", OLD),
           prior(6, "0.7.11-rc.1", OLD),
-        ),
-      );
+          ...extra,
+        );
+        st.runs["800"] = run800;
+      });
       expect(f.attachBoth().status).toBe(0);
       return f;
     };
+    const upgradeFrom = (version, digest) => ({ evidence: { mode: "upgrade", previous: { version, digest } } });
     const fresh = setupPrior();
     expect(fresh.accepted().status).toBe(0);
     expect(publish(fresh).stderr).toContain('mode "fresh", not "upgrade"');
     const stale = setupPrior();
-    expect(
-      stale.accepted({}, { evidence: { mode: "upgrade", previous: { version: "0.7.2", digest: OLD } } }).status,
-    ).toBe(0);
+    expect(stale.accepted({}, upgradeFrom("0.7.2", OLD)).status).toBe(0);
     expect(publish(stale).stderr).toContain("previous");
     const right = setupPrior();
-    expect(
-      right.accepted({}, { evidence: { mode: "upgrade", previous: { version: "0.7.10", digest: NEWER } } }).status,
-    ).toBe(0);
+    expect(right.accepted({}, upgradeFrom("0.7.10", NEWER)).status).toBe(0);
     const published = publish(right);
     expect(published.status, published.stderr).toBe(0);
+    // A newer release marked x64-only is never the baseline.
+    const declined = setupPrior([prior(8, "0.7.12", OLD, "<!-- orca-x64-only -->")]);
+    expect(declined.accepted({}, upgradeFrom("0.7.10", NEWER)).status).toBe(0);
+    expect(publish(declined).status, publish(declined).stderr).toBe(0);
+    // A newer arm64 release without acceptance proof stops publication; it is not skipped.
+    const unproven = setupPrior([prior(8, "0.7.12", OLD, `<!-- orca-signed-run-arm64: 700 ${OLD} -->`)]);
+    expect(unproven.accepted({}, upgradeFrom("0.7.10", NEWER)).status).toBe(0);
+    expect(publish(unproven).stderr).toContain("upgrade baseline v0.7.12 has no verified arm64 acceptance");
+    // So does a baseline whose acceptance run did not succeed on main.
+    const failedRun = setupPrior([], { ...priorRun, conclusion: "failure" });
+    expect(failedRun.accepted({}, upgradeFrom("0.7.10", NEWER)).status).toBe(0);
+    expect(publish(failedRun).stderr).toContain("upgrade baseline v0.7.10 has no verified arm64 acceptance");
   });
 
   it("refuses to publish without arm64 unless x64-only was decided", () => {

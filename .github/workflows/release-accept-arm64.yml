@@ -103,7 +103,13 @@ jobs:
           gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/$ASSET" > "$new"
           [[ "sha256:$(sha256sum "$new" | cut -d' ' -f1)" == "$DIGEST" ]] || { echo "::error::downloaded bytes are not $DIGEST"; exit 1; }
           gh api --paginate "repos/$REPO/releases" --jq '.[]' | jq -s . > releases.json
-          base=$(node tools/deploy/feed-arches.js baseline "$VERSION" releases.json)
+          # The baseline's own acceptance run must be a successful one on main; a baseline
+          # without that proof stops here instead of being accepted as a fresh install.
+          base_run=$(node tools/deploy/feed-arches.js baseline-run "$VERSION" releases.json)
+          echo '{}' > baseline-run.json
+          [[ -z "$base_run" ]] || gh api "repos/$REPO/actions/runs/$base_run" > baseline-run.json ||
+            echo "::warning::could not read the baseline's acceptance run $base_run"
+          base=$(node tools/deploy/feed-arches.js baseline "$VERSION" "$REPO" releases.json baseline-run.json)
           previous="" previous_digest=""
           if [[ -n "$base" ]]; then
             read -r previous previous_digest previous_asset <<<"$base"

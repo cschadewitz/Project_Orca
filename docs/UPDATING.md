@@ -265,7 +265,12 @@ For a final the order is:
    arm64 only for a final whose published arm64 installer has verified native acceptance:
    its notes point at a successful **Release (accept Windows arm64)** run on `main` whose
    evidence artifact names that release, commit, installer digest and upgrade baseline
-   (`tools/deploy/feed-arches.js`, #889). An attached arm64 installer that is not declined
+   (`tools/deploy/feed-arches.js`, #889). The baseline is the newest earlier published final
+   with an arm64 installer that is not marked x64-only, and it must itself carry a verified
+   acceptance (records for its installer and a successful acceptance run on `main`); a
+   baseline without that proof fails the check instead of counting as a fresh install. A
+   snapshot first written before #889 keeps its record when a publish is retried, and is
+   never extended to arm64. An attached arm64 installer that is not declined
    (`<!-- orca-x64-only -->`) and does not verify fails the feed run instead of feeding x64
    alone. `feed-r2.sh` lists the published architectures in the snapshot's write-once
    `complete.json`, and the Worker serves a version's channel files, installers and
