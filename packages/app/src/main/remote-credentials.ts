@@ -373,19 +373,40 @@ export class CredentialRecords {
     rmSync(this.file(id), { force: true });
   }
 
-  /** Every slot any record refers to. */
-  referencedSlots(): Set<string> {
+  /**
+   * Every slot any record refers to, or `undefined` when that cannot be known for certain:
+   * the records could not be listed, or a record file could not be read or is not valid.
+   * A record that cannot be read may still name a slot, so nothing may be swept then.
+   */
+  referencedSlots(): Set<string> | undefined {
     const slots = new Set<string>();
     let names: string[];
     try {
       names = readdirSync(this.dir);
-    } catch {
-      return slots;
+    } catch (error) {
+      // No records at all is certain; anything else is not.
+      return (error as NodeJS.ErrnoException).code === "ENOENT" ? slots : undefined;
     }
     for (const name of names) {
+      if (!name.endsWith(".json")) continue;
       const id = /^([a-z0-9][a-z0-9-]{0,62})\.json$/.exec(name)?.[1];
-      const record = id && this.read(id);
-      if (!record) continue;
+      if (!id) return undefined;
+      let text: string;
+      try {
+        text = readFileSync(join(this.dir, name), "utf8");
+      } catch (error) {
+        // Removed since the listing: it names nothing now.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        return undefined;
+      }
+      let record: CredentialRecord;
+      try {
+        const parsed = RecordSchema.safeParse(JSON.parse(text));
+        if (!parsed.success) return undefined;
+        record = parsed.data;
+      } catch {
+        return undefined;
+      }
       for (const slot of [record.current?.slot, record.next?.slot, record.imported?.slot]) if (slot) slots.add(slot);
     }
     return slots;

@@ -176,16 +176,19 @@ it was imported, with each credential's id, expiry and where it was issued (serv
 and workspace config). A credential changes role (staged, in use, imported, retired)
 only in one write of that record, and the slot it replaces is deleted after the write,
 so an interrupted write or a restart leaves the previous record and its slot as they
-were. Slots no record names are removed at startup, and a credential file from an older
+were. Slots no record names are removed at startup, but only when every record could be
+read: a record that cannot be read may name any slot. A credential file from an older
 build is taken over as an import. A credential the keychain cannot keep is revoked on
-the server at once. The app then asks the daemon
-for an authenticated `hello` with it over the tunnel. It switches in only on positive
-proof: the token is the credential the CLI reported for this installation's principal,
-the daemon accepts it, and the daemon names its workspace (the same one as before, if
-the profile had a credential). Then the workspace id is remembered, and the credential
-it replaces is revoked. A daemon that accepts the credential but names no workspace (an
-older ORCA) gets the credential revoked again, and the connect asks to update ORCA on
-the server. If the daemon cannot be asked (no daemon running, say), nothing
+the server at once. The app then asks the daemon about it over the tunnel: `hello`, then
+`operator.discover`. A `hello` answer alone proves nothing, since a daemon that does not
+authenticate its callers answers it whatever the token. The credential switches in only
+on positive proof: the token is the credential the CLI reported for this installation's
+principal, and the daemon answers discovery for it as an authenticated credential, for
+that principal, naming its workspace (the same one as before, if the profile had a
+credential). Then the workspace id is remembered, and the credential it replaces is
+revoked. A daemon that answers without that proof (one that does not authenticate
+callers, or an older ORCA) gets the credential revoked again, and the connect asks to
+update ORCA on the server. If the daemon cannot be asked (no daemon running, say), nothing
 switches: the staged credential waits for the next connect, and the one in use stays.
 If the daemon refuses a credential that was just issued, or answers from another
 workspace than before, the CLI issued it for another workspace than the daemon's on
@@ -201,7 +204,12 @@ daemon refuses (expired or revoked on the server) gets one replacement, then a c
 refusal.
 
 Credentials are bound to the host keys they were issued through, the server's and the
-jump host's. **Forget host key** quarantines the profile's credentials: they go on the
+jump host's. Each tunnel seals its pins once its hops are pinned: it copies them into files
+of its own and checks every later ssh it starts, for a connection or a command, against
+those copies, so a pin file changed while the tunnel lives changes nothing it carries. A
+credential is sent only on a tunnel sealed with the keys it is bound to, promoted only
+while the pins still vouch for the keys it was confirmed through, and revoked only through
+a tunnel sealed with the keys it was issued through. **Forget host key** quarantines the profile's credentials: they go on the
 list to revoke and are never sent to whatever answers under a new key. The same happens
 if the pinned key changes in any other way. An imported credential is bound to the keys
 it was first accepted through; after a key reset it is not sent until the person imports

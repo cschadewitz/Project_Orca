@@ -44,6 +44,8 @@ describe.skipIf(!live)("profile connection over a real ssh", () => {
       orcaVersion: "ssh-live",
       capabilities: ["runs.read", "runs.subscribe"],
       source: { subscribe: () => () => {}, eventsRange: async () => [] },
+      // As `orca serve` mounts them: credential-authenticated discovery is the sign-in proof.
+      operatorSources: { events: {} as never },
       auth: {
         mode: "token",
         credentials: auth.credentials,
@@ -187,6 +189,8 @@ describe.skipIf(!live)("profile connection over a real ssh", () => {
       workspaceId: randomUUID(),
       capabilities: ["runs.read", "runs.subscribe"],
       source: { subscribe: () => () => {}, eventsRange: async () => [] },
+      // As `orca serve` mounts them: credential-authenticated discovery is the sign-in proof.
+      operatorSources: { events: {} as never },
       auth: {
         mode: "token",
         credentials: auth.credentials,

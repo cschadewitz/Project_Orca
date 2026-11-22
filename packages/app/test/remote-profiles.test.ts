@@ -7,6 +7,7 @@ import { PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
 import {
   CredentialSlots,
   pinState,
+  tunnelKeyIdentity,
   TunnelRefusal,
   type SecretCipher,
   type SshTunnel,
@@ -18,9 +19,9 @@ import { connect as netConnect, type Socket } from "node:net";
 import { WebSocketServer } from "ws";
 import { z } from "zod";
 import { streamTransport } from "../src/client/stream-transport.js";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
 import { DaemonClient } from "../src/client/daemon-client.js";
@@ -129,6 +130,8 @@ class FakeTunnel {
   connects = 0;
   onStream?: (stream: Socket) => void;
   stateNow: TunnelState = { phase: "starting" };
+  /** Like the real one: the keys of the pins it sealed once open (or for one command). */
+  pinnedKeys: string | undefined;
   constructor(
     readonly options: SshTunnelOptions,
     private readonly outcome: Promise<string>,
@@ -142,8 +145,10 @@ class FakeTunnel {
     return this.server.run(command);
   }
   async runOnce(command: readonly string[]): Promise<RemoteResult> {
-    // Like the real one: an administrative connection never trusts a key on first use.
+    // Like the real one: an administrative connection never trusts a key on first use, and
+    // carries nothing unless its pins vouch for the keys expected.
     if (pinState(this.options.knownHostsFile) !== "pinned") throw new TunnelRefusal("host-key-missing");
+    this.seal();
     try {
       return await this.exec(command);
     } finally {
@@ -163,6 +168,13 @@ class FakeTunnel {
   open(): Promise<string> {
     return this.outcome.then(
       (url) => {
+        // ssh's accept-new on first use: the probe pins the server's key.
+        const pins = this.options.knownHostsFile;
+        if (pinState(pins) === "none") {
+          mkdirSync(dirname(pins), { recursive: true });
+          writeFileSync(pins, "orca-lab ssh-ed25519 AAAAFIRSTUSE\n");
+        }
+        this.seal();
         this.stateNow = { phase: "open", localPort: Number(new URL(url).port) };
         return url;
       },
@@ -174,6 +186,12 @@ class FakeTunnel {
   }
   remoteRefused(): boolean {
     return this.refused;
+  }
+  private seal(): void {
+    const keys = tunnelKeyIdentity(this.options.knownHostsFile, this.options.profile.jump !== undefined);
+    if (this.options.expectKeys !== undefined && keys !== this.options.expectKeys)
+      throw new TunnelRefusal("host-key-changed");
+    this.pinnedKeys = keys;
   }
   async close(): Promise<void> {
     this.closed += 1;
@@ -361,12 +379,18 @@ const reply = (result: unknown) => new Response(JSON.stringify({ kind: "response
 
 describe("credentials travel only on the tunnel's authenticated streams", () => {
   /** A stand-in daemon: what the far end of an authenticated ssh stream reaches. */
-  async function daemonRig(stall = false, accept: (authorization: string | undefined) => boolean = () => true) {
+  async function daemonRig(
+    stall = false,
+    accept: (authorization: string | undefined) => boolean = () => true,
+    /** Who the daemon authenticated: answers `operator.discover` for that principal. */
+    principalOf: (authorization: string | undefined) => string | undefined = () => undefined,
+  ) {
     const rpc: (string | undefined)[] = [];
     const sockets: (string | undefined)[] = [];
     const server = createServer((request, response) => {
       rpc.push(request.headers.authorization);
-      request.resume();
+      const body: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => body.push(chunk));
       request.on("end", () => {
         if (stall) return;
         if (!accept(request.headers.authorization)) {
@@ -376,7 +400,36 @@ describe("credentials travel only on the tunnel's authenticated streams", () => 
           );
           return;
         }
-        response.end(JSON.stringify({ kind: "response", id: 1, ok: true, result: hello }));
+        let method: string | undefined;
+        try {
+          method = (JSON.parse(Buffer.concat(body).toString()) as { method?: string }).method;
+        } catch {
+          method = undefined;
+        }
+        const principal = principalOf(request.headers.authorization);
+        if (method === "operator.discover" && principal) {
+          response.end(
+            JSON.stringify({
+              kind: "response",
+              id: 1,
+              ok: true,
+              result: {
+                target: hello.identity,
+                protocol: PROTOCOL_VERSION,
+                orcaVersion: "test",
+                principalId: principal,
+                authentication: "credential",
+                scope: { runs: "owned", workflows: "*", permissions: [] },
+                operations: [],
+                collections: [],
+                asOf: new Date().toISOString(),
+              },
+            }),
+          );
+          return;
+        }
+        const methods = principal ? ["hello", "operator.discover"] : ["hello"];
+        response.end(JSON.stringify({ kind: "response", id: 1, ok: true, result: { ...hello, methods } }));
       });
     });
     const wss = new WebSocketServer({ server, handleProtocols: () => "orca.v1" });
@@ -413,10 +466,16 @@ describe("credentials travel only on the tunnel's authenticated streams", () => 
 
   it("checks a credential with the daemon over the tunnel's own streams (#875)", async () => {
     let known: string | undefined;
-    const daemon = await daemonRig(false, (authorization) => authorization === `Bearer ${known}`);
+    let issuedTo: (token: string) => string | undefined = () => undefined;
+    const daemon = await daemonRig(
+      false,
+      (authorization) => authorization === `Bearer ${known}`,
+      (authorization) => (authorization === `Bearer ${known}` && known ? issuedTo(known) : undefined),
+    );
     try {
-      // The daemon's own hello check, not the seam.
+      // The daemon's own check (hello, then credential-authenticated discovery), not the seam.
       const { profiles, server } = store(() => Promise.resolve(daemon.url), daemon.port, { verify: helloVerdict });
+      issuedTo = (token) => [...server.credentials.values()].find((c) => c.token === token)?.principal;
       profiles.save({ name: "Lab", destination: "lab" });
       // The daemon knows none of what the server's CLI issues: another workspace.
       await expect(profiles.open("lab")).rejects.toMatchObject({ code: "wrong-workspace" });
@@ -430,6 +489,21 @@ describe("credentials travel only on the tunnel's authenticated streams", () => 
       expect(daemon.rpc.at(-1)).toBe(`Bearer ${known}`);
       expect(daemon.offered).toEqual([]);
       await lease.release();
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it("never confirms a credential on a daemon that ignores it (open loopback), and takes it back (#875 review 4)", async () => {
+    // Answers hello, naming its workspace, whatever the token: no credential-authenticated discovery.
+    const daemon = await daemonRig();
+    try {
+      const { profiles, server } = store(() => Promise.resolve(daemon.url), daemon.port, { verify: helloVerdict });
+      profiles.save({ name: "Lab", destination: "lab" });
+      await expect(profiles.open("lab")).rejects.toMatchObject({ code: "unverified" });
+      expect(daemon.rpc.length).toBeGreaterThan(0);
+      expect(server.live()).toEqual([]);
+      expect(profiles.list()[0]!.hasCredential).toBe(false);
     } finally {
       await daemon.close();
     }
@@ -893,10 +967,12 @@ describe("automatic sign-in (#875)", () => {
     await expect(profiles.remove("lab")).resolves.toBe("not-reached");
     expect(profiles.list()).toEqual([]);
 
-    // Never revoke through a server whose key is not pinned: that is not the server it was issued by.
+    // Never revoke through a server whose pins now vouch for another key than the one the
+    // credential was issued through: that is not the server it was issued by.
     server.fail = undefined;
     profiles.save({ name: "Lab", destination: "lab" });
     await (await profiles.open("lab")).release();
+    writeFileSync(join(dir, "known_hosts", "lab"), "orca-lab ssh-ed25519 AAAAANOTHERKEY\n");
     const before = server.commands.length;
     await expect(profiles.remove("lab")).resolves.toBe("not-reached");
     expect(server.commands).toHaveLength(before);
@@ -1283,5 +1359,93 @@ describe("a credential changes role only in one record commit (#875 review 3)", 
     expect(profiles.list()[0]).toMatchObject({ hasCredential: true, credentialImported: true });
     expect(existsSync(join(dir, "credentials", "lab.credential"))).toBe(false);
     expect(readdirSync(join(dir, "credentials", "vault"))).toHaveLength(1);
+  });
+});
+
+describe("credentials travel only through verified keys, and no slot is swept on doubt (#875 review 4)", () => {
+  const recordFile = (dir: string) => join(dir, "credentials", "lab.json");
+
+  it("a lease sends its credential only on streams sealed with the keys the credential is bound to", async () => {
+    const { dir, profiles, tunnels } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    const lease = await profiles.open("lab");
+    const tunnel = tunnels.at(-1)!;
+    expect(lease.auth.read()).toMatch(/^orca1\./);
+    const record = JSON.parse(readFileSync(recordFile(dir), "utf8")) as CredentialRecord;
+    expect(record.current!.target.hostKeys).toBe(tunnel.pinnedKeys);
+
+    // The record now binds the credential to other keys than this tunnel sealed: not sent.
+    writeFileSync(
+      recordFile(dir),
+      JSON.stringify({
+        ...record,
+        current: { ...record.current!, target: { ...record.current!.target, hostKeys: "[]" } },
+      }),
+    );
+    lease.auth.refresh();
+    expect(() => lease.auth.read()).toThrow(CredentialTransportUnavailable);
+    writeFileSync(recordFile(dir), JSON.stringify(record));
+    lease.auth.refresh();
+    expect(lease.auth.read()).toMatch(/^orca1\./);
+
+    // A stream that would not be verified against the keys the lease was set up through: none.
+    tunnel.pinnedKeys = JSON.stringify(["ssh-ed25519 AAAAOTHER", null]);
+    const connect = vi.spyOn(tunnel, "connect");
+    await expect(lease.transport.fetch("http://127.0.0.1:41000/rpc", { method: "POST", body: "{}" })).rejects.toThrow();
+    expect(connect).not.toHaveBeenCalled();
+    await lease.release();
+  });
+
+  it("promotes a staged credential only while the pins still vouch for the keys it was confirmed through", async () => {
+    let swap = false;
+    const made = store(undefined, undefined, {
+      verify: async (_connect, _url, token) => {
+        // The pin is replaced while the daemon is being asked.
+        if (swap) writeFileSync(join(made.dir, "known_hosts", "lab"), "orca-lab ssh-ed25519 AAAASWAPPED\n");
+        return made.server.answer(token);
+      },
+    });
+    const { dir, profiles, server } = made;
+    profiles.save({ name: "Lab", destination: "lab" });
+    mkdirSync(join(dir, "known_hosts"), { recursive: true });
+    writeFileSync(join(dir, "known_hosts", "lab"), "orca-lab ssh-ed25519 AAAA\n");
+    swap = true;
+    const lease = await profiles.open("lab");
+    // Confirmed, but not promoted: still staged, nothing current, nothing sent.
+    expect(lease.auth.read()).toBeUndefined();
+    const record = JSON.parse(readFileSync(recordFile(dir), "utf8")) as CredentialRecord;
+    expect(record.current).toBeUndefined();
+    expect(record.next).toBeDefined();
+    expect(server.live()).toHaveLength(1);
+    await lease.release();
+  });
+
+  it("never sweeps a slot while any record cannot be read or is not valid", async () => {
+    const { dir, profiles } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    await (await profiles.open("lab")).release();
+    const vault = join(dir, "credentials", "vault");
+    const stray = join(vault, "abcdefghij0123456789.credential");
+    const restart = () =>
+      new RemoteProfiles({ dir, cipher, hostname: "Casey's PC", tunnel: () => ({}) as unknown as SshTunnel });
+
+    for (const doubt of [
+      () => writeFileSync(join(dir, "credentials", "other.json"), "{ not json"),
+      () => writeFileSync(join(dir, "credentials", "other.json"), JSON.stringify({ version: 99 })),
+      () => mkdirSync(join(dir, "credentials", "other.json")),
+      () => writeFileSync(join(dir, "credentials", "Not A Profile.json"), "{}"),
+    ]) {
+      writeFileSync(stray, "sealed");
+      doubt();
+      restart();
+      expect(existsSync(stray)).toBe(true);
+      rmSync(join(dir, "credentials", "other.json"), { recursive: true, force: true });
+      rmSync(join(dir, "credentials", "Not A Profile.json"), { force: true });
+    }
+    // Every record readable: the stray slot goes, the profile's own stays.
+    const own = readdirSync(vault).filter((name) => name !== "abcdefghij0123456789.credential");
+    restart();
+    expect(existsSync(stray)).toBe(false);
+    expect(readdirSync(vault)).toEqual(own);
   });
 });

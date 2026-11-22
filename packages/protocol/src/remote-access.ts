@@ -36,6 +36,7 @@ import {
 import { createServer, type Server, type Socket } from "node:net";
 import { Duplex, type Readable, type Writable } from "node:stream";
 import { dirname, join } from "node:path";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
 /** The daemon's default port (`orca serve`). */
@@ -221,6 +222,11 @@ export interface SshTunnelOptions {
   backoff?: { initialMs: number; maxMs: number };
   onState?: (state: TunnelState) => void;
   /**
+   * The keys (`tunnelKeyIdentity`) the tunnel must be sealed with. Pins that vouch for any
+   * other keys refuse `host-key-changed` before a stream or command is carried.
+   */
+  expectKeys?: string;
+  /**
    * Never trust a key on first use: every hop must already be pinned, or the tunnel refuses
    * `host-key-missing` before that hop's ssh starts. For administrative connections, such as
    * revoking a credential, that must reach the server the credential came from or nothing.
@@ -283,6 +289,21 @@ export function pinnedKeyIdentity(knownHostsFile: string): string | undefined {
   } catch {
     return undefined;
   }
+  return keyIdentityOf(text);
+}
+
+/**
+ * The keys a profile's pins vouch for, server and jump host, as one string: what a
+ * credential is bound to, and what `SshTunnel.pinnedKeys` reports for the pins it sealed.
+ */
+export function tunnelKeyIdentity(knownHostsFile: string, jump: boolean): string {
+  return JSON.stringify([
+    pinnedKeyIdentity(knownHostsFile) ?? null,
+    jump ? (pinnedKeyIdentity(`${knownHostsFile}.jump`) ?? null) : null,
+  ]);
+}
+
+function keyIdentityOf(text: string): string | undefined {
   const keys = [...text.matchAll(/^[^#\s]\S*\s+(\S+)\s+([A-Za-z0-9+/]+=*)(?:\s|$)/gm)].map(
     (match) => `${match[1]} ${match[2]}`,
   );
@@ -526,6 +547,10 @@ export class SshTunnel {
   private stateNow: TunnelState = { phase: "starting" };
   private fingerprint: string | undefined;
   private channelRefusedAt = 0;
+  /** The keys of the pins this tunnel sealed (see `pinnedKeys`). */
+  private sealedKeys: string | undefined;
+  /** This tunnel's private copies of its pins, removed when it closes. */
+  private readonly sessionPins: string[] = [];
 
   constructor(private readonly options: SshTunnelOptions) {
     this.pinnedOnly = options.pinnedOnly === true;
@@ -539,6 +564,15 @@ export class SshTunnel {
   }
   get url(): string | undefined {
     return this.port ? `http://127.0.0.1:${this.port}` : undefined;
+  }
+  /**
+   * The keys (`tunnelKeyIdentity`) every stream and command of this tunnel is verified
+   * against, once its hops are pinned. The tunnel seals its pins then: it copies them into
+   * files of its own and checks every later ssh against those copies, so a pin file changed
+   * while the tunnel lives changes nothing it carries. `undefined` until sealed.
+   */
+  get pinnedKeys(): string | undefined {
+    return this.sealedKeys;
   }
   /** The host key the server presented on the last successful connect, `SHA256:…`. */
   get hostKeyFingerprint(): string | undefined {
@@ -568,6 +602,8 @@ export class SshTunnel {
       this.port = await this.listen();
       await this.prepare();
       await this.probe();
+      // Pinned on first use by the probe: sealed now, before anything is carried.
+      if (this.pinsComplete()) this.seal();
       this.attempt = 0;
       this.setState({ phase: "open", localPort: this.port });
     } catch (error) {
@@ -614,10 +650,10 @@ export class SshTunnel {
     const hop = this.hops.daemon;
     // Commands administer the server's credentials: only ever on a server, and behind a jump
     // host, that is already pinned. The pin is read once, into the arguments ssh gets.
+    // Only through sealed pins: every hop pinned, and checked against the tunnel's own copies.
+    if (this.sealedKeys === undefined) throw new TunnelRefusal("host-key-missing");
     const args = commandArgs(hop, command);
     if (!args.includes("StrictHostKeyChecking=yes")) throw new TunnelRefusal("host-key-missing");
-    if (this.hops.jump && pinState(this.hops.jump.knownHostsFile) !== "pinned")
-      throw new TunnelRefusal("host-key-missing");
     let child: ChildProcess;
     try {
       child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args);
@@ -729,7 +765,51 @@ export class SshTunnel {
     const { profile, knownHostsFile } = this.options;
     mkdirSync(dirname(knownHostsFile), { recursive: true });
     this.hops = tunnelHops(profile, knownHostsFile, profile.jump ? await ephemeralLoopbackPort() : undefined);
+    // Already pinned: sealed before any ssh starts, so even the first one checks the copies.
+    if (this.pinsComplete()) this.seal();
+    else if (this.options.expectKeys !== undefined) throw new TunnelRefusal("host-key-missing");
     if (this.hops.jump) await this.launchJump();
+  }
+
+  private pinsComplete(): boolean {
+    const hops = this.hops!;
+    return (
+      pinState(hops.daemon.knownHostsFile) === "pinned" &&
+      (!hops.jump || pinState(hops.jump.knownHostsFile) === "pinned")
+    );
+  }
+
+  /**
+   * Copy the pins into this tunnel's own files and point every hop at them. Each pin is read
+   * once, and the keys reported are the keys of exactly what was copied.
+   */
+  private seal(): void {
+    if (this.sealedKeys !== undefined) return;
+    const hops = this.hops!;
+    const copy = (hop: HopSpec): [HopSpec, string | undefined] => {
+      let text: string;
+      try {
+        text = readFileSync(hop.knownHostsFile, "utf8");
+      } catch {
+        throw new TunnelRefusal("host-key-missing");
+      }
+      const session = `${hop.knownHostsFile}.session-${randomBytes(8).toString("hex")}`;
+      try {
+        writeFileSync(session, text, { mode: 0o600, flag: "wx" });
+      } catch {
+        throw new TunnelRefusal("pin-write-failed");
+      }
+      this.sessionPins.push(session);
+      return [{ ...hop, knownHostsFile: session }, keyIdentityOf(text)];
+    };
+    const [daemon, daemonKeys] = copy(hops.daemon);
+    const [jump, jumpKeys] = hops.jump ? copy(hops.jump) : [undefined, undefined];
+    const keys = JSON.stringify([daemonKeys ?? null, hops.jump ? (jumpKeys ?? null) : null]);
+    if (!daemonKeys || (hops.jump && !jumpKeys)) throw new TunnelRefusal("host-key-missing");
+    if (this.options.expectKeys !== undefined && keys !== this.options.expectKeys)
+      throw new TunnelRefusal("host-key-changed");
+    this.hops = { daemon, ...(jump ? { jump } : {}) };
+    this.sealedKeys = keys;
   }
 
   private async shutdown(): Promise<void> {
@@ -754,6 +834,7 @@ export class SshTunnel {
       ...(jump ? jump.children.map(stop) : []),
       listener ? new Promise<void>((resolve) => listener.close(() => resolve())) : undefined,
     ]);
+    for (const file of this.sessionPins.splice(0)) rmSync(file, { force: true });
   }
 
   private setState(state: TunnelState): void {
@@ -763,6 +844,8 @@ export class SshTunnel {
 
   /** Record a pin's enrollment; a failure to write it is a refusal, never a throw out of a handler. */
   private enroll(knownHostsFile: string): void {
+    // A sealed tunnel checks its own copies, which are pinned by construction.
+    if (this.sealedKeys !== undefined) return;
     try {
       (this.options.markEnrolled ?? markPinEnrolled)(knownHostsFile);
     } catch {

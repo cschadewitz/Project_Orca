@@ -5,10 +5,19 @@
  * ssh-tunnel workflow sets up on Linux and Windows runners.
  */
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
@@ -27,6 +36,7 @@ import {
   SshTunnel,
   TunnelRefusal,
   tunnelHops,
+  tunnelKeyIdentity,
   hopArgs,
   commandArgs,
   RemoteCommandRefused,
@@ -427,11 +437,16 @@ describe("SshTunnel with a fake ssh", () => {
     tunnel.connect();
     await until(() => spawned.length === 2);
 
-    // Deleted after enrollment: no new stream starts, so no new key can be accepted.
+    // Deleted after enrollment: the open tunnel still checks every stream against the pin it
+    // sealed, never accepting a new key, and a new tunnel starts no ssh at all.
     rmSync(pins);
     expect(pinState(pins)).toBe("broken");
-    expect(() => tunnel.connect()).toThrow(expect.objectContaining({ code: "host-key-missing" }));
-    expect(spawned).toHaveLength(2);
+    tunnel.connect();
+    await until(() => spawned.length === 3);
+    expect(tunnel.pinnedKeys).toBe(JSON.stringify(["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6", null]));
+    const fresh = fakeTunnel(() => {}, { knownHostsFile: pins });
+    await expect(fresh.tunnel.open()).rejects.toMatchObject({ code: "host-key-missing" });
+    expect(fresh.spawned).toHaveLength(0);
     await tunnel.close();
 
     for (const damage of [
@@ -610,6 +625,43 @@ describe("commands on the server (#875)", () => {
     expect(commandArgs(hops.daemon, ["C:/Orca/orca.cmd", "auth", "revoke", "AbC_dEf-1234"]).at(-1)).toBe(
       "AbC_dEf-1234",
     );
+  });
+
+  it("seals its pins: streams and commands check the tunnel's own copy, and only the keys expected (#875 review 4)", async () => {
+    const pins = pinned();
+    const keys = tunnelKeyIdentity(pins, false);
+    expect(keys).toBe(JSON.stringify(["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6", null]));
+    const { tunnel, spawned } = fakeTunnel(
+      (ssh, _n, args) => {
+        // Never the live pin file: the tunnel's sealed copy, strictly.
+        expect(args).toContain("StrictHostKeyChecking=yes");
+        expect(args.some((arg) => arg.startsWith("UserKnownHostsFile=") && arg.includes(".session-"))).toBe(true);
+        ssh.say(authed);
+        if (args.includes("-W")) return;
+        ssh.exit(0);
+      },
+      { knownHostsFile: pins, expectKeys: keys },
+    );
+    await tunnel.open();
+    expect(tunnel.pinnedKeys).toBe(keys);
+    // The live pin now vouches for another key: what the tunnel carries does not change.
+    writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5\n");
+    tunnel.connect();
+    await until(() => spawned.length === 2);
+    await expect(tunnel.exec(["orca", "auth", "list"])).resolves.toMatchObject({ code: 0 });
+    expect(tunnel.pinnedKeys).toBe(keys);
+    const sessions = () => readdirSync(dirname(pins)).filter((name) => name.includes(".session-"));
+    expect(sessions()).toHaveLength(1);
+    await tunnel.close();
+    expect(sessions()).toEqual([]);
+
+    // A tunnel, or a one-off command, expecting other keys refuses before any ssh starts.
+    const other = fakeTunnel(() => {}, { knownHostsFile: pins, expectKeys: keys });
+    await expect(other.tunnel.open()).rejects.toMatchObject({ code: "host-key-changed" });
+    const once = fakeTunnel(() => {}, { knownHostsFile: pins, expectKeys: keys });
+    await expect(once.tunnel.runOnce(["orca", "auth", "list"])).rejects.toMatchObject({ code: "host-key-changed" });
+    expect([...other.spawned, ...once.spawned]).toEqual([]);
+    expect(sessions()).toEqual([]);
   });
 
   it.each([
