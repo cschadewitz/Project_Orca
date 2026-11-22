@@ -114,6 +114,16 @@ export const LATER_PHASE_LEAD = 0.5;
  */
 export const IN_PROGRESS_REMAINING = 0.5;
 
+/**
+ * `LATER_PHASE_LEAD` as a share of what the critical path charges the dependent. An item
+ * already underway is assumed `1 - IN_PROGRESS_REMAINING` done, and that work came out of
+ * its pre-phase part first, so only what is left of that part can still overlap.
+ */
+function laterPhaseLead(underway: boolean): number {
+  if (!underway) return LATER_PHASE_LEAD;
+  return Math.max(0, LATER_PHASE_LEAD - (1 - IN_PROGRESS_REMAINING)) / IN_PROGRESS_REMAINING;
+}
+
 export function evaluateDependency(d: Dependency, ctx: EvaluationContext): DependencyEvaluation {
   if (d.status === "waived") return { state: "waived", detail: `waived${d.resolution ? `: ${d.resolution}` : ""}` };
   if (d.status === "satisfied") return { state: "satisfied", detail: d.resolution ?? "satisfied" };
@@ -285,7 +295,7 @@ export function computeSchedule(input: ScheduleInput): Schedule {
     pathGraph,
     (id) => estimateWeight(itemsById.get(id)?.estimate) * (running.has(id) ? IN_PROGRESS_REMAINING : 1),
     (e) => (e.stage ? STAGE_EDGE_LAG : 1),
-    (e) => (e.requiredBy ? LATER_PHASE_LEAD : 0),
+    (e) => (e.requiredBy ? laterPhaseLead(running.has(e.from)) : 0),
   );
   const cp = criticalPath(paths);
   const { waves } = topologicalWaves(graph);

@@ -643,8 +643,23 @@ describe("scheduler", () => {
     // A dispatched item counts as underway even before its status flips.
     expect(computeSchedule({ ...base, items, running: ["wi_ui"] }).criticalPath).toEqual({
       workItemIds: ["wi_core", "wi_api", "wi_ui"],
-      length: 2.25, // 1 (core@spec) + 0.5 (what is left of ui) + 0.75 (api, less the quarter of ui overlapping it)
+      // 1 (core@spec) + 1 (api) + 0.5 (what is left of ui: its pre-build half is spent, so none overlaps api)
+      length: 2.5,
     });
+  });
+
+  it("does not overlap a running dependent's pre-phase work a second time", () => {
+    // Both are M (2) and half done. d needs u by its build phase, halfway in: d's first half is
+    // the half already spent, so the whole remaining unit of d waits for u's remaining unit.
+    const s = computeSchedule({
+      plan,
+      items: [item("u", { estimate: "M", status: "in-progress" }), item("d", { estimate: "M", status: "in-progress" })],
+      dependencies: [dep("d", "u", { requiredBy: "build" })],
+      risks: [],
+      decisions: [],
+      now: T,
+    });
+    expect(s.criticalPath).toEqual({ workItemIds: ["wi_u", "wi_d"], length: 2 });
   });
 
   it("leaves a satisfied stage edge out of the critical path, with its producer's remaining predecessors", () => {
@@ -662,8 +677,8 @@ describe("scheduler", () => {
       decisions: [],
       now: T,
     });
-    // p (8) then what is left of u (1), less the half of it that overlaps p: 8 + 0.5.
-    expect(s.criticalPath).toEqual({ workItemIds: ["wi_p", "wi_u"], length: 8.5 });
+    // p (8) then what is left of u (1), all of it past u's build gate: 8 + 1.
+    expect(s.criticalPath).toEqual({ workItemIds: ["wi_p", "wi_u"], length: 9 });
     // Readiness keeps the full view: d is ready, the edge only stops counting toward the path.
     expect(s.ready.map((r) => r.slug)).toContain("d");
     expect(s.waves.flat()).toContain("wi_d");

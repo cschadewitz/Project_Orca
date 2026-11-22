@@ -235,7 +235,8 @@ later-phase edge (`other#build`) lets the dependent start once the upstream is
 underway, so the first half of the dependent's own estimate overlaps the
 upstream and only the rest waits for it to finish.
 An item already underway (in progress, or dispatched) counts half its estimate,
-since the schedule has no finer measure of what is left. All three shares are
+since the schedule has no finer measure of what is left; that spent half is taken
+to be its pre-phase part, so it no longer overlaps a later-phase upstream. All three shares are
 heuristics (`STAGE_EDGE_LAG`, `LATER_PHASE_LEAD`, `IN_PROGRESS_REMAINING`).
 Every item on the
 reported path carries the reason `on the critical path`, and a cycle is listed
