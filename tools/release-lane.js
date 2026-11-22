@@ -173,16 +173,35 @@ export function linkedTo(checkRun, annotations, headSha, pr = {}) {
 export function guardRunProblems(checkRun, workflowRun, annotations, headSha, pr = {}) {
   const problems = [];
   if (checkRun?.conclusion !== "success") problems.push("it did not succeed");
-  if (checkRun?.head_sha !== headSha) problems.push(`it ran on ${checkRun?.head_sha}, not ${headSha}`);
-  if (checkRun?.app?.slug !== "github-actions")
-    problems.push(`it was posted by ${checkRun?.app?.slug ?? "an unknown app"}`);
-  if (workflowRun?.path !== GUARD_WORKFLOW) problems.push(`it came from ${workflowRun?.path ?? "no workflow"}`);
-  if (workflowRun?.event !== "pull_request_target") problems.push(`it ran on ${workflowRun?.event ?? "no"} event`);
+  problems.push(...guardSourceProblems(checkRun, workflowRun, headSha));
   // For this pull request into this line, at this head: a pass for another pull request that
   // shares the commit, or for the same commit aimed at another branch, is not this one's.
   if (!linkedTo(checkRun, annotations, headSha, pr))
     problems.push(`it is not linked to #${pr.number} into ${pr.base} at ${headSha}`);
   return problems;
+}
+
+/** Whether a check run is main's guard, run by GitHub Actions on `headSha`; empty when it is. */
+export function guardSourceProblems(checkRun, workflowRun, headSha) {
+  const problems = [];
+  if (checkRun?.head_sha !== headSha) problems.push(`it ran on ${checkRun?.head_sha}, not ${headSha}`);
+  if (checkRun?.app?.slug !== "github-actions")
+    problems.push(`it was posted by ${checkRun?.app?.slug ?? "an unknown app"}`);
+  if (workflowRun?.path !== GUARD_WORKFLOW) problems.push(`it came from ${workflowRun?.path ?? "no workflow"}`);
+  if (workflowRun?.event !== "pull_request_target") problems.push(`it ran on ${workflowRun?.event ?? "no"} event`);
+  return problems;
+}
+
+/**
+ * Which pull request a trusted guard attempt is shown to belong to: "this" (its receipt or
+ * GitHub's link names this pull request, line and head), "other" (they name something else),
+ * or "unbound" (neither: it failed or was cancelled before writing its receipt, and GitHub left
+ * no link). An unbound attempt could be this pull request's, so it is never skipped over.
+ */
+export function guardBinding(checkRun, annotations, headSha, pr = {}) {
+  if (linkedTo(checkRun, annotations, headSha, pr)) return "this";
+  const receipts = (annotations ?? []).filter((a) => a?.annotation_level === "notice" && a?.title === RECEIPT_TITLE);
+  return receipts.length || (checkRun?.pull_requests ?? []).length ? "other" : "unbound";
 }
 
 const versionAt = (sha) => {
@@ -205,15 +224,30 @@ function guardEvidence({ number, base, head }) {
     `repos/${repo()}/commits/${head}/check-runs?check_name=${encodeURIComponent("release line check")}&filter=all`,
   ).check_runs;
   const target = { number, base };
-  const forThisPr = (runs ?? [])
-    .map((run) => ({ run, annotations: ghJson(`repos/${repo()}/check-runs/${run.id}/annotations`) }))
-    .filter(({ run, annotations }) => linkedTo(run, annotations, head, target))
+  // Every attempt by main's guard on this head, newest first, except those shown to be another
+  // pull request's or another line's. The newest of them is the current verdict.
+  const attempts = (runs ?? [])
+    .map((run) => ({
+      run,
+      workflow: run.check_suite?.id
+        ? ghJson(`repos/${repo()}/actions/runs?check_suite_id=${run.check_suite.id}`).workflow_runs?.[0]
+        : undefined,
+    }))
+    .filter(({ run, workflow }) => !guardSourceProblems(run, workflow, head).length)
+    .map((attempt) => {
+      const annotations = ghJson(`repos/${repo()}/check-runs/${attempt.run.id}/annotations`);
+      return { ...attempt, annotations, binding: guardBinding(attempt.run, annotations, head, target) };
+    })
+    .filter(({ binding }) => binding !== "other")
     .sort((a, b) => Number(b.run.id) - Number(a.run.id));
-  if (!forThisPr.length) die(`no release line check for #${number} into ${base} ran on the reviewed head ${head}`);
-  const { run: newest, annotations } = forThisPr[0];
-  const workflow = newest.check_suite?.id
-    ? ghJson(`repos/${repo()}/actions/runs?check_suite_id=${newest.check_suite.id}`).workflow_runs?.[0]
-    : undefined;
+  if (!attempts.length)
+    die(`no release line check, as main runs it, for #${number} into ${base} ran on the reviewed head ${head}`);
+  const { run: newest, workflow, annotations, binding } = attempts[0];
+  if (binding === "unbound")
+    die(
+      `the newest release line check on ${head} (check run ${newest.id}, ${newest.conclusion ?? newest.status}) ` +
+        `left no receipt, so whether #${number} into ${base} passed is inconclusive; rerun the guard`,
+    );
   const problems = guardRunProblems(newest, workflow, annotations, head, target);
   if (problems.length)
     die(
