@@ -8,7 +8,7 @@
  * `sudo apt-get install` underneath the running app, waits for the title-bar offer, clicks it,
  * and requires:
  *
- * - `update-handoff.json` written into the store naming the stopped version and the installed
+ * - `update-handoff.json.<claim>` published into the store naming the stopped version and the installed
  *   one, before the old app exits;
  * - the old app exiting and a new main process of the installed executable starting by itself;
  * - the new version's daemon spending the handoff (same store format: nothing to carry), which
@@ -24,7 +24,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { NativeSession } from "./session.js";
@@ -71,7 +71,12 @@ function defineUpgradeTest(): void {
     const chosen = await disposableWorkspace(session.root, session.env);
     const launched = await launchInstalled(session, profile, "x11");
     const oldPid = launched.app.process().pid!;
-    const handoffPath = join(chosen.workspace, ".orca", "update-handoff.json");
+    const store = join(chosen.workspace, ".orca");
+    // One record per stopped claim: `update-handoff.json.<claimHash>`.
+    const handoffPath = async () =>
+      (await readdir(store).catch(() => [] as string[]))
+        .filter((name) => /^update-handoff\.json\.[0-9a-f]{64}$/.test(name))
+        .map((name) => join(store, name))[0];
     try {
       const current = await launched.app.evaluate(({ app }) => app.getVersion());
       expect(next).not.toBe(current);
@@ -88,9 +93,12 @@ function defineUpgradeTest(): void {
       let watching = true;
       const watcher = (async () => {
         while (watching && !handoff) {
-          handoff = await readFile(handoffPath, "utf8")
-            .then((text) => JSON.parse(text) as typeof handoff)
-            .catch(() => undefined);
+          const path = await handoffPath();
+          handoff = path
+            ? await readFile(path, "utf8")
+                .then((text) => JSON.parse(text) as typeof handoff)
+                .catch(() => undefined)
+            : undefined;
           await sleep(20);
         }
       })();
@@ -112,19 +120,10 @@ function defineUpgradeTest(): void {
       }
       expect(relaunched, "a new ORCA main process after the restart").toBeDefined();
       // Its daemon spends the record it was handed, once it has proved the claim chain.
-      await expect
-        .poll(
-          () =>
-            readFile(handoffPath).then(
-              () => "present",
-              () => "spent",
-            ),
-          { timeout: 90_000 },
-        )
-        .toBe("spent");
+      await expect.poll(async () => ((await handoffPath()) ? "present" : "spent"), { timeout: 90_000 }).toBe("spent");
       watching = false;
       await watcher;
-      expect(handoff, "update-handoff.json was written before the old app exited").toMatchObject({
+      expect(handoff, "the handoff record was published before the old app exited").toMatchObject({
         from: current,
         to: next,
         drained: true,

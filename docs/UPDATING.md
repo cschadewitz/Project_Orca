@@ -1003,7 +1003,7 @@ in-app updater and no `orca` command; its route is **Restart to finish update** 
 app runs, it reads dpkg's status every 30 seconds, and once `apt` has fully installed an
 `orca-desktop` version other than the running one, the title bar offers that restart. It runs
 exactly the Windows sequence above (drafts prepared, admission closed and drained, the exact
-daemon stopped and its exit observed, `update-handoff.json` written naming the installed
+daemon stopped and its exit observed, `update-handoff.json.<claim>` published naming the installed
 version) and then starts the installed binary, whose bundled daemon carries the store forward
 under the same proof. A failure before the stop resumes the running version's daemon and offers
 the restart again. The target is bound at the click, after the stop and just before the launch:
