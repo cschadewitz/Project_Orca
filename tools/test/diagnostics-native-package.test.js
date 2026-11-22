@@ -86,7 +86,7 @@ it("the actual builder validates the hooks/config and keeps native output out of
   await validateConfiguration(config, new DebugLogger(false));
   expect(config.files).toContain("!dist/diagnostics-native");
   expect(config.beforePack).toBe("./scripts/diagnostics-native-package.js");
-  expect(config.afterPack).toBe("./scripts/verify-diagnostics-native.js");
+  expect(config.afterPack).toBe("./scripts/after-pack.js");
 });
 
 it("the actual Mac builder copies the existing native validator with its relative imports intact", async () => {
@@ -159,7 +159,12 @@ it.each([Buffer.from("ELF linux fixture"), Buffer.alloc(32), Buffer.from([0xca, 
 it.each(["linux"])("does not require or package a diagnostics backend on %s", (platform) => {
   beforePack({ electronPlatformName: platform });
   afterPack({ electronPlatformName: platform });
-  expect(config[platform === "win32" ? "win" : platform].extraResources).toBeUndefined();
+  // Linux may ship other resources (the window icon, packages/app/src/main/window-icon.ts),
+  // but nothing from the native diagnostics staging tree.
+  const resources = config[platform === "win32" ? "win" : platform].extraResources ?? [];
+  for (const entry of resources) {
+    expect(`${entry.from} ${entry.to}`).not.toMatch(/diagnostics/);
+  }
 });
 
 it.each(["x64", "arm64"])("Windows %s packaging refuses a changed DPAPI source after staging", (arch) => {

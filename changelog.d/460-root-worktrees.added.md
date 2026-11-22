@@ -1,1 +1,0 @@
-Opt-in `git-worktree` root isolation on built-in local Linux hosts, with frozen base commits, retained ownership receipts and fail-closed provisioning recovery. Defaults, WorkItem workspaces and child inheritance remain unchanged.

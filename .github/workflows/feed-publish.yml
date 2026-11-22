@@ -1,0 +1,170 @@
+# Put a released version's *signed* Windows build into the private desktop feed, offered to
+# the internal ring only. release-publish.yml never feeds it: its Desktop output is unsigned.
+#
+# Inputs are a version with a published (non-draft) GitHub release and the id of a successful
+# `Windows signed (spike)` run, dispatched from main with `source_sha` set to that tag's
+# commit. tools/deploy/feed-source.js accepts the run only if it is that workflow on main and
+# it succeeded, and the release only if it is published for that tag. The job then takes
+# only the artifact named for the tagged commit, re-checks every installer's Authenticode
+# signature, timestamp and publisher on this Windows runner, re-checks the update metadata
+# against the installers (release-assets.py), and then uploads with tools/deploy/feed-r2.sh.
+# Signed artifacts are kept for 7 days, so run this within a week of signing.
+#
+# feed-auto.yml dispatches this from main once a release and its signed run both exist; it
+# can also be dispatched by hand. Keep the R2 write credential in the `desktop-feed`
+# environment (deployments from main only); see docs/UPDATING.md.
+#
+# Architectures: only Windows x64 has native acceptance, so FEED_ARCHES below serves x64
+# alone; the signed artifact's arm64 installer is never uploaded. An architecture with no
+# channel file in a snapshot is offered nothing new by it. Adding arm64 is a reviewed change
+# to FEED_ARCHES after arm64 passes native acceptance (docs/UPDATING.md, architecture gate).
+#
+# Rerunning after an interruption resumes: identical objects are skipped and different ones
+# refused. feed-promote.yml moves the version on from internal.
+name: Desktop feed (publish signed)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published version, e.g. 0.7.1 (tag v0.7.1 must exist)"
+        required: true
+        type: string
+      signed_run_id:
+        description: "Run id of a successful Windows signed (spike) run for that tag's commit"
+        required: true
+        type: string
+
+# One queue per version, so a pending feed of one version never replaces another's. Bucket
+# writes stay safe across versions and with promotions: objects are written once, and
+# rings.json only conditionally, re-read and retried on a conflict (feed-r2.sh).
+concurrency:
+  group: feed-publish-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  FEED_ARCHES: x64
+
+jobs:
+  publish:
+    name: publish ${{ inputs.version }} to the internal ring
+    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
+    runs-on: windows-latest
+    environment: desktop-feed
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The pause switch (#863, item 8): nothing new enters the feed while ORCA_FEED_PAUSE is
+      # `true` (docs/UPDATING.md, "Pulling a bad build").
+      - name: Refuse while the feed is paused
+        env:
+          PAUSE: ${{ vars.ORCA_FEED_PAUSE }}
+        run: |
+          if [ "$PAUSE" = "true" ]; then
+            echo "::error::the feed is paused (ORCA_FEED_PAUSE); nothing is published. See docs/UPDATING.md, \"Pulling a bad build\"."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Check the release and the signed run
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          RUN_ID: ${{ inputs.signed_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::invalid version"; exit 1; }
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::invalid run id"; exit 1; }
+          sha=$(git rev-parse --verify -q "refs/tags/v$VERSION^{commit}" || true)
+          gh api "repos/$REPO/actions/runs/$RUN_ID" > run.json || rm -f run.json
+          gh api "repos/$REPO/releases/tags/v$VERSION" > release.json || rm -f release.json
+          artifact=$(node tools/deploy/feed-source.js "$VERSION" "$sha" run.json release.json)
+          rm -f run.json release.json
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "Feeding published v$VERSION ($sha) from signed run $RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+
+      # Only the artifact named for the tagged commit: a run that signed anything else has none.
+      - name: Download the signed build of the tagged commit
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ steps.source.outputs.artifact }}
+          run-id: ${{ inputs.signed_run_id }}
+          github-token: ${{ github.token }}
+          path: signed
+
+      - name: Verify signatures, timestamps and publisher
+        shell: pwsh
+        env:
+          EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:EXPECTED) { throw 'ORCA_FEED_PUBLISHER_CN is not set' }
+          $exes = @(Get-ChildItem -Path signed -Recurse -File -Filter *.exe)
+          if ($exes.Count -ne 2) { throw "expected 2 installers, found $($exes.Count)" }
+          foreach ($arch in $env:FEED_ARCHES.Split(' ')) {
+            $name = "ORCA-$($env:VERSION)-win-$arch.exe"
+            if (@($exes | Where-Object Name -eq $name).Count -ne 1) { throw "missing $name" }
+          }
+          foreach ($file in $exes) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+            "{0,-8} stamped={1} cn='{2}' {3}" -f $sig.Status, [bool]$sig.TimeStamperCertificate, $cn, $file.Name
+            if ($sig.Status -ne 'Valid' -or $cn -ne $env:EXPECTED -or -not $sig.TimeStamperCertificate) {
+              throw "$($file.Name) is not validly signed and timestamped by '$($env:EXPECTED)'"
+            }
+          }
+
+      # Flattens the per-architecture directories and checks each metadata file's version,
+      # SHA-512 and blockmap against the signed installer it names.
+      - name: Verify the update metadata
+        env:
+          VERSION: ${{ inputs.version }}
+        run: python tools/deploy/release-assets.py signed "$VERSION" "$FEED_ARCHES"
+
+      # The feed must serve the bytes that were accepted and published, not just a valid
+      # signature: each served installer must equal the published release's asset.
+      - name: Match the published release's installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          for arch in $FEED_ARCHES; do
+            name="ORCA-$VERSION-win-$arch.exe"
+            published=$(gh api "repos/$REPO/releases/tags/v$VERSION" \
+              --jq ".assets[] | select(.name == \"$name\") | .digest")
+            [[ "$published" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::v$VERSION has no published $name digest"; exit 1; }
+            actual="sha256:$(sha256sum "signed/$name" | cut -d' ' -f1)"
+            [[ "$actual" == "$published" ]] || { echo "::error::$name differs from the published release ($actual != $published)"; exit 1; }
+            echo "$name matches the published release ($actual)" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload to the feed and offer to internal
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
+          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+          VERSION: ${{ inputs.version }}
+        # Prove R2 still honours conditional writes before relying on them.
+        run: |
+          bash tools/deploy/feed-r2.sh probe
+          bash tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$FEED_ARCHES"

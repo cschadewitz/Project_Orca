@@ -1,8 +1,8 @@
 # When something goes wrong
 
 Part of the [Windows/Linux candidate guide](tester-guide.md). Everything here affects
-only ORCA and the throwaway folders this test made: `orca-trial`, and on Linux
-`orca-candidate`. Never use these steps on a real project or on another program.
+only ORCA and the throwaway folder this test made, `orca-trial`. Never use these steps on
+a real project or on another program, including Ubuntu's Orca screen reader.
 
 ## Stop ORCA and its bundled daemon
 
@@ -22,8 +22,9 @@ After about 30 seconds, check that nothing is left:
   runs as `ORCA.exe`.
 - **Linux:** each of these prints nothing:
   - `pgrep -a -f orca-daemon`
-  - `pgrep -a -x orca`
-  - `pgrep -a -f orca-candidate` (this also catches the AppImage's own process)
+  - `pgrep -a -f /opt/ORCA/`
+
+  Don't look for or end a process called plain `orca`: that is the screen reader.
 
   Their output includes folder paths, so keep it to yourself.
 
@@ -44,7 +45,7 @@ Only end processes from this test.
 | ORCA closed after the review (F4), before you created files | Nothing was written. Start again from F3 |
 | ORCA closed or crashed while creating files (F5) | Reopen ORCA and open **Config**. If the status bar reads **● connected**, or setup offers **Connect selected local workspace**, continue at F6. If setup refuses, don't edit or delete the half-made workspace. On Linux, make a new empty folder `~/orca-trial/workspace-2` and select it in F3. On Windows, select the same parent again; ORCA makes a new private folder. Mention the interruption in your report |
 | ORCA closed before it said connected (F6) | Reopen ORCA and wait 30 seconds; it may reconnect to your reviewed folders by itself. If not, choose **Connect selected local workspace** once. If it still doesn't connect, see [failed startup](#failed-startup) |
-| You chose **Launch** (F7) and aren't sure anything happened | **Don't choose Launch again.** Open **Runs**. If a run is listed, continue at F8. If not, after 30 seconds close ORCA, reopen it, connect as in F10, and look at **Runs** again. If there is still no run, report it. Don't use **Recover original launch** or **Restore protected launch** unless your coordinator asks |
+| You chose **Launch** (F7) and aren't sure anything happened | **Don't choose Launch again.** Open **Runs**. If a run is listed, continue at F8. If not, after 30 seconds close ORCA, reopen it, connect as in F10, and look at **Runs** again. If there is still no run, report it. Don't use **Recover original launch** or **Restore protected launch** unless your coordinator asks, or F7's Linux keyring note tells you to |
 | The computer restarted, crashed or lost power while ORCA was open, or a setup message mentions recovery or ownership | On the next launch, setup may show one of these:<br>• "The last session ended without closing cleanly, before this computer restarted."<br>• "Local startup ownership requires reconciliation…"<br>• "Writer ownership is unknown…"<br>• "The exact owned daemon is still running…"<br>It may also offer **Mark previous session ended** or **Reconcile same-boot ownership**. **Don't choose any of these on your own**, and don't choose **Review same-boot recovery** either. That button is always on the card once files exist, and it isn't needed in this round. Write down which message appeared, close ORCA and report it. Your coordinator decides whether you continue or start again with new folders |
 
 ## Failed startup

@@ -31,12 +31,12 @@ jobs:
     name: propose a release
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -126,6 +126,27 @@ jobs:
           # tools/release-pr-body.js keeps it under GitHub's 65,536-character limit by linking
           # to CHANGELOG.md on the branch when the notes are too long to inline.
           node tools/release.js notes "$VERSION" > /tmp/release-notes.md
+
+          # A final (no prerelease suffix) is compared with its newest release candidate tag,
+          # so code that merged after the candidate shows in the body before anyone merges
+          # (#863).
+          DRIFT_SINCE=""
+          base="${VERSION%%-*}"
+          if [ "$VERSION" = "$base" ]; then
+            DRIFT_SINCE=$(git tag -l "v$base-rc.*" --sort=-v:refname | head -n 1)
+          fi
+          # No stale output: release-pr-body.js refuses a missing file rather than reading it
+          # as "nothing changed", and a failed diff stops this step (set -e).
+          rm -f /tmp/drift.txt
+          if [ -n "$DRIFT_SINCE" ]; then
+            # The same paths as DRIFT_PATHS in tools/release-pr-body.js: sources, manifests,
+            # the lockfile, root build config and desktop packaging. HEAD is main before the
+            # bump commit.
+            git diff --stat=200,150 "$DRIFT_SINCE" HEAD -- packages/ workflows/ templates/ package.json \
+              pnpm-lock.yaml pnpm-workspace.yaml patches/ 'tsconfig*.json' release-compatibility.json \
+              .github/workflows/desktop.yml > /tmp/drift.txt
+          fi
+          export DRIFT_SINCE DRIFT_FILE=/tmp/drift.txt
           node tools/release-pr-body.js /tmp/release-notes.md > /tmp/pr-body.md
 
           git switch -c "release/v$VERSION"

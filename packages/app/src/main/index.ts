@@ -30,7 +30,7 @@ import { FirstRunSetup } from "./first-run/setup.js";
 import { installFirstRunIPC, startFirstRunWorkspace } from "./first-run/ipc.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
 import type { DiagnosticsResult } from "../diagnostics-contract.js";
-import { AdmissionIntents, AdmissionIntentController } from "./admission-intents.js";
+import { AdmissionIntents, AdmissionIntentController, protectedStorageBridgeError } from "./admission-intents.js";
 import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
 import type { LaunchReview, PreflightParams } from "../configuration-launch-contract.js";
 import { RunsAdmitResultSchema } from "@orca/protocol";
@@ -44,6 +44,8 @@ import { createManagedMacUpdateApplication } from "./mac-managed-update-applicat
 import { createManagedMacNativeProviders } from "./mac-native-providers.js";
 import { updateDriver } from "./update-driver.js";
 import { basename, dirname, join } from "node:path";
+import { windowIcon } from "./window-icon.js";
+import { revealWhenReady } from "./window-reveal.js";
 import { fileURLToPath } from "node:url";
 import {
   app,
@@ -368,6 +370,8 @@ function handle<P, R>(channel: string, run: (params: P) => Promise<R>): void {
       return { ok: true, result: await appWriters.run(() => run(params)) };
     } catch (e) {
       if (e instanceof DaemonClientError) return { ok: false, error: e.error };
+      const storage = protectedStorageBridgeError(e);
+      if (storage) return { ok: false, error: storage };
       return { ok: false, error: { code: "AGENT_TRANSPORT", message: e instanceof Error ? e.message : String(e) } };
     }
   });
@@ -1235,6 +1239,11 @@ function createWindow(): void {
     backgroundColor: canvasColor(theme),
     // The renderer draws the title bar; the OS keeps only its buttons (window-chrome.ts).
     ...windowChrome(process.platform, theme),
+    ...windowIcon(process.platform, {
+      packaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appRoot: fileURLToPath(new URL("../..", import.meta.url)),
+    }),
     show: false,
     webPreferences: {
       // `.cjs`, because a sandboxed preload is evaluated as a plain script and this package
@@ -1267,7 +1276,13 @@ function createWindow(): void {
     diagnostics.rendererDisposed();
   });
   macUpdateWindows.track(win);
-  win.once("ready-to-show", () => win.show());
+  // `ready-to-show` alone can leave the window hidden for good under Wayland (#858).
+  revealWhenReady(win, {
+    onReveal: (reason) => {
+      if (reason !== "ready-to-show")
+        console.warn(`[orca] window shown by the ${reason} fallback; no first paint was reported`);
+    },
+  });
   if (rendererUrl) {
     void win.loadURL(rendererUrl);
     win.webContents.openDevTools({ mode: "detach" });

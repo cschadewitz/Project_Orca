@@ -27,6 +27,11 @@ on:
         description: The version to stamp into the artifacts. Defaults to the root package.json's.
         type: string
         required: false
+      hosted_only:
+        description: Never route to self-hosted runners (release rehearsals of arbitrary refs).
+        type: boolean
+        required: false
+        default: false
     secrets:
       CI_RUNNER_HEALTH_URL:
         description: The runner health endpoint; without it, Linux jobs use GitHub-hosted runners.
@@ -55,17 +60,22 @@ jobs:
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v7
+      # The workflow's own commit, not inputs.ref: the code that picks runners and the
+      # matrix is never the code under test (the same rule as app-smoke.yml's picker).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref || github.sha }}
-      - uses: actions/setup-node@v7
+          sparse-checkout: tools
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      # Tyler's runners when one is idle, GitHub-hosted otherwise (tools/linux-runner.js).
-      # Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners.
+      # Linux packaging runs GitHub-hosted for now: Tyler's hosts run out of disk building the
+      # x64 and arm64 archives (ENOSPC on tyler-1/2/3, Nov 2026). To go back to Tyler's runners
+      # when one is idle (tools/linux-runner.js), restore
+      # `${{ inputs.hosted_only && 'true' || vars.CI_FORCE_HOSTED }}` here; keep hosted_only.
       - id: pick
         env:
-          FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
+          FORCE_HOSTED: "true"
           HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
         run: node tools/linux-runner.js
       - id: select
@@ -88,7 +98,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
           # Nothing in this job pushes or fetches, and some of its runners are persistent
@@ -97,9 +107,9 @@ jobs:
 
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
       # resolve the store path. Version comes from package.json packageManager.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # One version: this is about producing an artifact, not about Node support.
           # `mise.toml` pins 24, so that is what a developer reproduces locally.
@@ -110,7 +120,7 @@ jobs:
       # platform tools. Keep these platform-specific; the package step consumes both x64
       # and arm64 downloads on the same runner.
       - name: Restore Electron downloads
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ matrix.cache_path }}
           key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -126,10 +136,17 @@ jobs:
       - name: The version to stamp
         id: version
         shell: bash
+        env:
+          # Data, never spliced into the script: the caller's version arrives as a variable.
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          version="${{ inputs.version }}"
+          version="$VERSION"
           if [ -z "$version" ]; then version=$(node -p 'require("./package.json").version'); fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::not a semver version; nothing packaged"
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "packaging $version"
 
@@ -257,7 +274,7 @@ jobs:
       - name: Prepare a GitHub-hosted Linux runner
         if: matrix.name == 'linux' && runner.environment == 'github-hosted'
         env:
-          ELECTRON_EXE: packages/app/dist/release/linux-unpacked/orca
+          ELECTRON_EXE: packages/app/dist/release/linux-unpacked/orca-desktop
         run: |
           set -euo pipefail
           command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
@@ -305,7 +322,7 @@ jobs:
           # disconnected for setup by design (src/main/index.ts), so give it a disposable
           # workspace: that is the explicit target that makes it start its bundled daemon.
           workspace=$(mktemp -d "$RUNNER_TEMP/orca-app-workspace.XXXXXX")
-          env -u ORCA_DAEMON_URL ORCA_WORKSPACE="$workspace" setsid xvfb-run -a packages/app/dist/release/linux-unpacked/orca \
+          env -u ORCA_DAEMON_URL ORCA_WORKSPACE="$workspace" setsid xvfb-run -a packages/app/dist/release/linux-unpacked/orca-desktop \
             --user-data-dir="$profile" > app.log 2>&1 &
           app=$!
           # The display, app and bundled daemon share this job's own process group.
@@ -319,6 +336,184 @@ jobs:
           grep -q 'listening on http://127.0.0.1:' app.log
           pgrep -af -g "$app" orca-daemon.mjs
 
+      # The supported Ubuntu 24.04 install (#853), as a tester gets it: the x64 .deb through
+      # apt, on a host whose `kernel.apparmor_restrict_unprivileged_userns` is on, launched
+      # from its installed path with the sandbox on and no profile of this job's own. The
+      # prepare step above only covers linux-unpacked/orca-desktop; the installed copy is a
+      # different file, so the package's own install script has to provide the exception or
+      # Chromium aborts before the first window, as the rc.2 tarball did. Then: the bundled
+      # daemon answers, renderers run in their own user namespace (the sandbox is really on),
+      # SIGTERM shuts the app and its daemon down, and removing the package removes the
+      # profile. GitHub-hosted only: it installs into /opt and /etc with sudo, which a
+      # persistent self-hosted runner must not be asked to do.
+      #
+      # Ubuntu Desktop ships the GNOME screen reader as package `orca` (/usr/bin/orca,
+      # orca.desktop). It is installed first, and must come through the install and the
+      # removal of ORCA's package untouched: same version, same owner of its files.
+      - name: The .deb installs and launches sandboxed on stock Ubuntu
+        if: matrix.name == 'linux' && runner.environment == 'github-hosted'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=(packages/app/dist/release/ORCA-*-linux-amd64.deb)
+          test "${#debs[@]}" = 1
+          deb=$(readlink -f "${debs[0]}")
+          # The exact packages this run produced, for the record.
+          (cd packages/app/dist/release && sha256sum ORCA-*.deb ORCA-*.tar.gz ORCA-*.AppImage) | tee -a "$GITHUB_STEP_SUMMARY"
+
+          # Every payload member by numeric mode: owned by root, no setuid, setgid or sticky
+          # bit anywhere, nothing group- or other-writable but symlinks. The install script,
+          # not the archive, sets the helper's mode.
+          dpkg-deb --fsys-tarfile "$deb" | python3 -c '
+          import sys, tarfile
+          bad = []
+          with tarfile.open(fileobj=sys.stdin.buffer, mode="r|") as tar:
+              n = 0
+              for m in tar:
+                  n += 1
+                  if m.uid or m.gid or m.mode & 0o7000 or (not m.issym() and m.mode & 0o022):
+                      bad.append(f"{m.mode:04o} {m.uid}:{m.gid} {m.name}")
+                  if m.name in ("./opt/ORCA/orca-desktop", "./opt/ORCA/chrome-sandbox"):
+                      print(f"{m.mode:04o} {m.name}")
+          print(f"{n} payload members checked")
+          if bad:
+              print("\n".join(bad)); sys.exit("::error::the .deb carries owned, special-bit or writable entries")
+          '
+          # The package's own identity, and no claim on the screen reader's.
+          test "$(dpkg-deb -f "$deb" Package)" = orca-desktop
+          for field in Conflicts Breaks Replaces Provides Pre-Depends; do
+            test -z "$(dpkg-deb -f "$deb" "$field")"
+          done
+          if dpkg-deb -c "$deb" | awk '{ print $NF }' | grep -E '^\./usr/bin/orca$|/orca\.desktop$|apparmor\.d/orca$|^\./usr/share/mime/'; then
+            echo "::error::the .deb ships a path the screen reader or the MIME database owns"; exit 1
+          fi
+
+          # The maintainer scripts as generated. postinst is the repository's
+          # (build/linux/after-install.tpl): helper always 0755, never setuid; no cache
+          # refreshes (dpkg triggers do that); the scoped profile, and a refusal if the
+          # restriction is on and the profile could not load. postrm is electron-builder's.
+          scripts=$(mktemp -d "$RUNNER_TEMP/orca-deb-control.XXXXXX")
+          dpkg-deb -e "$deb" "$scripts"
+          ls -ln "$scripts"
+          test "$(stat -c %a "$scripts/postinst")" = 755
+          test "$(stat -c %a "$scripts/postrm")" = 755
+          # One command per check: under `set -e` a failure before the last command of an
+          # && list does not stop the step.
+          for unexpected in preinst prerm triggers config templates; do
+            if [ -e "$scripts/$unexpected" ]; then echo "::error::the .deb carries an unexpected $unexpected"; exit 1; fi
+          done
+          for script in postinst postrm; do
+            if ! bash -n "$scripts/$script"; then echo "::error::$script is not valid bash"; exit 1; fi
+          done
+          grep -qx "EXECUTABLE='/opt/ORCA/orca-desktop'" "$scripts/postinst"
+          grep -qx "HELPER='/opt/ORCA/chrome-sandbox'" "$scripts/postinst"
+          grep -qx 'chmod 0755 "$HELPER"' "$scripts/postinst"
+          grep -q "update-alternatives --install '/usr/bin/orca-desktop' 'orca-desktop' \"\$EXECUTABLE\" 100" "$scripts/postinst"
+          grep -qx "PROFILE_TARGET='/etc/apparmor.d/orca-desktop'" "$scripts/postinst"
+          grep -q "update-alternatives --remove 'orca-desktop' '/opt/ORCA/orca-desktop'" "$scripts/postrm"
+          grep -q "APPARMOR_PROFILE_DEST='/etc/apparmor.d/orca-desktop'" "$scripts/postrm"
+          # Code only: the template's comments name what it deliberately does not do.
+          if grep -hvE '^[[:space:]]*#' "$scripts/postinst" "$scripts/postrm" \
+            | grep -nE '4755|[0-7]?[4-7][0-7]{3}[^0-9]|chmod [ug]?\+s|u\+s|update-mime-database|update-desktop-database|no-sandbox|apparmor_restrict_unprivileged_userns=0'; then
+            echo "::error::a maintainer script can make the helper setuid, weaken the sandbox or refresh caches"; exit 1
+          fi
+          if grep -nE "/usr/bin/orca'|alternatives/orca'|apparmor\.d/orca'|'orca'" "$scripts/postinst" "$scripts/postrm"; then
+            echo "::error::a maintainer script touches the screen reader's names"; exit 1
+          fi
+          rm -rf "$scripts"
+
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends orca
+          reader() { dpkg-query -W -f '${Status} ${Version}\n' orca; dpkg -S /usr/bin/orca; readlink -f /usr/bin/orca; }
+          before=$(reader)
+          echo "screen reader: $before"
+          sudo apt-get install -y -q "$deb"
+          test "$(reader)" = "$before"
+          dpkg-query -W -f '${Status}\n' orca-desktop | grep -q 'install ok installed'
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          sudo grep -q '^orca-desktop ' /sys/kernel/security/apparmor/profiles
+
+          # Installed, before any launch: modes as numbers (%a shows special bits), owners,
+          # and the entry point a user's launcher and menu resolve to.
+          stat -c '%a %U:%G %n' /opt/ORCA/orca-desktop /opt/ORCA/chrome-sandbox
+          test "$(stat -c '%a %u:%g' /opt/ORCA/chrome-sandbox)" = '755 0:0'
+          test "$(stat -c '%a %u:%g' /opt/ORCA/orca-desktop)" = '755 0:0'
+          special=$(sudo find /opt/ORCA \( -perm /7000 -o \( ! -type l -perm /022 \) -o ! -user root \) -print)
+          if [ -n "$special" ]; then echo "$special"; echo "::error::installed files are special-bit, writable or not root's"; exit 1; fi
+          test "$(readlink -f /usr/bin/orca-desktop)" = /opt/ORCA/orca-desktop
+          test "$(readlink -f "$(command -v orca-desktop)")" = /opt/ORCA/orca-desktop
+          grep -qx 'Exec=/opt/ORCA/orca-desktop %U' /usr/share/applications/orca-desktop.desktop
+          if grep -q '^MimeType=' /usr/share/applications/orca-desktop.desktop; then
+            echo "::error::the desktop entry declares MIME types this package does not document"; exit 1
+          fi
+          if unshare --user --map-root-user true 2> /dev/null; then
+            echo "::error::an unrelated executable can still create user namespaces"; exit 1
+          fi
+          # The launch below is the runner's own unprivileged account, never sudo.
+          test "$(id -u)" != 0
+
+          profile=$(mktemp -d "$RUNNER_TEMP/orca-deb-profile.XXXXXX")
+          workspace=$(mktemp -d "$RUNNER_TEMP/orca-deb-workspace.XXXXXX")
+          env -u ORCA_DAEMON_URL ORCA_WORKSPACE="$workspace" setsid xvfb-run -a orca-desktop \
+            --user-data-dir="$profile" > deb-app.log 2>&1 &
+          group=$!
+          trap 'kill -- "-$group" 2>/dev/null || true; sleep 1; rm -rf "$profile" "$workspace" || true' EXIT
+          for _ in $(seq 1 60); do
+            if grep -q 'listening on http://127.0.0.1:' deb-app.log; then break; fi
+            sleep 1
+          done
+          echo '--- the installed app said ---'
+          cat deb-app.log
+          grep -q 'listening on http://127.0.0.1:' deb-app.log
+          pgrep -af -g "$group" orca-daemon.mjs
+          if grep -q 'SUID sandbox helper' deb-app.log; then
+            echo "::error::Chromium fell back to the SUID sandbox"; exit 1
+          fi
+
+          # The browser process is the installed binary with no --type; a sandboxed renderer
+          # lives in a user namespace of its own. Found by executable, not by argv[0], which
+          # is whatever the launcher typed (here `orca-desktop`, through /usr/bin).
+          installed() {
+            for pid in $(pgrep -f 'orca' || true); do
+              [ "$(readlink "/proc/$pid/exe" 2> /dev/null)" = /opt/ORCA/orca-desktop ] && echo "$pid"
+            done
+            return 0
+          }
+          main=; renderer=
+          for pid in $(installed); do
+            args=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+            case "$args" in
+              # The bundled daemon is the same executable run as Node, with no --type either.
+              *orca-daemon.mjs*) ;;
+              *--type=renderer*) renderer=${renderer:-$pid} ;;
+              *--type=*) ;;
+              *) main=${main:-$pid} ;;
+            esac
+          done
+          if [ -z "$main" ] || [ -z "$renderer" ]; then echo "::error::no browser ($main) or renderer ($renderer) process found"; exit 1; fi
+          if [ "$(readlink "/proc/$main/ns/user")" = "$(readlink "/proc/$renderer/ns/user")" ]; then
+            echo "::error::the renderer shares the browser's user namespace: no namespace sandbox"; exit 1
+          fi
+          echo "browser $main, renderer $renderer in $(readlink "/proc/$renderer/ns/user")"
+
+          kill -TERM "$main"
+          for _ in $(seq 1 30); do
+            if [ -z "$(installed)" ] && ! pgrep -f orca-daemon.mjs > /dev/null; then break; fi
+            sleep 1
+          done
+          if [ -n "$(installed)" ] || pgrep -af orca-daemon.mjs; then
+            echo "::error::the app or its daemon outlived SIGTERM"; exit 1
+          fi
+
+          sudo apt-get remove -y -q orca-desktop
+          test ! -e /etc/apparmor.d/orca-desktop
+          if sudo grep -q '^orca-desktop ' /sys/kernel/security/apparmor/profiles; then
+            echo "::error::removing the package left its AppArmor profile loaded"; exit 1
+          fi
+          test "$(reader)" = "$before"
+          echo "screen reader unchanged: $(reader)"
+
       # The standalone daemon artifact, named for the release. Built once and taken from the
       # Linux leg: it is one ESM file with no platform in it, and three identical copies on
       # a release page would only raise the question of which one to take.
@@ -330,12 +525,13 @@ jobs:
       # Installers, archives and Windows update metadata/sidecars. Unpacked app directories
       # stay out; the updater needs the blockmaps beside the installers.
       - name: Upload the artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-${{ matrix.name }}
           path: |
             packages/app/dist/release/*.AppImage
             packages/app/dist/release/*.tar.gz
+            packages/app/dist/release/*.deb
             packages/app/dist/release/*.dmg
             packages/app/dist/release/*.zip
             packages/app/dist/release/*.exe
@@ -357,7 +553,7 @@ jobs:
       # Whatever the packaging said, when it failed to say anything useful.
       - name: Upload the packaging log
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-${{ matrix.name }}-logs
           path: |

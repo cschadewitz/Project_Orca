@@ -30,7 +30,7 @@ Kind: success / stuck / failure / confusing step / idea
    Platform: Windows / Linux
    OS name and version, as the prerequisites check on your platform page showed it:
    Architecture: x64 / arm64
-   Linux only, file type: tar.gz / AppImage
+   Linux only, install: .deb installed / stopped before installing
    Windows only, install: installer completed / stopped before installing
    Git version (git --version):
 

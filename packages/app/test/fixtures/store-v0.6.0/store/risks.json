@@ -1,0 +1,50 @@
+[
+  {
+    "id": "risk_QJKZRFQ661MBE8W5Z5B6042EW7",
+    "planId": "plan_01M7Y4N2F8SXV6CPP5X7GXWN58",
+    "key": "migration-downtime",
+    "title": "Schema migration locks the users table",
+    "description": "",
+    "category": "operational",
+    "likelihood": 2,
+    "impact": 4,
+    "status": "open",
+    "triggers": [],
+    "affects": [
+      "wi_01M7Y4N2FEP02284GR1X5MZ93Y"
+    ],
+    "mitigatedBy": [],
+    "origin": {
+      "kind": "decomposition",
+      "runId": "run_01M7Y4N25RKWC5S4YPWMJX1R3M",
+      "artifactId": "art_01M7Y4N2EC8Z1T9JE45YV9392Q"
+    },
+    "createdAt": "2026-11-21T04:08:25.844Z",
+    "updatedAt": "2026-11-21T04:08:25.844Z",
+    "mitigation": "Run the migration online"
+  },
+  {
+    "id": "risk_X3P4139EJ2QGDJ360E93TM0TAX",
+    "planId": "plan_01M7Y4N2F8SXV6CPP5X7GXWN58",
+    "key": "token-leak",
+    "title": "Tokens logged in plaintext",
+    "description": "",
+    "category": "security",
+    "likelihood": 2,
+    "impact": 5,
+    "status": "open",
+    "triggers": [],
+    "affects": [
+      "wi_01M7Y4N2FEB9B6JRDH72BKHGMZ"
+    ],
+    "mitigatedBy": [],
+    "origin": {
+      "kind": "artifact",
+      "artifactId": "art_01M7Y4N2Q7SR5E87P5HQ6VCV7G",
+      "runId": "run_01M7Y4N25RKWC5S4YPWMJX1R3M"
+    },
+    "createdAt": "2026-11-21T04:08:26.090Z",
+    "updatedAt": "2026-11-21T04:08:26.090Z",
+    "mitigation": "Redact in logger"
+  }
+]

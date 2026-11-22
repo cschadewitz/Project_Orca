@@ -12,12 +12,14 @@
       "import": "./dist/index.js"
     },
     "./css/*": "./css/*",
-    "./fonts/*": "./fonts/*"
+    "./fonts/*": "./fonts/*",
+    "./brand/*": "./brand/*"
   },
   "files": [
     "dist",
     "css",
-    "fonts"
+    "fonts",
+    "brand"
   ],
   "scripts": {
     "build:tokens": "node build-tokens.js",

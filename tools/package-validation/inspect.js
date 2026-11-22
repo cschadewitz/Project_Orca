@@ -26,6 +26,7 @@ import {
   readAsar,
   readBlockmap,
   readElf,
+  readAr,
   readPe,
   readTarGz,
   readUpdateMetadata,
@@ -46,6 +47,7 @@ export const NOT_ESTABLISHED = Object.freeze([
   "Authenticode validity, publisher identity or SmartScreen trust. An embedded certificate table is reported as present and unverified; absence means unsigned.",
   "Launch, rendering, font use, CSP enforcement, logs, shutdown, install, uninstall, update, failure recovery and rollback. These need the native runtime procedures.",
   "AppImage contents (squashfs). Inspect the same-architecture tar.gz and run the AppImage in a disposable environment.",
+  "Debian package contents and maintainer scripts (xz control and data archives). Install the .deb on a disposable Ubuntu baseline; desktop.yml installs and launches the x64 package.",
   "Full production dependency closure and blockmap chunk checksums (BLAKE2b-144).",
   "macOS artifacts, which are out of scope here.",
 ]);
@@ -170,6 +172,7 @@ export function classify(name, version) {
   const rules = [
     [new RegExp(`^ORCA-${v}-linux-(x64|arm64)\\.tar\\.gz$`), "linux-archive", "linux"],
     [new RegExp(`^ORCA-${v}-linux-(x86_64)\\.AppImage$`), "appimage", "linux"],
+    [new RegExp(`^ORCA-${v}-linux-(amd64|arm64)\\.deb$`), "deb", "linux"],
     [new RegExp(`^ORCA-${v}-win-(x64|arm64)\\.zip$`), "windows-archive", "win"],
     [new RegExp(`^ORCA-${v}-win-(x64|arm64)\\.exe$`), "windows-installer", "win"],
     [new RegExp(`^ORCA-${v}-win-(x64|arm64)\\.exe\\.blockmap$`), "blockmap", "win"],
@@ -178,7 +181,7 @@ export function classify(name, version) {
   ];
   for (const [pattern, kind, platform] of rules) {
     const match = pattern.exec(name);
-    if (match) return { kind, platform, arch: match[1] === "x86_64" ? "x64" : match[1] };
+    if (match) return { kind, platform, arch: ["x86_64", "amd64"].includes(match[1]) ? "x64" : match[1] };
   }
   if (/\.(?:dmg|pkg)$|-mac-|-darwin-/.test(name)) fail("artifact_out_of_scope", "macOS artifacts are excluded");
   fail("artifact_unrecognized", name);
@@ -360,7 +363,7 @@ function inspectTree(entries, { platform, arch }, source, version, scratch) {
     return entry?.kind === "file" ? entry : undefined;
   };
   const checks = [];
-  const executable = file(platform === "linux" ? "orca" : "ORCA.exe");
+  const executable = file(platform === "linux" ? "orca-desktop" : "ORCA.exe");
   if (!executable) fail("executable_missing");
   if (platform === "linux") {
     if (readElf(executable.body).machine !== arch) fail("executable_arch_mismatch");
@@ -472,6 +475,22 @@ function inspectOne(artifact, source, version, scratch) {
       return {
         checks: ["appimage-elf-runtime", "appimage-squashfs-magic"],
         observations: { squashfsOffset: squashfs, contents: "not-inspected" },
+      };
+    }
+    case "deb": {
+      const members = readAr(bytes);
+      const names = members.map((member) => member.name);
+      if (names[0] !== "debian-binary" || members[0].body.toString("latin1") !== "2.0\n")
+        fail("deb_format_invalid", "debian-binary");
+      if (
+        names.length !== 3 ||
+        !/^control\.tar(?:\.(?:gz|xz|zst))?$/.test(names[1]) ||
+        !/^data\.tar(?:\.(?:gz|xz|zst))?$/.test(names[2])
+      )
+        fail("deb_format_invalid", names.join(","));
+      return {
+        checks: ["deb-ar-members", "deb-format-version"],
+        observations: { members: names, contents: "not-inspected" },
       };
     }
     case "daemon": {

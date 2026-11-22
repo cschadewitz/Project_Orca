@@ -14,6 +14,7 @@ import type {
   PreflightParams,
   PreflightResult,
 } from "../../../src/configuration-launch-contract.js";
+import type { ProtectedStorageReason, ProtectedStorageStage } from "../../../src/bridge.js";
 import type { RequestOverrideChoices } from "./request-overrides.js";
 
 /** App-local injection contracts. These do not register an RPC or a storage format. */
@@ -86,9 +87,22 @@ export interface LaunchIntent {
 }
 /** Sanitized app-local failure classification, mapped from canonical refusals by the adapter. */
 export class LaunchPortFailure extends Error {
-  constructor(readonly reason: "unauthorized" | "stale" | "validation" | "unavailable") {
+  constructor(
+    readonly reason: "unauthorized" | "stale" | "validation" | "unavailable" | "protected-storage",
+    /** Only for `protected-storage`: the main process's cause and its recovery guidance. */
+    readonly storage?: ProtectedStorageRefusalView,
+  ) {
     super("Guided launch adapter refused the operation.");
   }
+}
+/**
+ * A fail-closed protected-storage refusal (#857). Only `before-send` says this launch was not
+ * sent; any other stage means a launch may exist and must be recovered, never sent again.
+ */
+export interface ProtectedStorageRefusalView {
+  reason: ProtectedStorageReason;
+  stage: ProtectedStorageStage;
+  message: string;
 }
 type WithoutOperation<T> = T extends unknown ? Omit<T, "operationId"> : never;
 export type LaunchReceipt = WithoutOperation<RunsAdmitResult> | RequestsSubmitResult;
@@ -172,4 +186,6 @@ export interface LaunchState {
   intent?: LaunchIntent | undefined;
   result?: LaunchResult | undefined;
   unresolvedReview?: LaunchReview | undefined;
+  /** Set when protected storage refused before anything was sent; the review stays ready to retry. */
+  storageRefusal?: ProtectedStorageRefusalView | undefined;
 }

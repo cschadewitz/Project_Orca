@@ -39,7 +39,7 @@ Keep these separate in any report. Evidence from one class never stands in for a
 | **T — signing and trust** | Native Windows, with provisioned signing only | Authenticode validity, publisher identity, SmartScreen behaviour | Nothing while builds are unsigned: record "unsigned" |
 | **U — update** | Disposable Windows VM plus a disposable HTTPS feed | The N→N+1 cycle, failure/recovery and rollback behaviour of the shipped updater | Linux/macOS updating (not shipped), Debian deployment updates (separate owner) |
 
-Current builds are **unsigned** ([RELEASING.md](../../RELEASING.md#signing-and-notarisation-are-not-done)).
+Current builds are **unsigned** ([RELEASING.md](../../RELEASING.md#signing-and-notarisation)).
 Until signing is provisioned, class T has exactly one valid result per installer: *unsigned*.
 Do not create, import or trust a certificate to produce a different one.
 
