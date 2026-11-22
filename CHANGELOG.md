@@ -64,7 +64,10 @@ format, or older than the previous release's, is refused without being changed.
   beside x64, accept it automatically on a native Windows arm64 machine (signature, install
   over the previous arm64 release, ARM64 binary, app reaches its bundled daemon), and the
   desktop feed serves arm64 for any release whose arm64 installer passed that acceptance.
-  x64 feeding is unchanged.
+  x64 feeding is unchanged. 0.7.1 is the first final with a signed arm64 installer, so its
+  acceptance is a fresh install of those exact bytes: it does not prove an in-place upgrade
+  or store carryover from 0.6.0's unsigned arm64 build (0.7.0 had none). Upgrades over an
+  accepted arm64 release start with 0.7.2.
 
 #### cli
 
