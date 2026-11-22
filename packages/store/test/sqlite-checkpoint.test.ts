@@ -1,7 +1,9 @@
 /**
  * WAL checkpointing on the SQLite metadata backend (#339): the settings every connection gets,
- * the idle checkpoint that copies the log back once writes stop, the cap on the log file after a
- * burst, and that none of it outlives the store or fails a write that has committed.
+ * the idle checkpoint that copies the log back once writes stop (seen through its own observer
+ * and the database file, never by running another checkpoint first), what the log file keeps
+ * after it starts over, that a pinned reader lets it grow past every setting, and that none of
+ * it outlives the store or fails a write that has committed.
  */
 import { existsSync, statSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -9,7 +11,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { SQLITE_CHECKPOINT, SQLITE_METADATA_FILE, SqliteDatabase, sqliteCollection } from "@orca/store";
+import {
+  SQLITE_CHECKPOINT,
+  SQLITE_METADATA_FILE,
+  SqliteDatabase,
+  sqliteCollection,
+  type SqliteCheckpointEvent,
+} from "@orca/store";
 
 const dirs: string[] = [];
 const open: { close(): void }[] = [];
@@ -54,33 +62,78 @@ describe("SQLite checkpoints", () => {
 
   it("copies the log back into the database once writes stop", async () => {
     // No automatic checkpoint: only the idle one can move pages out of the log.
-    const { db, file } = await database({ checkpoint: { autoPages: 0, idleMs: 30 } });
+    const events: SqliteCheckpointEvent[] = [];
+    const { db, file } = await database({ checkpoint: { autoPages: 0, idleMs: 30, observe: (e) => events.push(e) } });
     await fill(db, 512);
-    const before = statSync(file).size;
     // The rows are in the log, not yet in the database file.
-    expect(before).toBeLessThan(256 * 1024);
+    expect(statSync(file).size).toBeLessThan(256 * 1024);
+    expect(events).toEqual([]);
     await sleep(150);
+    // The timer's own checkpoint did the copy: it reports the whole log copied, and the database
+    // file now holds the rows. Nothing else has checkpointed this database.
+    expect(events).toHaveLength(1);
+    const [idle] = events;
+    expect(idle).toMatchObject({ trigger: "idle", busy: false });
+    expect("logPages" in idle! && idle.logPages).toBeGreaterThan(100);
+    expect("logPages" in idle! && idle.checkpointedPages === idle.logPages).toBe(true);
     expect(statSync(file).size).toBeGreaterThan(512 * 1024);
-    // Everything was copied: a checkpoint now has nothing left to do.
-    const after = db.checkpoint("passive");
-    expect(after.busy).toBe(false);
-    expect(after.checkpointedPages).toBe(after.logPages);
+  });
+
+  it("runs no checkpoint of its own when the idle checkpoint is off", async () => {
+    const events: SqliteCheckpointEvent[] = [];
+    const { db, file } = await database({ checkpoint: { autoPages: 0, idleMs: 0, observe: (e) => events.push(e) } });
+    await fill(db, 512);
+    const size = statSync(file).size;
+    await sleep(150);
+    expect(events).toEqual([]);
+    expect(statSync(file).size).toBe(size);
   });
 
   it("waits for a burst to end rather than checkpointing after every write", async () => {
-    const { db, file } = await database({ checkpoint: { autoPages: 0, idleMs: 200 } });
+    const events: SqliteCheckpointEvent[] = [];
+    const { db, file } = await database({ checkpoint: { autoPages: 0, idleMs: 200, observe: (e) => events.push(e) } });
     const start = statSync(file).size;
     // Writes keep coming more often than the idle window: no checkpoint runs between them.
     for (let i = 0; i < 6; i++) {
       await fill(db, 32);
       await sleep(40);
     }
+    expect(events).toEqual([]);
     expect(statSync(file).size).toBe(start);
     await sleep(400);
+    expect(events).toHaveLength(1);
     expect(statSync(file).size).toBeGreaterThan(start);
   });
 
-  it("cuts the log file back to its limit after a burst has been checkpointed", async () => {
+  it("lets the log grow past every setting while a reader holds a snapshot", async () => {
+    const limit = 256 * 1024;
+    const events: SqliteCheckpointEvent[] = [];
+    const { db, file, wal } = await database({
+      checkpoint: { autoPages: 16, idleMs: 30, walLimitBytes: limit, observe: (e) => events.push(e) },
+    });
+    await fill(db, 8);
+    const reader = new SqliteDatabase(file, { checkpoint: { idleMs: 0 } });
+    open.push(reader);
+    reader.db.exec("BEGIN");
+    reader.db.prepare("SELECT COUNT(*) FROM documents").get();
+    await fill(db, 1024);
+    // Neither the automatic trigger (16 pages) nor the retention limit bounds growth here.
+    expect(wal()).toBeGreaterThan(4 * limit);
+    await sleep(120);
+    // The idle checkpoint ran but could not copy past the reader's snapshot.
+    const idle = events.at(-1)!;
+    expect("logPages" in idle && idle.checkpointedPages < idle.logPages).toBe(true);
+    expect(wal()).toBeGreaterThan(4 * limit);
+    // Once the reader lets go, a checkpoint copies everything, and the next write starts the
+    // log over and cuts the file back to what it may keep.
+    reader.db.exec("COMMIT");
+    const done = db.checkpoint("passive");
+    expect(done.checkpointedPages).toBe(done.logPages);
+    await fill(db, 1);
+    expect(wal()).toBeLessThanOrEqual(limit);
+  });
+
+  it("keeps no more than its limit once the log starts over after a burst", async () => {
     const limit = 256 * 1024;
     const { db, wal } = await database({ checkpoint: { autoPages: 0, idleMs: 0, walLimitBytes: limit } });
     await fill(db, 2048);
@@ -94,10 +147,10 @@ describe("SQLite checkpoints", () => {
     expect(wal()).toBe(0);
   });
 
-  it("keeps the automatic checkpoint as the bound for a connection that never goes idle", async () => {
+  it("keeps the log near the automatic trigger for a connection that never goes idle, with no readers", async () => {
     const { db, wal } = await database({ checkpoint: { autoPages: 64, idleMs: 0 } });
     await fill(db, 2048);
-    // 64 pages of 4 KiB, plus the one transaction that crossed it.
+    // 64 pages of 4 KiB, plus the one transaction that crossed it: observed here, not promised.
     expect(wal()).toBeLessThan(64 * 4096 + 128 * 1024);
   });
 

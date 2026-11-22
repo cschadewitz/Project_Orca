@@ -370,8 +370,12 @@ export async function projectionRebuild({ api, handle, root, repeat }) {
 
 /**
  * A sustained burst of appends to one run, as an agent streaming output does, on a backend with a
- * write-ahead log (SQLite, #339): how the log grows, what the commits that run a checkpoint cost,
- * and what is left once writes stop. Backends without a log report that they have none.
+ * write-ahead log (SQLite, #339): how large the log grows (sampled, a measurement and not a
+ * bound SQLite keeps), how append latency is spread, and what the store's own idle checkpoint
+ * did once writes stopped, as the store reported it. Backends without a log say they have none.
+ *
+ * Appends over 5 ms are reported as latency outliers. Many are commits that ran SQLite's
+ * automatic checkpoint, but nothing here tells them apart from any other slow commit.
  */
 export async function walCheckpoint({ handle, scale }) {
   if (!handle.wal) return { skipped: "no write-ahead log on this backend" };
@@ -385,7 +389,10 @@ export async function walCheckpoint({ handle, scale }) {
     payload: { workflowId: "bench", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} },
   });
   const latency = [];
-  let maxWal = wal.bytes();
+  // The file as earlier work left it: SQLite reuses a log file from the start rather than
+  // shrinking it, so this is not growth from this burst.
+  const atStart = wal.bytes();
+  let maxWal = atStart;
   const started = performance.now();
   for (let i = 1; i < scale.checkpointBurst; i++) {
     const { ms } = await timed(() =>
@@ -401,11 +408,21 @@ export async function walCheckpoint({ handle, scale }) {
   const burstMs = performance.now() - started;
   maxWal = Math.max(maxWal, wal.bytes());
   const endOfBurst = wal.bytes();
-  // Quiet for longer than the idle window: the store's own idle checkpoint has had its chance.
+  // Quiet for longer than the idle window, then read what the store's own checkpoint did: the
+  // benchmark runs no checkpoint before this point, so whatever was copied, the timer copied.
+  const seen = wal.checkpoints.length;
   await new Promise((resolve) => setTimeout(resolve, wal.settings.idleMs + 250));
-  const db = wal.connect();
-  const idle = await timed(() => db.checkpoint("passive"));
-  const truncate = await timed(() => db.checkpoint("truncate"));
+  const idle = wal.checkpoints.slice(seen).map((event) =>
+    "error" in event
+      ? { ms: round(event.ms), error: String(event.error) }
+      : {
+          ms: round(event.ms),
+          busy: event.busy,
+          logPages: event.logPages,
+          checkpointedPages: event.checkpointedPages,
+        },
+  );
+  const truncate = await timed(() => wal.connect().checkpoint("truncate"));
   const afterTruncate = wal.bytes();
   const committed = (await events.lastSeq(runId)) === scale.checkpointBurst - 1;
   return {
@@ -413,14 +430,12 @@ export async function walCheckpoint({ handle, scale }) {
     appends: latency.length,
     appendsPerSecond: round(latency.length / (burstMs / 1000)),
     latency: summarize(latency),
-    appendsOver5ms: latency.filter((ms) => ms > 5).length,
-    walBytes: { max: maxWal, endOfBurst, afterTruncate },
-    // After the idle window: a checkpoint that finds nothing to copy is quick.
-    checkpointAfterIdle: { ms: round(idle.ms), ...idle.value },
+    latencyOutliersOver5ms: latency.filter((ms) => ms > 5).length,
+    walBytes: { atStart, sampledMax: maxWal, endOfBurst, afterTruncate },
+    idleCheckpoints: idle,
     truncateMs: round(truncate.ms),
     checks: {
       everyAppendCommitted: committed,
-      logStayedUnderLimit: maxWal <= wal.settings.walLimitBytes,
       truncateEmptiedLog: !truncate.value.busy && afterTruncate === 0,
     },
   };

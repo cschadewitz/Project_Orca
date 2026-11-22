@@ -35,13 +35,19 @@ export interface SqliteOptions {
  * WAL checkpointing (#339). A checkpoint copies committed pages from `metadata.sqlite-wal` back
  * into the database file; until one runs the log only grows, and every reader has to look
  * through it. SQLite's own automatic checkpoint runs *inside* the commit that crosses the
- * threshold, so that one write pays for copying the whole log. These settings move the work out
- * of the write path where they can, and bound the log on disk where they cannot.
+ * threshold, so that one write pays for copying the log. These settings move the work out of the
+ * write path where they can.
+ *
+ * None of them is a hard bound on the log. A checkpoint cannot copy past the oldest snapshot a
+ * reader still holds, and the log cannot start over while one is held, so a long read (or one
+ * large transaction) lets it grow past `autoPages` and past `walLimitBytes` alike. Measure the
+ * log's size; do not assume it.
  */
 export interface SqliteCheckpointOptions {
   /**
    * Log pages (4 KiB each) past which a commit runs a passive checkpoint itself
-   * (`wal_autocheckpoint`). The backstop for a connection that never goes idle. 0 turns it off.
+   * (`wal_autocheckpoint`): a trigger, not a bound (see above). The backstop for a connection
+   * that never goes idle. 0 turns it off.
    */
   autoPages?: number;
   /**
@@ -50,14 +56,24 @@ export interface SqliteCheckpointOptions {
    */
   idleMs?: number;
   /**
-   * The size the log file is cut back to once a checkpoint has copied all of it
-   * (`journal_size_limit`), so one burst does not leave a large file behind for good.
+   * The size a log file is cut back to when SQLite starts it over after a complete checkpoint,
+   * or a truncating one runs (`journal_size_limit`), so one burst does not leave a large file
+   * behind for good. It limits what is *kept*, not how far the log grows before that.
    */
   walLimitBytes?: number;
+  /**
+   * Told about every checkpoint this connection runs by itself (the idle one), with what it did
+   * and how long it took, or why it failed. For diagnostics and the benchmark; it must not throw.
+   */
+  observe?: (event: SqliteCheckpointEvent) => void;
 }
 
+/** One checkpoint a connection ran by itself. */
+export type SqliteCheckpointEvent =
+  ({ trigger: "idle"; ms: number } & SqliteCheckpointResult) | { trigger: "idle"; ms: number; error: unknown };
+
 /** The checkpoint settings every connection gets unless told otherwise. */
-export const SQLITE_CHECKPOINT: Readonly<Required<SqliteCheckpointOptions>> = Object.freeze({
+export const SQLITE_CHECKPOINT: Readonly<Required<Omit<SqliteCheckpointOptions, "observe">>> = Object.freeze({
   autoPages: 1000,
   idleMs: 1000,
   walLimitBytes: 64 * 1024 * 1024,
@@ -93,7 +109,8 @@ export class SqliteDatabase {
   readonly db: DatabaseSync;
   private readonly statements = new Map<string, StatementSync>();
   private readonly busyDeadlineMs: number;
-  private readonly checkpointSettings: Required<SqliteCheckpointOptions>;
+  private readonly checkpointSettings: Required<Omit<SqliteCheckpointOptions, "observe">> &
+    Pick<SqliteCheckpointOptions, "observe">;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
 
@@ -260,10 +277,19 @@ export class SqliteDatabase {
     this.idleTimer = setTimeout(() => {
       this.idleTimer = undefined;
       if (this.closed) return;
+      const started = performance.now();
+      let event: SqliteCheckpointEvent;
       try {
-        this.checkpoint("passive");
-      } catch {
+        event = { trigger: "idle", ms: 0, ...this.checkpoint("passive") };
+      } catch (error) {
         // Best effort by design; see above.
+        event = { trigger: "idle", ms: 0, error };
+      }
+      event.ms = performance.now() - started;
+      try {
+        this.checkpointSettings.observe?.(event);
+      } catch {
+        // An observer that throws must not become an uncaught error in a timer.
       }
     }, idleMs);
     this.idleTimer.unref?.();

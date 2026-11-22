@@ -23,6 +23,7 @@ export { sqliteStores, sqliteCollection, SQLITE_METADATA_FILE, type SqliteStores
 export {
   SQLITE_CHECKPOINT,
   SqliteDatabase,
+  type SqliteCheckpointEvent,
   type SqliteCheckpointOptions,
   type SqliteCheckpointResult,
   type SqliteOptions,

@@ -37,16 +37,23 @@ fence), #905 (Linux package hand-off) and #910 (Windows durability).
   back into the database. Three settings (`SqliteOptions.checkpoint`, defaults in
   `SQLITE_CHECKPOINT`):
   - `autoPages` 1000 (about 4 MB): SQLite's automatic passive checkpoint, run by the
-    commit that crosses it. It is the bound for a connection that never goes quiet,
-    and that one commit pays for the copy (see the measurements below).
+    commit that crosses it, so that commit pays for the copy. It is a **trigger, not
+    a bound**.
   - `idleMs` 1000: once a connection has made no write for a second, it runs a
     passive checkpoint itself, off the write path, so a burst is followed by one
     checkpoint and the log is copied back while the store is quiet. It never waits
     for readers and never fails a write that has committed; anything it could not
-    copy is left for the next one.
-  - `walLimitBytes` 64 MiB (`journal_size_limit`): after a large transaction (an
-    import, a big unit of work) the log file is cut back to this size once it has
-    been checkpointed, instead of keeping its largest size for good.
+    copy is left for the next one. `observe` reports each one (what it copied, how
+    long it took, or why it failed).
+  - `walLimitBytes` 64 MiB (`journal_size_limit`): what a log file **keeps** once
+    SQLite starts it over after a complete checkpoint, or a truncating checkpoint
+    runs. It does not limit how far the log grows before then.
+
+  **Nothing bounds the log's growth.** A checkpoint cannot copy past the oldest
+  snapshot a reader still holds, and the log cannot start over while one is held,
+  so a long read or one large transaction lets it grow past `autoPages` and
+  `walLimitBytes` alike (`sqlite-checkpoint.test.ts` shows it with a pinned reader).
+  Its size is something to measure and budget, not a promise SQLite keeps.
 
   `SqliteDatabase.checkpoint("truncate")` copies everything and empties the log, for
   maintenance; it waits for other connections and is never run on the write path.
@@ -121,29 +128,33 @@ either: two `large` runs on the previous settings (one full, one of the write
 workload alone) gave 3,388 to 4,798 ops/s at every writer level. The 400 ops/s
 was this container's noise, not a checkpoint cost.
 
-The `walCheckpoint` workload measures the checkpoints directly: one run receiving a
-sustained burst of appends, as an agent streaming output does.
+The `walCheckpoint` workload measures checkpoints on one run receiving a sustained
+burst of appends, as an agent streaming output does (SQLite runs with the default
+settings, separate `--scale` runs from the table above):
 
 | | medium (20,000 appends) | large (50,000 appends) |
 |---|---|---|
-| Appends per second | 2,622 | 3,083 |
-| Append latency p50 / p95 / max (ms) | 0.34 / 0.59 / 17 | 0.28 / 0.49 / 93 |
-| Appends over 5 ms | 2 | 16 |
-| Log file at its largest | 4.2 MB | 33 MB |
-| Checkpoint after the idle window | nothing left (0.05 ms) | nothing left (0.03 ms) |
-| Truncating checkpoint | 3 ms, log emptied | 19 ms, log emptied |
+| Appends per second | 2,729 | 2,936 |
+| Append latency p50 / p95 / max (ms) | 0.32 / 0.57 / 10 | 0.30 / 0.53 / 10 |
+| Latency outliers (appends over 5 ms) | 7 | 10 |
+| Log file before the burst / sampled peak / end of burst | 4.2 / 4.2 / 4.2 MB | 33 / 33 / 33 MB |
+| The store's own idle checkpoint (as it reported) | 1 run, 1.4 ms, copied 535 of 535 pages | 1 run, 1.6 ms, copied 677 of 677 pages |
+| Truncating checkpoint | 4 ms, log emptied | 23 ms, log emptied |
 
-- The automatic checkpoint is the cost a writer sees: about one append in 3,000 runs
-  one and takes 5 to 90 ms. That is the price of a bounded log under `synchronous =
-  FULL`. A larger `autoPages` makes those commits rarer but longer, and a smaller one
-  the reverse; in single-connection experiments at 250, 1000 and 4000 pages the tail
-  was within this container's noise, so the default stays at SQLite's 1000.
-- The idle checkpoint does its job: after a burst, the next checkpoint finds nothing
-  to copy.
-- The log file at `large` reached 33 MB, not 4 MB: while other connections were reading
-  (the earlier workloads keep their handles open), SQLite could not start the log over
-  and it kept growing. It stayed under the 64 MiB limit, and the limit is what brings
-  it back down afterwards.
+- **Outliers are measured, not explained.** Roughly one append in 3,000 to 5,000 took
+  over 5 ms (at most about 10 ms here, 93 ms in an earlier run). Commits that run the
+  automatic checkpoint are the likely cause, but the workload cannot tell them from
+  any other slow commit, so they are counted as outliers only. In single-connection
+  experiments at 250, 1000 and 4000 `autoPages` the tail was within this container's
+  noise, so the default stays at SQLite's 1000.
+- **The idle checkpoint does the copying after a burst.** The benchmark runs no
+  checkpoint of its own before reading the store's report, and the store's timer
+  copied the whole log (the pages written since the last automatic checkpoint).
+- **The log file's size is the file earlier work left.** At `large` it was 33 MB
+  before the burst began: SQLite reuses a log file from the start instead of shrinking
+  it, and `walLimitBytes` (64 MiB) only cuts back what is kept beyond that. The burst
+  itself never grew it. The peak is a sampled measurement (every 100 appends) for the
+  #341 budget to judge, not a bound SQLite keeps.
 
 Every workload invariant held on all backends. These are observations, not the
 baseline: the #341 ADR records its budgets and the reference machine first.

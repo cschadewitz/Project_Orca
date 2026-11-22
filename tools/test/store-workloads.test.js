@@ -52,10 +52,11 @@ describe("store workload benchmark", () => {
     // Only SQLite has a write-ahead log; the others say so instead of reporting zeros.
     const wal = report.results.find((r) => r.backend === "sqlite").workloads.walCheckpoint;
     expect(wal.appends).toBe(SCALES.smoke.checkpointBurst - 1);
-    expect(Object.keys(wal.checks).sort()).toEqual(
-      ["everyAppendCommitted", "logStayedUnderLimit", "truncateEmptiedLog"].sort(),
-    );
+    expect(Object.keys(wal.checks).sort()).toEqual(["everyAppendCommitted", "truncateEmptiedLog"].sort());
     expect(wal.walBytes.afterTruncate).toBe(0);
+    // The store's own idle checkpoint ran after the burst, and reported what it copied.
+    expect(wal.idleCheckpoints.length).toBeGreaterThan(0);
+    expect(wal.idleCheckpoints.every((c) => c.busy === false && c.checkpointedPages === c.logPages)).toBe(true);
     for (const plain of ["memory", "file"])
       expect(report.results.find((r) => r.backend === plain).workloads.walCheckpoint).toMatchObject({
         skipped: "no write-ahead log on this backend",
