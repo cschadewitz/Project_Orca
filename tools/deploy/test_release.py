@@ -58,6 +58,34 @@ class DeploymentTests(unittest.TestCase):
         self.assertLess(next(i for i, c in enumerate(self.calls) if c[0] == "prepare"),
                         next(i for i, c in enumerate(self.calls) if c[0] == "stop"))
 
+    def test_expected_predecessor_is_checked_under_the_locks(self):
+        # An app confirmed 0.6.0 -> 0.6.1; the timer moved the server to 0.6.1 first.
+        self.deployment.activate(self.new)
+        newer = self.make_release("0.6.2")
+        self.calls.clear()
+        with self.assertRaisesRegex(RuntimeError, "^Server moved: it runs 0.6.1, not the 0.6.0"):
+            self.deployment.activate(newer, "0.6.0")
+        self.assertEqual((self.root / "current").resolve(), self.new)
+        self.assertEqual(self.calls, [])
+        self.assertFalse(self.deployment.pending.exists())
+        self.deployment.activate(newer, "0.6.1")
+        self.assertEqual((self.root / "current").resolve(), newer)
+
+    def test_expect_current_from_the_command_line(self):
+        script = Path(__file__).with_name("orca-release.py")
+        run = lambda *extra: subprocess.run(
+            [sys.executable, str(script), "--deployment", str(self.manifest), *extra],
+            capture_output=True, text=True, timeout=30)
+        moved = run("update", "--bundle", "v0.6.1", "--expect-current", "0.5.9")
+        self.assertEqual(moved.returncode, 1)
+        self.assertIn("orca-release: Server moved: it runs 0.6.0, not the 0.5.9", moved.stderr)
+        self.assertEqual((self.root / "current").resolve(), self.old)
+        for bad in (["update", "v0.6.1", "--expect-current"], ["update", "v0.6.1", "--expect-current", "v0.6.0"],
+                    ["stage", "v0.6.1", "--expect-current", "0.6.0"]):
+            result = run(*bad)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("--expect-current takes", result.stderr)
+
     def test_busy_does_not_stop_service_or_change_pointer(self):
         def busy(action, token):
             raise RuntimeError("Daemon busy: runs.start")
@@ -129,6 +157,31 @@ class DeploymentTests(unittest.TestCase):
         with patch.object(os, "execve") as execute:
             self.deployment.launch("daemon", [])
             self.assertEqual(execute.call_args.args[2]["ORCA_ADMISSION_FILE"], str(self.deployment.pending))
+
+    def test_daemon_alone_learns_its_deployment_for_app_updates(self):
+        # #879: the managed daemon reports these in hello so the app can run this adapter over
+        # SSH. A CLI or ACP child is told nothing, even when the caller's environment has them.
+        self.config["ring"] = "preview"
+        self.manifest.write_text(json.dumps(self.config))
+        deployment = release.Deployment(self.manifest)
+        with patch.dict(os.environ, {"ORCA_DEPLOYMENT_RING": "stable", "ORCA_DEPLOYMENT_ADAPTER": "/elsewhere"}):
+            with patch.object(os, "execve") as execute:
+                deployment.launch("daemon", [])
+                env = execute.call_args.args[2]
+                self.assertEqual(env["ORCA_DEPLOYMENT_MANIFEST"], str(self.manifest.resolve()))
+                self.assertEqual(env["ORCA_DEPLOYMENT_ADAPTER"],
+                                 str(Path(__file__).with_name("orca-release.py").resolve()))
+                self.assertEqual(env["ORCA_DEPLOYMENT_RING"], "preview")
+            with patch.object(os, "execve") as execute:
+                deployment.launch("cli", ["status"])
+                env = execute.call_args.args[2]
+                for name in release.DEPLOYMENT_ENV:
+                    self.assertNotIn(name, env)
+
+    def test_unknown_ring_is_not_reported(self):
+        self.config["ring"] = "nightly"
+        self.manifest.write_text(json.dumps(self.config))
+        self.assertNotIn("ORCA_DEPLOYMENT_RING", release.Deployment(self.manifest).deployment_env())
 
     def test_hello_checks_version_protocol_methods_and_capabilities(self):
         meta = release.metadata(self.old)

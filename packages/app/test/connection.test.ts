@@ -121,6 +121,26 @@ describe("ConnectionMachine", () => {
     expect(pushed.map((s) => s.orcaVersion)).toEqual([undefined, "0.2.0-test"]);
   });
 
+  it("tells the renderer only that the server is managed, and keeps where its updater is in main", async () => {
+    const deployment = {
+      kind: "managed" as const,
+      adapter: "/opt/orca/orca-release.py",
+      manifest: "/etc/orca/deployment.json",
+    };
+    answer = hello({ deployment: { ...deployment, ring: "stable" } });
+    machine.linkChanged("live");
+    await settle();
+    expect(machine.current.managedServer).toEqual({ ring: "stable" });
+    expect(JSON.stringify(machine.current)).not.toContain("/opt/orca");
+    expect(machine.managedDeployment()).toEqual({ ...deployment, ring: "stable" });
+
+    machine.acceptHello(hello({ deployment }));
+    expect(machine.current.managedServer).toEqual({});
+    machine.acceptHello(hello());
+    expect(machine.current.managedServer).toBeUndefined();
+    expect(machine.managedDeployment()).toBeUndefined();
+  });
+
   it("says nothing for a blip shorter than the quiet window", async () => {
     machine.linkChanged("live");
     await settle();

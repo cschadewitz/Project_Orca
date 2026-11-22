@@ -33,6 +33,30 @@ fence), #905 (Linux package hand-off) and #910 (Windows durability).
 - **Durability:** `synchronous = FULL`: an acknowledged commit survives power loss
   on storage that honours flushes. The file backend gives the same promise
   (fsync before rename).
+- **Checkpoints:** a checkpoint copies committed pages from `metadata.sqlite-wal`
+  back into the database. Three settings (`SqliteOptions.checkpoint`, defaults in
+  `SQLITE_CHECKPOINT`):
+  - `autoPages` 1000 (about 4 MB): SQLite's automatic passive checkpoint, run by the
+    commit that crosses it, so that commit pays for the copy. It is a **trigger, not
+    a bound**.
+  - `idleMs` 1000: once a connection has made no write for a second, it runs a
+    passive checkpoint itself, off the write path, so a burst is followed by one
+    checkpoint and the log is copied back while the store is quiet. It never waits
+    for readers and never fails a write that has committed; anything it could not
+    copy is left for the next one. `observe` reports each one (what it copied, how
+    long it took, or why it failed).
+  - `walLimitBytes` 64 MiB (`journal_size_limit`): what a log file **keeps** once
+    SQLite starts it over after a complete checkpoint, or a truncating checkpoint
+    runs. It does not limit how far the log grows before then.
+
+  **Nothing bounds the log's growth.** A checkpoint cannot copy past the oldest
+  snapshot a reader still holds, and the log cannot start over while one is held,
+  so a long read or one large transaction lets it grow past `autoPages` and
+  `walLimitBytes` alike (`sqlite-checkpoint.test.ts` shows it with a pinned reader).
+  Its size is something to measure and budget, not a promise SQLite keeps.
+
+  `SqliteDatabase.checkpoint("truncate")` copies everything and empties the log, for
+  maintenance; it waits for other connections and is never run on the write path.
 - **Writes:** every write is one `BEGIN IMMEDIATE ... COMMIT`. `node:sqlite` is
   synchronous, so no other operation in the process can interleave with a write.
   Contention with another connection is `SQLITE_BUSY`: the connection waits 50 ms,
@@ -90,12 +114,47 @@ run in a 4-vCPU cloud container (Node 22) compared with the file backend:
 | Bytes on disk (incl. WAL) | 19.8 MB | 33.8 MB |
 
 At `large` (SQLite only: 200,000 events, 54,000 dependency edges, 20,000-document
-collections) history pages stayed under 1 ms p95 and the log reached 214 MB with
-its WAL. Two things to look at before a baseline: a dependency question costs
-about 160 ms because one plan's edges are a large result, and single-writer
-throughput at that scale dropped to about 400 ops/s with 12 to 24 ms p95 at 4
-writers while 16 writers reached 4,750 ops/s, which points at WAL checkpoints
-landing inside the measured window.
+collections) history pages stayed under 1 ms p95 and the log reached 212 MB. A
+dependency question costs about 160 ms because one plan's edges are a large result
+(a #341 question, not a storage setting).
+
+### Checkpoints
+
+An earlier `large` run reported single-writer throughput of about 400 ops/s, which
+looked like checkpoints landing inside the measured window. With the checkpoint
+settings above it did not recur: 1, 4 and 16 writers reached 4,186, 4,595 and
+4,843 committed ops/s (p95 0.36, 1.7 and 6.9 ms). It did not recur without them
+either: two `large` runs on the previous settings (one full, one of the write
+workload alone) gave 3,388 to 4,798 ops/s at every writer level. The 400 ops/s
+was this container's noise, not a checkpoint cost.
+
+The `walCheckpoint` workload measures checkpoints on one run receiving a sustained
+burst of appends, as an agent streaming output does (SQLite runs with the default
+settings, separate `--scale` runs from the table above):
+
+| | medium (20,000 appends) | large (50,000 appends) |
+|---|---|---|
+| Appends per second | 2,729 | 2,936 |
+| Append latency p50 / p95 / max (ms) | 0.32 / 0.57 / 10 | 0.30 / 0.53 / 10 |
+| Latency outliers (appends over 5 ms) | 7 | 10 |
+| Log file before the burst / sampled peak / end of burst | 4.2 / 4.2 / 4.2 MB | 33 / 33 / 33 MB |
+| The store's own idle checkpoint (as it reported) | 1 run, 1.4 ms, copied 535 of 535 pages | 1 run, 1.6 ms, copied 677 of 677 pages |
+| Truncating checkpoint | 4 ms, log emptied | 23 ms, log emptied |
+
+- **Outliers are measured, not explained.** Roughly one append in 3,000 to 5,000 took
+  over 5 ms (at most about 10 ms here, 93 ms in an earlier run). Commits that run the
+  automatic checkpoint are the likely cause, but the workload cannot tell them from
+  any other slow commit, so they are counted as outliers only. In single-connection
+  experiments at 250, 1000 and 4000 `autoPages` the tail was within this container's
+  noise, so the default stays at SQLite's 1000.
+- **The idle checkpoint does the copying after a burst.** The benchmark runs no
+  checkpoint of its own before reading the store's report, and the store's timer
+  copied the whole log (the pages written since the last automatic checkpoint).
+- **The log file's size is the file earlier work left.** At `large` it was 33 MB
+  before the burst began: SQLite reuses a log file from the start instead of shrinking
+  it, and `walLimitBytes` (64 MiB) only cuts back what is kept beyond that. The burst
+  itself never grew it. The peak is a sampled measurement (every 100 appends) for the
+  #341 budget to judge, not a bound SQLite keeps.
 
 Every workload invariant held on all backends. These are observations, not the
 baseline: the #341 ADR records its budgets and the reference machine first.
@@ -124,8 +183,8 @@ leaves only an unreferenced blob.
 
 ## Not in this change (follow-ups under #339)
 
-- Checkpoint behaviour under sustained load, and the `large` scale on the
-  reference machine.
+- The `large` scale on the reference machine, for the #341 baseline. The numbers
+  above are from a cloud container.
 - Making SQLite selectable for a workspace, after the format gates above. That
   switch is also when the daemon serves history from it to #255. **Precondition
   for that change:** a populated workspace can never be opened by both backends.

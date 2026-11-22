@@ -528,11 +528,12 @@ export class Authorizer {
   /** `hello` tells a principal about the methods and capabilities it may actually use. */
   private hello(principal: Principal, result: HelloResult): HelloResult {
     const everything = PERMISSIONS.every((p) => holds(principal, p));
-    const { storeDir, ...rest } = result;
+    const { storeDir, deployment, ...rest } = result;
     return {
       ...rest,
-      // The store's path on disk is the configuration's business.
+      // The store's path on disk is the configuration's business, and so is the installation's.
       ...(storeDir !== undefined && holds(principal, "config.read") ? { storeDir } : {}),
+      ...(deployment !== undefined && holds(principal, "config.read") ? { deployment } : {}),
       capabilities: result.capabilities.filter((c) => {
         if (c === "inputs.revise" || c === "inputs.replaceRevision")
           return holds(principal, "inputs.answer") && holds(principal, "runs.control");

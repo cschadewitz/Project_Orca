@@ -53,6 +53,9 @@ BUNDLE_SCHEMA = "orca-server-bundle/1"
 BUNDLE_PLATFORM = "linux-x64"
 BUNDLE_RECORD_RE = (r"<!-- orca-server-run: [0-9]+ sha256:([0-9a-f]{64}) sha256:([0-9a-f]{64})"
                     r" sha256:([0-9a-f]{64}) -->")
+# What the managed daemon is told about its own installation, and nothing else is (#879).
+DEPLOYMENT_ENV = ("ORCA_DEPLOYMENT_ADAPTER", "ORCA_DEPLOYMENT_MANIFEST", "ORCA_DEPLOYMENT_RING")
+DEPLOYMENT_RINGS = ("internal", "preview", "stable")
 BUNDLE_MAX_BYTES = 512 << 20          # compressed archive
 BUNDLE_MAX_UNPACKED = 1536 << 20      # everything it unpacks to
 # cosign is fetched once into the deployment root and checked against this digest every time
@@ -654,6 +657,15 @@ class Deployment(BundleSource):
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "releases").mkdir(exist_ok=True)
 
+    def deployment_env(self):
+        """What the managed daemon reports about how to update it (#879, `hello.deployment`)."""
+        env = {"ORCA_DEPLOYMENT_ADAPTER": str(Path(__file__).resolve()),
+               "ORCA_DEPLOYMENT_MANIFEST": str(self.manifest)}
+        ring = self.config.get("ring")
+        if ring in DEPLOYMENT_RINGS:
+            env["ORCA_DEPLOYMENT_RING"] = ring
+        return env
+
     def typed_dispatch(self, operation, *args, **kwargs):
         # Every retained assertion is synchronous. No process/await between the
         # last retained observation and the operation's actual dispatch.
@@ -893,6 +905,14 @@ class Deployment(BundleSource):
             raise RuntimeError("Managed daemon lacks the persistent admission guard; migrate its launcher first")
         return service_pid
 
+    def expect_current(self, expected):
+        """Refuse unless the active release is exactly `expected` (an app's confirmed predecessor)."""
+        if expected is None:
+            return
+        running = metadata((self.root / "current").resolve(strict=True))["version"]
+        if running != expected:
+            raise RuntimeError(f"Server moved: it runs {running}, not the {expected} this update was confirmed against")
+
     def service_identity(self):
         """Which service process runs now: its PID, the unit's invocation (new on every start or
         supervisor restart), the process's start time (against PID reuse) and the boot."""
@@ -944,12 +964,15 @@ class Deployment(BundleSource):
             f" it was written again durably, so launches and updates are blocked. Inspect it, then run recover") from failure
 
     @typed_operation("update")
-    def activate(self, candidate, auto=False):
+    def activate(self, candidate, expected=None, auto=False):
         assertion = self.typed_guard("update", (str(candidate),))
         self.retain_typed_inspection(assertion)
         with lock(self.root / "admission.lock"):
             if self.pending.exists():
                 raise RuntimeError("Interrupted activation exists. Run recover before another update.")
+            # Checked where the update commits, under both locks: another operator or the timer
+            # may have moved the server since the caller looked.
+            self.expect_current(expected)
             previous = (self.root / "current").resolve(strict=True)
             compatible(previous, candidate)
             old_version = version_key(metadata(previous)["version"])
@@ -1051,8 +1074,13 @@ class Deployment(BundleSource):
         env = {**os.environ, "ORCA_RELEASE": str(release)}
         env.pop("ORCA_MAINTENANCE_TOKEN", None)
         env.pop("ORCA_ADMISSION_FILE", None)
+        for name in DEPLOYMENT_ENV:
+            env.pop(name, None)
         if kind == "daemon":
             env["ORCA_ADMISSION_FILE"] = str(self.pending)
+            # Reported in the daemon's hello (#879): the app runs this adapter over SSH to update
+            # the server. Paths only; nothing installs through the daemon.
+            env.update(self.deployment_env())
         config = self.config[{"cli": "cliConfig", "acp": "acpConfig", "daemon": "daemonConfig"}[kind]]
         command = [meta["node"], meta["entry"], "--config", config]
         if kind == "daemon":
@@ -1279,7 +1307,18 @@ def main():
             with lock(deploy.root / "admission.lock"):
                 deploy.restore(json.loads(deploy.pending.read_text()))
         else:
-            args = options.args
+            args = list(options.args)
+            expected = None
+            if "--expect-current" in args:
+                at = args.index("--expect-current")
+                if options.action != "update" or at + 1 >= len(args):
+                    raise RuntimeError("--expect-current takes one release version, with update")
+                expected = args[at + 1]
+                if not re.fullmatch(VERSION_RE, expected):
+                    raise RuntimeError("--expect-current takes a release version such as 0.8.0")
+                del args[at:at + 2]
+                # Fail before staging when the server already moved; activation checks again.
+                deploy.expect_current(expected)
             bundle = args[:1] == ["--bundle"]
             if bundle:
                 args = args[1:]
@@ -1296,7 +1335,7 @@ def main():
             else:
                 candidate = deploy.stage(args[0])
             if options.action == "update":
-                deploy.activate(candidate)
+                deploy.activate(candidate, expected)
             print(candidate)
 
 
