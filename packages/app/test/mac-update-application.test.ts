@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { lstat, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
-import { fenceBoot, fenceDirectory, fenceHash } from "@orca/protocol/first-run-fence";
+import { fenceDirectory } from "@orca/protocol/first-run-fence";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,7 @@ import type { OrcaBridge } from "../src/bridge.js";
 import { MacCandidateSession } from "../src/main/mac-update-candidates.js";
 import { MacUpdateApplication, installMacUpdateIPC } from "../src/main/mac-update-application.js";
 import { macUpdateRehearsal } from "./mac-update-rehearsal-fixture.js";
+import { fencePorts, selectFenceDirectory } from "./fixtures/fence-ports.js";
 import { ClosedUpdateWindow, enterUpdateWriter, provisionUpdateWindow } from "@orca/protocol/update-window";
 
 const source = stripTypeScriptTypes(
@@ -61,6 +62,8 @@ async function admitFixture(closed: boolean, beforeProvision?: (layout: FixtureL
       if (closed) {
         const control = join(root, "control");
         await mkdir(data, { mode: 0o700 });
+        // Only the fixture's inode is chosen: its real slots stay clear of kernel autobind (#819).
+        await selectFenceDirectory(data);
         await mkdir(control, { mode: 0o700 });
         const layout = { root, control, data: [data], rehearsal: f };
         await beforeProvision?.(layout);
@@ -195,18 +198,8 @@ async function fixture(
   };
 }
 
-// Real owned listeners exercise the kernel fence; this mirrors its identity mapping.
-function fixtureSlots(root: string) {
-  const start =
-    20000 +
-    (Number.parseInt(
-      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, fenceDirectory(root)])).slice(0, 8),
-      16,
-    ) %
-      5000) *
-      8;
-  return Array.from({ length: 8 }, (_, slot) => start + slot);
-}
+// Real owned listeners exercise the kernel fence; fencePorts mirrors its identity mapping.
+const fixtureSlots = (root: string) => fencePorts(fenceDirectory(root));
 async function occupy(port: number) {
   const server = createServer();
   const close = async () => {

@@ -5,7 +5,7 @@ import { createServer, type Server } from "node:net";
 import { cp, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { fenceBoot, fenceDirectory, fenceHash } from "@orca/protocol/first-run-fence";
+import { fenceDirectory } from "@orca/protocol/first-run-fence";
 import { enterUpdateWriter, inspectUpdateWindowRoots } from "@orca/protocol/update-window";
 import { createManagedMacReplacementStartup } from "../src/main/mac-managed-replacement-startup.js";
 import {
@@ -17,6 +17,7 @@ import { PosixFixtureNativeAdapter } from "../src/main/diagnostics/native-adapte
 import { nodeRecoveryFiles } from "../src/main/diagnostics/recovery-files.js";
 import type { NativeStorageBackend } from "../src/main/diagnostics/native-storage.js";
 import { SyntheticKeys } from "./recovery-preparation/implementation-fixture.js";
+import { copyToFenceDirectory, fencePorts, selectFenceDirectory } from "./fixtures/fence-ports.js";
 
 const GUARD = ".orca-update-window.json";
 const bases: string[] = [];
@@ -34,8 +35,12 @@ function backend(): NativeStorageBackend {
     replacementStorage: 1,
     flushDescriptorSync: (fd) => fsyncSync(fd),
     async call(operation, _root, _file, path) {
-      if (operation === "provisionReplacementRoot") await mkdir(path, { mode: 0o700 }).catch(() => undefined);
-      else if (operation === "openRoot") {
+      if (operation === "provisionReplacementRoot") {
+        // A root this fixture creates gets an identity clear of kernel autobind (#807).
+        let created = true;
+        await mkdir(path, { mode: 0o700 }).catch(() => (created = false));
+        if (created) await selectFenceDirectory(path, fencedAs(path));
+      } else if (operation === "openRoot") {
         if (!(await lstat(path)).isDirectory()) throw new Error("fixture root unavailable");
       } else if (operation !== "closeRoot") throw new Error("fixture operation unavailable");
       return {};
@@ -43,6 +48,12 @@ function backend(): NativeStorageBackend {
   };
 }
 type Layout = { base: string; home: string; appRoot: string; control: string; workspace: string };
+/** Other paths a fixture directory's inode is fenced under: the same directory once its
+ * home folder is renamed (prepareHomeMove). Selection keeps all of them clear of autobind. */
+function fencedAs(path: string): string[] {
+  const match = /^(.*\/orca-mac-startup-[^/]+)\/home(\/.*)?$/.exec(path);
+  return match ? [`${match[1]}/renamed${match[2] ?? ""}`] : [];
+}
 function layout(base: string, home = join(base, "home")): Layout {
   const appRoot = join(home, "ORCA");
   return { base, home, appRoot, control: appRoot + "-native-replacement", workspace: join(home, "workspace") };
@@ -54,6 +65,8 @@ async function installed(fresh = false, prepare?: (f: Layout) => Promise<void>):
     const f = layout(await mkdtemp(join(process.cwd(), "orca-mac-startup-")));
     bases.push(f.base);
     for (const path of [f.home, f.appRoot, f.workspace]) await mkdir(path, { mode: 0o700 });
+    // Fenced directories get identities whose slots kernel autobind cannot take (#807).
+    for (const path of [f.appRoot, f.workspace]) await selectFenceDirectory(path, fencedAs(path));
     try {
       if (!fresh) {
         await provisionMacUpdateNamespace(f.control, [f.appRoot], backend());
@@ -67,23 +80,11 @@ async function installed(fresh = false, prepare?: (f: Layout) => Promise<void>):
     }
   }
 }
-function fixturePort(identity: ReturnType<typeof fenceDirectory>, slot: number): number {
-  return (
-    20000 +
-    (Number.parseInt(
-      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, identity])).slice(0, 8),
-      16,
-    ) %
-      5000) *
-      8 +
-    slot
-  );
-}
 async function holdFixtureSlot(identity: ReturnType<typeof fenceDirectory>, slot: number): Promise<Server> {
   const server = createServer();
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen({ host: "127.0.0.1", port: fixturePort(identity, slot), exclusive: true, reusePort: false }, resolve);
+    server.listen({ host: "127.0.0.1", port: fencePorts(identity)[slot], exclusive: true, reusePort: false }, resolve);
   });
   return server;
 }
@@ -134,7 +135,8 @@ async function launch(f: Pick<Layout, "appRoot" | "control">) {
 /** What Migration Assistant or a Time Machine restore leaves: same path and bytes, new inode. */
 async function recreate(path: string) {
   await rename(path, path + "-before");
-  await cp(path + "-before", path, { recursive: true });
+  // The copy's new inode is chosen clear of kernel autobind, like every fixture root (#807).
+  await copyToFenceDirectory(path + "-before", path, (from, to) => cp(from, to, { recursive: true }), fencedAs(path));
   await rm(path + "-before", { recursive: true });
 }
 const enrolledPaths = (control: string) => inspectUpdateWindowRoots(control).roots.map((root) => root.path);
