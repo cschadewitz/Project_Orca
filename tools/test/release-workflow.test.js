@@ -125,12 +125,15 @@ it("never hands a write token to the ref under test (#863)", () => {
   expect(guard.env.DEFAULT).toBe("refs/heads/${{ github.event.repository.default_branch }}");
 
   // A real release runs the released commit's tooling with write, so that commit must be
-  // on the default branch (any commit on it, so a fix-forward release still works).
+  // on the default branch or its version's release line (any commit on them, so a
+  // fix-forward release still works). release-lines.test.js runs the check itself.
   const sha = release.findIndex((s) => s.id === "sha");
   const reviewed = release[sha + 1];
-  expect(reviewed.name).toBe("A real release builds a reviewed commit from the default branch");
+  expect(reviewed.name).toBe("A real release builds a reviewed commit from its lane");
   expect(reviewed.if).toBe("${{ !inputs.dry_run }}");
-  expect(reviewed.run).toContain('git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"');
+  // The lane policy is main's copy, never the released commit's.
+  expect(reviewed.run).toContain('git show "refs/remotes/origin/$DEFAULT_BRANCH:tools/release-lane.js" > "$policy"');
+  expect(reviewed.run).toContain('node "$policy" verify "$SHA" "$version"');
   expect(reviewed.run).toContain('if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]');
   expect(release.findIndex((s) => s.run === "pnpm install --frozen-lockfile")).toBeGreaterThan(sha + 1);
 
@@ -139,9 +142,11 @@ it("never hands a write token to the ref under test (#863)", () => {
     if (job.uses) continue;
     const expected = ["publish", "rehearsal"].includes(name)
       ? { contents: "write" }
-      : name === "sign"
+      : ["sign", "record-line-release"].includes(name)
         ? { actions: "write" }
-        : null;
+        : name === "check"
+          ? { contents: "read", checks: "read" }
+          : null;
     expect(job.permissions ?? null, name).toEqual(expected);
     for (const step of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@")))
       expect(step.with["persist-credentials"], name).toBe(false);
@@ -251,7 +256,25 @@ it("publishes a final only from main, through the checking script, and hands ove
   expect(job.permissions).toEqual({ contents: "write", actions: "write" });
   expect(job.steps[1].run).toBe('bash tools/deploy/release-attach.sh publish "$ID" "$VERSION" "$SHA" "$DEB" "$EXE"');
   expect(job.steps[1].run).not.toContain("${{");
+  // After the publish read-back: the feed handover, then main's record of a line release.
+  expect(job.steps[1].id).toBe("publish");
   expect(job.steps[2].run).toBe('gh workflow run feed-auto.yml --repo "$GITHUB_REPOSITORY" --ref main');
+  expect(job.steps[3].name).toBe("Record a line release on main");
+  expect(job.steps[3].run).toContain("gh workflow run release-sync-main.yml");
+});
+
+it("never lets the notes handover suppress the feed, or the feed's suppress the notes", () => {
+  const steps = workflow("release-publish-final.yml").jobs.publish.steps;
+  const feed = steps.findIndex((s) => s.run?.includes("feed-auto.yml"));
+  const notes = steps.findIndex((s) => s.run?.includes("release-sync-main.yml"));
+  // A failed step skips every later step that keeps the default success() condition, so the
+  // feed goes first and the notes step runs on the publish's outcome alone.
+  expect(feed).toBeGreaterThan(1);
+  expect(notes).toBe(steps.length - 1);
+  expect(feed).toBeLessThan(notes);
+  expect(steps[feed]["continue-on-error"]).toBeUndefined();
+  expect(steps[notes].if).toBe("${{ !cancelled() && steps.publish.outcome == 'success' }}");
+  for (const s of steps.slice(1, feed)) expect(s.run ?? "").not.toContain("release-sync-main");
 });
 
 it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unattended (#889)", () => {

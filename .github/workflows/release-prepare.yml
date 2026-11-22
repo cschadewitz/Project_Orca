@@ -9,6 +9,19 @@
 # The version comes from the `release:*` labels on the milestone's issues (highest wins),
 # or from a `Release: vX.Y.Z` line in the milestone description, which overrides them —
 # that is how a release candidate or a deliberate 1.0.0 is expressed. See docs/RELEASING.md.
+#
+# Where it is cut from (docs/RELEASING.md, "Release lines"): a new minor or major (`X.Y.0`
+# and its candidates) from `main`; a patch (`X.Y.Z`, Z > 0) from its release line branch
+# `release/X.Y`, so work merged to `main` for the next minor never ships in it. The line is
+# named by the pin, else by a milestone title that is a version (`0.7.1`), else by the next
+# version of `main`. A missing line is created from the newest `vX.Y.*` final tag. A patch
+# milestone holding a `release:minor` or `release:major` issue is refused.
+#
+# With the variable ORCA_RELEASE_APP_ID and the secret ORCA_RELEASE_APP_PRIVATE_KEY set in the
+# main-only `release-bot` environment (a GitHub App with contents and pull-requests write), the
+# branch and pull request are
+# made with the App's token, so CI and the release line guard run on the pull request; a line
+# branch that requires those checks cannot merge a release pull request opened without it.
 name: Release (prepare)
 
 on:
@@ -30,11 +43,23 @@ jobs:
   prepare:
     name: propose a release
     runs-on: ubuntu-24.04
+    # The optional release App's key lives in this environment, which only main may deploy to
+    # (no reviewers); a milestone event and a dispatch from main both run on main.
+    environment: release-bot
     steps:
+      - name: Release bot token (optional)
+        id: app
+        if: ${{ vars.ORCA_RELEASE_APP_ID != '' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.ORCA_RELEASE_APP_ID }}
+          private-key: ${{ secrets.ORCA_RELEASE_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ steps.app.outputs.token || github.token }}
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -42,9 +67,9 @@ jobs:
 
       # tools/release.js has no dependencies, so no install step is needed here.
       #
-      # Note that CI will NOT run on the pull request this opens: GitHub does not start a
-      # workflow from an event created with GITHUB_TOKEN. That is why release-publish.yml
-      # re-runs every check itself before it tags anything.
+      # Without the release App's token, CI will NOT run on the pull request this opens:
+      # GitHub does not start a workflow from an event created with GITHUB_TOKEN. That is
+      # one reason release-publish.yml re-runs every check itself before it tags anything.
       - name: Resolve the version from the milestone
         id: resolve
         env:
@@ -83,17 +108,59 @@ jobs:
             exit 1
           fi
 
-          version=$(node tools/release.js version --bump "$bump" ${pin:+--pin "$pin"})
+          # The version names the branch it is cut from; main's tooling decides both, and runs
+          # against the chosen branch's package.json, CHANGELOG.md and changelog.d/.
+          tools="$RUNNER_TEMP/release-tools"
+          mkdir -p "$tools"
+          cp tools/release.js tools/release-lane.js tools/changelog.js tools/release-pr-body.js "$tools/"
+          target="$pin"
+          if [ -z "$target" ]; then
+            target=$(grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' <<<"$title" | sed 's/^v//' || true)
+          fi
+          if [ -z "$target" ]; then
+            target=$(node "$tools/release.js" version --bump "$bump")
+          fi
+          base=$(node "$tools/release.js" line "$target")
+          if [ "$base" != main ]; then
+            # Patch content is the line's: no issue meant for the next minor or major.
+            bumps=$(jq -r '[.[] | select(.labels | any(. == "release:minor" or . == "release:major"))
+              | "#\(.number) \(.title)"] | join(", ")' <<<"$issues")
+            if [ -n "$bumps" ]; then
+              echo "::error::milestone #$NUMBER ($title) is a $base patch but holds minor/major work: $bumps; move it to the next minor's milestone"
+              exit 1
+            fi
+            if ! git rev-parse -q --verify "refs/remotes/origin/$base" >/dev/null; then
+              line="${base#release/}"
+              from=$(git tag -l "v$line.*" --sort=-v:refname | grep -E "^v$line\.[0-9]+$" | head -n 1 || true)
+              if [ -z "$from" ]; then
+                echo "::error::$base does not exist and no v$line.* final is tagged to start it from"
+                exit 1
+              fi
+              git push origin "$(git rev-parse "$from^{commit}"):refs/heads/$base"
+              git fetch -q origin "$base"
+              echo "Created \`$base\` from \`$from\`." >> "$GITHUB_STEP_SUMMARY"
+            fi
+            # Only a protected line is a release source (tools/release-lane.js).
+            node "$tools/release-lane.js" verify "$(git rev-parse "refs/remotes/origin/$base")" "$target" >/dev/null
+            git checkout -q --detach "refs/remotes/origin/$base"
+          fi
+          version=$(node "$tools/release.js" version --bump "$bump" ${pin:+--pin "$pin"})
+          if [ "$(node "$tools/release.js" line "$version")" != "$base" ] ||
+            { [ "$base" != main ] && [ "$version" != "$target" ]; }; then
+            echo "::error::milestone #$NUMBER ($title) names $target but its labels give v$version from $base; fix the labels or pin the version"
+            exit 1
+          fi
           if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
             echo "::error::tag v$version already exists"
             exit 1
           fi
-
           unlabelled=$(jq -r '[.[] | select([.labels[] | select(startswith("release:"))] | length == 0)
             | "- #\(.number) \(.title)"] | join("\n")' <<<"$issues")
 
           {
             echo "version=$version"
+            echo "base=$base"
+            echo "tools=$tools"
             echo "bump=$bump"
             echo "pin=$pin"
             echo "title=$title"
@@ -101,16 +168,19 @@ jobs:
             echo "$unlabelled"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          echo "milestone #$NUMBER ($title) -> v$version (bump=$bump${pin:+, pinned})" >> "$GITHUB_STEP_SUMMARY"
+          echo "milestone #$NUMBER ($title) -> v$version from $base (bump=$bump${pin:+, pinned})" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Bump the version and render the changelog fragments
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
-        run: node tools/release.js prepare "$VERSION"
+          TOOLS: ${{ steps.resolve.outputs.tools }}
+        run: node "$TOOLS/release.js" prepare "$VERSION"
 
       - name: Open the release pull request
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          BASE: ${{ steps.resolve.outputs.base }}
+          TOOLS: ${{ steps.resolve.outputs.tools }}
           REPO: ${{ github.repository }}
           NUMBER: ${{ github.event.milestone.number || inputs.milestone }}
           VERSION: ${{ steps.resolve.outputs.version }}
@@ -125,7 +195,7 @@ jobs:
           # Build the body before anything is pushed, so a failure here leaves no branch behind.
           # tools/release-pr-body.js keeps it under GitHub's 65,536-character limit by linking
           # to CHANGELOG.md on the branch when the notes are too long to inline.
-          node tools/release.js notes "$VERSION" > /tmp/release-notes.md
+          node "$TOOLS/release.js" notes "$VERSION" > /tmp/release-notes.md
 
           # A final (no prerelease suffix) is compared with its newest release candidate tag,
           # so code that merged after the candidate shows in the body before anyone merges
@@ -140,18 +210,18 @@ jobs:
           rm -f /tmp/drift.txt
           if [ -n "$DRIFT_SINCE" ]; then
             # The same paths as DRIFT_PATHS in tools/release-pr-body.js: sources, manifests,
-            # the lockfile, root build config and desktop packaging. HEAD is main before the
-            # bump commit.
+            # the lockfile, root build config and desktop packaging. HEAD is the base branch
+            # before the bump commit.
             git diff --stat=200,150 "$DRIFT_SINCE" HEAD -- packages/ workflows/ templates/ package.json \
               pnpm-lock.yaml pnpm-workspace.yaml patches/ 'tsconfig*.json' release-compatibility.json \
               .github/workflows/desktop.yml > /tmp/drift.txt
           fi
           export DRIFT_SINCE DRIFT_FILE=/tmp/drift.txt
-          node tools/release-pr-body.js /tmp/release-notes.md > /tmp/pr-body.md
+          node "$TOOLS/release-pr-body.js" /tmp/release-notes.md > /tmp/pr-body.md
 
           git switch -c "release/v$VERSION"
           git commit -am "release: v$VERSION"
           git push --set-upstream origin "release/v$VERSION"
 
-          gh pr create --base main --head "release/v$VERSION" \
+          gh pr create --base "$BASE" --head "release/v$VERSION" \
             --title "release: v$VERSION" --body-file /tmp/pr-body.md --label release
