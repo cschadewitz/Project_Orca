@@ -130,6 +130,31 @@ class DeploymentTests(unittest.TestCase):
             self.deployment.launch("daemon", [])
             self.assertEqual(execute.call_args.args[2]["ORCA_ADMISSION_FILE"], str(self.deployment.pending))
 
+    def test_daemon_alone_learns_its_deployment_for_app_updates(self):
+        # #879: the managed daemon reports these in hello so the app can run this adapter over
+        # SSH. A CLI or ACP child is told nothing, even when the caller's environment has them.
+        self.config["ring"] = "preview"
+        self.manifest.write_text(json.dumps(self.config))
+        deployment = release.Deployment(self.manifest)
+        with patch.dict(os.environ, {"ORCA_DEPLOYMENT_RING": "stable", "ORCA_DEPLOYMENT_ADAPTER": "/elsewhere"}):
+            with patch.object(os, "execve") as execute:
+                deployment.launch("daemon", [])
+                env = execute.call_args.args[2]
+                self.assertEqual(env["ORCA_DEPLOYMENT_MANIFEST"], str(self.manifest.resolve()))
+                self.assertEqual(env["ORCA_DEPLOYMENT_ADAPTER"],
+                                 str(Path(__file__).with_name("orca-release.py").resolve()))
+                self.assertEqual(env["ORCA_DEPLOYMENT_RING"], "preview")
+            with patch.object(os, "execve") as execute:
+                deployment.launch("cli", ["status"])
+                env = execute.call_args.args[2]
+                for name in release.DEPLOYMENT_ENV:
+                    self.assertNotIn(name, env)
+
+    def test_unknown_ring_is_not_reported(self):
+        self.config["ring"] = "nightly"
+        self.manifest.write_text(json.dumps(self.config))
+        self.assertNotIn("ORCA_DEPLOYMENT_RING", release.Deployment(self.manifest).deployment_env())
+
     def test_hello_checks_version_protocol_methods_and_capabilities(self):
         meta = release.metadata(self.old)
         hello = {"orcaVersion": "0.6.0", "protocol": {"major": 1, "minor": 8},

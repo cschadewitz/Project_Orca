@@ -27,6 +27,10 @@ import {
   TunnelRefusal,
   tunnelHops,
   hopArgs,
+  commandArgs,
+  runRemote,
+  shellQuote,
+  type RemoteCommandExit,
   type SecretCipher,
   type TunnelState,
 } from "@orca/protocol/remote-access";
@@ -564,6 +568,135 @@ const cipher = (over: Partial<SecretCipher> = {}): SecretCipher => ({
   encryptString: (value) => Buffer.from(`sealed:${Buffer.from(value).toString("base64")}`),
   decryptString: (value) => Buffer.from(value.toString().replace(/^sealed:/, ""), "base64").toString(),
   ...over,
+});
+
+describe("running one command on the server", () => {
+  it("quotes each word for the remote shell, clears every forward and pins strictly", () => {
+    expect(shellQuote("it's $HOME; rm -rf /")).toBe(`'it'\\''s $HOME; rm -rf /'`);
+    const pins = join(dir(), "lab.known_hosts");
+    const args = commandArgs(tunnelHops(profile({ sshPort: 2200, identityFile: "/k/id" }), pins).daemon, [
+      "python3",
+      "/srv/orca release.py",
+      "--bundle",
+      "v0.8.0",
+    ]);
+    expect(args.slice(0, 3)).toEqual(["-F", "none", "-T"]);
+    const options = args.flatMap((arg, i) => (args[i - 1] === "-o" ? [arg] : []));
+    expect(options).toEqual(
+      expect.arrayContaining([
+        "BatchMode=yes",
+        "ClearAllForwardings=yes",
+        "StrictHostKeyChecking=yes",
+        "ForwardAgent=no",
+      ]),
+    );
+    expect(options).not.toContain("ExitOnForwardFailure=yes");
+    expect(args).not.toContain("-W");
+    expect(args).not.toContain("-L");
+    expect(args.slice(-3)).toEqual(["--", "casey@lab.example", "'python3' '/srv/orca release.py' '--bundle' 'v0.8.0'"]);
+    expect(() => commandArgs(tunnelHops(profile(), pins).daemon, [])).toThrow();
+  });
+
+  /** A child whose stdio and exit the test drives, closing like a real one. */
+  function child() {
+    const ssh = new FakeSsh();
+    const end = (code: number | null, signal: string | null = null) => {
+      ssh.stdout.end();
+      ssh.stderr.end();
+      setImmediate(() => ssh.emit("close", code, signal));
+    };
+    return { ssh, end };
+  }
+  const lines = () => {
+    const seen: string[] = [];
+    return { seen, onLine: (stream: "stdout" | "stderr", line: string) => seen.push(`${stream}:${line}`) };
+  };
+
+  it("streams the command's lines and returns its exit", async () => {
+    const { ssh, end } = child();
+    const out = lines();
+    const run = runRemote(ssh as unknown as ChildProcess, out.onLine);
+    ssh.stdout.write("staging v0.8.0\nhalf");
+    await until(() => out.seen.length === 1);
+    ssh.stderr.write("orca-release: Busy: update.lock; another update\n");
+    ssh.stdout.write(" a line\r\n");
+    end(1);
+    expect(await run.exit).toEqual<RemoteCommandExit>({ kind: "exited", code: 1 });
+    expect(out.seen).toEqual([
+      "stdout:staging v0.8.0",
+      "stderr:orca-release: Busy: update.lock; another update",
+      "stdout:half a line",
+    ]);
+  });
+
+  it("holds stderr until the command shows it runs, and drops ssh's own failure lines", async () => {
+    const refused = child();
+    const out = lines();
+    const run = runRemote(refused.ssh as unknown as ChildProcess, out.onLine);
+    refused.ssh.say("casey@lab.example: Permission denied (publickey).");
+    refused.end(255);
+    expect(await run.exit).toEqual({ kind: "refused", refusal: "auth-failed" });
+    expect(out.seen).toEqual([]);
+
+    // A command that writes only stderr has it delivered once ssh exits with its own code.
+    const quiet = child();
+    const later = lines();
+    const ran = runRemote(quiet.ssh as unknown as ChildProcess, later.onLine);
+    quiet.ssh.say("orca-release: Daemon busy: 1 run active");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(later.seen).toEqual([]);
+    quiet.end(1);
+    expect(await ran.exit).toEqual({ kind: "exited", code: 1 });
+    expect(later.seen).toEqual(["stderr:orca-release: Daemon busy: 1 run active"]);
+  });
+
+  it("reports a signal, a missing ssh, and a kill", async () => {
+    const signalled = child();
+    const run = runRemote(signalled.ssh as unknown as ChildProcess, () => {});
+    signalled.end(null, "SIGHUP");
+    expect(await run.exit).toEqual({ kind: "signalled", signal: "SIGHUP" });
+
+    const missing = child();
+    const none = runRemote(missing.ssh as unknown as ChildProcess, () => {});
+    missing.ssh.emit("error", Object.assign(new Error("spawn ssh ENOENT"), { code: "ENOENT" }));
+    missing.end(null);
+    expect(await none.exit).toEqual({ kind: "refused", refusal: "ssh-missing" });
+
+    const killed = child();
+    const stopped = runRemote(killed.ssh as unknown as ChildProcess, () => {});
+    stopped.kill();
+    expect(killed.ssh.killed).toBe(true);
+    killed.end(null, "SIGTERM");
+    expect(await stopped.exit).toEqual({ kind: "signalled", signal: "SIGTERM" });
+  });
+
+  it("runs only on an open, pinned tunnel, as its own ssh", async () => {
+    const { tunnel, spawned } = fakeTunnel((ssh, n, args) => {
+      if (n === 1) {
+        writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n");
+        ssh.say(authed);
+        return;
+      }
+      expect(args).toContain("-T");
+      expect(args).not.toContain("-W");
+      ssh.stdout.write("done\n");
+      ssh.stdout.end();
+      ssh.stderr.end();
+      setImmediate(() => ssh.emit("close", 0, null));
+    });
+    const pins = (tunnel as unknown as { options: { knownHostsFile: string } }).options.knownHostsFile;
+    expect(() => tunnel.exec(["true"], () => {})).toThrow(expect.objectContaining({ code: "closed" }));
+    await tunnel.open();
+    const seen: string[] = [];
+    const run = tunnel.exec(["orca", "version"], (_stream, line) => seen.push(line));
+    expect(await run.exit).toEqual({ kind: "exited", code: 0 });
+    expect(seen).toEqual(["done"]);
+    expect(spawned).toHaveLength(2);
+    rmSync(pins);
+    expect(() => tunnel.exec(["true"], () => {})).toThrow(expect.objectContaining({ code: "host-key-missing" }));
+    await tunnel.close();
+    expect(() => tunnel.exec(["true"], () => {})).toThrow(expect.objectContaining({ code: "closed" }));
+  });
 });
 
 describe("CredentialSlots", () => {

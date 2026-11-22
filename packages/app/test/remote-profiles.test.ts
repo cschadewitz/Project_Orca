@@ -399,6 +399,9 @@ function lease(id: string, url: string, released: string[], refused = false): Pr
     url,
     auth,
     remoteRefused: () => refused,
+    exec: () => {
+      throw new Error("workspace tests run nothing on the server");
+    },
     transport: streamTransport(() => {
       throw new Error("workspace tests use their own fetch");
     }),

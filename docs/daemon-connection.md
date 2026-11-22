@@ -132,6 +132,10 @@ switching. The tunnel and the
 credential slots live in `@orca/protocol/remote-access`, which the daemon can import
 for delegation (#883). Windows uses the built-in OpenSSH client (`ssh.exe`).
 
+A profile connection to a server installed by the Debian adapter can update that server from
+the connection dialog: the app runs the server's own updater over the profile's pinned ssh, never
+through the daemon (#879, [updating a server from the app](UPDATING.md#updating-a-server-from-the-app)).
+
 ### Choosing a remote access path
 
 - **App-managed SSH profile (default).** Nothing listens beyond the server's

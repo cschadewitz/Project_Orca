@@ -13,6 +13,7 @@
 import { UpdatePreflightRefusal } from "./updates.js";
 import { daemonEndpoint, type DaemonConnectionRequest, type DaemonTargetSnapshot } from "../daemon-connection.js";
 import type { ProfileLease } from "./remote-profiles.js";
+import type { RemoteCommand } from "@orca/protocol/remote-access";
 import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
 import {
@@ -553,6 +554,19 @@ export class Workspace {
   /** A saved target (URL or profile) replaces the bundled default. */
   private hasSavedTarget(): boolean {
     return Boolean(this.savedUrl || this.savedProfile);
+  }
+
+  /**
+   * Run one command on the server the current SSH profile reaches (#879), over that
+   * profile's own pinned ssh. `undefined` when the current connection is not a profile.
+   */
+  runOnServer(
+    command: readonly string[],
+    onLine: (stream: "stdout" | "stderr", line: string) => void,
+  ): { profile: string; command: RemoteCommand } | undefined {
+    const lease = this.lease;
+    if (!lease) return undefined;
+    return { profile: lease.profile.id, command: lease.exec(command, onLine) };
   }
 
   /** Make `next` the current profile lease and let go of the previous one. */

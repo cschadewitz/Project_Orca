@@ -48,6 +48,9 @@ BUNDLE_SCHEMA = "orca-server-bundle/1"
 BUNDLE_PLATFORM = "linux-x64"
 BUNDLE_RECORD_RE = (r"<!-- orca-server-run: [0-9]+ sha256:([0-9a-f]{64}) sha256:([0-9a-f]{64})"
                     r" sha256:([0-9a-f]{64}) -->")
+# What the managed daemon is told about its own installation, and nothing else is (#879).
+DEPLOYMENT_ENV = ("ORCA_DEPLOYMENT_ADAPTER", "ORCA_DEPLOYMENT_MANIFEST", "ORCA_DEPLOYMENT_RING")
+DEPLOYMENT_RINGS = ("internal", "preview", "stable")
 BUNDLE_MAX_BYTES = 512 << 20          # compressed archive
 BUNDLE_MAX_UNPACKED = 1536 << 20      # everything it unpacks to
 # cosign is fetched once into the deployment root and checked against this digest every time
@@ -368,6 +371,7 @@ class Deployment:
         self.typed_inspector = typed_inspector
         self._typed_assertions = []
         self._typed_lifetimes = []
+        self.manifest = Path(manifest).resolve()
         self.config = json.loads(Path(manifest).read_text())
         self.root = Path(self.config["root"]).resolve()
         self.pending = self.root / "activation.json"
@@ -382,6 +386,15 @@ class Deployment:
         self.typed_guard("inspect")()
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "releases").mkdir(exist_ok=True)
+
+    def deployment_env(self):
+        """What the managed daemon reports about how to update it (#879, `hello.deployment`)."""
+        env = {"ORCA_DEPLOYMENT_ADAPTER": str(Path(__file__).resolve()),
+               "ORCA_DEPLOYMENT_MANIFEST": str(self.manifest)}
+        ring = self.config.get("ring")
+        if ring in DEPLOYMENT_RINGS:
+            env["ORCA_DEPLOYMENT_RING"] = ring
+        return env
 
     def typed_dispatch(self, operation, *args, **kwargs):
         # Every retained assertion is synchronous. No process/await between the
@@ -802,8 +815,13 @@ class Deployment:
         env = {**os.environ, "ORCA_RELEASE": str(release)}
         env.pop("ORCA_MAINTENANCE_TOKEN", None)
         env.pop("ORCA_ADMISSION_FILE", None)
+        for name in DEPLOYMENT_ENV:
+            env.pop(name, None)
         if kind == "daemon":
             env["ORCA_ADMISSION_FILE"] = str(self.pending)
+            # Reported in the daemon's hello (#879): the app runs this adapter over SSH to update
+            # the server. Paths only; nothing installs through the daemon.
+            env.update(self.deployment_env())
         config = self.config[{"cli": "cliConfig", "acp": "acpConfig", "daemon": "daemonConfig"}[kind]]
         command = [meta["node"], meta["entry"], "--config", config]
         if kind == "daemon":

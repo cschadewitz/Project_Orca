@@ -36,6 +36,7 @@ import type { LaunchReview, PreflightParams } from "../configuration-launch-cont
 import { RunsAdmitResultSchema } from "@orca/protocol";
 import { ConnectionTarget, ConnectionRefusal, connectionFailure, callInConnection } from "./connection-target.js";
 import { RemoteProfiles } from "./remote-profiles.js";
+import { ServerUpdater } from "./server-update.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates } from "./updates.js";
 import { MacUpdateWindows } from "./mac-update-windows.js";
@@ -1065,6 +1066,15 @@ const ProfileIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
 function profileInUse(id: string): boolean {
   return workspace.connectionTarget.profile?.id === id;
 }
+/* Updating the connected server (#879): its own updater, over the profile's own ssh. The
+   daemon only said where the updater is; nothing installs through it. */
+const serverUpdater = new ServerUpdater({
+  version: app.getVersion(),
+  deployment: () => connection.managedDeployment(),
+  run: (command, onLine) => workspace.runOnServer(command, onLine),
+  onProgress: (progress) => send("orca:server.update.progress", progress),
+});
+ipcMain.handle("orca:server.update", () => serverUpdater.update());
 ipcMain.handle("orca:profiles.list", () => remoteProfiles.list());
 ipcMain.handle("orca:profiles.save", (_event, input: unknown) => profileResult(() => remoteProfiles.save(input)));
 ipcMain.handle("orca:profiles.remove", (_event, id: unknown) =>
@@ -1515,6 +1525,7 @@ app.on("before-quit", () => {
   stopDiagnosticObservations();
   targets.cancel();
   linuxReleases?.stop();
+  serverUpdater.stop();
   connection.close();
   alerts.close();
 });

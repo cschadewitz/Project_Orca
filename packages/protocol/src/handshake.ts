@@ -197,6 +197,39 @@ export const DAEMON_CAPABILITIES = [
 export const DaemonCapabilitySchema = z.enum(DAEMON_CAPABILITIES);
 export type DaemonCapability = z.infer<typeof DaemonCapabilitySchema>;
 
+/**
+ * An absolute POSIX path on the daemon's machine that is safe to put, single-quoted, in a
+ * remote shell command: no `..` segment, no quote, whitespace, glob or other shell character.
+ * The managed updater's own paths (`/srv/dev/orca-live/...`) fit; anything else is not offered.
+ */
+export const ServerPathSchema = z
+  .string()
+  .max(512)
+  .regex(/^\/[A-Za-z0-9._+/-]+$/, "an absolute path of letters, digits and . _ + / -")
+  .refine((path) => !path.split("/").includes(".."), "no '..' segment");
+
+/** A server ring, as the update feed names it (docs/UPDATING.md "Rings and controlled rollouts"). */
+export const ServerRingSchema = z.enum(["internal", "preview", "stable"]);
+export type ServerRing = z.infer<typeof ServerRingSchema>;
+
+/**
+ * How this daemon was installed, when the managed server updater (`orca-release.py`, Debian)
+ * launched it (#879). The app updates such a server by running that updater over the
+ * person's own SSH connection, never through the daemon: these are the two paths to run it
+ * with, and the ring it follows when its deployment names one. Absent for every other daemon
+ * (a desktop's bundled daemon, a source checkout, `orca serve` by hand), which the app then
+ * explains it cannot update.
+ */
+export const ManagedDeploymentSchema = z.object({
+  kind: z.literal("managed"),
+  /** The updater script: `orca-release.py`, outside the replaceable releases. */
+  adapter: ServerPathSchema,
+  /** The deployment manifest it takes as `--deployment`. */
+  manifest: ServerPathSchema,
+  ring: ServerRingSchema.optional(),
+});
+export type ManagedDeployment = z.infer<typeof ManagedDeploymentSchema>;
+
 export const HelloResultSchema = z.object({
   identity: z.object({ workspaceId: z.uuid(), instanceId: z.uuid() }).optional(),
   protocol: ProtocolVersionSchema,
@@ -214,5 +247,10 @@ export const HelloResultSchema = z.object({
    * surface; `agents.list` carries the per-agent and per-host detail. Optional.
    */
   sessionSlots: SessionSlotsSummarySchema.optional(),
+  /**
+   * The managed server updater that launched this daemon (#879), for a caller holding
+   * `config.read`. Absent for any other daemon. Protocol 2.2.
+   */
+  deployment: ManagedDeploymentSchema.optional(),
 });
 export type HelloResult = z.infer<typeof HelloResultSchema>;

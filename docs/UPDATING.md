@@ -557,6 +557,39 @@ activation check that the service runs the selected release follows the recorded
 than `packages/cli/dist/main.js`. Install the updated adapter (step 2 of the bootstrap) before
 the first bundle update.
 
+### Updating a server from the app
+
+A server the adapter launched can also be updated from the desktop app, over the same SSH
+profile the app connects with ([daemon connections](daemon-connection.md#ssh-connection-profiles-874)).
+When the adapter starts the daemon it passes its own path, the deployment manifest and the
+manifest's ring (`ORCA_DEPLOYMENT_ADAPTER`, `ORCA_DEPLOYMENT_MANIFEST`, `ORCA_DEPLOYMENT_RING`,
+set for the daemon only), and the daemon reports them in `hello.deployment` to a caller holding
+`config.read`. A daemon started any other way reports nothing and the app offers no update.
+
+The connection dialog shows the server's version, protocol and ring and whether it is older than
+the app. **Update now** runs, over the profile's own ssh (the pinned host key, the profile's key,
+no forwards, no ssh config):
+
+```sh
+python3 <adapter> --deployment <manifest> update --bundle v<app version>
+```
+
+That is the command above, so the server's rules decide: the bundle's signer and digests,
+forward-only versions, the update lock and the admission barrier. Nothing installs through the
+daemon's RPC. The app streams what the updater prints and then says how it ended:
+
+- **Updated**: the server now runs the app's version; the app reconnects on its own.
+- **Work is running**: the barrier refused (`Daemon busy`, `Busy: admission.lock`, or an
+  unmanaged ORCA process); nothing was cancelled and the old release keeps serving.
+- **Another update is running**: `Busy: update.lock`, held by the scheduled updater or another
+  operator; this one did not start.
+- **Failed**: the updater's own `orca-release:` message, and whether the previous release was
+  restored and healthy.
+- **Could not reach the server**: ssh could not run the updater; the app's own message, never
+  ssh's output.
+
+A development build of the app (a version that is not a release tag) offers no update.
+
 ### Recovery and store compatibility
 
 The operator-runtime integration uses **protocol 2.0** and **store epoch

@@ -20,7 +20,9 @@ import {
   pinState,
   profileIdFor,
   SshTunnel,
+  TunnelRefusal,
   type ConnectionProfile,
+  type RemoteCommand,
   type SecretCipher,
   type SshTunnelOptions,
   type TunnelState,
@@ -49,6 +51,12 @@ export interface ProfileLease {
   readonly transport: StreamTransport;
   /** The remote refused the forwarded connection just now: ssh works, no daemon listens. */
   remoteRefused(): boolean;
+  /**
+   * Run one command on the server over this profile's own ssh: the pinned host key, the
+   * person's key, no forwards (#879). Refused like `transport` once the lease is released
+   * or the profile changed.
+   */
+  exec(command: readonly string[], onLine: (stream: "stdout" | "stderr", line: string) => void): RemoteCommand;
   release(): Promise<void>;
 }
 
@@ -323,6 +331,10 @@ export class RemoteProfiles {
       },
       transport,
       remoteRefused: () => current.tunnel.remoteRefused(),
+      exec: (command, onLine) => {
+        if (!usable()) throw new TunnelRefusal("closed");
+        return current.tunnel.exec(command, onLine);
+      },
       release: async () => {
         if (released) return;
         released = true;

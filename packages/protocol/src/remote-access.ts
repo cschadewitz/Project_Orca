@@ -282,33 +282,7 @@ export interface TunnelHops {
  * known-hosts source, so the pin is the only host trust.
  */
 export function hopArgs(hop: HopSpec): string[] {
-  const pins = sshOptionPath(hop.knownHostsFile);
-  const options = [
-    "BatchMode=yes",
-    "ExitOnForwardFailure=yes",
-    `StrictHostKeyChecking=${pinnedHostKey(hop.knownHostsFile) ? "yes" : "accept-new"}`,
-    `UserKnownHostsFile=${pins}`,
-    `GlobalKnownHostsFile=${pins}`,
-    `HostKeyAlias=${hop.hostKeyAlias}`,
-    "CheckHostIP=no",
-    "UpdateHostKeys=no",
-    "VerifyHostKeyDNS=no",
-    "CanonicalizeHostname=no",
-    "ProxyCommand=none",
-    "ProxyJump=none",
-    "ControlMaster=no",
-    "ControlPath=none",
-    "ForwardAgent=no",
-    "ForwardX11=no",
-    "PermitLocalCommand=no",
-    "ClearAllForwardings=no",
-    "Tunnel=no",
-    "AddKeysToAgent=no",
-    "ConnectTimeout=15",
-    "ServerAliveInterval=15",
-    "ServerAliveCountMax=3",
-    ...(hop.identityFile ? ["IdentitiesOnly=yes"] : []),
-  ];
+  const options = hopOptions(hop, pinnedHostKey(hop.knownHostsFile) ? "yes" : "accept-new", "forward");
   return [
     "-F",
     "none",
@@ -324,6 +298,71 @@ export function hopArgs(hop: HopSpec): string[] {
     ...(hop.stdio ? ["-W", hop.stdio] : ["-L", hop.forward ?? ""]),
     "--",
     hop.target,
+  ];
+}
+
+/** POSIX single quotes around one word, for the remote shell ssh hands a command to. */
+export function shellQuote(word: string): string {
+  return `'${word.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * The argv for one remote command over a hop (#879): the same isolated options as a tunnel
+ * hop, but no forward of any kind, no `-v` (the command's own stderr is what the caller
+ * reads), and the host key must already be pinned: a command is never the connection that
+ * enrolls a server. ssh joins the command's words into one line for the remote shell, so each
+ * is single-quoted here and arrives as exactly that word.
+ */
+export function commandArgs(hop: HopSpec, command: readonly string[]): string[] {
+  if (command.length === 0) throw new Error("A remote command needs at least one word");
+  return [
+    "-F",
+    "none",
+    "-T",
+    ...hopOptions(hop, "yes", "none").flatMap((option) => ["-o", option]),
+    ...(hop.identityFile ? ["-i", hop.identityFile.replace(/%/g, "%%")] : []),
+    ...(hop.port ? ["-p", String(hop.port)] : []),
+    "--",
+    hop.target,
+    command.map(shellQuote).join(" "),
+  ];
+}
+
+/**
+ * Every option a hop sets. `forward`: the hop's one forward must bind or ssh exits. `none`: a
+ * command hop clears every forward, so nothing but the command crosses it.
+ */
+function hopOptions(
+  hop: HopSpec,
+  strictHostKeyChecking: "yes" | "accept-new",
+  forwarding: "forward" | "none",
+): string[] {
+  const pins = sshOptionPath(hop.knownHostsFile);
+  return [
+    "BatchMode=yes",
+    forwarding === "forward" ? "ExitOnForwardFailure=yes" : "ClearAllForwardings=yes",
+    `StrictHostKeyChecking=${strictHostKeyChecking}`,
+    `UserKnownHostsFile=${pins}`,
+    `GlobalKnownHostsFile=${pins}`,
+    `HostKeyAlias=${hop.hostKeyAlias}`,
+    "CheckHostIP=no",
+    "UpdateHostKeys=no",
+    "VerifyHostKeyDNS=no",
+    "CanonicalizeHostname=no",
+    "ProxyCommand=none",
+    "ProxyJump=none",
+    "ControlMaster=no",
+    "ControlPath=none",
+    "ForwardAgent=no",
+    "ForwardX11=no",
+    "PermitLocalCommand=no",
+    ...(forwarding === "forward" ? ["ClearAllForwardings=no"] : []),
+    "Tunnel=no",
+    "AddKeysToAgent=no",
+    "ConnectTimeout=15",
+    "ServerAliveInterval=15",
+    "ServerAliveCountMax=3",
+    ...(hop.identityFile ? ["IdentitiesOnly=yes"] : []),
   ];
 }
 
@@ -527,6 +566,31 @@ export class SshTunnel {
     });
     stream.socket = socket;
     return socket;
+  }
+
+  /**
+   * Run one command on the profile's server over its own ssh, beside the daemon streams
+   * (#879). The same pinned host key and identity as every stream, behind the same jump host,
+   * with no forward of any kind; the server must already be pinned, so a command is never
+   * what enrolls a host. Each word reaches the remote shell single-quoted, as itself.
+   *
+   * Lines of the command's stdout and stderr go to `onLine`; ssh's own failures are not
+   * lines, they end the command with a `refusal`. Throws a `TunnelRefusal` when the tunnel is
+   * not open or its pin is not on file.
+   */
+  exec(command: readonly string[], onLine: (stream: "stdout" | "stderr", line: string) => void): RemoteCommand {
+    if (this.closed || !this.hops) throw new TunnelRefusal("closed");
+    if (this.stateNow.phase === "failed") throw new TunnelRefusal(this.stateNow.refusal);
+    if (!this.jumpUp()) throw new TunnelRefusal("unreachable");
+    const hop = this.hops.daemon;
+    if (pinState(hop.knownHostsFile) !== "pinned") throw new TunnelRefusal("host-key-missing");
+    let child: ChildProcess;
+    try {
+      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", commandArgs(hop, command));
+    } catch {
+      throw new TunnelRefusal("ssh-missing");
+    }
+    return runRemote(child, onLine);
   }
 
   async close(): Promise<void> {
@@ -817,6 +881,103 @@ export class SshTunnel {
     }, delay);
     this.restartTimer.unref?.();
   }
+}
+
+/** stderr lines held back before a command shows it runs; more is ssh noise or a flood. */
+const HELD_LINES = 200;
+
+/** How a remote command ended. */
+export type RemoteCommandExit =
+  | { kind: "exited"; code: number }
+  | { kind: "signalled"; signal: string }
+  /** ssh could not run it (exit 255 or no ssh): the command's own outcome is unknown. */
+  | { kind: "refused"; refusal: TunnelRefusalCode };
+
+/** One remote command in flight. */
+export interface RemoteCommand {
+  readonly exit: Promise<RemoteCommandExit>;
+  /** Stop waiting: ends the local ssh, which hangs up the remote session. */
+  kill(): void;
+}
+
+/**
+ * Exit 255 is ssh's own failure (connect, host key, auth); the remote command's code
+ * otherwise. ssh's failure lines are classified, never passed on: they can carry user names,
+ * paths and banners. A command that itself exits 255 is read as an ssh failure, which only
+ * makes the caller report a connection problem instead of the command's: the safe side.
+ *
+ * ssh and the command share one stderr, so stderr lines are held until the command has shown
+ * it runs (its first stdout line) or ssh exits with anything but 255, and dropped on 255.
+ */
+export function runRemote(
+  child: ChildProcess,
+  onLine: (stream: "stdout" | "stderr", line: string) => void,
+): RemoteCommand {
+  let stderrTail = "";
+  let held: string[] | undefined = [];
+  const release = () => {
+    const lines = held ?? [];
+    held = undefined;
+    for (const line of lines) onLine("stderr", line);
+  };
+  const emit = (stream: "stdout" | "stderr", line: string) => {
+    if (stream === "stdout") {
+      release();
+      onLine(stream, line);
+    } else if (held) {
+      if (held.length < HELD_LINES) held.push(line);
+    } else onLine(stream, line);
+  };
+  const lines = (stream: "stdout" | "stderr") => {
+    let buffer = "";
+    const source = stream === "stdout" ? child.stdout : child.stderr;
+    source?.setEncoding("utf8");
+    source?.on("data", (chunk: string) => {
+      buffer += chunk;
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline).replace(/\r$/, "");
+        buffer = buffer.slice(newline + 1);
+        if (stream === "stderr") stderrTail = (stderrTail + line + "\n").slice(-STDERR_TAIL);
+        emit(stream, line);
+      }
+      if (buffer.length > STDERR_TAIL) buffer = buffer.slice(-STDERR_TAIL);
+    });
+    return new Promise<void>((resolve) => {
+      if (!source) return resolve();
+      source.once("end", () => {
+        if (buffer) {
+          if (stream === "stderr") stderrTail = (stderrTail + buffer).slice(-STDERR_TAIL);
+          emit(stream, buffer.replace(/\r$/, ""));
+        }
+        resolve();
+      });
+      source.once("error", () => resolve());
+    });
+  };
+  const drained = Promise.all([lines("stdout"), lines("stderr")]);
+  const exit = new Promise<RemoteCommandExit>((resolve) => {
+    child.once("error", (error: NodeJS.ErrnoException) =>
+      resolve({ kind: "refused", refusal: error.code === "ENOENT" ? "ssh-missing" : "ssh-failed" }),
+    );
+    child.once("close", (code, signal) => {
+      if (code === 255) resolve({ kind: "refused", refusal: classifySshFailure(stderrTail) });
+      else if (code !== null) resolve({ kind: "exited", code });
+      else resolve({ kind: "signalled", signal: signal ?? "unknown" });
+    });
+  });
+  return {
+    exit: drained
+      .then(() => exit)
+      .then((ended) => {
+        if (ended.kind === "refused") held = undefined;
+        else release();
+        return ended;
+      }),
+    kill: () => {
+      if (alive(child)) child.kill();
+    },
+  };
 }
 
 /** One connection over a child's stdin/stdout. Destroying it ends the child's stdio. */
