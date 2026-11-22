@@ -38,6 +38,7 @@ export {
   delegationRefusal,
   DELEGATION_METHODS,
   openDaemonSession,
+  recordsOrigin,
   type DelegationRefusalReason,
   type DelegationTransport,
   type OpenDaemonSessionOptions,
@@ -235,6 +236,8 @@ export interface DelegationOptions {
   tunnel?: (profile: ConnectionProfile, files: RemoteFiles, enrollment: Enrollment) => SshTunnel;
   /** Test seam: how often a running remote run is read. */
   pollMs?: number;
+  /** This daemon's workspace id, stated as each delegated run's origin (#883). */
+  workspaceId?: () => Promise<string>;
 }
 
 /** What the engine says a session is opened for (`SessionOrigin` in `@orca/engine`). */
@@ -297,6 +300,8 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
         tunnel: code,
       });
     }
+    // A workspace id that cannot be read leaves the origin out; the run is still delegated.
+    const originWorkspaceId = await options.workspaceId?.().catch(() => undefined);
     return openDaemonSession({
       agent: open.agent,
       host: open.host,
@@ -307,6 +312,7 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
       token,
       binding: delegationBinding(enrollment, profile, open.agent, open.origin?.generationId ?? "unversioned"),
       receipts,
+      ...(originWorkspaceId ? { originWorkspaceId } : {}),
       ...(open.askPermission ? { askPermission: (req, invocation) => open.askPermission!(req, invocation) } : {}),
       ...(open.logger ? { logger: open.logger } : {}),
       ...(open.clock ? { clock: open.clock } : {}),

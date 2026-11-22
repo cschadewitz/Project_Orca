@@ -28,6 +28,7 @@ import {
   DelegationReceipts,
   openDaemonSession,
   ReceiptConflict,
+  recordsOrigin,
   type DelegationTransport,
   type OpenDaemonSessionOptions,
 } from "@orca/daemon";
@@ -316,6 +317,25 @@ edges:
     expect(
       audit.some((r) => JSON.stringify(r).includes("parent-daemon") && JSON.stringify(r).includes("runs.admit")),
     ).toBe(true);
+
+    // The remote run records the parent workspace, run and step as its origin. The remote's
+    // audit record of the admission names the authenticated principal and the run it made;
+    // the caller-stated origin stays out of the audit log (it is not redacted there).
+    const parentWorkspace = ((await call(parent, "operator.discover", {})).target as { workspaceId: string })
+      .workspaceId;
+    const remoteRun = (await call(remote, "runs.get", { runId: delegated[0]!.id })).run as {
+      origin?: { workspaceId: string; runId: string; stepRunId?: string };
+    };
+    expect(remoteRun.origin).toMatchObject({ workspaceId: parentWorkspace, runId });
+    expect(typeof remoteRun.origin!.stepRunId).toBe("string");
+    const admission = audit.find(
+      (r) =>
+        r.operation === "runs.admit" &&
+        Object.values((r.target as Record<string, string> | undefined) ?? {}).includes(delegated[0]!.id),
+    );
+    expect(admission).toMatchObject({ outcome: "succeeded", actor: { principal: "parent-daemon" } });
+    const log = JSON.stringify(audit);
+    for (const value of [parentWorkspace, runId, remoteRun.origin!.stepRunId!]) expect(log).not.toContain(value);
   }, 120_000);
 
   it("forwards a remote gate to the parent and sends the parent's answer back", async (ctx) => {
@@ -985,6 +1005,102 @@ describe("delegation through a proxy the test controls (#883)", () => {
     expect(delegationKey("r", "d", 0)).not.toBe(delegationKey("r", "e", 0));
     expect(delegationKey("r", "d", 0)).toBe(delegationKey("r", "d", 0));
     expect(new TextEncoder().encode(delegationKey("r", "d", 0)).length).toBeLessThanOrEqual(128);
+  });
+
+  // Canonical ids, as the remote checks a stated origin.
+  const ORIGIN_WORKSPACE = "0b6f3c1e-4a1d-4c7e-9a52-2d6f0f8f9a11";
+  const PARENT = "run_01JD0000000000000000000000";
+  const STEP = "step_01JD0000000000000000000000";
+
+  it("states the parent workspace, run and step as the remote run's origin", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-origin"));
+    const session = await open(proxy.transport(), receipts, { originWorkspaceId: ORIGIN_WORKSPACE });
+    const path = join(work, "origin", "report.md");
+    await expect(
+      session.prompt("ignored", { timeoutMs: 60_000, turn: turn(PARENT, path, 1, STEP, STEP) }),
+    ).resolves.toMatchObject({ stopReason: "end_turn" });
+    const origin = { workspaceId: ORIGIN_WORKSPACE, runId: PARENT, stepRunId: STEP };
+    const receipt = receipts.read(PARENT, STEP)!;
+    expect(receipt.origin).toEqual(origin);
+    const remoteRun = (await call(remote, "runs.get", { runId: receipt.remoteRunId! })).run as { origin?: unknown };
+    expect(remoteRun.origin).toEqual(origin);
+    await session.close();
+    await proxy.close();
+  }, 120_000);
+
+  it("states no origin to a daemon whose hello does not list it, whatever its protocol minor", async () => {
+    const proxy = await proxied();
+    // The remote's hello, with `origin` taken out of admitFields: an independent 2.6 peer.
+    proxy.state.rules.tamper = { method: "hello", from: '"admitFields":["origin"]', to: '"admitFields":["nigiro"]' };
+    const receipts = new DelegationReceipts(join(work, "receipts-no-origin"));
+    const session = await open(proxy.transport(), receipts, { originWorkspaceId: ORIGIN_WORKSPACE });
+    const parent = "run_01JD0000000000000000000001";
+    await expect(
+      session.prompt("ignored", {
+        timeoutMs: 60_000,
+        turn: turn(parent, join(work, "no-origin", "report.md"), 1, STEP, STEP),
+      }),
+    ).resolves.toMatchObject({ stopReason: "end_turn" });
+    const receipt = receipts.read(parent, STEP)!;
+    expect(receipt.origin).toBeUndefined();
+    const remoteRun = (await call(remote, "runs.get", { runId: receipt.remoteRunId! })).run as { origin?: unknown };
+    expect(remoteRun.origin).toBeUndefined();
+    await session.close();
+    await proxy.close();
+  }, 120_000);
+
+  it("refuses to replay an admission that stated an origin to a daemon that no longer takes one", async () => {
+    const proxy = await proxied();
+    proxy.state.rules.tamper = { method: "hello", from: '"admitFields":["origin"]', to: '"admitFields":["nigiro"]' };
+    const receipts = new DelegationReceipts(join(work, "receipts-origin-replay"));
+    const parent = "run_01JD0000000000000000000002";
+    // A receipt whose admission went out with an origin, its answer never learned.
+    receipts.write({
+      profile: "direct",
+      binding: { ...binding, workflowId: "remote-task" },
+      parentRunId: parent,
+      delegationId: STEP,
+      generation: 0,
+      key: delegationKey(parent, STEP, 0),
+      state: "submitting",
+      origin: { workspaceId: ORIGIN_WORKSPACE, runId: parent, stepRunId: STEP },
+    });
+    const before = (await runsOf("remote-task")).length;
+    const session = await open(proxy.transport(), receipts, { originWorkspaceId: ORIGIN_WORKSPACE });
+    const error = await session
+      .prompt("ignored", { timeoutMs: 30_000, turn: turn(parent, join(work, "replay", "report.md"), 1, STEP, STEP) })
+      .catch((e: unknown) => e);
+    expect(isOrcaError(error, "DELEGATION_REFUSED")).toBe(true);
+    expect((error as { details: { reason: string } }).details.reason).toBe("protocol");
+    // Nothing was sent: no run, and the receipt still holds the admission as it was.
+    expect(await runsOf("remote-task")).toHaveLength(before);
+    expect(receipts.read(parent, STEP)).toMatchObject({ state: "submitting", origin: { runId: parent } });
+    await session.close();
+    await proxy.close();
+  }, 60_000);
+
+  it("refuses an origin that is not canonical ids, before anything is admitted", async () => {
+    const before = (await runsOf("remote-task")).length;
+    for (const origin of [
+      { workspaceId: "not-a-uuid", runId: PARENT },
+      { workspaceId: ORIGIN_WORKSPACE, runId: "run_<script>" },
+      { workspaceId: ORIGIN_WORKSPACE, runId: PARENT, stepRunId: "private-token-value" },
+      { workspaceId: ORIGIN_WORKSPACE, runId: PARENT, extra: "x" },
+    ]) {
+      const answer = await remote.call("runs.admit", { workflowId: "remote-task", vars: { prompt: "x" }, origin });
+      expect(answer.ok).toBe(false);
+    }
+    expect(await runsOf("remote-task")).toHaveLength(before);
+    // Refused admissions are audited without the origin they stated.
+    const audit = await readFile(join(remote.dir, "auth", "audit.jsonl"), "utf8");
+    for (const value of ["not-a-uuid", "run_<script>", "private-token-value"]) expect(audit).not.toContain(value);
+  });
+
+  it("states an origin only to a daemon whose hello lists it", () => {
+    expect(recordsOrigin({})).toBe(false);
+    expect(recordsOrigin({ admitFields: [] })).toBe(false);
+    expect(recordsOrigin({ admitFields: ["origin"] })).toBe(true);
   });
 
   it("refuses a daemon that does not take delegated runs, as a typed failure", async () => {
