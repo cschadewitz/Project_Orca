@@ -44,7 +44,14 @@ import {
   type WorkflowGraph,
   type WorkItem,
 } from "@orca/core";
-import { workflowRevision, type HeldRunLease, type Orchestrator, type PlanService } from "@orca/engine";
+import {
+  INLINE_SEP,
+  previewRecovery,
+  workflowRevision,
+  type HeldRunLease,
+  type Orchestrator,
+  type PlanService,
+} from "@orca/engine";
 import { redactExecutionValue, type WorkItemClaim } from "@orca/store";
 import {
   INLINE_WORKFLOW_SEPARATOR,
@@ -67,6 +74,8 @@ import {
   type RunsEventsParams,
   type RunsEventsResult,
   type RunsGetParams,
+  type RunsRecoveryParams,
+  type RunsRecoveryResult,
   type RunsGetResult,
   type RunsListParams,
   type RunsListResult,
@@ -524,6 +533,7 @@ class Pass {
       ...(summary.completedAt ? { finishedAt: summary.completedAt } : {}),
       ...(duration === undefined ? {} : { durationMs: duration }),
       ...(summary.parentRunId ? { parentRunId: summary.parentRunId } : {}),
+      ...(summary.checkpoint ? { checkpoint: { ...summary.checkpoint } } : {}),
       ...(summary.requestId ? { requestId: summary.requestId } : {}),
       ...(workItem ? { workItem } : {}),
       ...(facts.agentId ? { agentId: facts.agentId } : {}),
@@ -642,6 +652,32 @@ export class ReadModel {
       lastSeq: state.lastSeq,
       asOf: pass.asOf,
     };
+  }
+
+  /**
+   * `runs.recovery` (#357): the same assessment `orca recovery` prints, read from the run's
+   * log and the store. Read-only: no lease, nothing written. `principalId` is the caller, so
+   * a run started by someone else says so rather than offering a checkpoint attempt. Without
+   * `artifacts` (a caller lacking `artifacts.read`) no artifact is read or named, and each
+   * checkpoint is unverified on that point rather than blocked.
+   */
+  async runsRecovery(params: RunsRecoveryParams, principalId?: string, artifacts = true): Promise<RunsRecoveryResult> {
+    const asOf = this.clock.isoNow();
+    const summary = await this.orc.getSummary(params.runId);
+    let currentConfigGeneration: string | undefined;
+    try {
+      currentConfigGeneration = this.orc.generations?.current.snapshot.id;
+    } catch {
+      currentConfigGeneration = undefined;
+    }
+    const assessment = await previewRecovery(this.orc.stores, params.runId, {
+      ...(params.checkpoint ? { checkpoint: params.checkpoint } : {}),
+      ...(principalId ? { principalId } : {}),
+      artifacts,
+      currentWorkflowVersion: this.versionOnDisk(summary.workflowId.split(INLINE_SEP)[0]!),
+      currentConfigGeneration,
+    });
+    return { assessment, asOf };
   }
 
   /**
@@ -1049,8 +1085,52 @@ export class ReadModel {
   ): Promise<StepView> {
     const finishedAt = step.completedAt;
     const duration = elapsed(step.startedAt, finishedAt ?? pass.now);
+    const children = await this.childViews(pass, step.children);
+    const reusedChildren = step.reusedChildren ? await this.childViews(pass, step.reusedChildren) : undefined;
+    return {
+      id: step.id,
+      runId: step.runId,
+      nodeId: step.nodeId,
+      nodeType: step.nodeType,
+      attempt: step.attempt,
+      status: displayStatusForStep(step),
+      scheduledAt: step.scheduledAt,
+      inputArtifactIds: [...step.inputArtifactIds],
+      outputArtifactIds: [...(step.result?.artifactIds ?? [])],
+      children,
+      skippedBranches: step.skippedBranches.map((b) => ({
+        branch: b.branch,
+        reason: b.reason,
+        ...(b.workItemId ? { workItemId: b.workItemId } : {}),
+      })),
+      ...(step.reusedFrom ? { reusedFrom: { ...step.reusedFrom } } : {}),
+      ...(reusedChildren?.length ? { reusedChildren } : {}),
+      ...(step.effectReview
+        ? {
+            effectReview: {
+              decision: step.effectReview.decision,
+              at: step.effectReview.at,
+              ...(step.effectReview.note ? { note: step.effectReview.note } : {}),
+            },
+          }
+        : {}),
+      ...(step.iteration === undefined ? {} : { iteration: step.iteration }),
+      ...(step.waitingOn ? { waitingOn: step.waitingOn } : {}),
+      ...(step.startedAt ? { startedAt: step.startedAt } : {}),
+      ...(finishedAt ? { finishedAt } : {}),
+      ...(duration === undefined ? {} : { durationMs: duration }),
+      ...(agent ? { agentId: agent.agentId } : {}),
+      ...(agent?.model !== undefined ? { model: agent.model } : {}),
+      ...(step.agentSessionId ? { agentSessionId: step.agentSessionId } : {}),
+      ...(step.result?.choice ? { choice: step.result.choice } : {}),
+      ...(step.result?.message ? { message: step.result.message } : {}),
+      ...(viewError(step.error) ? { error: viewError(step.error)! } : {}),
+    };
+  }
+
+  private async childViews(pass: Pass, links: StepRun["children"]): Promise<ChildRunView[]> {
     const children: ChildRunView[] = [];
-    for (const link of step.children) {
+    for (const link of links) {
       const facts = await pass.runFacts(link.runId);
       const naming = facts ? await pass.naming(facts.summary) : undefined;
       const status = facts
@@ -1070,34 +1150,7 @@ export class ReadModel {
         ...(link.resumed ? { resumed: true } : {}),
       });
     }
-    return {
-      id: step.id,
-      runId: step.runId,
-      nodeId: step.nodeId,
-      nodeType: step.nodeType,
-      attempt: step.attempt,
-      status: displayStatusForStep(step),
-      scheduledAt: step.scheduledAt,
-      inputArtifactIds: [...step.inputArtifactIds],
-      outputArtifactIds: [...(step.result?.artifactIds ?? [])],
-      children,
-      skippedBranches: step.skippedBranches.map((b) => ({
-        branch: b.branch,
-        reason: b.reason,
-        ...(b.workItemId ? { workItemId: b.workItemId } : {}),
-      })),
-      ...(step.iteration === undefined ? {} : { iteration: step.iteration }),
-      ...(step.waitingOn ? { waitingOn: step.waitingOn } : {}),
-      ...(step.startedAt ? { startedAt: step.startedAt } : {}),
-      ...(finishedAt ? { finishedAt } : {}),
-      ...(duration === undefined ? {} : { durationMs: duration }),
-      ...(agent ? { agentId: agent.agentId } : {}),
-      ...(agent?.model !== undefined ? { model: agent.model } : {}),
-      ...(step.agentSessionId ? { agentSessionId: step.agentSessionId } : {}),
-      ...(step.result?.choice ? { choice: step.result.choice } : {}),
-      ...(step.result?.message ? { message: step.result.message } : {}),
-      ...(viewError(step.error) ? { error: viewError(step.error)! } : {}),
-    };
+    return children;
   }
 
   private async inputView(pass: Pass, request: HumanInputRequest, state: RunState): Promise<OpenInputView> {

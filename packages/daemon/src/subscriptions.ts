@@ -27,6 +27,8 @@ import type { OrcaEvent } from "@orca/core";
 import {
   AGENT_CHANGED,
   AGENT_UPDATE,
+  EVENT_APPENDED,
+  eventTypeReadable,
   CONFIG_CHANGED,
   WORKFLOWS_CHANGED,
   PLAN_CHANGED,
@@ -300,6 +302,12 @@ export class Subscription {
 
   private emit(notification: DaemonNotification): number {
     if (!wants(this.params.methods, notification.method)) return 0;
+    // An event type newer than the subscriber's event schema would fail its parse (#357).
+    if (
+      notification.method === EVENT_APPENDED &&
+      !eventTypeReadable((notification.params as { event: OrcaEvent }).event.type, this.params.protocol)
+    )
+      return 0;
     this.send({ kind: "notification", method: notification.method, params: notification.params });
     return 1;
   }

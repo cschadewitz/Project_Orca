@@ -16,6 +16,7 @@ import { z } from "zod";
 import { RunOutcomeSchema, WorkspaceSchema, OrcaEventSchema } from "@orca/core/schemas";
 import { DisplayStatusSchema } from "./status.js";
 import { ArtifactViewSchema, ViewErrorSchema, WorkItemViewSchema } from "./views.js";
+import { ProtocolVersionSchema } from "./version.js";
 
 export const RUNS_LIST_METHOD = "runs.list";
 export const RUNS_GET_METHOD = "runs.get";
@@ -116,6 +117,8 @@ export const RunSummaryViewSchema = z.object({
   error: ViewErrorSchema.optional(),
   /** Protocol 2.3: present only when `runs.list` or `runs.get` was asked for `operations`. */
   operations: RunOperationsViewSchema.optional(),
+  /** A checkpoint attempt (#357, protocol 2.5): the failed run and the completed step it started after. */
+  checkpoint: z.object({ runId: z.string(), stepRunId: z.string() }).optional(),
 });
 export type RunSummaryView = z.infer<typeof RunSummaryViewSchema>;
 
@@ -214,6 +217,17 @@ export const StepViewSchema = z.object({
   error: ViewErrorSchema.optional(),
   children: z.array(ChildRunViewSchema),
   skippedBranches: z.array(SkippedBranchViewSchema),
+  /**
+   * Protocol 2.5 (#357): this step was reused by a checkpoint attempt from that attempt of
+   * another run. It did not run here; its result is the one recorded there.
+   */
+  reusedFrom: z.object({ runId: z.string(), stepRunId: z.string() }).optional(),
+  /** The children the reused step had where it ran. History only: this run owns none of them. */
+  reusedChildren: z.array(ChildRunViewSchema).optional(),
+  /** Protocol 2.5 (#357): an operator's review of this attempt's possible effects outside ORCA. */
+  effectReview: z
+    .object({ decision: z.enum(["run-again", "abandon"]), at: z.string(), note: z.string().optional() })
+    .optional(),
 });
 export type StepView = z.infer<typeof StepViewSchema>;
 
@@ -318,6 +332,11 @@ export const RunsEventsParamsSchema = z
      * as an AND, and an unknown step run matches nothing rather than failing.
      */
     stepRunId: z.string().min(1).optional(),
+    /**
+     * Protocol 2.5: the protocol this client reads events in. Event types added after it are
+     * withheld (`EVENT_TYPES_SINCE`); absent means 2.0. Cursors are unaffected.
+     */
+    protocol: ProtocolVersionSchema.optional(),
     limit: z.number().int().positive().max(500).default(200),
   })
   .refine((p) => p.after === undefined || p.before === undefined, {

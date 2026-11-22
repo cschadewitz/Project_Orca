@@ -1108,6 +1108,7 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
           claims: app.retryClaims,
           direct: app.directAdmissions,
           requests: app.program.submissions,
+          checkpoints: app.checkpointAdmissions,
           orchestrator: app.orchestrator,
           checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
           execute: async (id, authority) => {

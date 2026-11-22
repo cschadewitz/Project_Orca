@@ -29,6 +29,11 @@ export interface RecoveryPreviewOptions {
   now?: number;
   /** A lease this holder holds on a run is not counted as another process driving it. */
   leaseHolder?: string | undefined;
+  /**
+   * False when the asker may not read artifacts: no artifact record or byte is read, no
+   * artifact id is reported, and each checkpoint is `artifacts-unchecked` rather than blocked.
+   */
+  artifacts?: boolean | undefined;
 }
 
 export async function previewRecovery(
@@ -73,7 +78,8 @@ export async function previewRecovery(
   // checks the bytes against their hash). Checked once per id.
   const artifactIds = new Set(Object.values(state.steps).flatMap((step) => step.result?.artifactIds ?? []));
   const present = new Set<string>();
-  for (const id of artifactIds) {
+  const hidden = options.artifacts === false;
+  for (const id of hidden ? [] : artifactIds) {
     try {
       if ((await stores.artifacts.get(id)) === undefined) continue;
       await stores.artifacts.bytes(id);
@@ -90,6 +96,7 @@ export async function previewRecovery(
     resumeAncestors,
     resumeDescendants,
     artifactPresent: (id) => present.has(id),
+    artifactsHidden: hidden,
     checkpoint: options.checkpoint,
     currentWorkflowVersion: options.currentWorkflowVersion,
     currentConfigGeneration: options.currentConfigGeneration,

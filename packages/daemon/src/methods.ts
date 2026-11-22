@@ -62,7 +62,25 @@ import {
   AdmissionsGetParamsSchema,
   AdmissionsReconcileParamsSchema,
 } from "@orca/protocol";
-import { checkAdmissionScope, type AdmissionRetryModel, type AdmissionAuthorities } from "./admission-retry.js";
+import {
+  checkAdmissionScope,
+  newAdmissionFence,
+  type AdmissionRetryModel,
+  type AdmissionAuthorities,
+} from "./admission-retry.js";
+import {
+  eventTypeReadable,
+  RUNS_RECOVER_METHOD,
+  RUNS_RECOVERY_METHOD,
+  RUNS_REVIEW_EFFECT_METHOD,
+  RunsRecoverParamsSchema,
+  RunsRecoveryParamsSchema,
+  RunsReviewEffectParamsSchema,
+  type RunsRecoveryParams,
+  type RunsRecoveryResult,
+  type RunsReviewEffectParams,
+  type RunsReviewEffectResult,
+} from "@orca/protocol";
 import type { RequestSubmissionModel } from "./request-submission.js";
 import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine";
 import type { Maintenance } from "./maintenance.js";
@@ -478,7 +496,11 @@ export const runsGet: Method<Parameters<ReadModel["runsGet"]>[0], RunsGetResult>
 /** `runs.events`: one page of a run's log, by sequence number, forwards or backwards. */
 export const runsEvents: Method<Parameters<ReadModel["runsEvents"]>[0], RunsEventsResult> = {
   params: RunsEventsParamsSchema,
-  handle: (params, ctx) => reads(ctx).runsEvents(params),
+  handle: async (params, ctx) => {
+    const page = await reads(ctx).runsEvents(params);
+    // Withhold event types newer than the client's event schema; the cursors stay (#357).
+    return { ...page, events: page.events.filter((e) => eventTypeReadable(e.type, params.protocol)) };
+  },
 };
 
 /** `inputs.list`: the gates and permission asks waiting on a person. */
@@ -681,6 +703,19 @@ export const runsCancel: Method<RunsCancelParams, RunsCancelResult> = {
   handle: (params, ctx) => control(ctx).cancelRun(params, ctx.mutationActor),
 };
 
+/** `runs.recovery` (#357): how this run could be recovered. Read-only. */
+export const runsRecovery: Method<RunsRecoveryParams, RunsRecoveryResult> = {
+  params: RunsRecoveryParamsSchema,
+  handle: (params, ctx) =>
+    reads(ctx).runsRecovery(params, ctx.mutationActor?.principalId, ctx.readScope?.artifacts ?? true),
+};
+
+/** `runs.reviewEffect` (#357): an operator's review of a step that may have acted and never finished. */
+export const runsReviewEffect: Method<RunsReviewEffectParams, RunsReviewEffectResult> = {
+  params: RunsReviewEffectParamsSchema,
+  handle: (params, ctx) => control(ctx).reviewEffect(params, ctx.mutationActor),
+};
+
 /** `runs.start`: a workflow and its vars. No request, no work item, no documents - by decision. */
 export const runsStart: Method<RunsStartParams, RunsStartResult> = {
   params: RunsStartParamsSchema,
@@ -814,6 +849,7 @@ export const methods: MethodTable = {
   [WORKFLOWS_LIST_METHOD]: workflowsList,
   [WORKFLOWS_GET_METHOD]: workflowsGet,
   [SEARCH_METHOD]: search,
+  [RUNS_RECOVERY_METHOD]: runsRecovery,
 };
 
 /**
@@ -855,6 +891,7 @@ export const controlMethods: MethodTable = {
   [RUNS_RESUME_METHOD]: runsResume,
   [RUNS_CANCEL_METHOD]: runsCancel,
   [RUNS_START_METHOD]: runsStart,
+  [RUNS_REVIEW_EFFECT_METHOD]: runsReviewEffect,
   [CLAIMS_RELEASE_METHOD]: claimsRelease,
 };
 
@@ -963,6 +1000,21 @@ export function methodsFor(ctx: MethodContext): MethodTable {
         return model.admit(command, idempotencyKey === undefined ? {} : { idempotencyKey }, await authority.direct());
       },
     };
+    if (model.supportsCheckpoints)
+      table[RUNS_RECOVER_METHOD] = {
+        params: RunsRecoverParamsSchema,
+        handle: async (params, invocation) => {
+          const { idempotencyKey, expectedScope, ...command } = params;
+          const authority = await authorities(invocation);
+          await checkAdmissionScope(expectedScope, authority);
+          const response = await model.recover(
+            command,
+            idempotencyKey === undefined ? {} : { idempotencyKey },
+            authority,
+          );
+          return response.state === "resolved" ? { ...response.result, operationId: response.operationId } : response;
+        },
+      };
     table["admissions.get"] = {
       params: AdmissionsGetParamsSchema,
       handle: async (params, invocation) => {
@@ -992,7 +1044,7 @@ export function methodsFor(ctx: MethodContext): MethodTable {
       handle: async (params, invocation) => {
         const authority = await authorities(invocation);
         await checkAdmissionScope(params.expectedScope, authority);
-        return model.reconcile(params.operationId, authority);
+        return model.reconcile(params.operationId, authority, newAdmissionFence(ctx.maintenance));
       },
     };
   }
