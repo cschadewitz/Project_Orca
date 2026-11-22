@@ -39,6 +39,8 @@ import { FileRetryClaimStore } from "../../store/src/admission-retry-store.js";
 import { RegisteredRetryClaims } from "../../engine/src/admission-retry.js";
 import { ConfigurationGenerations } from "../../engine/src/configuration-generation.js";
 import { AdmissionRetryModel, type AdmissionAuthorities } from "../src/admission-retry.js";
+import { Maintenance } from "../src/maintenance.js";
+import { harness as securityHarness, putArtifact } from "./security-harness.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -254,4 +256,91 @@ it("answers the read without control, and offers no writes", async () => {
     await call(readOnly, "runs.reviewEffect", { runId: f.source.run.id, stepRunId: f.b.id, decision: "abandon" }),
   ).toMatchObject({ ok: false });
   expect(await f.stores.events.lastSeq(f.source.run.id)).toBe(seq);
+});
+
+it("keeps a reserved attempt uncreated while new admission is closed, and reconciles it after", async () => {
+  const f = await fixture();
+  let open = true;
+  const ctx: MethodContext = {
+    ...f.ctx,
+    maintenance: new Maintenance(undefined, undefined, undefined, () => open),
+  };
+  await call(ctx, "runs.reviewEffect", { runId: f.source.run.id, stepRunId: f.b.id, decision: "run-again" });
+  // Interrupted between reserving the attempt and creating it.
+  const crash = vi.spyOn(f.orchestrator, "startRun").mockRejectedValueOnce(new Error("interrupted"));
+  const first = RunsRecoverResultSchema.parse(
+    (await call(ctx, "runs.recover", { runId: f.source.run.id, idempotencyKey: "k1" })).result,
+  );
+  crash.mockRestore();
+  if (first.state !== "recoverable-failure" || !first.runId) throw new Error(JSON.stringify(first));
+  const reserved = first.runId;
+
+  // A drain closes new admission: reconciling would create the run, so it is refused.
+  open = false;
+  expect(await call(ctx, "admissions.reconcile", { operationId: first.operationId })).toMatchObject({
+    ok: false,
+    error: { code: "PROTOCOL_MESSAGE" },
+  });
+  expect(await f.stores.events.lastSeq(reserved)).toBeUndefined();
+  // Reading the receipt stays open, and stays read-only.
+  expect(await call(ctx, "admissions.get", { operationId: first.operationId })).toMatchObject({
+    ok: true,
+    result: { state: "resolved", result: { state: "recoverable-failure", runId: reserved } },
+  });
+  expect(await f.stores.events.lastSeq(reserved)).toBeUndefined();
+  expect(f.execute).not.toHaveBeenCalled();
+
+  // Admission reopens: the same reconciliation creates exactly the reserved attempt and drives it.
+  open = true;
+  expect(await call(ctx, "admissions.reconcile", { operationId: first.operationId })).toMatchObject({
+    ok: true,
+    result: { state: "resolved", result: { state: "accepted", runId: reserved } },
+  });
+  await vi.waitFor(async () => expect((await f.orchestrator.getState(reserved)).run.status).toBe("completed"));
+  expect(f.execute).toHaveBeenCalledTimes(1);
+});
+
+it("assesses without artifact reads or ids for a run reader who may not read artifacts", async () => {
+  const h = await securityHarness();
+  try {
+    // A completed step of alice's run that produced an artifact.
+    await putArtifact(h.stores, "art_private", h.runs.alice);
+    const runId = h.runs.alice;
+    await h.append({
+      type: "step.scheduled",
+      runId,
+      payload: { stepRunId: "made-it", nodeId: "s", nodeType: "start", attempt: 1 },
+    });
+    await h.append({ type: "step.started", runId, payload: { stepRunId: "made-it", inputArtifactIds: [] } });
+    await h.append({
+      type: "step.completed",
+      runId,
+      payload: { stepRunId: "made-it", result: { artifactIds: ["art_private"], data: {} } },
+    });
+    const get = vi.spyOn(h.stores.artifacts, "get");
+    const bytes = vi.spyOn(h.stores.artifacts, "bytes");
+
+    // alice with runs.read alone: no artifact is opened or named; checkpoints are unverified.
+    const narrow = await h.rpc(h.tokens.runsOnly, "runs.recovery", { runId });
+    expect(narrow.body.ok, JSON.stringify(narrow.body.error)).toBe(true);
+    expect(JSON.stringify(narrow.body.result)).not.toContain("art_private");
+    expect(get).not.toHaveBeenCalled();
+    expect(bytes).not.toHaveBeenCalled();
+    const hidden = RunsRecoveryResultSchema.parse(narrow.body.result).assessment;
+    const checkpoint = hidden.checkpoints.find((c) => c.stepRunId === "made-it")!;
+    expect(checkpoint.unverified).toContain("artifacts-unchecked");
+    expect(checkpoint.blockers).not.toContain("missing-artifact");
+
+    // alice's own client credential may read artifacts: the same artifact is checked and named.
+    const full = await h.rpc(h.tokens.alice, "runs.recovery", { runId });
+    const shown = RunsRecoveryResultSchema.parse(full.body.result).assessment;
+    expect(bytes).toHaveBeenCalled();
+    const reused = shown.checkpoints.find((c) => c.stepRunId === "made-it")!;
+    expect(reused.unverified).not.toContain("artifacts-unchecked");
+    expect(reused.reused.flatMap((s) => s.artifactIds)).toContain("art_private");
+    // Another principal cannot read alice's run at all.
+    expect((await h.rpc(h.tokens.bob, "runs.recovery", { runId })).body.ok).toBe(false);
+  } finally {
+    await h.close();
+  }
 });

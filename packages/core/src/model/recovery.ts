@@ -72,7 +72,7 @@ export const RECOVERY_BLOCKER_TEXT: Record<RecoveryBlocker, string> = {
 };
 
 /** What the read path could not confirm. An option with any of these is unverified, not available. */
-export const RecoveryUnverifiedSchema = z.enum(["generation-restore", "generation-unreadable"]);
+export const RecoveryUnverifiedSchema = z.enum(["generation-restore", "generation-unreadable", "artifacts-unchecked"]);
 export type RecoveryUnverified = z.infer<typeof RecoveryUnverifiedSchema>;
 
 export const RECOVERY_UNVERIFIED_TEXT: Record<RecoveryUnverified, string> = {
@@ -80,6 +80,8 @@ export const RECOVERY_UNVERIFIED_TEXT: Record<RecoveryUnverified, string> = {
     "The configuration generation this run recorded is on file, but whether it still restores (its agents and plugins) is checked only when the run is driven.",
   "generation-unreadable":
     "The configuration generation this run recorded could not be read here; whether it is usable is checked only when the run is driven.",
+  "artifacts-unchecked":
+    "Whether the artifacts this checkpoint reuses still read back was not checked for you; it is checked when the attempt is created.",
 };
 
 /** `available`: nothing blocks it and nothing is unconfirmed. Never a promise that it will succeed. */
@@ -218,6 +220,11 @@ export interface RecoveryFacts extends RecoveryRunFacts {
   /** False for an artifact id the store cannot read. */
   artifactPresent: (artifactId: string) => boolean;
   /**
+   * The asker may not read artifacts: no artifact ids are reported, nothing is called missing,
+   * and every checkpoint is unverified (`artifacts-unchecked`) rather than blocked.
+   */
+  artifactsHidden?: boolean | undefined;
+  /**
    * The checkpoint the checkpoint-attempt option describes: a step run id, or a node id when
    * exactly one checkpoint is at that node. Absent: the latest checkpoint that is not blocked.
    */
@@ -317,7 +324,7 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
     const agentFor = new Map((owner.run.provenance?.selections ?? []).map((s) => [s.nodeId, s.agent.value]));
     const inputs = Object.values(owner.humanInputs);
     return (step: StepRun, effect: RecoveryEffect): RecoveryStep => {
-      const artifactIds = step.result?.artifactIds ?? [];
+      const artifactIds = facts.artifactsHidden ? [] : (step.result?.artifactIds ?? []);
       const agent = agentFor.get(step.nodeId);
       const asked = inputs.filter((input) => input.stepRunId === step.id);
       // A decision is a prompt only when it asked someone; an expression or agent decision is not.
@@ -379,6 +386,10 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
   // Checkpoints: every completed, non-terminal step attempt, in scheduling order. A loop back to
   // an earlier node makes several, one for each point in the history.
   const own = pinChecks(facts);
+  const checkpointUnverified: RecoveryUnverified[] = [
+    ...own.unverified,
+    ...(facts.artifactsHidden ? (["artifacts-unchecked"] as const) : []),
+  ];
   const checkpointBlockers: RecoveryBlocker[] = [];
   if (!terminal) checkpointBlockers.push("not-terminal");
   else if (run.status !== "failed") checkpointBlockers.push("not-failed");
@@ -412,9 +423,9 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
       stepRunId: step.id,
       nodeId: step.nodeId,
       attempt: step.attempt,
-      readiness: readinessOf(blockers, own.unverified),
+      readiness: readinessOf(blockers, checkpointUnverified),
       blockers: unique(blockers),
-      unverified: unique(own.unverified),
+      unverified: unique(checkpointUnverified),
       reused,
       ranAfter: steps.slice(index + 1).map((s) => fresh(s, effectOf(s))),
     });

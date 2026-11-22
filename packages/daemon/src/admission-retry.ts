@@ -1,6 +1,7 @@
 /** Authenticated direct admission and fixed-kind receipt dispatch. No execution is awaited by admit. */
 import type { RuntimeActivity } from "./runtime-activity.js";
 import { OrcaError, type SubmissionAuthority } from "@orca/core";
+import { ProtocolFault } from "@orca/protocol";
 import {
   readAdmissionExecutionStatus,
   type CheckpointAdmissionAuthority,
@@ -216,13 +217,23 @@ export class AdmissionRetryModel {
   inspect(operationId: string, authorities: AdmissionAuthorities): Promise<RetryResult<unknown>> {
     return this.receipt(operationId, authorities, false);
   }
-  reconcile(operationId: string, authorities: AdmissionAuthorities): Promise<RetryResult<unknown>> {
-    return this.receipt(operationId, authorities, true);
+  /**
+   * `newAdmission` is the maintenance fence for work that can create a run: reconciling a
+   * checkpoint attempt's receipt can create its reserved run, so it is refused while new
+   * admission is closed (a drain), exactly as `runs.recover` is. Inspection never needs it.
+   */
+  reconcile(
+    operationId: string,
+    authorities: AdmissionAuthorities,
+    newAdmission?: () => void,
+  ): Promise<RetryResult<unknown>> {
+    return this.receipt(operationId, authorities, true, newAdmission);
   }
   private async receipt(
     operationId: string,
     authorities: AdmissionAuthorities,
     recover: boolean,
+    newAdmission?: () => void,
   ): Promise<RetryResult<unknown>> {
     await authorities.check();
     const kind = await this.options.claims.operationKind(operationId, authorities);
@@ -264,6 +275,7 @@ export class AdmissionRetryModel {
     if (kind === "run.recover" && this.options.checkpoints) {
       const checkpoints = this.options.checkpoints;
       const authority = checkpointAdmissionAuthority(await authorities.direct(), this.options.orchestrator);
+      if (recover) newAdmission?.();
       const result = await (recover
         ? checkpoints.reconcile(operationId, authority)
         : checkpoints.inspect(operationId, authority));
@@ -370,6 +382,19 @@ export async function neverAttached(orchestrator: Orchestrator, runId: string): 
   const status = await readAdmissionExecutionStatus(orchestrator.stores, runId);
   if (status.state !== "ready") return false;
   return !(await orchestrator.stores.leases.get(`run:${runId}`));
+}
+
+/**
+ * The maintenance fence for a call that can admit new work part-way (reconciling a reserved
+ * checkpoint attempt): throws, as the dispatch wrapper does for `runs.admit`, while new
+ * admission is closed. Undefined when this daemon has no maintenance boundary.
+ */
+export function newAdmissionFence(maintenance: { admissionClosed(): boolean } | undefined): (() => void) | undefined {
+  if (!maintenance) return undefined;
+  return () => {
+    if (maintenance.admissionClosed())
+      throw new ProtocolFault("PROTOCOL_MESSAGE", "Update admission is closed; retry later");
+  };
 }
 
 /** A client guard, never authority; reject before admission and exclude from intent comparison. */

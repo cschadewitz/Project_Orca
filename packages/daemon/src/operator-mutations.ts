@@ -2,6 +2,7 @@
 import { OrcaError } from "@orca/core";
 import { OperatorMutationContracts, type OperatorMutationName, type OperatorMutationParams } from "@orca/protocol";
 import type { MethodContext, MethodTable } from "./methods.js";
+import { newAdmissionFence } from "./admission-retry.js";
 import { revisionAuthority } from "./revision-input.js";
 
 export interface OperatorMutationComposition {
@@ -63,7 +64,11 @@ export function createOperatorMutationMethods(ctx: MethodContext): MethodTable {
     );
     add("operator.reconcileAdmission", async (p, call) => {
       const response = OperatorMutationContracts["operator.reconcileAdmission"].result.parse(
-        await ctx.admissionRetries!.reconcile(p.operationId, await ctx.admissionAuthorities!(call)),
+        await ctx.admissionRetries!.reconcile(
+          p.operationId,
+          await ctx.admissionAuthorities!(call),
+          newAdmissionFence(ctx.maintenance),
+        ),
       );
       if (response.state === "resolved" && response.result.state === "accepted" && "requestId" in response.result) {
         if (!ctx.requestSubmissions || !ctx.requestSubmissionAuthority)

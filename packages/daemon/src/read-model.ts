@@ -657,9 +657,11 @@ export class ReadModel {
   /**
    * `runs.recovery` (#357): the same assessment `orca recovery` prints, read from the run's
    * log and the store. Read-only: no lease, nothing written. `principalId` is the caller, so
-   * a run started by someone else says so rather than offering a checkpoint attempt.
+   * a run started by someone else says so rather than offering a checkpoint attempt. Without
+   * `artifacts` (a caller lacking `artifacts.read`) no artifact is read or named, and each
+   * checkpoint is unverified on that point rather than blocked.
    */
-  async runsRecovery(params: RunsRecoveryParams, principalId?: string): Promise<RunsRecoveryResult> {
+  async runsRecovery(params: RunsRecoveryParams, principalId?: string, artifacts = true): Promise<RunsRecoveryResult> {
     const asOf = this.clock.isoNow();
     const summary = await this.orc.getSummary(params.runId);
     let currentConfigGeneration: string | undefined;
@@ -671,6 +673,7 @@ export class ReadModel {
     const assessment = await previewRecovery(this.orc.stores, params.runId, {
       ...(params.checkpoint ? { checkpoint: params.checkpoint } : {}),
       ...(principalId ? { principalId } : {}),
+      artifacts,
       currentWorkflowVersion: this.versionOnDisk(summary.workflowId.split(INLINE_SEP)[0]!),
       currentConfigGeneration,
     });

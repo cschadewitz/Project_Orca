@@ -62,7 +62,12 @@ import {
   AdmissionsGetParamsSchema,
   AdmissionsReconcileParamsSchema,
 } from "@orca/protocol";
-import { checkAdmissionScope, type AdmissionRetryModel, type AdmissionAuthorities } from "./admission-retry.js";
+import {
+  checkAdmissionScope,
+  newAdmissionFence,
+  type AdmissionRetryModel,
+  type AdmissionAuthorities,
+} from "./admission-retry.js";
 import {
   RUNS_RECOVER_METHOD,
   RUNS_RECOVERY_METHOD,
@@ -696,7 +701,8 @@ export const runsCancel: Method<RunsCancelParams, RunsCancelResult> = {
 /** `runs.recovery` (#357): how this run could be recovered. Read-only. */
 export const runsRecovery: Method<RunsRecoveryParams, RunsRecoveryResult> = {
   params: RunsRecoveryParamsSchema,
-  handle: (params, ctx) => reads(ctx).runsRecovery(params, ctx.mutationActor?.principalId),
+  handle: (params, ctx) =>
+    reads(ctx).runsRecovery(params, ctx.mutationActor?.principalId, ctx.readScope?.artifacts ?? true),
 };
 
 /** `runs.reviewEffect` (#357): an operator's review of a step that may have acted and never finished. */
@@ -1033,7 +1039,7 @@ export function methodsFor(ctx: MethodContext): MethodTable {
       handle: async (params, invocation) => {
         const authority = await authorities(invocation);
         await checkAdmissionScope(params.expectedScope, authority);
-        return model.reconcile(params.operationId, authority);
+        return model.reconcile(params.operationId, authority, newAdmissionFence(ctx.maintenance));
       },
     };
   }
