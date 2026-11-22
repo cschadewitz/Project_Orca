@@ -14,10 +14,17 @@
  * participating writer, opened the store between the update stop and this start. Any later
  * reservation has a different predecessor, so a record that was not used in time is inert.
  *
+ * Each record lives at a path named by the claim it passes ownership from
+ * (`update-handoff.json.<claimHash>`), and the updater publishes it without replacing anything
+ * ({@link publishUpdateHandoff}: create-exclusive). A stale updater can therefore only ever write
+ * the record for its own stopped claim; it can never replace a newer valid record, which names
+ * another claim. Readers look only at the record for the claim they directly follow.
+ *
  * Before converting, the daemon moves the record onto its own claim (bounded by
  * {@link HANDOFF_ATTEMPTS}), so a carryover interrupted by a crash is retried by the next start
  * under the same proof. A finished or refused carryover removes the record. Only a writer that
- * holds the fence ever removes it ({@link spendUpdateHandoff}); the updater never does.
+ * holds the fence ever replaces or removes a record, and only the one for its own claim or the
+ * claim it follows ({@link spendUpdateHandoff}); the updater never does.
  */
 import { randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, lstatSync, openSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -25,11 +32,17 @@ import { join } from "node:path";
 import { z } from "zod";
 import { fenceRead, FenceDirectorySchema, type FirstRunWriterHold } from "./first-run-fence.js";
 
-/** In the store's top level; store carryover never copies or compares it. */
+const digest = z.string().regex(/^[a-f0-9]{64}$/);
+/**
+ * The prefix of every record in the store's top level (`update-handoff.json.<claimHash>`); store
+ * carryover never copies or compares anything named with it.
+ */
 export const UPDATE_HANDOFF_FILE = "update-handoff.json";
+/** The record passing ownership from `claimHash`. */
+export const updateHandoffPath = (storeDir: string, claimHash: string): string =>
+  join(storeDir, `${UPDATE_HANDOFF_FILE}.${digest.parse(claimHash)}`);
 /** Starts that may try to carry one store forward under one handoff (the first, then retries). */
 export const HANDOFF_ATTEMPTS = 3;
-const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const version = z
   .string()
   .min(1)
@@ -66,10 +79,36 @@ function syncDirectory(path: string): void {
   }
 }
 
-/** Durable replace. The store directory is private (0700, or a protected owner-only DACL that
- * new files inherit on Windows), and the reader verifies the file before trusting it. */
+const serialize = (value: UpdateHandoff) => JSON.stringify(UpdateHandoffSchema.parse(value)) + "\n";
+
+/**
+ * The updater's publication: the record for the stopped claim, created exclusively and flushed.
+ * Throws (EEXIST) rather than replace anything already at that path; a crash mid-write leaves a
+ * record that never parses, which grants nothing. The store directory is private (0700, or a
+ * protected owner-only DACL that new files inherit on Windows), and readers verify the file.
+ */
+export function publishUpdateHandoff(storeDir: string, value: UpdateHandoff): void {
+  const text = serialize(value);
+  const fd = openSync(
+    updateHandoffPath(storeDir, value.claimHash),
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+    0o600,
+  );
+  try {
+    writeFileSync(fd, text);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  syncDirectory(storeDir);
+}
+
+/**
+ * A fenced writer's durable replace of the record for `value.claimHash` (its own claim, when it
+ * moves a handoff onto itself). Never called by the updater.
+ */
 export function writeUpdateHandoff(storeDir: string, value: UpdateHandoff): void {
-  const text = JSON.stringify(UpdateHandoffSchema.parse(value)) + "\n";
+  const text = serialize(value);
   const temporary = join(storeDir, `${UPDATE_HANDOFF_FILE}.${randomUUID()}.tmp`);
   const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
   try {
@@ -79,7 +118,7 @@ export function writeUpdateHandoff(storeDir: string, value: UpdateHandoff): void
     closeSync(fd);
   }
   try {
-    renameSync(temporary, join(storeDir, UPDATE_HANDOFF_FILE));
+    renameSync(temporary, updateHandoffPath(storeDir, value.claimHash));
   } catch (error) {
     try {
       unlinkSync(temporary);
@@ -91,9 +130,12 @@ export function writeUpdateHandoff(storeDir: string, value: UpdateHandoff): void
   syncDirectory(storeDir);
 }
 
-/** `undefined` when there is none; a damaged, linked or foreign-owned record is never trusted. */
-export function readUpdateHandoff(storeDir: string): UpdateHandoff | undefined {
-  const path = join(storeDir, UPDATE_HANDOFF_FILE);
+/**
+ * The record passing ownership from `claimHash`, or `undefined` when there is none; a damaged,
+ * linked or foreign-owned record, or one naming another claim than its path, is never trusted.
+ */
+export function readUpdateHandoff(storeDir: string, claimHash: string): UpdateHandoff | undefined {
+  const path = updateHandoffPath(storeDir, claimHash);
   let info;
   try {
     info = lstatSync(path);
@@ -105,15 +147,16 @@ export function readUpdateHandoff(storeDir: string): UpdateHandoff | undefined {
   // record must also be owner-only.
   if (process.platform !== "win32" && (info.mode & 0o077) !== 0) return undefined;
   try {
-    return UpdateHandoffSchema.parse(JSON.parse(fenceRead(path)));
+    const handoff = UpdateHandoffSchema.parse(JSON.parse(fenceRead(path)));
+    return handoff.claimHash === claimHash ? handoff : undefined;
   } catch {
     return undefined;
   }
 }
 
-export function removeUpdateHandoff(storeDir: string): void {
+export function removeUpdateHandoff(storeDir: string, claimHash: string): void {
   try {
-    unlinkSync(join(storeDir, UPDATE_HANDOFF_FILE));
+    unlinkSync(updateHandoffPath(storeDir, claimHash));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
@@ -122,16 +165,21 @@ export function removeUpdateHandoff(storeDir: string): void {
 }
 
 /**
- * Remove the handoff only under proof this writer owns it: the fence holds, and the record on
- * disk satisfies `owns`, with the fence re-checked immediately before the unlink (no await in
- * between). Otherwise nothing in the store is changed. Returns whether it was removed.
+ * Remove a handoff only under proof this writer owns it: only the records for this writer's own
+ * claim and the claim it directly follows are considered, the fence holds, and the record on
+ * disk satisfies `owns`, with the fence re-checked immediately before each unlink (no await in
+ * between). Otherwise nothing in the store is changed. Returns whether one was removed.
  */
 export function spendUpdateHandoff(hold: FirstRunWriterHold, owns: (handoff: UpdateHandoff) => boolean): boolean {
-  if (!hold.check()) return false;
-  const current = readUpdateHandoff(hold.storeDir);
-  if (!current || !owns(current) || !hold.check()) return false;
-  removeUpdateHandoff(hold.storeDir);
-  return true;
+  let spent = false;
+  for (const claim of [hold.claimHash, hold.previous]) {
+    if (claim === null || !hold.check()) continue;
+    const current = readUpdateHandoff(hold.storeDir, claim);
+    if (!current || !owns(current) || !hold.check()) continue;
+    removeUpdateHandoff(hold.storeDir, claim);
+    spent = true;
+  }
+  return spent;
 }
 
 /**
@@ -170,8 +218,9 @@ export function claimUpdateHandoff(
   now: () => Date = () => new Date(),
 ): { ok: true; handoff: UpdateHandoff } | { ok: false; reason: HandoffRefusal } {
   if (!hold) return { ok: false, reason: "not-first-run" };
-  const handoff = readUpdateHandoff(hold.storeDir);
-  if (!handoff) return { ok: false, reason: "none" };
+  // Only the record for the claim this writer directly follows can be its handoff.
+  const handoff = hold.previous === null ? undefined : readUpdateHandoff(hold.storeDir, hold.previous);
+  if (!handoff) return { ok: false, reason: hold.previous === null ? "not-next-reservation" : "none" };
   if (!hold.check()) return { ok: false, reason: "fence-not-held" };
   if (!same(handoff.store, hold.store) || !same(handoff.workspace, hold.workspace))
     return { ok: false, reason: "other-store" };
@@ -186,7 +235,11 @@ export function claimUpdateHandoff(
     attempts: handoff.attempts + 1,
     createdAt: now().toISOString(),
   };
+  // Moved onto this writer's own claim first, then the record it came from is removed: a crash
+  // in between leaves the moved record for the next start, and the old one inert.
   writeUpdateHandoff(hold.storeDir, moved);
+  if (!hold.check()) return { ok: false, reason: "fence-not-held" };
+  removeUpdateHandoff(hold.storeDir, handoff.claimHash);
   if (!hold.check()) return { ok: false, reason: "fence-not-held" };
   return { ok: true, handoff: moved };
 }
