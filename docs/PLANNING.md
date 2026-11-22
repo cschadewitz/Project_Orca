@@ -228,10 +228,12 @@ Waves and the critical path describe the **remaining** work: settled items
 (done, failed, cancelled) are left out of the graph, so an edge to a done item
 disappears and `criticalPath.length` is the estimate still ahead. A stage-level
 edge (`other@spec`) exists so that work can overlap, so along it the chain is
-charged half of the upstream estimate rather than all of it, and nothing once
-the upstream has produced that stage. A later-phase edge (`other#build`) lets
-the dependent start alongside the upstream, so the first half of the
-dependent's own estimate overlaps the upstream and only the rest waits for it.
+charged half of the upstream estimate rather than all of it. An edge that is
+already satisfied (the upstream produced that stage) drops out of the critical
+path altogether, so it no longer carries the upstream's own waiting. A
+later-phase edge (`other#build`) lets the dependent start once the upstream is
+underway, so the first half of the dependent's own estimate overlaps the
+upstream and only the rest waits for it to finish.
 An item already underway (in progress, or dispatched) counts half its estimate,
 since the schedule has no finer measure of what is left. All three shares are
 heuristics (`STAGE_EDGE_LAG`, `LATER_PHASE_LEAD`, `IN_PROGRESS_REMAINING`).

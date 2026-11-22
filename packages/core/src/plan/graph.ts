@@ -70,6 +70,12 @@ function graphFromEdges(nodes: readonly string[], edges: readonly GraphEdge[]): 
   return { nodes: [...nodes], edges: [...edges], upstreamOf, downstreamOf };
 }
 
+/** The same graph minus the edges `drop` selects. */
+export function withoutEdges(graph: DependencyGraph, drop: (edge: GraphEdge) => boolean): DependencyGraph {
+  const kept = graph.edges.filter((e) => !drop(e));
+  return kept.length === graph.edges.length ? graph : graphFromEdges(graph.nodes, kept);
+}
+
 export interface RelaxedGraph {
   graph: DependencyGraph;
   /** The optional edges that were left out because they closed a cycle. */
@@ -260,7 +266,10 @@ export type EdgeLead = (edge: GraphEdge) => number;
  * A chain through an edge costs
  * `length(dependent) + max(0, lag(edge) * weight(node) - lead(edge) * weight(dependent))`:
  * the dependent's waiting part starts once `lag` of the upstream has elapsed, and the
- * `lead` of the dependent that may run before that overlaps it. A node alone costs its
+ * `lead` of the dependent that may run before that overlaps it. The overlap is clamped per
+ * edge because a dependent never starts before its upstream does: the scheduler holds a
+ * later-phase dependent until the upstream is underway (see `computeSchedule`), so an
+ * upstream's own predecessors delay the dependent's start in full. A node alone costs its
  * own weight, so with every lag at 1 and every lead at 0 (the defaults) this is the plain
  * longest path over node weights.
  */

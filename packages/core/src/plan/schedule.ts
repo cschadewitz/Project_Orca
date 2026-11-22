@@ -30,6 +30,7 @@ import {
   dropCycleClosingEdges,
   findCycles,
   longestDownstreamPaths,
+  withoutEdges,
   topologicalWaves,
   transitiveDownstream,
   type DependencyGraph,
@@ -265,19 +266,6 @@ export function computeSchedule(input: ScheduleInput): Schedule {
       ])
     : { graph: blockingGraph, dropped: [] as GraphEdge[] };
   const ignoredSoftDependencies = dropped.map((e) => ({ dependencyId: e.dependencyId, from: e.from, to: e.to }));
-  const paths = longestDownstreamPaths(
-    graph,
-    (id) => estimateWeight(itemsById.get(id)?.estimate) * (running.has(id) ? IN_PROGRESS_REMAINING : 1),
-    (e) => {
-      if (!e.stage) return 1;
-      // Already produced: the dependent need not wait for any more of the upstream.
-      return itemsById.get(e.to)?.produced[e.stage] ? 0 : STAGE_EDGE_LAG;
-    },
-    (e) => (e.requiredBy ? LATER_PHASE_LEAD : 0),
-  );
-  const cp = criticalPath(paths);
-  const { waves } = topologicalWaves(graph);
-
   // Dependency evaluation, once.
   const dependencyStates: Record<string, DependencyEvaluation> = {};
   const depsByItem = new Map<string, Dependency[]>();
@@ -287,6 +275,20 @@ export function computeSchedule(input: ScheduleInput): Schedule {
     list.push(d);
     depsByItem.set(d.from, list);
   }
+
+  // The critical path counts only constraints still ahead: an edge whose dependency is already
+  // satisfied (a produced stage, a manually satisfied dependency) no longer delays its dependent,
+  // so it must not carry its upstream's own waiting into the dependent's chain. Waves and
+  // readiness keep the full ordering view.
+  const pathGraph = withoutEdges(graph, (e) => dependencyStates[e.dependencyId]?.state === "satisfied");
+  const paths = longestDownstreamPaths(
+    pathGraph,
+    (id) => estimateWeight(itemsById.get(id)?.estimate) * (running.has(id) ? IN_PROGRESS_REMAINING : 1),
+    (e) => (e.stage ? STAGE_EDGE_LAG : 1),
+    (e) => (e.requiredBy ? LATER_PHASE_LEAD : 0),
+  );
+  const cp = criticalPath(paths);
+  const { waves } = topologicalWaves(graph);
 
   // Risk.
   const exposure: Record<string, RiskExposure> = {};

@@ -397,6 +397,22 @@ describe("dependency graph", () => {
       path: ["wi_b", "wi_c"],
     });
   });
+  it("holds a later-phase dependent until its upstream starts, so the upstream's predecessors delay it in full", () => {
+    // b waits for all of a; c needs b only by its build phase, halfway in. b runs 10..11, and the
+    // scheduler does not dispatch c before b is underway, so c runs 10..20 (its build half from 15 on
+    // is past b's finish). Starting c at 6 to meet b's finish at its halfway point would occupy a slot
+    // with an item the dispatch rule still holds.
+    const g = buildDependencyGraph(
+      items.map((i) => i.id),
+      [dep("b", "a"), dep("c", "b", { requiredBy: "build" })],
+    );
+    const weight = (id: string) => ({ wi_a: 10, wi_b: 1, wi_c: 10 })[id] ?? 1;
+    const lead = (e: { requiredBy?: string }) => (e.requiredBy ? 0.5 : 0);
+    expect(criticalPath(longestDownstreamPaths(g, weight, undefined, lead))).toEqual({
+      length: 20,
+      path: ["wi_a", "wi_b", "wi_c"],
+    });
+  });
   it("drops the soft edges that close a cycle, keeping the required ones", () => {
     const g = buildDependencyGraph(
       items.map((i) => i.id),
@@ -629,6 +645,28 @@ describe("scheduler", () => {
       workItemIds: ["wi_core", "wi_api", "wi_ui"],
       length: 2.25, // 1 (core@spec) + 0.5 (what is left of ui) + 0.75 (api, less the quarter of ui overlapping it)
     });
+  });
+
+  it("leaves a satisfied stage edge out of the critical path, with its producer's remaining predecessors", () => {
+    // u is underway and has produced its spec, but still needs p by its build phase. d needs only
+    // u's spec, so nothing ahead delays d: p's wait must not reach d through u.
+    const s = computeSchedule({
+      plan,
+      items: [
+        item("p", { estimate: "8" }),
+        item("u", { estimate: "M", status: "in-progress", produced: { spec: "art_1" } }),
+        item("d", { estimate: "8" }),
+      ],
+      dependencies: [dep("u", "p", { requiredBy: "build" }), dep("d", "u", { stage: "spec" })],
+      risks: [],
+      decisions: [],
+      now: T,
+    });
+    // p (8) then what is left of u (1), less the half of it that overlaps p: 8 + 0.5.
+    expect(s.criticalPath).toEqual({ workItemIds: ["wi_p", "wi_u"], length: 8.5 });
+    // Readiness keeps the full view: d is ready, the edge only stops counting toward the path.
+    expect(s.ready.map((r) => r.slug)).toContain("d");
+    expect(s.waves.flat()).toContain("wi_d");
   });
 
   it("reports what an open decision blocks from the live dependency states", () => {
