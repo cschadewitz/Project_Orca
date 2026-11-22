@@ -4,7 +4,7 @@
  * as the diagnosable repair state, and a process killed mid-write at random commit boundaries.
  */
 import { spawn } from "node:child_process";
-import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -119,9 +119,36 @@ describe("SQLite import from a file-backed store", () => {
     await seedFileStore(dir);
     await importFileMetadata(dir);
     await sqlite(dir).events.append({ type: "run.started", runId: "run_2", payload: {} });
+    // The file store has also changed in ways the import would apply before reaching run_2.
+    const files = fileStores(dir);
+    await files.plan.plans.delete("plan_2");
+    await files.events.append({ type: "run.started", runId: "run_1", payload: {} });
+    const before = await verifySqliteMetadata(dir);
     const error = await rejection(importFileMetadata(dir));
     expect(isOrcaError(error, "STORE_FORMAT")).toBe(true);
     expect((error as { details?: unknown }).details).toMatchObject({ reason: "IMPORT_CONFLICT", runId: "run_2" });
+    // Refused before any write: nothing the import would have changed has changed.
+    const after = await verifySqliteMetadata(dir);
+    expect(after).toEqual(before);
+    expect((await sqlite(dir).plan.plans.list()).map((p) => p.id)).toEqual(["plan_1", "plan_2"]);
+    expect((await sqlite(dir).events.read("run_1")).length).toBe(12);
+  });
+
+  it("refuses a source that changes while it is read, and changes nothing", async () => {
+    const dir = await makeDir();
+    const files = await seedFileStore(dir);
+    await importFileMetadata(dir);
+    const before = await verifySqliteMetadata(dir);
+    const error = await rejection(
+      importFileMetadata(dir, {
+        betweenSourceReads: async () => {
+          await files.events.append({ type: "run.started", runId: "run_1", payload: {} });
+        },
+      }),
+    );
+    expect(isOrcaError(error, "STORE_WRITE")).toBe(true);
+    expect((error as { details?: unknown }).details).toMatchObject({ reason: "SOURCE_CHANGED" });
+    expect(await verifySqliteMetadata(dir)).toEqual(before);
   });
 });
 
@@ -168,6 +195,40 @@ describe("SQLite backup, restore and verify", () => {
     const target = await makeDir();
     for (const bad of [newer, garbage]) expect(await rejection(restoreSqliteMetadata(bad, target))).toBeDefined();
     expect(isOrcaError(await rejection(verifySqliteMetadata(target)), "STORE_FORMAT")).toBe(true);
+  });
+
+  it("restore never replaces a database that appears while it runs, and leaves no staging file", async () => {
+    const source = await makeDir();
+    await seedFileStore(source);
+    await importFileMetadata(source);
+    const backup = join(await makeDir(), "backup.sqlite");
+    await backupSqliteMetadata(source, backup);
+    const target = await makeDir();
+    const error = await rejection(
+      restoreSqliteMetadata(backup, target, {
+        beforePublish: async () => {
+          // Another process creates and writes a database at the target meanwhile.
+          const other = sqliteStores(target);
+          await other.plan.plans.put(plan(9, "concurrent"));
+          other.close?.();
+        },
+      }),
+    );
+    expect(isOrcaError(error, "STORE_WRITE")).toBe(true);
+    expect((error as { details?: unknown }).details).toMatchObject({ reason: "EXISTS" });
+    expect((await sqlite(target).plan.plans.list()).map((p) => p.name)).toEqual(["concurrent"]);
+    expect((await readdir(target)).filter((n) => n.includes(".restore"))).toEqual([]);
+  });
+
+  it("restore refuses a live WAL-mode database that is not a sealed backup", async () => {
+    const source = await makeDir();
+    await seedFileStore(source);
+    await importFileMetadata(source);
+    const live = sqlite(source);
+    await live.plan.plans.put(plan(7));
+    const error = await rejection(restoreSqliteMetadata(join(source, SQLITE_METADATA_FILE), await makeDir()));
+    expect(isOrcaError(error, "STORE_FORMAT")).toBe(true);
+    expect((error as { details?: unknown }).details).toMatchObject({ reason: "NOT_SEALED" });
   });
 
   it("verify reports a blob whose bytes no longer match its hash", async () => {

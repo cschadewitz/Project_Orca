@@ -4,22 +4,33 @@
  * - `importFileMetadata(dir)` copies a file-backed store's metadata into `<dir>/metadata.sqlite`,
  *   beside the files it came from. The file store stays the authority until a workspace is
  *   switched to SQLite, so the import *mirrors* it: collections are replaced, runs and plan
- *   journals are extended with the events the database does not have yet. Every collection,
- *   run and journal is its own transaction, so an interrupted import leaves whole units and a
- *   rerun finishes the rest. Ids, sequence numbers and timestamps are copied, never reassigned.
- *   History the database has that the files do not is a conflict, never overwritten.
+ *   journals are extended with the events the database does not have yet, all in one
+ *   transaction after every conflict has been checked. Ids, sequence numbers and timestamps are
+ *   copied, never reassigned. History the database has that the files do not is a conflict,
+ *   never overwritten, and a refused import changes nothing.
  * - `backupSqliteMetadata(dir, target)` writes a consistent copy with `VACUUM INTO` while the
  *   database stays open to other connections. Artifact blobs, encrypted records, claims and
  *   leases are files and are backed up as files.
- * - `restoreSqliteMetadata(backup, dir)` checks the copy and puts it in place in a store that has
- *   no database; it never replaces one.
+ * - `restoreSqliteMetadata(backup, dir)` stages, checks and links a sealed backup into a store that
+ *   has no database; it never replaces one.
  * - `verifySqliteMetadata(dir)` is the diagnosable repair state: integrity, per-run sequence
  *   gaps, artifact rows whose blob is missing or wrong, and blobs no row references.
  */
-import { copyFile, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { constants } from "node:fs";
+import { copyFile, link, mkdir, open, readFile, stat, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { ArtifactSchema, OrcaError, OrcaEventSchema, PlanEventSchema, sha256 } from "@orca/core";
+import {
+  ArtifactSchema,
+  OrcaError,
+  OrcaEventSchema,
+  PlanEventSchema,
+  sha256,
+  type Artifact,
+  type OrcaEvent,
+  type PlanEvent,
+} from "@orca/core";
+import { withFileLock } from "../file-lock.js";
 import { FileArtifactStore } from "../artifact-store.js";
 import { fileStores } from "../document-store.js";
 import { JsonlEventStore } from "../jsonl-event-store.js";
@@ -49,87 +60,132 @@ function conflict(what: string, details: Record<string, unknown>): OrcaError {
   );
 }
 
-/** Mirror the file-backed metadata under `dir` into `<dir>/metadata.sqlite`. Safe to rerun. */
-export async function importFileMetadata(dir: string, options: SqliteOptions = {}): Promise<SqliteImportReport> {
-  const files = fileStores(dir);
-  const target = sqliteStores(dir, options);
-  const db = (target.requests as unknown as { collection: SqliteCollection<never> }).collection.db;
-  try {
-    const report: SqliteImportReport = {
-      documents: {},
-      runs: 0,
-      eventsImported: 0,
-      plans: 0,
-      planEventsImported: 0,
-      artifacts: 0,
-    };
-    const pairs = [
-      [files.requests, target.requests],
-      [files.workItems, target.workItems],
-      [files.plan.plans, target.plan.plans],
-      [files.plan.dependencies, target.plan.dependencies],
-      [files.plan.risks, target.plan.risks],
-      [files.plan.decisions, target.plan.decisions],
-    ] as const;
-    for (const [source, sink] of pairs) {
-      const docs = await source.list();
-      const collection = (sink as unknown as { collection: SqliteCollection<never> }).collection;
-      await db.write(() => {
-        db.prepare("DELETE FROM documents WHERE collection = ?").run(collection.name);
-        for (const doc of docs) collection.putSync(doc as never);
-        collection.bumpSync();
-      });
-      report.documents[collection.name] = docs.length;
-    }
+/** Everything the import moves, read from the file store at one point. */
+interface SourceSnapshot {
+  collections: [name: string, docs: { id: string }[]][];
+  runs: [runId: string, events: OrcaEvent[]][];
+  plans: [planId: string, events: PlanEvent[]][];
+  artifacts: Artifact[];
+}
 
-    const events = new JsonlEventStore(dir);
-    for (const runId of await events.listRuns()) {
-      const history = await events.read(runId);
-      report.eventsImported += await db.write(() => {
+async function readSource(dir: string): Promise<SourceSnapshot> {
+  const files = fileStores(dir);
+  const collections: SourceSnapshot["collections"] = [];
+  for (const [name, store] of [
+    ["requests", files.requests],
+    ["workItems", files.workItems],
+    ["plans", files.plan.plans],
+    ["dependencies", files.plan.dependencies],
+    ["risks", files.plan.risks],
+    ["decisions", files.plan.decisions],
+  ] as const)
+    collections.push([name, await (store as { list(): Promise<{ id: string }[]> }).list()]);
+  const events = new JsonlEventStore(dir);
+  const runs: SourceSnapshot["runs"] = [];
+  for (const runId of await events.listRuns()) runs.push([runId, await events.read(runId)]);
+  const journal = new JsonlPlanJournal(dir);
+  const plans: SourceSnapshot["plans"] = [];
+  for (const planId of await journal.listPlans()) plans.push([planId, await journal.read(planId)]);
+  return { collections, runs, plans, artifacts: await new FileArtifactStore(dir).list() };
+}
+
+export interface SqliteImportOptions extends SqliteOptions {
+  /** Test hook: runs between the two source reads that must agree. */
+  betweenSourceReads?: () => Promise<void>;
+}
+
+/**
+ * Mirror the file-backed metadata under `dir` into `<dir>/metadata.sqlite`. Safe to rerun.
+ *
+ * Run it with every ORCA using the store stopped, as for `carry-forward`. The source is read
+ * twice and the two reads must be identical, so a write that lands during the read is refused
+ * rather than half-imported. Then everything is decided and applied in **one** transaction:
+ * every run and plan journal is checked for history only the database has *before* anything
+ * is written, and the commit is the single publish point. A refused or interrupted import leaves
+ * the database exactly as it was.
+ */
+export async function importFileMetadata(dir: string, options: SqliteImportOptions = {}): Promise<SqliteImportReport> {
+  const { betweenSourceReads, ...dbOptions } = options;
+  const source = await readSource(dir);
+  await betweenSourceReads?.();
+  const again = await readSource(dir);
+  if (sha256(JSON.stringify(again)) !== sha256(JSON.stringify(source)))
+    throw new OrcaError("STORE_WRITE", "the file store changed while it was being imported; stop ORCA and rerun", {
+      reason: "SOURCE_CHANGED",
+      dir,
+    });
+
+  const target = sqliteStores(dir, dbOptions);
+  const collection = (store: unknown) => (store as { collection: SqliteCollection<never> }).collection;
+  const db = collection(target.requests).db;
+  const sinks = new Map(
+    [
+      target.requests,
+      target.workItems,
+      target.plan.plans,
+      target.plan.dependencies,
+      target.plan.risks,
+      target.plan.decisions,
+    ].map((store) => [collection(store).name, collection(store)]),
+  );
+  try {
+    return await db.write(() => {
+      // Preflight: decide every conflict before the first write.
+      const appendFrom = new Map<string, number>();
+      for (const [runId, history] of source.runs) {
         const present = db
           .prepare("SELECT seq, id FROM events WHERE run_id = ? ORDER BY seq")
           .all(runId) as unknown as { seq: number; id: string }[];
         if (present.length > history.length) throw conflict("more events in a run", { runId });
-        for (const row of present) {
-          const source = history[Number(row.seq)];
-          if (!source || source.id !== row.id) throw conflict("different events in a run", { runId, seq: row.seq });
-        }
-        for (const event of history.slice(present.length)) insertEvent(db, event);
-        if (history.length === 0) db.prepare("INSERT OR IGNORE INTO runs (run_id) VALUES (?)").run(runId);
-        return history.length - present.length;
-      });
-      report.runs++;
-    }
-
-    const journal = new JsonlPlanJournal(dir);
-    for (const planId of await journal.listPlans()) {
-      const history = await journal.read(planId);
-      report.planEventsImported += await db.write(() => {
+        for (const row of present)
+          if (history[Number(row.seq)]?.id !== row.id)
+            throw conflict("different events in a run", { runId, seq: row.seq });
+        appendFrom.set(runId, present.length);
+      }
+      const planFrom = new Map<string, number>();
+      for (const [planId, history] of source.plans) {
         const present = db
           .prepare("SELECT seq, body FROM plan_events WHERE plan_id = ? ORDER BY seq")
           .all(planId) as unknown as { seq: number; body: string }[];
         if (present.length > history.length) throw conflict("more plan journal events", { planId });
-        for (const row of present) {
-          const source = history[Number(row.seq)];
-          if (!source || source.id !== (JSON.parse(row.body) as { id: string }).id)
+        for (const row of present)
+          if (history[Number(row.seq)]?.id !== (JSON.parse(row.body) as { id: string }).id)
             throw conflict("different plan journal events", { planId, seq: row.seq });
-        }
+        planFrom.set(planId, present.length);
+      }
+
+      const report: SqliteImportReport = {
+        documents: {},
+        runs: source.runs.length,
+        eventsImported: 0,
+        plans: source.plans.length,
+        planEventsImported: 0,
+        artifacts: source.artifacts.length,
+      };
+      for (const [name, docs] of source.collections) {
+        const sink = sinks.get(name)!;
+        db.prepare("DELETE FROM documents WHERE collection = ?").run(name);
+        for (const doc of docs) sink.putSync(doc as never);
+        sink.bumpSync();
+        report.documents[name] = docs.length;
+      }
+      for (const [runId, history] of source.runs) {
+        db.prepare("INSERT OR IGNORE INTO runs (run_id) VALUES (?)").run(runId);
+        for (const event of history.slice(appendFrom.get(runId))) insertEvent(db, event);
+        report.eventsImported += history.length - appendFrom.get(runId)!;
+      }
+      for (const [planId, history] of source.plans) {
         db.prepare("INSERT OR IGNORE INTO plan_journals (plan_id) VALUES (?)").run(planId);
-        for (const event of history.slice(present.length))
+        for (const event of history.slice(planFrom.get(planId)))
           db.prepare("INSERT INTO plan_events (plan_id, seq, body) VALUES (?, ?, ?)").run(
             planId,
             event.seq,
             JSON.stringify(event),
           );
-        return history.length - present.length;
-      });
-      report.plans++;
-    }
-
-    // Blobs are already where SqliteArtifactStore reads them; only the index moves.
-    const artifacts = await new FileArtifactStore(dir).list();
-    await db.write(() => {
-      for (const artifact of artifacts)
+        report.planEventsImported += history.length - planFrom.get(planId)!;
+      }
+      // Blobs are already where SqliteArtifactStore reads them; only the index moves.
+      for (const artifact of source.artifacts)
         db.prepare(
           "INSERT INTO artifacts (id, content_hash, run_id, kind, name, body) VALUES (?, ?, ?, ?, ?, ?) " +
             "ON CONFLICT (id) DO UPDATE SET content_hash = excluded.content_hash, run_id = excluded.run_id, " +
@@ -142,9 +198,8 @@ export async function importFileMetadata(dir: string, options: SqliteOptions = {
           artifact.name,
           JSON.stringify(artifact),
         );
+      return report;
     });
-    report.artifacts = artifacts.length;
-    return report;
   } finally {
     target.close?.();
   }
@@ -188,60 +243,157 @@ function checkDatabaseFile(file: string): { schema: number } {
   }
 }
 
-/** A consistent copy of `<dir>/metadata.sqlite` at `target`, taken while the database stays in use. */
+/**
+ * A sealed copy of `<dir>/metadata.sqlite` at `target`, taken while the database stays in use.
+ * `VACUUM INTO` writes a consistent snapshot to a staging file beside `target`; it is switched to
+ * rollback-journal mode so it is one standalone file (no `-wal` it depends on), synced, checked,
+ * and only then linked to `target`, which is never replaced.
+ */
 export async function backupSqliteMetadata(dir: string, target: string): Promise<{ file: string; bytes: number }> {
   if (await exists(target))
     throw new OrcaError("STORE_WRITE", `${target} already exists; a backup never overwrites a file`, {
       file: target,
       reason: "EXISTS",
     });
-  const db = new SqliteDatabase(join(dir, SQLITE_METADATA_FILE));
+  const staged = `${target}.${randomUUID()}.partial`;
   try {
-    await db.statement(() => db.prepare("VACUUM INTO ?").run(target));
-  } finally {
-    db.close();
-  }
-  const handle = await open(target, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  checkDatabaseFile(target);
-  return { file: target, bytes: (await stat(target)).size };
-}
-
-/**
- * Put a backup in place as `<dir>/metadata.sqlite`. Refuses when the store already has a
- * database: restoring over live metadata is a decision for an operator who has moved it aside.
- * The copy is checked, synced and renamed into place, so a crash leaves either no database or
- * the whole backup; the open that follows applies any migration an older backup needs.
- */
-export async function restoreSqliteMetadata(backup: string, dir: string): Promise<{ file: string; schema: number }> {
-  const file = join(dir, SQLITE_METADATA_FILE);
-  for (const existing of [file, `${file}-wal`])
-    if (await exists(existing))
-      throw new OrcaError("STORE_WRITE", `${existing} exists; move it aside before restoring`, {
-        file: existing,
-        reason: "EXISTS",
-      });
-  checkDatabaseFile(backup);
-  await mkdir(dir, { recursive: true });
-  const scratch = `${file}.${randomUUID()}.restore`;
-  try {
-    await copyFile(backup, scratch);
-    const handle = await open(scratch, "r");
+    const db = new SqliteDatabase(join(dir, SQLITE_METADATA_FILE));
+    try {
+      await db.statement(() => db.prepare("VACUUM INTO ?").run(staged));
+    } finally {
+      db.close();
+    }
+    const { DatabaseSync } = sqlite();
+    const copy = new DatabaseSync(staged);
+    try {
+      copy.exec("PRAGMA journal_mode = DELETE");
+    } finally {
+      copy.close();
+    }
+    const handle = await open(staged, "r+");
     try {
       await handle.sync();
     } finally {
       await handle.close();
     }
-    await rename(scratch, file);
+    if (await walMode(staged)) throw new OrcaError("STORE_WRITE", `${staged} could not be sealed`, { file: staged });
+    checkDatabaseFile(staged);
+    try {
+      await link(staged, target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      throw new OrcaError(
+        "STORE_WRITE",
+        `${target} appeared while backing up; nothing was replaced`,
+        { file: target, reason: "EXISTS" },
+        { cause: error },
+      );
+    }
+    await syncDirectory(dirname(target));
   } finally {
-    await unlink(scratch).catch(() => undefined);
+    for (const leftover of [staged, `${staged}-journal`, `${staged}-wal`, `${staged}-shm`])
+      await unlink(leftover).catch(() => undefined);
   }
-  new SqliteDatabase(file).close();
-  return { file, schema: checkDatabaseFile(file).schema };
+  return { file: target, bytes: (await stat(target)).size };
+}
+
+/** SQLite's file header says whether a database needs a WAL file beside it (bytes 18-19 = 2). */
+async function walMode(file: string): Promise<boolean> {
+  const handle = await open(file, "r");
+  try {
+    const header = Buffer.alloc(20);
+    const { bytesRead } = await handle.read(header, 0, 20, 0);
+    return bytesRead === 20 && (header[18] === 2 || header[19] === 2);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function syncDirectory(dir: string): Promise<void> {
+  if (process.platform === "win32") return;
+  const handle = await open(dir, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+export interface SqliteRestoreOptions {
+  /** Test hook: runs after the staged copy is validated, just before it is published. */
+  beforePublish?: () => Promise<void>;
+}
+
+/**
+ * Put a backup in place as `<dir>/metadata.sqlite`, in a store that has no database.
+ *
+ * - The backup must be a **sealed standalone** database: what `backupSqliteMetadata` writes
+ *   (`VACUUM INTO`), not a live WAL-mode file whose committed pages may still sit in a `-wal`
+ *   beside it. A WAL-mode file, or one with a `-wal`/`-journal` sidecar, is refused.
+ * - The bytes are copied into a staging file in the store first, synced, and the *staged copy*
+ *   is what is checked (integrity, schema, still standalone): the file that gets published is
+ *   exactly the file that was validated.
+ * - Publication is a hard link to the final name, which fails rather than replaces when a
+ *   database (or a `-wal`) appeared meanwhile, under a restore lock so two restores cannot race.
+ *   A crash leaves either no database or the whole backup; the staging file is always removed.
+ */
+export async function restoreSqliteMetadata(
+  backup: string,
+  dir: string,
+  options: SqliteRestoreOptions = {},
+): Promise<{ file: string; schema: number }> {
+  const file = join(dir, SQLITE_METADATA_FILE);
+  const refuseExisting = async () => {
+    for (const existing of [file, `${file}-wal`, `${file}-journal`])
+      if (await exists(existing))
+        throw new OrcaError("STORE_WRITE", `${existing} exists; move it aside before restoring`, {
+          file: existing,
+          reason: "EXISTS",
+        });
+  };
+  for (const sidecar of [`${backup}-wal`, `${backup}-journal`])
+    if (await exists(sidecar))
+      throw new OrcaError("STORE_FORMAT", `${backup} is not a sealed backup: ${sidecar} is beside it`, {
+        reason: "NOT_SEALED",
+        file: backup,
+      });
+  await mkdir(dir, { recursive: true });
+  return withFileLock(`${file}.restore.lock`, async () => {
+    await refuseExisting();
+    const staged = `${file}.${randomUUID()}.restore`;
+    try {
+      await copyFile(backup, staged, constants.COPYFILE_EXCL);
+      const handle = await open(staged, "r+");
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      if (await walMode(staged))
+        throw new OrcaError("STORE_FORMAT", `${backup} is a WAL-mode database, not a sealed backup`, {
+          reason: "NOT_SEALED",
+          file: backup,
+        });
+      const { schema } = checkDatabaseFile(staged);
+      await options.beforePublish?.();
+      await refuseExisting();
+      try {
+        await link(staged, file);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        throw new OrcaError(
+          "STORE_WRITE",
+          `${file} appeared while restoring; nothing was replaced`,
+          { file, reason: "EXISTS" },
+          { cause: error },
+        );
+      }
+      await syncDirectory(dir);
+      return { file, schema };
+    } finally {
+      await unlink(staged).catch(() => undefined);
+    }
+  });
 }
 
 export interface SqliteVerifyReport {
