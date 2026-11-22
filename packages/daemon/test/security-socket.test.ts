@@ -298,7 +298,7 @@ describe("recovery events (#357)", () => {
         actor: { principalId: "alice" },
         workflowId: "gated",
         workflowVersion: "1",
-        workspace: { kind: "local", path: "/tmp" },
+        workspace: { hostId: "local", cwd: "/tmp" },
         vars: {},
         checkpoint: {
           runId: h.runs.alice,
