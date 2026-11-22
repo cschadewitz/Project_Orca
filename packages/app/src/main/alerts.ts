@@ -35,6 +35,14 @@ export type AlertTier = AlertItem["tier"];
 /** A gate is not an interruption for its first minute (docs/design/20-attention-and-gates.md). */
 export const GATE_DELAY_MS = 60_000;
 
+/**
+ * How many already-notified ids are remembered after they leave the open set (#882). An item
+ * can leave and come back with the same id when its source changes hands: focus moves to a
+ * watched machine, and for a moment neither the fleet nor the renderer states its alerts.
+ * Remembering the id means the return is not a second notification. Bounded, oldest first.
+ */
+export const NOTIFIED_LEDGER_SIZE = 512;
+
 /** What the port is asked to put on screen. One of these per tier, updated in place. */
 export interface AlertNotification {
   tier: AlertTier;
@@ -80,6 +88,8 @@ interface Tracked {
   item: AlertItem;
   /** Set once its notification has been posted, so it is never posted twice. */
   notified: boolean;
+  /** Set once it has been put in front of the person at all: notified, or Attention brought forward. */
+  presented: boolean;
   /** The pending gate delay, if it is a gate that has not fired yet. */
   timer: ReturnType<typeof setTimeout> | undefined;
 }
@@ -102,6 +112,8 @@ function words(item: AlertItem, count: number): { title: string; body: string } 
 export function createAlerts(port: AlertsPort, preferences: () => AlertPreferences): Alerts {
   const now = port.now ?? Date.now;
   const tracked = new Map<string, Tracked>();
+  /** Presented ids that have left the open set, oldest first, and whether each was notified. */
+  const ledger = new Map<string, boolean>();
   /** When the window last lost focus, and the timer that escalates gates if it stays that way. */
   let unfocusedSince: number | undefined = port.isFocused() ? undefined : now();
   let escalation: ReturnType<typeof setTimeout> | undefined;
@@ -117,6 +129,7 @@ export function createAlerts(port: AlertsPort, preferences: () => AlertPreferenc
   function post(entry: Tracked): void {
     if (closed || entry.notified) return;
     entry.notified = true;
+    entry.presented = true;
     const open = of(entry.item.tier).filter((t) => t.notified);
     port.show({ tier: entry.item.tier, count: open.length, item: entry.item, ...words(entry.item, open.length) });
   }
@@ -144,8 +157,17 @@ export function createAlerts(port: AlertsPort, preferences: () => AlertPreferenc
   }
 
   function arrived(item: AlertItem): void {
-    const entry: Tracked = { item, notified: false, timer: undefined };
+    const entry: Tracked = { item, notified: false, presented: false, timer: undefined };
     tracked.set(item.id, entry);
+    const before = ledger.get(item.id);
+    if (before !== undefined) {
+      // Already put in front of the person once; it only went missing while its source
+      // changed hands. Neither a notification nor Attention a second time.
+      ledger.delete(item.id);
+      entry.notified = before;
+      entry.presented = true;
+      return;
+    }
     if (item.tier === "gate") {
       scheduleGate(entry);
       return;
@@ -153,13 +175,24 @@ export function createAlerts(port: AlertsPort, preferences: () => AlertPreferenc
     /* A permission ask is the one thing in the app allowed to take the person's attention,
        and only inside a window that already has focus — so this is asked before the
        preference is, because it is not a notification and is not opted out of. */
-    if (item.tier === "permission" && port.isFocused()) port.focusAttention(item);
+    if (item.tier === "permission" && port.isFocused()) {
+      entry.presented = true;
+      port.focusAttention(item);
+    }
     if (item.tier === "permission" ? preferences().permission : preferences().failure) post(entry);
   }
 
   function departed(entry: Tracked): void {
     if (entry.timer) clearTimeout(entry.timer);
     tracked.delete(entry.item.id);
+    if (entry.presented) {
+      ledger.delete(entry.item.id);
+      ledger.set(entry.item.id, entry.notified);
+      for (const id of ledger.keys()) {
+        if (ledger.size <= NOTIFIED_LEDGER_SIZE) break;
+        ledger.delete(id);
+      }
+    }
   }
 
   return {

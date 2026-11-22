@@ -220,9 +220,10 @@ export interface AlertItem {
   /**
    * The machine it is on (#882), set by the main process. `focused` is decided again when a
    * person clicks: an alert from a machine that is not focused opens Machines, never a route
-   * on whichever daemon happens to be focused.
+   * on whichever daemon happens to be focused. `workspaceId` is the store the alert was
+   * verified on; a click is dropped once that machine no longer reaches that store.
    */
-  machine?: { key: string; name: string; focused: boolean };
+  machine?: { key: string; name: string; focused: boolean; workspaceId?: string };
 }
 
 /** Everything open, as one statement. Absent items have gone away. */

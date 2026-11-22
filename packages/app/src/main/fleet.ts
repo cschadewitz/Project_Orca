@@ -166,14 +166,19 @@ export function alertScope(workspaceId: string | undefined, key: string): string
  */
 export function labelAlerts(
   items: readonly AlertItem[],
-  machine: { key: string; name: string; focused: boolean; scope: string },
+  machine: { key: string; name: string; focused: boolean; scope: string; workspaceId?: string | undefined },
   named: boolean,
 ): AlertItem[] {
   return items.map((item) => ({
     ...item,
     id: machineAlertId(machine.scope, item.id),
     ...(named ? { title: `${item.title} on ${machine.name}` } : {}),
-    machine: { key: machine.key, name: machine.name, focused: machine.focused },
+    machine: {
+      key: machine.key,
+      name: machine.name,
+      focused: machine.focused,
+      ...(machine.workspaceId ? { workspaceId: machine.workspaceId } : {}),
+    },
   }));
 }
 
@@ -285,6 +290,28 @@ export class Fleet {
   /** The key of the machine writes go to, if one is focused. */
   get focusedKey(): string | undefined {
     return this.focused?.key;
+  }
+
+  /**
+   * Where a click on an alert may go now (#882). Its machine counts as focused only while
+   * the focused target is that machine *and* still verified on the store the alert came
+   * from; a watched machine likewise has to still be verified on it. Anything else (a
+   * profile repointed at another daemon, a machine refused or no longer watched) is a stale
+   * click and answers undefined, so it opens nothing rather than a route on the wrong store.
+   * An alert with no machine predates the fleet and is passed through.
+   */
+  routeAlert(item: AlertItem): AlertItem | undefined {
+    const machine = item.machine;
+    if (!machine) return item;
+    const focused = this.focused?.key === machine.key;
+    const now = focused ? this.focused?.workspaceId : this.verifiedOn(machine.key);
+    if (now !== machine.workspaceId || (!focused && now === undefined)) return undefined;
+    return { ...item, machine: { ...machine, focused } };
+  }
+
+  private verifiedOn(key: string): string | undefined {
+    const member = this.members.get(key);
+    return member && !member.suspended ? member.verified : undefined;
   }
 
   /** Whether a watched machine's connection currently uses this profile. */
@@ -715,7 +742,13 @@ export class Fleet {
       items.push(
         ...labelAlerts(
           own,
-          { key: member.key, name, focused: false, scope: alertScope(shown.workspaceId, member.key) },
+          {
+            key: member.key,
+            name,
+            focused: false,
+            scope: alertScope(shown.workspaceId, member.key),
+            workspaceId: shown.workspaceId,
+          },
           true,
         ),
       );

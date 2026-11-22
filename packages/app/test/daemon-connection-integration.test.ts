@@ -673,22 +673,31 @@ it.each(["env", "bundled", "store"] as const)(
     expect(shell.notificationShow).toHaveBeenCalledOnce();
     publish();
     expect(shell.badge).toHaveBeenLastCalledWith(1);
-    expect(shell.notificationShow).toHaveBeenCalledTimes(2);
+    // The same ask on the same workspace, back after the restart: already put in front of
+    // the person once, so it is not posted again (#882).
+    expect(shell.notificationShow).toHaveBeenCalledOnce();
 
     // Switching targets also clears alerts, without the new target's seed clearing twice.
     const oldClient = workspace.client;
     await workspace.open("/another-archive");
     expect(shell.badge).toHaveBeenLastCalledWith(0);
-    expect(shell.notificationClose).toHaveBeenCalledTimes(2);
     publish();
     workspace.observeHello(oldClient, hello);
     workspace.observeHello(workspace.client, hello);
     expect(shell.badge).toHaveBeenLastCalledWith(1);
-    expect(shell.notificationClose).toHaveBeenCalledTimes(2);
-    expect(shell.notificationShow).toHaveBeenCalledTimes(3);
+    expect(shell.notificationShow).toHaveBeenCalledOnce();
+    // A different ask on the new target is new.
+    shell.events!.emit(
+      "orca:alerts.update",
+      {},
+      { waiting: 1, items: [{ ...update.items[0]!, id: "permission-2", inputId: "permission-2" }] },
+      workspace.connectionTarget.epoch,
+    );
+    expect(shell.notificationShow).toHaveBeenCalledTimes(2);
+    const closed = shell.notificationClose.mock.calls.length;
     shell.events!.emit("orca:alerts.update", {}, { waiting: 0, items: [] }, workspace.connectionTarget.epoch);
     expect(shell.badge).toHaveBeenLastCalledWith(0);
-    expect(shell.notificationClose).toHaveBeenCalledTimes(3);
+    expect(shell.notificationClose).toHaveBeenCalledTimes(closed + 1);
   },
 );
 

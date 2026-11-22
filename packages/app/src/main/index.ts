@@ -722,7 +722,13 @@ function publishAlerts(): void {
   const own = focused
     ? labelAlerts(
         focusedAlerts.items,
-        { key: focused.key, name: focused.name, focused: true, scope: alertScope(focused.workspaceId, focused.key) },
+        {
+          key: focused.key,
+          name: focused.name,
+          focused: true,
+          scope: alertScope(focused.workspaceId, focused.key),
+          workspaceId: focused.workspaceId,
+        },
         named,
       )
     : [...focusedAlerts.items];
@@ -1466,11 +1472,13 @@ function activate(item: AlertItem | undefined): void {
   }
 }
 
-/** Whether the alert's machine is the focused one *now*, not when it was posted (#882). */
-function withFocus(item: AlertItem): AlertItem {
-  return item.machine
-    ? { ...item, machine: { ...item.machine, focused: item.machine.key === fleet.focusedKey } }
-    : item;
+/**
+ * Whether the alert's machine is the focused one *now*, not when it was posted, and still on
+ * the store the alert came from (#882). A stale alert routes nowhere: the window still comes
+ * forward, but no card opens on a daemon the alert was never about.
+ */
+function withFocus(item: AlertItem): AlertItem | undefined {
+  return fleetStarted ? fleet.routeAlert(item) : item;
 }
 
 const alerts = createAlerts(
@@ -1506,7 +1514,10 @@ const alerts = createAlerts(
     // Inside the focused window only, and never `show()`: a permission ask may take the
     // person's attention where they already are, and may not move a window at them
     // (docs/design/20-attention-and-gates.md).
-    focusAttention: (item) => focusedWindow()?.webContents.send("orca:alerts.activate", { item: withFocus(item) }),
+    focusAttention: (item) => {
+      const current = withFocus(item);
+      if (current) focusedWindow()?.webContents.send("orca:alerts.activate", { item: current });
+    },
   },
   () => preferences.read().alerts,
 );

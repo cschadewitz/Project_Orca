@@ -183,7 +183,13 @@ each other:
 - **Notifications.** Waiting gates, permission asks and failures it saw happen on a
   watched machine post OS notifications that name the machine ("Build is waiting on
   build-box"). Alert ids are scoped by the verified workspace id, so moving focus or
-  renaming the profile does not post the same alert twice. Clicking one from an unfocused machine opens Machines. The dock badge
+  renaming the profile does not post the same alert twice. While focus changes hands
+  there is a moment when neither the fleet nor the renderer states an alert; the
+  alerts manager remembers the last 512 ids it already presented, so one that comes
+  back is not posted or brought forward again. Each alert also carries the workspace
+  it was verified on, and a click routes only while its machine still reaches that
+  workspace; a click on an alert from a repointed, refused or unwatched machine just
+  brings the window forward. Clicking one from an unfocused machine opens Machines. The dock badge
   stays the focused daemon's count, the same number as the title bar.
 
 Not here yet: observe-only profiles with read-only credentials wait on #875's

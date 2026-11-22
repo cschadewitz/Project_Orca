@@ -15,7 +15,9 @@ import {
   type InputsListResult,
   type RunsListResult,
 } from "@orca/protocol";
-import type { AlertsUpdate } from "../src/bridge.js";
+import type { AlertItem, AlertsUpdate } from "../src/bridge.js";
+import { createAlerts, type AlertNotification } from "../src/main/alerts.js";
+import { DEFAULT_PREFERENCES } from "../src/preferences/schema.js";
 import { DaemonClientError } from "../src/client/daemon-client.js";
 import type { RetryCount, SubscriptionState } from "../src/client/subscription.js";
 import {
@@ -625,6 +627,138 @@ describe("what a machine showed", () => {
     await settle(0);
     expect(t.machine("profile:alpha")!.work!.runs[0]!.name).toBe("From A");
     expect(t.lastAlerts().items).toEqual([]);
+  });
+});
+
+describe("an alert changing hands (#882)", () => {
+  const focusOn = (key: string, epoch: number, workspaceId?: string): FocusedMachine => ({
+    key,
+    name: "Alpha",
+    detail: "",
+    epoch,
+    state: "live",
+    since: new Date(START).toISOString(),
+    ...(workspaceId ? { workspaceId } : {}),
+  });
+  const permission = (question: string) => {
+    const list = inputs([question]);
+    for (const input of list.inputs) (input as { kind: string }).kind = "permission";
+    return list;
+  };
+
+  /** The real alerts manager behind the same merge index.ts does: focused items, then the fleet's. */
+  function wired() {
+    const shown: AlertNotification[] = [];
+    const attention: AlertItem[] = [];
+    let fleetAlerts: AlertsUpdate = { waiting: 0, items: [] };
+    let focusedItems: AlertItem[] = [];
+    const manager = createAlerts(
+      {
+        show: (n) => shown.push(n),
+        dismiss: () => {},
+        badge: () => {},
+        isFocused: () => true,
+        focusAttention: (item) => attention.push(item),
+        now: () => Date.now(),
+      },
+      () => ({ ...DEFAULT_PREFERENCES.alerts, permission: true }),
+    );
+    const publish = () => manager.update({ waiting: 0, items: [...focusedItems, ...fleetAlerts.items] });
+    const t = setup({
+      onAlerts: (update) => {
+        fleetAlerts = update;
+        publish();
+      },
+    });
+    return {
+      t,
+      shown,
+      attention,
+      /** What the renderer reports for the focused daemon, labelled the way index.ts labels it. */
+      focusedReports: (items: AlertItem[], workspaceId: string | undefined) => {
+        focusedItems = labelAlerts(
+          items,
+          {
+            key: "profile:alpha",
+            name: "Alpha",
+            focused: true,
+            scope: alertScope(workspaceId, "profile:alpha"),
+            workspaceId,
+          },
+          false,
+        );
+        publish();
+      },
+    };
+  }
+
+  it("notifies once when focus moves to its machine and the focused source reports it later", async () => {
+    const w = wired();
+    w.t.fleet.setTargets([profile("alpha", "Alpha")]);
+    await settle(0);
+    const daemon = w.t.daemons.get("alpha")!;
+    daemon.inputs = permission("Run rm?");
+    daemon.live(ID_A);
+    await settle(0);
+    expect(w.shown).toHaveLength(1);
+    expect(w.attention).toHaveLength(1);
+    const asked = w.shown[0]!.item;
+
+    // Focus moves: the fleet stops stating it at once; the renderer has not read yet.
+    w.focusedReports([], undefined);
+    w.t.fleet.setFocused(focusOn("profile:alpha", 2, ID_A.workspaceId));
+    await settle(2_000);
+    w.focusedReports(
+      [
+        {
+          id: "in-Run rm?",
+          tier: "permission",
+          title: "Run 0 needs permission",
+          body: "Run rm?",
+          runId: "run-0",
+          inputId: "in-Run rm?",
+          since: asked.since,
+        },
+      ],
+      ID_A.workspaceId,
+    );
+    expect(w.shown).toHaveLength(1);
+    expect(w.attention).toHaveLength(1);
+  });
+
+  it("routes a click only while its machine still reaches the store it came from", async () => {
+    const w = wired();
+    w.t.fleet.setTargets([profile("alpha", "Alpha")]);
+    await settle(0);
+    const daemon = w.t.daemons.get("alpha")!;
+    daemon.inputs = permission("Run rm?");
+    daemon.live(ID_A);
+    await settle(0);
+    const item = w.shown[0]!.item;
+    expect(w.t.fleet.routeAlert(item)?.machine).toMatchObject({ key: "profile:alpha", focused: false });
+
+    // Focused on the same store: routed as focused.
+    w.t.fleet.setFocused(focusOn("profile:alpha", 2, ID_A.workspaceId));
+    expect(w.t.fleet.routeAlert(item)?.machine?.focused).toBe(true);
+    // The profile now reaches another store: the old click goes nowhere.
+    w.t.fleet.setFocused(focusOn("profile:alpha", 3, ID_B.workspaceId));
+    expect(w.t.fleet.routeAlert(item)).toBeUndefined();
+    // Watched again, but verified on another store: still stale.
+    w.t.fleet.setFocused(undefined);
+    await settle(0);
+    daemon.live(ID_B);
+    expect(w.t.fleet.routeAlert(item)).toBeUndefined();
+    // Refused: stale as well.
+    daemon.live(ID_A);
+    expect(w.t.fleet.routeAlert(item)).toBeDefined();
+    daemon.stream.onState("auth-failed", { consecutive: 1, atCap: 0 });
+    expect(w.t.fleet.routeAlert(item)).toBeUndefined();
+  });
+
+  it("passes an alert with no machine straight through", () => {
+    const t = setup();
+    const item: AlertItem = { id: "x", tier: "gate", title: "t", body: "b", runId: "r", since: "s" };
+    expect(t.fleet.routeAlert(item)).toBe(item);
   });
 });
 
