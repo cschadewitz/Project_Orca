@@ -11,7 +11,7 @@ import {
   fstatSync,
   lstatSync,
   openSync,
-  readdirSync,
+  opendirSync,
   readSync,
   realpathSync,
   type Stats,
@@ -112,8 +112,13 @@ function trustedAncestors(dir: string): boolean {
 export interface ReadSkillOptions {
   /** The most content bytes, all files together; the read stops past it. */
   maxBytes?: number;
-  /** The most files and directories together. */
+  /** The most files and directories together. A directory is never listed past it. */
   maxEntries?: number;
+  /**
+   * Bytes each file costs beyond its content, charged against `maxBytes` before it is read:
+   * what naming it in a delivered block takes, so even empty files are paid for.
+   */
+  metadataBytes?: (rel: string) => number;
   /**
    * For delivery: walk only in ways that cannot be led outside the skill, and refuse where
    * that is not possible. The configured path is resolved once to its real path, every
@@ -137,8 +142,9 @@ export function readSkillFiles(
   skill: SkillDefinition,
   baseDir: string | undefined,
   options: ReadSkillOptions = {},
-): { files: SkillFile[] } | { error: string; tooLarge?: true } {
+): { files: SkillFile[]; bytes: number; entries: number } | { error: string; tooLarge?: true } {
   const maxBytes = options.maxBytes ?? SKILL_MAX_BYTES;
+  const metadataBytes = options.metadataBytes ?? (() => 0);
   const maxEntries = options.maxEntries ?? SKILL_MAX_ENTRIES;
   if (!isAbsolute(skill.path) && baseDir === undefined)
     return { error: `skill path '${skill.path}' is relative, and no config directory is known to resolve it against` };
@@ -148,9 +154,10 @@ export function readSkillFiles(
   const files: SkillFile[] = [];
   let total = 0;
   let entries = 0;
+  const tooMany = () =>
+    new SkillReadRefusal(`skill '${skill.path}' has more than ${maxEntries} files and directories`, true);
   const count = () => {
-    if (++entries > maxEntries)
-      throw new SkillReadRefusal(`skill '${skill.path}' has more than ${maxEntries} files and directories`);
+    if (++entries > maxEntries) throw tooMany();
   };
   const readFile = (path: string, rel: string, found: Stats) => {
     count();
@@ -159,6 +166,8 @@ export function readSkillFiles(
       const opened = fstatSync(fd);
       if (!opened.isFile() || !sameObject(opened, found))
         throw new SkillReadRefusal(`skill '${rel || skill.path}' changed while it was read`);
+      total += metadataBytes(rel);
+      if (total > maxBytes) throw new SkillReadRefusal(tooLarge, true);
       const bytes = readBounded(fd, opened.size, maxBytes - total, tooLarge);
       total += bytes.length;
       files.push({ rel, bytes });
@@ -173,7 +182,18 @@ export function readSkillFiles(
       if (fd !== undefined && !sameObject(fstatSync(fd), found))
         throw new SkillReadRefusal(`skill '${rel || skill.path}' changed while it was read`);
       const dir = PROC_FD && fd !== undefined ? `/proc/self/fd/${fd}` : path;
-      for (const name of readdirSync(dir).sort()) {
+      // Listed one entry at a time, and never past what the entry budget has left.
+      const names: string[] = [];
+      const listing = opendirSync(dir);
+      try {
+        for (let entry = listing.readSync(); entry; entry = listing.readSync()) {
+          names.push(entry.name);
+          if (entries + names.length > maxEntries) throw tooMany();
+        }
+      } finally {
+        listing.closeSync();
+      }
+      for (const name of names.sort()) {
         const childRel = rel ? `${rel}/${name}` : name;
         const child = join(dir, name);
         const stat = lstatSync(child);
@@ -227,7 +247,7 @@ export function readSkillFiles(
             : `skill path '${skill.path}' cannot be read (${code ?? "error"})`,
     };
   }
-  return { files: files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0)) };
+  return { files: files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0)), bytes: total, entries };
 }
 
 /**
@@ -322,28 +342,49 @@ export function deliveryIssues(
   return issues;
 }
 
-/** The most skill content one step may carry inline in its prompts. */
+/** The most skill bytes one step may carry inline in its prompts, names and URIs included. */
 export const SKILL_DELIVERY_MAX_BYTES = 256 * 1024;
-/** The most files and directories one skill may bring to a step's prompts. */
+/** The most files and directories all of a step's skills may bring together. */
 export const SKILL_DELIVERY_MAX_FILES = 64;
+
+/** What a step's skills may still use (#337): shared by every skill the step selects. */
+export interface SkillDeliveryBudget {
+  bytes: number;
+  entries: number;
+}
+
+export function skillDeliveryBudget(): SkillDeliveryBudget {
+  return { bytes: SKILL_DELIVERY_MAX_BYTES, entries: SKILL_DELIVERY_MAX_FILES };
+}
+
+/** The URI a delivered skill file is named by: `orca-skill://<id>/<file>?digest=<sha256:...>`. */
+export function skillResourceUri(id: string, rel: string, digest: string): string {
+  return `orca-skill://${encodeURIComponent(id)}/${rel.split("/").map(encodeURIComponent).join("/")}?digest=${digest}`;
+}
+
+/** A resource block's fixed fields beyond its URI and text, generously. */
+const RESOURCE_BLOCK_OVERHEAD = 96;
+const DIGEST_LENGTH = "sha256:".length + 64;
 
 /**
  * A selected skill as it will be delivered: its files read once, digest computed over the
- * very bytes that will be sent, and each file decoded as UTF-8 text. Refused when it no
- * longer hashes to `expected` (what the launch recorded), is not text, or the step's skills
- * together are larger than `SKILL_DELIVERY_MAX_BYTES`.
+ * very bytes that will be sent, and each file decoded as UTF-8 text. The read is bounded by
+ * what `budget` has left, each file charged its content and the block naming it; on success
+ * the budget is spent by what this skill used. Refused when it no longer hashes to
+ * `expected` (what the launch recorded), is not text, or does not fit (`tooLarge`).
  */
 export function readSkillForDelivery(
   id: string,
   skill: SkillDefinition,
   baseDir: string | undefined,
   expected: string | undefined,
-  /** What is left of the step's `SKILL_DELIVERY_MAX_BYTES`: the read stops past it. */
-  budget: number = SKILL_DELIVERY_MAX_BYTES,
-): { files: { rel: string; text: string }[]; digest: string; bytes: number } | { error: string; tooLarge?: true } {
+  budget: SkillDeliveryBudget = skillDeliveryBudget(),
+): { files: { rel: string; text: string }[]; digest: string } | { error: string; tooLarge?: true } {
   const read = readSkillFiles(skill, baseDir, {
-    maxBytes: budget,
-    maxEntries: SKILL_DELIVERY_MAX_FILES,
+    maxBytes: budget.bytes,
+    maxEntries: budget.entries,
+    metadataBytes: (rel) =>
+      Buffer.byteLength(skillResourceUri(id, rel, "x".repeat(DIGEST_LENGTH))) + RESOURCE_BLOCK_OVERHEAD,
     anchored: true,
   });
   if ("error" in read) return read;
@@ -354,16 +395,16 @@ export function readSkillForDelivery(
   // bytes the digest names.
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   const files: { rel: string; text: string }[] = [];
-  let bytes = 0;
   for (const file of read.files) {
-    bytes += file.bytes.length;
     try {
       files.push({ rel: file.rel, text: decoder.decode(file.bytes) });
     } catch {
       return { error: `skill '${id}' file '${file.rel}' is not UTF-8 text, and skills are delivered as text` };
     }
   }
-  return { files, digest, bytes };
+  budget.bytes -= read.bytes;
+  budget.entries -= read.entries;
+  return { files, digest };
 }
 
 /** The refusal a launch or a session open throws for a step whose capabilities do not resolve. */

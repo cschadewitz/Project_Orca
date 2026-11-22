@@ -30,6 +30,9 @@ import {
   launchProvenance,
   readSkillFiles,
   readSkillForDelivery,
+  SKILL_DELIVERY_MAX_BYTES,
+  SKILL_DELIVERY_MAX_FILES,
+  skillDeliveryBudget,
   LocalWorkspaceProvider,
   Orchestrator,
   PausingHumanInput,
@@ -84,13 +87,46 @@ describe("reading a skill for delivery (#337)", () => {
     await writeFile(join(dir, "s", "a.md"), "12345");
     await writeFile(join(dir, "s", "b.md"), "67890");
     const read = readSkillFiles({ path: "s" }, dir, { maxBytes: 10 });
+    expect(read).toMatchObject({ bytes: 10, entries: 3 });
     expect("files" in read && read.files.map((f) => f.bytes.toString())).toEqual(["12345", "67890"]);
     expect(readSkillFiles({ path: "s" }, dir, { maxBytes: 9 })).toEqual({
       error: expect.stringMatching(/larger than 9/),
       tooLarge: true,
     });
-    // The step's budget left over is what the next skill may use.
-    expect(readSkillForDelivery("s", { path: "s" }, dir, undefined, 9)).toMatchObject({ tooLarge: true });
+    // Delivery charges each file the block that names it too, before reading it.
+    expect(readSkillForDelivery("s", { path: "s" }, dir, undefined, { bytes: 10, entries: 64 })).toMatchObject({
+      tooLarge: true,
+    });
+  });
+
+  it("spends one budget across all of a step's skills, files and names included", async () => {
+    const dir = await tempDir();
+    for (const name of ["a", "b"]) {
+      await mkdir(join(dir, name));
+      for (let i = 0; i < 20; i++) await writeFile(join(dir, name, `f${i}.md`), "");
+    }
+    const budget = skillDeliveryBudget();
+    expect(readSkillForDelivery("a", { path: "a" }, dir, undefined, budget)).toHaveProperty("files");
+    // 21 entries spent, and 20 empty files' blocks paid for in bytes.
+    expect(budget.entries).toBe(SKILL_DELIVERY_MAX_FILES - 21);
+    expect(budget.bytes).toBeLessThan(SKILL_DELIVERY_MAX_BYTES - 20 * 100);
+    expect(readSkillForDelivery("b", { path: "b" }, dir, undefined, budget)).toHaveProperty("files");
+    expect(budget.entries).toBe(SKILL_DELIVERY_MAX_FILES - 42);
+    // A third of the same size no longer fits: refused, and nothing more is spent.
+    await mkdir(join(dir, "c"));
+    for (let i = 0; i < 30; i++) await writeFile(join(dir, "c", `f${i}.md`), "");
+    expect(readSkillForDelivery("c", { path: "c" }, dir, undefined, budget)).toMatchObject({ tooLarge: true });
+    expect(budget.entries).toBe(SKILL_DELIVERY_MAX_FILES - 42);
+  });
+
+  it("stops listing a directory once it holds more entries than the walk may visit", async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, "huge"));
+    await Promise.all(Array.from({ length: 1100 }, (_, i) => writeFile(join(dir, "huge", `f${i}`), "")));
+    expect(readSkillFiles({ path: "huge" }, dir)).toEqual({
+      error: expect.stringMatching(/more than 1024 files and directories/),
+      tooLarge: true,
+    });
   });
 
   it("refuses a link at the top or inside, and anything that is not a regular file", async () => {
@@ -116,6 +152,7 @@ describe("reading a skill for delivery (#337)", () => {
     // 64 empty files and the directory itself: one entry too many for delivery.
     expect(readSkillForDelivery("many", { path: "many" }, dir, undefined)).toEqual({
       error: expect.stringMatching(/more than 64 files and directories/),
+      tooLarge: true,
     });
     expect(readSkillFiles({ path: "many" }, dir)).toHaveProperty("files");
   });

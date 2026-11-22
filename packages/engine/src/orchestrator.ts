@@ -131,6 +131,9 @@ import {
   readSkillForDelivery,
   resolveNodeCapabilities,
   SKILL_DELIVERY_MAX_BYTES,
+  SKILL_DELIVERY_MAX_FILES,
+  skillDeliveryBudget,
+  skillResourceUri,
 } from "./capabilities.js";
 import type * as acp from "@agentclientprotocol/sdk";
 import { SessionSlots, type ConfiguredSessionLimits, type SessionSlot, type SessionSlotCaps } from "./session-slots.js";
@@ -2519,25 +2522,23 @@ export class Orchestrator {
     const { catalog: definitions, baseDir } = registry.capabilities();
     const skills: DeliveredSkill[] = [];
     const unreadable: CapabilityIssue[] = [];
-    let skillBytes = 0;
+    // One budget for the whole step, bytes (names included) and files: each read is bounded
+    // by what is left of it, not checked after.
+    const budget = skillDeliveryBudget();
     for (const skill of selected) {
       const definition = definitions.skills[skill.id];
-      // Each read is bounded by what is left of the step's budget, not checked after it.
       const read = definition
-        ? readSkillForDelivery(skill.id, definition, baseDir, skill.digest, SKILL_DELIVERY_MAX_BYTES - skillBytes)
+        ? readSkillForDelivery(skill.id, definition, baseDir, skill.digest, budget)
         : { error: `skill '${skill.id}' is no longer in the catalog` };
       if ("tooLarge" in read) {
         unreadable.push({
           path: `${nodePath}.capabilities.skills`,
-          message: `the selected skills are more than the ${SKILL_DELIVERY_MAX_BYTES} bytes together a step may carry in its prompts`,
+          message: `the selected skills are more than a step may carry in its prompts: ${SKILL_DELIVERY_MAX_BYTES} bytes, names included, and ${SKILL_DELIVERY_MAX_FILES} files and directories, together`,
         });
         break;
       }
       if ("error" in read) unreadable.push({ path: `${nodePath}.capabilities.skills`, message: read.error });
-      else {
-        skillBytes += read.bytes;
-        skills.push({ id: skill.id, digest: read.digest, files: read.files });
-      }
+      else skills.push({ id: skill.id, digest: read.digest, files: read.files });
     }
     if (unreadable.length) throw capabilityRefusal(step.nodeId, unreadable);
     const hostBinding = secretHostBinding(host.spec);
@@ -3231,7 +3232,7 @@ function skillBlocks(skills: DeliveredSkill[]): acp.ContentBlock[] {
     skill.files.map((file) => ({
       type: "resource" as const,
       resource: {
-        uri: `orca-skill://${encodeURIComponent(skill.id)}/${file.rel.split("/").map(encodeURIComponent).join("/")}?digest=${skill.digest}`,
+        uri: skillResourceUri(skill.id, file.rel, skill.digest),
         mimeType: file.rel.endsWith(".md") ? "text/markdown" : "text/plain",
         text: file.text,
       },

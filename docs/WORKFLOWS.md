@@ -644,8 +644,10 @@ on the daemon's machine reaches an agent on an SSH host the same way.
   cannot lead it outside the skill; every file and directory is opened without following a
   symbolic link and checked by its descriptor to be what the walk found. That walk needs a
   Linux daemon: elsewhere only a single-file skill can be delivered, and on Windows none.
-  Each read stops at what is left of the step's budget: a step's skills together may be at
-  most 256 KiB, and one skill at most 64 files and directories.
+  A step's skills share one budget, spent as they are read and never checked after: at most
+  256 KiB together, counting each file's content and the block that names it (so empty
+  files are paid for), and at most 64 files and directories together. A directory is
+  listed one entry at a time and never past what is left.
   Every file must be UTF-8 text; a leading byte-order mark is kept in the text, so what is
   sent is exactly the bytes the digest names.
 - The use decision is asked again before every prompt that carries the skills, so a grant
