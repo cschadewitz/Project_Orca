@@ -380,6 +380,19 @@ export async function startDemoDaemon(): Promise<Daemon> {
   const configPath = await writeSmokeConfig(dir);
   const tokenFile = join(dir, "auth", "local-client.token");
 
+  // #566: ordinary startup refuses a pre-0.7 store unchanged; the supported upgrade is one
+  // explicit `orca store carry-forward`, then the daemon opens the converted store.
+  const orca = (...args: string[]) =>
+    promisify(execFile)(process.execPath, [cli, "--config", configPath, ...args], { cwd: dir, timeout: 120_000 });
+  const refused = await orca("runs").then(
+    () => undefined,
+    (error: { stderr?: string }) => error.stderr ?? "",
+  );
+  if (refused === undefined || !refused.includes("CARRYOVER_REQUIRED"))
+    throw new Error(`startup did not refuse the old store before carry-forward: ${refused ?? "it opened"}`);
+  const carried = await orca("store", "carry-forward");
+  if (!carried.stdout.startsWith("carried ")) throw new Error(`carry-forward did not convert: ${carried.stdout}`);
+
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const serve: ChildProcess = spawn(process.execPath, [cli, "--config", configPath, "serve", "--port", String(port)], {
@@ -501,6 +514,19 @@ export async function startStoreFixtureDaemon(fixture: string): Promise<StoreFix
   const configPath = join(dir, "orca.upgrade.config.json");
   await writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
   const tokenFile = join(dir, "auth", "local-client.token");
+
+  // #566: ordinary startup refuses a pre-0.7 store unchanged; the supported upgrade is one
+  // explicit `orca store carry-forward`, then the daemon opens the converted store.
+  const orca = (...args: string[]) =>
+    promisify(execFile)(process.execPath, [cli, "--config", configPath, ...args], { cwd: dir, timeout: 120_000 });
+  const refused = await orca("runs").then(
+    () => undefined,
+    (error: { stderr?: string }) => error.stderr ?? "",
+  );
+  if (refused === undefined || !refused.includes("CARRYOVER_REQUIRED"))
+    throw new Error(`startup did not refuse the old store before carry-forward: ${refused ?? "it opened"}`);
+  const carried = await orca("store", "carry-forward");
+  if (!carried.stdout.startsWith("carried ")) throw new Error(`carry-forward did not convert: ${carried.stdout}`);
 
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
