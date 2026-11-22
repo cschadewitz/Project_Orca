@@ -125,10 +125,11 @@ it("never hands a write token to the ref under test (#863)", () => {
   expect(guard.env.DEFAULT).toBe("refs/heads/${{ github.event.repository.default_branch }}");
 
   // A real release runs the released commit's tooling with write, so that commit must be
-  // on the default branch (any commit on it, so a fix-forward release still works).
+  // on the default branch or its version's release line (any commit on them, so a
+  // fix-forward release still works). release-lines.test.js runs the check itself.
   const sha = release.findIndex((s) => s.id === "sha");
   const reviewed = release[sha + 1];
-  expect(reviewed.name).toBe("A real release builds a reviewed commit from the default branch");
+  expect(reviewed.name).toBe("A real release builds a reviewed commit from the default branch or its line");
   expect(reviewed.if).toBe("${{ !inputs.dry_run }}");
   expect(reviewed.run).toContain('git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"');
   expect(reviewed.run).toContain('if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]');
@@ -141,7 +142,9 @@ it("never hands a write token to the ref under test (#863)", () => {
       ? { contents: "write" }
       : name === "sign"
         ? { actions: "write" }
-        : null;
+        : name === "sync-main"
+          ? { contents: "write", "pull-requests": "write" }
+          : null;
     expect(job.permissions ?? null, name).toEqual(expected);
     for (const step of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@")))
       expect(step.with["persist-credentials"], name).toBe(false);

@@ -1,5 +1,6 @@
-# Merging a `release` pull request (the one release-prepare.yml opened) tags the merge
-# commit and publishes the GitHub release.
+# Merging a `release` pull request (the one release-prepare.yml opened, into `main` for a new
+# minor or into its release line `release/X.Y` for a patch) tags the merge commit and publishes
+# the GitHub release.
 #
 # The checks run again here rather than trusting the PR's green run: what gets tagged is
 # the merge commit, which no CI run has seen, and a release nobody built from the tagged
@@ -103,11 +104,13 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # A real release runs the released commit's own tooling with a write token (the
-      # `publish` job), so that commit must already be reviewed: on the default branch, and
-      # dispatched with the default branch's workflow. Any commit on it qualifies, which keeps
-      # the fix-forward path (publish again from a later reviewed commit) open. A dry run may
-      # rehearse anything, because its writer runs none of the ref's code.
-      - name: A real release builds a reviewed commit from the default branch
+      # `publish` job), so that commit must already be reviewed: on the default branch, or on
+      # the protected release line branch of its own version (`release/X.Y` for X.Y.Z, where
+      # patches are cut; docs/RELEASING.md "Release lines"), and dispatched with the default
+      # branch's workflow. Any commit on them qualifies, which keeps the fix-forward path
+      # (publish again from a later reviewed commit) open. A dry run may rehearse anything,
+      # because its writer runs none of the ref's code.
+      - name: A real release builds a reviewed commit from the default branch or its line
         if: ${{ !inputs.dry_run }}
         env:
           EVENT: ${{ github.event_name }}
@@ -120,10 +123,24 @@ jobs:
             echo "::error::dispatch a release with the workflow from $DEFAULT_BRANCH (it was $REF)"
             exit 1
           fi
-          if ! git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"; then
-            echo "::error::$SHA is not on $DEFAULT_BRANCH; release a reviewed commit, or tick dry_run to rehearse this one"
+          if git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"; then
+            echo "releasing $SHA from $DEFAULT_BRANCH"
+            exit 0
+          fi
+          version=$(git show "$SHA:package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::package.json version is not a semver version; nothing built"
             exit 1
           fi
+          line="release/$(cut -d. -f1-2 <<<"${version%%-*}")"
+          if git rev-parse -q --verify "refs/remotes/origin/$line^{commit}" >/dev/null &&
+            git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$line"; then
+            echo "releasing $SHA (v$version) from its line $line"
+            echo "Released from the release line \`$line\`, not $DEFAULT_BRANCH." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::error::$SHA is not on $DEFAULT_BRANCH or $line; release a reviewed commit, or tick dry_run to rehearse this one"
+          exit 1
 
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
@@ -423,6 +440,80 @@ jobs:
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::invalid release commit"; exit 1; }
           gh workflow run windows-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f source_sha="$SHA"
           echo "Dispatched Windows signed (spike) for \`$SHA\`." >> "$GITHUB_STEP_SUMMARY"
+
+  # A patch released from its line branch (`release/X.Y`) never merges into main, so main
+  # would neither list it in CHANGELOG.md nor know its changelog.d/ fragments were released:
+  # the next minor would repeat them. This records the release's section on main and deletes
+  # the fragments the line consumed, in a pull request that touches nothing else, and merges
+  # it. It runs main's tooling only; the released commit is read as data.
+  sync-main:
+    name: record a line release on main
+    needs: [check, publish]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Record the release on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SHA: ${{ needs.check.outputs.sha }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"; then
+            echo "v$VERSION was released from $DEFAULT_BRANCH; nothing to record."
+            exit 0
+          fi
+          git show "$SHA:CHANGELOG.md" > "$RUNNER_TEMP/line-CHANGELOG.md"
+          node tools/release.js sync "$VERSION" "$RUNNER_TEMP/line-CHANGELOG.md"
+          # Every fragment the line deleted since it left main, i.e. rendered into one of its
+          # releases, that main still holds.
+          fork=$(git merge-base "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH")
+          git log --diff-filter=D --name-only --format= "$fork..$SHA" -- changelog.d/ | sort -u |
+            while IFS= read -r file; do
+              if [ -n "$file" ] && [ -f "$file" ]; then git rm -q -- "$file"; fi
+            done
+          git add CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "main already records v$VERSION; nothing to do."
+            exit 0
+          fi
+          changed=$(git diff --cached --name-status |
+            awk -F'\t' '!(($1 == "M" && $2 == "CHANGELOG.md") || ($1 == "D" && $2 ~ /^changelog\.d\/[^\/]+\.md$/))')
+          if [ -n "$changed" ]; then
+            echo "::error::the sync would change more than CHANGELOG.md and released fragments:"
+            echo "$changed"
+            exit 1
+          fi
+          branch="release-sync/v$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -q -c "$branch"
+          git commit -qm "changelog: record v$VERSION, released from its line"
+          git push -q "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" "HEAD:refs/heads/$branch"
+          url=$(gh pr create --repo "$REPO" --base "$DEFAULT_BRANCH" --head "$branch" --label no-changelog \
+            --title "changelog: record v$VERSION" \
+            --body "v$VERSION was released from its release line at \`$SHA\`. This adds its CHANGELOG section to $DEFAULT_BRANCH and deletes the changelog.d/ fragments it released, so the next minor does not repeat them. Opened and merged by Release (publish); it changes nothing else.")
+          if gh pr merge "$url" --squash --delete-branch; then
+            echo "Recorded v$VERSION on $DEFAULT_BRANCH: $url" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::could not merge $url; merge it by hand (it only records v$VERSION's notes)"
+            echo "Opened $url; it did not merge automatically." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   # The rehearsal's writer. It runs none of the rehearsed ref's code: it checks out this
   # workflow's own revision (the default branch, checked in `check`), takes the artifacts
