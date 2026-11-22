@@ -132,8 +132,24 @@ export function validateSecretReferences(config: {
  * `[REDACTED]`. Defense in depth for values ORCA itself read: it does not catch encodings,
  * transformations or fragments of a value.
  */
+/**
+ * A value and the encodings a transport may carry it in: base64 (an SSH host reports what it
+ * read that way), unpadded, and base64url. Redacting only the raw value would let an encoded
+ * copy through a diagnostic.
+ */
+function encodedForms(value: string): string[] {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  const b64 = btoa(binary);
+  const bare = b64.replace(/=+$/, "");
+  return [value, b64, bare, bare.replace(/\+/g, "-").replace(/\//g, "_")].filter((v) => v.length > 0);
+}
+
 export function redactSecretValues<T>(value: T, secrets: readonly string[]): T {
-  const needles = [...new Set(secrets.filter((s) => s.length > 0))].sort((a, b) => b.length - a.length);
+  const needles = [...new Set(secrets.filter((s) => s.length > 0).flatMap(encodedForms))].sort(
+    (a, b) => b.length - a.length,
+  );
   if (!needles.length) return value;
   const text = (input: string) => needles.reduce((out, needle) => out.split(needle).join("[REDACTED]"), input);
   const visit = (input: unknown): unknown => {

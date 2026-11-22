@@ -1,7 +1,7 @@
 /** Local credential administration: only explicit issue/rotate output contains a bearer token. */
 import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
 import { resolve } from "node:path";
-import { OrcaError } from "@orca/core";
+import { OrcaError, type OrcaConfig } from "@orca/core";
 import {
   openAuthDirectory,
   PRESETS,
@@ -24,8 +24,12 @@ function expiry(ctx: CommandContext): Date | undefined {
   return date;
 }
 
-/** `--secret <id>@<host>` (repeatable) or `--secret '*'`: the references a credential may use (#336). */
-function secretGrant(ctx: CommandContext): SecretGrant | undefined {
+/**
+ * `--secret <id>@<host>` (repeatable) or `--secret '*'`: the references a credential may use
+ * (#336). Each id must be configured and bound to that host now; the grant records its
+ * provider too, so a later rebinding to another host or provider is not covered.
+ */
+function secretGrant(ctx: CommandContext, config: OrcaConfig): SecretGrant | undefined {
   const values = ctx.flags.secret as string[] | undefined;
   if (!values?.length) return undefined;
   if (values.includes("*")) {
@@ -36,7 +40,13 @@ function secretGrant(ctx: CommandContext): SecretGrant | undefined {
     const at = value.lastIndexOf("@");
     if (at <= 0 || at === value.length - 1)
       throw new OrcaError("CONFIG_INVALID", `--secret takes <id>@<host> or '*', not '${value}'`);
-    return { secret: value.slice(0, at), host: value.slice(at + 1) };
+    const secret = value.slice(0, at);
+    const host = value.slice(at + 1);
+    const bound = config.secrets?.[secret];
+    if (!bound) throw new OrcaError("CONFIG_INVALID", `--secret names '${secret}', which is not a configured secret`);
+    if (bound.host !== host)
+      throw new OrcaError("CONFIG_INVALID", `--secret '${secret}' is bound to host '${bound.host}', not '${host}'`);
+    return { secret, provider: bound.provider, host };
   });
   const parsed = SecretGrantSchema.safeParse(grants);
   if (!parsed.success) throw new OrcaError("CONFIG_INVALID", "--secret ids use letters, digits, '.', '_' and '-'");
@@ -68,7 +78,7 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
     throw new OrcaError("CONFIG_INVALID", "auth expects issue, list, rotate or revoke");
   if (extra.length || (sub === "list" && value !== undefined))
     throw new OrcaError("CONFIG_INVALID", `unexpected arguments for auth ${sub}`);
-  const { configDir } = await loadConfig(ctx.cwd, ctx.configPath);
+  const { configDir, config } = await loadConfig(ctx.cwd, ctx.configPath);
   assertNoUnownedFirstRunMutation(resolve(configDir));
   const auth = openAuthDirectory(resolve(configDir, "auth"));
   switch (sub) {
@@ -83,7 +93,7 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
       const workflowIds = ctx.flags["workflow-scope"] as string[] | undefined;
       if (workflowIds?.some((id) => !id || id === "*"))
         throw new OrcaError("CONFIG_INVALID", "--workflow-scope requires workflow ids; omit it for all workflows");
-      const secrets = secretGrant(ctx);
+      const secrets = secretGrant(ctx, config);
       const issued = await auth.credentials.issue({
         principal: value,
         preset,
@@ -110,7 +120,7 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
               ? "expired"
               : "active";
           ctx.out(
-            `${c.id} ${c.principal} ${state} workflows=${c.scope.workflows === "*" ? "*" : c.scope.workflows.join(",")} runs=${c.scope.runs}${c.secrets === undefined ? "" : ` secrets=${c.secrets === "*" ? "*" : c.secrets.map((g) => `${g.secret}@${g.host}`).join(",")}`}${c.expiresAt ? ` expires=${c.expiresAt}` : ""}${c.label ? ` label=${c.label}` : ""}`,
+            `${c.id} ${c.principal} ${state} workflows=${c.scope.workflows === "*" ? "*" : c.scope.workflows.join(",")} runs=${c.scope.runs}${c.secrets === undefined ? "" : ` secrets=${c.secrets === "*" ? "*" : c.secrets.map((g) => `${g.secret}(${g.provider})@${g.host}`).join(",")}`}${c.expiresAt ? ` expires=${c.expiresAt}` : ""}${c.label ? ` label=${c.label}` : ""}`,
           );
         }
       return 0;

@@ -10,7 +10,22 @@ import type { CommandContext } from "../src/commands/index.js";
 let dir: string;
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "orca-auth-secret-"));
-  await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
+  await writeFile(
+    join(dir, "orca.config.yaml"),
+    [
+      "version: 1",
+      "workflows: []",
+      "templates: []",
+      "hosts:",
+      "  - { id: local, type: local }",
+      "  - { id: build-box, type: ssh, host: build.example }",
+      "secrets:",
+      "  github-token: { host: build-box, provider: file, path: /etc/orca/gh }",
+      "  npm: { host: local, provider: env, name: NPM_TOKEN }",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -36,8 +51,8 @@ describe("auth issue --secret", () => {
     expect(await issue("ci-bot", { secret: ["github-token@build-box", "npm@local", "npm@local"] })).toBe(0);
     const c = stored("ci-bot");
     expect(c.secrets).toEqual([
-      { secret: "github-token", host: "build-box" },
-      { secret: "npm", host: "local" },
+      { secret: "github-token", provider: "file", host: "build-box" },
+      { secret: "npm", provider: "env", host: "local" },
     ]);
     expect(c.permissions).toContain("secrets.use");
   });
@@ -50,9 +65,13 @@ describe("auth issue --secret", () => {
     expect(stored("none").permissions).not.toContain("secrets.use");
   });
 
-  it("refuses a grant without a host, a bad id, or '*' mixed with ids", async () => {
-    await expect(issue("a", { secret: ["token"] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+  it("refuses a grant without a host, for an unconfigured id or another host, or '*' mixed with ids", async () => {
+    await expect(issue("a", { secret: ["npm"] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    await expect(issue("a", { secret: ["absent@local"] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    await expect(issue("a", { secret: ["npm@build-box"] })).rejects.toMatchObject({
+      message: "--secret 'npm' is bound to host 'local', not 'build-box'",
+    });
     await expect(issue("b", { secret: ["bad id@local"] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
-    await expect(issue("c", { secret: ["*", "token@local"] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    await expect(issue("c", { secret: ["*", "npm@local"] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
   });
 });

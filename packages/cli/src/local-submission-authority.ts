@@ -1,6 +1,6 @@
 /** Explicit OS-user admission for local CLI/stdio entry points, never network RPC. */
 import { bindLocalAdmissionExecution } from "./admission-execution-authority.js";
-import { createHash } from "node:crypto";
+import { osUserPrincipalId } from "./local-secret-use.js";
 import { existsSync, constants } from "node:fs";
 import { access, mkdir, stat } from "node:fs/promises";
 import { userInfo } from "node:os";
@@ -19,12 +19,6 @@ import {
   submissionAuthority,
   directAdmissionAuthority,
   orchestratorResolver,
-  credentialSecretUse,
-  secretUseAuthority,
-  RunAccess,
-  UNRESTRICTED,
-  FileAuditSink,
-  AUDIT_FILE,
 } from "@orca/daemon";
 export async function localSubmissionAuthority(
   app: {
@@ -50,14 +44,6 @@ export async function localSubmissionAuthority(
       throw new OrcaError("RUN_STATE", "a current local client credential is required");
     const principal = authenticated.principal;
     const credentialId = principal.credentialId!;
-    const audit = new FileAuditSink(join(authDir, AUDIT_FILE));
-    // Secret references: the run owner's current grant decides, as in the daemon (#336).
-    app.orchestrator.secretUse = credentialSecretUse({
-      resolver: orchestratorResolver(app.orchestrator),
-      ownership,
-      credentials,
-      audit,
-    });
     const factory = mode === "request" ? submissionAuthority : directAdmissionAuthority;
     const authority = factory({
       workspaceId,
@@ -80,10 +66,7 @@ export async function localSubmissionAuthority(
     return local;
   }
   const localUser = userInfo();
-  const principalId = `os-user-${createHash("sha256")
-    .update(JSON.stringify([localUser.uid, localUser.username]))
-    .digest("hex")
-    .slice(0, 32)}`;
+  const principalId = osUserPrincipalId(localUser);
   const verify = async () => {
     const current = userInfo();
     if (
@@ -101,25 +84,6 @@ export async function localSubmissionAuthority(
     }
   };
   await verify();
-  // The verified OS user owns the config directory and the secrets it declares outright, so
-  // its runs may use every reference - but only while no credentials file exists (#336).
-  const runAccess = new RunAccess(orchestratorResolver(app.orchestrator), ownership);
-  app.orchestrator.secretUse = secretUseAuthority({
-    root: async (runId) => (await runAccess.root(runId))?.rootRunId,
-    owner: (root) => ownership.owner(root),
-    principals: (id) => {
-      const current = userInfo();
-      if (
-        id !== principalId ||
-        current.uid !== localUser.uid ||
-        current.username !== localUser.username ||
-        existsSync(tokenFile) ||
-        existsSync(credentialsFile)
-      )
-        return [];
-      return [{ id, kind: "local", permissions: new Set(["secrets.use"]), scope: UNRESTRICTED, secrets: "*" }];
-    },
-  });
   const local: SubmissionAuthority = {
     workspaceId,
     actor: { principalId },

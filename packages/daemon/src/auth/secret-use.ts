@@ -12,16 +12,18 @@ import type { SecretUse } from "@orca/agents";
 import type { AuditSink } from "./audit.js";
 import type { CredentialStore } from "./credentials.js";
 import type { OwnershipStore } from "./ownership.js";
-import { grantCovers, holds, type Principal } from "./principal.js";
-import { RunAccess, type ResourceResolver } from "./resources.js";
+import { grantCovers, holds, workflowAllowed, isUnrestricted, type Principal } from "./principal.js";
+import { RunAccess, type ResourceResolver, type RunRoot } from "./resources.js";
 
 export type SecretUseCheck = (request: { runId: string; uses: SecretUse[] }) => Promise<void>;
 
 export interface SecretUseAuthorityOptions {
-  /** The run's root run id, or `undefined` when its parent chain cannot be read. */
-  root(runId: string): Promise<string | undefined>;
-  /** The principal that durably owns a root run. */
+  /** The run's root run and its workflow, or `undefined` when its parent chain cannot be read. */
+  root(runId: string): Promise<RunRoot | undefined>;
+  /** The principal recorded as owning a root run (possibly still pending). */
   owner(rootRunId: string): string | undefined;
+  /** Throws unless `principalId` is the root's *durable* owner. Pending attribution is not. */
+  verifyOwner(rootRunId: string, principalId: string): Promise<void>;
   /** That principal's current authorities: unrevoked, unexpired, read now. */
   principals(principalId: string): readonly Principal[];
   audit?: AuditSink | undefined;
@@ -34,6 +36,19 @@ function refuse(use: SecretUse | undefined): OrcaError {
       ? `use of secret '${use.secret}' on host '${use.hostId}' is not granted to this run`
       : "use of secret references is not granted to this run",
     { ...(use ? { secret: use.secret, hostId: use.hostId } : {}), reason: "unauthorized" },
+  );
+}
+
+/**
+ * Whether one authority covers one use: it holds `secrets.use`, its workflow scope includes
+ * the run's root workflow, and its grant names the reference with the exact provider and the
+ * host it is bound to now.
+ */
+function covers(principal: Principal, root: RunRoot, use: SecretUse): boolean {
+  return (
+    holds(principal, "secrets.use") &&
+    workflowAllowed(principal.scope, root.workflowId) &&
+    grantCovers(principal.secrets, use)
   );
 }
 
@@ -54,14 +69,20 @@ export function secretUseAuthority(opts: SecretUseAuthorityOptions): SecretUseCh
         ...(reason ? { reason } : {}),
       });
     const root = await opts.root(runId);
-    const owner = root === undefined ? undefined : opts.owner(root);
-    if (!owner) {
+    const owner = root === undefined ? undefined : opts.owner(root.rootRunId);
+    if (!root || !owner) {
       audit("denied", undefined, root === undefined ? "run root unavailable" : "run has no recorded owner");
       throw refuse(uses[0]);
     }
-    const principals = opts.principals(owner).filter((p) => p.id === owner && holds(p, "secrets.use"));
+    try {
+      await opts.verifyOwner(root.rootRunId, owner);
+    } catch {
+      audit("denied", owner, "run ownership is not durable");
+      throw refuse(uses[0]);
+    }
+    const principals = opts.principals(owner).filter((p) => p.id === owner);
     for (const use of uses) {
-      if (!principals.some((p) => grantCovers(p.secrets, use.secret, use.hostId))) {
+      if (!principals.some((p) => covers(p, root, use))) {
         audit("denied", owner, principals.length ? `secret '${use.secret}' not granted` : "no current grant");
         throw refuse(use);
       }
@@ -72,12 +93,16 @@ export function secretUseAuthority(opts: SecretUseAuthorityOptions): SecretUseCh
 
 /**
  * Loopback compatibility mode: every caller is `LOCAL_PRINCIPAL`, which holds every owner
- * permission, so every run may use every reference while the daemon runs in that mode.
+ * permission, so every run may use every reference while the daemon runs in that mode. That
+ * mode keeps no ownership records, so there is nothing to verify, and no audit log.
  */
 export function loopbackSecretUse(principal: Principal, audit?: AuditSink): SecretUseCheck {
+  if (principal.secrets !== "*" || !isUnrestricted(principal.scope))
+    throw new Error("loopback secret use needs an unrestricted principal granted every reference");
   return secretUseAuthority({
-    root: async (runId) => runId,
+    root: async (runId) => ({ rootRunId: runId, workflowId: "*" }),
     owner: () => principal.id,
+    verifyOwner: async () => {},
     principals: () => [principal],
     audit,
   });
@@ -95,8 +120,9 @@ export function credentialSecretUse(opts: {
 }): SecretUseCheck {
   const access = new RunAccess(opts.resolver, opts.ownership);
   return secretUseAuthority({
-    root: async (runId) => (await access.root(runId))?.rootRunId,
+    root: (runId) => access.root(runId),
     owner: (root) => opts.ownership.owner(root),
+    verifyOwner: (root, principalId) => opts.ownership.verify(root, principalId),
     principals: (id) => opts.credentials.currentForPrincipal(id),
     audit: opts.audit,
   });

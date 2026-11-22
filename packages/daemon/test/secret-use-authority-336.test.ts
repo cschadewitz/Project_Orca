@@ -16,6 +16,7 @@ import {
   PRESETS,
   credentialSecretUse,
   loopbackSecretUse,
+  secretUseAuthority,
   orchestratorResolver,
   type ResourceResolver,
 } from "../src/auth/index.js";
@@ -54,7 +55,7 @@ describe("secret use authority", () => {
       principal: "ci-bot",
       permissions: client,
       scope: PRESETS.client.scope,
-      secrets: [{ secret: "token", host: "local" }],
+      secrets: [{ secret: "token", provider: "env", host: "local" }],
     });
     await f.check({ runId: "root", uses: [use()] });
     // A child run is judged by its root's owner.
@@ -72,7 +73,7 @@ describe("secret use authority", () => {
       principal: "ci-bot",
       permissions: client,
       scope: PRESETS.client.scope,
-      secrets: [{ secret: "token", host: "local" }],
+      secrets: [{ secret: "token", provider: "env", host: "local" }],
     });
     const unauthorized = { code: "CONFIG_INVALID", details: { reason: "unauthorized" } };
     await expect(f.check({ runId: "root", uses: [use("other")] })).rejects.toMatchObject({
@@ -90,6 +91,48 @@ describe("secret use authority", () => {
     await expect(g.check({ runId: "root", uses: [use()] })).rejects.toMatchObject(unauthorized);
   });
 
+  it("needs one credential that covers the root workflow, the provider, the host and the reference", async () => {
+    const f = fixture();
+    f.ownership.record("root", "ci-bot");
+    // Same principal: one credential is scoped to another workflow, another lacks the grant.
+    await f.credentials.issue({
+      principal: "ci-bot",
+      permissions: client,
+      scope: { workflows: ["other"], runs: "owned" },
+      secrets: "*",
+    });
+    await f.credentials.issue({ principal: "ci-bot", permissions: client, scope: PRESETS.client.scope });
+    await expect(f.check({ runId: "root", uses: [use()] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    // A child of a run in scope is judged by the root's workflow, not its own inline id.
+    await f.credentials.issue({
+      principal: "ci-bot",
+      permissions: client,
+      scope: { workflows: ["w"], runs: "owned" },
+      secrets: [{ secret: "token", provider: "file", host: "local" }],
+    });
+    // The reference was rebound to another provider: the grant does not follow it.
+    await expect(f.check({ runId: "child", uses: [use()] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    await f.check({ runId: "child", uses: [{ ...use(), provider: "file" }] });
+  });
+
+  it("refuses an owner that is recorded but not durable", async () => {
+    const audit = new MemoryAuditSink();
+    const check = secretUseAuthority({
+      root: async (runId) => ({ rootRunId: runId, workflowId: "w" }),
+      owner: () => "ci-bot",
+      verifyOwner: async () => {
+        throw new Error("pending");
+      },
+      principals: () => [LOCAL_PRINCIPAL].map((p) => ({ ...p, id: "ci-bot" })),
+      audit,
+    });
+    await expect(check({ runId: "root", uses: [use()] })).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      details: { reason: "unauthorized" },
+    });
+    expect(audit.records.map((r) => r.reason)).toEqual(["run ownership is not durable"]);
+  });
+
   it("judges by the run's owner only: another principal's grant never covers it", async () => {
     const f = fixture();
     f.ownership.record("root", "alice");
@@ -100,7 +143,7 @@ describe("secret use authority", () => {
     await expect(f.check({ runId: "orphan", uses: [use()] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     await expect(f.check({ runId: "missing", uses: [use()] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     expect(f.audit.records.map((r) => r.reason)).toEqual([
-      "no current grant",
+      "secret 'token' not granted",
       "run has no recorded owner",
       "run root unavailable",
     ]);
@@ -128,10 +171,10 @@ describe("secret use authority", () => {
       principal: "ci-bot",
       permissions: client,
       scope: PRESETS.client.scope,
-      secrets: [{ secret: "token", host: "local" }],
+      secrets: [{ secret: "token", provider: "env", host: "local" }],
     });
     const rotated = await f.credentials.rotate(credential.id, {});
-    expect(rotated.credential.secrets).toEqual([{ secret: "token", host: "local" }]);
+    expect(rotated.credential.secrets).toEqual([{ secret: "token", provider: "env", host: "local" }]);
     await f.check({ runId: "root", uses: [use()] });
     const owner = await f.credentials.issue({ principal: "someone", preset: "owner" });
     expect(owner.credential.secrets).toBe("*");
@@ -210,7 +253,7 @@ edges: [{ from: s, to: work }, { from: work, to: e }]
       principal: "ci-bot",
       permissions: client,
       scope: PRESETS.client.scope,
-      secrets: [{ secret: "token", host: "local" }],
+      secrets: [{ secret: "token", provider: "env", host: "local" }],
     });
     const allowed = await orchestrator.startRun({ workflowId: "single" });
     ownership.record(allowed, "ci-bot");

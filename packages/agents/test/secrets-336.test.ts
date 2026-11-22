@@ -3,6 +3,7 @@
  * the host as part of starting the agent, refused rather than borrowed from anywhere else,
  * never on a command line, never inherited without a reference, and redacted from errors.
  */
+import { spawnSync } from "node:child_process";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -303,6 +304,84 @@ describe("SshHost delivery", () => {
   });
 });
 
+/**
+ * A fake ssh whose remote shell traces every command (as a login profile that turned on
+ * `xtrace` would) into `stderr`, after running `setup` in that same shell. It runs the
+ * script it is sent (`sh -c '<script>'`) itself, so the trace covers the preamble.
+ */
+async function tracingSsh(dir: string, shell: string, setup = ""): Promise<string> {
+  const bin = join(dir, "ssh");
+  await writeFile(
+    bin,
+    `#!/bin/sh
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+shift 3
+eval "script=$1"
+exec ${shell} -x -c "${setup}$script" 2>>"${join(dir, "stderr")}"
+`,
+  );
+  await chmod(bin, 0o755);
+  return bin;
+}
+
+const SHELLS = ["/bin/sh", "bash", "dash"].filter(
+  (s) => spawnSync(s, ["-c", "true"], { stdio: "ignore" }).status === 0,
+);
+
+describe("SshHost launch boundary", () => {
+  const value = "boundary-value-0123456789";
+  const encoded = Buffer.from(value).toString("base64");
+  const secrets = [{ id: "token", source: { provider: "env" as const, name: "ORCA_REMOTE_TOKEN" }, env: ["TOKEN"] }];
+
+  it.each(SHELLS)("keeps values and their encoding out of a tracing shell's diagnostics (%s)", async (shell) => {
+    const dir = await tempDir();
+    const host = sshHost(await tracingSsh(dir, shell));
+    vi.stubEnv("ORCA_REMOTE_TOKEN", value);
+    const out = join(dir, "seen");
+    const proc = await host.spawnAgent(
+      AgentSpecSchema.parse({ id: "a", command: process.execPath, args: ["-e", envReporter(out, ["TOKEN"])] }),
+      { cwd: dir, secrets, withheldEnv: ["ORCA_REMOTE_TOKEN"] },
+    );
+    procs.push(proc);
+    await waitFor(out);
+    expect(JSON.parse(await readFile(out, "utf8"))).toEqual({ TOKEN: value });
+    const stderr = await readFile(join(dir, "stderr"), "utf8");
+    expect(stderr).toContain("set +xv");
+    expect(stderr).not.toContain(value);
+    expect(stderr).not.toContain(encoded);
+  });
+
+  it.each(SHELLS)(
+    "stops before the agent starts when the environment cannot be set or withheld (%s)",
+    async (shell) => {
+      for (const setup of ["readonly TOKEN; ", "readonly ORCA_REMOTE_OTHER; "]) {
+        const dir = await tempDir();
+        const host = sshHost(await tracingSsh(dir, shell, setup));
+        vi.stubEnv("ORCA_REMOTE_TOKEN", value);
+        vi.stubEnv("ORCA_REMOTE_OTHER", value);
+        const out = join(dir, "seen");
+        const error = await host
+          .spawnAgent(
+            AgentSpecSchema.parse({ id: "a", command: process.execPath, args: ["-e", envReporter(out, ["TOKEN"])] }),
+            { cwd: dir, secrets, withheldEnv: ["ORCA_REMOTE_TOKEN", "ORCA_REMOTE_OTHER"] },
+          )
+          .then(
+            () => undefined,
+            (e: unknown) => e,
+          );
+        expect(error, setup).toMatchObject({ code: "AGENT_TRANSPORT" });
+        expect(
+          JSON.stringify({ message: (error as Error).message, details: (error as OrcaError).details }),
+        ).not.toContain(value);
+        expect(await exists(out), setup).toBe(false);
+        const stderr = await readFile(join(dir, "stderr"), "utf8").catch(() => "");
+        expect(stderr).not.toContain(value);
+        expect(stderr).not.toContain(encoded);
+      }
+    },
+  );
+});
+
 /** An ACP agent that reports what it was started with: its env, and the MCP env it was given. */
 const reportingAgent = (out: string) => `
 const rl = require("node:readline").createInterface({ input: process.stdin });
@@ -504,6 +583,14 @@ describe("redaction helpers", () => {
     log.error("pw-123");
     log.child({ k: "pw-123" }).info("x");
     expect(JSON.stringify(seen)).not.toContain("pw-123");
+  });
+
+  it("redacts a value's base64, unpadded and base64url encodings too", () => {
+    const value = "pw?>~ünï";
+    const b64 = Buffer.from(value).toString("base64");
+    const url = Buffer.from(value).toString("base64url");
+    const error = redactError(new Error(`a ${b64} b ${b64.replace(/=+$/, "")} c ${url}`), [value]);
+    expect(error.message).toBe("a [REDACTED] b [REDACTED] c [REDACTED]");
   });
 
   it("redactError rewrites message, stack, details and the cause chain in place", () => {

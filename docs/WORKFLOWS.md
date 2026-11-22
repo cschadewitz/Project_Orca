@@ -606,17 +606,18 @@ agents:
 ```
 
 - **Delivered only under a grant.** At every session open the daemon asks whether the
-  principal that owns the run (the root run's starter) may use each secret on the host it is
-  bound to, from that principal's credentials as they are *now*: a revoked or expired
-  credential stops the next open. A credential grants references with
-  `orca auth issue <principal> --secret github-token@local` (repeatable) or `--secret '*'`;
-  the `owner` preset, which the local client's bootstrap credential uses, grants every
-  reference, and no other preset grants any. A denial fails that step before anything is
-  read, with `reason: unauthorized`. In standalone mode (no credentials file) the verified
-  OS user owns the config and its secrets outright; with `orca serve
-  --unauthenticated-loopback` every local run may use every reference. A launch with no use
-  check at all (an embedder that wires none) is refused before the run starts, and
-  `agents.ping` never starts an agent that uses a reference. See
+  principal that owns the run (the root run's starter, as durably recorded) may use each
+  secret, with its provider, on the host it is bound to, from that principal's credentials
+  as they are *now*: a revoked or expired credential stops the next open. One credential
+  must cover the whole use, including the run's workflow in its scope. A credential grants
+  references with `orca auth issue <principal> --secret github-token@local` (repeatable) or
+  `--secret '*'`; the `owner` preset, which the local client's bootstrap credential uses,
+  grants every reference, and no other preset grants any. A denial fails that step before
+  anything is read, with `reason: unauthorized`. In standalone mode (no credentials file)
+  the verified OS user owns the config and its secrets outright; with `orca serve
+  --unauthenticated-loopback` every local run may use every reference. A direct `orca run`
+  with `--cwd` or `--agent`/`--model` overrides records no owner and cannot use references,
+  and `agents.ping` never starts an agent that uses one. See
   [secret-use-authority.md](secret-use-authority.md).
 - **Only where it lives is configured, never the value.** `provider: env` reads a variable
   from the host's environment: the daemon's own on a local host, the remote login shell's on

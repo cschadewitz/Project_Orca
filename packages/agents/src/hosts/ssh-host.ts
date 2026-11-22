@@ -184,6 +184,7 @@ export class SshHost implements AgentHost {
     const ready = Buffer.from(`\n${READY}\n`);
     return new Promise<void>((resolve, reject) => {
       let buffered = Buffer.alloc(0);
+      let failed = false;
       const finish = (error?: Error) => {
         clearTimeout(timer);
         child.stdout.off("data", onData);
@@ -200,6 +201,7 @@ export class SshHost implements AgentHost {
           if (marker === VALUE_MARKER && encoded !== undefined)
             values.set(d.id, Buffer.from(encoded, "base64").toString("utf8"));
           else if (marker === MISSING_MARKER) missing = Number(index);
+          else if (marker === FAILED_MARKER) failed = true;
         }
         return missing;
       };
@@ -225,11 +227,17 @@ export class SshHost implements AgentHost {
         finish(
           d
             ? sourceMissing(d.id, d.source, this.id)
-            : new OrcaError(
-                "AGENT_TRANSPORT",
-                `the connection to host '${this.id}' ended (exit ${code}) before the agent started`,
-                { hostId: this.id },
-              ),
+            : failed
+              ? new OrcaError(
+                  "AGENT_TRANSPORT",
+                  `host '${this.id}' could not withhold or set the agent's environment; the agent was not started`,
+                  { hostId: this.id, reason: "environment" },
+                )
+              : new OrcaError(
+                  "AGENT_TRANSPORT",
+                  `the connection to host '${this.id}' ended (exit ${code}) before the agent started`,
+                  { hostId: this.id },
+                ),
         );
       };
       const timer = setTimeout(
@@ -562,6 +570,7 @@ const VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const VALUE_MARKER = "__orca_secret_value__";
 const MISSING_MARKER = "__orca_secret_missing__";
 const READY = "__orca_ready__";
+const FAILED_MARKER = "__orca_secret_failed__";
 
 /**
  * The remote half of secret delivery (#336), in POSIX sh. Each source is read into a shell
@@ -569,16 +578,25 @@ const READY = "__orca_ready__";
  * host does); a missing or empty one reports its index and exits. Then every withheld
  * variable is removed, the agent's own are exported, and each value is reported in base64.
  * Leading newlines keep each marker at the start of a line whatever a login profile printed.
+ *
+ * The boundary is controlled and fails closed: tracing is switched off and the shell's
+ * stderr goes to /dev/null while values are in variables, so no diagnostic (an `xtrace` a
+ * profile turned on, a readonly variable's error) can carry a value or its encoding; every
+ * withholding and every export is checked afterwards, and any that did not take reports a
+ * failure and exits before the agent starts. Stderr is restored only for the agent itself.
  */
 export function secretPreamble(deliveries: readonly SecretDelivery[], withheld: readonly string[]): string {
   const parts: string[] = [];
+  if (!deliveries.length && !withheld.length) return "";
+  const failed = `{ printf '\\n${FAILED_MARKER}\\n'; exit 96; }`;
+  parts.push(`set +xv`, `exec 3>&2 2>/dev/null`);
   if (deliveries.length) parts.push(`__orca_nl='\n'`, `__orca_cr=$(printf '\\r')`);
   deliveries.forEach((d, i) => {
     const missing = `{ printf '\\n${MISSING_MARKER} ${i}\\n'; exit 97; }`;
     const read =
       d.source.provider === "env"
         ? `printenv ${d.source.name} && printf x`
-        : `cat -- ${shellQuote(d.source.path)} 2>/dev/null && printf x`;
+        : `cat -- ${shellQuote(d.source.path)} && printf x`;
     parts.push(
       `__orca_v=$(${read}) || ${missing}`,
       `__orca_v=\${__orca_v%x}`,
@@ -589,9 +607,10 @@ export function secretPreamble(deliveries: readonly SecretDelivery[], withheld: 
       `__orca_s${i}=$__orca_v`,
     );
   });
-  if (withheld.length) parts.push(`unset ${withheld.join(" ")}`);
+  for (const name of withheld) parts.push(`unset ${name}`, `[ -z "\${${name}+x}" ] || ${failed}`);
   deliveries.forEach((d, i) => {
-    for (const name of d.env) parts.push(`${name}=$__orca_s${i}`, `export ${name}`);
+    for (const name of d.env)
+      parts.push(`export ${name}="$__orca_s${i}" || ${failed}`, `[ "\${${name}-}" = "$__orca_s${i}" ] || ${failed}`);
     parts.push(`printf '\\n${VALUE_MARKER} ${i} %s\\n' "$(printf '%s' "$__orca_s${i}" | base64 | tr -d '\\n')"`);
   });
   if (deliveries.length)
@@ -599,5 +618,6 @@ export function secretPreamble(deliveries: readonly SecretDelivery[], withheld: 
       `unset __orca_v __orca_nl __orca_cr ${deliveries.map((_, i) => `__orca_s${i}`).join(" ")}`,
       `printf '\\n${READY}\\n'`,
     );
+  parts.push(`exec 2>&3 3>&-`);
   return parts.map((p) => `${p}; `).join("");
 }
