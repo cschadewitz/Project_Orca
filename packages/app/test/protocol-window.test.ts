@@ -26,7 +26,7 @@ import type { ConnectionSnapshot } from "../src/bridge.js";
 const window: { value?: ProtocolWindow } = vi.hoisted(() => ({}));
 vi.mock("../src/client/protocol-window.js", async () => {
   const protocol = await import("@orca/protocol");
-  const w = windowOf({ major: protocol.PROTOCOL_VERSION.major + 1, minor: 0 }, protocol.PROTOCOL_VERSION);
+  const w = windowOf({ major: protocol.PROTOCOL_VERSION.major + 1, minor: 0 }, protocol.CLIENT_PROTOCOL);
   window.value = w;
   return {
     APP_PROTOCOL_WINDOW: w,
@@ -80,7 +80,7 @@ describe("app N against an N-1 daemon", () => {
   });
 
   it("offers its fallback and gets the daemon's own protocol back", async () => {
-    expect(window.value).toMatchObject({ previous: PROTOCOL_VERSION });
+    expect(window.value).toMatchObject({ previous: { major: PROTOCOL_VERSION.major } });
     const result = await new DaemonClient(d.url).hello("orca-app/n");
     expect(result.protocol).toEqual(PROTOCOL_VERSION);
   });

@@ -138,17 +138,24 @@ export const AGENT_METHODS = [AGENTS_LIST_METHOD, AGENTS_PING_METHOD] as const;
  */
 export const SUBSCRIPTION_METHODS = [SUBSCRIBE_METHOD, UNSUBSCRIBE_METHOD] as const;
 
-export const HelloParamsSchema = z.object({
-  /** Client identity for logs and the daemon's session list, e.g. `orca-app/0.3.1`. */
-  client: z.string().min(1),
-  protocol: ProtocolVersionSchema,
-  /**
-   * The previous-major version this client can also speak, sent only while its build has a
-   * compatibility window open (protocol 2.1, #880). A daemon that does not speak `protocol`
-   * answers in this one instead, and says so in `HelloResult.protocol`.
-   */
-  fallback: ProtocolVersionSchema.optional(),
-});
+export const HelloParamsSchema = z
+  .object({
+    /** Client identity for logs and the daemon's session list, e.g. `orca-app/0.3.1`. */
+    client: z.string().min(1),
+    protocol: ProtocolVersionSchema,
+    /**
+     * The previous-major version this client can also speak, sent only while its build has a
+     * compatibility window open (protocol 2.1, #880). A daemon that does not speak `protocol`
+     * answers in this one instead, and says so in `HelloResult.protocol`.
+     */
+    fallback: ProtocolVersionSchema.optional(),
+  })
+  .refine((p) => p.fallback === undefined || p.fallback.major === p.protocol.major - 1, {
+    /* A fallback is the previous major and nothing else: a same-major or skipped-major pair
+     is a malformed offer, refused as such before any version is matched. */
+    message: "hello fallback must be exactly one major below protocol",
+    path: ["fallback"],
+  });
 export type HelloParams = z.infer<typeof HelloParamsSchema>;
 
 /** What a daemon can do; a client checks these rather than the ORCA version. */

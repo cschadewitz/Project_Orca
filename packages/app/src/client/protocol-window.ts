@@ -11,7 +11,8 @@
  * Tests replace this module to stand the app one major ahead of a real daemon.
  */
 import {
-  PROTOCOL_WINDOW,
+  CLIENT_PROTOCOL_WINDOW,
+  PROTOCOL_VERSION,
   daemonRelation,
   formatProtocolVersion,
   helloOffer,
@@ -20,7 +21,12 @@ import {
   type ProtocolWindow,
 } from "@orca/protocol";
 
-export const APP_PROTOCOL_WINDOW: ProtocolWindow = PROTOCOL_WINDOW;
+/**
+ * The client window, not the daemon's: the app offers the oldest current-major daemon it
+ * works with (`CLIENT_PROTOCOL`), so an updated desktop still reaches daemons on an earlier
+ * minor of the same major.
+ */
+export const APP_PROTOCOL_WINDOW: ProtocolWindow = CLIENT_PROTOCOL_WINDOW;
 
 /** What the app sends in `hello`: its protocol, and its fallback while a window is open. */
 export function appHelloOffer(): { protocol: ProtocolVersion; fallback?: ProtocolVersion } {
@@ -37,7 +43,7 @@ export function appSpeaks(daemon: ProtocolVersion): boolean {
   return appDaemonRelation(daemon) !== undefined;
 }
 
-/** This app's own protocol, for the "daemon 2.4 · app 3.0" rendering. */
+/** This build's own protocol, for the "daemon 2.4 · app 3.0" rendering. */
 export function appProtocolLabel(): string {
-  return formatProtocolVersion(APP_PROTOCOL_WINDOW.current);
+  return formatProtocolVersion(PROTOCOL_VERSION);
 }

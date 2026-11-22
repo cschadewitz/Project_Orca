@@ -133,7 +133,9 @@ export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 1 };
  * - The next major replaces it with the final N.x, so N-1 leaves: the window is one major
  *   wide and one release long, never more. N-2 is refused with a protocol message.
  * - Whatever the major changed has to stay readable to an N-1 peer: the major that sets
- *   this owns the projection of every message it reshaped, and the N-1 fixtures in
+ *   this owns the projection of every message it reshaped (capabilities, methods and
+ *   events, not only the version negotiation), and it stays `undefined` until that
+ *   projection is verified. The N-1 fixtures in
  *   `packages/protocol/test/protocol-window.test.ts` and `packages/app/test/protocol-window.test.ts` are the check.
  * - Store epochs are not part of it. A store migration still needs the matching daemon.
  *
@@ -150,8 +152,24 @@ export interface ProtocolWindow {
   readonly previous?: ProtocolVersion;
 }
 
-/** This build's window. */
+/** This build's window, as a daemon: what it answers `hello` in. */
 export const PROTOCOL_WINDOW: ProtocolWindow = windowOf(PROTOCOL_VERSION, PREVIOUS_PROTOCOL);
+
+/**
+ * The oldest daemon this build's clients work with on the current major, which is what they
+ * offer in `hello` instead of `PROTOCOL_VERSION`. The minor rule refuses a daemon older in
+ * minor than the client's offer, so offering this build's own minor would strand every daemon
+ * on an earlier minor of the same major the moment a desktop updates.
+ *
+ * Raise its minor only when the app starts to depend *unconditionally* on something that
+ * minor added. A feature behind a capability or `hello.methods` does not need it: an older
+ * daemon simply does not advertise it. 2.1 adds only the daemon's reading of `fallback`,
+ * which a client never needs, so a 2.1 app still offers 2.0 and reaches shipped 2.0 daemons.
+ */
+export const CLIENT_PROTOCOL: ProtocolVersion = { major: 2, minor: 0 };
+
+/** This build's window, as a client: what it offers in `hello` and accepts back. */
+export const CLIENT_PROTOCOL_WINDOW: ProtocolWindow = windowOf(CLIENT_PROTOCOL, PREVIOUS_PROTOCOL);
 
 /** A window from a current version and an optional previous one, checked for shape. */
 export function windowOf(current: ProtocolVersion, previous?: ProtocolVersion): ProtocolWindow {
@@ -197,7 +215,7 @@ export function negotiateProtocol(
  */
 export function daemonRelation(
   daemon: ProtocolVersion,
-  window: ProtocolWindow = PROTOCOL_WINDOW,
+  window: ProtocolWindow = CLIENT_PROTOCOL_WINDOW,
 ): ProtocolRelation | undefined {
   if (isCompatible(window.current, daemon)) return "current";
   if (window.previous && isCompatible(window.previous, daemon)) return "previous";
@@ -205,7 +223,7 @@ export function daemonRelation(
 }
 
 /** What a client puts in `hello`: its own version, and its fallback while a window is open. */
-export function helloOffer(window: ProtocolWindow = PROTOCOL_WINDOW): {
+export function helloOffer(window: ProtocolWindow = CLIENT_PROTOCOL_WINDOW): {
   protocol: ProtocolVersion;
   fallback?: ProtocolVersion;
 } {

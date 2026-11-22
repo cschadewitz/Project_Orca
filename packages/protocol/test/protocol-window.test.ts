@@ -7,7 +7,11 @@
  * the same fixtures will be the N-1 clients of the first major that opens a window.
  */
 import { describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
 import {
+  CLIENT_PROTOCOL,
+  CLIENT_PROTOCOL_WINDOW,
+  HelloParamsSchema,
   HelloResultSchema,
   PREVIOUS_PROTOCOL,
   PROTOCOL_VERSION,
@@ -15,6 +19,7 @@ import {
   daemonRelation,
   describeProtocolRefusal,
   helloOffer,
+  isCompatible,
   negotiateProtocol,
   windowOf,
   type HelloParams,
@@ -29,7 +34,7 @@ const NEXT_WINDOW = windowOf(N, PROTOCOL_VERSION);
 
 /** What a client of this build sends, and what one a major older and newer would send. */
 const N1_CLIENT: HelloParams = { client: "orca-app/n-1", protocol: PROTOCOL_VERSION };
-const N_CLIENT: HelloParams = { client: "orca-app/n", protocol: N, fallback: PROTOCOL_VERSION };
+const N_CLIENT: HelloParams = { client: "orca-app/n", protocol: N, fallback: CLIENT_PROTOCOL };
 const N2_CLIENT: HelloParams = { client: "orca-app/n-2", protocol: v(PROTOCOL_VERSION.major - 1, 10) };
 
 const handshake = (params: HelloParams, window?: ProtocolWindow) => {
@@ -52,6 +57,18 @@ describe("the window this build ships", () => {
     expect(PROTOCOL_WINDOW.current).toEqual(PROTOCOL_VERSION);
     if (PREVIOUS_PROTOCOL) expect(PREVIOUS_PROTOCOL.major).toBe(PROTOCOL_VERSION.major - 1);
     expect(PROTOCOL_WINDOW.previous).toEqual(PREVIOUS_PROTOCOL);
+  });
+
+  it("has clients offer the oldest current-major daemon they work with", () => {
+    expect(CLIENT_PROTOCOL.major).toBe(PROTOCOL_VERSION.major);
+    expect(CLIENT_PROTOCOL.minor).toBeLessThanOrEqual(PROTOCOL_VERSION.minor);
+    // 2.1 adds only the daemon's reading of `fallback`; no client depends on it.
+    expect(CLIENT_PROTOCOL).toEqual({ major: 2, minor: 0 });
+    expect(CLIENT_PROTOCOL_WINDOW).toEqual({
+      current: CLIENT_PROTOCOL,
+      ...(PREVIOUS_PROTOCOL ? { previous: PREVIOUS_PROTOCOL } : {}),
+    });
+    expect(helloOffer()).toEqual(helloOffer(CLIENT_PROTOCOL_WINDOW));
   });
 
   it("refuses a window that skips a major or points forward", () => {
@@ -129,5 +146,41 @@ describe("this build's daemon as the N-1 daemon an N app falls back to", () => {
   it("still refuses an N client that offers no fallback", async () => {
     const response = await handshake({ client: "orca-app/n", protocol: N });
     expect(response).toMatchObject({ ok: false, error: { code: "NOT_SUPPORTED" } });
+  });
+});
+
+describe("the fallback offer is validated before any version is matched", () => {
+  it.each([
+    ["non-adjacent", { client: "x", protocol: v(3, 0), fallback: v(1, 10) }],
+    ["same-major", { client: "x", protocol: v(3, 0), fallback: v(3, 0) }],
+    ["same-major on this build", { client: "x", protocol: PROTOCOL_VERSION, fallback: CLIENT_PROTOCOL }],
+    ["forward", { client: "x", protocol: v(2, 1), fallback: v(3, 0) }],
+  ])("refuses a %s fallback", async (_name, params) => {
+    expect(HelloParamsSchema.safeParse(params).success).toBe(false);
+    for (const window of [undefined, NEXT_WINDOW]) {
+      const response = await handshake(params, window);
+      expect(response.ok).toBe(false);
+      if (response.ok) continue;
+      expect(response.error.code).not.toBe("NOT_SUPPORTED");
+      expect(JSON.stringify(response.error)).toContain("fallback");
+    }
+  });
+
+  it("accepts an adjacent fallback and no fallback", () => {
+    expect(HelloParamsSchema.safeParse(N_CLIENT).success).toBe(true);
+    expect(HelloParamsSchema.safeParse(N1_CLIENT).success).toBe(true);
+  });
+});
+
+describe("old app on the shipped 2.0 wire against this build's daemon", () => {
+  it("accepts the exact hello a v0.7.0 desktop sends, in a protocol that desktop accepts", async () => {
+    const wire: { request: { params: HelloParams } } = JSON.parse(
+      await readFile(new URL("../../app/test/fixtures/protocol-2.0-hello.json", import.meta.url), "utf8"),
+    );
+    expect(wire.request.params.protocol).toEqual({ major: 2, minor: 0 });
+    const result = await accepted(wire.request.params);
+    expect(result.protocol).toEqual(PROTOCOL_VERSION);
+    // v0.7.0's own check: same major, daemon at least as new as the client.
+    expect(isCompatible(wire.request.params.protocol, result.protocol)).toBe(true);
   });
 });

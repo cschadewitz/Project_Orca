@@ -542,9 +542,14 @@ connect, so an app that updates first does not lose its servers.
   major version behind. A daemon outside the window is a version mismatch as before.
 - The window is the `PREVIOUS_PROTOCOL` constant in `@orca/protocol`. The release that
   bumps the major sets it to the final N-1.x; the next major replaces it, so N-1 leaves.
+- **Within a major, an updated desktop keeps working with older daemons.** Clients offer
+  the oldest minor they need (`CLIENT_PROTOCOL`, 2.0 today), not their own, so a 2.1
+  desktop still connects to shipped 2.0 daemons. Only the daemon reads `fallback`.
 - **2.x opens no window.** 2.0 was cut before the window existed, and 1.10 peers read 2.x
   with closed schemas, so 1.10 stays refused. 2.1 is the first daemon that understands a
   `fallback`, which is what lets the first 3.0 app talk to it.
+- The window stays disabled until the major that opens it verifies its previous-major
+  wire projection: capabilities, methods and events, not only the version negotiation.
 - The window never covers store epochs. A store migration still needs the matching daemon;
   see [Recovery and store compatibility](#recovery-and-store-compatibility).
 
