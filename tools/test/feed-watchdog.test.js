@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   canaryMapDigest,
+  carriedName,
   channelProblems,
   latestRecord,
   offerProblem,
@@ -68,20 +69,21 @@ const run = (w, extra = {}) =>
 
 describe("feed watchdog", () => {
   it("passes a healthy feed and reports each ring", async () => {
-    const { problems, report } = await run(world());
+    const record = { format: 1, rings: { internal: { version: "0.7.1-rc.1" }, stable: { version: "0.7.0" } } };
+    const { problems, report } = await run(world(), { record });
     expect(problems).toEqual([]);
     expect(report).toEqual([
-      "no recorded ring state: a 404 cannot be told from an empty ring; only servers-first is checked",
       "internal x64: 0.7.1-rc.1, served bytes match the published release",
       "stable x64: 0.7.0, served bytes match the published release",
-      "internal server: nothing offered yet",
-      "stable server: nothing offered yet",
+      "internal server: nothing offered (none recorded)",
+      "stable server: nothing offered (none recorded)",
     ]);
   });
 
   it("downloads each installer once, and sends tokens only to the feed", async () => {
     const w = world({ offers: { internal: "0.7.0", stable: "0.7.0" } });
-    expect((await run(w)).problems).toEqual([]);
+    const record = { format: 1, rings: { internal: { version: "0.7.0" }, stable: { version: "0.7.0" } } };
+    expect((await run(w, { record })).problems).toEqual([]);
     const installer = w.calls.filter((c) => c.href.endsWith("ORCA-0.7.0-win-x64.exe"));
     // One full download, and a HEAD with the other ring's own token.
     expect(installer.map((c) => c.method)).toEqual(["GET", "HEAD"]);
@@ -142,10 +144,20 @@ describe("feed watchdog", () => {
     );
   });
 
-  it("reports a ring that is offered nothing yet without failing", async () => {
-    const { problems, report } = await run(world({ offers: { internal: "0.7.0" } }));
+  it("reports a ring that is offered nothing, as recorded, without failing", async () => {
+    const record = { format: 1, rings: { internal: { version: "0.7.0" } } };
+    const { problems, report } = await run(world({ offers: { internal: "0.7.0" } }), { record });
     expect(problems).toEqual([]);
-    expect(report).toContain("stable x64: nothing offered yet");
+    expect(report).toContain("stable x64: nothing offered (none recorded)");
+  });
+
+  it("passes an uncommissioned feed without a record, and fails a live one without", async () => {
+    const empty = await run(world({ offers: {} }));
+    expect(empty.problems).toEqual([]);
+    expect(empty.report).toContain("stable x64: nothing offered yet");
+    expect((await run(world())).problems).toContain(
+      "the feed offers versions but no recorded ring state was found; expected offers cannot be checked",
+    );
   });
 
   it("refuses an empty or unknown canary list", async () => {
@@ -345,7 +357,8 @@ describe("server bundle channel (#877)", () => {
 
   it("passes a healthy server channel and downloads each file once", async () => {
     const w = serverWorld({ servers: { internal: "0.8.0", stable: "0.8.0" } });
-    const { problems, report } = await run(w);
+    const record = { format: 1, rings: {}, server: { internal: { version: "0.8.0" }, stable: { version: "0.8.0" } } };
+    const { problems, report } = await run(w, { record });
     expect(problems).toEqual([]);
     expect(report.filter((line) => / server: /.test(line))).toEqual([
       "internal server: 0.8.0, served bytes match the published release",
@@ -491,7 +504,10 @@ describe("server bundle channel (#877)", () => {
       expect((await run(servers({ internal: "0.8.0-rc.1" }))).problems).toContain(
         "internal server/latest-linux-x64.yml: offers 0.8.0-rc.1, older than the 0.8.0 internal's desktops are offered (servers first)",
       );
-      expect((await run(servers({ internal: "0.8.0" }))).problems).toEqual([]);
+      // Fine by servers first; still red without a record, because the feed is live.
+      expect((await run(servers({ internal: "0.8.0" }))).problems).toEqual([
+        "the feed offers versions but no recorded ring state was found; expected offers cannot be checked",
+      ]);
     });
   });
 });
@@ -506,41 +522,115 @@ describe("offerProblem", () => {
 });
 
 describe("latestRecord", () => {
-  const artifact = (id, name, run, created, branch = "main") => ({
-    id,
-    name,
-    expired: false,
-    created_at: created,
-    workflow_run: { id: run, head_branch: branch },
-  });
-  const runs = {
-    1: { id: 1, path: ".github/workflows/feed-promote.yml", head_branch: "main", event: "workflow_dispatch" },
-    2: { id: 2, path: ".github/workflows/feed-publish.yml", head_branch: "main", event: "workflow_dispatch" },
-    3: { id: 3, path: ".github/workflows/ci.yml", head_branch: "main", event: "workflow_dispatch" },
-    4: { id: 4, path: ".github/workflows/feed-promote.yml", head_branch: "main", event: "pull_request" },
+  const RUNS = {
+    "feed-publish.yml": [
+      { id: 20, created_at: "2026-11-22T11:00:00Z", event: "workflow_dispatch" },
+      { id: 21, created_at: "2026-11-20T11:00:00Z", event: "workflow_dispatch" },
+    ],
+    "feed-promote.yml": [
+      { id: 30, created_at: "2026-11-22T12:00:00Z", event: "workflow_dispatch", head_branch: "attacker" },
+      { id: 31, created_at: "2026-11-22T10:00:00Z", event: "pull_request" },
+      { id: 32, created_at: "2026-11-21T10:00:00Z", event: "workflow_dispatch" },
+    ],
+    "feed-watchdog.yml": [
+      { id: 40, created_at: "2026-11-22T07:17:00Z", event: "schedule" },
+      { id: 41, created_at: "2026-11-21T07:17:00Z", event: "schedule" },
+    ],
   };
-  const api = (artifacts) => async (url) => {
-    const path = String(url).replace("https://api.github.com/repos/o/r/", "");
-    if (path.startsWith("actions/artifacts")) return new Response(JSON.stringify({ artifacts }), { status: 200 });
-    const id = /^actions\/runs\/(\d+)$/.exec(path)?.[1];
-    return runs[id] ? new Response(JSON.stringify(runs[id]), { status: 200 }) : new Response(null, { status: 404 });
-  };
+  const art = (name, created, expired = false) => ({ name, created_at: created, expired });
+  function github({ runs = RUNS, artifacts, pages = {} }) {
+    const calls = [];
+    const fetch = async (url) => {
+      const path = String(url).replace("https://api.github.com/repos/o/r/", "");
+      calls.push(path);
+      const listing = /^actions\/workflows\/([\w.-]+)\/runs\?branch=main&per_page=100&page=(\d+)$/.exec(path);
+      if (listing) {
+        const [, workflow, page] = listing;
+        const all = (pages[workflow] ?? []).concat(runs[workflow] ?? []);
+        const slice = all.slice((page - 1) * 100, page * 100).map((r) => ({
+          head_branch: "main",
+          path: `.github/workflows/${workflow}`,
+          ...r,
+        }));
+        return new Response(JSON.stringify({ workflow_runs: slice }), { status: 200 });
+      }
+      const run = /^actions\/runs\/(\d+)\/artifacts\?per_page=100$/.exec(path)?.[1];
+      if (run) return new Response(JSON.stringify({ artifacts: artifacts[run] ?? [] }), { status: 200 });
+      return new Response(null, { status: 404 });
+    };
+    return { fetch, calls };
+  }
 
-  it("takes the newest record kept by a main dispatch of the feed workflows", async () => {
-    const fetch = api([
-      artifact(10, "feed-rings-promote", 1, "2026-11-22T10:00:00Z"),
-      artifact(11, "feed-rings-server", 2, "2026-11-22T11:00:00Z"),
-      artifact(12, "feed-rings-promote", 3, "2026-11-22T12:00:00Z"),
-      artifact(13, "feed-rings-promote", 4, "2026-11-22T13:00:00Z"),
-      artifact(14, "feed-rings-promote", 1, "2026-11-22T14:00:00Z", "attacker"),
-      artifact(15, "other", 2, "2026-11-22T15:00:00Z"),
-      { ...artifact(16, "feed-rings-desktop", 2, "2026-11-22T16:00:00Z"), expired: true },
-    ]);
-    expect(await latestRecord({ repo: "o/r", fetch })).toEqual({ run: 2, name: "feed-rings-server" });
+  it("takes the newest record of a trusted run, ignoring other branches, events and names", async () => {
+    const { fetch } = github({
+      artifacts: {
+        20: [art("feed-rings-server", "2026-11-22T11:05:00Z"), art("feed-rings-desktop", "2026-11-22T11:20:00Z")],
+        30: [art("feed-rings-promote", "2026-11-22T12:05:00Z")],
+        31: [art("feed-rings-promote", "2026-11-22T10:05:00Z")],
+        32: [art("feed-rings-promote", "2026-11-21T10:05:00Z")],
+        40: [art("unrelated", "2026-11-22T07:20:00Z")],
+      },
+    });
+    expect(await latestRecord({ repo: "o/r", fetch })).toEqual({
+      run: 20,
+      name: "feed-rings-desktop",
+      recordedAt: "2026-11-22T11:20:00Z",
+    });
+  });
+
+  it("is not hidden by many newer unrelated artifacts or runs ahead of the record", async () => {
+    // 250 newer feed-publish runs (dispatched, on main) kept other artifacts first; the record
+    // is on the third page of runs. Repository-wide artifacts of other workflows never matter.
+    const noise = Array.from({ length: 250 }, (_, i) => ({
+      id: 1000 + i,
+      created_at: `2026-11-22T11:${String(59 - (i % 60)).padStart(2, "0")}:00Z`,
+      event: "workflow_dispatch",
+    }));
+    const artifacts = Object.fromEntries(noise.map((r) => [r.id, [art(`ci-evidence-${r.id}`, r.created_at)]]));
+    artifacts[20] = [art("feed-rings-server", "2026-11-22T11:05:00Z")];
+    const { fetch, calls } = github({ artifacts, pages: { "feed-publish.yml": noise } });
+    expect(await latestRecord({ repo: "o/r", fetch })).toMatchObject({ run: 20, name: "feed-rings-server" });
+    expect(calls).toContain("actions/workflows/feed-publish.yml/runs?branch=main&per_page=100&page=3");
+  });
+
+  it("stops reading a workflow's runs a day before its newest record", async () => {
+    const { fetch, calls } = github({
+      artifacts: {
+        20: [art("feed-rings-server", "2026-11-22T11:05:00Z")],
+        21: [art("feed-rings-server", "2026-11-20T11:05:00Z")],
+      },
+    });
+    await latestRecord({ repo: "o/r", fetch });
+    expect(calls).not.toContain("actions/runs/21/artifacts?per_page=100");
+  });
+
+  it("uses the watchdog's carried copy, by its own recorded time, never over a newer write", async () => {
+    const carried = carriedName("2026-08-01T09:00:00Z");
+    expect(carried).toBe("feed-rings-carried-20260801T090000Z");
+    // Every write record has expired; the carried copy keeps the state.
+    const old = github({
+      artifacts: {
+        20: [art("feed-rings-server", "2026-08-01T09:00:00Z", true)],
+        40: [art(carried, "2026-11-22T07:20:00Z")],
+      },
+    });
+    expect(await latestRecord({ repo: "o/r", fetch: old.fetch })).toEqual({
+      run: 40,
+      name: carried,
+      recordedAt: "2026-08-01T09:00:00Z",
+    });
+    // A copy made after a newer write landed still carries the older time, so the write wins.
+    const racing = github({
+      artifacts: {
+        20: [art("feed-rings-server", "2026-11-22T11:05:00Z")],
+        40: [art(carriedName("2026-11-21T10:05:00Z"), "2026-11-22T11:06:00Z")],
+      },
+    });
+    expect(await latestRecord({ repo: "o/r", fetch: racing.fetch })).toMatchObject({ run: 20 });
   });
 
   it("answers undefined without a record, and fails rather than guessing when GitHub does", async () => {
-    expect(await latestRecord({ repo: "o/r", fetch: api([]) })).toBeUndefined();
+    expect(await latestRecord({ repo: "o/r", fetch: github({ artifacts: {} }).fetch })).toBeUndefined();
     await expect(latestRecord({ repo: "o/r", fetch: async () => new Response(null, { status: 500 }) })).rejects.toThrow(
       /answered 500/,
     );

@@ -169,7 +169,17 @@ describe("server bundle channel workflows (#877)", () => {
     const record = steps.find((s) => s.id === "record");
     expect(record.run).toContain("node tools/deploy/feed-watchdog.js record");
     expect(record.run).toContain('gh run download "$run"');
-    expect(steps.at(-1).env.FEED_RINGS_RECORD).toBe("${{ steps.record.outputs.file }}");
-    expect(steps.indexOf(record)).toBe(steps.length - 2);
+    const check = steps.find((s) => s.name === "Check every ring and architecture");
+    expect(check.env.FEED_RINGS_RECORD).toBe("${{ steps.record.outputs.file }}");
+    expect(steps.indexOf(record)).toBe(steps.indexOf(check) - 1);
+    // The record is carried forward after the check, even when the check failed.
+    const carry = steps.at(-1);
+    expect(carry.if).toBe("always() && steps.record.outputs.file != ''");
+    expect(carry.with).toEqual({
+      name: "${{ steps.record.outputs.carried }}",
+      path: "${{ steps.record.outputs.file }}",
+      "if-no-files-found": "error",
+      "retention-days": 90,
+    });
   });
 });

@@ -25,10 +25,11 @@
  * What each ring should be offered comes from the last ring state a feed write recorded: every
  * job that changes rings.json (feed-r2.sh, run only from main in the protected desktop-feed
  * environment) keeps the exact file it stored as the artifact `feed-rings-<job>`, and the
- * workflow downloads the newest one (`record` below). Against it, an x64 or server channel
+ * workflow downloads the newest one, found through the trusted workflows' own runs and carried
+ * forward by the watchdog itself (`latestRecord` below). Against it, an x64 or server channel
  * answering 404 for a ring that has a recorded offer is a failure, as is an offer of anything
  * but that ring's recorded full or rollout version, or an offer to a ring with none. Without a
- * record (none kept yet, or older than its 90-day retention) only the rule below is checked.
+ * record only the rule below is checked, and once anything is offered that itself fails.
  * Independently, a ring whose x64 desktops are offered a version from the server bundle's line
  * must offer its servers that version or newer (servers first, rings.js). These are checks of
  * what the feed offers, never of what any host has installed or is running.
@@ -181,6 +182,8 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
   if (record) validateRings(record);
   else report.push("no recorded ring state: a 404 cannot be told from an empty ring; only servers-first is checked");
   const desktopOffers = new Map();
+  // Whether any channel of any canary ring answered with an offer: the feed is commissioned.
+  const seen = { offered: false };
   const feed = (name, token, method = "GET") =>
     fetch(new URL(name, base), {
       method,
@@ -227,6 +230,7 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
         problems.push(`${ring} latest-${arch}.yml: got ${response.status}`);
         continue;
       }
+      seen.offered = true;
       let channel;
       try {
         channel = parseChannel(await response.text());
@@ -292,12 +296,16 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
       else report.push(`${ring} ${arch}: ${channel.version}, served bytes match the published release`);
     }
   }
-  await watchServers({ tokens, rings, feed, github, releases, problems, report, record, desktopOffers });
+  await watchServers({ tokens, rings, feed, github, releases, problems, report, record, desktopOffers, seen });
+  // Once anything is offered, the feed is commissioned and must have a record to be judged:
+  // without one, a missing route or snapshot would look like an empty ring.
+  if (!record && seen.offered)
+    problems.push("the feed offers versions but no recorded ring state was found; expected offers cannot be checked");
   return { problems, report };
 }
 
 /** The server bundle channel of every ring with a canary (#877). Adds to problems and report. */
-async function watchServers({ tokens, rings, feed, github, releases, problems, report, record, desktopOffers }) {
+async function watchServers({ tokens, rings, feed, github, releases, problems, report, record, desktopOffers, seen }) {
   const anonymous = await feed("server/latest-linux-x64.yml");
   if (anonymous.status !== 401)
     problems.push(`a server channel request without a token got ${anonymous.status}, not 401`);
@@ -320,6 +328,7 @@ async function watchServers({ tokens, rings, feed, github, releases, problems, r
       problems.push(`${where}: got ${response.status}`);
       continue;
     }
+    seen.offered = true;
     let channel;
     try {
       channel = parseServerChannel(await response.text());
@@ -394,13 +403,35 @@ async function watchServers({ tokens, rings, feed, github, releases, problems, r
   }
 }
 
-const RECORD_NAME = /^feed-rings-(server|desktop|promote)$/;
-const RECORD_WORKFLOWS = [".github/workflows/feed-publish.yml", ".github/workflows/feed-promote.yml"];
+const WRITE_RECORD = /^feed-rings-(server|desktop|promote)$/;
+const CARRIED_RECORD = /^feed-rings-carried-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;
+// A run lasts well under this, so a run created this long before the newest record found in its
+// workflow cannot hold a newer one; older runs are not read.
+const RUN_SPAN_MS = 24 * 60 * 60 * 1000;
+const MAX_PAGES = 10;
+
+/** `feed-rings-carried-<stamp>`: the name the watchdog re-keeps a record under, stamped with its time. */
+export function carriedName(recordedAt) {
+  return `feed-rings-carried-${new Date(recordedAt)
+    .toISOString()
+    .replace(/\.\d{3}Z$/, "Z")
+    .replace(/[-:]/g, "")}`;
+}
 
 /**
- * The newest recorded ring state: `{ run, name }` of the newest unexpired `feed-rings-<job>`
- * artifact kept by a run of feed-publish.yml or feed-promote.yml dispatched on main, or
- * undefined when there is none. Artifacts of any other workflow, branch or event are ignored.
+ * The newest recorded ring state: `{ run, name, recordedAt }`, or undefined when there is none.
+ *
+ * Found only through the runs of the workflows trusted to write or carry it, never through the
+ * repository-wide artifact list, which other workflows' artifacts can push it out of:
+ *
+ * - `feed-rings-server|desktop|promote`, kept by a feed-publish.yml or feed-promote.yml run
+ *   dispatched on main right after its write; recorded when the artifact was created. Each
+ *   workflow's runs are read newest first, page by page, until they started a day before the
+ *   newest record found in it.
+ * - `feed-rings-carried-<stamp>`, kept by the newest feed-watchdog.yml run on main that kept
+ *   one: a verbatim copy of the record that run checked against, stamped with that record's own
+ *   time. It keeps the record alive past artifact retention while the watchdog runs daily, and
+ *   never outranks a newer write.
  */
 export async function latestRecord({ repo, githubToken, fetch = globalThis.fetch }) {
   const api = async (path) => {
@@ -413,22 +444,48 @@ export async function latestRecord({ repo, githubToken, fetch = globalThis.fetch
     if (response.status !== 200) throw new Error(`GitHub answered ${response.status} for ${path}`);
     return response.json();
   };
-  const { artifacts = [] } = await api("actions/artifacts?per_page=100");
-  const candidates = artifacts
-    .filter((a) => RECORD_NAME.test(a.name) && !a.expired && a.workflow_run?.head_branch === "main")
-    .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
-  for (const artifact of candidates) {
-    const run = await api(`actions/runs/${artifact.workflow_run.id}`);
-    if (RECORD_WORKFLOWS.includes(run.path) && run.head_branch === "main" && run.event === "workflow_dispatch")
-      return { run: run.id, name: artifact.name };
+  async function* runs(workflow, events) {
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const { workflow_runs: list = [] } = await api(
+        `actions/workflows/${workflow}/runs?branch=main&per_page=100&page=${page}`,
+      );
+      for (const run of list)
+        if (run.path === `.github/workflows/${workflow}` && run.head_branch === "main" && events.includes(run.event))
+          yield run;
+      if (list.length < 100) return;
+    }
   }
-  return undefined;
+  const artifactsOf = async (run) =>
+    ((await api(`actions/runs/${run.id}/artifacts?per_page=100`)).artifacts ?? []).filter((a) => !a.expired);
+  const newer = (a, b) => !b || Date.parse(a.recordedAt) > Date.parse(b.recordedAt);
+  let best;
+  for (const workflow of ["feed-publish.yml", "feed-promote.yml"]) {
+    let found;
+    for await (const run of runs(workflow, ["workflow_dispatch"])) {
+      if (found && Date.parse(run.created_at) < Date.parse(found.recordedAt) - RUN_SPAN_MS) break;
+      for (const artifact of await artifactsOf(run)) {
+        if (!WRITE_RECORD.test(artifact.name)) continue;
+        const candidate = { run: run.id, name: artifact.name, recordedAt: artifact.created_at };
+        if (newer(candidate, found)) found = candidate;
+      }
+    }
+    if (found && newer(found, best)) best = found;
+  }
+  for await (const run of runs("feed-watchdog.yml", ["schedule", "workflow_dispatch"])) {
+    const carried = (await artifactsOf(run)).find((a) => CARRIED_RECORD.test(a.name));
+    if (!carried) continue;
+    const [, y, mo, d, h, mi, se] = CARRIED_RECORD.exec(carried.name);
+    const candidate = { run: run.id, name: carried.name, recordedAt: `${y}-${mo}-${d}T${h}:${mi}:${se}Z` };
+    if (newer(candidate, best)) best = candidate;
+    break;
+  }
+  return best;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url) && process.argv[2] === "record") {
   try {
     const found = await latestRecord({ repo: process.env.GITHUB_REPOSITORY, githubToken: process.env.GITHUB_TOKEN });
-    if (found) console.log(`${found.run} ${found.name}`);
+    if (found) console.log(`${found.run} ${found.name} ${carriedName(found.recordedAt)}`);
   } catch (error) {
     console.error(`::error::${error.message}`);
     process.exit(1);

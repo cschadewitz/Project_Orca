@@ -268,12 +268,17 @@ legacy `path` and `sha512`; or the installer the feed serves does not have that 
 and sha512, or differs from the published release asset. It holds no bucket credential and
 cannot read `rings.json` itself. Instead, every job that changes `rings.json` (publish and
 promote, both channels, run only from main in `desktop-feed`) keeps the exact file it stored
-as a `feed-rings-<job>` artifact for 90 days, and the watchdog downloads the newest one kept
-by a main dispatch of those workflows. Against it, a ring's x64 or server channel answering
-404 although the record gives that ring an offer fails, as does an offer of anything but the
-ring's recorded full or rollout version, or any offer to a ring the record leaves empty. With
-no record (none kept yet, or none in 90 days) it says so and cannot tell an empty ring from a
-broken one. A promotion that lands while the watchdog runs can make it fail once; rerun it.
+as a `feed-rings-<job>` artifact for 90 days. The watchdog finds the newest one through
+those workflows' own runs on main (dispatched ones only, read page by page), so other
+workflows' artifacts can never hide it, and keeps a verbatim copy of it as its own
+`feed-rings-carried-<time>` artifact, stamped with the record's time, so the record lives on
+while the watchdog runs daily and never outranks a newer write. Against the record, a ring's
+x64 or server channel answering 404 although the record gives that ring an offer fails, as
+does an offer of anything but the ring's recorded full or rollout version, or any offer to a
+ring the record leaves empty. Before the feed offers anything, no record is fine; once any
+canary is offered a version, a missing record fails the run, because an empty ring could no
+longer be told from a broken one. A promotion that lands while the watchdog runs can make it
+fail once; rerun it.
 Like the rest of the watchdog, this checks what the feed offers, never what hosts run.
 
 To turn it on:
