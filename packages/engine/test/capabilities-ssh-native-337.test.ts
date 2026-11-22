@@ -103,7 +103,23 @@ describe("catalog MCP servers over a real sshd", () => {
         ],
       },
     ]);
-    expect(asked).toEqual([[expect.objectContaining({ kind: "mcpServer", id: "tool", hostId: "box" })]]);
+    const use = (trustedExecutable: boolean) => [
+      expect.objectContaining({ kind: "mcpServer", id: "tool", hostId: "box", trustedExecutable }),
+    ];
+    // Taken at its word before the probe; then, as the SSH host found it, a file under a
+    // world-writable temp directory is not a trusted executable (#337). Asked again after the
+    // slot, at session/new and before the prompt.
+    expect(asked).toEqual([use(true), use(false), use(false), use(false), use(false)]);
+  }, 60_000);
+
+  it("finds an administrator-owned absolute command a trusted executable on the SSH host", async (context) => {
+    if (!sshd) return context.skip("no /usr/sbin/sshd; set ORCA_REQUIRE_SSHD=1 to require it");
+    const { state, asked } = await run("/usr/bin/env");
+    expect(state.status).toBe("completed");
+    expect(asked.at(-1)).toEqual([expect.objectContaining({ id: "tool", trustedExecutable: true })]);
+    // Its own canonical spelling only.
+    const other = await run("/usr/bin/../bin/env");
+    expect(other.asked.at(-1)).toEqual([expect.objectContaining({ id: "tool", trustedExecutable: false })]);
   }, 60_000);
 
   it("refuses the step when the command is not on the SSH host, before the agent starts", async (context) => {

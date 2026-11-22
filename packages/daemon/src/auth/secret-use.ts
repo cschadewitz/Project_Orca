@@ -57,7 +57,11 @@ function refuseCapability(use: CapabilityUse | undefined): OrcaError {
   return new OrcaError(
     "CONFIG_INVALID",
     use
-      ? `MCP server '${use.id}' on host '${use.hostId}' is not granted to this run`
+      ? `MCP server '${use.id}' on host '${use.hostId}' is not granted to this run${
+          use.trustedExecutable
+            ? ""
+            : ": a grant naming one server covers it only when its command is an absolute, canonical path to an executable that only root or the agent's account can change (see docs/secret-use-authority.md)"
+        }`
       : "catalog capabilities are not granted to this run",
     { ...(use ? { kind: use.kind, id: use.id, hostId: use.hostId } : {}), reason: "unauthorized" },
   );
@@ -78,7 +82,7 @@ function covers(principal: Principal, root: RunRoot, use: SecretUse): boolean {
 
 /**
  * The same for a catalog capability: `capabilities.use`, the workflow, and a grant naming it
- * (a narrow one only for a server whose command is an absolute path).
+ * (a narrow one only for a server whose command is a trusted executable on that host).
  */
 function coversCapability(principal: Principal, root: RunRoot, use: CapabilityUse): boolean {
   return (

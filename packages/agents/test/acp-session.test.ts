@@ -300,3 +300,57 @@ describe("acp session config options", () => {
     expect(session.configOptions).toEqual([]);
   });
 });
+
+describe("catalog capability delivery (#337)", () => {
+  /** An agent that writes each method it is sent to a log before answering it. */
+  const loggingAgent = `
+const fs = require("node:fs");
+const rl = require("node:readline").createInterface({ input: process.stdin });
+const reply = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
+rl.on("line", (line) => {
+  const m = JSON.parse(line);
+  fs.appendFileSync(process.env.METHOD_LOG, m.method + "\\n");
+  if (m.method === "initialize") reply(m.id, { protocolVersion: m.params.protocolVersion, agentCapabilities: {}, agentInfo: { name: "log", version: "0" } });
+  else if (m.method === "session/new") reply(m.id, { sessionId: "s1" });
+});
+setInterval(() => {}, 1000);
+`;
+
+  async function openLogged(authorizeCapabilityDelivery: () => Promise<void>) {
+    const log = join(await mkdtemp(join(tmpdir(), "orca-acp-337-")), "methods");
+    const host = new LocalHost({ id: "local", type: "local" });
+    let proc: AgentProcessHandle | undefined;
+    const spawn = host.spawnAgent.bind(host);
+    host.spawnAgent = async (...args) => (proc = await spawn(...args));
+    const agent = AgentSpecSchema.parse({
+      id: "logged",
+      command: process.execPath,
+      args: ["-e", loggingAgent],
+      env: { METHOD_LOG: log },
+    });
+    const methods = async () => (await readFile(log, "utf8").catch(() => "")).trim().split("\n").filter(Boolean);
+    const opening = openAcpSession({ host, agent, cwd: process.cwd(), authorizeCapabilityDelivery });
+    return { opening, methods, proc: () => proc };
+  }
+
+  it("asks after initialize and immediately before session/new", async () => {
+    let seen: string[] | undefined;
+    const { opening, methods } = await openLogged(async () => {
+      seen = await methods();
+    });
+    const session = await opening;
+    sessions.push(session);
+    expect(seen).toEqual(["initialize"]);
+    expect(await methods()).toEqual(["initialize", "session/new"]);
+  });
+
+  it("delivers nothing and stops the agent when authority is gone by then", async () => {
+    const denied = new OrcaError("CONFIG_INVALID", "not granted", { reason: "unauthorized" });
+    const { opening, methods, proc } = await openLogged(async () => {
+      throw denied;
+    });
+    await expect(opening).rejects.toBe(denied);
+    await proc()!.exited;
+    expect(await methods()).toEqual(["initialize"]);
+  });
+});

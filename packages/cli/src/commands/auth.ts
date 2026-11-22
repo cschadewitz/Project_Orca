@@ -103,6 +103,12 @@ function capabilityGrant(ctx: CommandContext, config: OrcaConfig, configDir: str
         "CONFIG_INVALID",
         `--mcp-server '${id}' runs '${server.command}', which is not an absolute path: a grant for one server pins the executable itself, so give its command as an absolute path in the catalog, or grant '*'`,
       );
+    // Delivery checks the executable's ownership and modes on that host; Windows has neither.
+    if (spec.type === "local" && process.platform === "win32")
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `--mcp-server '${id}' runs on this Windows machine, where ORCA cannot check that an executable is administrator-owned: only '*' covers a catalog server here`,
+      );
     return {
       kind: "mcpServer" as const,
       id,

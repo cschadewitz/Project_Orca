@@ -178,9 +178,11 @@ export type CapabilityGrant = z.infer<typeof CapabilityGrantSchema>;
 
 /**
  * Whether `grant` covers one use. A server: that id, defined that way, on that host and
- * endpoint, and only when its command is an absolute path, so the definition pinned names
- * the executable itself rather than whatever a `PATH` search or a working directory turns
- * up. A skill: that id with exactly that content digest.
+ * endpoint, and only when its command was checked on that host to be a trusted executable
+ * (`TRUSTED_EXECUTABLE_POLICY` in `@orca/agents`: an absolute, canonical, administrator-owned
+ * path), so the definition pinned names the program itself rather than whatever a `PATH`
+ * search, a working directory, a symbolic link or a writable directory turns up. A skill:
+ * that id with exactly that content digest.
  */
 export function capabilityGrantCovers(
   grant: CapabilityGrant | undefined,
@@ -191,7 +193,7 @@ export function capabilityGrantCovers(
         hostId: string;
         hostBinding: string;
         definition: string;
-        absoluteCommand: boolean;
+        trustedExecutable: boolean;
       }
     | { kind: "skill"; id: string; digest: string },
 ): boolean {
@@ -199,7 +201,7 @@ export function capabilityGrantCovers(
   if (grant === "*") return true;
   if (use.kind === "skill") return grant.some((g) => g.kind === "skill" && g.id === use.id && g.digest === use.digest);
   return (
-    use.absoluteCommand &&
+    use.trustedExecutable &&
     grant.some(
       (g) =>
         g.kind === "mcpServer" &&

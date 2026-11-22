@@ -560,7 +560,11 @@ nodes:
      github@local`, or `--mcp-server '*'`; the `owner` preset grants every server). Grants
      on two credentials do not combine. A grant does not follow a server redefined to
      another command or a host id pointed at another machine, and a revoked or expired
-     credential stops the next step, even one that would reuse a `per-run` session;
+     credential stops the next step, even one that would reuse a `per-run` session. The
+     decision is asked again after any wait for a session slot, immediately before
+     `session/new` hands the agent its servers, and before every prompt, so authority
+     revoked while a step waits is not used; a `per-run` session refused there is closed
+     and never handed to another step;
   2. the server's command resolves on the **agent's host** to an executable regular file,
      and the agent is handed that absolute path, so it starts what was checked and does
      not search again. Over SSH that is one quiet `command -v` on that host. ORCA never
@@ -572,8 +576,15 @@ nodes:
 
   What a grant covers when a server is launched:
   - **The executable.** A grant for named servers covers only a server whose `command` is
-    an absolute path: the definition it pins is then the executable itself, and nothing
-    found on a `PATH` or under a working directory can stand in for it. A bare name
+    a **trusted executable** on the agent's host, checked there at every delivery: an
+    absolute path that is the file itself (no extension appended, no `PATH`), canonical
+    (no symbolic link, `.` or `..` anywhere on it), an executable regular file, and owned,
+    with every directory above it up to `/`, by root or the account the agent runs as,
+    writable by neither group nor others and carrying no ACL. So only an administrator of
+    that host, or the agent's own account, can put another program at the granted path.
+    Anything else (a file under `/tmp`, a symlinked `/bin/...`, a group-writable
+    `/usr/local`, any Windows machine, whose permissions this check cannot read) runs only
+    under `'*'`. A bare name
     (searched on the server's literal `env.PATH`, else the agent's, else the host's) or a
     relative path (resolved against the session's working directory, which is the run's
     workspace) is covered only by `'*'`, and `orca auth issue` refuses to write a named
