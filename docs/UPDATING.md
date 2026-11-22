@@ -31,8 +31,9 @@ missing/unresponsive window blocks restart. Next the main process asks its **own
 to close admission atomically. Any in-flight request (including a running agent operation)
 blocks the attempt; no work is killed. Durable parked gates have returned their leases and
 survive restart. Once admission is closed, new calls cannot race with shutdown. The owned
-daemon is stopped before the installer launches. An external daemon is neither stopped nor
-installed by this path.
+daemon is stopped before the installer launches. The installer runs silently, keeps the
+per-user install where it is and starts the updated app; it asks nothing. An external daemon
+is neither stopped nor installed by this path.
 
 ### Windows failed-update recovery contract (#660, C5a-02)
 
@@ -157,6 +158,81 @@ environment (see the setup below).
 Rings never move backwards, and halting is not a rollback. The client disallows downgrades,
 so anyone who already took a bad build keeps it until a newer fixed version ships; halting
 only stops more people from getting it. Keep early rollouts small for that reason.
+
+### Pulling a bad build
+
+Rings never move backwards, so a bad build is never "rolled back": it is contained, then
+replaced by a newer fixed version (adopted from T3 Code's bad-nightly runbook, #863). What
+containing it can do depends on how far it got, so find out first.
+
+1. **Pause the feed.** Set the repository variable `ORCA_FEED_PAUSE` to `true` (Settings →
+   Secrets and variables → Actions → Variables). From then on **Desktop feed (publish
+   signed)** refuses to start and **Desktop feed (promote)** refuses everything except a
+   halt. The pause is checked when a job starts: it does **not** stop a job that already
+   passed that check.
+2. **Check for jobs already running.** In the Actions tab, look for in-progress or queued
+   runs of both feed workflows (they share one concurrency group, so at most one runs and
+   the rest queue). Cancel any you did not mean to happen, and let a running one finish or
+   cancel it before you read the ring state: a promotion that completes after you looked
+   changes the answer.
+3. **Read the authoritative ring state.** Open `rings.json` in the bucket (Cloudflare
+   dashboard → R2 → the feed bucket → `rings.json`). It is the only record of each ring's
+   **full** version and any active **rollout** with its percentage; decide on a halt from
+   it alone. The watchdog can corroborate what a client is offered, but each canary token
+   sits in one rollout bucket, so it can miss an active rollout and cannot tell a fully
+   promoted version from a partial offer.
+4. **Halt what is still a rollout.** For each ring where the bad version is an active
+   partial rollout, dispatch **Desktop feed (promote)** with that ring, the bad version and
+   percent `0`. That stops offering it to the rest of the ring. A halt does nothing for a
+   ring whose full version is already the bad one: there is no older version to offer
+   instead, and every install in that ring that checks for updates is still offered it.
+5. **Contain a fully promoted bad build by shipping past it.** Release the fix as a newer
+   version (a patch, or the next rc), sign it, unpause (set `ORCA_FEED_PAUSE` to anything
+   but `true`, or delete it), publish it to `internal` and check it there, then promote it
+   in every ring that has the bad version, starting with a small rollout. Until then, tell
+   that ring's testers not to update.
+6. **Say what affected people see.** An install that already updated, or already
+   downloaded the bad version and is waiting to restart into it, keeps it: the client
+   refuses downgrades and the feed cannot take a download back. An install that was offered
+   the bad version before the halt can still hold that offer and download it, because the
+   versioned installer stays in the bucket for differential downloads; a halt only changes
+   what the next check returns. An install that never saw the offer is safe only while its
+   ring no longer offers the bad version (its rollout was halted and it was outside it);
+   while a ring's full version is the bad one, its next check offers it. If the bad version
+   cannot start, those people need the Windows failed-update recovery above, or a reinstall
+   of the last good release from GitHub.
+
+Leave the bad version's snapshot in the bucket: deleting it would break differential
+downloads for anyone upgrading from it.
+
+### Feed watchdog
+
+**Desktop feed (watchdog)** (`feed-watchdog.yml`) checks the live feed once a day as a client
+sees it. For each ring with a canary token it fetches every channel file and fails when:
+a request without a token is not refused; an architecture the Worker does not serve answers;
+a ring is offered a version with no published GitHub release, `stable` a prerelease, or any
+ring a prerelease other than `-rc.N`; the channel file's `files[]` entry (what the installed
+updater reads) does not name exactly that architecture's installer or disagrees with the
+legacy `path` and `sha512`; or the installer the feed serves does not have that entry's size
+and sha512, or differs from the published release asset. It holds no bucket credential and
+cannot read `rings.json`, so it checks what each ring is offered, not what it should be
+offered; compare its summary with the last promotion.
+
+To turn it on:
+
+1. Create a GitHub environment named `feed-canary` with deployment branches limited to
+   `main`. It holds only the canary tokens; never put the R2 write credential in it.
+2. Mint one canary token per ring you want checked with
+   `node tools/deploy/feed-token.js RING`, and add their `FEED_TOKENS` entries to the Worker
+   secret like any tester's.
+3. Store the tokens as the **environment** secret `ORCA_FEED_CANARY_TOKENS` in
+   `feed-canary` (not a repository secret), a JSON object such as
+   `{"internal": "…", "preview": "…", "stable": "…"}`.
+4. Set the repository variable `ORCA_FEED_URL` to the feed's https origin. Until it is set
+   the workflow is skipped. It runs only from main, so a dispatch from another branch never
+   reads the tokens.
+
+A canary token is an ordinary read token: revoke it the same way.
 
 ### Release/feed provisioning
 

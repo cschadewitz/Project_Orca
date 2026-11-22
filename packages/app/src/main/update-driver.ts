@@ -75,7 +75,10 @@ export function updateDriver(packaged: boolean, platform: string, arch: string):
         const timer = setTimeout(failed, 10000);
         instance.once("error", failed);
         try {
-          instance.quitAndInstall(false, true);
+          // Silent, then relaunch the updated app: "Restart to update" asks nothing more. The
+          // installer's interactive pages would stop on the per-user/per-machine choice, and
+          // "all users" elevates into a second, per-machine install beside this one.
+          instance.quitAndInstall(true, true);
         } catch {
           failed();
         }

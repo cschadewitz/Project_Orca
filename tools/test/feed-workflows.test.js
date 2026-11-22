@@ -35,6 +35,19 @@ describe("desktop feed workflows", () => {
     expect(read("feed-promote.yml")).toContain("group: release-publication");
   });
 
+  it("refuses to publish, or to offer anything, while the feed is paused (#863, item 8)", () => {
+    const steps = (name) => read(name).split("    steps:\n")[1];
+    const publish = steps("feed-publish.yml");
+    expect(publish.indexOf("Refuse while the feed is paused")).toBeLessThan(publish.indexOf("actions/checkout@"));
+    expect(publish).toContain('if [ "$PAUSE" = "true" ]; then');
+    const promote = steps("feed-promote.yml");
+    expect(promote.indexOf("Refuse while the feed is paused")).toBeLessThan(promote.indexOf("actions/checkout@"));
+    // Halting (percent 0) is how a bad rollout is stopped, so it still runs while paused.
+    expect(promote).toContain('if [ "$PAUSE" = "true" ] && [ "$PERCENT" != "0" ]; then');
+    for (const name of ["feed-publish.yml", "feed-promote.yml"])
+      expect(read(name)).toContain("PAUSE: ${{ vars.ORCA_FEED_PAUSE }}");
+  });
+
   it("serves only the natively accepted x64 installer, matching the published release", () => {
     const feed = read("feed-publish.yml");
     expect(feed).toMatch(/^env:\n {2}FEED_ARCHES: x64\n/m);
