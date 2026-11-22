@@ -45,6 +45,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   newId,
   OrcaError,
+  RunOriginSchema,
   silentLogger,
   systemClock,
   type AgentSpec,
@@ -170,6 +171,11 @@ export interface OpenDaemonSessionOptions {
   pollMs?: number;
   /** Per-call limit for remote calls. Default 30 s. */
   callTimeoutMs?: number;
+  /**
+   * This daemon's workspace id. With it, each admission states its origin (this workspace,
+   * the parent run and the step) to a remote whose `hello.admitFields` lists `origin` (#883).
+   */
+  originWorkspaceId?: string;
 }
 
 /** The turn in flight: its remote run, and what its forwarded questions are bound to. */
@@ -218,6 +224,14 @@ const MAX_PAGES_PER_ROUND = 50;
 const MAX_CHILD_DEPTH = 8;
 
 /** The workspace and principal every remote mutation for a receipt is scoped to. */
+/**
+ * Whether a daemon takes `runs.admit` `origin`: only when its `hello` lists the field in
+ * `admitFields`, never on the strength of a protocol minor (another 2.6 need not have it).
+ */
+export function recordsOrigin(hello: { admitFields?: readonly string[] | undefined }): boolean {
+  return hello.admitFields?.includes("origin") ?? false;
+}
+
 function scopeOf(receipt: DelegationReceipt): { workspaceId: string; principalId: string } {
   return { workspaceId: receipt.binding.workspaceId, principalId: receipt.binding.principalId };
 }
@@ -288,10 +302,14 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
         `The credential for ${options.remoteName} may not start runs there. Issue one with the client preset.`,
         { principal: discovery.principalId },
       );
-    const session = new DaemonSession(options, client, clock, logger, {
-      principalId: discovery.principalId,
-      workspaceId: discovery.target.workspaceId,
-    });
+    const session = new DaemonSession(
+      options,
+      client,
+      clock,
+      logger,
+      { principalId: discovery.principalId, workspaceId: discovery.target.workspaceId },
+      recordsOrigin(hello),
+    );
     await session.sweep();
     return session;
   } catch (error) {
@@ -360,6 +378,8 @@ class DaemonSession implements AgentSession {
     private readonly clock: Clock,
     private readonly logger: Logger,
     private readonly scope: { principalId: string; workspaceId: string },
+    /** The remote's `hello.admitFields` lists `origin`. */
+    private readonly takesOrigin = false,
   ) {
     this.id = newId("sess", clock.now());
     this.agentId = options.agent.id;
@@ -555,6 +575,22 @@ class DaemonSession implements AgentSession {
     }
   }
 
+  /**
+   * The origin a new generation states (#883): this daemon's workspace, the parent run and the
+   * step's first attempt, which stays the same across retries of the step. Only for a remote
+   * that takes it; a 2.5 daemon refuses the unknown field.
+   */
+  private originOf(turn: TurnContext): Pick<DelegationReceipt, "origin"> {
+    if (!this.takesOrigin || !this.options.originWorkspaceId) return {};
+    // Canonical ids only, as the remote checks them; an origin that is not one is left out.
+    const origin = RunOriginSchema.safeParse({
+      workspaceId: this.options.originWorkspaceId,
+      runId: turn.runId,
+      stepRunId: turn.delegationId,
+    });
+    return origin.success ? { origin: origin.data } : {};
+  }
+
   /** One decision on a delegation's receipt: the receipt to follow, or undefined to read again. */
   private async step(
     receipt: DelegationReceipt | undefined,
@@ -574,6 +610,7 @@ class DaemonSession implements AgentSession {
         generation: 0,
         key: delegationKey(parentRunId, delegationId, 0),
         state: "submitting",
+        ...this.originOf(turn),
       });
       return this.submit(fresh, task, deadline, signal);
     }
@@ -608,6 +645,7 @@ class DaemonSession implements AgentSession {
           generation,
           key: delegationKey(parentRunId, delegationId, generation),
           state: "submitting",
+          ...this.originOf(turn),
         });
         return this.submit(next, task, deadline, signal);
       }
@@ -727,7 +765,16 @@ class DaemonSession implements AgentSession {
       vars: { [this.options.agent.promptVar ?? "prompt"]: task },
       idempotencyKey: receipt.key,
       expectedScope: scopeOf(receipt),
+      ...(receipt.origin ? { origin: receipt.origin } : {}),
     };
+    // The receipt's admission is replayed exactly as it was first sent: an origin it carries is
+    // part of that command. A remote that no longer takes one is refused, never sent less.
+    if (receipt.origin && !this.takesOrigin)
+      throw delegationRefusal(
+        this.options.profile,
+        "protocol",
+        `The daemon on ${this.options.remoteName} no longer takes a run origin, which this step's earlier admission stated. Nothing was sent; update ORCA there to settle the step.`,
+      );
     const admitted = (runId: string) => this.store({ ...receipt, state: "admitted", remoteRunId: runId });
     for (let attempt = 0; ; attempt++) {
       if (signal?.aborted) return this.abandon(receipt, deadline);

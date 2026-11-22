@@ -2,7 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { OrcaError, OrcaEventSchema } from "@orca/core";
+import { OrcaError, OrcaEventSchema, RunOriginSchema } from "@orca/core";
 import type { MutationActor } from "@orca/core";
 import type {
   DirectAdmissionAuthority,
@@ -31,6 +31,7 @@ export const DirectAdmissionCommandSchema = z.strictObject({
   expectedConfigGeneration: z.string().min(1).optional(),
   requestId: z.string().min(1).optional(),
   workItemId: z.string().min(1).optional(),
+  origin: RunOriginSchema.optional(),
   fence: z.literal(true).optional(),
 });
 /** Reserved orchestrator/generation integration supplies this explicit capability. */
@@ -176,6 +177,7 @@ export class DirectAdmissionService {
       vars: command.vars ?? {},
       ...(command.requestId ? { requestId: command.requestId } : {}),
       ...(command.workItemId ? { workItemId: command.workItemId } : {}),
+      ...(command.origin ? { origin: command.origin } : {}),
     };
   }
   private async recover(command: DirectAdmissionCommand, context: RetryContext): Promise<DirectAdmissionResult> {
@@ -228,7 +230,8 @@ export class DirectAdmissionService {
       root.workflowVersion !== material.workflow.version ||
       root.parentRunId ||
       root.requestId !== material.command.requestId ||
-      root.workItemId !== material.command.workItemId
+      root.workItemId !== material.command.workItemId ||
+      canonicalJson(root.origin ?? null) !== canonicalJson(material.command.origin ?? null)
     )
       throw unavailable();
     return true;
@@ -293,6 +296,7 @@ export class DirectAdmissionService {
       workflow: material.workflow,
       ...(material.command.requestId ? { requestId: material.command.requestId } : {}),
       ...(material.command.workItemId ? { workItemId: material.command.workItemId } : {}),
+      ...(material.command.origin ? { origin: material.command.origin } : {}),
     };
   }
   private async verifyAccepted(
