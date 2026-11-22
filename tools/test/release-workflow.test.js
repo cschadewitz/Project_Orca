@@ -190,10 +190,15 @@ it("attaches only re-verified signed x64 and arm64 installers, through the re-va
   expect(text).toContain('workflows: ["Windows signed (spike)"]');
   // Attachment and publication share one queue, so they never interleave; reconcile, which
   // only dispatches, queues on its own.
-  expect(wf.jobs.attach.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  expect(wf.jobs.attach.concurrency).toEqual({
+    group: "release-draft-writes",
+    "cancel-in-progress": false,
+    queue: "max",
+  });
   expect(workflow("release-publish-final.yml").concurrency).toEqual({
     group: "release-draft-writes",
     "cancel-in-progress": false,
+    queue: "max",
   });
   expect(wf.jobs.reconcile.concurrency.group).toBe("release-attach-reconcile");
   expect(wf.permissions).toEqual({ contents: "read" });
@@ -210,7 +215,7 @@ it("attaches only re-verified signed x64 and arm64 installers, through the re-va
   expect(wf.jobs.attach.steps[attachStep].run).toContain(
     'bash tools/deploy/release-attach.sh attach "$ID" "$SHA" "$VERSION" "$RUN_ID" "$file" "$arm_file"',
   );
-  expect(wf.jobs.reconcile.steps.at(-1).run).toBe("bash tools/deploy/release-attach.sh reconcile");
+  expect(wf.jobs.reconcile.steps.at(-2).run).toBe("bash tools/deploy/release-attach.sh reconcile");
   expect(text).not.toMatch(/draft=false|make_latest|feed-r2/);
   const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
   // The signing run itself is checked before any draft is selected, on every path.
@@ -262,7 +267,11 @@ it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unatten
   expect(wf.jobs.accept.permissions).toBeUndefined();
   expect(wf.jobs.accept["runs-on"]).toBe("windows-11-arm");
   expect(wf.jobs.record.permissions).toEqual({ contents: "write" });
-  expect(wf.jobs.record.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  expect(wf.jobs.record.concurrency).toEqual({
+    group: "release-draft-writes",
+    "cancel-in-progress": false,
+    queue: "max",
+  });
   expect(wf.jobs.record.needs).toEqual(["select", "accept"]);
   expect(wf.jobs.record.steps.at(-1).run).toBe(
     'bash tools/deploy/release-attach.sh accept "$ID" "$SHA" "$VERSION" "$GITHUB_RUN_ID" "$DIGEST"',
@@ -291,7 +300,11 @@ it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unatten
   expect(wf.jobs["x64-only"].if).toBe(
     "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.x64_only",
   );
-  expect(wf.jobs["x64-only"].concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  expect(wf.jobs["x64-only"].concurrency).toEqual({
+    group: "release-draft-writes",
+    "cancel-in-progress": false,
+    queue: "max",
+  });
   expect(wf.jobs["x64-only"].steps.at(-1).run).toContain('bash tools/deploy/release-attach.sh x64-only "$ID" "$sha"');
   expect(wf.jobs.select.if).toContain("!inputs.x64_only");
 });

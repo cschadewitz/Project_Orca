@@ -148,7 +148,10 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    built from the commit its tag resolved to. A pass is recorded in the draft's notes as
    `<!-- orca-upgrade-check: RUN sha256:… from vX.Y.Z -->`, and the run's record job is named
    as its receipt: the draft's release id, version, commit and installer digest, and the same
-   for the Latest. To run it by
+   for the Latest. The attach's 6-hourly reconcile dispatches the check again for a fully
+   attached draft with no record for its installer from the current Latest (never while one
+   is waiting or running, and at most three runs per draft). Every job that writes to a draft
+   shares one queue that keeps all waiting members (`queue: max`). To run it by
    hand, dispatch it from `main` with `release_id=$ID`. A candidate that changes the store
    format fails it on purpose until the automatic desktop carryover (#897) lands.
 6. Publish by dispatching **Release (publish final)** (`release-publish-final.yml`) from

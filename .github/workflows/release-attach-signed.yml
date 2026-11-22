@@ -47,6 +47,7 @@ jobs:
     concurrency:
       group: release-draft-writes
       cancel-in-progress: false
+      queue: max
     permissions:
       contents: write
       actions: read
@@ -169,3 +170,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: bash tools/deploy/release-attach.sh reconcile
+
+      # A fully attached draft whose x64 upgrade check never recorded a pass (a canceled or
+      # failed run, or a Latest that changed since): run the check again, at most three times
+      # per draft and never while one is waiting or running. Publication stays fail-closed.
+      - name: Dispatch the upgrade check for drafts missing its record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: bash tools/deploy/release-attach.sh upgrade-reconcile

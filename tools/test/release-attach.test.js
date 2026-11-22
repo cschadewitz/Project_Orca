@@ -93,6 +93,8 @@ if (method === "DELETE" && (m = path.match(/^releases\/assets\/(\d+)$/))) {
   out = state.releases;
 } else if ((m = path.match(/^actions\/runs\/(\d+)\/artifacts/))) {
   out = { artifacts: state.artifacts[m[1]] || [] };
+} else if (path.startsWith("actions/workflows/release-upgrade-check.yml/runs")) {
+  out = { workflow_runs: state.upgradeRuns || [] };
 } else if (path.startsWith("actions/workflows/windows-signed.yml/runs")) {
   out = { workflow_runs: state.signedRuns.map((id) => ({ id })) };
 }
@@ -912,5 +914,65 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(f.attachBoth().status).toBe(0);
     f.edit((st) => (st.releases[0].body += "\n\n<!-- orca-x64-only -->"));
     expect(publish(f).stderr).toContain("marked x64-only but still has");
+  });
+  describe("upgrade-reconcile", () => {
+    const dispatchCheck = [
+      "workflow",
+      "run",
+      "release-upgrade-check.yml",
+      "--repo",
+      "o/r",
+      "--ref",
+      "main",
+      "-f",
+      "release_id=7",
+    ];
+    const title = "Release (upgrade check) of draft 7";
+
+    it("dispatches the check for an attached draft without a record, once per call", () => {
+      const f = withLatest();
+      const result = f.run(ATTACH, ["upgrade-reconcile"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(f.writes().at(-1)).toEqual(dispatchCheck);
+    });
+
+    it.each([
+      ["a record for this installer from the Latest", (f, st) => (st.releases[0].body += `\n\n${upgradeMarker(f)}`)],
+      ["a check waiting", (_f, st) => (st.upgradeRuns = [{ display_title: title, status: "queued" }])],
+      ["a check running", (_f, st) => (st.upgradeRuns = [{ display_title: title, status: "in_progress" }])],
+      [
+        "three runs already",
+        (_f, st) => (st.upgradeRuns = Array.from({ length: 3 }, () => ({ display_title: title, status: "completed" }))),
+      ],
+      ["no Latest", (_f, st) => delete st.latest],
+    ])("dispatches nothing with %s", (_label, change) => {
+      const f = withLatest();
+      f.edit((st) => change(f, st));
+      const writes = f.writes().length;
+      const result = f.run(ATTACH, ["upgrade-reconcile"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(f.writes()).toHaveLength(writes);
+    });
+
+    it("runs the check again for a record from an older Latest, and for runs of other drafts", () => {
+      const f = withLatest();
+      f.edit((st) => {
+        st.releases[0].body += `\n\n${upgradeMarker(f, 500, "0.7.8")}`;
+        st.upgradeRuns = [{ display_title: "Release (upgrade check) of draft 8", status: "in_progress" }];
+      });
+      expect(f.run(ATTACH, ["upgrade-reconcile"]).status).toBe(0);
+      expect(f.writes().at(-1)).toEqual(dispatchCheck);
+    });
+
+    it("leaves a draft whose x64 installer is not attached to the attach", () => {
+      const f = setup();
+      f.edit((st) => {
+        st.releases.push({ ...draft({ id: 5, tag_name: "v0.7.9", name: "v0.7.9", draft: false }) });
+        st.latest = 5;
+        st.releases[0].body = `Notes.\n\n${f.marker()}`;
+      });
+      expect(f.run(ATTACH, ["upgrade-reconcile"]).status).toBe(0);
+      expect(f.writes()).toEqual([]);
+    });
   });
 });

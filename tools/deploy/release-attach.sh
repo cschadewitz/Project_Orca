@@ -30,6 +30,9 @@
 #                                       draft ID once its signed x64 installer is attached and
 #                                       recorded: that installer's digest and asset id, and the
 #                                       current Latest's id, version, commit and x64 digest
+#   release-attach.sh upgrade-reconcile dispatch the upgrade check for each final draft whose
+#                                       recorded x64 installer has no upgrade record from the
+#                                       current Latest; never while one runs, at most 3 per draft
 #   release-attach.sh record-upgrade ID SHA VERSION RUN_ID EXE_SHA256 FROM
 #                                       record in draft ID's notes that upgrade-check run RUN_ID
 #                                       passed for that x64 installer from vFROM, replacing any
@@ -426,6 +429,44 @@ case "${1:-}" in
     [[ "$check" == "true true" ]] || fail "draft $id does not read back with its upgrade record ($check)"
     note "Recorded upgrade check run $run for ORCA-$version-win-x64.exe (\`$exe\`) from v$from on draft v$version (release \`$id\`)."
     ;;
+  upgrade-reconcile)
+    # Bounded, idempotent recovery for the x64 upgrade check: dispatch it for every final draft
+    # whose recorded x64 installer is attached but has no upgrade record for that installer
+    # from the current Latest, unless a run for the draft is already waiting or running, or
+    # three runs for it already exist. It only dispatches; publish still checks the receipt.
+    [[ $# -eq 1 ]] || fail "usage: release-attach.sh upgrade-reconcile"
+    rc=0
+    latest=$(lookup "repos/$REPO/releases/latest" .tag_name) || rc=$?
+    found "$rc" || { note "No Latest release; there is nothing to check an upgrade from."; exit 0; }
+    drafts=$(gh api --paginate "repos/$REPO/releases" \
+      --jq '.[] | select(.draft and (.prerelease | not)) | [.id, .name] | @tsv')
+    [[ -n "$drafts" ]] || { note "No final drafts."; exit 0; }
+    runs=$(gh api "repos/$REPO/actions/workflows/release-upgrade-check.yml/runs?branch=main&event=workflow_dispatch&per_page=100" \
+      --jq '.workflow_runs[] | [.display_title, .status] | @tsv')
+    while IFS=$'\t' read -r id name; do
+      [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+      json=$(gh api "repos/$REPO/releases/$id")
+      body=$(jq -r '.body // ""' <<<"$json")
+      signed=$(records "$MARK_RE" <<<"$body")
+      [[ $(grep -c . <<<"$signed") -eq 1 ]] || continue
+      exe=$(awk '{print $4}' <<<"$signed")
+      attached=$(jq -r --arg n "ORCA-${name#v}-win-x64.exe" '[.assets[] | select(.name == $n) | .digest] | .[0] // ""' <<<"$json")
+      [[ "$attached" == "$exe" ]] || continue
+      if grep -qF " $exe from $latest -->" <<<"$(records "$UPGRADE_RE" <<<"$body")"; then continue; fi
+      title="Release (upgrade check) of draft $id"
+      mine=$(awk -F'\t' -v t="$title" '$1 == t {print $2}' <<<"$runs")
+      if [[ -n "$mine" ]] && grep -qvx completed <<<"$mine"; then
+        note "$name (release $id): an upgrade check is already waiting or running."
+        continue
+      fi
+      if [[ $(grep -c . <<<"$mine") -ge 3 ]]; then
+        note "$name (release $id): no upgrade check record after $(grep -c . <<<"$mine") runs; look at the last run, then dispatch Release (upgrade check) by hand."
+        continue
+      fi
+      gh workflow run release-upgrade-check.yml --repo "$REPO" --ref main -f release_id="$id"
+      note "$name (release $id): dispatched Release (upgrade check)."
+    done <<<"$drafts"
+    ;;
   publish)
     # The operator states what native acceptance passed on: the source commit and both
     # installers' digests. Everything is compared against the draft right before publishing.
@@ -520,5 +561,5 @@ case "${1:-}" in
     [[ "$(gh api "repos/$REPO/releases/latest" --jq .id)" == "$id" ]] || fail "release $id is not latest"
     note "Published v$version (release \`$id\`, \`$sha\`): $deb_name \`$deb\`, $exe_name \`$exe\`${arm:+, $arm_name \`$arm\` (natively accepted)}."
     ;;
-  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE [ARM64_FILE] | reconcile | accept-select [ID] | accept ID SHA VERSION RUN_ID DIGEST | x64-only ID SHA VERSION | upgrade-target ID | record-upgrade ID SHA VERSION RUN_ID EXE_SHA256 FROM | publish ID VERSION SHA DEB_SHA256 EXE_SHA256" ;;
+  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE [ARM64_FILE] | reconcile | accept-select [ID] | accept ID SHA VERSION RUN_ID DIGEST | x64-only ID SHA VERSION | upgrade-target ID | upgrade-reconcile | record-upgrade ID SHA VERSION RUN_ID EXE_SHA256 FROM | publish ID VERSION SHA DEB_SHA256 EXE_SHA256" ;;
 esac

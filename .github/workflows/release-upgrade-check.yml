@@ -383,6 +383,7 @@ jobs:
     concurrency:
       group: release-draft-writes
       cancel-in-progress: false
+      queue: max
     permissions:
       contents: write
     steps:

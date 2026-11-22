@@ -35,7 +35,11 @@ it("runs only this revision's tooling where it can write", () => {
   }
   expect(check.jobs.target.if).toContain("github.ref == 'refs/heads/main'");
   expect(check.jobs.record.needs).toEqual(["target", "check"]);
-  expect(check.jobs.record.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  expect(check.jobs.record.concurrency).toEqual({
+    group: "release-draft-writes",
+    "cancel-in-progress": false,
+    queue: "max",
+  });
 });
 
 it("checks the installers' signatures before installing either, then runs the upgrade spec", () => {
@@ -77,4 +81,26 @@ it("builds the baseline from its resolved commit and checks both installers' byt
   const verify = step("check", "Both installers are the expected bytes, validly signed by the publisher").run;
   expect(verify).toContain("$env:FROM_EXE");
   expect(verify).toContain("$env:EXE");
+});
+
+it("keeps every waiting member of the shared draft-writes queue (none replaces another)", () => {
+  const members = [];
+  for (const name of [
+    "release-attach-signed.yml",
+    "release-accept-arm64.yml",
+    "release-publish-final.yml",
+    "release-upgrade-check.yml",
+  ]) {
+    const w = workflow(name);
+    const groups = [w.concurrency, ...Object.values(w.jobs).map((j) => j.concurrency)];
+    for (const c of groups) if (c?.group === "release-draft-writes") members.push([name, c]);
+  }
+  expect(members.length).toBe(5);
+  for (const [, c] of members)
+    expect(c).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
+});
+
+it("re-dispatches a missing upgrade check from the attach's reconcile", () => {
+  const steps = workflow("release-attach-signed.yml").jobs.reconcile.steps;
+  expect(steps.at(-1).run).toBe("bash tools/deploy/release-attach.sh upgrade-reconcile");
 });
