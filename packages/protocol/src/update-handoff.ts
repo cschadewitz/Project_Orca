@@ -121,6 +121,17 @@ export function removeUpdateHandoff(storeDir: string): void {
 }
 
 /**
+ * Remove the handoff only when the record on disk is exactly `issued` (the receipt its writer
+ * kept); a replacement, or a record moved onto a later claim, is left. Returns whether it was
+ * removed.
+ */
+export function removeIssuedUpdateHandoff(storeDir: string, issued: UpdateHandoff): boolean {
+  if (!same(readUpdateHandoff(storeDir), issued)) return false;
+  removeUpdateHandoff(storeDir);
+  return true;
+}
+
+/**
  * Remove the handoff only under proof this writer owns it: the fence holds, and the record on
  * disk satisfies `owns`, with the fence re-checked immediately before the unlink (no await in
  * between). Otherwise nothing in the store is changed. Returns whether it was removed.

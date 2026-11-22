@@ -1,4 +1,5 @@
 /** Exact candidate ownership and cold-start policy, plus a real compiled CLI child over disposable directories. */
+import type { UpdateHandoff } from "@orca/protocol/update-handoff";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -559,8 +560,9 @@ it("preflight evidence for another token cannot revoke an existing exact claim",
 });
 
 it("hands the stopped daemon's store off only after the exact stop, once, and withdraws it on non-launch (#897)", async () => {
-  const handOffStore = vi.fn();
-  const withdrawHandoff = vi.fn();
+  const receipt = { reservationId: "receipt" } as unknown as UpdateHandoff;
+  const handOffStore = vi.fn(() => receipt);
+  const withdrawHandoff = vi.fn(() => true);
   const f = rig({ handOffStore, withdrawHandoff });
   (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
   vi.spyOn(f.workspace.client, "maintenance").mockResolvedValue({ ready: true, active: [] });
@@ -575,7 +577,7 @@ it("hands the stopped daemon's store off only after the exact stop, once, and wi
   await expect(f.workspace.handOffForUpdate("owner", "0.8.0", "0.9.0")).rejects.toThrow("not available");
   // The installer never ran: the handoff goes before any recovery is attempted.
   await expect(f.workspace.cancelUpdate("owner")).rejects.toThrow();
-  expect(withdrawHandoff).toHaveBeenCalledExactlyOnceWith(selectedPath);
+  expect(withdrawHandoff).toHaveBeenCalledExactlyOnceWith(selectedPath, receipt);
   await f.workspace.close();
 });
 

@@ -12,17 +12,20 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { fenceDirectory } from "@orca/protocol/first-run-fence";
-import { removeUpdateHandoff, writeUpdateHandoff } from "@orca/protocol/update-handoff";
+import { removeIssuedUpdateHandoff, writeUpdateHandoff, type UpdateHandoff } from "@orca/protocol/update-handoff";
 import { hash, inspectFirstRunOwnership, refuse } from "./ownership.js";
 
 const directChildTerminal = z.object({ observation: z.literal("direct-child-terminal") }).passthrough();
 
+/** Returns the record written: the receipt that alone may withdraw it later. */
 export function handOffStoreForUpdate(
   path: string,
   from: string,
   to: string,
   now: () => Date = () => new Date(),
-): void {
+  /** Injected for tests. */
+  afterWrite?: () => void,
+): UpdateHandoff {
   const journal = inspectFirstRunOwnership(path);
   const latest = journal.latest;
   if (
@@ -36,7 +39,7 @@ export function handOffStoreForUpdate(
   )
     return refuse();
   const storeDir = join(path, ".orca");
-  writeUpdateHandoff(storeDir, {
+  const issued: UpdateHandoff = {
     version: 1,
     kind: "orca-update-handoff",
     reservationId: latest.reservationId,
@@ -48,16 +51,27 @@ export function handOffStoreForUpdate(
     drained: true,
     attempts: 0,
     createdAt: now().toISOString(),
-  });
+  };
+  writeUpdateHandoff(storeDir, issued);
+  afterWrite?.();
   // The journal must still end on the attempt the record names: nothing launched meanwhile.
+  // Only this exact record is taken back; one written or moved by anything else stays.
   const after = inspectFirstRunOwnership(path).latest;
   if (after?.reservationId !== latest.reservationId) {
-    removeUpdateHandoff(storeDir);
+    removeIssuedUpdateHandoff(storeDir, issued);
     refuse();
   }
+  return issued;
 }
 
-/** The updater did not install after all: the record must not outlive this attempt. */
-export function withdrawUpdateHandoff(path: string): void {
-  removeUpdateHandoff(join(path, ".orca"));
+/**
+ * The updater did not install after all: the record it issued must not outlive this attempt.
+ * Withdrawn only while the attempt it names is still the journal's latest (nothing launched since
+ * could have claimed it) and the record on disk is exactly the one issued; anything else stays.
+ */
+export function withdrawUpdateHandoff(path: string, issued: UpdateHandoff): boolean {
+  const latest = inspectFirstRunOwnership(path).latest;
+  if (latest?.reservationId !== issued.reservationId) return false;
+  if (!latest.texts["claim.json"] || hash(latest.texts["claim.json"]) !== issued.claimHash) return false;
+  return removeIssuedUpdateHandoff(join(path, ".orca"), issued);
 }

@@ -197,7 +197,46 @@ it("is written only after an observed exit and withdrawn when nothing was instal
   void owner;
   const other = await selected();
   launch(other);
-  handOffStoreForUpdate(other, "0.8.0", "0.9.0");
-  withdrawUpdateHandoff(other);
+  const issued = handOffStoreForUpdate(other, "0.8.0", "0.9.0");
+  expect(withdrawUpdateHandoff(other, issued)).toBe(true);
   expect(readUpdateHandoff(join(other, ".orca"))).toBeUndefined();
+}, 30000);
+
+it("withdraws only the exact record it issued, and only while its attempt is still the latest", async () => {
+  const path = await selected();
+  launch(path);
+  const store = join(path, ".orca");
+  await mkdir(store, { recursive: true });
+  const issued = handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  // A replacement survives rollback.
+  const replacement = { ...issued, createdAt: "2026-01-01T00:00:00.000Z" };
+  writeUpdateHandoff(store, replacement);
+  expect(withdrawUpdateHandoff(path, issued)).toBe(false);
+  expect(readUpdateHandoff(store)).toEqual(replacement);
+  // The exact record survives too once anything was launched after the attempt it names.
+  writeUpdateHandoff(store, issued);
+  launch(path);
+  expect(withdrawUpdateHandoff(path, issued)).toBe(false);
+  expect(readUpdateHandoff(store)).toEqual(issued);
+}, 30000);
+
+it("takes back only its own record when the journal advances while it writes", async () => {
+  const path = await selected();
+  launch(path);
+  const store = join(path, ".orca");
+  await mkdir(store, { recursive: true });
+  // The journal advances and the record is replaced before the post-write check: refused, and
+  // the replacement survives.
+  let replacement: ReturnType<typeof readUpdateHandoff>;
+  expect(() =>
+    handOffStoreForUpdate(path, "0.8.0", "0.9.0", undefined, () => {
+      launch(path);
+      replacement = { ...readUpdateHandoff(store)!, createdAt: "2026-01-01T00:00:00.000Z" };
+      writeUpdateHandoff(store, replacement);
+    }),
+  ).toThrow();
+  expect(readUpdateHandoff(store)).toEqual(replacement);
+  // The journal advances with its own record still there: that one is taken back.
+  expect(() => handOffStoreForUpdate(path, "0.8.0", "0.9.0", undefined, () => launch(path))).toThrow();
+  expect(readUpdateHandoff(store)).toBeUndefined();
 }, 30000);
