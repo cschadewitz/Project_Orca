@@ -459,6 +459,12 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
   known to have ended without success, or known never to have been admitted.
 - **The work is the remote daemon's.** It appears in that daemon's run list, owned by the
   credential's principal, and its audit log names that principal on the admission.
+- **The remote run records where it came from.** A remote on protocol 2.6 or later records
+  this daemon's workspace id, the parent run and the step as the run's `origin` (on
+  `runs.list` and `runs.get`), and its audit record of the admission carries them as
+  `originWorkspaceId`, `originRunId` and `originStepRunId`. The origin is what the admitting
+  principal stated; the principal is what the remote authenticated. An older remote is
+  delegated to without one.
 - **Progress shows on the step.** Remote step milestones and the remote agents' updates
   appear as the step's agent output.
 - **Remote gates are asked here.** A question the remote run (or a child run the remote's
@@ -486,8 +492,8 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
   not be reached. `DELEGATED_RUN_FAILED` means the remote run ended without success; its
   error is in the step's error details.
 
-Not yet: recording the parent run as the remote run's origin, fetching a named git ref on
-the remote side, issuing the credential automatically over SSH, and binary artifacts.
+Not yet: fetching a named git ref on the remote side, issuing the credential automatically
+over SSH, and binary artifacts.
 
 ## MCP servers and skills for agent steps
 

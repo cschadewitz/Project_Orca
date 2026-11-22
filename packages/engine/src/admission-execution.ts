@@ -24,6 +24,13 @@ const BindingSchema = z.strictObject({
   workflow: IdentitySchema,
   requestId: z.string().min(1).optional(),
   workItemId: z.string().min(1).optional(),
+  origin: z
+    .strictObject({
+      workspaceId: z.string().min(1),
+      runId: z.string().min(1),
+      stepRunId: z.string().min(1).optional(),
+    })
+    .optional(),
 });
 export type AdmissionExecutionBinding = z.infer<typeof BindingSchema>;
 const EvidenceSchema = z.strictObject({
@@ -113,6 +120,7 @@ async function validateCreation(stores: AdmissionStores, binding: AdmissionExecu
     !equal(payload.actor, binding.actor) ||
     payload.requestId !== binding.requestId ||
     payload.workItemId !== binding.workItemId ||
+    !equal(payload.origin, binding.origin) ||
     (binding.kind === "request"
       ? payload.requestAdmissionId !== binding.admissionId ||
         payload.directAdmissionId !== undefined ||

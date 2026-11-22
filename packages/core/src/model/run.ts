@@ -107,6 +107,17 @@ export type EffectReviewDecision = z.infer<typeof EffectReviewDecisionSchema>;
 export const StepOriginSchema = z.object({ runId: z.string(), stepRunId: z.string() });
 export type StepOrigin = z.infer<typeof StepOriginSchema>;
 
+/**
+ * Where a delegated run came from (#883): the parent daemon's workspace, run and step. The
+ * admitting principal states it; it is a record of that statement, never authority.
+ */
+export const RunOriginSchema = z.object({
+  workspaceId: z.string().min(1).max(128),
+  runId: z.string().min(1).max(256),
+  stepRunId: z.string().min(1).max(256).optional(),
+});
+export type RunOrigin = z.infer<typeof RunOriginSchema>;
+
 export const StepRunSchema = z.object({
   id: z.string(),
   runId: z.string(),
@@ -229,6 +240,8 @@ export const RunSchema = z.object({
   provenance: RunProvenanceSchema.optional(),
   /** A checkpoint attempt's source run and checkpoint step (#357). */
   checkpoint: StepOriginSchema.optional(),
+  /** A delegated run's parent workspace, run and step (#883). */
+  origin: RunOriginSchema.optional(),
   error: ErrorInfoSchema.optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
@@ -253,6 +266,7 @@ export const RunSummarySchema = RunSchema.pick({
   overrides: true,
   provenance: true,
   checkpoint: true,
+  origin: true,
   createdAt: true,
   startedAt: true,
   completedAt: true,

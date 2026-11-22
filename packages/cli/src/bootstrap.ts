@@ -73,7 +73,7 @@ import {
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
 import { delegatingSessionFactory, validateRemotes } from "@orca/daemon";
-import { fileStores, memoryStores, type Stores } from "@orca/store";
+import { fileStores, memoryStores, workspaceIdentity, type Stores } from "@orca/store";
 import { bindLocalAdmissionExecution } from "./admission-execution-authority.js";
 import { cliHumanInput } from "./human-input-cli.js";
 import { localSecretUse } from "./local-secret-use.js";
@@ -503,6 +503,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       remotes: () => currentRemotes(),
       configDir,
       receiptsDir: resolve(configDir, config.storeDir, "delegations"),
+      workspaceId: () => workspaceIdentity(resolve(configDir, config.storeDir)),
     });
   const openSession = delegating(makeSessionFactory({ configDir, storeDir: config.storeDir, configFile }));
   const orchestrator = new Orchestrator({

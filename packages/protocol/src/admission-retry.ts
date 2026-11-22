@@ -15,9 +15,17 @@ export const AdmissionExpectedScopeSchema = z.strictObject({
   principalId: z.string().min(1).max(512),
   workspaceId: z.uuid(),
 });
+/** Protocol 2.6 (#883): the parent workspace, run and step a delegated run is started for. */
+export const RunOriginParamsSchema = z.strictObject({
+  workspaceId: z.string().min(1).max(128),
+  runId: z.string().min(1).max(256),
+  stepRunId: z.string().min(1).max(256).optional(),
+});
 export const RunsAdmitParamsSchema = RunsStartParamsSchema.extend({
   expectedScope: AdmissionExpectedScopeSchema.optional(),
   idempotencyKey: RetryKeySchema.optional(),
+  /** Recorded on the run and in the audit record; the admitting principal's statement, not authority. */
+  origin: RunOriginParamsSchema.optional(),
 }).strict();
 export const AdmissionsGetParamsSchema = z.strictObject({
   operationId: z.string().regex(/^retry_[a-f0-9-]{36}$/),

@@ -534,6 +534,7 @@ class Pass {
       ...(duration === undefined ? {} : { durationMs: duration }),
       ...(summary.parentRunId ? { parentRunId: summary.parentRunId } : {}),
       ...(summary.checkpoint ? { checkpoint: { ...summary.checkpoint } } : {}),
+      ...(summary.origin ? { origin: { ...summary.origin } } : {}),
       ...(summary.requestId ? { requestId: summary.requestId } : {}),
       ...(workItem ? { workItem } : {}),
       ...(facts.agentId ? { agentId: facts.agentId } : {}),

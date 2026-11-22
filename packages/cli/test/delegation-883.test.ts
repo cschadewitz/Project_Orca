@@ -28,6 +28,7 @@ import {
   DelegationReceipts,
   openDaemonSession,
   ReceiptConflict,
+  recordsOrigin,
   type DelegationTransport,
   type OpenDaemonSessionOptions,
 } from "@orca/daemon";
@@ -316,6 +317,24 @@ edges:
     expect(
       audit.some((r) => JSON.stringify(r).includes("parent-daemon") && JSON.stringify(r).includes("runs.admit")),
     ).toBe(true);
+
+    // The remote run records the parent workspace, run and step as its origin, and so does the
+    // remote's audit record of the admission.
+    const parentWorkspace = ((await call(parent, "operator.discover", {})).target as { workspaceId: string })
+      .workspaceId;
+    const remoteRun = (await call(remote, "runs.get", { runId: delegated[0]!.id })).run as {
+      origin?: { workspaceId: string; runId: string; stepRunId?: string };
+    };
+    expect(remoteRun.origin).toMatchObject({ workspaceId: parentWorkspace, runId });
+    expect(typeof remoteRun.origin!.stepRunId).toBe("string");
+    const admission = audit.find(
+      (r) => r.operation === "runs.admit" && (r.target as Record<string, string> | undefined)?.originRunId === runId,
+    );
+    expect(admission?.target).toMatchObject({
+      originWorkspaceId: parentWorkspace,
+      originRunId: runId,
+      originStepRunId: remoteRun.origin!.stepRunId,
+    });
   }, 120_000);
 
   it("forwards a remote gate to the parent and sends the parent's answer back", async (ctx) => {
@@ -985,6 +1004,30 @@ describe("delegation through a proxy the test controls (#883)", () => {
     expect(delegationKey("r", "d", 0)).not.toBe(delegationKey("r", "e", 0));
     expect(delegationKey("r", "d", 0)).toBe(delegationKey("r", "d", 0));
     expect(new TextEncoder().encode(delegationKey("r", "d", 0)).length).toBeLessThanOrEqual(128);
+  });
+
+  it("states the parent workspace, run and step as the remote run's origin", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-origin"));
+    const originWorkspaceId = "0b6f3c1e-4a1d-4c7e-9a52-2d6f0f8f9a11";
+    const session = await open(proxy.transport(), receipts, { originWorkspaceId });
+    const path = join(work, "origin", "report.md");
+    await expect(
+      session.prompt("ignored", { timeoutMs: 60_000, turn: turn("run_origin", path) }),
+    ).resolves.toMatchObject({ stopReason: "end_turn" });
+    const origin = { workspaceId: originWorkspaceId, runId: "run_origin", stepRunId: "run_origin_step1" };
+    const receipt = receipts.read("run_origin", "run_origin_step1")!;
+    expect(receipt.origin).toEqual(origin);
+    const remoteRun = (await call(remote, "runs.get", { runId: receipt.remoteRunId! })).run as { origin?: unknown };
+    expect(remoteRun.origin).toEqual(origin);
+    await session.close();
+    await proxy.close();
+  }, 120_000);
+
+  it("states an origin only to a daemon that takes one (protocol 2.6)", () => {
+    expect(recordsOrigin({ major: 2, minor: 5 })).toBe(false);
+    expect(recordsOrigin({ major: 2, minor: 6 })).toBe(true);
+    expect(recordsOrigin({ major: 3, minor: 0 })).toBe(true);
   });
 
   it("refuses a daemon that does not take delegated runs, as a typed failure", async () => {

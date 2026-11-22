@@ -200,3 +200,27 @@ it("refuses a root whose creation acknowledgement was lost before policy publica
   expect(f.start).toHaveBeenCalledTimes(1);
   expect(await f.orc.listRuns()).toHaveLength(1);
 });
+
+it("records a stated origin on the admitted run, and a key replayed with another origin conflicts (#883)", async () => {
+  const f = await fixture();
+  const origin = { workspaceId: "8c1f2d3e-0a4b-4c5d-8e6f-7a8b9c0d1e2f", runId: "run_parent", stepRunId: "step_1" };
+  const first = await f.service.admitRun({ workflowId: "program", origin }, { idempotencyKey: "origin" }, f.authority);
+  expect(first).toMatchObject({ state: "resolved", result: { state: "accepted" } });
+  const runId = (first as { result: { runId: string } }).result.runId;
+  expect((await f.orc.getState(runId)).run.origin).toEqual(origin);
+  // The same key and origin replay the admission; another origin is another command.
+  await expect(
+    f.service.admitRun({ workflowId: "program", origin }, { idempotencyKey: "origin" }, f.authority),
+  ).resolves.toMatchObject({ replayed: true });
+  await expect(
+    f.service.admitRun(
+      { workflowId: "program", origin: { ...origin, runId: "run_other" } },
+      { idempotencyKey: "origin" },
+      f.authority,
+    ),
+  ).rejects.toThrow("conflict");
+  expect(await f.orc.listRuns()).toHaveLength(1);
+  // Execution's first-attachment fence checks the origin the admission recorded.
+  await f.orc.run(runId);
+  expect((await f.orc.getState(runId)).run.status).not.toBe("created");
+});

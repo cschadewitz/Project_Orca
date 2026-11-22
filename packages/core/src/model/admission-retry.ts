@@ -56,6 +56,8 @@ export interface DirectAdmissionCommand {
   expectedConfigGeneration?: string | undefined;
   requestId?: string | undefined;
   workItemId?: string | undefined;
+  /** A delegated run's parent workspace, run and step (#883): recorded on the run, never authority. */
+  origin?: { workspaceId: string; runId: string; stepRunId?: string | undefined } | undefined;
   /**
    * A fence (#883, `admissions.fence`): claims the key so that no later admission under it can
    * admit a run. Never set by `runs.admit`.

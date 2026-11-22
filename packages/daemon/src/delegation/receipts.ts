@@ -81,6 +81,15 @@ export const DelegationReceiptSchema = z
     key: z.string().min(1),
     state: z.enum(["submitting", "admitted", "cancel-pending", "settled"]),
     remoteRunId: z.string().min(1).optional(),
+    /**
+     * The origin this generation's admission states (#883, protocol 2.6): this daemon's
+     * workspace, the parent run and the step. Fixed when the generation is created, so every
+     * replay of its key sends the same command; absent when the remote predates 2.6.
+     */
+    origin: z
+      .object({ workspaceId: z.string().min(1), runId: z.string().min(1), stepRunId: z.string().min(1).optional() })
+      .strict()
+      .optional(),
     outcome: z.enum(["succeeded", "failed", "cancelled", "never-admitted"]).optional(),
     updatedAt: z.string(),
   })

@@ -167,8 +167,14 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * and `operator.reconcileAdmission` refuse a checkpoint receipt; it stays on `admissions.*`.
  * `admissions.reconcile` takes an optional `kind` (`run.recover`) and refuses any other kind
  * before it reconciles; a 2.4 daemon rejects the unknown field, so it fails closed.
+ *
+ * 2.6 (#883) adds an optional `origin` ({ workspaceId, runId, stepRunId? }) to `runs.admit`:
+ * the parent workspace, run and step a delegated run was started for. The daemon records it
+ * on the run (`origin` on `RunSummaryView`) and in the audit record of the admission. It is
+ * the admitting principal's statement, never authority. A 2.5 daemon rejects the unknown
+ * field, so a delegating daemon sends it only to a daemon that answered `hello` in 2.6 or later.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 5 };
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 6 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is

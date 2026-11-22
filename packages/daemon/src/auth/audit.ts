@@ -77,6 +77,15 @@ export function targetOf(
     // A standing-permission answer is recorded as such: which decision, never the answer text.
     const always = (params as { always?: { decision?: unknown } }).always;
     if (always && typeof always.decision === "string") out.always = always.decision;
+    // A delegated admission's stated parent (#883): which workspace, run and step asked for it.
+    const origin = (params as { origin?: Record<string, unknown> }).origin;
+    if (origin && typeof origin === "object")
+      for (const [from, to] of [
+        ["workspaceId", "originWorkspaceId"],
+        ["runId", "originRunId"],
+        ["stepRunId", "originStepRunId"],
+      ] as const)
+        if (typeof origin[from] === "string") out[to] = origin[from].slice(0, 200);
   }
   for (const [key, value] of Object.entries(extra ?? {})) if (value !== undefined) out[key] = value.slice(0, 200);
   return Object.keys(out).length ? out : undefined;

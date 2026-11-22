@@ -268,6 +268,8 @@ export class ProtectedEventStore implements EventStore {
       "workItemId",
       "parentRunId",
       "parentStepRunId",
+      // A delegated run's parent workspace, run and step (#883): identifiers only.
+      "origin",
       "stepRunId",
       "nodeId",
       "nodeType",

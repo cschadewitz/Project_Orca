@@ -170,6 +170,11 @@ export interface OpenDaemonSessionOptions {
   pollMs?: number;
   /** Per-call limit for remote calls. Default 30 s. */
   callTimeoutMs?: number;
+  /**
+   * This daemon's workspace id. With it, each admission states its origin (this workspace,
+   * the parent run and the step) to a remote that speaks protocol 2.6 or later (#883).
+   */
+  originWorkspaceId?: string;
 }
 
 /** The turn in flight: its remote run, and what its forwarded questions are bound to. */
@@ -218,6 +223,11 @@ const MAX_PAGES_PER_ROUND = 50;
 const MAX_CHILD_DEPTH = 8;
 
 /** The workspace and principal every remote mutation for a receipt is scoped to. */
+/** Whether a daemon that answered `hello` in this version takes `runs.admit` `origin` (2.6+). */
+export function recordsOrigin(version: { major: number; minor: number }): boolean {
+  return version.major > 2 || (version.major === 2 && version.minor >= 6);
+}
+
 function scopeOf(receipt: DelegationReceipt): { workspaceId: string; principalId: string } {
   return { workspaceId: receipt.binding.workspaceId, principalId: receipt.binding.principalId };
 }
@@ -288,10 +298,14 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
         `The credential for ${options.remoteName} may not start runs there. Issue one with the client preset.`,
         { principal: discovery.principalId },
       );
-    const session = new DaemonSession(options, client, clock, logger, {
-      principalId: discovery.principalId,
-      workspaceId: discovery.target.workspaceId,
-    });
+    const session = new DaemonSession(
+      options,
+      client,
+      clock,
+      logger,
+      { principalId: discovery.principalId, workspaceId: discovery.target.workspaceId },
+      recordsOrigin(hello.protocol),
+    );
     await session.sweep();
     return session;
   } catch (error) {
@@ -360,6 +374,8 @@ class DaemonSession implements AgentSession {
     private readonly clock: Clock,
     private readonly logger: Logger,
     private readonly scope: { principalId: string; workspaceId: string },
+    /** The remote takes `runs.admit` `origin` (protocol 2.6). */
+    private readonly takesOrigin = false,
   ) {
     this.id = newId("sess", clock.now());
     this.agentId = options.agent.id;
@@ -555,6 +571,18 @@ class DaemonSession implements AgentSession {
     }
   }
 
+  /**
+   * The origin a new generation states (#883): this daemon's workspace, the parent run and the
+   * step's first attempt, which stays the same across retries of the step. Only for a remote
+   * that takes it; a 2.5 daemon refuses the unknown field.
+   */
+  private originOf(turn: TurnContext): Pick<DelegationReceipt, "origin"> {
+    if (!this.takesOrigin || !this.options.originWorkspaceId) return {};
+    return {
+      origin: { workspaceId: this.options.originWorkspaceId, runId: turn.runId, stepRunId: turn.delegationId },
+    };
+  }
+
   /** One decision on a delegation's receipt: the receipt to follow, or undefined to read again. */
   private async step(
     receipt: DelegationReceipt | undefined,
@@ -574,6 +602,7 @@ class DaemonSession implements AgentSession {
         generation: 0,
         key: delegationKey(parentRunId, delegationId, 0),
         state: "submitting",
+        ...this.originOf(turn),
       });
       return this.submit(fresh, task, deadline, signal);
     }
@@ -608,6 +637,7 @@ class DaemonSession implements AgentSession {
           generation,
           key: delegationKey(parentRunId, delegationId, generation),
           state: "submitting",
+          ...this.originOf(turn),
         });
         return this.submit(next, task, deadline, signal);
       }
@@ -727,6 +757,7 @@ class DaemonSession implements AgentSession {
       vars: { [this.options.agent.promptVar ?? "prompt"]: task },
       idempotencyKey: receipt.key,
       expectedScope: scopeOf(receipt),
+      ...(receipt.origin ? { origin: receipt.origin } : {}),
     };
     const admitted = (runId: string) => this.store({ ...receipt, state: "admitted", remoteRunId: runId });
     for (let attempt = 0; ; attempt++) {

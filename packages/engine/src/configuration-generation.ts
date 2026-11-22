@@ -386,6 +386,7 @@ export class ConfigurationGenerations {
         requestAdmissionId,
         directAdmissionId,
         admissionRunId,
+        origin,
       } = options;
       const requestId = recordedRequestId ?? options.requestId;
       const vars =
@@ -434,6 +435,7 @@ export class ConfigurationGenerations {
         ...(parentRunId ? { parentRunId } : {}),
         ...(parentStepRunId ? { parentStepRunId } : {}),
         ...(overrides ? { overrides: structuredClone(overrides) } : {}),
+        ...(origin ? { origin: structuredClone(origin) } : {}),
       };
     };
     return Object.freeze({
