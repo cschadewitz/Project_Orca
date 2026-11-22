@@ -238,8 +238,8 @@ async function exists(file: string): Promise<boolean> {
 
 /**
  * That `db` is an ORCA metadata database at a schema this build knows: the ORCA application id,
- * a schema version from 1 to the newest migration, and every table and index that version's
- * migrations create, with exactly their definitions. A healthy SQLite file that is anything else
+ * a schema version from 1 to the newest migration, and exactly the tables, indexes, views and
+ * triggers that version's migrations create - nothing missing, nothing extra. A healthy SQLite file that is anything else
  * (another application's, an empty one, one with ORCA's version number but not its tables) is
  * `STORE_FORMAT`.
  */
@@ -263,16 +263,25 @@ function checkOrcaSchema(db: import("node:sqlite").DatabaseSync, file: string): 
     });
   if (schema < 1)
     throw new OrcaError("STORE_FORMAT", `${file} has no ORCA metadata schema`, { reason: "FOREIGN", file, schema });
-  const present = new Map(schemaObjects(db).map((o) => [`${o.type} ${o.name}`, o.sql]));
-  const missing = expectedSchemaObjects(sqlite().DatabaseSync, schema)
-    .filter((o) => present.get(`${o.type} ${o.name}`) !== o.sql)
-    .map((o) => `${o.type} ${o.name}`);
-  if (missing.length)
-    throw new OrcaError("STORE_FORMAT", `${file} does not have the ORCA metadata schema ${schema}`, {
+  // The exact application-owned schema, not a superset: an extra trigger or view is behaviour,
+  // not inert metadata, and a database carrying one is not an ORCA store.
+  const key = (o: { type: string; name: string; tbl_name: string; sql: string | null }) =>
+    JSON.stringify([o.type, o.name, o.tbl_name, o.sql]);
+  const present = new Set(schemaObjects(db).map(key));
+  const expected = new Set(expectedSchemaObjects(sqlite().DatabaseSync, schema).map(key));
+  const missing = [...expected]
+    .filter((k) => !present.has(k))
+    .map((k) => (JSON.parse(k) as string[]).slice(0, 2).join(" "));
+  const unexpected = [...present]
+    .filter((k) => !expected.has(k))
+    .map((k) => (JSON.parse(k) as string[]).slice(0, 2).join(" "));
+  if (missing.length || unexpected.length)
+    throw new OrcaError("STORE_FORMAT", `${file} does not have exactly the ORCA metadata schema ${schema}`, {
       reason: "SCHEMA_MISMATCH",
       file,
       schema,
       missing,
+      unexpected,
     });
   return schema;
 }

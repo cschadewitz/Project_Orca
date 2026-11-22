@@ -89,7 +89,7 @@ export const ORCA_SQLITE_APPLICATION_ID = 0x4f524341;
 export function expectedSchemaObjects(
   DatabaseSync: typeof import("node:sqlite").DatabaseSync,
   version: number,
-): { type: string; name: string; sql: string }[] {
+): { type: string; name: string; tbl_name: string; sql: string | null }[] {
   const db = new DatabaseSync(":memory:");
   try {
     for (const migration of SQLITE_MIGRATIONS.slice(0, version)) db.exec(migration);
@@ -99,10 +99,17 @@ export function expectedSchemaObjects(
   }
 }
 
-export function schemaObjects(db: import("node:sqlite").DatabaseSync): { type: string; name: string; sql: string }[] {
+/**
+ * Every application-owned schema object (tables, indexes, views, triggers), in name order.
+ * Only SQLite's own internals are left out, by an exact `sqlite_` name prefix (not `LIKE`, where
+ * `_` would be a wildcard).
+ */
+export function schemaObjects(
+  db: import("node:sqlite").DatabaseSync,
+): { type: string; name: string; tbl_name: string; sql: string | null }[] {
   return db
     .prepare(
-      "SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL ORDER BY name",
+      "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE substr(name, 1, 7) <> 'sqlite_' ORDER BY type, name",
     )
-    .all() as { type: string; name: string; sql: string }[];
+    .all() as { type: string; name: string; tbl_name: string; sql: string | null }[];
 }

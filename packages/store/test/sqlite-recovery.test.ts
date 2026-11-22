@@ -292,6 +292,22 @@ describe("SQLite backup, restore and verify", () => {
         "SCHEMA_MISMATCH",
       ],
     ];
+    // An otherwise valid ORCA backup with one extra object of each kind.
+    const source = await makeDir();
+    await seedFileStore(source);
+    await importFileMetadata(source);
+    for (const [name, extra] of [
+      ["extra-trigger.sqlite", "CREATE TRIGGER wipe AFTER INSERT ON events BEGIN DELETE FROM artifacts; END"],
+      ["extra-view.sqlite", "CREATE VIEW everything AS SELECT * FROM documents"],
+      ["extra-table.sqlite", "CREATE TABLE sqliteXnotes (x)"],
+    ] as const) {
+      const file = join(inputs, name);
+      await backupSqliteMetadata(source, file);
+      const raw = new DatabaseSync(file);
+      raw.exec(extra);
+      raw.close();
+      cases.push([file, "SCHEMA_MISMATCH"]);
+    }
     for (const [input, reason] of cases) {
       const target = await makeDir();
       const error = await rejection(restoreSqliteMetadata(input, target));
