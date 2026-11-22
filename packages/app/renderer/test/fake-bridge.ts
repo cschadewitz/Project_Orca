@@ -305,7 +305,10 @@ const defaults: Handlers = {
         (params.requestId === undefined || r.requestId === params.requestId) &&
         (params.workItemId === undefined || r.workItem?.id === params.workItemId) &&
         (params.parentRunId === undefined || r.parentRunId === params.parentRunId) &&
-        (!params.roots || r.parentRunId === undefined),
+        (!params.roots || r.parentRunId === undefined) &&
+        (params.workflowId === undefined || r.workflowId === params.workflowId) &&
+        (params.createdFrom === undefined || Date.parse(r.createdAt) >= Date.parse(params.createdFrom)) &&
+        (params.runIds === undefined || params.runIds.includes(r.id)),
     );
     const offset = params.offset ?? 0;
     const limit = params.limit ?? RUNS_LIST_LIMIT;

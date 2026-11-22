@@ -307,6 +307,27 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
     });
   });
 
+  it("sets and lifts the servers' stop switch conditionally, keeping the rings (#878)", () => {
+    const f = setup();
+    f.release("0.7.0", "latest");
+    expect(f.run("snapshot", f.artifacts, "0.7.0", "x64").status).toBe(0);
+    const stopped = f.run("stop-servers");
+    expect(stopped.status, stopped.stderr).toBe(0);
+    expect(stopped.stdout).toContain("servers stopped");
+    expect(f.log().at(-1)).toContain("--if-match");
+    const rings = JSON.parse(readFileSync(f.object("rings.json"), "utf8"));
+    expect(rings).toEqual({ format: 1, rings: { internal: { version: "0.7.0" } }, serverStop: true });
+    expect(f.run("stop-servers", "now").stderr).toContain("usage: feed-r2.sh stop-servers");
+    expect(f.run("resume-servers").status).toBe(0);
+    expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8"))).toEqual({
+      format: 1,
+      rings: { internal: { version: "0.7.0" } },
+    });
+    const again = f.run("resume-servers");
+    expect(again.status).not.toBe(0);
+    expect(again.stderr).toContain("servers are not stopped");
+  });
+
   it("proves conditional writes on a throwaway key, and stops when they are ignored", () => {
     const f = setup();
     const ok = f.run("probe");

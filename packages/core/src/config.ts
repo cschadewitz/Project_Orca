@@ -12,7 +12,9 @@ import {
   HostSpecSchema,
   LOCAL_HOST_ID,
   RemoteDaemonSpecSchema,
+  SecretsConfigSchema,
   validateCapabilitiesConfig,
+  validateSecretReferences,
 } from "./model/agent.js";
 import { RiskMatrixInputSchema, SchedulingPolicySchema } from "./model/plan.js";
 
@@ -91,6 +93,11 @@ export const OrcaConfigSchema = z
      * agent starts from (#335). Agents, workflows and nodes select from this catalog.
      */
     capabilities: CapabilitiesConfigSchema.optional(),
+    /**
+     * Where each referenced credential lives, and on which host (#336). Env values elsewhere
+     * name one as `{ secret: <id> }`; the value is read on that host when it is needed.
+     */
+    secrets: SecretsConfigSchema.optional(),
     hosts: z.array(HostSpecSchema).default([{ id: LOCAL_HOST_ID, type: "local" }]),
     agents: z.array(AgentSpecSchema).default([]),
     /** Other ORCA daemons that `type: orca-daemon` agents delegate steps to (#883). */
@@ -128,7 +135,7 @@ export const OrcaConfigSchema = z
   .superRefine((config, ctx) => {
     // Catalog references in the config scopes are checked here, so a typo fails the config
     // rather than the first run that reaches the agent (#335).
-    for (const issue of validateCapabilitiesConfig(config).errors)
+    for (const issue of [...validateCapabilitiesConfig(config).errors, ...validateSecretReferences(config)])
       ctx.addIssue({ code: "custom", path: issue.path.split("."), message: issue.message });
     const remotes = new Set<string>();
     config.remotes.forEach((remote, i) => {

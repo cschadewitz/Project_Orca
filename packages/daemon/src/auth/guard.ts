@@ -590,8 +590,11 @@ export class Authorizer {
     const rows: RunSummaryView[] = [];
     const seen = new Set<string>();
     let last: Page;
+    // Visibility first, on plain rows: the operations facts (the log's tail, the lease) are
+    // read only for the rows this principal is then shown, never for a hidden run (#340).
+    const { operations, ...plain } = params;
     for (let offset = 0; ;) {
-      last = (await original({ ...params, limit: PAGE, offset })) as Page;
+      last = (await original({ ...plain, limit: PAGE, offset })) as Page;
       for (const row of last.runs) {
         if (seen.has(row.id)) continue;
         seen.add(row.id);
@@ -602,11 +605,20 @@ export class Authorizer {
       if (last.runs.length === 0 || offset >= last.total) break;
     }
     const visible = await this.visible(principal, rows, (r) => r.id);
-    return {
-      ...last,
-      runs: visible.slice(params.offset as number, (params.offset as number) + (params.limit as number)),
-      total: visible.length,
-    };
+    let page = visible.slice(params.offset as number, (params.offset as number) + (params.limit as number));
+    if (operations === true && page.length) {
+      const detailed = (await original({
+        ...plain,
+        runIds: page.map((r) => r.id),
+        operations: true,
+        offset: 0,
+        limit: page.length,
+      })) as Page;
+      const byId = new Map(detailed.runs.map((r) => [r.id, r]));
+      // A row that moved out of the filter between the two reads keeps its plain form.
+      page = page.map((r) => byId.get(r.id) ?? r);
+    }
+    return { ...last, runs: page, total: visible.length };
   }
 
   /**

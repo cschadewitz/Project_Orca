@@ -1,5 +1,12 @@
 /** Real renderer controls, production IPC, protected revision journal and deterministic ACP delivery. */
-import { test, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
+import {
+  test,
+  expect,
+  _electron as electron,
+  type ElectronApplication,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import { once } from "node:events";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,6 +30,10 @@ import {
   startRevisionDaemon,
   startRevisionRun,
 } from "./revision-daemon.js";
+
+/** The recorded correction's own text, not the compose preview that also shows text. */
+const current = (recorded: Locator) =>
+  recorded.getByRole("group", { name: "Current correction", exact: true }).locator("pre");
 
 const appDir = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const phaseTimeout = 30_000;
@@ -224,7 +235,7 @@ test("revision controls survive restart and conflict, then deliver the reviewed 
     const first = await receipt(app, 0);
     expect(first.result.target).toEqual(boundary.target);
     let recorded = page.getByRole("region", { name: "Recorded correction", exact: true });
-    await expect(recorded.locator("pre")).toHaveText(fixture.initial);
+    await expect(current(recorded)).toHaveText(fixture.initial);
     await expect(page.getByRole("region", { name: `gate, ${fixture.question}` })).toHaveCount(0);
     const expectedFirst = {
       receipt: first.result,
@@ -259,7 +270,7 @@ test("revision controls survive restart and conflict, then deliver the reviewed 
     evidence.newProcess = app.process().pid !== firstPid;
     expect(evidence.newProcess).toBe(true);
     recorded = page.getByRole("region", { name: "Recorded correction", exact: true });
-    await expect(recorded.locator("pre")).toHaveText(fixture.initial);
+    await expect(current(recorded)).toHaveText(fixture.initial);
     await expect(recorded.getByText(`Destination: ${fixture.destination}`, { exact: true })).toBeVisible();
     const recovered = PendingRevisionViewSchema.parse(
       await daemon.rpc("inputs.revisionPending", { target: pendingTarget(first.result) }),
@@ -328,7 +339,7 @@ test("revision controls survive restart and conflict, then deliver the reviewed 
       }),
     ).toBeVisible();
     await expect(draft).toHaveValue(fixture.final);
-    await expect(recorded.locator("pre")).toHaveText(fixture.competing);
+    await expect(current(recorded)).toHaveText(fixture.competing);
     await expect(replace).toBeDisabled();
     evidence.staleCasPreservedDraft = true;
 
@@ -343,7 +354,7 @@ test("revision controls survive restart and conflict, then deliver the reviewed 
     await expect(draft).toHaveValue(fixture.final);
     await expect(replace).toBeDisabled();
     await configureProbe(app, { holdPendingReads: false });
-    await expect(recorded.locator("pre")).toHaveText(fixture.competing);
+    await expect(current(recorded)).toHaveText(fixture.competing);
     await expect(draft).toHaveValue(fixture.final);
     await recorded.getByRole("button", { name: "Use reviewed correction version", exact: true }).click();
     await expect(replace).toBeEnabled();
@@ -352,7 +363,7 @@ test("revision controls survive restart and conflict, then deliver the reviewed 
     expect(final.result.target.destinationId).toBe(first.result.target.destinationId);
     expect(final.result.attemptId).toBe(first.result.attemptId);
     expect(final.result.revisionId).not.toBe(competitor.result.revisionId);
-    await expect(recorded.locator("pre")).toHaveText(fixture.final);
+    await expect(current(recorded)).toHaveText(fixture.final);
     await expect(draft).toHaveValue("");
     evidence.recoverableRefreshPreservedDraft = true;
     const expectedFinal = {

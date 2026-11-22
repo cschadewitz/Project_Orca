@@ -550,6 +550,7 @@ export class ConfigurationGenerations {
     frozen(snapshot);
     const agents = snapshot.runtimeBinding ? new AgentRegistry() : AgentRegistry.fromConfig(snapshot.config);
     agents.setCapabilities(snapshot.config.capabilities, snapshot.workspaceInputs?.configDir);
+    agents.setSecrets(snapshot.config.secrets);
     if (snapshot.runtimeBinding) {
       for (const host of runtimeAgents!.listHosts()) agents.addHost(host);
       for (const agent of snapshot.effectiveAgents ?? []) agents.addAgent(agent);
@@ -563,7 +564,7 @@ export class ConfigurationGenerations {
     readonlyRegistry(templates, ["register", "registerSource"]);
     return Object.freeze({
       snapshot,
-      agents: readonlyRegistry(agents, ["addHost", "addAgent", "mapRole", "setCapabilities"]),
+      agents: readonlyRegistry(agents, ["addHost", "addAgent", "mapRole", "setCapabilities", "setSecrets"]),
       workflows,
       templates,
       ...((restoredExecutors ?? this.runtimeExecutors.get(snapshot.runtimeBinding!))

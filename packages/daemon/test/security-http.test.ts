@@ -199,6 +199,28 @@ describe("resource isolation", () => {
     expect((page.body.result as { total: number }).total).toBe(1);
   });
 
+  it("reads operations facts only for the rows a scoped caller is shown", async () => {
+    const events = h.stores.events;
+    const readRange = events.readRange.bind(events);
+    const tails: string[] = [];
+    events.readRange = async (runId, range) => {
+      if (range?.before === Number.MAX_SAFE_INTEGER) tails.push(runId);
+      return readRange(runId, range);
+    };
+    try {
+      const alice = await h.rpc(h.tokens.alice, "runs.list", { operations: true });
+      const rows = (alice.body.result as { runs: { id: string; operations?: { lastSeq: number } }[] }).runs;
+      expect(rows.map((r) => r.id)).toEqual([h.runs.alice]);
+      expect(rows[0]!.operations?.lastSeq).toEqual(expect.any(Number));
+      expect(tails).toEqual([h.runs.alice]);
+      // `runIds` never widens what a scoped caller sees.
+      const asked = await h.rpc(h.tokens.alice, "runs.list", { runIds: [h.runs.bob, h.runs.alice] });
+      expect(ids(asked)).toEqual([h.runs.alice]);
+    } finally {
+      events.readRange = readRange;
+    }
+  });
+
   it("answers another principal's run exactly as it answers a run that does not exist", async () => {
     for (const method of ["runs.get", "runs.events", "runs.resume", "runs.cancel"]) {
       const theirs = await h.rpc(h.tokens.alice, method, { runId: h.runs.bob });

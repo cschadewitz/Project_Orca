@@ -7,9 +7,12 @@
  */
 import { z } from "zod";
 import { AuthorityCapabilityScopeSchema } from "./capabilities.js";
+import { EnvSchema } from "./secrets.js";
 
 // Scoped capabilities (#335) belong with the agent model they select for.
 export * from "./capabilities.js";
+// Secret references (#336) fill the env maps below.
+export * from "./secrets.js";
 
 export const LOCAL_HOST_ID = "local";
 
@@ -588,7 +591,8 @@ export const McpServerConfigSchema = z.object({
   name: z.string(),
   command: z.string(),
   args: z.array(z.string()).default([]),
-  env: z.record(z.string(), z.string()).default({}),
+  /** Literal values, or `{ secret: <id> }` references read on the agent's host at session open (#336). */
+  env: EnvSchema.default({}),
 });
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
 
@@ -625,7 +629,8 @@ export const AgentSpecSchema = z
       .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
       .optional(),
     args: z.array(z.string()).default([]),
-    env: z.record(z.string(), z.string()).default({}),
+    /** Literal values, or `{ secret: <id> }` references read on the agent's host at spawn (#336). */
+    env: EnvSchema.default({}),
     hostId: z.string().default(LOCAL_HOST_ID),
     /** Roles this agent can fill (e.g. "planner", "builder", "reviewer"). */
     roles: z.array(z.string()).default([]),
