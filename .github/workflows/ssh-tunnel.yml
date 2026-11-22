@@ -1,0 +1,163 @@
+# App-managed SSH tunnels to remote daemons (#874), against a real sshd on the runner's
+# loopback: the tunnel's refusals, host-key pinning and restart, and a profile connection
+# end to end through the app's Workspace to a loopback-only daemon. Linux uses the distro
+# OpenSSH; Windows uses the built-in OpenSSH client against the Windows OpenSSH server.
+# The unit halves of the same tests run in the main CI job without an sshd.
+name: SSH tunnel
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/protocol/src/remote-access.ts
+      - packages/protocol/test/remote-access.test.ts
+      - packages/app/src/main/remote-profiles.ts
+      - packages/app/src/client/stream-transport.ts
+      - packages/app/src/main/workspace.ts
+      - packages/app/src/main/connection-target.ts
+      - packages/app/test/remote-profiles*.test.ts
+      - .github/workflows/ssh-tunnel.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ssh-tunnel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: ssh tunnel (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Start a loopback sshd for this user
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v /usr/sbin/sshd >/dev/null || { sudo apt-get update -q && sudo apt-get install -yq openssh-server; }
+          b="$RUNNER_TEMP/sshd"; mkdir -p "$b" ~/.ssh; chmod 700 ~/.ssh
+          ssh-keygen -q -t ed25519 -N "" -f "$b/hostkey"
+          ssh-keygen -q -t ed25519 -N "" -f "$b/client"
+          cat "$b/client.pub" >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys
+          cat > "$b/sshd_config" <<CONF
+          Port 2222
+          ListenAddress 127.0.0.1
+          HostKey $b/hostkey
+          PidFile $b/sshd.pid
+          AuthorizedKeysFile $HOME/.ssh/authorized_keys
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          StrictModes no
+          AllowTcpForwarding local
+          CONF
+          /usr/sbin/sshd -f "$b/sshd_config" -E "$b/sshd.log"
+          for i in $(seq 20); do nc -z 127.0.0.1 2222 && break; sleep 0.5; done
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$b/client" -p 2222 \
+            "$USER@127.0.0.1" true
+          # A hostile user config and known-hosts file: ORCA's tunnels must not read either.
+          # If they did, ProxyCommand would fail every connection and the forwards would differ.
+          cat > ~/.ssh/config <<'CONF'
+          Host *
+            ProxyCommand false
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LocalForward 127.0.0.1:1 127.0.0.1:1
+            RemoteForward 2 127.0.0.1:2
+            PermitLocalCommand yes
+            LocalCommand false
+            ForwardAgent yes
+          CONF
+          echo "orca-live ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" >> ~/.ssh/known_hosts
+          echo "ORCA_SSH_TUNNEL_TEST={\"destination\":\"$USER@127.0.0.1\",\"sshPort\":2222,\"identity\":\"$b/client\"}" >> "$GITHUB_ENV"
+
+      - name: Tunnel and profile tests against the sshd
+        run: pnpm exec vitest run packages/protocol/test/remote-access.test.ts packages/app/test/remote-profiles
+
+  windows:
+    name: ssh tunnel (windows)
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Start the Windows OpenSSH server on loopback
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+            Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
+          }
+          $b = Join-Path $env:RUNNER_TEMP "sshd"
+          New-Item -ItemType Directory -Force $b | Out-Null
+          ssh-keygen -q -t ed25519 -N "" -f "$b\client"
+          if ($LASTEXITCODE -ne 0) { throw "ssh-keygen failed" }
+          # ssh.exe refuses a private key other users can read.
+          icacls.exe "$b\client" /inheritance:r /grant "${env:USERNAME}:F" | Out-Null
+          # The runner user is an administrator: sshd reads administrators_authorized_keys,
+          # which must be owned by and only writable by Administrators and SYSTEM.
+          $keys = "$env:ProgramData\ssh\administrators_authorized_keys"
+          New-Item -ItemType Directory -Force "$env:ProgramData\ssh" | Out-Null
+          Get-Content "$b\client.pub" | Set-Content -Encoding ascii $keys
+          icacls.exe $keys /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F" | Out-Null
+          $config = "$env:ProgramData\ssh\sshd_config"
+          @(
+            "Port 2222",
+            "ListenAddress 127.0.0.1",
+            "PasswordAuthentication no",
+            "PubkeyAuthentication yes",
+            "AllowTcpForwarding yes",
+            "Match Group administrators",
+            "  AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys"
+          ) | Set-Content -Encoding ascii $config
+          # The service may already be running on port 22 with the default config: restart it.
+          $sshd = (Get-Command sshd.exe -ErrorAction SilentlyContinue).Source
+          if (-not $sshd) { $sshd = "$env:WINDIR\System32\OpenSSH\sshd.exe" }
+          & $sshd -t -f $config
+          if ($LASTEXITCODE -ne 0) { throw "sshd_config is invalid" }
+          Restart-Service sshd -Force
+          Get-Service sshd | Format-List Name, Status
+          for ($i = 0; $i -lt 40; $i++) {
+            if ((Test-NetConnection 127.0.0.1 -Port 2222 -WarningAction SilentlyContinue).TcpTestSucceeded) { break }
+            Start-Sleep -Milliseconds 500
+          }
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -i "$b\client" -p 2222 "$env:USERNAME@127.0.0.1" "echo ok"
+          if ($LASTEXITCODE -ne 0) { throw "ssh to the loopback sshd failed" }
+          # A hostile user config: ORCA's tunnels must not read it (ProxyCommand would fail them).
+          New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh" | Out-Null
+          @(
+            "Host *",
+            "  ProxyCommand false",
+            "  StrictHostKeyChecking no",
+            "  LocalForward 127.0.0.1:1 127.0.0.1:1",
+            "  PermitLocalCommand yes",
+            "  LocalCommand false"
+          ) | Set-Content -Encoding ascii "$env:USERPROFILE\.ssh\config"
+          $test = @{ destination = "$env:USERNAME@127.0.0.1"; sshPort = 2222; identity = "$b\client" } | ConvertTo-Json -Compress
+          "ORCA_SSH_TUNNEL_TEST=$test" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Tunnel and profile tests against the sshd
+        run: pnpm exec vitest run packages/protocol/test/remote-access.test.ts packages/app/test/remote-profiles
