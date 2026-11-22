@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { Artifact, OrcaEventInput } from "@orca/core";
 import { memoryStores, type Stores } from "@orca/store";
-import { previewRecovery, runLeaseResource, workflowRevision } from "../src/index.js";
+import { inlineWorkflowDefinition, previewRecovery, runLeaseResource, workflowRevision } from "../src/index.js";
 
 const definition = { id: "wf", version: "1", nodes: { start: { type: "start" } }, edges: [] } as never;
 const REVISION = workflowRevision(definition);
@@ -254,6 +254,74 @@ describe("previewRecovery", () => {
     await stores.workflows.put(definition);
     resume = (await previewRecovery(stores, "run_c")).options.find((o) => o.kind === "resume")!;
     expect(resume).toMatchObject({ readiness: "available", blockers: [], targetRunId: "run_p" });
+  });
+
+  it("an inline child's pin is checked against the definition built from its root", async () => {
+    const body = { start: "a", nodes: { a: { type: "agent" } }, edges: [] };
+    const root = {
+      id: "wf2",
+      version: "1",
+      nodes: { start: { type: "start" }, each: { type: "loop", body: { graph: body } } },
+      edges: [],
+    } as never;
+    const inline = inlineWorkflowDefinition(root, "wf2::each");
+    // The child recorded the inline definition's revision, which is not the root's.
+    expect(workflowRevision(inline)).not.toBe(workflowRevision(root));
+    const setup = async (stored: never) => {
+      const stores = memoryStores();
+      const append = (runId: string, event: Omit<OrcaEventInput, "runId">) =>
+        stores.events.append({ ...event, runId } as OrcaEventInput);
+      await append("run_p", {
+        type: "run.created",
+        payload: { workflowId: "wf2", workflowVersion: "1", workspace: ws, vars: {}, workflowStored: true },
+      });
+      await append("run_p", { type: "run.started", payload: {} } as never);
+      await append("run_p", {
+        type: "step.scheduled",
+        payload: { stepRunId: "p_each", nodeId: "each", nodeType: "loop", attempt: 1 },
+      });
+      await append("run_p", { type: "step.started", payload: { stepRunId: "p_each", inputArtifactIds: [] } });
+      await append("run_p", { type: "run.paused", payload: {} } as never);
+      await append("run_c", {
+        type: "run.created",
+        payload: {
+          workflowId: "wf2::each",
+          workflowVersion: "1",
+          workspace: ws,
+          vars: {},
+          workflowStored: true,
+          parentRunId: "run_p",
+          parentStepRunId: "p_each",
+          provenance: {
+            configGeneration: "gen_1",
+            workflow: { id: "wf2::each", version: "1", revision: workflowRevision(inline) },
+            inputs: [],
+            selections: [],
+          },
+        },
+      });
+      await append("run_c", { type: "run.started", payload: {} } as never);
+      await append("run_c", {
+        type: "step.scheduled",
+        payload: { stepRunId: "c_a", nodeId: "a", nodeType: "agent", attempt: 1 },
+      });
+      await append("run_c", { type: "step.started", payload: { stepRunId: "c_a", inputArtifactIds: [] } });
+      await append("run_c", { type: "run.paused", payload: {} } as never);
+      await stores.workflows.put(stored);
+      await stores.execution.putGeneration("gen_1", { id: "gen_1" });
+      return (await previewRecovery(stores, "run_c")).options.find((o) => o.kind === "resume")!;
+    };
+
+    // A healthy, generation-backed inline child: not blocked, only the restore is unconfirmed.
+    expect(await setup(root)).toMatchObject({
+      readiness: "unverified",
+      blockers: [],
+      unverified: ["generation-restore"],
+      targetRunId: "run_p",
+    });
+    // A stored root that no longer holds the inline graph cannot be continued.
+    const without = { id: "wf2", version: "1", nodes: { start: { type: "start" } }, edges: [] } as never;
+    expect((await setup(without)).blockers).toContain("workflow-missing");
   });
 
   it("a changed definition revision or a missing generation blocks continuing history", async () => {

@@ -34,7 +34,9 @@ interpreter checks when it drives the run) or `blocked`. Unverified is never sho
 Today the one unverified case is a run whose provenance records a configuration generation: the
 read path checks the snapshot is on file (missing blocks), but only a writer can show it still
 restores with its agents and plugins. The read path does check the stored definition's revision
-against the one the run recorded; a mismatch blocks, as it does in the interpreter.
+against the one the run recorded; a mismatch blocks, as it does in the interpreter. For an inline
+child run (a loop body or parallel branch) that is the definition built from its stored root, as
+the interpreter builds it; a root that no longer holds that inline graph blocks as missing.
 
 Every refusal has a reason code (`RecoveryBlocker`) and one sentence saying what to do instead
 (`RECOVERY_BLOCKER_TEXT`). A missing artifact is a blocker on the checkpoints that need it, never an

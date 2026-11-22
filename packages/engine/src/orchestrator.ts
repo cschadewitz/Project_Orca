@@ -239,6 +239,43 @@ export function workflowRevision(def: WorkflowDefinition): string {
   return `sha256:${sha256(canonicalJson(def))}`;
 }
 
+/**
+ * The definition an inline id (`root::loopNode`, `root::parallelNode::branch`) names inside its
+ * root definition, built the way the interpreter builds it, so its `workflowRevision` is the one
+ * an inline run recorded. Pure: it reads nothing, so a read-only recovery preview can use it.
+ */
+export function inlineWorkflowDefinition(root: WorkflowDefinition, workflowId: string): WorkflowDefinition {
+  const [, ...path] = workflowId.split(INLINE_SEP);
+  let graph: WorkflowGraph = root;
+  for (let i = 0; i < path.length; i++) {
+    const node: NodeDef | undefined = graph.nodes[path[i]!];
+    if (!node) throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: node '${path[i]}' not found`);
+    if (node.type === "loop") {
+      if (!("graph" in node.body))
+        throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: loop body is a reference`);
+      graph = node.body.graph;
+    } else if (node.type === "parallel") {
+      if (node.forEach) {
+        if (!node.forEach.body || !("graph" in node.forEach.body))
+          throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: forEach body is a reference`);
+        graph = node.forEach.body.graph;
+      } else {
+        const branch = path[++i];
+        const ref = branch !== undefined ? node.branches?.[branch] : undefined;
+        if (!ref || !("graph" in ref))
+          throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: branch '${branch}' not found`);
+        graph = ref.graph;
+      }
+    } else
+      throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: node '${path[i]}' has no nested graph`);
+  }
+  return inlineDefinition(workflowId, graph, root.version);
+}
+
+function inlineDefinition(id: string, graph: WorkflowGraph, version: string): WorkflowDefinition {
+  return { id, name: id, version, vars: {}, inputs: {}, start: graph.start, nodes: graph.nodes, edges: graph.edges };
+}
+
 function versionCollision(def: WorkflowDefinition): OrcaError {
   return new OrcaError(
     "WORKFLOW_INVALID",
@@ -1239,35 +1276,7 @@ export class Orchestrator {
   }
 
   private walkInline(root: WorkflowDefinition, workflowId: string): WorkflowDefinition {
-    const [, ...path] = workflowId.split(INLINE_SEP);
-    let graph: WorkflowGraph = root;
-    for (let i = 0; i < path.length; i++) {
-      const node: NodeDef | undefined = graph.nodes[path[i]!];
-      if (!node)
-        throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: node '${path[i]}' not found`);
-      if (node.type === "loop") {
-        if (!("graph" in node.body))
-          throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: loop body is a reference`);
-        graph = node.body.graph;
-      } else if (node.type === "parallel") {
-        if (node.forEach) {
-          if (!node.forEach.body || !("graph" in node.forEach.body))
-            throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: forEach body is a reference`);
-          graph = node.forEach.body.graph;
-        } else {
-          const branch = path[++i];
-          const ref = branch !== undefined ? node.branches?.[branch] : undefined;
-          if (!ref || !("graph" in ref))
-            throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: branch '${branch}' not found`);
-          graph = ref.graph;
-        }
-      } else
-        throw new OrcaError(
-          "WORKFLOW_NOT_FOUND",
-          `inline workflow ${workflowId}: node '${path[i]}' has no nested graph`,
-        );
-    }
-    return this.inlineDefinition(workflowId, graph, root.version);
+    return inlineWorkflowDefinition(root, workflowId);
   }
 
   /**
@@ -1295,7 +1304,7 @@ export class Orchestrator {
   }
 
   private inlineDefinition(id: string, graph: WorkflowGraph, version: string): WorkflowDefinition {
-    return { id, name: id, version, vars: {}, inputs: {}, start: graph.start, nodes: graph.nodes, edges: graph.edges };
+    return inlineDefinition(id, graph, version);
   }
 
   // -------------------------------------------------------------- interpreter

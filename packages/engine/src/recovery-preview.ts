@@ -10,9 +10,10 @@ import {
   type OrcaEventPayload,
   type RecoveryAssessment,
   type RecoveryRunFacts,
+  type WorkflowDefinition,
 } from "@orca/core";
 import { lapsed, type Stores } from "@orca/store";
-import { INLINE_SEP, runLeaseResource, workflowRevision } from "./orchestrator.js";
+import { INLINE_SEP, inlineWorkflowDefinition, runLeaseResource, workflowRevision } from "./orchestrator.js";
 
 export interface RecoveryPreviewOptions {
   /** The checkpoint to describe: a step run id, or a node id that names exactly one. */
@@ -86,9 +87,13 @@ async function runFacts(
   const created = first.payload;
   const rootId = state.run.workflowId.split(INLINE_SEP)[0]!;
   const workflowStored = created.workflowStored === true;
-  const definition = workflowStored
+  const root = workflowStored
     ? await stores.workflows.get(rootId, state.run.workflowVersion).catch(() => undefined)
     : undefined;
+  // An inline run (`root::node...`) recorded the revision of the definition the interpreter
+  // builds from its root, so that is what is compared; a root that no longer holds the inline
+  // graph cannot be continued, as the interpreter would refuse it too.
+  const definition = root && rootId !== state.run.workflowId ? inlineOrUndefined(root, state.run.workflowId) : root;
   const workflowReadable = !workflowStored || definition !== undefined;
   // The interpreter refuses to continue a run whose stored definition no longer has the revision
   // its provenance recorded, or whose recorded generation is gone (orchestrator loadContext).
@@ -118,4 +123,12 @@ async function runFacts(
     facts: { state, workflowStored, workflowReadable, revision, generation, executionInputsAvailable, leased },
     created,
   };
+}
+
+function inlineOrUndefined(root: WorkflowDefinition, workflowId: string): WorkflowDefinition | undefined {
+  try {
+    return inlineWorkflowDefinition(root, workflowId);
+  } catch {
+    return undefined;
+  }
 }
