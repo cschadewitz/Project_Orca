@@ -45,5 +45,7 @@ Reading it:
   64-request read window keeps the pipe full. A single large *write* is within 10–20% of
   `cat > file`: the per-command path is one unframed stream, while SFTP frames and
   acknowledges every 32 KiB chunk. Writes are not on the pickup path and stay at the same
-  order of magnitude; the commit after this run removed two buffer copies per WRITE packet,
-  and the PR's later benchmark runs show the effect.
+  order of magnitude. Removing two buffer copies per WRITE packet (the next commit) did not
+  move the ratio: on [run 45005232465](https://github.com/cschadewitz/Project_Orca/actions/runs/45005232465)
+  (an EPYC 7763 runner) a 50 MB write was 476 ms per-command and 574 ms over SFTP on loopback, and
+  1114 ms and 1227 ms at 20 ms RTT, while the small-file and pickup ratios held (22×, 9.5×).
