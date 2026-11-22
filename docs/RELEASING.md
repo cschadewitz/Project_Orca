@@ -106,7 +106,13 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    no-op; different bytes under the same name stop it. Its summary gives the installer's **SHA-256**. To check by hand:
    `gh api repos/$R/releases/$ID --jq '{draft, name, tag_name, target_commitish, assets: [.assets[] | {name, digest}]}'`
    must show `draft: true`, `name: "v$V"`, `target_commitish` equal to `SHA`, and exactly the
-   `.deb` and the two `.exe`s. `tag_name` may read `v$V` or `untagged-…`; step 6 sets it.
+   `.deb` and the two `.exe`s (plus the three server bundle files of step 3a). `tag_name` may
+   read `v$V` or `untagged-…`; step 6 sets it.
+3a. **Automatic, from the 0.8 line on** ([The server bundle](#the-server-bundle)): the same Release (publish) run's `server-bundle` job dispatches
+   **Release (server bundle)** (`release-server-bundle.yml`) for `SHA`, which builds, signs,
+   checks and attaches the headless server bundle ([The server bundle](#the-server-bundle))
+   and records it in the draft's notes. A reconcile every 6 hours re-dispatches it for any
+   release newer than Latest without that record. Step 6 refuses a final from that line without it.
 4. If either automatic step did not run (the switch is off, or the signing run was refused),
    dispatch **Windows signed (spike)** for `SHA` by hand, then **Release (attach signed
    installer)** with that run's id (`signed_run_id`); with the switch on the attach follows
@@ -161,12 +167,18 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    targeting `SHA`, exactly those two assets with those digests, and the installer's digest
    equal to the signing record. It also needs either the arm64 installer the same signing
    run recorded, with acceptance verified against the acceptance run and its evidence
-   (`tools/deploy/feed-arches.js verify`), or the x64-only decision with no arm64 installer. It refuses a version that is not newer than the current
+   (`tools/deploy/feed-arches.js verify`), or the x64-only decision with no arm64 installer,
+   and, from the 0.8 line, the server bundle with its receipt ([The server bundle](#the-server-bundle)): the three
+   files with exactly the digests its one record names, the signed manifest naming this
+   version, commit and archive digest, and a successful receipt job of the recorded Release
+   (server bundle) run committing to this release id, version, commit and those digests. It refuses a version that is not newer than the current
    Latest, a draft without exactly one x64 upgrade check record pointing at a successful run
    whose receipt names exactly this draft, its x64 installer and the current Latest and its
    installer (step 5), and an existing tag at another commit, publishes with the tag and target stated
    explicitly, and reads back the published digests, the tag and Latest. It shares one queue
-   with the attach, so the two never interleave; publish only through it, not by editing the
+   (`release-draft-writes`, which keeps every waiting job) with every job that rewrites a
+   release's notes, including the signed attach and the server bundle's attach, so none of
+   them interleave; publish only through it, not by editing the
    draft by hand.
 7. Where the desktop feed is enabled, publishing feeds that signing run automatically
    (step 6 dispatches **Desktop feed (automatic)**, which dispatches **Desktop feed (publish signed)**; see
@@ -178,6 +190,60 @@ checks pass for the commit you mean to release (upload the `.deb` by id if it is
 Delete a draft only when its target or assets are wrong, then dispatch **Release
 (publish)** again. More than one draft for the version is always a stop: delete the extras
 after checking which one, if any, is valid.
+
+### The server bundle
+
+From the 0.8 release line (`SERVER_FROM=0.8.0` in `tools/deploy/release-attach.sh`: the 0.8.0
+release candidates and every final from 0.8.0 on), every real release also carries a prebuilt
+headless server (#876), for servers that should install and update without a toolchain, `gh`
+or a clone. Releases before it (0.7.x, including 0.7.1) keep their approved desktop asset set:
+nothing is dispatched, reconciled or required for them, and server files on such a draft are
+unexpected assets.
+
+| File | What it is |
+|---|---|
+| `orca-server-X.Y.Z-linux-x64.tar.xz` | One directory: `orca-daemon.mjs` (the CLI, daemon and ACP facade, bundled by `build-daemon.js --server`), the two programs it starts beside itself (`native-io-worker.js`, `scripted-agent/main.js`), `runtime/bin/node` (the Node 24 the release workflow built with, and its licence), the shipped `workflows/` and `templates/`, `release-compatibility.json` and `orca-server.json`. |
+| `orca-server-X.Y.Z-linux-x64.manifest.json` | Version, source commit, the archive's name, size and **SHA-256**, the entry, the Node version and the compatibility contract. This is the file that is signed. |
+| `orca-server-X.Y.Z-linux-x64.manifest.json.sigstore.json` | The manifest's Sigstore bundle: a keyless cosign signature with its short-lived certificate and transparency-log entry. |
+
+**Release (server bundle)** (`release-server-bundle.yml`) produces them, unattended, from
+`main`: it confirms the release `vX.Y.Z` targets the commit and the commit is on `main`, builds
+that commit, assembles the archive (`tools/deploy/server-bundle.py`, deterministic for its
+inputs), signs the manifest with `cosign sign-blob` using the job's GitHub OIDC identity (no
+key exists anywhere to store, rotate or leak), stages the signed files with
+`orca-release.py stage --bundle` inside a `python:3.12-slim` container that has no `gh`, `git`,
+`mise`, `pnpm` or Node, and only then attaches them by release id and records their digests in
+the release notes (`<!-- orca-server-run: RUN archive manifest signature -->`).
+
+The expected signer is recorded in `tools/deploy/orca-release.py` (`BUNDLE_SIGNER` and its
+neighbours): the certificate must name
+`https://github.com/cschadewitz/Project_Orca/.github/workflows/release-server-bundle.yml@refs/heads/main`,
+issuer `https://token.actions.githubusercontent.com`, trigger `workflow_dispatch`. A pull
+request's runs carry a `refs/pull/…` identity and can never match. Moving or renaming the
+workflow is therefore a change to that constant in the same pull request, and servers
+verify with the adapter they have installed, so update the adapter on servers first.
+
+**Timing.** A final stays a draft until its bundle is attached: Release (publish final)
+refuses it without the bundle's **receipt**, which it checks right before publishing. The
+receipt is the one well-formed record (a missing record waits; a duplicate or malformed one
+is a stop to fix by hand, and is never written over), the three files with exactly the
+recorded digests, the signed manifest itself naming this version, commit and archive digest,
+and the recorded run: a successful Release (server bundle) dispatch from `main` of this
+repository whose run name is `Release (server bundle) vX.Y.Z at SHA`, whose signing and
+clean-host jobs passed, and whose attach job passed under the name
+`server bundle receipt: release ID vX.Y.Z SHA sha256:R`. `R` is the SHA-256 of
+`orca-server-receipt/1 release=ID version=X.Y.Z sha=SHA files=A M S` (the three files' digests,
+`sha256:`-prefixed, archive first), computed by the clean-host job from the exact files it
+verified, only after it passed; the attach job uploads only files with those digests. So the
+receipt is evidence from the trusted run itself, independent of the notes and the draft. A **release candidate** is different: it is published as
+soon as Release (publish) finishes, and its bundle is attached asynchronously by the run that
+job dispatches (normally within half an hour). Until the record is in its notes the rc has no
+usable bundle, and `orca-release.py stage --bundle` refuses it with "no complete server bundle
+yet". Check with
+`gh release view vX.Y.Z-rc.N --json body,assets --jq '[(.body | test("orca-server-run")), [.assets[].name | select(startswith("orca-server-"))]]'`.
+
+Dry runs build no server bundle: a rehearsed ref is untrusted and is never signed.
+linux-arm64 is deferred; the bundle is linux-x64 only.
 
 ## The artifacts
 

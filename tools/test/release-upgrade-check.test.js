@@ -1,5 +1,5 @@
 /** release-upgrade-check.yml (#566): the native Windows upgrade check that gates a final. */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { expect, it } from "vitest";
 
@@ -84,19 +84,26 @@ it("builds the baseline from its resolved commit and checks both installers' byt
 });
 
 it("keeps every waiting member of the shared draft-writes queue (none replaces another)", () => {
+  // Every job that reads and rewrites a release's notes, found by scanning all workflows, so a
+  // new writer outside the group or with another queue policy fails here.
   const members = [];
-  for (const name of [
-    "release-attach-signed.yml",
-    "release-accept-arm64.yml",
-    "release-publish-final.yml",
-    "release-upgrade-check.yml",
-  ]) {
+  for (const name of readdirSync(new URL("../../.github/workflows/", import.meta.url))
+    .filter((n) => n.endsWith(".yml"))
+    .sort()) {
     const w = workflow(name);
-    const groups = [w.concurrency, ...Object.values(w.jobs).map((j) => j.concurrency)];
-    for (const c of groups) if (c?.group === "release-draft-writes") members.push([name, c]);
+    if (w.concurrency?.group === "release-draft-writes") members.push([name, "(workflow)", w.concurrency]);
+    for (const [job, j] of Object.entries(w.jobs))
+      if (j.concurrency?.group === "release-draft-writes") members.push([name, job, j.concurrency]);
   }
-  expect(members.length).toBe(5);
-  for (const [, c] of members)
+  expect(members.map(([name, job]) => `${name} ${job}`)).toEqual([
+    "release-accept-arm64.yml record",
+    "release-accept-arm64.yml x64-only",
+    "release-attach-signed.yml attach",
+    "release-publish-final.yml (workflow)",
+    "release-server-bundle.yml attach",
+    "release-upgrade-check.yml record",
+  ]);
+  for (const [, , c] of members)
     expect(c).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
 });
 

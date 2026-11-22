@@ -16,7 +16,14 @@
  * Nothing here is Electron-specific: the same file is the release's standalone daemon
  * artifact, runnable on any Node the repository supports.
  *
- * Usage: node packages/app/scripts/build-daemon.js [--outfile <path>]
+ * `--server` also writes, beside the bundle, the two programs the daemon starts from a path
+ * relative to its own module: `native-io-worker.js` (the host-resources telemetry worker) and
+ * `scripted-agent/main.js` (the scripted agent `orca demo` drives). Both are ESM, so the
+ * directory needs a `package.json` with `"type": "module"`, which the headless server bundle
+ * (tools/deploy/server-bundle.py, #876) carries. The desktop app's packaging takes the `.mjs`
+ * alone and is unchanged.
+ *
+ * Usage: node packages/app/scripts/build-daemon.js [--outfile <path>] [--server]
  */
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -39,7 +46,7 @@ const appDir = fileURLToPath(new URL("../", import.meta.url));
 const { version: releaseVersion } = createRequire(import.meta.url)("../../../package.json");
 
 const { values } = parseArgs({
-  options: { outfile: { type: "string" } },
+  options: { outfile: { type: "string" }, server: { type: "boolean" } },
 });
 
 const cliDist = fileURLToPath(new URL("../../cli/dist/", import.meta.url));
@@ -92,6 +99,28 @@ const result = await build({
   logLevel: "info",
   metafile: true,
 });
+
+if (values.server) {
+  // Built from the compiled packages, the same JavaScript the unbundled daemon starts.
+  for (const [entry, target] of [
+    ["../../daemon/dist/host-resources/native-io-worker.js", "native-io-worker.js"],
+    ["../../testing/dist/scripted-agent/main.js", "scripted-agent/main.js"],
+  ]) {
+    await build({
+      entryPoints: [fileURLToPath(new URL(entry, import.meta.url))],
+      outfile: join(dirname(outfile), target),
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      target: "node24",
+      banner: {
+        js: "import { createRequire as __createRequire } from 'node:module';\nconst require = __createRequire(import.meta.url);",
+      },
+      minify: false,
+      logLevel: "info",
+    });
+  }
+}
 
 const bytes = Object.values(result.metafile.outputs).reduce((total, out) => total + out.bytes, 0);
 console.log(`daemon bundle: ${outfile.replace(repoRoot, "")} (${(bytes / 1024 / 1024).toFixed(1)} MiB)`);
