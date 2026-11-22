@@ -1745,15 +1745,18 @@ export class Orchestrator {
           // outside ORCA: no agent turn was sent, and a node that leaves no such evidence said so
           // itself. One that may have acted fails the run instead, for an operator's review (#357).
           const step = rc.state.steps[stepRunId]!;
+          // `repeatable` permits a repeat without claiming anything about the effect: only `none`
+          // is recorded, so an attempt left over when the budget is spent still needs review.
           const acted = mayHaveActed(outcome.effect === "none" ? { ...step, noEffect: true } : step);
-          const willRetry = outcome.retryable !== false && attempt < retryBudget(node) && !acted;
+          const repeatable = outcome.effect === "repeatable" && step.dispatched !== true;
+          const willRetry = outcome.retryable !== false && attempt < retryBudget(node) && (!acted || repeatable);
           await rc.emit({
             type: "step.failed",
             payload: {
               stepRunId,
               error: outcome.error,
               willRetry,
-              ...(outcome.effect ? { effect: outcome.effect } : {}),
+              ...(outcome.effect === "none" ? { effect: "none" as const } : {}),
             },
           });
           if (willRetry) {

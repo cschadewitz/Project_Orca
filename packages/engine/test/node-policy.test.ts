@@ -1,7 +1,14 @@
 /** Retry budget and run termination are node-type agnostic: custom node types get both. */
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry, validateWorkflow } from "@orca/core";
+import {
+  FakeClock,
+  needsEffectReview,
+  parseWorkflow,
+  TemplateRegistry,
+  WorkflowRegistry,
+  validateWorkflow,
+} from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, builtinExecutors, completed, failed } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
@@ -18,12 +25,18 @@ function make(yaml: string) {
       execute: async (ctx) => {
         const n = (attempts.get(ctx.nodeId) ?? 0) + 1;
         attempts.set(ctx.nodeId, n);
-        const node = ctx.node as unknown as { succeedOn?: number; mayAct?: boolean };
+        const node = ctx.node as unknown as { succeedOn?: number; mayAct?: boolean | "repeatable" };
         const succeedOn = node.succeedOn ?? 1;
         // Unless told otherwise, it states that a failed attempt did nothing outside ORCA.
         return n >= succeedOn
           ? completed()
-          : failed("FLAKY", `attempt ${n} failed`, {}, true, node.mayAct ? undefined : "none");
+          : failed(
+              "FLAKY",
+              `attempt ${n} failed`,
+              {},
+              true,
+              node.mayAct === "repeatable" ? "repeatable" : node.mayAct ? undefined : "none",
+            );
       },
     })
     // Stands in for the agent executor: attempt 1 fails before any prompt is sent, attempt 2
@@ -62,7 +75,7 @@ function make(yaml: string) {
   return { orchestrator, workflows };
 }
 
-const flaky = (opts: { succeedOn: number; maxAttempts?: number; mayAct?: boolean }) => `
+const flaky = (opts: { succeedOn: number; maxAttempts?: number; mayAct?: boolean | "repeatable" }) => `
 id: flaky
 name: flaky
 start: s
@@ -71,7 +84,7 @@ nodes:
   work:
     type: "custom:flaky"
     succeedOn: ${opts.succeedOn}
-    ${opts.mayAct ? "mayAct: true" : ""}
+    ${opts.mayAct ? `mayAct: ${opts.mayAct}` : ""}
     ${opts.maxAttempts === undefined ? "" : `maxAttempts: ${opts.maxAttempts}`}
   e: { type: end }
 edges: [{ from: s, to: work }, { from: work, to: e }]
@@ -107,6 +120,18 @@ describe("node-agnostic retry and termination", () => {
     const failedEvent = (await orchestrator.events(state.run.id)).find((e) => e.type === "step.failed");
     expect(failedEvent?.payload).toMatchObject({ willRetry: false });
     expect(failedEvent?.payload).not.toHaveProperty("effect");
+  });
+
+  it("repeats a repeatable attempt within its budget, and leaves the last one for review (#357)", async () => {
+    const { orchestrator } = make(flaky({ succeedOn: 5, maxAttempts: 2, mayAct: "repeatable" }));
+    const state = await orchestrator.startAndRun({ workflowId: "flaky" });
+    expect(state.run.status).toBe("failed");
+    expect(attempts.get("work")).toBe(2);
+    const work = state.stepOrder.map((id) => state.steps[id]!).filter((s) => s.nodeId === "work");
+    expect(work.map((s) => s.noEffect)).toEqual([undefined, undefined]);
+    expect(needsEffectReview(work[1]!)).toBe(true);
+    const failures = (await orchestrator.events(state.run.id)).filter((e) => e.type === "step.failed");
+    expect(failures.map((e) => e.payload)).not.toContainEqual(expect.objectContaining({ effect: expect.anything() }));
   });
 
   it("retries an agent step that failed before sending a prompt, but not one that sent it (#357)", async () => {

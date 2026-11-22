@@ -235,17 +235,25 @@ export function jevEvalExecutor(options: JevEvalOptions = {}): NodeExecutor {
       return fail(err.code === "INTERNAL" ? "JEV_PROVIDER" : err.code, err.message, true, err.details, true);
     }
 
+    // From here the request was answered: every failure is after it was sent.
     const checked = validateJevResponse(node.questions, raw);
     if (!checked.ok)
-      fail("JEV_RESPONSE_INVALID", `JEV response rejected: ${checked.problems.join("; ")}`, false, {
-        problems: checked.problems,
-      });
+      fail(
+        "JEV_RESPONSE_INVALID",
+        `JEV response rejected: ${checked.problems.join("; ")}`,
+        false,
+        { problems: checked.problems },
+        true,
+      );
     const { answers, usage, model: resolvedModel } = checked.response;
     if (resolvedModel !== undefined && resolvedModel !== model)
-      fail("JEV_MODEL_MISMATCH", `asked for model '${model}' but '${resolvedModel}' answered`, false, {
-        requested: model,
-        resolved: resolvedModel,
-      });
+      fail(
+        "JEV_MODEL_MISMATCH",
+        `asked for model '${model}' but '${resolvedModel}' answered`,
+        false,
+        { requested: model, resolved: resolvedModel },
+        true,
+      );
 
     return {
       status: "ok",
@@ -319,10 +327,10 @@ export function jevEvalExecutor(options: JevEvalOptions = {}): NodeExecutor {
       } catch (e) {
         if (!(e instanceof EvalFailure)) throw e;
         const { code, message, retryable, details, sent } = e.failure;
-        // Before the request is sent nothing outside ORCA happened; after it, the attempt is
-        // repeated only when the node says asking again is safe (#357).
+        // Before the request is sent nothing outside ORCA happened. After it nothing is claimed:
+        // the node may only permit asking again within its budget (#357).
         if (node.onError === "fail" || code === "WORKFLOW_INVALID")
-          return failed(code, message, details, retryable, !sent || node.repeatable ? "none" : undefined);
+          return failed(code, message, details, retryable, !sent ? "none" : node.repeatable ? "repeatable" : undefined);
         ctx.logger.warn("jev evaluation failed; recording the failure as the node asked", { code, message });
         return record(ctx, node, {
           status: "failed",

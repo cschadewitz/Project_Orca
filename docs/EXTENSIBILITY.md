@@ -59,8 +59,9 @@ Conventions that keep extensions reviewable:
   not into side channels.
 - Nothing in the interpreter is keyed on node type: a custom node gets retries by setting
   `maxAttempts:` on the node (its executor must return `failed(..., retryable = true, "none")`:
-  the last argument states the attempt did nothing outside ORCA; without it the attempt is
-  assumed to have acted and is not repeated, see [recovery](recovery.md#side-effect-review)), and
+  the last argument states the attempt did nothing outside ORCA, or `"repeatable"` that it may
+  have acted but repeating it is safe; without it the attempt is assumed to have acted and is
+  not repeated, see [recovery](recovery.md#side-effect-review)), and
   ends the run by returning `completed({ outcome, message })` — no `end` node needed after it.
 - Custom node types are `custom:<kebab-name>`; validation of their fields is the plugin's job,
   and it has two moments. Give the executor a `validate(node)` returning

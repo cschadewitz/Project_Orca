@@ -37,11 +37,14 @@ export type StepOutcome =
       error: { code: string; message: string; details?: Record<string, unknown> };
       retryable?: boolean;
       /**
-       * The executor's statement that this attempt did nothing outside ORCA (#357). Recorded on
-       * `step.failed`; without it, a node that leaves no other evidence is assumed to have
-       * acted, and its retry budget does not repeat it. Ignored once an agent turn was sent.
+       * What this attempt may have done outside ORCA (#357). `none`: the executor states it did
+       * nothing outside, recorded on `step.failed`, so its retry budget may repeat it and no
+       * review is needed. `repeatable`: it may have acted, but repeating it is safe, so the retry
+       * budget may repeat it; nothing is claimed about its effect, and once the budget is spent
+       * it waits for review like any other. Omitted: a node that leaves no other evidence is
+       * assumed to have acted and is not repeated. Both are ignored once an agent turn was sent.
        */
-      effect?: "none";
+      effect?: "none" | "repeatable";
     }
   /** The step cannot finish in this process (a human must answer, or a child run parked); the run is paused and re-attempts the node on resume. */
   | { kind: "paused"; reason: string; details?: Record<string, unknown> };
@@ -174,8 +177,8 @@ export const failed = (
   message: string,
   details?: Record<string, unknown>,
   retryable = false,
-  /** "none": this attempt did nothing outside ORCA, so its retry budget may repeat it (#357). */
-  effect?: "none",
+  /** See the failed outcome's `effect` (#357). */
+  effect?: "none" | "repeatable",
 ): StepOutcome => ({
   kind: "failed",
   error: details ? { code, message, details } : { code, message },

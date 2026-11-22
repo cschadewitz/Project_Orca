@@ -116,8 +116,11 @@ The retry budget follows the same rule. A failed attempt is retried automaticall
 - Any other node that can act outside ORCA (a plugin's custom node) is retried only when its
   executor states the attempt did nothing outside, `failed(code, message, details, true,
   "none")`; `step.failed` records that as `effect: "none"`. Without it the attempt is assumed to
-  have acted. `custom:jev-eval` states it for failures before its request is sent, and after
-  that only when the node sets `repeatable: true`.
+  have acted. An executor can instead pass `"repeatable"`: the attempt may have acted but
+  repeating it is safe, so the budget may repeat it; nothing is recorded about its effect, so an
+  attempt left when the budget is spent waits for review like any other. `custom:jev-eval`
+  states `none` for failures before its request is sent, and `repeatable` after that only when
+  the node sets `repeatable: true`; an invalid or wrong-model answer comes after the request too.
 - Steps that act only inside ORCA (gates, `set`, containers) are retried as before.
 
 A step paused on purpose is different: an agent that asked a person, or a container waiting on a

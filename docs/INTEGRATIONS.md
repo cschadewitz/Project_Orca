@@ -353,8 +353,10 @@ pnpm run orca --config examples/jev/orca.config.yaml run ai-sdlc-jev-shadow --va
 Under `onError: fail` (the default), `maxAttempts:` on the node retries what the API says
 to retry — 429, 529, 5xx, a network error, a timeout — and nothing else. Once the request was
 sent, its outcome can be unknown (a timeout or a lost response), so an attempt is repeated only
-when the node sets `repeatable: true`, stating that asking the model again is safe; without it
-the run fails and the step waits for a [side-effect review](recovery.md#side-effect-review).
+when the node sets `repeatable: true`, permitting ORCA to ask the model again; without it the
+run fails and the step waits for a [side-effect review](recovery.md#side-effect-review).
+`repeatable` is permission, not a claim that nothing happened: an attempt still failing when
+`maxAttempts` is spent waits for review too, and so does an invalid or wrong-model answer.
 Failures before the request is sent are retried either way.
 
 ### Bounded input, and what the model is not for
