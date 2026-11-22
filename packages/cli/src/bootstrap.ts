@@ -508,7 +508,10 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     // (`orca agent ping`), and standing grants a workspace recorded for its real runs are
     // durable workspace state of exactly the kind `ephemeral` means to leave alone.
     ...(opts.ephemeral
-      ? { sessionFactory: delegating(openAcpSession) }
+      ? // The bare ACP factory, no sidecar; delegating only when there is a remote to go to.
+        config.remotes.length
+        ? { sessionFactory: delegating(openAcpSession) }
+        : {}
       : {
           sessionFactory: (options: OpenSessionOptions) => {
             const current = agents.resolve(options.agent.id).agent;
