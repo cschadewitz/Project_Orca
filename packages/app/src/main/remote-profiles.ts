@@ -260,6 +260,7 @@ export class RemoteProfiles {
       discovery: Discovery;
       account: string;
       root: string;
+      current: string | null;
       version: string;
       revision: number;
       until: number;
@@ -640,6 +641,8 @@ export class RemoteProfiles {
       revision,
       keys: discovery.keys,
       account,
+      root,
+      current,
       version: options.version,
       scope: "install-and-sign-in",
     });
@@ -648,6 +651,7 @@ export class RemoteProfiles {
       discovery,
       account,
       root,
+      current,
       version: options.version,
       revision,
       until: Date.now() + CONFIRMATION_MS,
@@ -710,7 +714,7 @@ export class RemoteProfiles {
     let command: string[];
     let program: string;
     try {
-      command = setupCommand(options.version, profile.remotePort, pending.account);
+      command = setupCommand(options.version, profile.remotePort, pending);
       program = setupProgram(options.scripts);
     } catch (error) {
       dropDiscovery(pending.discovery);

@@ -159,7 +159,20 @@ describe("orca remote add (#881)", () => {
     const pins = setup.options.knownHostsFile;
     expect(dirname(pins)).toBe(join(config, "orca", "known_hosts"));
     expect(readFileSync(pins, "utf8")).toContain(KEY);
-    expect(setup.command).toEqual(["python3", "-", "--version", "0.8.0", "--port", "6722", "--expect-account", "dev"]);
+    expect(setup.command).toEqual([
+      "python3",
+      "-",
+      "--version",
+      "0.8.0",
+      "--port",
+      "6722",
+      "--expect-account",
+      "dev",
+      "--expect-root",
+      "/home/dev/.local/share/orca-server",
+      "--expect-current",
+      "none",
+    ]);
     expect(setup.options).toMatchObject({ pinnedOnly: true, expectKeys: expect.any(String) });
     expect(setup.options.profile).toMatchObject({ destination: "dev@lab", sshPort: 2222 });
     expect(setup.input).toContain("EMBEDDED_ADAPTER");
@@ -186,6 +199,17 @@ describe("orca remote add (#881)", () => {
     expect(run.errs.at(-1)).toContain("does not match");
     expect(existsSync(pinFile())).toBe(false);
     expect(server.commands.every((c) => c.command.includes("--inspect"))).toBe(true);
+
+    // The same key, but another directory, or a repair where an install was confirmed.
+    for (const changed of [
+      INSPECTED.stdout.replace("/home/dev/.local/share/orca-server", "/srv/orca-server"),
+      INSPECTED.stdout.replace('"current":null', '"current":"0.8.0"'),
+    ]) {
+      const moved = fakeServer({ inspect: { ...INSPECTED, stdout: changed } });
+      run = ctx(["add", "lab"], { confirm: confirmation });
+      expect(await remoteCommand(run.context, { tunnel: moved.make, scripts: scripts(), version: "0.8.0" })).toBe(2);
+      expect(moved.server.commands.every((c) => c.command.includes("--inspect"))).toBe(true);
+    }
 
     // The same key under another account, or for another version: also not what was confirmed.
     const other = fakeServer({

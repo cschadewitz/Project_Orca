@@ -124,7 +124,7 @@ export async function remoteCommand(
     return finish(ctx, destination, found);
   }
   const { account, root, current } = found.inspected;
-  const code = confirmationCode({ profile, keys: discovery.keys, account, version, scope: "install" });
+  const code = confirmationCode({ profile, keys: discovery.keys, account, root, current, version, scope: "install" });
   if (confirm !== code) {
     dropDiscovery(discovery);
     const fingerprints = keyFingerprints(discovery.keys);
@@ -172,7 +172,13 @@ export async function remoteCommand(
     await tunnel.open();
     // Only the setup that was confirmed counts: what the server reports must match it.
     outcome = confirmedResult(
-      readSetup(await tunnel.exec(setupCommand(version, profile.remotePort, account), SETUP_TIMEOUT_MS, program)),
+      readSetup(
+        await tunnel.exec(
+          setupCommand(version, profile.remotePort, { account, root, current }),
+          SETUP_TIMEOUT_MS,
+          program,
+        ),
+      ),
       { version, port: profile.remotePort, account, root },
     );
   } finally {

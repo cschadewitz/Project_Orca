@@ -122,7 +122,7 @@ class ServerSetupTests(unittest.TestCase):
         state.update(values)
         (self.bin / "systemd.json").write_text(json.dumps(state))
 
-    def setup(self, version="0.8.0", expect_account=None):
+    def setup(self, version="0.8.0", expect_account=None, **expect):
         test = self
 
         class Under(setup_module.Setup):
@@ -134,6 +134,8 @@ class ServerSetupTests(unittest.TestCase):
                 (stage / "runtime" / "bin").mkdir(parents=True)
                 (stage / "runtime" / "bin" / "node").write_text("#!/bin/sh\n")
                 (stage / "orca-daemon.mjs").write_text("// daemon\n")
+                (stage / "workflows").mkdir()
+                (stage / "workflows" / "review.yaml").write_text("name: review\n")
                 release.write_json(stage / ".orca-release.json", {
                     "version": self.version, "sha": "a" * 40, "node": "runtime/bin/node", "entry": "orca-daemon.mjs",
                     "source": "bundle", "compatibility": {"storeEpoch": "e", "protocol": {"major": 2, "minor": 2}, "capabilities": []}})
@@ -144,15 +146,15 @@ class ServerSetupTests(unittest.TestCase):
                     raise RuntimeError("Health check failed: connection refused")
 
         made = Under(None, version, 6722, ADAPTER, home=self.home, systemctl=str(self.bin / "systemctl"),
-                     expect_account=expect_account)
+                     expect_account=expect_account, **expect)
         made.proc = self.proc
         made.loginctl_bin = str(self.bin / "loginctl")
         return made
 
-    def run_setup(self, version="0.8.0", inspect=False, expect_account=None):
+    def run_setup(self, version="0.8.0", inspect=False, expect_account=None, **expect):
         out = io.StringIO()
         with redirect_stdout(out):
-            made = self.setup(version, expect_account)
+            made = self.setup(version, expect_account, **expect)
             code = made.inspect() if inspect else made.run()
         lines = [json.loads(line[len("orca-setup: "):]) for line in out.getvalue().splitlines() if line.startswith("orca-setup: ")]
         return code, lines
@@ -164,12 +166,12 @@ class ServerSetupTests(unittest.TestCase):
         code, lines = self.run_setup()
         self.assertEqual(code, 0, lines)
         self.assertEqual(self.results(lines), {"account": "ok", "platform": "ok", "inventory": "ok", "fence": "ok",
-                                               "recover": "ok", "existing": "ok",
+                                               "confirmed": "ok", "recover": "ok", "existing": "ok",
                                                "adapter": "changed", "files": "changed",
                                                "stage": "changed", "select": "changed", "unit": "changed", "linger": "ok",
                                                "start": "changed"})
         self.assertEqual(lines[-1], {"done": True, "root": str(self.root), "command": str(self.root / "orca"),
-                                     "account": setup_module.getpass.getuser(), "version": "0.8.0", "port": 6722})
+                                     "account": setup_module.pwd.getpwuid(os.geteuid()).pw_name, "version": "0.8.0", "port": 6722})
         self.assertFalse((self.root / ".setup-journal.json").exists())
         self.assertEqual(self.staged, ["0.8.0"])
         self.assertEqual(os.readlink(self.root / "current"), str((self.root / "releases" / "v0.8.0").resolve()))
@@ -290,6 +292,59 @@ class ServerSetupTests(unittest.TestCase):
         code, lines = self.run_setup()
         self.assert_refused_unchanged(before, lines, code, "existing", "is not a directory of")
 
+    def test_restarts_reuse_only_an_unaltered_release(self):
+        """The receipt covers every file the service consumes, not just its runtime."""
+        self.assertEqual(self.run_setup()[0], 0)
+        release_dir = self.root / "releases" / "v0.8.0"
+        for name, change in (
+            ("a changed workflow", lambda: (release_dir / "workflows" / "review.yaml").write_text("name: evil\n")),
+            ("an added helper", lambda: (release_dir / "helper.mjs").write_text("// added\n")),
+            ("a removed asset", lambda: (release_dir / "workflows" / "review.yaml").unlink()),
+            ("a changed mode", lambda: (release_dir / "orca-daemon.mjs").chmod(0o777)),
+            ("a planted link", lambda: (release_dir / "workflows" / "link.yaml").symlink_to("/etc/passwd")),
+        ):
+            with self.subTest(name):
+                self.setUp()
+                self.assertEqual(self.run_setup()[0], 0)
+                release_dir = self.root / "releases" / "v0.8.0"
+                change()
+                self.set_systemd(active=False)
+                before = self.snapshot()
+                code, lines = self.run_setup()
+                self.assert_refused_unchanged(before, lines, code, "existing", "changed since this setup staged")
+                self.assertFalse(self.systemd()["active"])
+
+    def test_refuses_before_any_change_when_the_server_is_not_what_was_confirmed(self):
+        account = setup_module.pwd.getpwuid(os.geteuid()).pw_name
+        # A changed preflight root: the confirmation named another directory.
+        before = self.snapshot()
+        code, lines = self.run_setup(expect_account=account, expect_root=str(self.tmp / "elsewhere"),
+                                     expect_current="none")
+        self.assertEqual((code, lines[-1]["result"]), (2, "refused"), lines)
+        self.assertIn("not " + str(self.tmp / "elsewhere"), lines[-1]["detail"])
+        self.assertEqual(self.snapshot(), before)  # nothing created, not even the directory
+        self.assertEqual(self.staged, [])
+        self.assertFalse(self.systemd().get("enabled"))
+        # Confirmed as a repair, found a first install (and the other way round).
+        code, lines = self.run_setup(expect_root=str(self.root), expect_current="0.8.0")
+        self.assertEqual((code, lines[-1]["result"]), (2, "refused"))
+        self.assertIn("first install", lines[-1]["detail"])
+        self.assertFalse(self.root.exists())
+        self.assertEqual(self.run_setup(expect_account=account, expect_root=str(self.root), expect_current="none")[0], 0)
+        code, lines = self.run_setup(expect_root=str(self.root), expect_current="none")
+        self.assertEqual((code, lines[-1]["result"]), (2, "refused"))
+        self.assertIn("a repair of v0.8.0", lines[-1]["detail"])
+        self.assertEqual(self.run_setup(expect_root=str(self.root), expect_current="0.8.0")[0], 0)
+
+    def test_inventory_refusals_never_echo_command_lines(self):
+        (self.proc / "778").mkdir()
+        (self.proc / "778" / "cmdline").write_bytes(b"node\0/opt/orca-daemon.mjs\0--token\0s3cret-value\0")
+        code, lines = self.run_setup()
+        self.assertEqual(code, 2)
+        self.assertIn("process 778", lines[-1]["detail"])
+        self.assertNotIn("s3cret", lines[-1]["detail"])
+        self.assertNotIn("--token", lines[-1]["detail"])
+
     def test_a_rerun_keeps_the_operators_deployment_settings(self):
         self.assertEqual(self.run_setup()[0], 0)
         manifest = json.loads((self.root / "deployment.json").read_text())
@@ -319,7 +374,7 @@ class ServerSetupTests(unittest.TestCase):
         before = self.snapshot()
         code, lines = self.run_setup(inspect=True)
         self.assertEqual(code, 0, lines)
-        self.assertEqual(lines[-1], {"inspected": True, "account": setup_module.getpass.getuser(),
+        self.assertEqual(lines[-1], {"inspected": True, "account": setup_module.pwd.getpwuid(os.geteuid()).pw_name,
                                      "root": str(self.root), "current": None})
         self.assertEqual(self.snapshot(), before)
         self.assertEqual(self.staged, [])
@@ -335,7 +390,7 @@ class ServerSetupTests(unittest.TestCase):
         before = self.snapshot()
         code, lines = self.run_setup(expect_account="someone-else")
         self.assert_refused_unchanged(before, lines, code, "account", "not someone-else as confirmed")
-        self.assertEqual(self.run_setup(expect_account=setup_module.getpass.getuser())[0], 0)
+        self.assertEqual(self.run_setup(expect_account=setup_module.pwd.getpwuid(os.geteuid()).pw_name)[0], 0)
 
     def test_refuses_an_unmanaged_installation_and_changes_nothing(self):
         cases = {

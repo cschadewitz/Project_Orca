@@ -27,12 +27,14 @@ describe("server setup confirmation (#881)", () => {
     expect(keyFingerprints(JSON.stringify([KEY, null]))).not.toHaveProperty("jump");
   });
 
-  it("binds the code to the connection, keys, account, version, revision and scope", () => {
+  it("binds the code to the connection, keys, account, directory, install-or-repair, version, revision and scope", () => {
     const profile = ConnectionProfileSchema.parse({ id: "lab", name: "Lab", destination: "dev@lab" });
     const base = {
       profile,
       keys: JSON.stringify([KEY, null]),
       account: "dev",
+      root: "/home/dev/.local/share/orca-server",
+      current: null as string | null,
       version: "0.8.0",
       scope: "install" as const,
     };
@@ -44,6 +46,8 @@ describe("server setup confirmation (#881)", () => {
       { ...base, profile: { ...profile, jump: { destination: "gw" } } },
       { ...base, keys: JSON.stringify([KEY, KEY]) },
       { ...base, account: "root" },
+      { ...base, root: "/srv/orca-server" },
+      { ...base, current: "0.8.0" },
       { ...base, version: "0.8.1" },
       { ...base, scope: "install-and-sign-in" as const },
       { ...base, revision: 1 },
@@ -61,11 +65,32 @@ describe("server setup confirmation (#881)", () => {
       "6722",
       "--inspect",
     ]);
-    expect(setupCommand("0.8.0", 6722, "dev")).toContain("--expect-account");
-    expect(() => setupCommand("0.8.0", 6722, "-oProxyCommand=x")).toThrow("account");
-    expect(() => setupCommand("0.8.0", 6722, "-x")).toThrow("account");
-    expect(() => setupCommand("0.8.0", 6722, "dev lab")).toThrow("account");
-    expect(() => setupCommand("0.8.0", 6722, "")).toThrow("account");
+    const root = "/home/dev/.local/share/orca-server";
+    const as = (account: string, at = root, current: string | null = null) =>
+      setupCommand("0.8.0", 6722, { account, root: at, current });
+    expect(as("dev")).toEqual([
+      "python3",
+      "-",
+      "--version",
+      "0.8.0",
+      "--port",
+      "6722",
+      "--expect-account",
+      "dev",
+      "--expect-root",
+      root,
+      "--expect-current",
+      "none",
+    ]);
+    expect(as("dev", root, "0.8.0").at(-1)).toBe("0.8.0");
+    expect(() => as("-oProxyCommand=x")).toThrow("account");
+    expect(() => as("-x")).toThrow("account");
+    expect(() => as("dev lab")).toThrow("account");
+    expect(() => as("")).toThrow("account");
+    expect(() => as("dev", "relative/dir")).toThrow("directory");
+    expect(() => as("dev", "/home/dev/../root")).toThrow("directory");
+    expect(() => as("dev", "/home/dev; rm -rf /")).toThrow("directory");
+    expect(() => as("dev", root, "latest")).toThrow("release version");
   });
 
   it("reads an inspection, and nothing else as one", () => {

@@ -1550,6 +1550,10 @@ describe("setting a machine up as a managed server (#881)", () => {
       "6722",
       "--expect-account",
       "casey",
+      "--expect-root",
+      "/home/casey/.local/share/orca-server",
+      "--expect-current",
+      "none",
     ]);
     expect(tunnels[1]!.options).toMatchObject({
       knownHostsFile: join(dir, "known_hosts", "lab"),

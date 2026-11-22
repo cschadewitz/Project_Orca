@@ -5,8 +5,12 @@ Every step is idempotent: on a machine this set up before it verifies, and repai
 missing or stopped, instead of installing again. It installs exactly what the bootstrap in
 docs/UPDATING.md describes, with the managed adapter (`orca-release.py`) doing the staging:
 
-0. account     With `--expect-account`, refuses to run as any other account than the one
-               the person confirmed.
+0. account     With `--expect-account`, refuses to run as any other effective account than
+               the one the person confirmed.
+   confirmed   Under the fence, before any change: with `--expect-root` and
+               `--expect-current`, refuses unless the canonical setup directory, and whether
+               this is a first install (`none`) or a repair of VERSION, are still exactly what
+               the inspection showed and the person confirmed.
 1. platform    Linux x64, Python 3.8+, /proc, and a systemd user manager.
 2. inventory   Refuses a machine with an ORCA installation this setup did not make (a
                launcher, unit, process or directory): those are migrated by hand, never
@@ -24,8 +28,9 @@ docs/UPDATING.md describes, with the managed adapter (`orca-release.py`) doing t
                `orca` and `orca-acp` wrappers.
 5. stage       `orca-release.py stage --bundle VERSION`: the signed server bundle, verified
                against its pinned signer before a byte of it is unpacked (#876). Then the
-               receipt, `<root>/receipts/vVERSION.json`: the release record's and runtime's
-               digests, which a later run checks before it trusts the release.
+               receipt, `<root>/receipts/vVERSION.json`: a digest of the whole release (every
+               path, kind, mode and content: runtime, entry, helpers, assets, workflows,
+               templates), which a later run checks before it trusts the release.
 6. select      `current` -> `releases/vVERSION`, only when there is none yet.
 7. unit        The systemd user unit, enabled; lingering, so it runs without a login.
 8. start       The unit started, and the daemon's hello checked against the release.
@@ -56,13 +61,13 @@ third-party modules.
 import argparse
 import fcntl
 import base64
-import getpass
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import platform
+import pwd
 import re
 import shutil
 import signal
@@ -134,9 +139,10 @@ def file_digest(path):
 
 class Setup:
     def __init__(self, root, version, port, adapter_source, bundle=None, home=None, systemctl=None,
-                 expect_account=None):
-        self.home = Path(home or os.path.expanduser("~"))
-        self.root = Path(root) if root else self.home / ".local" / "share" / "orca-server"
+                 expect_account=None, expect_root=None, expect_current=None):
+        # The effective account's own home, not $HOME: what the confirmation names is canonical.
+        self.home = Path(home or pwd.getpwuid(os.geteuid()).pw_dir)
+        self.root = Path(os.path.realpath(root if root else self.home / ".local" / "share" / "orca-server"))
         self.version = version
         self.port = port
         self.adapter_source = adapter_source
@@ -146,6 +152,9 @@ class Setup:
         self.systemctl_bin = systemctl or "systemctl"
         self.proc = Path("/proc")
         self.expect_account = expect_account
+        self.expect_root = expect_root
+        # "none" (a first install) or the version a repair expects to find selected.
+        self.expect_current = expect_current
         self.loginctl_bin = "loginctl"
         self.fence = None
         self.before = None
@@ -188,7 +197,15 @@ class Setup:
 
     @property
     def user(self):
-        return os.environ.get("USER") or str(os.getuid())
+        """The effective account, canonically: what runs every step, owns every file and lingers."""
+        try:
+            return pwd.getpwuid(os.geteuid()).pw_name
+        except KeyError:
+            return str(os.geteuid())
+
+    def lifecycle(self):
+        """What this run would be: a first install (`none`), or a repair of the selected version."""
+        return self.version if os.path.lexists(self.root / "current") else "none"
 
     @property
     def release(self):
@@ -251,19 +268,22 @@ class Setup:
             except PermissionError:
                 raise Refused("Cannot read this user's processes, so an unmanaged ORCA cannot be ruled out.") from None
             if ORCA_PROCESS.search(args) and releases not in args and SETUP_MARKER not in args:
-                found.append(f"process {directory.name} ({args.strip()[:120]})")
+                # Its pid only: a command line can hold anything, secrets included.
+                found.append(f"process {directory.name}")
         if found:
             raise Refused("Found an ORCA installation this setup did not make: " + "; ".join(found) + ". " + GUIDANCE)
         report("inventory", "ok", "no unmanaged ORCA installation")
 
     def check_account(self):
-        account = getpass.getuser()
+        account = self.user
         if self.expect_account is not None and account != self.expect_account:
             raise Refused(f"This connection runs as {account}, not {self.expect_account} as confirmed. Nothing was changed.")
         report("account", "ok", account)
 
     def release_digests(self, release):
-        """What a receipt vouches for: the release record and the runtime it names."""
+        """What a receipt vouches for: the whole release, every file the service may consume
+        (runtime, entry, helpers, assets, workflows, templates), by path, kind, mode and
+        content, and the record naming its runtime inside it."""
         record = json.loads((release / ".orca-release.json").read_text())
         if record.get("source") != "bundle" or record.get("version") != self.version:
             raise Refused(f"{release} is not the server bundle for v{self.version}. " + RECONCILE)
@@ -272,8 +292,22 @@ class Setup:
             if path.is_symlink() or not path.is_file() or path.resolve().parent != path.parent.resolve() \
                     or not str(path.resolve()).startswith(str(release.resolve()) + os.sep):
                 raise Refused(f"{release} names a runtime outside itself. " + RECONCILE)
-        return {"record": file_digest(release / ".orca-release.json"), "node": file_digest(node),
-                "entry": file_digest(entry)}
+        manifest = []
+        for directory, dirs, files in os.walk(release):
+            dirs.sort()
+            for name in sorted(dirs + files):
+                path = Path(directory) / name
+                relative = str(path.relative_to(release))
+                if path.is_symlink():
+                    manifest.append([relative, "link", os.readlink(path)])
+                elif path.is_dir():
+                    manifest.append([relative, "dir", path.stat().st_mode & 0o7777])
+                elif path.is_file():
+                    manifest.append([relative, "file", path.stat().st_mode & 0o7777, file_digest(path)])
+                else:
+                    raise Refused(f"{release} holds {relative}, which is not a file, link or directory. " + RECONCILE)
+        tree = hashlib.sha256(json.dumps(manifest, separators=(",", ":")).encode()).hexdigest()
+        return {"tree": tree, "entries": len(manifest)}
 
     def verify_release(self):
         """`releases/vVERSION` is the release this setup staged from the verified bundle:
@@ -320,6 +354,8 @@ class Setup:
         """Hold the admission lock exclusively for the rest of the run: no second setup, no
         update activation or recovery, no CLI or ACP launch inside it. An update that holds the
         update lock (staging, say), or an interrupted activation, refuses instead."""
+        # Checked before the fence creates anything, and again under it (`confirmed`).
+        self.check_confirmed(quiet=True)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         if not self.marker.is_file():
             write_file(self.marker, json.dumps({"by": SETUP_MARKER, "version": 1}) + "\n", 0o600)
@@ -362,6 +398,17 @@ class Setup:
             "current": os.readlink(current) if os.path.islink(current) else None,
             "linger": (linger.stdout.strip() == "yes") if linger.returncode == 0 else None,
         }
+
+    def check_confirmed(self, quiet=False):
+        """Under the fence, before any change: still the directory, account and kind of run
+        (install or repair) the person confirmed from the inspection."""
+        if self.expect_root is not None and str(self.root) != self.expect_root:
+            raise Refused(f"The setup directory is {self.root}, not {self.expect_root} as confirmed. Nothing was changed.")
+        if self.expect_current is not None and self.lifecycle() != self.expect_current:
+            found = "a first install" if self.lifecycle() == "none" else f"a repair of v{self.version}"
+            raise Refused(f"This is now {found}, not what was confirmed. Check the server again. Nothing was changed.")
+        if not quiet:
+            report("confirmed", "ok", f"{self.user}, {self.root}")
 
     def recover(self):
         """A run that ended before it could finish or put things back: back to what it found."""
@@ -603,7 +650,7 @@ class Setup:
             report(step, "failed", str(error)[:2000])
             return 1
         current = self.root / "current"
-        emit({"inspected": True, "account": getpass.getuser(), "root": str(self.root),
+        emit({"inspected": True, "account": self.user, "root": str(self.root),
               "current": self.version if os.path.lexists(current) else None})
         return 0
 
@@ -614,7 +661,7 @@ class Setup:
         try:
             for step, action in (("account", self.check_account), ("platform", self.check_platform),
                                  ("inventory", self.check_inventory), ("fence", self.take_fence),
-                                 ("recover", self.recover), ("existing", self.check_existing),
+                                 ("confirmed", self.check_confirmed), ("recover", self.recover), ("existing", self.check_existing),
                                  ("journal", self.begin), ("adapter", self.install_adapter),
                                  ("files", self.install_files), ("stage", self.stage), ("select", self.select),
                                  ("unit", self.install_unit), ("start", self.start)):
@@ -630,7 +677,7 @@ class Setup:
         finally:
             self.release_fence()
         self.journal.unlink(missing_ok=True)
-        emit({"done": True, "root": str(self.root), "command": str(self.root / "orca"), "account": getpass.getuser(),
+        emit({"done": True, "root": str(self.root), "command": str(self.root / "orca"), "account": self.user,
               "version": (self.root / "current").resolve().name[1:], "port": self.port})
         return 0
 
@@ -644,6 +691,8 @@ def main(argv, embedded=None):
     parser.add_argument("--adapter", help="orca-release.py to install (default: the embedded one)")
     parser.add_argument("--inspect", action="store_true", help="check only, change nothing")
     parser.add_argument("--expect-account", help="refuse to run as any other account")
+    parser.add_argument("--expect-root", help="refuse unless the setup directory is exactly this")
+    parser.add_argument("--expect-current", help="'none' for a first install, or the version a repair expects")
     options = parser.parse_args(argv)
     if not re.fullmatch(VERSION_RE, options.version):
         parser.error("--version takes X.Y.Z or X.Y.Z-rc.N")
@@ -658,7 +707,8 @@ def main(argv, embedded=None):
     else:
         parser.error("no adapter: pass --adapter orca-release.py")
     setup = Setup(options.root, options.version, options.port, source, options.bundle,
-                  expect_account=options.expect_account)
+                  expect_account=options.expect_account, expect_root=options.expect_root,
+                  expect_current=options.expect_current)
     return setup.inspect() if options.inspect else setup.run()
 
 

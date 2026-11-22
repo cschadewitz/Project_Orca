@@ -51,14 +51,45 @@ export function setupProgram(dir: string): string {
 /** A server account name, as one remote word. */
 const ACCOUNT = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
 
+/** A canonical absolute directory on the server, as one remote word. */
+const SERVER_DIR = /^\/[A-Za-z0-9._/-]{0,1023}$/;
+
+/** What the person confirmed about the server, which the setup rechecks there before any change. */
+export interface ConfirmedServer {
+  /** The effective account. */
+  account: string;
+  /** The canonical setup directory. */
+  root: string;
+  /** The version a repair expects selected, or `null` for a first install. */
+  current: string | null;
+}
+
 /**
- * The server version to install: the app's own, so client and server are one release. Run
- * as `account` only: the account the person confirmed.
+ * The server version to install: the app's own, so client and server are one release. Only
+ * as confirmed: the setup refuses, before it changes anything, unless it runs as that
+ * effective account, in that canonical directory, as that kind of run (install or repair).
  */
-export function setupCommand(version: string, port: number, account: string): string[] {
+export function setupCommand(version: string, port: number, confirmed: ConfirmedServer): string[] {
   if (!VERSION.test(version)) throw new Error(`Not a release version: ${version}`);
-  if (!ACCOUNT.test(account)) throw new Error(`Not an account name: ${account}`);
-  return ["python3", "-", "--version", version, "--port", String(port), "--expect-account", account];
+  if (!ACCOUNT.test(confirmed.account)) throw new Error(`Not an account name: ${confirmed.account}`);
+  if (!SERVER_DIR.test(confirmed.root) || confirmed.root.split("/").includes(".."))
+    throw new Error(`Not a setup directory: ${confirmed.root}`);
+  if (confirmed.current !== null && !VERSION.test(confirmed.current))
+    throw new Error(`Not a release version: ${confirmed.current}`);
+  return [
+    "python3",
+    "-",
+    "--version",
+    version,
+    "--port",
+    String(port),
+    "--expect-account",
+    confirmed.account,
+    "--expect-root",
+    confirmed.root,
+    "--expect-current",
+    confirmed.current ?? "none",
+  ];
 }
 
 /** The read-only check the person's confirmation is based on. */
@@ -117,7 +148,7 @@ export type SetupOutcome =
 const InspectedSchema = z.object({
   inspected: z.literal(true),
   account: z.string().regex(ACCOUNT),
-  root: z.string().max(1024),
+  root: z.string().regex(SERVER_DIR),
   current: z.string().regex(VERSION).nullable(),
 });
 export type Inspected = z.infer<typeof InspectedSchema>;
@@ -251,7 +282,10 @@ export interface Confirmation {
   revision?: number;
   /** The keys the person saw (`SshTunnel.pinnedKeys` of the inspecting connection). */
   keys: string;
+  /** The effective account, canonical directory and install-or-repair the inspection found. */
   account: string;
+  root: string;
+  current: string | null;
   version: string;
   scope: SetupScope;
 }
@@ -272,6 +306,8 @@ export function confirmationCode(confirmation: Confirmation): string {
     confirmation.revision ?? null,
     confirmation.keys,
     confirmation.account,
+    confirmation.root,
+    confirmation.current,
     confirmation.version,
     confirmation.scope,
   ]);

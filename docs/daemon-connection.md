@@ -276,13 +276,17 @@ also sign in). Check a first-seen key against `ssh-keygen -lf` on the server. Th
 confirmation is used once, for that profile as it was (any edit, removal or host key reset
 voids it), and for 15 minutes; the CLI's code is checked against a fresh check of the server
 and refused if the keys, account or version differ. Only then are those keys pinned, and the
-setup runs over a connection that refuses any other key, as exactly the confirmed account.
+setup runs over a connection that refuses any other key. On the server, before it changes
+anything and again under its lock, the setup refuses unless it runs as the confirmed effective
+account, in the confirmed canonical directory, as the confirmed kind of run (a first install
+or a repair).
 
 The setup runs `tools/deploy/orca-server-setup.py` on the server (sent over ssh as
 `python3 -`, with the managed adapter embedded), which installs what the bootstrap in
 [UPDATING](UPDATING.md#prebuilt-server-bundle) describes under `~/.local/share/orca-server`:
 the adapter, `deployment.json`, the `orca`/`orca-acp` wrappers, this version's signed server
-bundle (verified against its pinned signer, #876) with a receipt of what was verified,
+bundle (verified against its pinned signer, #876) with a receipt of the whole release as
+verified (every file, link and mode),
 `current`, and the `orca.service` user unit with lingering. It then starts the unit and checks
 the daemon's hello.
 
@@ -294,7 +298,7 @@ Every step is idempotent, and a re-run only verifies and repairs what the setup 
   `service`, `userService`, `setup`, `url`), adds any that are missing, and keeps every other
   setting as the operator left it. A changed owned key is refused for you to repair.
 - A release is started only if this setup staged it from the verified bundle, for exactly the
-  version asked for: its receipt must still match, and it must be a directory of
+  version asked for: the receipt of every file it holds must still match, and it must be a directory of
   `<root>/releases`. A `current` on another version, or a release the setup did not stage or
   that changed since, is refused for separate reconciliation with `orca-release.py` (updating
   is #879's job), and nothing is started.
