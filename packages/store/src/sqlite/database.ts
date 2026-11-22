@@ -21,7 +21,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { OrcaError } from "@orca/core";
-import { SQLITE_MIGRATIONS } from "./schema.js";
+import { ORCA_SQLITE_APPLICATION_ID, SQLITE_MIGRATIONS } from "./schema.js";
 
 export interface SqliteOptions {
   /** How long a write keeps retrying `SQLITE_BUSY` before `STORE_LOCK_TIMEOUT`. Default 10 s. */
@@ -77,9 +77,25 @@ export class SqliteDatabase {
     return Number((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
   }
 
+  /**
+   * Refuse, before anything can change the file, a database this build must not open: one from
+   * a newer build, or one that is not an ORCA metadata database at all (another application's
+   * id, or an unmarked file that already holds tables). A brand-new empty file is fine.
+   */
   private refuseNewer(): void {
     const schema = this.schemaVersion();
     const known = SQLITE_MIGRATIONS.length;
+    const applicationId = Number(
+      (this.db.prepare("PRAGMA application_id").get() as { application_id: number }).application_id,
+    );
+    const tables = Number((this.db.prepare("SELECT COUNT(*) AS n FROM sqlite_schema").get() as { n: number }).n);
+    const fresh = schema === 0 && applicationId === 0 && tables === 0;
+    if (!fresh && applicationId !== ORCA_SQLITE_APPLICATION_ID)
+      throw new OrcaError("STORE_FORMAT", `${this.file} is not an ORCA metadata database`, {
+        reason: "FOREIGN",
+        file: this.file,
+        applicationId,
+      });
     if (schema > known)
       throw new OrcaError("STORE_FORMAT", `SQLite metadata schema ${schema} is newer than this build (${known})`, {
         reason: "NEWER",

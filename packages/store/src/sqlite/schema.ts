@@ -74,5 +74,35 @@ export const SQLITE_MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX artifacts_run ON artifacts (run_id);
   CREATE INDEX artifacts_hash ON artifacts (content_hash);
+
+  PRAGMA application_id = 1330791233;
   `,
 ];
+
+/**
+ * `PRAGMA application_id` of every ORCA metadata database: "ORCA" in ASCII. It is what tells an
+ * ORCA database from any other healthy SQLite file, which a schema number alone cannot.
+ */
+export const ORCA_SQLITE_APPLICATION_ID = 0x4f524341;
+
+/** The tables and indexes a database at `version` must have, exactly as the migrations make them. */
+export function expectedSchemaObjects(
+  DatabaseSync: typeof import("node:sqlite").DatabaseSync,
+  version: number,
+): { type: string; name: string; sql: string }[] {
+  const db = new DatabaseSync(":memory:");
+  try {
+    for (const migration of SQLITE_MIGRATIONS.slice(0, version)) db.exec(migration);
+    return schemaObjects(db);
+  } finally {
+    db.close();
+  }
+}
+
+export function schemaObjects(db: import("node:sqlite").DatabaseSync): { type: string; name: string; sql: string }[] {
+  return db
+    .prepare(
+      "SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL ORDER BY name",
+    )
+    .all() as { type: string; name: string; sql: string }[];
+}

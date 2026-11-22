@@ -16,6 +16,7 @@ import {
   fileStores,
   importFileMetadata,
   restoreSqliteMetadata,
+  SqliteDatabase,
   SQLITE_METADATA_FILE,
   sqliteStores,
   verifySqliteMetadata,
@@ -268,6 +269,40 @@ describe("SQLite backup, restore and verify", () => {
     expect((error as { details?: unknown }).details).toMatchObject({ reason: "EXISTS" });
     expect((await sqlite(target).plan.plans.list()).map((p) => p.name)).toEqual(["concurrent"]);
     expect((await readdir(target)).filter((n) => n.includes(".restore"))).toEqual([]);
+  });
+
+  it("restore refuses a healthy SQLite file that is not ORCA metadata, and publishes nothing", async () => {
+    const inputs = await makeDir();
+    const make = (name: string, sql: string) => {
+      const file = join(inputs, name);
+      const raw = new DatabaseSync(file);
+      raw.exec(sql);
+      raw.close();
+      return file;
+    };
+    const cases: [string, string][] = [
+      [make("unrelated.sqlite", "CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)"), "FOREIGN"],
+      [make("empty.sqlite", "PRAGMA user_version = 0"), "FOREIGN"],
+      [make("other-app.sqlite", "PRAGMA application_id = 42; PRAGMA user_version = 1; CREATE TABLE t (x)"), "FOREIGN"],
+      [
+        make(
+          "orca-number-no-tables.sqlite",
+          "PRAGMA application_id = 1330791233; PRAGMA user_version = 1; CREATE TABLE t (x)",
+        ),
+        "SCHEMA_MISMATCH",
+      ],
+    ];
+    for (const [input, reason] of cases) {
+      const target = await makeDir();
+      const error = await rejection(restoreSqliteMetadata(input, target));
+      expect(isOrcaError(error, "STORE_FORMAT")).toBe(true);
+      expect((error as { details?: unknown }).details).toMatchObject({ reason });
+      expect(await readdir(target)).toEqual([]);
+    }
+    // The ordinary opener refuses them too, before changing anything.
+    expect(() => new SqliteDatabase(join(inputs, "unrelated.sqlite"))).toThrow(
+      expect.objectContaining({ code: "STORE_FORMAT", details: expect.objectContaining({ reason: "FOREIGN" }) }),
+    );
   });
 
   it("restore refuses a live WAL-mode database that is not a sealed backup", async () => {

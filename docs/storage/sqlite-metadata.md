@@ -49,6 +49,12 @@ fence), #905 (Linux package hand-off) and #910 (Windows durability).
   applied at open in one transaction. A database from a newer build is refused
   with `STORE_FORMAT` (`reason: "NEWER"`) before anything can change the file
   (journal mode included), never opened and half-understood.
+- **Identity:** every ORCA metadata database carries `PRAGMA application_id`
+  `0x4f524341` ("ORCA"). The opener refuses any other non-empty SQLite file
+  (`FOREIGN`); restore and verify also require every table and index of the
+  database's schema version, with exactly the migrations' definitions
+  (`SCHEMA_MISMATCH`), so a healthy but unrelated database is never published as
+  `metadata.sqlite`.
 - **Ids:** `documents.sort_key` holds the id as UTF-16 code units, so query
   pagination is the contract's code-unit order on every host.
 
@@ -103,7 +109,7 @@ file-backed metadata they read from.
 |---|---|
 | `orca store sqlite import` | Mirrors the file store's metadata into `<store>/metadata.sqlite`. **Run it with every ORCA using the store stopped**, as for `carry-forward`: the source is read twice and the reads must agree, or the import is refused (`SOURCE_CHANGED`). Then one transaction checks both sides before writing anything: runs, plan journals and artifact records are history, so what the database holds must be exactly a prefix of the source, record for record (same id with different content is a conflict), and nothing may exist only in the database (refused as `STORE_FORMAT` `IMPORT_CONFLICT`). Collections are current state the file store owns until the switch, so they are mirrored. Only then and applies everything: collections replaced, runs and journals extended, the artifact index upserted (blobs are already in place). The commit is the single publish point, so a refused or interrupted import leaves the database as it was, and a rerun is safe. Ids, sequence numbers and timestamps are copied, never reassigned. |
 | `orca store sqlite backup <file>` | Refuses a store with no database (never an empty "backup"). `VACUUM INTO` from a read-only connection (never migrating what it copies) into a staging file while the database stays in use, switch it to rollback-journal mode so it is one sealed standalone file, sync and integrity-check it, then hard-link it to `<file>`, which is never replaced. Blobs, encrypted records, claims and leases are files and are backed up as files. |
-| `orca store sqlite restore <file>` | Accepts only a sealed backup (refuses a WAL-mode file or one with a `-wal`/`-journal` beside it). Copies it into a staging file in the store, syncs it, checks the **staged** bytes (integrity, schema not newer, still standalone), then publishes with a hard link under a restore lock: if a database (or `-wal`) appeared meanwhile the link fails and nothing is replaced. A crash leaves no database or the whole backup. |
+| `orca store sqlite restore <file>` | Accepts only a sealed backup (refuses a WAL-mode file or one with a `-wal`/`-journal` beside it). Copies it into a staging file in the store, syncs it, checks the **staged** bytes (integrity, ORCA application id, a known schema version with all of its tables and indexes, still standalone), then publishes with a hard link under a restore lock: if a database (or `-wal`) appeared meanwhile the link fails and nothing is replaced. A crash leaves no database or the whole backup. |
 | `orca store sqlite verify` | Read-only: a read-only connection (no migration; a schema this build does not verify is refused), one read snapshot, blobs only read. Checks integrity, per-run and per-plan sequence gaps, every stored event, journal entry and artifact record, and every artifact row's blob (present, matching its hash). Blobs no row references (an interrupted `put`) are listed, not deleted. Exit 1 on any problem. The only files that can appear are SQLite's own WAL coordination files (an empty `-wal` and the `-shm`), which SQLite creates when a reader opens a WAL database nobody else has open; the next writer's clean close removes them. |
 
 Until a workspace can select SQLite, the database is inert: nothing reads it, and
