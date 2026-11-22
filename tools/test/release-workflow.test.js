@@ -1,5 +1,5 @@
 /** Hold release verification to ci.yml's full path: build before tests, and the same strict checks. */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { expect, it } from "vitest";
 
@@ -191,10 +191,11 @@ it("attaches only re-verified signed x64 and arm64 installers, through the re-va
   expect(text).toContain('workflows: ["Windows signed (spike)"]');
   // Attachment and publication share one queue, so they never interleave; reconcile, which
   // only dispatches, queues on its own.
-  expect(wf.jobs.attach.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  expect(wf.jobs.attach.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
   expect(workflow("release-publish-final.yml").concurrency).toEqual({
     group: "release-draft-writes",
     "cancel-in-progress": false,
+    queue: "max",
   });
   expect(wf.jobs.reconcile.concurrency.group).toBe("release-attach-reconcile");
   expect(wf.permissions).toEqual({ contents: "read" });
@@ -283,11 +284,11 @@ it("signs the server bundle only from main, in a job that runs none of the relea
   for (const job of [resolve, verify, attach, reconcile])
     expect(job.steps[0].with).toEqual({ ref: "${{ github.sha }}", "persist-credentials": false });
 
-  // The clean-host check gates the attach, and the attach shares the draft-writes queue.
+  // The clean-host check gates the attach, and the attach shares the draft-writes queue: it
+  // rewrites the release notes like every other member, so it must never interleave with one.
   expect(verify.needs).toEqual(["resolve", "sign"]);
   expect(attach.needs).toEqual(["resolve", "verify"]);
-  // Not in release-draft-writes: joining it could displace a pending attach or publication.
-  expect(attach.concurrency).toBeUndefined();
+  expect(attach.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
   expect(file.concurrency).toEqual({
     group: "release-server-bundle-${{ inputs.version || 'reconcile' }}",
     "cancel-in-progress": false,
@@ -325,7 +326,7 @@ it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unatten
   expect(wf.jobs.accept.permissions).toBeUndefined();
   expect(wf.jobs.accept["runs-on"]).toBe("windows-11-arm");
   expect(wf.jobs.record.permissions).toEqual({ contents: "write" });
-  expect(wf.jobs.record.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  expect(wf.jobs.record.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
   expect(wf.jobs.record.needs).toEqual(["select", "accept"]);
   expect(wf.jobs.record.steps.at(-1).run).toBe(
     'bash tools/deploy/release-attach.sh accept "$ID" "$SHA" "$VERSION" "$GITHUB_RUN_ID" "$DIGEST"',
@@ -354,7 +355,7 @@ it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unatten
   expect(wf.jobs["x64-only"].if).toBe(
     "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.x64_only",
   );
-  expect(wf.jobs["x64-only"].concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  expect(wf.jobs["x64-only"].concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
   expect(wf.jobs["x64-only"].steps.at(-1).run).toContain('bash tools/deploy/release-attach.sh x64-only "$ID" "$sha"');
   expect(wf.jobs.select.if).toContain("!inputs.x64_only");
 });
@@ -387,4 +388,20 @@ it("starts the server bundle with the 0.8 line in the dispatch and in release-at
   expect(dispatch).toContain(`SERVER_FROM=${from}`);
   expect(dispatch.indexOf("SERVER_FROM=")).toBeLessThan(dispatch.indexOf("gh workflow run"));
   expect(dispatch).toContain('"${VERSION%%-*}" | sort -V | head -n1)" != "$SERVER_FROM"');
+});
+
+it("puts every job that rewrites release notes in one draft-writes queue that keeps all waiters", () => {
+  // Each member reads the whole release body and replaces it. Two interleaving would let the
+  // later PATCH drop the earlier one's record, and a member replacing a pending one would drop
+  // its write entirely, so every member shares the group with `queue: max`.
+  const members = [];
+  for (const name of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((n) => n.endsWith(".yml"))) {
+    const w = workflow(name);
+    for (const c of [w.concurrency, ...Object.values(w.jobs).map((j) => j.concurrency)])
+      if (c?.group === "release-draft-writes") members.push([name, c]);
+  }
+  expect(members.map(([name]) => name)).toEqual(
+    expect.arrayContaining(["release-attach-signed.yml", "release-publish-final.yml", "release-server-bundle.yml"]),
+  );
+  for (const [, c] of members) expect(c).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
 });

@@ -153,7 +153,9 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    (server bundle) run committing to this release id, version, commit and those digests. It refuses a version that is not newer than the current
    Latest and an existing tag at another commit, publishes with the tag and target stated
    explicitly, and reads back the published digests, the tag and Latest. It shares one queue
-   with the attach, so the two never interleave; publish only through it, not by editing the
+   (`release-draft-writes`, which keeps every waiting job) with every job that rewrites a
+   release's notes, including the signed attach and the server bundle's attach, so none of
+   them interleave; publish only through it, not by editing the
    draft by hand.
 7. Where the desktop feed is enabled, publishing feeds that signing run automatically
    (step 6 dispatches **Desktop feed (automatic)**, which dispatches **Desktop feed (publish signed)**; see

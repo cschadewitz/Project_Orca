@@ -248,11 +248,15 @@ jobs:
     name: "server bundle receipt: release ${{ needs.resolve.outputs.id }} v${{ inputs.version }} ${{ inputs.source_sha }} ${{ needs.verify.outputs.receipt }}"
     needs: [resolve, verify]
     runs-on: ubuntu-24.04
-    # Deliberately not in `release-draft-writes`: a pending member of that group would be
-    # displaced by this job (GitHub keeps one pending run per group). The workflow-level group
-    # serializes runs for one version; every write re-reads the release first, the record goes
-    # last, and publication requires the receipt, so an interleaved publish fails closed. A
-    # run that never attaches leaves no record, and the 6-hourly reconcile dispatches it again.
+    # In the shared draft-writes queue with every other job that rewrites a release's notes
+    # (the signed attach, arm64 acceptance, the upgrade check record, publish final): each reads
+    # the whole body and replaces it, so two of them must never interleave or one would drop the
+    # other's record. `queue: max` keeps every waiting member instead of replacing the pending
+    # one. The workflow-level group still serializes this workflow's runs for one version.
+    concurrency:
+      group: release-draft-writes
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: write
     steps:
