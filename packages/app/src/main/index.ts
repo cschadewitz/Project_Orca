@@ -85,7 +85,7 @@ import { ConnectionMachine } from "./connection-state.js";
 import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./deep-link.js";
 import { findBundledDaemon, startBundledDaemon } from "./daemon-process.js";
 import { storeRoot, Workspace } from "./workspace.js";
-import { Fleet, labelAlerts, type FleetTarget, type FocusedMachine } from "./fleet.js";
+import { Fleet, alertScope, labelAlerts, type FleetTarget, type FocusedMachine } from "./fleet.js";
 import { MAX_WATCHED_PROFILES } from "../preferences/schema.js";
 
 // Mount synchronously before producers. Selected workspace/configuration roots are
@@ -664,6 +664,7 @@ function focusedMachine(): FocusedMachine | undefined {
         : target.source === "env"
           ? "ORCA_DAEMON_URL"
           : "Daemon URL",
+    workspaceId: target.identity?.workspaceId,
     epoch: target.epoch,
     state: state.state,
     since: state.since,
@@ -677,7 +678,14 @@ function fleetTargets(): FleetTarget[] {
   if (parked) targets.push({ kind: "bundled", ...parked });
   for (const id of preferences.read().watchedProfiles ?? []) {
     const profile = remoteProfiles.get(id);
-    if (profile) targets.push({ kind: "profile", id, name: profile.name, destination: profile.destination });
+    if (profile)
+      targets.push({
+        kind: "profile",
+        id,
+        name: profile.name,
+        destination: profile.destination,
+        revision: remoteProfiles.revisionOf(id),
+      });
   }
   return targets;
 }
@@ -712,7 +720,11 @@ function publishAlerts(): void {
   const focused = focusedMachine();
   const named = fleetAlerts.items.length > 0 || fleet.snapshot.machines.length > 1;
   const own = focused
-    ? labelAlerts(focusedAlerts.items, { key: focused.key, name: focused.name, focused: true }, named)
+    ? labelAlerts(
+        focusedAlerts.items,
+        { key: focused.key, name: focused.name, focused: true, scope: alertScope(focused.workspaceId, focused.key) },
+        named,
+      )
     : [...focusedAlerts.items];
   alerts.update({ waiting: focusedAlerts.waiting, items: [...own, ...fleetAlerts.items] });
 }
@@ -1252,6 +1264,7 @@ ipcMain.handle("orca:profiles.forgetHostKey", (_event, id: unknown) =>
     if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before forgetting this key.");
     if (fleet.usesProfile(valid)) throw new ConnectionRefusal("Stop watching this machine before forgetting its key.");
     remoteProfiles.forgetHostKey(valid);
+    refreshFleet();
     const view = remoteProfiles.describe(valid);
     if (!view) throw new ConnectionRefusal("That profile no longer exists.");
     return view;
@@ -1280,7 +1293,9 @@ ipcMain.handle("orca:profiles.importCredential", (event, id: unknown) =>
     } catch {
       throw new ConnectionRefusal("That file could not be read as a daemon credential.");
     }
-    return remoteProfiles.importCredential(valid, token, ticket);
+    const view = remoteProfiles.importCredential(valid, token, ticket);
+    refreshFleet();
+    return view;
   }),
 );
 

@@ -47,6 +47,7 @@ import type { FleetMachine, FleetSnapshot, FleetWork } from "../daemon-connectio
 export type { FleetInput, FleetMachine, FleetRun, FleetSnapshot, FleetWork } from "../daemon-connection.js";
 import { connectionStateFor, QUIET_MS } from "./connection-state.js";
 import { connectionFailure } from "./connection-target.js";
+import { authenticationCode } from "../client/auth.js";
 
 /** The run statuses a machine's row counts as work in progress. */
 export const ACTIVE_STATUSES = ["running", "waiting", "blocked", "held"] as const;
@@ -83,7 +84,18 @@ export interface FleetClient extends FleetReader {
 
 /** A machine to watch: a saved SSH profile, or this computer's parked bundled daemon. */
 export type FleetTarget =
-  | { kind: "profile"; id: string; name: string; destination: string }
+  | {
+      kind: "profile";
+      id: string;
+      name: string;
+      destination: string;
+      /**
+       * The profile's revision in `RemoteProfiles`: it moves on every edit, credential import,
+       * host-key reset or removal, so a change that keeps the name and destination still
+       * reopens the member and drops what the old credential read.
+       */
+      revision: number;
+    }
   | { kind: "bundled"; url: string; tokenFile?: string | undefined; workspace: string };
 
 export function fleetKey(target: FleetTarget): string {
@@ -101,6 +113,8 @@ export interface FleetConnection {
 /** The focused target, as `index.ts` sees it through the workspace and the connection machine. */
 export interface FocusedMachine {
   key: string;
+  /** The focused daemon's verified `workspaceId`, which its alerts are deduplicated by. */
+  workspaceId?: string | undefined;
   name: string;
   detail: string;
   /** The workspace's connection epoch; a focused read is dropped if it moves. */
@@ -129,9 +143,19 @@ interface Work {
   failed: { id: string; name: string; at: string; message?: string }[];
 }
 
-/** Where a machine's alerts are told apart from another's: every item id is `<key>␁<id>`. */
-export function machineAlertId(key: string, id: string): string {
-  return `${key}\u0001${id}`;
+/**
+ * Where one store's alerts are told apart from another's: every item id is `<scope>␁<id>`,
+ * and the scope is the verified workspace (`ws:<workspaceId>`), never the profile or URL
+ * that reached it. The same store keeps the same alert ids whichever way it is reached and
+ * whether or not it is focused; a different store behind the same profile gets new ones.
+ */
+export function machineAlertId(scope: string, id: string): string {
+  return `${scope}\u0001${id}`;
+}
+
+/** The alert scope for a verified workspace, or for a machine that has none yet. */
+export function alertScope(workspaceId: string | undefined, key: string): string {
+  return workspaceId ? `ws:${workspaceId}` : key;
 }
 
 /**
@@ -142,12 +166,12 @@ export function machineAlertId(key: string, id: string): string {
  */
 export function labelAlerts(
   items: readonly AlertItem[],
-  machine: { key: string; name: string; focused: boolean },
+  machine: { key: string; name: string; focused: boolean; scope: string },
   named: boolean,
 ): AlertItem[] {
   return items.map((item) => ({
     ...item,
-    id: machineAlertId(machine.key, item.id),
+    id: machineAlertId(machine.scope, item.id),
     ...(named ? { title: `${item.title} on ${machine.name}` } : {}),
     machine: { key: machine.key, name: machine.name, focused: machine.focused },
   }));
@@ -203,11 +227,21 @@ class Member {
   link: SubscriptionState = "connecting";
   retries: RetryCount = { consecutive: 0, atCap: 0 };
   compatible = true;
+  /** The identity the current connection last verified, for noticing a reboot or another store. */
   identity: HelloResult["identity"];
+  /**
+   * The workspace an authenticated `hello` on *this* connection verified, and still
+   * authorized. Cleared on every close or reopen and on any loss of authorization; what was
+   * retained is shown only while it names the same workspace.
+   */
+  verified: string | undefined;
   slots: SessionSlotsSummary | undefined;
-  /** Set once the machine has answered; kept, and marked stale, while it is away. */
-  work: FleetWork | undefined;
-  failed: Work["failed"] = [];
+  /**
+   * What the machine last said, bound to the workspace that said it. Kept, and marked stale,
+   * while that same verified workspace is away; hidden until a reopened connection verifies
+   * that workspace again, and dropped the moment a different one, none, or a refusal answers.
+   */
+  retained: (Work & { workspaceId: string }) | undefined;
   /** Runs this connection saw fail; only these become failure alerts. */
   failedIds = new Set<string>();
   reason: string | undefined;
@@ -261,7 +295,8 @@ export class Fleet {
 
   /**
    * Replace the set of watched machines. Members still wanted keep their connection; new
-   * ones open; dropped ones close. A profile whose name or destination changed reopens.
+   * ones open; dropped ones close. A profile that changed in any way (its revision rises on an
+   * edit, a reset host key or an imported credential) reopens and drops what it showed.
    */
   setTargets(targets: readonly FleetTarget[]): void {
     if (this.closed) return;
@@ -274,8 +309,7 @@ export class Fleet {
       } else if (JSON.stringify(next) !== JSON.stringify(member.target)) {
         void this.closeMember(member);
         member.target = next;
-        member.work = undefined;
-        member.failed = [];
+        this.forget(member);
         member.everLive = false;
         member.wentQuietAt = undefined;
         if (!member.suspended) void this.openMember(member);
@@ -369,8 +403,32 @@ export class Fleet {
 
   /* ---------- one member ---------- */
 
+  /**
+   * What may be shown for a member: its retained answer, only while this connection has
+   * verified the same workspace that gave it and nothing has refused it since.
+   */
+  private shown(member: Member): Member["retained"] {
+    const retained = member.retained;
+    return retained && !member.suspended && member.verified === retained.workspaceId ? retained : undefined;
+  }
+
+  /** Drop everything a member retained: another store, no identity, or no authority. */
+  private forget(member: Member): void {
+    member.scope += 1;
+    member.retained = undefined;
+    member.failedIds = new Set();
+  }
+
+  /** Authorization was lost: nothing read under it may stay on screen or in an alert. */
+  private refused(member: Member, reason: string): void {
+    member.verified = undefined;
+    member.reason = reason;
+    this.forget(member);
+  }
+
   private machine(member: Member): FleetMachine {
     const target = member.target;
+    const shown = this.shown(member);
     return {
       key: member.key,
       name: target.kind === "profile" ? target.name : "This computer",
@@ -383,8 +441,8 @@ export class Fleet {
         ? { staleSince: new Date(member.wentQuietAt).toISOString() }
         : {}),
       ...(member.reason ? { reason: member.reason } : {}),
-      ...(member.work ? { work: member.work } : {}),
-      ...(member.slots ? { slots: member.slots } : {}),
+      ...(shown ? { work: shown.work } : {}),
+      ...(member.verified && member.slots ? { slots: member.slots } : {}),
     };
   }
 
@@ -415,6 +473,9 @@ export class Fleet {
     member.retries = { consecutive: 0, atCap: 0 };
     member.compatible = true;
     member.identity = undefined;
+    // Hidden, not dropped: shown again only once this connection verifies the same workspace.
+    member.verified = undefined;
+    member.scope += 1;
     member.failedIds = new Set();
     let connection: FleetConnection;
     try {
@@ -423,7 +484,8 @@ export class Fleet {
       });
     } catch (error) {
       if (generation !== member.generation) return;
-      member.reason = connectionFailure(error);
+      if (authenticationCode(error)) this.refused(member, connectionFailure(error));
+      else member.reason = connectionFailure(error);
       this.markQuiet(member);
       this.scheduleReopen(member, generation);
       this.publish();
@@ -462,13 +524,21 @@ export class Fleet {
     const next = hello.identity;
     const previous = member.identity;
     member.identity = next;
-    if (previous && (!next || next.workspaceId !== previous.workspaceId || next.instanceId !== previous.instanceId)) {
-      // Another store (or another boot of it) answers on this connection now: nothing the
-      // old one said may stay under this name, and nothing it is still saying may land.
-      member.scope += 1;
-      member.work = undefined;
-      member.failed = [];
-      member.failedIds = new Set();
+    if (!next) {
+      // A daemon that will not say which store it serves cannot vouch for anything shown.
+      member.verified = undefined;
+      this.forget(member);
+    } else {
+      if (member.retained && member.retained.workspaceId !== next.workspaceId) {
+        // Another store answers behind this machine now — after a reopen too, where there is
+        // no previous identity on the connection to compare with: what was retained is the
+        // other store's, and is dropped rather than shown under this name.
+        this.forget(member);
+      } else if (previous && next.instanceId !== previous.instanceId) {
+        // The same store rebooted: its history may have rewound, so no read in flight lands.
+        member.scope += 1;
+      }
+      member.verified = next.workspaceId;
     }
     this.publish();
   }
@@ -486,7 +556,7 @@ export class Fleet {
       this.scheduleRead(member, generation, 0);
     } else {
       if (was === "live") this.markQuiet(member);
-      if (state === "auth-failed") member.reason = connectionFailure({ error: { code: "AUTH_INVALID" } });
+      if (state === "auth-failed") this.refused(member, connectionFailure({ error: { code: "AUTH_INVALID" } }));
     }
     this.publish();
   }
@@ -530,17 +600,25 @@ export class Fleet {
       member.readAgain = true;
       return;
     }
-    member.reading = true;
     const scope = member.scope;
+    const workspaceId = member.verified;
+    // Nothing is read until this connection has verified which store it is talking to.
+    if (!workspaceId) return;
+    member.reading = true;
     try {
       const result = await readWork(member.connection.client, member.failedIds);
-      // A reply from an earlier connection or another store is dropped, never shown here.
-      if (generation !== member.generation || scope !== member.scope || this.closed) return;
-      member.work = result.work;
-      member.failed = result.failed;
+      // A reply from an earlier connection, another store, or after a refusal is dropped.
+      if (generation !== member.generation || scope !== member.scope || member.verified !== workspaceId || this.closed)
+        return;
+      member.retained = { ...result, workspaceId };
       this.publish();
     } catch (error) {
       if (generation !== member.generation) return;
+      if (authenticationCode(error)) {
+        this.refused(member, connectionFailure(error));
+        this.publish();
+        return;
+      }
       const explained = member.connection?.explainFailure?.(error);
       this.deps.onError?.(`Could not read ${this.machine(member).name}: ${explained ?? connectionFailure(error)}`);
     } finally {
@@ -563,6 +641,7 @@ export class Fleet {
     const connection = member.connection;
     member.connection = undefined;
     member.link = "closed";
+    member.verified = undefined;
     return (
       connection?.release().catch(() => this.deps.onError?.("A watched machine's connection did not close")) ??
       Promise.resolve()
@@ -610,11 +689,12 @@ export class Fleet {
     let waiting = 0;
     const items: AlertItem[] = [];
     for (const member of this.members.values()) {
-      if (member.suspended || !member.work) continue;
+      const shown = this.shown(member);
+      if (!shown) continue;
       const name = this.machine(member).name;
-      waiting += member.work.waiting;
+      waiting += shown.work.waiting;
       const own: AlertItem[] = [
-        ...member.work.inputs.map<AlertItem>((input) => ({
+        ...shown.work.inputs.map<AlertItem>((input) => ({
           id: input.id,
           tier: input.tier,
           title: input.tier === "permission" ? `${input.runName} needs permission` : `${input.runName} is waiting`,
@@ -623,7 +703,7 @@ export class Fleet {
           inputId: input.id,
           since: input.requestedAt,
         })),
-        ...member.failed.map<AlertItem>((run) => ({
+        ...shown.failed.map<AlertItem>((run) => ({
           id: run.id,
           tier: "failure",
           title: `${run.name} failed`,
@@ -632,7 +712,13 @@ export class Fleet {
           since: run.at,
         })),
       ];
-      items.push(...labelAlerts(own, { key: member.key, name, focused: false }, true));
+      items.push(
+        ...labelAlerts(
+          own,
+          { key: member.key, name, focused: false, scope: alertScope(shown.workspaceId, member.key) },
+          true,
+        ),
+      );
     }
     return { waiting, items };
   }

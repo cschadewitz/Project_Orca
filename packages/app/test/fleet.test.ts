@@ -16,9 +16,11 @@ import {
   type RunsListResult,
 } from "@orca/protocol";
 import type { AlertsUpdate } from "../src/bridge.js";
+import { DaemonClientError } from "../src/client/daemon-client.js";
 import type { RetryCount, SubscriptionState } from "../src/client/subscription.js";
 import {
   Fleet,
+  alertScope,
   labelAlerts,
   machineAlertId,
   type FleetClient,
@@ -86,6 +88,8 @@ function inputs(questions: string[]): InputsListResult {
   } as unknown as InputsListResult;
 }
 
+const denied = () => new DaemonClientError({ code: "AUTH_INVALID", message: "denied" });
+
 /** One fake daemon behind one connection. */
 class FakeDaemon {
   runs = runs(["Build"]);
@@ -93,6 +97,8 @@ class FakeDaemon {
   inputs = inputs([]);
   /** When set, reads wait on this instead of answering at once. */
   gate: Promise<void> | undefined;
+  /** When set, reads are refused the way a daemon refuses a credential it no longer accepts. */
+  denied = false;
   reads = 0;
   streams: {
     onNotification: (n: DaemonNotification) => void;
@@ -108,11 +114,13 @@ class FakeDaemon {
         this.reads += 1;
         const snapshot = params.status?.includes("failed") ? this.failed : this.runs;
         await this.gate;
+        if (this.denied) throw denied();
         return snapshot;
       },
       inputsList: async () => {
         const snapshot = this.inputs;
         await this.gate;
+        if (this.denied) throw denied();
         return snapshot;
       },
       subscribe: (options) => {
@@ -152,6 +160,7 @@ const profile = (id: string, name = id): Extract<FleetTarget, { kind: "profile" 
   id,
   name,
   destination: `${id}.example`,
+  revision: 0,
 });
 
 function setup(over: Partial<FleetDeps> = {}) {
@@ -488,8 +497,12 @@ describe("the focused machine", () => {
     await settle(0);
     expect(t.lastAlerts().waiting).toBe(2);
     expect(t.lastAlerts().items.map((i) => [i.id, i.title, i.machine?.name])).toEqual([
-      [machineAlertId("profile:alpha", "in-Merge?"), "Run 0 is waiting on Alpha", "Alpha"],
-      [machineAlertId("profile:beta", "in-Deploy?"), "Run 0 is waiting on Beta", "Beta"],
+      [
+        machineAlertId(alertScope(ID_A.workspaceId, "profile:alpha"), "in-Merge?"),
+        "Run 0 is waiting on Alpha",
+        "Alpha",
+      ],
+      [machineAlertId(alertScope(ID_B.workspaceId, "profile:beta"), "in-Deploy?"), "Run 0 is waiting on Beta", "Beta"],
     ]);
     t.fleet.setFocused(focused());
     expect(t.lastAlerts().items.map((i) => i.machine?.name)).toEqual(["Beta"]);
@@ -514,13 +527,122 @@ describe("the focused machine", () => {
   });
 });
 
+describe("what a machine showed", () => {
+  const focusOn = (key: string, epoch: number): FocusedMachine => ({
+    key,
+    name: key,
+    detail: "",
+    epoch,
+    state: "live",
+    since: new Date(START).toISOString(),
+  });
+
+  async function watchedWithWork() {
+    const t = setup();
+    t.fleet.setTargets([profile("alpha", "Alpha")]);
+    await settle(0);
+    const daemon = t.daemons.get("alpha")!;
+    daemon.runs = runs(["From A"]);
+    daemon.inputs = inputs(["Merge?"]);
+    daemon.live(ID_A);
+    await settle(0);
+    expect(t.machine("profile:alpha")!.work!.runs[0]!.name).toBe("From A");
+    expect(t.lastAlerts().items).toHaveLength(1);
+    return { t, daemon };
+  }
+
+  it("shows nothing it learned from one store after a reopen lands on another, and nothing after a denied read", async () => {
+    const { t, daemon } = await watchedWithWork();
+    // Focused, then let go: the member is suspended and reopens.
+    t.fleet.setFocused(focusOn("profile:alpha", 1));
+    t.fleet.setFocused(focusOn("url:elsewhere", 2));
+    await settle(0);
+    // Reopened but not yet verified: the old answer is held back, not shown.
+    expect(t.machine("profile:alpha")!.work).toBeUndefined();
+    expect(t.lastAlerts().items).toEqual([]);
+    // The first hello on the new connection names another store, then its reads are refused.
+    daemon.denied = true;
+    daemon.live(ID_B);
+    expect(t.machine("profile:alpha")!.work).toBeUndefined();
+    await settle(0);
+    const machine = t.machine("profile:alpha")!;
+    expect(machine.work).toBeUndefined();
+    expect(machine.slots).toBeUndefined();
+    expect(machine.reason).toBeDefined();
+    expect(t.lastAlerts().items).toEqual([]);
+    // Even when that store later answers, store A's runs never come back.
+    daemon.denied = false;
+    daemon.runs = runs(["From B"]);
+    daemon.inputs = inputs([]);
+    daemon.live(ID_B);
+    await settle(0);
+    expect(t.machine("profile:alpha")!.work!.runs.map((r) => r.name)).toEqual(["From B"]);
+    expect(t.lastAlerts().items).toEqual([]);
+  });
+
+  it("shows the held answer again only once a reopen verifies the same store", async () => {
+    const { t, daemon } = await watchedWithWork();
+    t.fleet.setFocused(focusOn("profile:alpha", 1));
+    t.fleet.setFocused(undefined);
+    await settle(0);
+    expect(t.machine("profile:alpha")!.work).toBeUndefined();
+    let open!: () => void;
+    daemon.gate = new Promise((resolve) => (open = resolve));
+    daemon.live(ID_A);
+    // Verified again: the last answer is back while the fresh read is in flight.
+    expect(t.machine("profile:alpha")!.work!.runs[0]!.name).toBe("From A");
+    expect(t.lastAlerts().items).toHaveLength(1);
+    open();
+    await settle(0);
+  });
+
+  it("hides work and alerts as soon as the daemon stops accepting the credential", async () => {
+    const { t, daemon } = await watchedWithWork();
+    daemon.stream.onState("auth-failed", { consecutive: 1, atCap: 0 });
+    expect(t.machine("profile:alpha")!.work).toBeUndefined();
+    expect(t.lastAlerts().items).toEqual([]);
+  });
+
+  it("hides work and alerts as soon as a read is refused", async () => {
+    const { t, daemon } = await watchedWithWork();
+    daemon.denied = true;
+    daemon.push({ method: "run.changed", params: {} } as unknown as DaemonNotification);
+    await settle();
+    expect(t.machine("profile:alpha")!.work).toBeUndefined();
+    expect(t.lastAlerts().items).toEqual([]);
+  });
+
+  it("drops what it showed when the profile changes under the same name and destination", async () => {
+    const { t, daemon } = await watchedWithWork();
+    t.fleet.setTargets([{ ...profile("alpha", "Alpha"), revision: 1 }]);
+    expect(t.machine("profile:alpha")!.work).toBeUndefined();
+    expect(t.lastAlerts().items).toEqual([]);
+    await settle(0);
+    // Even the same store answering again starts from nothing.
+    daemon.inputs = inputs([]);
+    daemon.live(ID_A);
+    expect(t.machine("profile:alpha")!.work).toBeUndefined();
+    await settle(0);
+    expect(t.machine("profile:alpha")!.work!.runs[0]!.name).toBe("From A");
+    expect(t.lastAlerts().items).toEqual([]);
+  });
+});
+
 describe("labelAlerts", () => {
-  it("scopes ids by machine so an alert keeps its id when focus moves", () => {
+  it("scopes ids by workspace so an alert keeps its id when focus moves or the profile is renamed", () => {
     const item = { id: "in-1", tier: "gate" as const, title: "Build is waiting", body: "?", runId: "r", since: "x" };
-    const focused = labelAlerts([item], { key: "profile:a", name: "A", focused: true }, false);
-    const watched = labelAlerts([item], { key: "profile:a", name: "A", focused: false }, true);
+    const scope = alertScope(ID_A.workspaceId, "profile:a");
+    const focused = labelAlerts([item], { key: "profile:a", name: "A", focused: true, scope }, false);
+    const watched = labelAlerts([item], { key: "profile:a", name: "A", focused: false, scope }, true);
+    const other = labelAlerts([item], { key: "profile:b", name: "B", focused: false, scope }, true);
     expect(focused[0]!.id).toBe(watched[0]!.id);
+    expect(other[0]!.id).toBe(watched[0]!.id);
     expect(focused[0]!.title).toBe("Build is waiting");
     expect(watched[0]!.title).toBe("Build is waiting on A");
+  });
+
+  it("keeps two workspaces apart even behind one profile", () => {
+    expect(alertScope(ID_A.workspaceId, "profile:a")).not.toBe(alertScope(ID_B.workspaceId, "profile:a"));
+    expect(alertScope(undefined, "profile:a")).toBe("profile:a");
   });
 });

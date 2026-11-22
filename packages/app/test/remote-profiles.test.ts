@@ -201,6 +201,22 @@ describe("pending work does not outlive a profile change", () => {
     expect(profiles.list()[0]?.hasCredential).toBe(false);
   });
 
+  it("raises the revision a watcher keys on for every change, a credential import included (#882)", () => {
+    const { profiles } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    const seen = [profiles.revisionOf("lab")];
+    for (const change of [
+      () => profiles.importCredential("lab", TOKEN),
+      () => profiles.save({ id: "lab", name: "Lab", destination: "lab" }),
+      () => profiles.forgetHostKey("lab"),
+      () => profiles.importCredential("lab", TOKEN),
+    ]) {
+      change();
+      seen.push(profiles.revisionOf("lab"));
+    }
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeGreaterThan(seen[i - 1]!);
+  });
+
   it("refuses a pin reset while a connect is in flight or open, and allows it after a failure", async () => {
     let finish!: (url: string) => void;
     const { profiles, tunnels } = store(() => new Promise<string>((resolve) => (finish = resolve)));

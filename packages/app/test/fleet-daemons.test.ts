@@ -93,8 +93,8 @@ describe("three daemons at once", () => {
     });
     const machine = (key: string) => snapshot.machines.find((m) => m.key === key);
     const targets: FleetTarget[] = [
-      { kind: "profile", id: "alpha", name: "Alpha", destination: "alpha.example" },
-      { kind: "profile", id: "beta", name: "Beta", destination: "beta.example" },
+      { kind: "profile", id: "alpha", name: "Alpha", destination: "alpha.example", revision: 0 },
+      { kind: "profile", id: "beta", name: "Beta", destination: "beta.example", revision: 0 },
     ];
     try {
       const focusedRun = await start(daemons.focused);

@@ -103,6 +103,16 @@ export class RemoteProfiles {
   private bump(id: string): void {
     this.revisions.set(id, this.revision(id) + 1);
   }
+  /** Credentials imported per profile; an import does not end open leases, so it has its own count. */
+  private readonly imports = new Map<string, number>();
+
+  /**
+   * Rises whenever the profile, its pinned key or its credential changes, so a watcher can drop
+   * what it learned under the old one (#882). Both counts only rise, so their sum only rises.
+   */
+  revisionOf(id: string): number {
+    return this.revision(id) + (this.imports.get(id) ?? 0);
+  }
 
   private read(): ConnectionProfile[] {
     let text: string;
@@ -235,6 +245,7 @@ export class RemoteProfiles {
       throw new ConnectionRefusal("The profile changed while the credential was being chosen. Import it again.");
     try {
       this.slots.write(id, token);
+      this.imports.set(id, (this.imports.get(id) ?? 0) + 1);
     } catch (error) {
       throw new ConnectionRefusal(error instanceof Error ? error.message : "The credential could not be stored.");
     }

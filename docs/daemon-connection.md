@@ -162,6 +162,12 @@ each other:
   from an old connection or another store is dropped instead of shown under this
   machine. A reconnect reads `runs.list` and `inputs.list` again rather than replaying
   frames, so nothing appears twice.
+- **Shown only for a verified store.** Each answer a machine keeps is bound to the
+  workspace id that the connection's `hello` verified. After a reopen it is held back
+  until the new connection verifies that same workspace; a different or missing
+  identity, a refused credential (`auth-failed` or an authentication error on a read)
+  or any change to the profile (edit, host key reset or credential import, all of
+  which raise its revision) drops it and its alerts at once.
 - **Read-only.** A watched connection only calls `hello`, `runs.list`, `inputs.list`
   and `subscribe`. Its rows name the work and do not open it. **Focus** goes through
   the same path as the connection dialog (authenticated probe, then the all-window
@@ -176,8 +182,8 @@ each other:
   sessions in use against the cap and the queue depth.
 - **Notifications.** Waiting gates, permission asks and failures it saw happen on a
   watched machine post OS notifications that name the machine ("Build is waiting on
-  build-box"). Alert ids are scoped by machine, so moving focus does not post the same
-  alert twice. Clicking one from an unfocused machine opens Machines. The dock badge
+  build-box"). Alert ids are scoped by the verified workspace id, so moving focus or
+  renaming the profile does not post the same alert twice. Clicking one from an unfocused machine opens Machines. The dock badge
   stays the focused daemon's count, the same number as the title bar.
 
 Not here yet: observe-only profiles with read-only credentials wait on #875's
