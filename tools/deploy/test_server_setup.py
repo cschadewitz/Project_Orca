@@ -64,6 +64,12 @@ import json, sys
 from pathlib import Path
 state_file = Path(__file__).with_name("loginctl.json")
 state = json.loads(state_file.read_text()) if state_file.exists() else {"linger": True}
+if sys.argv[1] == "show-user" and state.get("unreadable", 0) > 0:
+    state["unreadable"] -= 1
+    state_file.write_text(json.dumps(state))
+    sys.exit(1)
+if sys.argv[1] in ("enable-linger", "disable-linger"):
+    state.setdefault("changes", []).append(sys.argv[1])
 if sys.argv[1] == "show-user":
     print("yes" if state["linger"] else "no")
 elif sys.argv[1] == "enable-linger":
@@ -676,6 +682,47 @@ class ServerSetupTests(unittest.TestCase):
         calls = (self.bin / "loginctl.calls").read_text()
         self.assertNotIn("enable-linger", calls)
         self.assertNotIn("disable-linger", calls)
+
+    def test_rollback_keeps_the_unit_files_mode_and_refuses_a_linked_unit(self):
+        self.assertEqual(self.run_setup()[0], 0)
+        unit = self.home / ".config" / "systemd" / "user" / "orca.service"
+        older = unit.read_text().replace("TimeoutStopSec=20", "TimeoutStopSec=10")
+        unit.write_text(older)
+        unit.chmod(0o600)
+        self.healthy = False
+        code, lines = self.run_setup()
+        self.assertEqual((code, lines[-1]["step"], lines[-1]["result"]), (1, "cleanup", "ok"), lines)
+        self.assertEqual((unit.read_text(), unit.stat().st_mode & 0o777), (older, 0o600))
+        # A unit that is a link is refused before anything changes, never replaced by a file.
+        target = self.tmp / "elsewhere.service"
+        target.write_text(older)
+        unit.unlink()
+        unit.symlink_to(target)
+        self.healthy = True
+        before = self.snapshot()
+        code, lines = self.run_setup()
+        self.assert_refused_unchanged(before, lines, code, "existing", "is not a plain file")
+        self.assertTrue(unit.is_symlink())
+
+    def test_lingering_follows_the_journaled_baseline(self):
+        """Unknown when the run began: never changed, even if a later query answers."""
+        (self.bin / "loginctl.json").write_text(json.dumps({"linger": False, "unreadable": 1}))
+        code, lines = self.run_setup()
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.step(lines, "linger")["result"], "warning")
+        self.assertNotIn("changes", json.loads((self.bin / "loginctl.json").read_text()))
+        self.assertFalse(self.linger())
+
+    def test_recovery_belongs_to_the_interrupted_transaction(self):
+        self.kill_at("check_health")
+        before = self.snapshot()
+        for inspect in (True, False):
+            code, lines = self.run_setup("0.8.1", inspect=inspect)
+            self.assertEqual((code, lines[-1]["result"]), (2, "refused"), lines)
+            self.assertIn("interrupted setup of v0.8.0 is pending", lines[-1]["detail"])
+            self.assertEqual(self.snapshot(), before)
+        # The same transaction's version finishes it.
+        self.assertEqual(self.run_setup("0.8.0")[0], 0)
 
     def test_fenced_against_a_concurrent_setup_or_update(self):
         import fcntl

@@ -146,6 +146,15 @@ def file_digest(path):
     return digest.hexdigest()
 
 
+def snapshot(path):
+    """A file as rollback restores it: its text and mode, or None when absent. Links and
+    other kinds are refused before any change (`existing`), so they never get here."""
+    path = Path(path)
+    if not path.is_file() or path.is_symlink():
+        return None
+    return {"text": path.read_text(), "mode": path.stat().st_mode & 0o7777}
+
+
 class Setup:
     def __init__(self, root, version, port, adapter_source, bundle=None, home=None, systemctl=None,
                  expect_account=None, expect_root=None, expect_current=None):
@@ -224,6 +233,10 @@ class Setup:
                 raise ValueError
         except (OSError, ValueError, AttributeError):
             raise Refused(f"{self.journal} is unreadable: inspect the server and remove it by hand.") from None
+        # Recovery belongs to that transaction: the same operation, version and directory.
+        if (journal.get("operation"), journal.get("version"), journal.get("root")) != ("setup", self.version, str(self.root)):
+            raise Refused(f"An interrupted setup of v{journal.get('version')} is pending here. Run that setup again "
+                          "to finish it, or reconcile by hand; this run changes nothing.")
         return journal
 
     def lifecycle(self):
@@ -398,10 +411,13 @@ class Setup:
 
     def check_existing(self):
         """Read only. What an earlier run left is accepted only as exactly this setup's."""
+        self.pending_journal()  # an interrupted transaction of another version refuses first
         current = self.root / "current"
-        for name, _mode in OWNED_FILES:
-            if (self.root / name).is_symlink() or (os.path.lexists(self.root / name) and not (self.root / name).is_file()):
-                raise Refused(f"{self.root / name} is not a file this setup wrote. Repair it by hand.")
+        # Rollback restores text and mode of regular files only: anything else is refused here,
+        # before any change, rather than replaced by a plain file later.
+        for path in [self.root / name for name, _mode in OWNED_FILES] + [self.unit]:
+            if path.is_symlink() or (os.path.lexists(path) and not path.is_file()):
+                raise Refused(f"{path} is not a plain file this setup wrote. Repair it by hand.")
         self.existing_manifest()
         if os.path.lexists(current):
             target = current.resolve()
@@ -462,13 +478,12 @@ class Setup:
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         current = self.root / "current"
         return {
-            "unit": self.unit.read_text() if self.unit.is_file() else None,
+            "unit": snapshot(self.unit),
             "enabled": query("is-enabled", SERVICE) == "enabled",
             "active": query("is-active", SERVICE) == "active",
             "current": os.readlink(current) if os.path.islink(current) else None,
             "linger": (linger.stdout.strip() == "yes") if linger.returncode == 0 else None,
-            "files": {name: ((self.root / name).read_text() if (self.root / name).is_file() else None)
-                      for name, _mode in OWNED_FILES},
+            "files": {name: snapshot(self.root / name) for name, _mode in OWNED_FILES},
         }
 
     def check_confirmed(self, quiet=False):
@@ -502,7 +517,8 @@ class Setup:
         self.write_journal()
 
     def write_journal(self):
-        journal = {"by": SETUP_MARKER, "before": self.before, **({"staging": self.staging} if self.staging else {})}
+        journal = {"by": SETUP_MARKER, "operation": "setup", "version": self.version, "root": str(self.root),
+                   "before": self.before, **({"staging": self.staging} if self.staging else {})}
         write_file(self.journal, json.dumps(journal, sort_keys=True) + "\n", 0o600)
 
     def restore(self, before, staging=None):
@@ -538,7 +554,7 @@ class Setup:
                 if before["unit"] is None:
                     self.unit.unlink(missing_ok=True)
                 else:
-                    write_file(self.unit, before["unit"], 0o644)
+                    write_file(self.unit, before["unit"]["text"], before["unit"]["mode"])
                 self.systemctl("daemon-reload")
             attempt("unit file", unit)
         if before["active"] and not now["active"]:
@@ -551,12 +567,12 @@ class Setup:
             attempt("lingering", linger)
         for name, mode in OWNED_FILES:
             if now["files"].get(name) != before.get("files", {}).get(name, now["files"].get(name)):
-                def put(name=name, mode=mode):
-                    text = before["files"][name]
-                    if text is None:
+                def put(name=name):
+                    prior = before["files"][name]
+                    if prior is None:
                         (self.root / name).unlink(missing_ok=True)
                     else:
-                        write_file(self.root / name, text, mode)
+                        write_file(self.root / name, prior["text"], prior["mode"])
                 attempt(name, put)
         scratch = self.owned_scratch(staging)
         if scratch is not None and os.path.lexists(scratch):
@@ -713,14 +729,15 @@ class Setup:
         report("unit", "changed" if changed or not enabled else "ok", SERVICE)
         # Without lingering the user manager, and the daemon, stop at logout.
         user = self.user
-        linger = subprocess.run([self.loginctl_bin, "show-user", user, "--property=Linger", "--value"],
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        if linger.returncode != 0:
+        # The journaled baseline decides: unknown when the run began means never touched,
+        # even if a later query would answer, since rollback could not put it back.
+        baseline = self.before["linger"] if self.before is not None else None
+        if baseline is None:
             # Unknown: left exactly as it is, never changed blind.
             report("linger", "warning", "could not read lingering, so it was left as it is: if it is off, the "
                    "daemon stops when this user logs out (an administrator can run: loginctl enable-linger "
                    + user + ")")
-        elif linger.stdout.strip() == "yes":
+        elif baseline is True:
             report("linger", "ok", "the daemon runs without a login")
         elif subprocess.run([self.loginctl_bin, "enable-linger", user], stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL).returncode == 0:
