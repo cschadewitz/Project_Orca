@@ -409,8 +409,11 @@ opens one pull request on `main`, `changelog: record vX.Y.Z` from the branch
 `release-sync/vX.Y.Z`, that adds the release's CHANGELOG section (`node tools/release.js sync`)
 and deletes the fragments the release commit consumed, each only where `main`'s copy is
 byte-identical to the released one; a differing copy is kept and named. It refuses to touch
-anything else and goes through `main`'s normal review and checks with auto-merge requested; a
-rerun replaces that branch's single commit and finds the same pull request. `main`'s
+anything else and goes through `main`'s normal review and checks, with auto-merge requested
+for exactly the head it checked. A rerun never pushes over that branch: the same change (even
+on a newer `main`) is reused with its pull request, and an edit or a different change stops the
+run with nothing changed. Publish-final hands over to the feed first; the notes handover runs
+whether or not that worked, so neither can suppress the other. `main`'s
 `package.json` keeps the last minor it released, so the next minor is still computed from it.
 
 **Lines stop at 0.7 for now.** From 0.8 on a release must carry the signed server bundle, which

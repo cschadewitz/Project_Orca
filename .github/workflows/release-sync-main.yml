@@ -6,13 +6,14 @@
 # `release-sync/vX.Y.Z`, that adds the release's section and deletes exactly the fragments the
 # release commit consumed, each only where main's copy is byte-identical to the released one (a
 # differing copy is kept and named). It goes through main's normal review and checks, with
-# auto-merge requested; it is never merged directly.
+# auto-merge requested for the exact head it checked; it is never merged directly.
 #
 # It acts only on a release that is really published: the release is read back by tag (and by
 # id when given), must not be a draft, and its tag must resolve to a commit on the version's
 # protected line (tools/release-lane.js). A draft, or a final whose acceptance failed, leaves
 # main alone. Release (publish final) dispatches it after publishing; Release (publish) does
-# for a line prerelease. A rerun updates the same branch and pull request.
+# for a line prerelease. A rerun reuses the same branch and pull request when they hold the same
+# change, and stops, changing nothing, when they hold anything else.
 #
 # The optional release App's token lives in the `release-bot` environment, which only main may
 # deploy to; without it the pull request is opened with GITHUB_TOKEN and gets no checks.
@@ -149,21 +150,43 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -qm "changelog: record v$VERSION, released from its line"
-          # One branch and one pull request per version: a rerun replaces the branch's single commit
-          # (this workflow's own branch, nobody else's) and finds the pull request already open.
+          # One branch and one pull request per version. A rerun never replaces what is there: an
+          # identical change (same patch, whatever main it was made on) is reused as it stands,
+          # and anything else (an edit, a different section) stops the run for a person to look.
           branch="release-sync/v$VERSION"
-          git push -q --force "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" "HEAD:refs/heads/$branch"
-          url=$(gh pr list --repo "$REPO" --state open --base "$DEFAULT_BRANCH" --head "$branch" --json url --jq '.[0].url // ""')
-          if [ -z "$url" ]; then
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git config "http.https://github.com/.extraheader" "AUTHORIZATION: basic $auth"
+          if git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null; then
+            ours=$(git diff HEAD^ HEAD | git patch-id --stable | cut -d' ' -f1)
+            theirs=$(git diff "$(git merge-base HEAD^ "refs/remotes/origin/$branch")" "refs/remotes/origin/$branch" |
+              git patch-id --stable | cut -d' ' -f1)
+            if [ "$ours" != "$theirs" ]; then
+              echo "::error::$branch already holds a different change; it is left as it is. Review it, or delete the branch and rerun."
+              exit 1
+            fi
+            head=$(git rev-parse "refs/remotes/origin/$branch")
+            echo "$branch already holds this change at \`$head\`; reused." >> "$GITHUB_STEP_SUMMARY"
+          else
+            git push -q origin "HEAD:refs/heads/$branch"
+            head=$(git rev-parse HEAD)
+          fi
+          found=$(gh pr list --repo "$REPO" --state open --base "$DEFAULT_BRANCH" --head "$branch" \
+            --json url,headRefOid --jq '.[0] | "\(.url // "") \(.headRefOid // "")"')
+          read -r url pr_head <<<"$found" || true
+          if [ -z "${url:-}" ]; then
             body="v$VERSION was released from its release line at \`$SHA\`. This adds its CHANGELOG section to $DEFAULT_BRANCH and deletes the changelog.d/ fragments it released (only where $DEFAULT_BRANCH's copy is identical), so the next minor does not repeat them. It changes nothing else."
             if [ ${#kept[@]} -gt 0 ]; then body+=$'\n\n'"Kept because they differ from the released copy: ${kept[*]}"; fi
             url=$(gh pr create --repo "$REPO" --base "$DEFAULT_BRANCH" --head "$branch" --label no-changelog \
               --title "changelog: record v$VERSION" --body "$body")
             echo "Opened $url." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$pr_head" != "$head" ]; then
+            echo "::error::$url is at $pr_head, not the $head this run checked; nothing changed"
+            exit 1
           else
-            echo "Updated $url." >> "$GITHUB_STEP_SUMMARY"
+            echo "Found $url, unchanged." >> "$GITHUB_STEP_SUMMARY"
           fi
-          # Through main's normal review and checks: auto-merge, never a direct merge.
-          if ! gh pr merge "$url" --auto --squash; then
+          # Through main's normal review and required checks: auto-merge of exactly the head this
+          # run checked, never a direct merge.
+          if ! gh pr merge "$url" --auto --squash --match-head-commit "$head"; then
             echo "::warning::could not enable auto-merge on $url; it waits for review"
           fi

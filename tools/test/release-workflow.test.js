@@ -256,10 +256,25 @@ it("publishes a final only from main, through the checking script, and hands ove
   expect(job.permissions).toEqual({ contents: "write", actions: "write" });
   expect(job.steps[1].run).toBe('bash tools/deploy/release-attach.sh publish "$ID" "$VERSION" "$SHA" "$DEB" "$EXE"');
   expect(job.steps[1].run).not.toContain("${{");
-  // After the publish read-back: main's record of a line release, then the feed.
-  expect(job.steps[2].name).toBe("Record a line release on main");
-  expect(job.steps[2].run).toContain("gh workflow run release-sync-main.yml");
-  expect(job.steps[3].run).toBe('gh workflow run feed-auto.yml --repo "$GITHUB_REPOSITORY" --ref main');
+  // After the publish read-back: the feed handover, then main's record of a line release.
+  expect(job.steps[1].id).toBe("publish");
+  expect(job.steps[2].run).toBe('gh workflow run feed-auto.yml --repo "$GITHUB_REPOSITORY" --ref main');
+  expect(job.steps[3].name).toBe("Record a line release on main");
+  expect(job.steps[3].run).toContain("gh workflow run release-sync-main.yml");
+});
+
+it("never lets the notes handover suppress the feed, or the feed's suppress the notes", () => {
+  const steps = workflow("release-publish-final.yml").jobs.publish.steps;
+  const feed = steps.findIndex((s) => s.run?.includes("feed-auto.yml"));
+  const notes = steps.findIndex((s) => s.run?.includes("release-sync-main.yml"));
+  // A failed step skips every later step that keeps the default success() condition, so the
+  // feed goes first and the notes step runs on the publish's outcome alone.
+  expect(feed).toBeGreaterThan(1);
+  expect(notes).toBe(steps.length - 1);
+  expect(feed).toBeLessThan(notes);
+  expect(steps[feed]["continue-on-error"]).toBeUndefined();
+  expect(steps[notes].if).toBe("${{ !cancelled() && steps.publish.outcome == 'success' }}");
+  for (const s of steps.slice(1, feed)) expect(s.run ?? "").not.toContain("release-sync-main");
 });
 
 it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unattended (#889)", () => {
