@@ -244,6 +244,10 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "agents.list": { permission: "agents.read", resource: "none" },
   "agents.ping": { permission: "agents.ping", resource: "none", audit: "mutation" },
 
+  // Secret reference metadata (#336): never a value; filtered to the caller's grant.
+  "secrets.list": { permission: "secrets.read", resource: "none" },
+  "secrets.check": { permission: "secrets.read", resource: "none" },
+
   // Store-wide subscriptions are open to any principal: each notification is gated on its own
   // (guard.ts `notificationGate`). A run-scoped one needs `runs.read` and the run.
   subscribe: { permission: null, resource: "subscription" },

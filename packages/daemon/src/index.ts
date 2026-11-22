@@ -19,6 +19,7 @@ export * from "./plan-control.js";
 export * from "./config-model.js";
 export * from "./config-schema.js";
 export * from "./agent-model.js";
+export * from "./secrets-model.js";
 export * from "./methods.js";
 export * from "./notifications.js";
 export * from "./subscriptions.js";
