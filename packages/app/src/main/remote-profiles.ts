@@ -127,6 +127,12 @@ export interface ProfileLease {
   exec(command: readonly string[], onLine: (stream: "stdout" | "stderr", line: string) => void): RemoteCommand;
   /** The server's host key as this tunnel authenticated it (`SHA256:…`), once it has. */
   hostKey(): string | undefined;
+  /**
+   * The pins this lease's tunnel sealed (`tunnelKeyIdentity`: server, and jump host), which
+   * every stream and command of the lease is verified against. Fixed for the lease's life,
+   * unlike `hostKey()`, the last key observed; `undefined` once the lease is unusable.
+   */
+  pinnedKeys(): string | undefined;
   release(): Promise<void>;
 }
 
@@ -1053,6 +1059,7 @@ export class RemoteProfiles {
         return current.tunnel.execStreaming(command, onLine);
       },
       hostKey: () => current.tunnel.hostKeyFingerprint,
+      pinnedKeys: () => (usable() && current.tunnel.pinnedKeys === sealed ? sealed : undefined),
       release: async () => {
         if (released) return;
         released = true;

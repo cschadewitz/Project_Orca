@@ -6,8 +6,8 @@ event, starts nothing and carries no approval or permission forward.
 
 Phase 2 adds **side-effect review** (below): a step that may have acted and never finished is
 never run again on its own, and `orca recovery review` records an operator's decision about it.
-It also adds **starting a checkpoint attempt** (`orca recovery start`, below). The app's recovery
-panel follows; host reconnection and reassignment stay with #344.
+It also adds **starting a checkpoint attempt** (`orca recovery start`, below), and the app's
+recovery section (below). Host reconnection and reassignment stay with #344.
 
 ```sh
 orca recovery <runId>                       # options, reasons, uncertain effects, checkpoints
@@ -202,7 +202,10 @@ Protocol 2.5 carries the same three actions for the app:
   attempt as `orca recovery start` does: one attempt per idempotency key, authorized as a new
   run of the source's workflow and only for the principal that started the source. The daemon
   then drives it once, under the same first-attachment policy as `runs.admit`, and its receipt
-  reads back and reconciles through `admissions.get` and `admissions.reconcile`. Reconciling it
+  reads back and reconciles through `admissions.get` and `admissions.reconcile`. A caller
+  finishing a checkpoint attempt passes `kind: "run.recover"` to `admissions.reconcile`; the
+  daemon reads the receipt's kind first and refuses any other kind before it reconciles,
+  creates or drives anything. Reconciling it
   can create the reserved attempt, so while new admission is closed (an update drain) it is
   refused like `runs.recover`; `admissions.get` stays open and read-only.
 
@@ -227,3 +230,45 @@ The app's recovery panel (phase 2, next), reconciling an
 uncertain effect automatically, the operations console (#340), host-specific orphan handling
 (#344), and agent-context recovery for approvals (the Approved, then Continue contract recorded
 on #357).
+
+## In the app
+
+Selecting a run that stopped (failed, cancelled or held, not running or succeeded) shows a
+**Recovery** section in its summary, read from `runs.recovery`: each option with the same
+reasons the CLI prints, the steps that need review, and the checkpoints, newest first. Each
+control is drawn only when the daemon lists its method, so a daemon before protocol 2.5 shows
+none of it and a `--read-only` daemon shows the assessment without buttons.
+
+- **Mark to run again** and **Abandon the run** record a review (`runs.reviewEffect`).
+  Abandoning asks for confirmation first.
+- **Start an attempt from here** sends `runs.recover` for that checkpoint. The intent (the
+  verified connection and principal, the source run, the checkpoint, its idempotency key, a
+  reserved receipt once there is one, and the attempt the daemon accepted) is kept by the app's
+  main process in an encrypted journal (`recovery-intents.enc`, OS keychain, never plain text),
+  not in the window. An SSH profile's connection is identified by the profile, its effective SSH
+  endpoint (server and jump chain), the daemon's remote port and the host-key pins its tunnel sealed, not
+  its tunnel's local port, so reconnecting to the same verified endpoint finds the same intent
+  while a changed endpoint or a replaced pin does not. A tunnel that has not sealed its pins
+  cannot start a recovery. Leaving the run, selecting a step, reloading or restarting the app finds the
+  same intent above the checkpoints, and no other checkpoint of that run can be started
+  meanwhile:
+  - **Ask again** sends the same key after any answer that is not an outcome: a lost reply, an
+    in-progress answer, or an error. An error answers that request only and cannot show that an
+    earlier, lost request admitted nothing, so it never ends the intent. A start refused because
+    a step still needs review can be asked again with the same key once it is reviewed.
+  - **Finish the attempt** after a receipt that reserved the attempt without confirming it was
+    created reconciles that receipt (`admissions.reconcile` with `kind: "run.recover"`) and
+    never starts another.
+  - **Abandon this recovery**, after a confirmation, forgets an unresolved intent. It cancels
+    nothing on the daemon; the next start is new work with a new key.
+  - Once the daemon accepts an attempt for this source, the attempt is written to the intent
+    before anyone is told, so a lost reply, a reload or a changed connection still finds it:
+    **Open the attempt**, or **Start a separate attempt**, which confirms and then forgets the
+    link so the next start uses a new key.
+
+  Main runs one start, finish or dismissal per source run at a time, a dismissal's confirmation
+  included. An answer that arrives after the connection changed is recorded against its own
+  intent and not shown on the new connection. A started attempt is selected in the run tree.
+- A checkpoint attempt's summary names the run and step it started after, and a reused step
+  says which run it came from. A step with a recorded review says what was decided.
+

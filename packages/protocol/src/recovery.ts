@@ -21,6 +21,18 @@ import { EffectReviewDecisionSchema, RecoveryAssessmentSchema } from "@orca/core
 import { AdmissionExpectedScopeSchema, AdmissionInProgressSchema, RetryKeySchema } from "./admission-retry.js";
 import { RunSummaryViewSchema } from "./runs.js";
 
+/** The assessment's shapes and its operator sentences, for a client that may not import core. */
+export {
+  RECOVERY_BLOCKER_TEXT,
+  RECOVERY_UNVERIFIED_TEXT,
+  type RecoveryAssessment,
+  type RecoveryBlocker,
+  type RecoveryCheckpoint,
+  type RecoveryOption,
+  type RecoveryStep,
+  type RecoveryUnverified,
+} from "@orca/core/schemas";
+
 export const RUNS_RECOVERY_METHOD = "runs.recovery";
 export const RUNS_REVIEW_EFFECT_METHOD = "runs.reviewEffect";
 export const RUNS_RECOVER_METHOD = "runs.recover";

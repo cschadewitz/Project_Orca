@@ -470,7 +470,7 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
           {detail === undefined ? (
             <StateView kind="empty" title="Step detail" body="Select a run in the tree to see what it produced." />
           ) : (
-            <StepDetail detail={detail} stepRunId={selectedStepRunId} connection={connection} />
+            <StepDetail detail={detail} stepRunId={selectedStepRunId} connection={connection} onOpenRun={openInTree} />
           )}
         </aside>
       </div>

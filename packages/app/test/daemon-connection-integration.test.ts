@@ -1050,7 +1050,14 @@ it("durable admission closure retains completion only for the reserved live drai
   expect(await invoke("orca:inputs.answer")).toMatchObject({ ok: true });
   expect(await invoke("orca:runs.get")).toMatchObject({ ok: true });
   expect(rpc).toHaveBeenCalledTimes(2);
-  for (const channel of ["orca:runs.start", "orca:templates", "orca:config.apply", "orca:guidedLaunch.submit"])
+  for (const channel of [
+    "orca:runs.start",
+    "orca:recoveryIntents.start",
+    "orca:recoveryIntents.finish",
+    "orca:templates",
+    "orca:config.apply",
+    "orca:guidedLaunch.submit",
+  ])
     expect(await invoke(channel)).toMatchObject({ ok: false });
   expect(await shell.handlers.get("orca:preferences.write")!(event, { theme: "dark" })).toMatchObject({ ok: false });
   shell.replacementBootstrap.existingWorkAllowed = false;

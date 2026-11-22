@@ -121,10 +121,16 @@ const full = () =>
   new Error(
     `Too many retained run intents (${RETAINED_LIMIT}). No run was submitted; recover or explicitly abandon earlier intents, on the connection that started each, before starting new work.`,
   );
-export class AdmissionIntents {
+/**
+ * The encrypted, fsynced journal file under a run-intent store (#357 shares it with recovery
+ * intents). Rows are validated by the owner; only `retained` rows are ever written back.
+ */
+export class ProtectedJournal<T extends { state: string }> {
   constructor(
     private readonly path: string,
     private readonly encryption: IntentEncryption,
+    /** Parse the decrypted rows or throw; any throw reads as "could not be verified". */
+    private readonly validate: (data: unknown) => T[],
   ) {}
   /** Never falls back: `basic_text` is refused even when Electron reports it as available. */
   private refusal(): ProtectedStorageRefusal {
@@ -144,7 +150,7 @@ export class AdmissionIntents {
    * existing journal stays `unconfirmed` (#857 review): an earlier retained launch may exist
    * and must not be offered again as new.
    */
-  private read(): IntentRecord[] {
+  read(): T[] {
     try {
       this.check();
     } catch (error) {
@@ -154,7 +160,7 @@ export class AdmissionIntents {
     return this.readChecked();
   }
   /** Read and verified with no existing intent for this work: a refused write was not sent. */
-  private writeNewWork(records: IntentRecord[]): void {
+  writeNewWork(records: T[]): void {
     try {
       this.write(records);
     } catch (error) {
@@ -171,7 +177,7 @@ export class AdmissionIntents {
       return (error as NodeJS.ErrnoException).code !== "ENOENT";
     }
   }
-  private readChecked(): IntentRecord[] {
+  private readChecked(): T[] {
     let bytes: Buffer;
     try {
       bytes = readFileSync(this.path);
@@ -180,41 +186,7 @@ export class AdmissionIntents {
       throw new ProtectedStorageRefusal("unavailable");
     }
     try {
-      const data: unknown = JSON.parse(this.encryption.decryptString(bytes));
-      if (!Array.isArray(data) || data.length > RETAINED_LIMIT) throw invalid();
-      const ids = new Set<string>();
-      for (const row of data) {
-        if (
-          typeof row !== "object" ||
-          row === null ||
-          ![
-            "id,idempotencyKey,principalId,state,target,workflowId,workspaceId",
-            "guided,id,idempotencyKey,principalId,state,target,workflowId,workspaceId",
-          ].includes(Object.keys(row).sort().join()) ||
-          ![row.id, row.idempotencyKey, row.principalId, row.target, row.workflowId, row.workspaceId].every(
-            (v) => typeof v === "string" && v.length > 0,
-          ) ||
-          !["retained", "abandoned"].includes(row.state) ||
-          ids.has(row.id)
-        )
-          throw invalid();
-        if (Object.hasOwn(row, "guided")) {
-          const guided = row.guided as IntentRecord["guided"];
-          if (
-            !guided ||
-            guided.version !== 1 ||
-            Object.keys(guided).some((key) => !["version", "review", "operationId", "admissionId"].includes(key)) ||
-            [guided.operationId, guided.admissionId].some(
-              (id) => id !== undefined && (typeof id !== "string" || !id.length),
-            )
-          )
-            throw invalid();
-          const review = parseGuidedReview(guided.review);
-          if (review.workflowId !== row.workflowId || review.target.workspaceId !== row.workspaceId) throw invalid();
-        }
-        ids.add(row.id);
-      }
-      return data as IntentRecord[];
+      return this.validate(JSON.parse(this.encryption.decryptString(bytes)));
     } catch {
       throw new Error(
         "Saved run intents could not be verified. No run was submitted; restore the intent journal and matching OS keychain.",
@@ -222,10 +194,11 @@ export class AdmissionIntents {
     }
   }
   /** Compacts: an abandoned record is settled and nothing reads it again, so it is not kept.
-   * Every retained record is kept, since retry, recovery and reconciliation need it. */
-  private write(records: IntentRecord[]): void {
+   * Every other record (retained, or a recovery intent's resolved outcome) is kept, since
+   * retry, recovery, reconciliation and finding what started need it. */
+  write(records: T[]): void {
     this.check();
-    const retained = records.filter((r) => r.state === "retained");
+    const retained = records.filter((r) => r.state !== "abandoned");
     let bytes: Buffer;
     try {
       bytes = this.encryption.encryptString(JSON.stringify(retained));
@@ -255,6 +228,58 @@ export class AdmissionIntents {
     } catch {
       throw new ProtectedStorageRefusal("unavailable");
     }
+  }
+}
+
+function admissionRows(data: unknown): IntentRecord[] {
+  if (!Array.isArray(data) || data.length > RETAINED_LIMIT) throw invalid();
+  const ids = new Set<string>();
+  for (const row of data) {
+    if (
+      typeof row !== "object" ||
+      row === null ||
+      ![
+        "id,idempotencyKey,principalId,state,target,workflowId,workspaceId",
+        "guided,id,idempotencyKey,principalId,state,target,workflowId,workspaceId",
+      ].includes(Object.keys(row).sort().join()) ||
+      ![row.id, row.idempotencyKey, row.principalId, row.target, row.workflowId, row.workspaceId].every(
+        (v) => typeof v === "string" && v.length > 0,
+      ) ||
+      !["retained", "abandoned"].includes(row.state) ||
+      ids.has(row.id)
+    )
+      throw invalid();
+    if (Object.hasOwn(row, "guided")) {
+      const guided = row.guided as IntentRecord["guided"];
+      if (
+        !guided ||
+        guided.version !== 1 ||
+        Object.keys(guided).some((key) => !["version", "review", "operationId", "admissionId"].includes(key)) ||
+        [guided.operationId, guided.admissionId].some(
+          (id) => id !== undefined && (typeof id !== "string" || !id.length),
+        )
+      )
+        throw invalid();
+      const review = parseGuidedReview(guided.review);
+      if (review.workflowId !== row.workflowId || review.target.workspaceId !== row.workspaceId) throw invalid();
+    }
+    ids.add(row.id);
+  }
+  return data as IntentRecord[];
+}
+export class AdmissionIntents {
+  private readonly journal: ProtectedJournal<IntentRecord>;
+  constructor(path: string, encryption: IntentEncryption) {
+    this.journal = new ProtectedJournal(path, encryption, admissionRows);
+  }
+  private read(): IntentRecord[] {
+    return this.journal.read();
+  }
+  private writeNewWork(records: IntentRecord[]): void {
+    this.journal.writeNewWork(records);
+  }
+  private write(records: IntentRecord[]): void {
+    this.journal.write(records);
   }
   /** Persist before the first network admission. Repeated clicks/restarts reuse exact intent. */
   retain(scope: IntentScope, workflowId: string): IntentRecord {

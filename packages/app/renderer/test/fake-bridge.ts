@@ -103,6 +103,8 @@ import type {
   BridgeResult,
   ConnectionSnapshot,
   OrcaBridge,
+  RecoveryIntentOutcome,
+  RecoveryIntentView,
   WorkspaceSnapshot,
 } from "../../src/bridge.js";
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
@@ -146,6 +148,12 @@ export type MethodName =
   | "runs.cancel"
   | "runs.resume"
   | "runs.start"
+  | "runs.recovery"
+  | "runs.reviewEffect"
+  | "recoveryIntents.list"
+  | "recoveryIntents.start"
+  | "recoveryIntents.finish"
+  | "recoveryIntents.dismiss"
   | "config.get"
   | "config.set"
   | "plans.list"
@@ -185,6 +193,16 @@ export interface Handlers {
   "runs.cancel": (params: RunsCancelParams) => Answer<RunsCancelResult>;
   "runs.resume": (params: RunsResumeParams) => Answer<RunsResumeResult>;
   "runs.start": (params: Params<RunsStartParams> & { workflowId: string }) => Answer<RunsStartResult>;
+  "runs.recovery": (
+    params: import("@orca/protocol").RunsRecoveryParams,
+  ) => Answer<import("@orca/protocol").RunsRecoveryResult>;
+  "runs.reviewEffect": (
+    params: import("@orca/protocol").RunsReviewEffectParams,
+  ) => Answer<import("@orca/protocol").RunsReviewEffectResult>;
+  "recoveryIntents.list": (params: { runId: string }) => Answer<RecoveryIntentView[]>;
+  "recoveryIntents.start": (params: { runId: string; checkpoint: string }) => Answer<RecoveryIntentOutcome>;
+  "recoveryIntents.finish": (params: { id: string }) => Answer<RecoveryIntentOutcome>;
+  "recoveryIntents.dismiss": (params: { id: string }) => Answer<{ abandoned: boolean }>;
   "config.get": (params: Params<ConfigGetParams>) => Answer<ConfigGetResult>;
   "config.set": (params: ConfigSetParams) => Answer<ConfigSetResult>;
   "plans.list": (params: Params<PlansListParams>) => Answer<PlansListResult>;
@@ -467,6 +485,16 @@ const defaults: Handlers = {
   /* Answers as the daemon does: the moment the run exists, with its id and a summary that
      is `running` and has no outcome yet. The id is derived from the workflow so a test can
      assert where the palette navigated without scripting a handler. */
+  /* Recovery (#357) is not in the fixture daemon's `hello.methods`, so nothing calls these
+     unless a test lists the methods and scripts the answers. */
+  "runs.recovery": () => err("NOT_SUPPORTED", "no recovery in the fixture daemon"),
+  "runs.reviewEffect": () => err("NOT_SUPPORTED", "no recovery in the fixture daemon"),
+  // Main's journal of unresolved checkpoint attempts: empty unless a test scripts one.
+  "recoveryIntents.list": () => ok([]),
+  "recoveryIntents.start": () => err("NOT_SUPPORTED", "no recovery in the fixture daemon"),
+  "recoveryIntents.finish": () => err("NOT_SUPPORTED", "no recovery in the fixture daemon"),
+  "recoveryIntents.dismiss": () => ok({ abandoned: true }),
+
   "runs.start": ({ workflowId }) => {
     const workflow = WORKFLOWS.find((w) => w.id === workflowId);
     if (!workflow) return err("WORKFLOW_NOT_FOUND", `no workflow ${workflowId}`);
@@ -771,6 +799,16 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
       cancel: (params) => call("runs.cancel", params) as Promise<BridgeResult<RunsCancelResult>>,
       resume: (params) => call("runs.resume", params) as Promise<BridgeResult<RunsResumeResult>>,
       start: (params) => call("runs.start", params) as Promise<BridgeResult<RunsStartResult>>,
+      recovery: (params) =>
+        call("runs.recovery", params) as Promise<BridgeResult<import("@orca/protocol").RunsRecoveryResult>>,
+      reviewEffect: (params) =>
+        call("runs.reviewEffect", params) as Promise<BridgeResult<import("@orca/protocol").RunsReviewEffectResult>>,
+    },
+    recoveryIntents: {
+      list: (params) => call("recoveryIntents.list", params) as Promise<BridgeResult<RecoveryIntentView[]>>,
+      start: (params) => call("recoveryIntents.start", params) as Promise<BridgeResult<RecoveryIntentOutcome>>,
+      finish: (params) => call("recoveryIntents.finish", params) as Promise<BridgeResult<RecoveryIntentOutcome>>,
+      dismiss: (params) => call("recoveryIntents.dismiss", params) as Promise<BridgeResult<{ abandoned: boolean }>>,
     },
     inputs: {
       list: (params = {}) => call("inputs.list", params) as Promise<BridgeResult<InputsListResult>>,

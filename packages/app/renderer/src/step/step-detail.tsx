@@ -28,8 +28,9 @@ import type { ArtifactView, RunsGetResult, StepView } from "@orca/protocol";
 import { StepAsks } from "../attention/inline-asks.js";
 import { useArtifactPanel } from "../artifacts/panel-context.js";
 import { useArtifactsList } from "../artifacts/use-artifacts.js";
-import { Duration, KeyValueList, StateView, StatusChip, Text, textClass } from "../ui/index.js";
+import { Duration, KeyValueList, ObjectId, StateView, StatusChip, Text, textClass } from "../ui/index.js";
 import { OutputPane, outputLabel, type OutputPaneHandle } from "./output-pane.js";
+import { RunRecovery } from "./run-recovery.js";
 import { sessionOf } from "./step-facts.js";
 import { ToolCallRow } from "./tool-call-row.js";
 import { useStepLog } from "./use-step-log.js";
@@ -41,11 +42,13 @@ export interface StepDetailProps {
   /** The step to show. Absent renders the run summary in the same pane. */
   stepRunId?: string | undefined;
   connection: ConnectionState;
+  /** Select another run: where a recovery action's new attempt is opened (#357). */
+  onOpenRun?: ((runId: string) => void) | undefined;
 }
 
-export function StepDetail({ detail, stepRunId, connection }: StepDetailProps): JSX.Element {
+export function StepDetail({ detail, stepRunId, connection, onOpenRun }: StepDetailProps): JSX.Element {
   const step = stepRunId === undefined ? undefined : detail.steps.find((s) => s.id === stepRunId);
-  if (step === undefined) return <RunSummary detail={detail} connection={connection} />;
+  if (step === undefined) return <RunSummary detail={detail} connection={connection} onOpenRun={onOpenRun} />;
   // Keyed on the step so the log hook's buffer, the selection and the search field all
   // start again rather than being carried across to a different step's output.
   return <Step key={step.id} detail={detail} step={step} connection={connection} />;
@@ -125,6 +128,23 @@ function Step({
       {session.error !== undefined && step.error === undefined && (
         <Text style="label" as="div" className="orca-step__error">
           {`${session.error.code}: ${session.error.message}`}
+        </Text>
+      )}
+
+      {/* Where a checkpoint attempt's reused step came from, and an operator's review of a
+          step that may have acted outside ORCA (#357): both are facts of the run's history
+          that the status chip cannot say. */}
+      {step.reusedFrom !== undefined && (
+        <Text style="caption" as="div" className="orca-step__note">
+          Reused from <ObjectId id={step.reusedFrom.runId} kind="run" />; it did not run here.
+        </Text>
+      )}
+      {step.effectReview !== undefined && (
+        <Text style="caption" as="div" className="orca-step__note">
+          {(step.effectReview.decision === "run-again"
+            ? "Effect reviewed: marked to run again."
+            : "Effect reviewed: abandoned; the run ended here.") +
+            (step.effectReview.note ? ` ${step.effectReview.note}` : "")}
         </Text>
       )}
 
@@ -258,7 +278,15 @@ export function ArtifactChip({ runId, artifact }: { runId: string; artifact: Art
  * Workflows inspector and a launch's review card use too, so a value reads the same in all
  * three: a scalar on the line, an object as its indented JSON in a well.
  */
-function RunSummary({ detail, connection }: { detail: RunsGetResult; connection: ConnectionState }): JSX.Element {
+function RunSummary({
+  detail,
+  connection,
+  onOpenRun,
+}: {
+  detail: RunsGetResult;
+  connection: ConnectionState;
+  onOpenRun?: ((runId: string) => void) | undefined;
+}): JSX.Element {
   const [showVars, setShowVars] = useState(true);
   const count = Object.keys(detail.vars).length;
   const status: RunStatus = detail.run.status;
@@ -301,6 +329,15 @@ function RunSummary({ detail, connection }: { detail: RunsGetResult; connection:
             <ArtifactChip key={artifact.id} runId={detail.run.id} artifact={artifact} />
           ))}
         </div>
+
+        {detail.run.checkpoint !== undefined && (
+          <Text style="caption" as="div" className="orca-step__note">
+            A checkpoint attempt of <ObjectId id={detail.run.checkpoint.runId} kind="run" />, started after step{" "}
+            <ObjectId id={detail.run.checkpoint.stepRunId} kind="step" />.
+          </Text>
+        )}
+
+        <RunRecovery detail={detail} onOpenRun={onOpenRun} />
 
         {connection !== "live" && (
           <Text style="caption" className="orca-faint" as="div">

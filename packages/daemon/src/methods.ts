@@ -1044,7 +1044,7 @@ export function methodsFor(ctx: MethodContext): MethodTable {
       handle: async (params, invocation) => {
         const authority = await authorities(invocation);
         await checkAdmissionScope(params.expectedScope, authority);
-        return model.reconcile(params.operationId, authority, newAdmissionFence(ctx.maintenance));
+        return model.reconcile(params.operationId, authority, newAdmissionFence(ctx.maintenance), params.kind);
       },
     };
   }

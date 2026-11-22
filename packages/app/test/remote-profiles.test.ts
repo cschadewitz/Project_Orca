@@ -338,6 +338,35 @@ describe("RemoteProfiles", () => {
     expect(profiles.serverUpdater("lab")).toBeUndefined();
   });
 
+  it("keeps a lease's sealed pins across host-key observations, and a pin replacement changes them", async () => {
+    const { dir, profiles, tunnels } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    profiles.importCredential("lab", TOKEN);
+    const a = await profiles.open("lab");
+    const sealed = a.pinnedKeys();
+    expect(sealed).toBe(tunnels[0]!.pinnedKeys);
+    expect(sealed).toBeDefined();
+    // Another stream's ssh output updates the last-observed key; the sealed pins do not move.
+    tunnels[0]!.hostKeyFingerprint = "SHA256:observedOnAnotherStream";
+    expect(a.hostKey()).toBe("SHA256:observedOnAnotherStream");
+    expect(a.pinnedKeys()).toBe(sealed);
+    // A tunnel resealed under other pins no longer vouches for this lease.
+    tunnels[0]!.pinnedKeys = "resealed";
+    expect(a.pinnedKeys()).toBeUndefined();
+    tunnels[0]!.pinnedKeys = sealed;
+    await a.release();
+    expect(a.pinnedKeys()).toBeUndefined();
+
+    // A real pin replacement: forget the key and pin the one the server presents now.
+    profiles.forgetHostKey("lab");
+    writeFileSync(join(dir, "known_hosts", "lab"), "orca-lab ssh-ed25519 AAAAREPLACEDKEY\n");
+    profiles.importCredential("lab", TOKEN);
+    const b = await profiles.open("lab");
+    expect(b.pinnedKeys()).toBeDefined();
+    expect(b.pinnedKeys()).not.toBe(sealed);
+    await b.release();
+  });
+
   it("shares one tunnel per profile, closes it with its last user, and refuses edits while in use", async () => {
     const { profiles, tunnels } = store();
     profiles.save({ name: "Lab", destination: "lab" });
@@ -716,7 +745,13 @@ describe("credentials travel only on the tunnel's authenticated streams", () => 
   });
 });
 
-function lease(id: string, url: string, released: string[], refused = false): ProfileLease {
+/** What a fake lease's tunnel reports: the last-observed host key and the pins it sealed. */
+interface LeaseKeys {
+  observed?: string;
+  pins?: string;
+}
+
+function lease(id: string, url: string, released: string[], refused = false, keys: LeaseKeys = {}): ProfileLease {
   const auth: DaemonTokenSource = { read: () => TOKEN, refresh: () => true };
   return {
     profile: { id, name: id.toUpperCase(), destination: `casey@${id}`, remotePort: 6722 },
@@ -726,7 +761,8 @@ function lease(id: string, url: string, released: string[], refused = false): Pr
     exec: () => {
       throw new Error("workspace tests run nothing on the server");
     },
-    hostKey: () => undefined,
+    hostKey: () => keys.observed,
+    pinnedKeys: () => keys.pins,
     transport: streamTransport(() => {
       throw new Error("workspace tests use their own fetch");
     }),
@@ -736,7 +772,9 @@ function lease(id: string, url: string, released: string[], refused = false): Pr
   };
 }
 
-function workspaceRig(options: { savedProfile?: string; fetcher?: typeof fetch; refused?: boolean } = {}) {
+function workspaceRig(
+  options: { savedProfile?: string; fetcher?: typeof fetch; refused?: boolean; keys?: LeaseKeys } = {},
+) {
   const released: string[] = [];
   const opened: string[] = [];
   const auths: (DaemonTokenSource | undefined)[] = [];
@@ -746,7 +784,7 @@ function workspaceRig(options: { savedProfile?: string; fetcher?: typeof fetch; 
     openProfile: async (id) => {
       if (id === "missing") throw new Error("That profile no longer exists.");
       opened.push(id);
-      return lease(id, `http://127.0.0.1:${41000 + opened.length}`, released, options.refused);
+      return lease(id, `http://127.0.0.1:${41000 + opened.length}`, released, options.refused, options.keys);
     },
     defaultPath: () => "/workspace",
     defaultUrl: "http://localhost:6722",
@@ -787,6 +825,23 @@ describe("profile connections", () => {
     expect(r.auths.at(-1)?.read()).toBe(TOKEN);
     await r.workspace.close();
     expect(r.released).toEqual(["lab"]);
+  });
+
+  it("names a profile connection's recovery endpoint by its sealed pins, not the last-observed key (#357)", async () => {
+    const keys: LeaseKeys = { observed: "SHA256:first", pins: "pins-v1" };
+    const r = workspaceRig({ savedProfile: "lab", keys });
+    await r.workspace.connect();
+    const endpoint = r.workspace.profileEndpoint;
+    expect(endpoint).toMatchObject({ id: "lab", remotePort: 6722, pins: "pins-v1" });
+    // Another stream observing a key changes nothing the journal looks up by.
+    keys.observed = "SHA256:observedLater";
+    expect(r.workspace.profileEndpoint).toEqual(endpoint);
+    // A real pin replacement does, and a lease whose pins no longer hold has no endpoint.
+    keys.pins = "pins-v2";
+    expect(r.workspace.profileEndpoint).toEqual({ ...endpoint, pins: "pins-v2" });
+    delete keys.pins;
+    expect(r.workspace.profileEndpoint).toBeUndefined();
+    await r.workspace.close();
   });
 
   it("a saved profile that cannot connect leaves the app disconnected with the reason, not on another daemon", async () => {

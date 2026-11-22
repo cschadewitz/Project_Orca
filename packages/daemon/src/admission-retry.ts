@@ -241,17 +241,23 @@ export class AdmissionRetryModel {
     operationId: string,
     authorities: AdmissionAuthorities,
     newAdmission?: () => void,
+    expectedKind?: "run.recover",
   ): Promise<RetryResult<unknown>> {
-    return this.receipt(operationId, authorities, true, newAdmission);
+    return this.receipt(operationId, authorities, true, newAdmission, expectedKind);
   }
   private async receipt(
     operationId: string,
     authorities: AdmissionAuthorities,
     recover: boolean,
     newAdmission?: () => void,
+    expectedKind?: "run.recover",
   ): Promise<RetryResult<unknown>> {
     await authorities.check();
     const kind = await this.options.claims.operationKind(operationId, authorities);
+    // A caller that named the kind it means (#357) is refused before any dispatch below can
+    // reconcile, create or drive another kind of admission.
+    if (expectedKind !== undefined && kind !== expectedKind)
+      throw new OrcaError("NOT_SUPPORTED", `This admission is not a ${expectedKind} receipt`, { operationId });
     if (kind === "request.submit") {
       const authority = await authorities.request();
       return this.options.requests.withRetryAuthority(authority, () => {

@@ -13,6 +13,7 @@
 import { UpdatePreflightRefusal } from "./updates.js";
 import { daemonEndpoint, type DaemonConnectionRequest, type DaemonTargetSnapshot } from "../daemon-connection.js";
 import type { ProfileLease } from "./remote-profiles.js";
+import { serverKey } from "./remote-credentials.js";
 import type { RemoteCommand } from "@orca/protocol/remote-access";
 import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
@@ -585,6 +586,20 @@ export class Workspace {
     const lease = this.lease;
     if (!lease) return undefined;
     return { profile: lease.profile.id, command: lease.exec(command, onLine) };
+  }
+
+  /**
+   * The verified server a profile connection reaches (#357), stable across tunnel reconnects:
+   * the profile, the SSH server and jump chain its pins vouch for (`serverKey`), the daemon's
+   * remote port and the pins the lease's tunnel sealed (never the last-observed host key, which
+   * another stream's ssh output can update). Absent for a direct connection, and while the
+   * lease has no sealed pins that still hold.
+   */
+  get profileEndpoint(): { id: string; server: string; remotePort: number; pins: string } | undefined {
+    const lease = this.lease;
+    const pins = lease?.pinnedKeys();
+    if (!lease || !pins) return undefined;
+    return { id: lease.profile.id, server: serverKey(lease.profile), remotePort: lease.profile.remotePort, pins };
   }
 
   /**
