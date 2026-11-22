@@ -1,0 +1,406 @@
+# The native upgrade check for a final, unattended (#566): the signed installer of the current
+# Latest release, then the staged final's signed installer over it, on a store the Latest
+# release wrote, on a clean GitHub-hosted Windows runner.
+#
+# Release (attach signed installer) dispatches this for the draft as soon as the signed x64
+# installer is attached; a dispatch with the draft's release id runs it by hand. Three jobs:
+#
+#   target  this workflow's own revision only (main): reads the draft, takes the attached
+#           installer's digest and the Latest version from it, downloads both installers and
+#           hands them on as one artifact. It runs no installer and none of the draft's code.
+#   check   GitHub-hosted Windows, read-only token. Verifies both installers' Authenticode
+#           signatures and publisher, builds the Latest release's CLI from its tag and runs
+#           its `orca demo` into a workspace (runs, a plan and protected run records under a
+#           private execution key), then `pnpm run app:windows-store-upgrade`
+#           (packages/app/test/windows-upgrade/store-upgrade.spec.ts): the Latest installs and
+#           opens the workspace, the candidate installs over it and opens the same store in
+#           place (stamped, no backup, every run still there), the Latest's daemon still reads
+#           it, and the candidate refuses a newer-format store without changing it.
+#   record  this workflow's own revision only: re-reads the draft and, when it still holds
+#           exactly the checked installer, records `<!-- orca-upgrade-check: RUN sha256:… from
+#           vX.Y.Z -->` in its notes (the newest pass replaces an older one). Its job name is
+#           the run's receipt: the candidate's release id, version, source commit and installer
+#           digest, and the same four for the Latest it was installed over.
+#
+# Both installers' bytes are checked against those digests before either is installed, and the
+# Latest's CLI is built from the commit its tag resolved to. Release (publish final) refuses a
+# draft unless its notes point at a successful run here whose receipt names exactly that draft
+# and installer and exactly the current Latest and its installer. Nothing here
+# publishes, tags or touches the feed, and there is no secret: the publisher name is a variable.
+name: Release (upgrade check)
+
+on:
+  # A rehearsal on pull requests that can change what the check proves: this revision,
+  # packaged unsigned as 99.0.0, installed over the current Latest's signed installer.
+  pull_request:
+    paths:
+      - packages/app/test/windows-upgrade/**
+      - packages/app/test/smoke/playwright.config.ts
+      - packages/store/src/store-format.ts
+      - packages/store/src/store-format-carryover.ts
+      - packages/cli/src/bootstrap.ts
+      - packages/app/src/main/daemon-process.ts
+      - packages/app/electron-builder.yml
+      - release-compatibility.json
+      - .github/workflows/release-upgrade-check.yml
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: The final draft's release id (its signed installer must be attached)
+        required: true
+
+run-name: Release (upgrade check) ${{ inputs.release_id && format('of draft {0}', inputs.release_id) || 'rehearsal' }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-upgrade-check-${{ inputs.release_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  target:
+    name: find the draft's installer and the release it upgrades from
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # Drafts are visible only with write access. This job runs this revision's script and
+    # `gh` only, and writes nothing.
+    permissions:
+      contents: write
+    outputs:
+      id: ${{ steps.target.outputs.id }}
+      version: ${{ steps.target.outputs.version }}
+      sha: ${{ steps.target.outputs.sha }}
+      exe: ${{ steps.target.outputs.exe }}
+      from: ${{ steps.target.outputs.from }}
+      from_id: ${{ steps.target.outputs.from_id }}
+      from_sha: ${{ steps.target.outputs.from_sha }}
+      from_exe: ${{ steps.target.outputs.from_exe }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: The draft, its installer and the Latest release
+        id: target
+        env:
+          ID: ${{ inputs.release_id }}
+        run: |
+          set -euo pipefail
+          [[ "$ID" =~ ^[0-9]+$ ]] || { echo "::error::invalid release id"; exit 1; }
+          bash tools/deploy/release-attach.sh upgrade-target "$ID" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Download both installers
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+          ASSET: ${{ steps.target.outputs.asset }}
+          EXE: ${{ steps.target.outputs.exe }}
+          FROM: ${{ steps.target.outputs.from }}
+          FROM_EXE: ${{ steps.target.outputs.from_exe }}
+        run: |
+          set -euo pipefail
+          mkdir -p installers/to installers/from
+          gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/$ASSET" \
+            > "installers/to/ORCA-$VERSION-win-x64.exe"
+          [[ "sha256:$(sha256sum "installers/to/ORCA-$VERSION-win-x64.exe" | cut -d' ' -f1)" == "$EXE" ]] ||
+            { echo "::error::the downloaded installer is not the draft's $EXE"; exit 1; }
+          gh release download "v$FROM" --repo "$REPO" --pattern "ORCA-$FROM-win-x64.exe" --dir installers/from
+          [[ "sha256:$(sha256sum "installers/from/ORCA-$FROM-win-x64.exe" | cut -d' ' -f1)" == "$FROM_EXE" ]] ||
+            { echo "::error::the downloaded v$FROM installer is not the Latest's $FROM_EXE"; exit 1; }
+          ls -l installers/*
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: upgrade-installers-${{ github.run_id }}
+          path: installers/
+          retention-days: 3
+          if-no-files-found: error
+
+  check:
+    name: upgrade from the Latest release on Windows
+    needs: target
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    env:
+      FROM: ${{ needs.target.outputs.from }}
+      TO: ${{ needs.target.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      # The release being upgraded from, at the commit its tag resolved to when the target was
+      # read (not the tag's name, which could move): its CLI writes the store under test.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.target.outputs.from_sha }}
+          path: previous
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: upgrade-installers-${{ github.run_id }}
+          path: installers
+
+      - name: Both installers are the expected bytes, validly signed by the publisher
+        shell: pwsh
+        env:
+          EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+          EXE: ${{ needs.target.outputs.exe }}
+          FROM_EXE: ${{ needs.target.outputs.from_exe }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:EXPECTED) { throw 'ORCA_FEED_PUBLISHER_CN is not set' }
+          $to = "installers/to/ORCA-$($env:TO)-win-x64.exe"
+          $from = "installers/from/ORCA-$($env:FROM)-win-x64.exe"
+          if ("sha256:$((Get-FileHash -Algorithm SHA256 $to).Hash.ToLower())" -ne $env:EXE) { throw "$to is not $($env:EXE)" }
+          if ("sha256:$((Get-FileHash -Algorithm SHA256 $from).Hash.ToLower())" -ne $env:FROM_EXE) { throw "$from is not $($env:FROM_EXE)" }
+          foreach ($file in @($from, $to)) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $file
+            $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+            "{0}: {1} stamped={2} cn='{3}'" -f $file, $sig.Status, [bool]$sig.TimeStamperCertificate, $cn
+            if ($sig.Status -ne 'Valid' -or $cn -ne $env:EXPECTED -or -not $sig.TimeStamperCertificate) {
+              throw "$file is not validly signed and timestamped by '$($env:EXPECTED)'"
+            }
+          }
+          "ORCA_UPGRADE_TO_INSTALLER=$((Resolve-Path $to).Path)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "ORCA_UPGRADE_FROM_INSTALLER=$((Resolve-Path $from).Path)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # No Electron download: the apps under test are the installed ones.
+      - name: Install this revision's test tooling
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the previous release's CLI and write a store with it
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          workspace=$(cygpath -w "$RUNNER_TEMP/upgrade-workspace")
+          (cd previous && pnpm install --frozen-lockfile && pnpm exec tsc -b tsconfig.build.json)
+          [[ "$(node -p 'require("./previous/package.json").version')" == "$FROM" ]] ||
+            { echo "::error::tag v$FROM does not hold version $FROM"; exit 1; }
+          node previous/packages/cli/dist/main.js demo --dir "$workspace" --keep --quiet
+          {
+            echo "ORCA_UPGRADE_WORKSPACE=$workspace"
+            echo "ORCA_UPGRADE_FROM_EPOCH=$(node -p 'require("./previous/release-compatibility.json").storeEpoch')"
+          } >> "$GITHUB_ENV"
+
+      - name: Install the previous release, then the candidate over it
+        env:
+          ORCA_UPGRADE_FROM: ${{ env.FROM }}
+          ORCA_UPGRADE_TO: ${{ env.TO }}
+        run: pnpm run app:windows-store-upgrade
+
+      - name: Stop anything left running
+        if: always()
+        shell: pwsh
+        run: Get-Process ORCA -ErrorAction SilentlyContinue | Stop-Process -Force
+
+      - name: Upload the check's output
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-upgrade-check
+          path: |
+            test-results/windows-store-upgrade/
+            playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # The pull request rehearsal: the same spec, with this revision as the candidate. Read-only,
+  # no draft, nothing recorded.
+  rehearse:
+    name: upgrade from the Latest release to this revision on Windows
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      TO: 99.0.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The Latest release and its signed installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') { throw "Latest is '$tag', not a final" }
+          $from = $tag.Substring(1)
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "ORCA-$from-win-x64.exe" --dir installers/from
+          $file = "installers/from/ORCA-$from-win-x64.exe"
+          $digest = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq ".assets[] | select(.name == ""ORCA-$from-win-x64.exe"") | .digest"
+          if ("sha256:$((Get-FileHash -Algorithm SHA256 $file).Hash.ToLower())" -ne $digest) { throw "$file is not the release's $digest" }
+          $commit = gh api "repos/$env:GITHUB_REPOSITORY/commits/$tag" --jq .sha
+          if ($commit -notmatch '^[0-9a-f]{40}$') { throw "$tag does not resolve to a commit" }
+          "FROM_SHA=$commit" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $sig = Get-AuthenticodeSignature -LiteralPath $file
+          $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+          "{0}: {1} stamped={2} cn='{3}'" -f $file, $sig.Status, [bool]$sig.TimeStamperCertificate, $cn
+          if ($sig.Status -ne 'Valid' -or -not $sig.TimeStamperCertificate -or ($env:EXPECTED -and $cn -ne $env:EXPECTED)) {
+            throw "$file is not validly signed and timestamped by the publisher"
+          }
+          "FROM=$from" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "ORCA_UPGRADE_FROM_INSTALLER=$((Resolve-Path $file).Path)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.FROM_SHA }}
+          path: previous
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # A version no release will use, read by the CLI and the bundled daemon alike, so the
+      # marker the candidate writes names it.
+      - name: Build as 99.0.0
+        run: |
+          set -euo pipefail
+          node -e 'const f="package.json",p=require("./"+f);p.version=process.env.TO;require("fs").writeFileSync(f,JSON.stringify(p,null,2)+"\n")'
+          pnpm run build
+          pnpm --filter @orca/app run build:daemon
+
+      # Identical to desktop.yml's step (tools/test/release-upgrade-check.test.js holds it so).
+      - name: Stage native addons for all requested Windows architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_version=$(node -p 'process.versions.node')
+          case "$node_version" in *[!0-9.]*|'') exit 1 ;; esac
+          headers_scratch=$(mktemp -d "$RUNNER_TEMP/orca-win-native-headers.XXXXXX")
+          trap 'rm -rf -- "$headers_scratch"' EXIT
+          archive="node-v${node_version}-headers.tar.gz"
+          base="https://nodejs.org/download/release/v${node_version}"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 30 --max-filesize 65536 \
+            "$base/SHASUMS256.txt" --output "$headers_scratch/SHASUMS256.txt"
+          for name in "$archive" win-x64/node.lib win-arm64/node.lib; do
+            mkdir -p "$headers_scratch/$(dirname "$name")"
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 60 --max-filesize 16777216 \
+              "$base/$name" --output "$headers_scratch/$name"
+            CHECKSUM_ROOT="$headers_scratch" CHECKSUM_NAME="$name" python - <<'PY'
+          import hashlib, os, pathlib, re
+          root, name = pathlib.Path(os.environ["CHECKSUM_ROOT"]), os.environ["CHECKSUM_NAME"]
+          entries = [line[:64] for line in (root / "SHASUMS256.txt").read_text().splitlines()
+                     if re.fullmatch(r"[0-9a-f]{64}  " + re.escape(name), line)]
+          if len(entries) != 1 or hashlib.sha256((root / name).read_bytes()).hexdigest() != entries[0]:
+              raise SystemExit("Exact Node input checksum unavailable or mismatched")
+          PY
+          done
+          # GNU tar in Git Bash reads a drive-letter archive path as host:path.
+          # Use the verified archive's basename from its directory instead.
+          (cd "$headers_scratch" && tar -xzf "$archive")
+          for arch in x64 arm64; do
+            mkdir -p "$headers_scratch/node-v${node_version}/$arch"
+            cp "$headers_scratch/win-$arch/node.lib" "$headers_scratch/node-v${node_version}/$arch/node.lib"
+          done
+          node tools/packaged-windows/stage-native-addons.js --headers "$headers_scratch/node-v${node_version}"
+
+      - name: Package the candidate (unsigned, x64 NSIS)
+        run: |
+          set -euo pipefail
+          pnpm --filter @orca/app exec electron-builder --win nsis --x64 --publish never \
+            -c.extraMetadata.version="$TO" -c.directories.output=dist/release/upgrade-check
+          installer="packages/app/dist/release/upgrade-check/ORCA-$TO-win-x64.exe"
+          [[ -f "$installer" ]] || { echo "::error::no $installer"; exit 1; }
+          echo "ORCA_UPGRADE_TO_INSTALLER=$(cygpath -w "$PWD/$installer")" >> "$GITHUB_ENV"
+
+      - name: Build the previous release's CLI and write a store with it
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          workspace=$(cygpath -w "$RUNNER_TEMP/upgrade-workspace")
+          (cd previous && pnpm install --frozen-lockfile && pnpm exec tsc -b tsconfig.build.json)
+          [[ "$(node -p 'require("./previous/package.json").version')" == "$FROM" ]] ||
+            { echo "::error::tag v$FROM does not hold version $FROM"; exit 1; }
+          node previous/packages/cli/dist/main.js demo --dir "$workspace" --keep --quiet
+          {
+            echo "ORCA_UPGRADE_WORKSPACE=$workspace"
+            echo "ORCA_UPGRADE_FROM_EPOCH=$(node -p 'require("./previous/release-compatibility.json").storeEpoch')"
+          } >> "$GITHUB_ENV"
+
+      - name: Install the previous release, then the candidate over it
+        env:
+          ORCA_UPGRADE_FROM: ${{ env.FROM }}
+          ORCA_UPGRADE_TO: ${{ env.TO }}
+        run: pnpm run app:windows-store-upgrade
+
+      - name: Stop anything left running
+        if: always()
+        shell: pwsh
+        run: Get-Process ORCA -ErrorAction SilentlyContinue | Stop-Process -Force
+
+      - name: Upload the rehearsal's output
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-upgrade-rehearsal
+          path: |
+            test-results/windows-store-upgrade/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  record:
+    # The name is the check's receipt (release-attach.sh receipt_name): Release (publish final)
+    # requires a successful job of exactly this name, naming the draft's release, version,
+    # source commit and installer digest and the Latest's, before it publishes. Keep the two in
+    # step.
+    name: "upgrade check receipt: release ${{ needs.target.outputs.id }} v${{ needs.target.outputs.version }} ${{ needs.target.outputs.sha }} ${{ needs.target.outputs.exe }} from release ${{ needs.target.outputs.from_id }} v${{ needs.target.outputs.from }} ${{ needs.target.outputs.from_sha }} ${{ needs.target.outputs.from_exe }}"
+    needs: [target, check]
+    runs-on: ubuntu-24.04
+    # Shared with the attach and publish: no write to a draft interleaves with another.
+    concurrency:
+      group: release-draft-writes
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Record the upgrade check in the draft's notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ID: ${{ needs.target.outputs.id }}
+          SHA: ${{ needs.target.outputs.sha }}
+          VERSION: ${{ needs.target.outputs.version }}
+          EXE: ${{ needs.target.outputs.exe }}
+          FROM: ${{ needs.target.outputs.from }}
+        run: |
+          bash tools/deploy/release-attach.sh record-upgrade "$ID" "$SHA" "$VERSION" "$GITHUB_RUN_ID" "$EXE" "$FROM"
+          echo "Next: native acceptance of the .deb, then Release (publish final) (docs/RELEASING.md)." >> "$GITHUB_STEP_SUMMARY"

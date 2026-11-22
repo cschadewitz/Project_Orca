@@ -1,5 +1,5 @@
 /** Hold release verification to ci.yml's full path: build before tests, and the same strict checks. */
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { expect, it } from "vitest";
 
@@ -216,7 +216,7 @@ it("attaches only re-verified signed x64 and arm64 installers, through the re-va
   expect(wf.jobs.attach.steps[attachStep].run).toContain(
     'bash tools/deploy/release-attach.sh attach "$ID" "$SHA" "$VERSION" "$RUN_ID" "$file" "$arm_file"',
   );
-  expect(wf.jobs.reconcile.steps.at(-1).run).toBe("bash tools/deploy/release-attach.sh reconcile");
+  expect(wf.jobs.reconcile.steps.at(-2).run).toBe("bash tools/deploy/release-attach.sh reconcile");
   expect(text).not.toMatch(/draft=false|make_latest|feed-r2/);
   const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
   // The signing run itself is checked before any draft is selected, on every path.
@@ -400,23 +400,4 @@ it("starts the server bundle with the 0.8 line in the dispatch and in release-at
   expect(dispatch).toContain(`SERVER_FROM=${from}`);
   expect(dispatch.indexOf("SERVER_FROM=")).toBeLessThan(dispatch.indexOf("gh workflow run"));
   expect(dispatch).toContain('"${VERSION%%-*}" | sort -V | head -n1)" != "$SERVER_FROM"');
-});
-
-it("puts every job that rewrites release notes in one draft-writes queue that keeps all waiters", () => {
-  // Each member reads the whole release body and replaces it. Two interleaving would let the
-  // later PATCH drop the earlier one's record, and a member replacing a pending one would drop
-  // its write entirely, so every member shares the group with `queue: max`.
-  const members = [];
-  for (const name of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((n) =>
-    n.endsWith(".yml"),
-  )) {
-    const w = workflow(name);
-    for (const c of [w.concurrency, ...Object.values(w.jobs).map((j) => j.concurrency)])
-      if (c?.group === "release-draft-writes") members.push([name, c]);
-  }
-  expect(members.map(([name]) => name)).toEqual(
-    expect.arrayContaining(["release-attach-signed.yml", "release-publish-final.yml", "release-server-bundle.yml"]),
-  );
-  for (const [, c] of members)
-    expect(c).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
 });

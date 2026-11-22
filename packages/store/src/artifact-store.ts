@@ -21,7 +21,7 @@
  * question `mediaType` answers.
  */
 import { randomUUID } from "node:crypto";
-import { link, mkdir, open, readFile, unlink } from "node:fs/promises";
+import { link, mkdir, open, readdir, readFile, unlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { ArtifactSchema, OrcaError, sha256, type Artifact, type Logger } from "@orca/core";
 import { JsonlLogDir } from "./jsonl-log.js";
@@ -139,6 +139,10 @@ function matches(a: Artifact, q: ArtifactQuery): boolean {
 export class InMemoryArtifactStore implements ArtifactStore {
   private readonly index = new Map<string, Artifact>();
   private readonly blobs = new Map<string, Buffer>();
+  /**
+   * Not hash-verified: test fixtures across the workspace put hand-written hashes through it.
+   * The capability matrix says so (`artifact.verifiedContent: false`, #338).
+   */
   async put(artifact: Artifact, content: ArtifactContent): Promise<void> {
     this.index.set(artifact.id, artifact);
     this.blobs.set(artifact.contentHash, toBytes(content));
@@ -225,5 +229,18 @@ export class FileArtifactStore implements ArtifactStore {
   }
   async list(query: ArtifactQuery = {}): Promise<Artifact[]> {
     return [...(await this.load()).values()].filter((a) => matches(a, query));
+  }
+
+  /**
+   * Blob hashes no index record references, sorted. `put` publishes the blob before it appends the index record, so a put whose index
+   * append failed leaves exactly such a blob - invisible to `get`, `list` and every reader, and
+   * adopted again by a retried `put` of the same content. This is the compensation inventory
+   * (#338): it only reports, and never deletes, because a concurrent `put` may be between its
+   * blob and its record. Scratch files from an interrupted publish are not blobs and are skipped.
+   */
+  async unreferencedBlobs(): Promise<string[]> {
+    const referenced = new Set([...(await this.load()).values()].map((a) => a.contentHash));
+    const names = await readdir(join(this.base, "blobs"));
+    return names.filter((n) => /^[a-f0-9]{64}$/.test(n) && !referenced.has(n)).sort();
   }
 }

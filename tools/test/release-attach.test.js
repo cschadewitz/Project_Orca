@@ -94,12 +94,16 @@ if (method === "DELETE" && (m = path.match(/^releases\/assets\/(\d+)$/))) {
   out = state.runs[m[1]];
 } else if ((m = path.match(/^actions\/runs\/(\d+)\/jobs/))) {
   if (state.runs[m[1]]) out = { jobs: (state.jobs || {})[m[1]] || [] };
+} else if ((m = path.match(/^commits\/(.+)$/))) {
+  if (state.tags[m[1]]) out = { sha: state.tags[m[1]] };
 } else if ((m = path.match(/^releases\/tags\/(.+)$/))) {
   out = state.releases.find((r) => r.tag_name === m[1]);
 } else if (/^releases(\?|$)/.test(path)) {
   out = state.releases;
 } else if ((m = path.match(/^actions\/runs\/(\d+)\/artifacts/))) {
   out = { artifacts: state.artifacts[m[1]] || [] };
+} else if (path.startsWith("actions/workflows/release-upgrade-check.yml/runs")) {
+  out = { workflow_runs: state.upgradeRuns || [] };
 } else if (path.startsWith("actions/workflows/windows-signed.yml/runs")) {
   out = { workflow_runs: state.signedRuns.map((id) => ({ id })) };
 }
@@ -677,18 +681,159 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(f.writes()).toHaveLength(3);
   });
 
-  it("publishes over an older Latest and reads the accepted digests back", () => {
-    const f = setup();
-    expect(f.attach().status).toBe(0);
-    expect(f.x64Only().status).toBe(0);
-    f.edit((st) => {
-      st.releases.push({ ...draft({ id: 5, tag_name: "v0.7.9", name: "v0.7.9", draft: false }) });
-      st.latest = 5;
-    });
+  it("publishes over an older Latest after its upgrade check, and reads the accepted digests back", () => {
+    const f = withLatest();
+    expect(f.run(ATTACH, recordUpgrade(f)).status).toBe(0);
     const result = f.run(ATTACH, accepted(f));
     expect(result.status, result.stderr).toBe(0);
     expect(f.state().latest).toBe(7);
     expect(f.state().tags["v0.8.0"]).toBe(SHA);
+  });
+
+  // release-upgrade-check.yml: the target it checks, the record it writes, and the gate.
+  const BASE_SHA = "b".repeat(40);
+  const BASE_EXE = "sha256:" + "7".repeat(64);
+  const upgradeRun = { ...goodRun, path: ".github/workflows/release-upgrade-check.yml" };
+  const receipt = (f, { exe = f.digest, base = BASE_EXE, from = "0.7.9" } = {}) =>
+    `upgrade check receipt: release 7 v0.8.0 ${SHA} ${exe} from release 5 v${from} ${BASE_SHA} ${base}`;
+  const job = (name, conclusion = "success") => ({ name, status: "completed", conclusion });
+  const withLatest = (runs = { 100: goodRun, 500: upgradeRun }, jobs = (f) => ({ 500: [job(receipt(f))] })) => {
+    const f = setup({ runs });
+    expect(f.attach().status).toBe(0);
+    expect(f.x64Only().status).toBe(0);
+    f.edit((st) => {
+      st.releases.push({
+        ...draft({
+          id: 5,
+          tag_name: "v0.7.9",
+          name: "v0.7.9",
+          draft: false,
+          assets: [{ id: 50, name: "ORCA-0.7.9-win-x64.exe", digest: BASE_EXE }],
+        }),
+      });
+      st.latest = 5;
+      st.tags["v0.7.9"] = BASE_SHA;
+      st.jobs = { ...st.jobs, ...jobs(f) };
+    });
+    return f;
+  };
+  const recordUpgrade = (f, run = "500", exe = f.digest, from = "0.7.9") => [
+    "record-upgrade",
+    "7",
+    SHA,
+    "0.8.0",
+    run,
+    exe,
+    from,
+  ];
+  const upgradeMarker = (f, run = 500, from = "0.7.9") =>
+    `<!-- orca-upgrade-check: ${run} ${f.digest} from v${from} -->`;
+
+  it("names the attached installer and the Latest it upgrades from, printing only output assignments", () => {
+    const f = withLatest();
+    const result = f.run(ATTACH, ["upgrade-target", "7"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      `id=7\nversion=0.8.0\nsha=${SHA}\nexe=${f.digest}\nasset=1001\nfrom=0.7.9\nfrom_id=5\nfrom_sha=${BASE_SHA}\nfrom_exe=${BASE_EXE}\n`,
+    );
+    expect(f.writes()).toHaveLength(3);
+  });
+
+  it.each([
+    ["before its installer is attached", (f) => f, "no single signing record"],
+    [
+      "without a Latest release",
+      (f) => {
+        expect(f.attach().status).toBe(0);
+        return f;
+      },
+      "no Latest release",
+    ],
+  ])("names no upgrade target %s", (_label, prepare, message) => {
+    const f = prepare(setup());
+    const result = f.run(ATTACH, ["upgrade-target", "7"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
+    expect(result.stdout).toBe("");
+  });
+
+  it("records a pass once, and a newer pass replaces it", () => {
+    const f = withLatest();
+    expect(f.run(ATTACH, recordUpgrade(f)).status).toBe(0);
+    const recorded = `Notes.\n\n${SERVER_RECORD}\n\n${f.marker()}\n\n<!-- orca-x64-only -->`;
+    expect(f.state().releases[0].body).toBe(`${recorded}\n\n${upgradeMarker(f)}`);
+    expect(f.run(ATTACH, recordUpgrade(f, "501")).status).toBe(0);
+    expect(f.state().releases[0].body).toBe(`${recorded}\n\n${upgradeMarker(f, 501)}`);
+    expect(f.writes().slice(3)).toEqual([RECORD, RECORD]);
+  });
+
+  it.each([
+    ["another installer", (f) => recordUpgrade(f, "500", "sha256:" + "9".repeat(64)), "not the checked installer"],
+    [
+      "a draft published meanwhile",
+      (f) => {
+        f.edit((st) => (st.releases[0].draft = false));
+        return recordUpgrade(f);
+      },
+      "no longer a draft",
+    ],
+  ])("records nothing for %s", (_label, args, message) => {
+    const f = withLatest();
+    const result = f.run(ATTACH, args(f));
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
+    expect(f.writes()).toHaveLength(3);
+  });
+
+  it.each([
+    ["no upgrade check", () => undefined, "no single upgrade check record"],
+    [
+      "a check from another release",
+      (f) => recordUpgrade(f, "500", f.digest, "0.7.8"),
+      "not the current latest v0.7.9",
+    ],
+    ["a check whose run did not pass", (f) => recordUpgrade(f, "600"), "did not pass"],
+    ["a check of the signing workflow's run", (f) => recordUpgrade(f, "100"), "did not pass"],
+    // A successful run whose receipt names other evidence than the notes claim.
+    ["a passing run that tested another installer", (f) => recordUpgrade(f, "700"), "no successful receipt"],
+    ["a passing run over another baseline installer", (f) => recordUpgrade(f, "800"), "no successful receipt"],
+    ["a passing run whose receipt job failed", (f) => recordUpgrade(f, "900"), "no successful receipt"],
+  ])("refuses to publish over a Latest with %s", (_label, record, message) => {
+    const runs = { 100: goodRun, 500: upgradeRun, 600: { ...upgradeRun, conclusion: "failure" } };
+    for (const id of [700, 800, 900]) runs[id] = upgradeRun;
+    const f = withLatest(runs, (f) => ({
+      500: [job(receipt(f))],
+      700: [job(receipt(f, { exe: "sha256:" + "9".repeat(64) }))],
+      800: [job(receipt(f, { base: "sha256:" + "6".repeat(64) }))],
+      900: [job(receipt(f), "failure")],
+    }));
+    const args = record(f);
+    if (args) expect(f.run(ATTACH, args).status).toBe(0);
+    const writes = f.writes().length;
+    const result = f.run(ATTACH, accepted(f));
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
+    expect(f.writes()).toHaveLength(writes);
+    expect(f.state().releases.find((r) => r.id === 7).draft).toBe(true);
+  });
+
+  it("refuses to publish after the Latest's installer changed since the check", () => {
+    const f = withLatest();
+    expect(f.run(ATTACH, recordUpgrade(f)).status).toBe(0);
+    f.edit((st) => (st.releases.find((r) => r.id === 5).assets[0].digest = "sha256:" + "5".repeat(64)));
+    const result = f.run(ATTACH, accepted(f));
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("no successful receipt");
+    expect(f.state().releases.find((r) => r.id === 7).draft).toBe(true);
+  });
+
+  it("refuses to publish over a Latest with no Windows installer to upgrade from", () => {
+    const f = withLatest();
+    expect(f.run(ATTACH, recordUpgrade(f)).status).toBe(0);
+    f.edit((st) => (st.releases.find((r) => r.id === 5).assets = []));
+    const result = f.run(ATTACH, accepted(f));
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("no Windows x64 installer to upgrade from");
   });
 
   const publish = (f) => f.run(ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest]);
@@ -1135,6 +1280,67 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
         `source_sha=${sha}`,
       ];
       expect(f.writes()).toEqual([dispatch("0.8.0", SHA), dispatch(RC, SHA)]);
+    });
+  });
+
+  describe("upgrade-reconcile", () => {
+    const dispatchCheck = [
+      "workflow",
+      "run",
+      "release-upgrade-check.yml",
+      "--repo",
+      "o/r",
+      "--ref",
+      "main",
+      "-f",
+      "release_id=7",
+    ];
+    const title = "Release (upgrade check) of draft 7";
+
+    it("dispatches the check for an attached draft without a record, once per call", () => {
+      const f = withLatest();
+      const result = f.run(ATTACH, ["upgrade-reconcile"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(f.writes().at(-1)).toEqual(dispatchCheck);
+    });
+
+    it.each([
+      ["a record for this installer from the Latest", (f, st) => (st.releases[0].body += `\n\n${upgradeMarker(f)}`)],
+      ["a check waiting", (_f, st) => (st.upgradeRuns = [{ display_title: title, status: "queued" }])],
+      ["a check running", (_f, st) => (st.upgradeRuns = [{ display_title: title, status: "in_progress" }])],
+      [
+        "three runs already",
+        (_f, st) => (st.upgradeRuns = Array.from({ length: 3 }, () => ({ display_title: title, status: "completed" }))),
+      ],
+      ["no Latest", (_f, st) => delete st.latest],
+    ])("dispatches nothing with %s", (_label, change) => {
+      const f = withLatest();
+      f.edit((st) => change(f, st));
+      const writes = f.writes().length;
+      const result = f.run(ATTACH, ["upgrade-reconcile"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(f.writes()).toHaveLength(writes);
+    });
+
+    it("runs the check again for a record from an older Latest, and for runs of other drafts", () => {
+      const f = withLatest();
+      f.edit((st) => {
+        st.releases[0].body += `\n\n${upgradeMarker(f, 500, "0.7.8")}`;
+        st.upgradeRuns = [{ display_title: "Release (upgrade check) of draft 8", status: "in_progress" }];
+      });
+      expect(f.run(ATTACH, ["upgrade-reconcile"]).status).toBe(0);
+      expect(f.writes().at(-1)).toEqual(dispatchCheck);
+    });
+
+    it("leaves a draft whose x64 installer is not attached to the attach", () => {
+      const f = setup();
+      f.edit((st) => {
+        st.releases.push({ ...draft({ id: 5, tag_name: "v0.7.9", name: "v0.7.9", draft: false }) });
+        st.latest = 5;
+        st.releases[0].body = `Notes.\n\n${f.marker()}`;
+      });
+      expect(f.run(ATTACH, ["upgrade-reconcile"]).status).toBe(0);
+      expect(f.writes()).toEqual([]);
     });
   });
 });

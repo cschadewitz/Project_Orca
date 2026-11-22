@@ -59,6 +59,8 @@ jobs:
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.event == 'workflow_dispatch')
     runs-on: windows-latest
+    outputs:
+      id: ${{ steps.attached.outputs.id }}
     defaults:
       run:
         shell: bash
@@ -110,6 +112,7 @@ jobs:
           }
 
       - name: Attach it to the draft by id, re-validating the draft before each write
+        id: attached
         if: steps.find.outputs.id != ''
         env:
           ID: ${{ steps.find.outputs.id }}
@@ -120,7 +123,28 @@ jobs:
           file=$(find signed -type f -name "ORCA-$VERSION-win-x64.exe")
           arm_file=$(find signed -type f -name "ORCA-$VERSION-win-arm64.exe")
           bash tools/deploy/release-attach.sh attach "$ID" "$SHA" "$VERSION" "$RUN_ID" "$file" "$arm_file"
-          echo "Next: native acceptance on the draft's exact assets (arm64's runs by itself), then publish (docs/RELEASING.md)." >> "$GITHUB_STEP_SUMMARY"
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+          echo "Next: the x64 upgrade check and arm64 acceptance run by themselves; native acceptance of the .deb, then publish (docs/RELEASING.md)." >> "$GITHUB_STEP_SUMMARY"
+
+  # The attached installer's native upgrade check from the current Latest (#566). This job
+  # checks nothing out and can only dispatch.
+  upgrade-check:
+    name: dispatch the upgrade check for the draft
+    needs: attach
+    if: needs.attach.outputs.id != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch Release (upgrade check)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ID: ${{ needs.attach.outputs.id }}
+        run: |
+          set -euo pipefail
+          [[ "$ID" =~ ^[0-9]+$ ]] || { echo "::error::invalid release id"; exit 1; }
+          gh workflow run release-upgrade-check.yml --repo "$GITHUB_REPOSITORY" --ref main -f release_id="$ID"
+          echo "Dispatched Release (upgrade check) for release \`$ID\`." >> "$GITHUB_STEP_SUMMARY"
 
   reconcile:
     name: re-dispatch attachments still missing
@@ -146,3 +170,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: bash tools/deploy/release-attach.sh reconcile
+
+      # A fully attached draft whose x64 upgrade check never recorded a pass (a canceled or
+      # failed run, or a Latest that changed since): run the check again, at most three times
+      # per draft and never while one is waiting or running. Publication stays fail-closed.
+      - name: Dispatch the upgrade check for drafts missing its record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: bash tools/deploy/release-attach.sh upgrade-reconcile

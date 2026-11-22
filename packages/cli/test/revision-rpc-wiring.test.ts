@@ -10,6 +10,7 @@ import { OrcaError, parseOrcaConfig, silentLogger } from "@orca/core";
 import { createRevisionInputServices, createRevisionRuntime, PausingHumanInput } from "@orca/engine";
 import { ControlModel, ReadModel, openAuthDirectory, orchestratorResolver, startDaemon } from "@orca/daemon";
 import {
+  CLIENT_PROTOCOL,
   PROTOCOL_VERSION,
   RevisionResultSchema,
   type PendingRevisionView,
@@ -503,7 +504,7 @@ describe("closed revision wire boundary", () => {
       ]),
     ).toBe(0);
     expect(server.requests.map((request) => request.method)).toEqual(["hello", "inputs.revise"]);
-    expect(server.requests[0]!.params).toMatchObject({ protocol: { major: 2, minor: 0 } });
+    expect(server.requests[0]!.params).toMatchObject({ protocol: CLIENT_PROTOCOL });
     expect(server.requests[1]!.params).toEqual({ command: large, retry: { idempotencyKey: " retained key " } });
     expect(server.authorizations).toEqual(["Bearer first-credential", "Bearer first-credential"]);
     expect(server.urls).toEqual(["/rpc", "/rpc"]);
