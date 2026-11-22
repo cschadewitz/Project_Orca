@@ -558,6 +558,27 @@ it("preflight evidence for another token cannot revoke an existing exact claim",
   await f.workspace.close();
 });
 
+it("hands the stopped daemon's store off only after the exact stop, once, and withdraws it on non-launch (#897)", async () => {
+  const handOffStore = vi.fn();
+  const withdrawHandoff = vi.fn();
+  const f = rig({ handOffStore, withdrawHandoff });
+  (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
+  vi.spyOn(f.workspace.client, "maintenance").mockResolvedValue({ ready: true, active: [] });
+  await expect(f.workspace.handOffForUpdate("owner", "0.8.0", "0.9.0")).rejects.toThrow("not prepared");
+  await f.workspace.prepareUpdate("owner");
+  await expect(f.workspace.handOffForUpdate("owner", "0.8.0", "0.9.0")).rejects.toThrow("not available");
+  expect(handOffStore).not.toHaveBeenCalled();
+  await f.workspace.stopForUpdate("owner");
+  await expect(f.workspace.handOffForUpdate("other", "0.8.0", "0.9.0")).rejects.toThrow("not prepared");
+  await f.workspace.handOffForUpdate("owner", "0.8.0", "0.9.0");
+  expect(handOffStore).toHaveBeenCalledExactlyOnceWith(selectedPath, "0.8.0", "0.9.0");
+  await expect(f.workspace.handOffForUpdate("owner", "0.8.0", "0.9.0")).rejects.toThrow("not available");
+  // The installer never ran: the handoff goes before any recovery is attempted.
+  await expect(f.workspace.cancelUpdate("owner")).rejects.toThrow();
+  expect(withdrawHandoff).toHaveBeenCalledExactlyOnceWith(selectedPath);
+  await f.workspace.close();
+});
+
 it("refusal after the preflight await keeps an intervening connection candidate's guard", async () => {
   const f = rig();
   let connection: Awaited<ReturnType<Workspace["prepareConnection"]>> | undefined;

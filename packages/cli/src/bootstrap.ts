@@ -12,6 +12,8 @@ import {
 import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
 import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR, enterStoreFormat } from "@orca/store";
+import { removeUpdateHandoff } from "@orca/protocol/update-handoff";
+import { desktopCarryover } from "./desktop-carryover.js";
 import { readOrcaVersion } from "./version.js";
 import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
 
@@ -333,15 +335,23 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     await enterClosedFirstRunInspection(resolve(configDir), resolve(configDir, config.storeDir), () =>
       closedUpdateOwnsConfiguredRoots(configDir, resolve(configDir, config.storeDir)),
     );
-  else await enterFirstRunWriter(resolve(configDir), resolve(configDir, config.storeDir), firstRunLaunch);
+  const writer = isClosedUpdateBootstrap()
+    ? undefined
+    : await enterFirstRunWriter(resolve(configDir), resolve(configDir, config.storeDir), firstRunLaunch);
   // Before any store reader or writer (#566): refuse a store this build cannot open, including
-  // an older format, which only `orca store carry-forward` converts. Closed update validation
-  // only checks; an ephemeral bootstrap never opens the store at all.
-  if (!opts.ephemeral)
+  // an older format, which only `orca store carry-forward` converts, or the desktop app's daemon
+  // on the first start after an update while it holds the store's writer fence (#897). Closed
+  // update validation only checks; an ephemeral bootstrap never opens the store at all.
+  if (!opts.ephemeral) {
+    const version = storeWriterVersion();
     await enterStoreFormat(resolve(configDir, config.storeDir), {
-      appVersion: storeWriterVersion(),
+      appVersion: version,
       mode: isClosedUpdateBootstrap() ? "read" : "write",
+      ...(writer ? { carryover: () => Promise.resolve(desktopCarryover(writer, version)) } : {}),
     });
+    // A handoff for an update that kept the format is spent once its daemon holds the store.
+    if (writer?.check()) removeUpdateHandoff(writer.storeDir);
+  }
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config);
   const assets = await releaseAssets(config);

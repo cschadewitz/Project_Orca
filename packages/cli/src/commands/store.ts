@@ -14,6 +14,7 @@ import { OrcaError } from "@orca/core";
 import { carryStoreForward, enterStoreFormat, readStoreFormat, STORE_FORMAT_EPOCH } from "@orca/store";
 import { loadConfig } from "../bootstrap.js";
 import { readOrcaVersion } from "../version.js";
+import { storePrivacy } from "../store-privacy.js";
 import type { CommandContext } from "./index.js";
 
 export async function storeCommand(ctx: CommandContext): Promise<number> {
@@ -38,7 +39,11 @@ export async function storeCommand(ctx: CommandContext): Promise<number> {
       return 0;
     }
     case "carry-forward": {
-      const outcome = await carryStoreForward(storeDir, { appVersion: readOrcaVersion() });
+      const privacy = storePrivacy();
+      const outcome = await carryStoreForward(storeDir, {
+        appVersion: readOrcaVersion(),
+        ...(privacy ? { privacy } : {}),
+      });
       if (outcome.status === "carried")
         ctx.out(`carried ${storeDir} forward from ${outcome.from} to ${outcome.epoch}; backup in ${outcome.backup}`);
       else ctx.out(`${storeDir} is already in store format ${outcome.epoch}; nothing to do`);

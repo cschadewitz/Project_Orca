@@ -23,6 +23,7 @@ export default defineConfig({
       "@orca/integrations": pkg("integrations"),
       "@orca/protocol/update-window": src("protocol", "update-window"),
       "@orca/protocol/first-run-fence": src("protocol", "first-run-fence"),
+      "@orca/protocol/update-handoff": src("protocol", "update-handoff"),
       "@orca/protocol": pkg("protocol"),
       "@orca/daemon": pkg("daemon"),
       "@orca/design": pkg("design"),

@@ -14,6 +14,7 @@ import { UpdatePreflightRefusal } from "./updates.js";
 import { daemonEndpoint, type DaemonTargetSnapshot } from "../daemon-connection.js";
 import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
+import { handOffStoreForUpdate, withdrawUpdateHandoff } from "./first-run/update-handoff.js";
 import {
   MAINTENANCE_RUNTIME_METHOD,
   RuntimeMaintenanceResultSchema,
@@ -65,6 +66,8 @@ interface WindowsUpdateAttempt {
   storeDir: string | undefined;
   target: WorkspaceTarget;
   stopAttempted: boolean;
+  /** A store handoff was written for the version being installed (#897). */
+  handedOff: boolean;
   recovering: boolean;
   busy: boolean;
 }
@@ -117,6 +120,9 @@ export interface WorkspaceDeps {
   /** Explicit environment workspace only. No home-directory bootstrap. */
   defaultPath: () => string | undefined;
   setupBusy?: () => boolean;
+  /** Injected for tests; default to the first-run journal's update handoff (#897). */
+  handOffStore?: (path: string, from: string, to: string) => void;
+  withdrawHandoff?: (path: string) => void;
   /** Saved-receipt verification must bind this exact path before requesting its candidate. */
   recoverFirstRun?: (
     path: string,
@@ -971,6 +977,29 @@ export class Workspace {
     }
   }
 
+  /**
+   * After the exact stop, before the installer: hand the stopped bundled daemon's store to the
+   * first start of `to` (#897). Only for an app-owned first-run workspace whose daemon this
+   * attempt prepared (admission closed, no active work), stopped, and saw exit.
+   */
+  async handOffForUpdate(token: string, from: string, to: string): Promise<void> {
+    const attempt = this.windowsUpdate;
+    if (!attempt || attempt.token !== token) throw new Error("Update was not prepared for this token");
+    this.checkWindowsUpdate(attempt);
+    if (attempt.busy || !attempt.stopAttempted || attempt.handedOff || attempt.recovering)
+      throw new Error("Update handoff is not available");
+    if (!attempt.daemon || attempt.daemon.exited !== true || !attempt.firstRun || !attempt.ownership)
+      throw new Error("No stopped bundled daemon to hand off");
+    attempt.busy = true;
+    try {
+      if (!attempt.ownership.complete()) throw new FirstRunOwnershipRefusal();
+      (this.deps.handOffStore ?? handOffStoreForUpdate)(attempt.firstRun.path, from, to);
+      attempt.handedOff = true;
+    } finally {
+      attempt.busy = false;
+    }
+  }
+
   async prepareUpdate(token: string): Promise<void> {
     const refuseUnclaimed = (message: string): never => {
       // A duplicate exact-token caller cannot declare its existing reservation absent.
@@ -1011,6 +1040,7 @@ export class Workspace {
       storeDir: this.verifiedHello?.storeDir,
       target: { ...this.target },
       stopAttempted: false,
+      handedOff: false,
       recovering: false,
       busy: true,
     };
@@ -1048,6 +1078,11 @@ export class Workspace {
         }
       } else if (attempt.daemon) {
         if (attempt.daemon.exited !== true) throw new Error("Exact child termination is uncertain");
+        // Nothing was installed: the store goes back to this version, so its handoff is withdrawn.
+        if (attempt.handedOff && attempt.firstRun) {
+          (this.deps.withdrawHandoff ?? withdrawUpdateHandoff)(attempt.firstRun.path);
+          attempt.handedOff = false;
+        }
         attempt.ownership?.check();
         if (attempt.ownership && !attempt.ownership.complete()) throw new FirstRunOwnershipRefusal();
         // The old captured child is now settled. Generic reconnect cannot authorize a new writer.

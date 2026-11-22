@@ -537,7 +537,7 @@ converts a store:
 | --- | --- |
 | Its own format | Opens it in place. Updates that keep the format, such as 0.7.0 to 0.7.1, need nothing else. |
 | `operator-journals-v4`, before the marker existed, with intact evidence a released 0.7 build wrote it: `.workspace-identified` holding `1`, a valid `workspace-identity/id` and a 32-byte `private-execution/.execution-key`, none of them linked or foreign-owned. The 0.7 desktop app's daemon and `submit` write all three; 0.6 and earlier wrote none | Stamps the marker and opens it in place. No conversion, no backup, no other byte changed. |
-| The previous release's format, or any other unmarked store (incomplete or missing evidence included) | Refuses (`CARRYOVER_REQUIRED`) and changes nothing. Run `orca store carry-forward` once, below. |
+| The previous release's format, or any other unmarked store (incomplete or missing evidence included) | Refuses (`CARRYOVER_REQUIRED`) and changes nothing. Run `orca store carry-forward` once, below. The desktop app's first start after an in-app update carries it forward itself, under the proof in [Automatic carryover after a desktop update](#automatic-carryover-after-a-desktop-update). |
 | An older format than that | Refuses, naming the release line to open it with first. |
 | A format it does not know (a newer ORCA) | Refuses for reads and writes alike and changes nothing. The message names the version that wrote it and, when there is one, the backup that version made. |
 | A damaged marker | Refuses until the marker is restored or repaired with ORCA stopped. |
@@ -570,17 +570,47 @@ keeping the newest two and always the one the marker names, plus the scratch fol
 interrupted run. Anything else in `format-backups/` is left alone. The folder must be a
 private directory owned by the user running ORCA (`BACKUPS_UNSAFE` otherwise).
 
-`carry-forward` is not available on Windows yet (`BACKUPS_UNSAFE`): the copies hold the
-execution key and private records, and ORCA cannot yet verify that a destination's ACL keeps
-them at least as private as the originals. That, with automatic desktop carryover, is #897.
-Marker adoption of 0.7 stores, which copies nothing, works on Windows as everywhere else.
+On Windows the copies hold the execution key and private records, and anyone with the
+default "bypass traverse checking" right can reach a file by its path whatever its parent's
+ACL. So every directory of the backup and of the throwaway read copy is created with an
+owner-only protected DACL by the packaged first-run boundary, and every directory and file
+copied is verified owner-only and owned by the user running ORCA before anything is published.
+Where that boundary is not available, or a copy cannot be verified, `carry-forward` refuses
+(`BACKUPS_UNSAFE`) and nothing changes. Marker adoption of 0.7 stores, which copies nothing,
+works on Windows as everywhere else.
 
 The supported window is this release's format and the one before it, so a store carries
 forward across one format change at a time. Closed update validation (`serve --read-only
 --no-resume` under an update fence) only checks; it never writes the marker. `validate` does
-not open the store and is unaffected. Automatic carryover on the desktop update path, with
-proof that the updater owns the store and holds its write fence, is tracked separately and
-must land before the next store format change.
+not open the store and is unaffected.
+
+#### Automatic carryover after a desktop update
+
+From 0.8.0 the desktop app carries its own workspace's store forward on the first start after
+an in-app update, with no command, and only with positive proof that nothing else can write the
+store while it does (#897):
+
+1. Before the installer runs, the updater closes admission on the bundled daemon, waits until
+   it reports no active work, stops it and observes that exact process exit, as for every
+   update. It then writes `update-handoff.json` into the store: the exact store and workspace
+   directories, the first-run journal claim of the daemon it stopped, and the version being
+   installed. If the installer never starts, the record is withdrawn.
+2. On the new app's first start, its bundled daemon enters as the store's first-run writer and
+   holds the workspace's kernel-lifetime fence, which no other ORCA app, daemon or command can
+   hold at the same time. It may carry the store forward only if its own journal claim directly
+   follows the one the record names (so nothing else was launched on the workspace in between),
+   the record names this exact store, and this is the version the update installed.
+3. The carryover is the same as `carry-forward` above, and the fence must still hold before the
+   copy, after it, after the read check, before the backup is published and before the marker
+   is written. If it no longer holds, nothing is carried (`FENCE_LOST`) and the prior format
+   stays in charge.
+
+A carryover that finishes or is refused spends the record. One interrupted by a crash is retried
+by the next start under the same proof (the daemon moves the record onto its own claim before it
+copies), at most three times. Without the record, or with any part of the proof missing, startup
+keeps refusing (`CARRYOVER_REQUIRED`) exactly as before, and `orca store carry-forward` remains
+the way through. This covers app-owned workspaces updated by the Windows in-app updater. The
+Linux `.deb` has no in-app updater, so a format change there still needs `carry-forward`.
 
 The backup covers the store directory only: not the config file, the permission sidecar or
 `auth/` beside the config. Agents cannot read `format-backups/`, which holds copies of the

@@ -318,7 +318,7 @@ describe("store format marker (#566)", () => {
     });
   });
 
-  it("refuses to carry forward on Windows, where private copies cannot be verified yet", async () => {
+  it("refuses to carry forward on Windows without a backend that verifies private copies", async () => {
     const dir = await store();
     await mkdir(dir, { recursive: true });
     await legacy(dir);

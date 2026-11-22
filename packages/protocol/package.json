@@ -17,6 +17,10 @@
     "./first-run-fence": {
       "types": "./dist/first-run-fence.d.ts",
       "import": "./dist/first-run-fence.js"
+    },
+    "./update-handoff": {
+      "types": "./dist/update-handoff.d.ts",
+      "import": "./dist/update-handoff.js"
     }
   },
   "files": [
