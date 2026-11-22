@@ -134,12 +134,13 @@ it("never hands a write token to the ref under test (#863)", () => {
   expect(reviewed.run).toContain('if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]');
   expect(release.findIndex((s) => s.run === "pnpm install --frozen-lockfile")).toBeGreaterThan(sha + 1);
 
-  // Only the two writers get contents write (sign may only dispatch), and every checkout drops its credentials.
+  // Only the two writers get contents write (sign and server-bundle may only dispatch), and
+  // every checkout drops its credentials.
   for (const [name, job] of Object.entries(file.jobs)) {
     if (job.uses) continue;
     const expected = ["publish", "rehearsal"].includes(name)
       ? { contents: "write" }
-      : name === "sign"
+      : ["sign", "server-bundle"].includes(name)
         ? { actions: "write" }
         : null;
     expect(job.permissions ?? null, name).toEqual(expected);
@@ -254,6 +255,68 @@ it("publishes a final only from main, through the checking script, and hands ove
   expect(job.steps[2].run).toBe('gh workflow run feed-auto.yml --repo "$GITHUB_REPOSITORY" --ref main');
 });
 
+it("dispatches the signed server bundle for every real release, never a rehearsal (#876)", () => {
+  const job = workflow("release-publish.yml").jobs["server-bundle"];
+  expect(job.needs).toEqual(["check", "publish"]);
+  expect(job.if).toBe("${{ !inputs.dry_run }}");
+  expect(job.steps.some((step) => step.uses)).toBe(false);
+  expect(job.steps[0].run).toContain(
+    'gh workflow run release-server-bundle.yml --repo "$GITHUB_REPOSITORY" --ref main \\\n  -f version="$VERSION" -f source_sha="$SHA"',
+  );
+});
+
+it("signs the server bundle only from main, in a job that runs none of the release commit (#876)", () => {
+  const file = workflow("release-server-bundle.yml");
+  expect(file.permissions).toEqual({ contents: "read" });
+  expect(Object.keys(file.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
+  const { resolve, build, sign, verify, attach, reconcile } = file.jobs;
+  expect(resolve.if).toBe("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'");
+  expect(reconcile.if).toBe("github.event_name == 'schedule' && github.ref == 'refs/heads/main'");
+
+  // id-token only where nothing from the release commit runs, and nowhere else.
+  for (const [name, job] of Object.entries(file.jobs))
+    expect(job.permissions?.["id-token"] ?? null, name).toBe(name === "sign" ? "write" : null);
+  expect(sign.permissions).toEqual({ contents: "read", "id-token": "write" });
+  expect(sign.steps.some((step) => step.uses?.startsWith("actions/checkout@"))).toBe(false);
+  expect(sign.steps.some((step) => /pnpm|node /.test(step.run ?? ""))).toBe(false);
+  const signing = sign.steps.find((step) => step.name === "Sign").run;
+  expect(signing).toContain('cosign sign-blob --yes --bundle "$manifest.sigstore.json" "$manifest"');
+
+  // The release commit is built with a read-only token; main's tooling does everything else.
+  expect(build.permissions).toEqual({ contents: "read" });
+  expect(build.steps[0].with).toEqual({ ref: "${{ inputs.source_sha }}", "persist-credentials": false });
+  for (const job of [resolve, verify, attach, reconcile])
+    expect(job.steps[0].with).toEqual({ ref: "${{ github.sha }}", "persist-credentials": false });
+
+  // The clean-host check gates the attach, and the attach shares the draft-writes queue: it
+  // rewrites the release notes like every other member, so it must never interleave with one.
+  expect(verify.needs).toEqual(["resolve", "sign"]);
+  expect(attach.needs).toEqual(["resolve", "verify"]);
+  expect(attach.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
+  expect(file.concurrency).toEqual({
+    group: "release-server-bundle-${{ inputs.version || 'reconcile' }}",
+    "cancel-in-progress": false,
+  });
+  const staging = verify.steps.find((step) => step.name === "Stage it with Python 3 alone").run;
+  expect(staging).toContain("python:3.12-slim-bookworm");
+  expect(staging).toContain("stage --bundle");
+  expect(staging).toContain("for tool in gh git mise pnpm node; do");
+});
+
+it("pins the same signer identity in the workflow and the adapter (#876)", () => {
+  const adapter = readFileSync(new URL("../../tools/deploy/orca-release.py", import.meta.url), "utf8");
+  expect(adapter).toContain('BUNDLE_REPOSITORY = "cschadewitz/Project_Orca"');
+  expect(adapter).toContain(
+    'BUNDLE_SIGNER = f"https://github.com/{BUNDLE_REPOSITORY}/.github/workflows/release-server-bundle.yml@refs/heads/main"',
+  );
+  expect(adapter).toContain('BUNDLE_TRIGGER = "workflow_dispatch"');
+  const sign = workflow("release-server-bundle.yml").jobs.sign.steps;
+  expect(sign.find((step) => step.uses?.startsWith("sigstore/cosign-installer@")).with).toEqual({
+    "cosign-release": "v3.1.4",
+  });
+  expect(adapter).toContain('COSIGN_VERSION = "v3.1.4"');
+});
+
 it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unattended (#889)", () => {
   const text = readFileSync(".github/workflows/release-accept-arm64.yml", "utf8");
   const wf = workflow("release-accept-arm64.yml");
@@ -307,4 +370,34 @@ it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unatten
   });
   expect(wf.jobs["x64-only"].steps.at(-1).run).toContain('bash tools/deploy/release-attach.sh x64-only "$ID" "$sha"');
   expect(wf.jobs.select.if).toContain("!inputs.x64_only");
+});
+
+it("binds each server bundle run to its version and commit (#876)", () => {
+  const file = workflow("release-server-bundle.yml");
+  expect(file["run-name"]).toBe("Release (server bundle) v${{ inputs.version }} at ${{ inputs.source_sha }}");
+  const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
+  expect(script).toContain("|Release (server bundle) v$version at $sha");
+  // The receipt names the jobs exactly as the workflow does.
+  for (const job of ["sign", "verify"]) expect(script).toContain(`"${file.jobs[job].name}"`);
+  expect(file.jobs.attach.name).toBe(
+    "server bundle receipt: release ${{ needs.resolve.outputs.id }} v${{ inputs.version }} ${{ inputs.source_sha }} ${{ needs.verify.outputs.receipt }}",
+  );
+  expect(script).toContain('receipt="server bundle receipt: release $id v$version $sha $(receipt_hash');
+  // The receipt is computed only after the clean-host stage, and the attach uploads only those bytes.
+  const steps = file.jobs.verify.steps.map((step) => step.name ?? step.uses);
+  expect(steps.indexOf("The receipt for exactly these bytes")).toBeGreaterThan(
+    steps.indexOf("Stage it with Python 3 alone"),
+  );
+  expect(file.jobs.attach.needs).toEqual(["resolve", "verify"]);
+  expect(file.jobs.attach.steps.at(-1).env.VERIFIED).toBe("${{ needs.verify.outputs.digests }}");
+});
+
+it("starts the server bundle with the 0.8 line in the dispatch and in release-attach.sh alike (#876)", () => {
+  const dispatch = workflow("release-publish.yml").jobs["server-bundle"].steps[0].run;
+  const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
+  const from = script.match(/^SERVER_FROM=(\S+)$/m)[1];
+  expect(from).toBe("0.8.0");
+  expect(dispatch).toContain(`SERVER_FROM=${from}`);
+  expect(dispatch.indexOf("SERVER_FROM=")).toBeLessThan(dispatch.indexOf("gh workflow run"));
+  expect(dispatch).toContain('"${VERSION%%-*}" | sort -V | head -n1)" != "$SERVER_FROM"');
 });
