@@ -9,8 +9,9 @@
  * peers that are as separate as two machines, short of two machines.
  *
  * `loopbackSshd` adds the transport between them where it can: a throwaway `sshd` for the
- * current user on `127.0.0.1`, with a fresh host key and client key, through which a test
- * forwards a port to the other daemon. It needs `/usr/sbin/sshd`; without it the helper
+ * current user on `127.0.0.1`, with a fresh pinned host key and a client key limited to local
+ * forwarding, through which a test forwards a port to the other daemon. The client reads only
+ * a generated config, so no ambient `~/.ssh/config`, agent or control socket takes part. It needs `/usr/sbin/sshd`; without it the helper
  * answers `undefined` so a suite can skip, unless `ORCA_REQUIRE_SSHD=1` says the run must
  * have it (the CI job that installs it sets that, so a missing sshd fails rather than skips).
  *
@@ -195,10 +196,14 @@ async function ready(
 export interface LoopbackSshd {
   /** The port sshd listens on, on 127.0.0.1. */
   readonly port: number;
-  /** The private key a client logs in with, as the current user. */
+  /** The generated private key a client logs in with, as the current user. */
   readonly identity: string;
   readonly user: string;
-  /** `ssh` options that trust this throwaway host key and log in with `identity`. */
+  /**
+   * `ssh` arguments for this fixture alone: `-F` a generated client config that pins the
+   * fixture's host key, uses only the generated identity, and turns off the agent, control
+   * sockets and every other ambient option a developer's `~/.ssh/config` could add.
+   */
   readonly sshArgs: readonly string[];
   /**
    * Forward a free local port through sshd to `127.0.0.1:remotePort` - another daemon, as a
@@ -210,10 +215,19 @@ export interface LoopbackSshd {
 }
 
 const SSHD = "/usr/sbin/sshd";
+/** How long one ssh probe, one forward or one process's shutdown may take. */
+const SSH_STEP_MS = 5_000;
 
 /**
  * A throwaway sshd for the current user on loopback, or `undefined` where there is no sshd
  * and `ORCA_REQUIRE_SSHD` is not `1`. Linux and macOS only: Windows has no `/usr/sbin/sshd`.
+ *
+ * The boundary is the current user on this machine, not a second machine: sshd logs in as
+ * the same account, so it isolates *configuration*, not privilege. What it does limit is what
+ * the generated key can do - its `authorized_keys` entry is `restrict`ed to local port
+ * forwarding to `127.0.0.1` and a forced `true`, so the key opens no shell, runs no other
+ * command, gets no pty, agent, X11 or remote forwarding - and the client side trusts only the
+ * generated host key and reads no ambient SSH configuration.
  */
 export async function loopbackSshd(): Promise<LoopbackSshd | undefined> {
   if (!existsSync(SSHD) || process.platform === "win32") {
@@ -230,10 +244,13 @@ export async function loopbackSshd(): Promise<LoopbackSshd | undefined> {
     const user = userInfo().username;
     const hostKey = join(root, "hostkey");
     const identity = join(root, "client");
-    await run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", hostKey]);
-    await run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", identity]);
+    await run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "orca-fixture-host", "-f", hostKey]);
+    await run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "orca-fixture-client", "-f", identity]);
     const authorized = join(root, "authorized_keys");
-    await writeFile(authorized, await readFile(`${identity}.pub`), { mode: 0o600 });
+    const clientKey = (await readFile(`${identity}.pub`, "utf8")).trim();
+    await writeFile(authorized, `restrict,port-forwarding,permitopen="127.0.0.1:*",command="true" ${clientKey}\n`, {
+      mode: 0o600,
+    });
     const port = await freePort();
     const config = join(root, "sshd_config");
     await writeFile(
@@ -245,37 +262,75 @@ export async function loopbackSshd(): Promise<LoopbackSshd | undefined> {
         `PidFile ${join(root, "sshd.pid")}`,
         `AuthorizedKeysFile ${authorized}`,
         `AllowUsers ${user}`,
+        "PubkeyAuthentication yes",
         "PasswordAuthentication no",
         "KbdInteractiveAuthentication no",
         // The keys live in a temp directory whose parents this user does not own.
         "StrictModes no",
         "AllowTcpForwarding local",
+        "PermitOpen 127.0.0.1:*",
+        "AllowAgentForwarding no",
+        "AllowStreamLocalForwarding no",
+        "X11Forwarding no",
+        "PermitTunnel no",
+        "PermitTTY no",
+        "PermitUserEnvironment no",
         "",
       ].join("\n"),
     );
+    // Pin the generated host key: the client trusts this key for this port and nothing else.
+    const knownHosts = join(root, "known_hosts");
+    const hostPub = (await readFile(`${hostKey}.pub`, "utf8")).trim().split(" ").slice(0, 2).join(" ");
+    await writeFile(knownHosts, `[127.0.0.1]:${port} ${hostPub}\n`, { mode: 0o600 });
+    const clientConfig = join(root, "ssh_config");
+    await writeFile(
+      clientConfig,
+      [
+        "Host 127.0.0.1",
+        "  HostName 127.0.0.1",
+        `  Port ${port}`,
+        `  User ${user}`,
+        `  IdentityFile ${identity}`,
+        "  IdentitiesOnly yes",
+        "  IdentityAgent none",
+        "  AddKeysToAgent no",
+        "  ForwardAgent no",
+        "  ForwardX11 no",
+        "  ControlMaster no",
+        "  ControlPath none",
+        "  ControlPersist no",
+        "  BatchMode yes",
+        "  PasswordAuthentication no",
+        "  KbdInteractiveAuthentication no",
+        "  StrictHostKeyChecking yes",
+        `  UserKnownHostsFile ${knownHosts}`,
+        "  GlobalKnownHostsFile /dev/null",
+        "  UpdateHostKeys no",
+        "  CheckHostIP no",
+        "  ProxyCommand none",
+        "  ProxyJump none",
+        "  PermitLocalCommand no",
+        `  ConnectTimeout ${SSH_STEP_MS / 1000}`,
+        "  ServerAliveInterval 5",
+        "  ServerAliveCountMax 2",
+        "  LogLevel ERROR",
+        "",
+      ].join("\n"),
+      { mode: 0o600 },
+    );
+    const sshArgs = ["-F", clientConfig, "127.0.0.1"];
     // -D: stay in the foreground, so this process owns sshd and `close` stops it.
     const sshd = spawn(SSHD, ["-D", "-f", config, "-E", join(root, "sshd.log")], { stdio: ["pipe", "pipe", "pipe"] });
     processes.push(sshd);
-    const sshArgs = [
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "StrictHostKeyChecking=no",
-      "-o",
-      "UserKnownHostsFile=/dev/null",
-      "-o",
-      "LogLevel=ERROR",
-      "-i",
-      identity,
-      "-p",
-      String(port),
-    ];
+    const spawnFailure = failureOf(sshd);
     const log = () => readFile(join(root, "sshd.log"), "utf8").catch(() => "");
     await until(
       async () => {
+        const failed = spawnFailure.current;
+        if (failed) throw new Fatal(`sshd could not start: ${failed.message}`);
         // An sshd that refused to start (a bad config, root without /run/sshd) says why in its log.
-        if (sshd.exitCode !== null) throw new Error(`sshd exited ${sshd.exitCode}: ${(await log()).trim()}`);
-        await run("ssh", [...sshArgs, `${user}@127.0.0.1`, "true"]);
+        if (sshd.exitCode !== null) throw new Fatal(`sshd exited ${sshd.exitCode}: ${(await log()).trim()}`);
+        await run("ssh", [...sshArgs, "true"]);
       },
       "sshd to accept a login",
       log,
@@ -290,18 +345,38 @@ export async function loopbackSshd(): Promise<LoopbackSshd | undefined> {
         const tunnel = spawn(
           "ssh",
           [
-            ...sshArgs,
+            "-F",
+            clientConfig,
             "-N",
             "-o",
             "ExitOnForwardFailure=yes",
             "-L",
             `127.0.0.1:${local}:127.0.0.1:${remotePort}`,
-            `${user}@127.0.0.1`,
+            "127.0.0.1",
           ],
           { stdio: ["pipe", "pipe", "pipe"] },
         );
         processes.push(tunnel);
-        await until(() => connects(local), `the forward to ${remotePort}`);
+        const failure = failureOf(tunnel);
+        let stderr = "";
+        tunnel.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+        try {
+          await until(
+            async () => {
+              if (failure.current) throw new Fatal(`ssh could not start: ${failure.current.message}`);
+              if (tunnel.exitCode !== null || tunnel.signalCode !== null)
+                throw new Fatal(`ssh exited ${tunnel.exitCode ?? tunnel.signalCode}: ${stderr.trim()}`);
+              await connects(local);
+            },
+            `the forward to ${remotePort}`,
+            undefined,
+            SSH_STEP_MS,
+          );
+        } catch (error) {
+          // A forward that failed is torn down now, not left for `close`.
+          await stop(tunnel);
+          throw error;
+        }
         return local;
       },
       close,
@@ -312,27 +387,55 @@ export async function loopbackSshd(): Promise<LoopbackSshd | undefined> {
   }
 }
 
-async function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  child.kill("SIGTERM");
-  await exited;
+/** A failure `until` must not retry: the process it waits on is gone. */
+class Fatal extends Error {}
+
+/** Record a spawn `error` (a missing binary, a bad cwd) instead of letting it go unhandled. */
+function failureOf(child: ChildProcessWithoutNullStreams): { current: Error | undefined } {
+  const failure: { current: Error | undefined } = { current: undefined };
+  child.once("error", (error) => (failure.current = error));
+  return failure;
 }
 
+/** SIGTERM, then SIGKILL if the process has not exited within `SSH_STEP_MS`. */
+async function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  child.kill("SIGTERM");
+  if (await Promise.race([exited.then(() => true), delay(SSH_STEP_MS).then(() => false)])) return;
+  child.kill("SIGKILL");
+  await Promise.race([exited, delay(SSH_STEP_MS)]);
+}
+
+/** Run a command to completion, killing it if it outlives `SSH_STEP_MS`. */
 function run(command: string, args: readonly string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`${command} did not finish within ${SSH_STEP_MS} ms`));
+    }, SSH_STEP_MS);
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    child.once("error", reject);
-    child.once("exit", (code) =>
-      code === 0 ? resolve() : reject(new Error(`${command} exited ${code}: ${stderr.trim()}`)),
-    );
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`${command} exited ${code}: ${stderr.trim()}`));
+    });
   });
 }
 
-async function until(attempt: () => Promise<unknown>, what: string, diagnostics?: () => Promise<string>) {
-  const deadline = Date.now() + 15_000;
+async function until(
+  attempt: () => Promise<unknown>,
+  what: string,
+  diagnostics?: () => Promise<string>,
+  within = 15_000,
+): Promise<void> {
+  const deadline = Date.now() + within;
   let last: unknown;
   while (Date.now() < deadline) {
     try {
@@ -340,7 +443,7 @@ async function until(attempt: () => Promise<unknown>, what: string, diagnostics?
       return;
     } catch (error) {
       last = error;
-      if (/^sshd exited/.test((error as Error).message)) break;
+      if (error instanceof Fatal) break;
       await delay(100);
     }
   }
@@ -351,6 +454,7 @@ async function until(attempt: () => Promise<unknown>, what: string, diagnostics?
 function connects(port: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const socket = connect(port, "127.0.0.1");
+    socket.setTimeout(1_000, () => socket.destroy(new Error("connect timed out")));
     socket.once("connect", () => {
       socket.destroy();
       resolve();

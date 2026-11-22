@@ -6,7 +6,9 @@
  *
  * Needs `pnpm run build` (it runs the compiled CLI); CI builds before it tests.
  */
-import { readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CLIENT_PROTOCOL, HELLO_METHOD, HelloResultSchema, PROTOCOL_VERSION } from "@orca/protocol";
@@ -101,5 +103,43 @@ describe("a daemon behind a loopback sshd", () => {
     expect(answer.storeDir).toBe(join(pair.b.dir, ".orca"));
     // The tunnel carries bytes, not trust: a's token is still refused by b.
     expect(await rpc(through, HELLO_METHOD, hello("over-ssh"), pair.a.token)).toMatchObject({ ok: false });
+  });
+
+  it("gives the generated key forwarding and nothing else", async (context) => {
+    if (!sshd) return context.skip("no /usr/sbin/sshd; set ORCA_REQUIRE_SSHD=1 to require it");
+    // An ambient ~/.ssh/config that would break every connection is never read.
+    const home = await mkdtemp(join(tmpdir(), "orca-ssh-home-"));
+    try {
+      await mkdir(join(home, ".ssh"));
+      await writeFile(join(home, ".ssh", "config"), "Host *\n  ProxyCommand false\n  ControlMaster auto\n");
+      const ambient = spawnSync("ssh", [...sshd.sshArgs, "true"], {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: { ...process.env, HOME: home },
+      });
+      expect(ambient.status, ambient.stderr).toBe(0);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+    // The forced command replaces whatever the client asks to run.
+    const shell = spawnSync("ssh", [...sshd.sshArgs, "echo", "escaped"], { encoding: "utf8", timeout: 10_000 });
+    expect(shell.status).toBe(0);
+    expect(shell.stdout).not.toContain("escaped");
+    // A forward to anywhere but 127.0.0.1 is refused by the key's permitopen, even to a
+    // reachable daemon under another name.
+    const elsewhere = spawnSync(
+      "ssh",
+      ["-F", sshd.sshArgs[1]!, "-o", "ExitOnForwardFailure=yes", "-W", `localhost:${pair.b.port}`, "127.0.0.1"],
+      { encoding: "utf8", timeout: 10_000, input: "" },
+    );
+    expect(elsewhere.status).not.toBe(0);
+    expect(elsewhere.stderr).toContain("forwarding failed");
+    // The same request to 127.0.0.1 is allowed, so the refusal above is the key's limit.
+    const allowed = spawnSync(
+      "ssh",
+      ["-F", sshd.sshArgs[1]!, "-o", "ExitOnForwardFailure=yes", "-W", `127.0.0.1:${pair.b.port}`, "127.0.0.1"],
+      { encoding: "utf8", timeout: 10_000, input: "" },
+    );
+    expect(allowed.stderr).not.toContain("forwarding failed");
   });
 });
