@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { laneOf, releaseDiffProblems } from "./release-lane.js";
+import { RECEIPT_TITLE, laneOf, receiptMessage, releaseDiffProblems } from "./release-lane.js";
 
 const BUMPS = new Set(["release:minor", "release:major"]);
 const REFERENCE = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?|part of|backport of)\s*:?\s+#(\d+)\b/gi;
@@ -100,6 +100,12 @@ export function checkLinePullRequest(pr, issues) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
   const p = event.pull_request;
+  // First, whatever the verdict: which pull request, line and head this run judged. The check
+  // run's conclusion is the verdict; this receipt is what ties it to the pull request
+  // (tools/release-lane.js, RECEIPT_TITLE).
+  console.log(
+    `::notice title=${RECEIPT_TITLE}::${receiptMessage({ number: p.number, base: p.base.ref, head: p.head.sha })}`,
+  );
   const api = (path, ...flags) =>
     execFileSync("gh", ["api", ...flags, `repos/${process.env.GITHUB_REPOSITORY}/${path}`], { encoding: "utf8" });
   const pkg = (sha) =>

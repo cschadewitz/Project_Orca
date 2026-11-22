@@ -13,6 +13,9 @@
 //                                                             git repository and `gh api`
 //   node tools/release-lane.js release-pr <event.json>     -> checks a merged release pull
 //                                                             request before it is published
+//   node tools/release-lane.js guard-evidence <pr> <base> <head>
+//                                                          -> the guard's newest trusted pass for
+//                                                             that pull request (publishes nothing)
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -134,30 +137,40 @@ function verify(sha, version) {
 
 export const GUARD_WORKFLOW = ".github/workflows/release-line-guard.yml";
 
-/** The run title release-line-guard.yml gives itself (its `run-name`) for a pull request. */
-export const guardTitle = (number, base) => `release line check: #${number} into ${base}`;
-
 /**
- * Whether a guard result was recorded for pull request `pr.number` into `pr.base` at `headSha`.
- * GitHub leaves `pull_requests` empty on pull_request_target runs, so the workflow run's title,
- * which main's guard workflow sets from the event, is the binding; `pull_requests` is still
- * honoured where GitHub fills it.
+ * The receipt main's guard writes when it passes a pull request: a notice annotation on its own
+ * check run, `::notice title=RECEIPT_TITLE::{"pr":N,"base":"release/X.Y","head":"<sha>"}`.
+ * GitHub leaves `pull_requests` empty on pull_request_target runs, and a run's display title is
+ * the pull request's own title unless the workflow sets one, so neither binds a result to its
+ * pull request. The receipt does: only the guard script writes annotations on that check run
+ * (it runs none of the pull request's code), runs from before this receipt existed carry none,
+ * and annotations stay with the check run after the pull request closes.
  */
-export function linkedTo(checkRun, workflowRun, headSha, pr = {}) {
-  const linked = [...(checkRun?.pull_requests ?? []), ...(workflowRun?.pull_requests ?? [])];
-  if (linked.some((p) => p?.number === pr.number && p?.base?.ref === pr.base && (p?.head?.sha ?? headSha) === headSha))
+export const RECEIPT_TITLE = "release line receipt v1";
+export const receiptMessage = ({ number, base, head }) => JSON.stringify({ pr: number, base, head });
+
+/** Whether a guard result was recorded for pull request `pr.number` into `pr.base` at `headSha`. */
+export function linkedTo(checkRun, annotations, headSha, pr = {}) {
+  if (
+    (checkRun?.pull_requests ?? []).some(
+      (p) => p?.number === pr.number && p?.base?.ref === pr.base && (p?.head?.sha ?? headSha) === headSha,
+    )
+  )
     return true;
-  return workflowRun?.display_title === guardTitle(pr.number, pr.base) && workflowRun?.head_sha === headSha;
+  const expected = receiptMessage({ number: pr.number, base: pr.base, head: headSha });
+  return (annotations ?? []).some(
+    (a) => a?.annotation_level === "notice" && a?.title === RECEIPT_TITLE && a?.message === expected,
+  );
 }
 
 /**
  * Whether a check run is the release line guard as main runs it: by GitHub Actions, from
  * main's release-line-guard.yml on a pull_request_target event, attached to exactly `headSha`,
- * and linked to this pull request (`pr.number`) into this line (`pr.base`).
+ * and linked to this pull request (`pr.number`) into this line (`pr.base`) by its receipt.
  * The check run binds the commit: a pull_request_target run itself runs main's revision. A
  * check name alone is not provenance: anything with checks: write could post one.
  */
-export function guardRunProblems(checkRun, workflowRun, headSha, pr = {}) {
+export function guardRunProblems(checkRun, workflowRun, annotations, headSha, pr = {}) {
   const problems = [];
   if (checkRun?.conclusion !== "success") problems.push("it did not succeed");
   if (checkRun?.head_sha !== headSha) problems.push(`it ran on ${checkRun?.head_sha}, not ${headSha}`);
@@ -167,7 +180,7 @@ export function guardRunProblems(checkRun, workflowRun, headSha, pr = {}) {
   if (workflowRun?.event !== "pull_request_target") problems.push(`it ran on ${workflowRun?.event ?? "no"} event`);
   // For this pull request into this line, at this head: a pass for another pull request that
   // shares the commit, or for the same commit aimed at another branch, is not this one's.
-  if (!linkedTo(checkRun, workflowRun, headSha, pr))
+  if (!linkedTo(checkRun, annotations, headSha, pr))
     problems.push(`it is not linked to #${pr.number} into ${pr.base} at ${headSha}`);
   return problems;
 }
@@ -179,6 +192,36 @@ const versionAt = (sha) => {
     return undefined;
   }
 };
+
+/**
+ * The newest release line check recorded for pull request `number` into `base` at `head`, which
+ * must be a trusted pass; dies otherwise. Only that pull request's results count, and an older
+ * pass does not outlive a later failure (a relabel, a milestone change, an edited body). It
+ * publishes nothing, so it can be run against any pull request, open or closed.
+ */
+function guardEvidence({ number, base, head }) {
+  if (!/^[0-9a-f]{40}$/.test(head ?? "")) die(`not a full commit sha: ${head}`);
+  const runs = ghJson(
+    `repos/${repo()}/commits/${head}/check-runs?check_name=${encodeURIComponent("release line check")}&filter=all`,
+  ).check_runs;
+  const target = { number, base };
+  const forThisPr = (runs ?? [])
+    .map((run) => ({ run, annotations: ghJson(`repos/${repo()}/check-runs/${run.id}/annotations`) }))
+    .filter(({ run, annotations }) => linkedTo(run, annotations, head, target))
+    .sort((a, b) => Number(b.run.id) - Number(a.run.id));
+  if (!forThisPr.length) die(`no release line check for #${number} into ${base} ran on the reviewed head ${head}`);
+  const { run: newest, annotations } = forThisPr[0];
+  const workflow = newest.check_suite?.id
+    ? ghJson(`repos/${repo()}/actions/runs?check_suite_id=${newest.check_suite.id}`).workflow_runs?.[0]
+    : undefined;
+  const problems = guardRunProblems(newest, workflow, annotations, head, target);
+  if (problems.length)
+    die(
+      `the release line check, as main runs it, did not pass on the reviewed head ${head} ` +
+        `(its newest result for #${number}, check run ${newest.id}: ${problems.join(", ")})`,
+    );
+  console.log(`release line check run ${newest.id} passed #${number} into ${base} at ${head}`);
+}
 
 /**
  * A merged release pull request may start publication only if it is the release preparation
@@ -217,30 +260,7 @@ function releasePr(eventPath, sha) {
   if (git("rev-parse", `${sha}^{tree}`) !== git("rev-parse", `${pr.head.sha}^{tree}`))
     die(`the merge commit ${sha} is not the reviewed head ${pr.head.sha}; update the branch and review again`);
   if (lane !== "main") {
-    const runs = ghJson(
-      `repos/${repo()}/commits/${pr.head.sha}/check-runs?check_name=${encodeURIComponent("release line check")}&filter=all`,
-    ).check_runs;
-    // Only the newest guard result for this pull request into this line counts: an older pass
-    // does not outlive a later failure (a relabel, a milestone change, an edited body).
-    const target = { number: pr.number, base: lane };
-    const forThisPr = (runs ?? [])
-      .map((run) => ({
-        run,
-        workflow: run.check_suite?.id
-          ? ghJson(`repos/${repo()}/actions/runs?check_suite_id=${run.check_suite.id}`).workflow_runs?.[0]
-          : undefined,
-      }))
-      .filter(({ run, workflow }) => linkedTo(run, workflow, pr.head.sha, target))
-      .sort((a, b) => Number(b.run.id) - Number(a.run.id));
-    if (!forThisPr.length)
-      die(`no release line check for #${pr.number} into ${lane} ran on the reviewed head ${pr.head.sha}`);
-    const { run: newest, workflow } = forThisPr[0];
-    const problems = guardRunProblems(newest, workflow, pr.head.sha, target);
-    if (problems.length)
-      die(
-        `the release line check, as main runs it, did not pass on the reviewed head ${pr.head.sha} ` +
-          `(its newest result for #${pr.number}, check run ${newest.id}: ${problems.join(", ")})`,
-      );
+    guardEvidence({ number: pr.number, base: lane, head: pr.head.sha });
   }
   console.log(`release pull request #${pr.number}: v${version} into ${lane}`);
 }
@@ -255,5 +275,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     }
   } else if (command === "verify") verify(args[0], args[1]);
   else if (command === "release-pr") releasePr(args[0], args[1]);
-  else die("usage: node tools/release-lane.js lane <version> | verify <sha> <version> | release-pr <event.json> <sha>");
+  else if (command === "guard-evidence") guardEvidence({ number: Number(args[0]), base: args[1], head: args[2] });
+  else
+    die(
+      "usage: node tools/release-lane.js lane <version> | verify <sha> <version> | release-pr <event.json> <sha> | guard-evidence <pr> <base> <head>",
+    );
 }
