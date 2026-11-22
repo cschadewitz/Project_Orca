@@ -546,6 +546,9 @@ describe("saved profile preference", () => {
   it("is exclusive with a saved URL and survives a restart", () => {
     const file = new PreferencesFile(join(mkdtempSync(join(tmpdir(), "orca-prefs-")), "preferences.json"));
     file.saveDaemonUrl("http://localhost:2");
+    file.saveDaemonProfile("other");
+    file.saveDaemonProfile(null);
+    expect(file.read()).not.toHaveProperty("daemonProfile");
     file.saveDaemonProfile("lab");
     expect(file.read()).toMatchObject({ daemonProfile: "lab" });
     expect(file.read().daemonUrl).toBeUndefined();

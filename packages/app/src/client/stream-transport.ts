@@ -37,7 +37,7 @@ class StreamAgent extends Agent {
     try {
       return this.open();
     } catch (error) {
-      created?.(error instanceof Error ? error : new Error(String(error)), undefined as unknown as Duplex);
+      (created as (error: Error | null, stream: Duplex) => void)(error as Error, undefined as unknown as Duplex);
       return undefined;
     }
   }
@@ -61,73 +61,50 @@ export function streamTransport(connect: StreamConnect): StreamTransport {
       const url = new URL(String(input));
       const signal = init.signal ?? undefined;
       if (signal?.aborted) {
-        reject(signal.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError"));
+        reject(signal.reason as Error);
         return;
       }
-      let req: ClientRequest;
-      try {
-        req = request(
-          {
-            agent,
-            host: url.hostname,
-            port: url.port,
-            path: `${url.pathname}${url.search}`,
-            method: init.method ?? "GET",
-            headers: headerRecord(init.headers),
-          },
-          (res: IncomingMessage) => {
-            const chunks: Buffer[] = [];
-            res.on("data", (chunk: Buffer) => chunks.push(chunk));
-            res.on("error", reject);
-            res.on("end", () => {
-              const status = res.statusCode ?? 502;
-              const body = chunks.length && status !== 204 && status !== 304 ? Buffer.concat(chunks) : null;
-              const headers = new Headers();
-              for (const [key, value] of Object.entries(res.headers))
-                for (const one of Array.isArray(value) ? value : value === undefined ? [] : [value])
-                  headers.append(key, one);
-              resolve(new Response(body, { status, statusText: res.statusMessage ?? "", headers }));
-            });
-          },
-        );
-      } catch (error) {
-        // `connect()` refused (tunnel closed, failed or released): nothing was written.
-        reject(error instanceof Error ? error : new Error(String(error)));
-        return;
-      }
+      // A refusal from `connect()` (tunnel closed, failed or released) arrives as the
+      // request's error, before anything was written.
+      const req: ClientRequest = request(
+        {
+          agent,
+          host: url.hostname,
+          port: url.port,
+          path: `${url.pathname}${url.search}`,
+          method: init.method ?? "GET",
+          headers: headerRecord(init.headers),
+        },
+        (res: IncomingMessage) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk: Buffer) => chunks.push(chunk));
+          res.on("error", reject);
+          res.on("end", () => {
+            const status = res.statusCode!;
+            const body = status === 204 || status === 304 ? null : Buffer.concat(chunks);
+            const headers = new Headers();
+            for (const [key, value] of Object.entries(res.headers))
+              for (const one of [value ?? []].flat()) headers.append(key, one);
+            resolve(new Response(body, { status, statusText: res.statusMessage!, headers }));
+          });
+        },
+      );
       req.on("error", reject);
-      const abort = () =>
-        req.destroy(signal?.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError"));
+      const abort = () => req.destroy(signal?.reason as Error);
       signal?.addEventListener("abort", abort, { once: true });
       req.on("close", () => signal?.removeEventListener("abort", abort));
       req.end(body ?? undefined);
     })) as typeof fetch;
 
   const socket: SocketFactory = (url, handlers, protocols) => {
-    let closed = false;
-    const finish = (code?: number) => {
-      if (closed) return;
-      closed = true;
-      handlers.onClose(code);
-    };
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(url, protocols, { createConnection: () => connect() as Socket, perMessageDeflate: false });
-    } catch {
-      // No stream to open (tunnel down): the subscription treats it as a closed attempt.
-      queueMicrotask(() => finish());
-      return { send: () => {}, close: () => {} };
-    }
+    // No stream to open (tunnel down) fails the upgrade request: `error`, then `close`,
+    // which the subscription treats as a closed attempt.
+    const ws = new WebSocket(url, protocols, { createConnection: () => connect() as Socket, perMessageDeflate: false });
     ws.on("open", () => handlers.onOpen());
-    ws.on("message", (data: WebSocket.RawData) =>
-      handlers.onMessage(
-        Buffer.isBuffer(data)
-          ? data.toString()
-          : Buffer.concat(Array.isArray(data) ? data : [Buffer.from(data)]).toString(),
-      ),
-    );
+    // The default binary type: every message arrives as one Buffer.
+    ws.on("message", (data: WebSocket.RawData) => handlers.onMessage((data as Buffer).toString()));
     ws.on("error", () => {});
-    ws.on("close", (code: number) => finish(code));
+    ws.on("close", (code: number) => handlers.onClose(code));
     return {
       send: (text) => ws.send(text),
       close: () => ws.close(),
