@@ -10,10 +10,10 @@
  * entry's security descriptor back with PowerShell:
  *
  * - owner is this user, and every ACE names only this user or SYSTEM;
- * - every copied file and nested directory carries ONLY inherited ACEs: its DACL was assigned by
- *   the kernel from the owner-only parent when the object was created, and nothing copied from
+ * - every copied file carries ONLY inherited ACEs: its DACL was assigned by
+ *   the kernel from the owner-only parent when the file was created, and nothing copied from
  *   the source (the Everyone ACE must not appear) or set afterwards;
- * - the directories the boundary created are protected (no inheritance from outside).
+ * - every directory was created by the boundary with a protected owner-only DACL.
  *
  * Then a second store whose existing `format-backups` grants Everyone must be refused
  * (BACKUPS_UNSAFE) with no marker written. Prints one JSON result; exits non-zero on failure.
@@ -181,7 +181,9 @@ for (const entry of entries) {
     entry.rules.some((rule) => rule.sid === me),
     `${where}: no ACE for this user`,
   );
-  if (entry.path === root || entry.path === backup) check(entry.protected, `${where}: DACL not protected`);
+  // Directories come from the boundary's create-only private mkdir (explicit, protected DACL);
+  // files are created new inside them and must carry only what the kernel inherited at creation.
+  if (lstatSync(entry.path).isDirectory()) check(entry.protected, `${where}: DACL not protected`);
   else
     check(
       entry.rules.every((rule) => rule.inherited),
