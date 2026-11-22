@@ -118,6 +118,7 @@ const drainCompletionChannels = new Set([
   "orca:claims.list",
   "orca:artifacts.list",
   "orca:artifacts.get",
+  "orca:search",
   "orca:agents.list",
   "orca:workflows.list",
   "orca:workflows.get",
@@ -487,6 +488,8 @@ handle("orca:inputs.list", (params: Parameters<DaemonClient["inputsList"]>[0]) =
 handle("orca:claims.list", (params: Parameters<DaemonClient["claimsList"]>[0]) => client().claimsList(params));
 handle("orca:artifacts.list", (params: Parameters<DaemonClient["artifactsList"]>[0]) => client().artifactsList(params));
 handle("orca:artifacts.get", (params: Parameters<DaemonClient["artifactsGet"]>[0]) => client().artifactsGet(params));
+// `search` (#255): a read, bounded by the daemon; the palette asks `hello.methods` first.
+handle("orca:search", (params: Parameters<DaemonClient["search"]>[0]) => client().search(params));
 handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) => client().agentsList(params));
 // The workflow viewer's two reads (#174, for #177). Reads like the ones above: a
 // `--read-only` daemon answers both, because a workflow is a file and not a run.

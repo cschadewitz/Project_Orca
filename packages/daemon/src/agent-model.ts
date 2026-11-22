@@ -19,7 +19,13 @@
 import type { AgentRegistry, AgentHealth } from "@orca/agents";
 import { describeError, type Clock } from "@orca/core";
 import type { Orchestrator } from "@orca/engine";
-import type { AgentsListResult, AgentsPingParams, AgentsPingResult, AgentView } from "@orca/protocol";
+import type {
+  AgentsListResult,
+  AgentsPingParams,
+  AgentsPingResult,
+  AgentView,
+  SessionSlotsSummary,
+} from "@orca/protocol";
 import type { ReadModel } from "./read-model.js";
 
 export interface AgentModelOptions {
@@ -72,7 +78,17 @@ export class AgentModel {
     const registry = this.registry;
     const agents = registry.listHealth().map((h) => agentView(h, registry));
     const claims = this.reads ? (await this.reads.claimsList({})).claims : [];
-    return { agents, claims, asOf: this.clock.isoNow() };
+    return { agents, claims, sessionSlots: this.orc.sessionSlots.view(), asOf: this.clock.isoNow() };
+  }
+
+  /** The daemon-wide part of the session slots, for `hello` (#873). */
+  sessionSlotsSummary(): SessionSlotsSummary {
+    const view = this.orc.sessionSlots.view();
+    return {
+      ...(view.limits.maxAgentSessions === undefined ? {} : { maxAgentSessions: view.limits.maxAgentSessions }),
+      inUse: view.inUse.total,
+      queued: view.queued,
+    };
   }
 
   /**

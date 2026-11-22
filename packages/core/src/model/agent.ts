@@ -25,6 +25,11 @@ export const SshHostSchema = z.object({
   /** Root directory on the remote machine under which workspaces live. */
   workspaceRoot: z.string().optional(),
   connectTimeoutMs: z.number().int().positive().default(20_000),
+  /**
+   * At most this many agent sessions open on this host at once (#873). Absent means
+   * unlimited, which is the default: nothing is derived from the machine.
+   */
+  maxSessions: z.number().int().positive().optional(),
 });
 export type SshHost = z.infer<typeof SshHostSchema>;
 
@@ -32,6 +37,11 @@ export const LocalHostSchema = z.object({
   id: z.string().min(1),
   type: z.literal("local"),
   workspaceRoot: z.string().optional(),
+  /**
+   * At most this many agent sessions open on this host at once (#873). Absent means
+   * unlimited, which is the default: nothing is derived from the machine.
+   */
+  maxSessions: z.number().int().positive().optional(),
 });
 export type LocalHost = z.infer<typeof LocalHostSchema>;
 
@@ -581,6 +591,11 @@ export const AgentSpecSchema = z.object({
   models: z.array(z.object({ id: z.string().min(1), name: z.string(), description: z.string().optional() })).optional(),
   /** The model used when a run selects none; one of `models[].id`. */
   defaultModel: z.string().optional(),
+  /**
+   * At most this many sessions of this agent open at once, across every run (#873), for a
+   * provider or account that limits concurrent use. Absent means unlimited, the default.
+   */
+  maxSessions: z.number().int().positive().optional(),
 });
 export type AgentSpec = z.infer<typeof AgentSpecSchema>;
 

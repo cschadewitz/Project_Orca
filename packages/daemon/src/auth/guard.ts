@@ -45,6 +45,8 @@ import {
   type RunsEventsResult,
   type RunSummaryView,
   type WorkflowSummaryView,
+  type SearchHit,
+  type SearchResult,
 } from "@orca/protocol";
 import type { OrcaEvent } from "@orca/core";
 import type { MethodContext, MethodTable } from "../methods.js";
@@ -317,6 +319,11 @@ export class Authorizer {
           const invocation = bindPrincipal(
             {
               ...ctx,
+              readScope: {
+                // Restricted: only the named run, which `case "search"` authorizes first.
+                runs: isUnrestricted(principal.scope) ? "all" : "named",
+                artifacts: holds(principal, "artifacts.read"),
+              },
               mutationActor: {
                 principalId: principal.id,
                 ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
@@ -403,6 +410,30 @@ export class Authorizer {
         return original(params);
       case "subscription":
         return original(params);
+
+      case "search": {
+        const named = params.runId as string | undefined;
+        if (restricted) {
+          /* A caller limited to some runs searches one named run. Walking the store and asking
+             run by run would read facts of hidden runs and spend this caller's deadline on
+             them, so hidden work could change which visible hits are found and whether the
+             answer says it was cut short. Workspace-wide search for a restricted caller waits
+             for an authorization-scoped run catalog. */
+          if (named === undefined) throw new Denied(authForbidden(), "search-needs-named-run");
+          // A run the caller cannot see answers as one with no matches, never as a refusal.
+          if (!(await this.runs.allows(principal, named)))
+            return { hits: [], scannedRuns: 0, asOf: this.now().toISOString() };
+        }
+        const result = (await original(params)) as SearchResult;
+        const artifacts = holds(principal, "artifacts.read");
+        // A second line behind the scan's own scope; it never calls the resolver.
+        const hits: SearchHit[] = result.hits.filter(
+          (hit) =>
+            (artifacts || (hit.kind !== "artifact" && !artifactEvent(hit.type))) &&
+            (!restricted || hit.runId === named),
+        );
+        return { ...result, hits };
+      }
 
       case "run": {
         const runId = params.runId as string;

@@ -8,7 +8,15 @@
 import { ConfigurationGenerations, type GenerationMaterial } from "./configuration-generation.js";
 import { configuredGenerationSecrets, launchProvenance } from "./configuration-provenance.js";
 
-import { AgentRegistry, LocalHost, openAcpSession, type AgentSession, type OpenSessionOptions } from "@orca/agents";
+import {
+  AgentRegistry,
+  LocalHost,
+  openAcpSession,
+  startupTermination,
+  type AgentHost,
+  type AgentSession,
+  type OpenSessionOptions,
+} from "@orca/agents";
 import { applyModel, currentModel, selectedModel } from "./session-model.js";
 import {
   describeError,
@@ -92,6 +100,7 @@ import { RunContext } from "./run-context.js";
 import type { LiveHumanInput, ExecutionResumeAuthority, ExecutionActivity } from "./live-input.js";
 import { protectExecutionInputs } from "./execution-inputs.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
+import { SessionSlots, type ConfiguredSessionLimits, type SessionSlot, type SessionSlotCaps } from "./session-slots.js";
 
 /** Opens an agent session; defaults to ACP over stdio (local or ssh). Integrations can substitute other transports. */
 export type SessionFactory = (options: OpenSessionOptions) => Promise<AgentSession>;
@@ -124,6 +133,14 @@ export interface OrchestratorOptions {
   };
   workspaceProvider?: WorkspaceProvider;
   sessionFactory?: SessionFactory;
+  /**
+   * Daemon-wide session ceiling (#873) for an orchestrator built without configuration
+   * generations. With generations, the current generation's `limits.maxAgentSessions` wins.
+   * Absent means unlimited.
+   */
+  maxAgentSessions?: number;
+  /** Likewise `limits.agentSlotWaitMs`: how long a step may wait for a slot. Absent: no deadline. */
+  agentSlotWaitMs?: number;
   /** Planning layer; created over `stores` when omitted. */
   plan?: PlanService;
   clock?: Clock;
@@ -303,7 +320,22 @@ export class Orchestrator {
    */
   private readonly terminalStates = new Map<string, RunState>();
   /** Per-run pooled sessions. `current.step` is the step using the session right now, so events from a long-lived session are attributed correctly. */
-  private readonly sessions = new Map<string, { session: AgentSession; current: { step: StepRun } }>();
+  private readonly sessions = new Map<
+    string,
+    {
+      session: AgentSession;
+      current: { step: StepRun };
+      close: () => Promise<void>;
+      returnSlot: () => Promise<void>;
+    }
+  >();
+  private readonly maxAgentSessions: number | undefined;
+  private readonly agentSlotWaitMs: number | undefined;
+  /**
+   * Open agent sessions against the optional caps (#873). Unlimited unless configured; see
+   * `session-slots.ts`. Read by the daemon for `hello` and `agents.list`.
+   */
+  readonly sessionSlots: SessionSlots = new SessionSlots(() => this.configuredSessionLimits());
   private readonly sessionOpenedListeners = new Set<AgentSessionOpenedListener>();
 
   constructor(o: OrchestratorOptions) {
@@ -324,6 +356,8 @@ export class Orchestrator {
     this.humanInput = o.humanInput ?? o.liveInput?.port ?? autoHumanInput();
     this.workspaceProvider = o.workspaceProvider ?? new LocalWorkspaceProvider(process.cwd());
     this.sessionFactory = o.sessionFactory ?? openAcpSession;
+    this.maxAgentSessions = o.maxAgentSessions;
+    this.agentSlotWaitMs = o.agentSlotWaitMs;
     this.clock = o.clock ?? systemClock;
     this.logger = o.logger ?? silentLogger;
     this.leaseHolder = o.lease?.holder ?? newId("orc", this.clock.now());
@@ -1903,12 +1937,14 @@ export class Orchestrator {
         if (e instanceof OrcaError && e.code === "AGENT_MODEL_NOT_FOUND") throw e;
         rc.logger.warn("pooled session refused the model; reopening it", { agent: agent.id, model });
         this.sessions.delete(key);
-        await pooled.session.close().catch(() => undefined);
+        await pooled.close().catch(() => undefined);
+        void pooled.returnSlot();
         await rc
           .emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: pooled.session.id } })
           .catch(() => undefined);
       }
     }
+    const slot = await this.takeSessionSlot(rc, step, agent, host);
     const current = { step };
     let pendingAsks = 0;
     const humanInput = abortableHumanInput(this.humanInput, rc.abort.signal);
@@ -2020,8 +2056,44 @@ export class Orchestrator {
       });
     } catch (e) {
       handshake.failed(e);
+      // A failed open whose process was spawned carries that process's exit; its bounded
+      // cleanup may have given up before observing it, so the slot waits for the exit too.
+      // An exit that cannot be observed at all (the handle's promise rejects) is not evidence
+      // the process is gone: the slot stays held and is reported as unconfirmed.
+      const exited = startupTermination(e);
+      // Teardown has begun: a retry of this step in the same run must wait for this slot,
+      // not count it as a per-run session the run holds for good.
+      if (exited) slot.closing();
+      if (exited)
+        void exited.then(
+          () => slot.release(),
+          (error: unknown) => this.unconfirmedTeardown(rc, slot, agent.id, undefined, error),
+        );
+      else slot.release();
       throw e;
     }
+    // The cap bounds live agent processes, not connections. However the session ends -
+    // closed by its step, by the run, or by the agent's connection dropping - it is closed
+    // (once: the owned-process cleanup), and its slot goes back only once that process is
+    // confirmed gone (`terminated`). A close whose cleanup could not observe the exit keeps the
+    // slot until the process does exit, rather than letting a queued open start beside it.
+    let closing: Promise<void> | undefined;
+    const closeOnce = () => (closing ??= session.close());
+    let returning: Promise<void> | undefined;
+    const returnSlot = () =>
+      (returning ??= (async () => {
+        slot.closing();
+        await closeOnce().catch(() => undefined);
+        try {
+          await session.terminated;
+        } catch (error) {
+          // No positive evidence the process is gone: keep the slot, and say so.
+          this.unconfirmedTeardown(rc, slot, agent.id, session.id, error);
+          return;
+        }
+        slot.release();
+      })());
+    void session.closed.then(returnSlot, returnSlot);
     // Until the release function or pool takes ownership, every startup failure
     // must close the newly created session, including a failed opened-event append.
     try {
@@ -2049,13 +2121,17 @@ export class Orchestrator {
         }
       }
       const close = async () => {
-        await session.close();
+        try {
+          await closeOnce();
+        } finally {
+          void returnSlot();
+        }
         await rc
           .emit({ type: "agent.session.closed", payload: { stepRunId: current.step.id, sessionId: session.id } })
           .catch(() => undefined);
       };
       if (agent.sessionMode === "per-run") {
-        const pooled = { session, current };
+        const pooled = { session, current, close: closeOnce, returnSlot };
         this.sessions.set(key, pooled);
         // A pooled session whose connection went away (wedged agent killed after a cancel, or a
         // crash) must not be handed to the next step; let that step open a fresh one instead.
@@ -2066,24 +2142,178 @@ export class Orchestrator {
       }
       return { session, release: close };
     } catch (error) {
-      await session.close().catch((cleanupError: unknown) =>
+      await closeOnce().catch((cleanupError: unknown) =>
         rc.logger.warn("agent session startup cleanup failed", {
           sessionId: session.id,
           error: describeError(cleanupError),
         }),
       );
+      void returnSlot();
       throw error;
     }
+  }
+
+  /**
+   * Take a session slot for this step (#873), waiting when a configured cap is full. Waiting
+   * is a `step.waiting` on `agent-slot` whose detail names the cap and its use; once the slot
+   * is ours the step goes back to waiting on its agent turn. Cancelling the run while the
+   * step waits leaves the queue without ever having held a slot.
+   */
+  private async takeSessionSlot(
+    rc: RunContext,
+    step: StepRun,
+    agent: { id: string; maxSessions?: number | undefined; sessionMode: "per-step" | "per-run" },
+    host: AgentHost,
+  ): Promise<SessionSlot> {
+    const request = {
+      agentId: agent.id,
+      hostId: host.id,
+      caps: () => this.sessionSlotCaps(agent, host),
+      signal: rc.abort.signal,
+      runs: this.runAncestry(rc),
+      deadlineMs: this.sessionSlotWaitMs(),
+      ...(agent.sessionMode === "per-run" ? { pinnedTo: rc.id } : {}),
+    };
+    const immediate = this.sessionSlots.tryAcquire(request);
+    if (immediate) {
+      if (!rc.abort.signal.aborted) return immediate;
+      immediate.release();
+      throw new OrcaError("CANCELLED", "cancelled");
+    }
+    let waited = false;
+    const slot = await this.sessionSlots.acquire({
+      ...request,
+      priority: await this.planPriority(rc).catch(() => undefined),
+      onWait: async (detail) => {
+        waited = true;
+        await rc
+          .emit({ type: "step.waiting", payload: { stepRunId: step.id, on: "agent-slot", detail } })
+          .catch(() => undefined);
+      },
+    });
+    if (waited)
+      await rc.emit({ type: "step.waiting", payload: { stepRunId: step.id, on: "agent-turn" } }).catch(() => undefined);
+    // A cancel that lands after the queue granted the slot but before the open must not spawn:
+    // this is the last await before `openSession` calls the factory.
+    if (rc.abort.signal.aborted) {
+      slot.release();
+      throw new OrcaError("CANCELLED", "cancelled");
+    }
+    return slot;
+  }
+
+  /**
+   * The caps this open is subject to. They are read from the *current* configuration, so an
+   * operator who raises or lowers a cap changes the next open in every run, including runs
+   * pinned to an older generation; the run's own specs answer only for an agent or host the
+   * current configuration no longer has.
+   */
+  private sessionSlotCaps(agent: { id: string; maxSessions?: number | undefined }, host: AgentHost): SessionSlotCaps {
+    const registry = this.generations?.current.agents ?? this.agents;
+    const currentAgent = registry.listAgents().find((a) => a.id === agent.id);
+    const currentHost = registry.hasHost(host.id) ? registry.host(host.id) : undefined;
+    return {
+      daemon: this.daemonSessionCap(),
+      agent: (currentAgent ?? agent).maxSessions,
+      host: hostCap(currentHost ?? host),
+    };
+  }
+
+  private sessionSlotWaitMs(): number | undefined {
+    const generation = this.generations?.current;
+    return generation ? generation.snapshot.config.limits?.agentSlotWaitMs : this.agentSlotWaitMs;
+  }
+
+  private daemonSessionCap(): number | undefined {
+    const generation = this.generations?.current;
+    return generation ? generation.snapshot.config.limits?.maxAgentSessions : this.maxAgentSessions;
+  }
+
+  private configuredSessionLimits(): ConfiguredSessionLimits {
+    const registry = this.generations?.current.agents ?? this.agents;
+    const agents: Record<string, number> = {};
+    for (const a of registry.listAgents()) if (a.maxSessions !== undefined) agents[a.id] = a.maxSessions;
+    const hosts: Record<string, number> = {};
+    for (const h of registry.listHosts()) {
+      const cap = hostCap(h);
+      if (cap !== undefined) hosts[h.id] = cap;
+    }
+    const daemon = this.daemonSessionCap();
+    const wait = this.sessionSlotWaitMs();
+    return {
+      ...(daemon === undefined ? {} : { maxAgentSessions: daemon }),
+      ...(wait === undefined ? {} : { agentSlotWaitMs: wait }),
+      agents,
+      hosts,
+    };
+  }
+
+  /**
+   * A session whose process exit could not be confirmed keeps its slot - the cap bounds live
+   * processes, and this one may still be running - and the operator hears about it: a warning
+   * here and `teardownUnconfirmed` in `agents.list`.
+   */
+  private unconfirmedTeardown(
+    rc: RunContext,
+    slot: SessionSlot,
+    agentId: string,
+    sessionId: string | undefined,
+    error: unknown,
+  ): void {
+    slot.unconfirmed();
+    rc.logger.warn("agent process exit not confirmed; its session slot stays held", {
+      agent: agentId,
+      ...(sessionId ? { sessionId } : {}),
+      error: describeError(error),
+    });
+  }
+
+  /** This run and every run above it that this process is driving, nearest first. */
+  private runAncestry(rc: RunContext): string[] {
+    const runs = [rc.id];
+    let run = rc.state.run;
+    for (let depth = 0; run.parentRunId && depth < 32; depth++) {
+      runs.push(run.parentRunId);
+      const parent = this.live.get(run.parentRunId)?.state.run;
+      if (!parent) break;
+      run = parent;
+    }
+    return runs;
+  }
+
+  /**
+   * The plan priority of the work item this run (or the nearest ancestor run with one)
+   * belongs to: its `computeSchedule()` score. Undefined outside a plan. Asked only when a
+   * step has to wait, so an uncapped daemon never computes a schedule here.
+   */
+  private async planPriority(rc: RunContext): Promise<number | undefined> {
+    let run = rc.state.run;
+    for (let depth = 0; !run.workItemId && run.parentRunId && depth < 16; depth++) {
+      const parent = this.live.get(run.parentRunId)?.state.run;
+      if (!parent) break;
+      run = parent;
+    }
+    if (!run.workItemId) return undefined;
+    const plan = await this.plan.planForRun(run);
+    if (!plan) return undefined;
+    return (await this.plan.schedule(plan.id)).priorities[run.workItemId]?.score;
   }
 
   private async closeRunSessions(runId: string): Promise<void> {
     for (const [key, s] of this.sessions) {
       if (key.startsWith(`${runId}:`)) {
         this.sessions.delete(key);
-        await s.session.close().catch(() => undefined);
+        await s.close().catch(() => undefined);
+        void s.returnSlot();
       }
     }
   }
+}
+
+/** A host's configured cap; a plugin host whose spec has no such field is unlimited. */
+function hostCap(host: AgentHost): number | undefined {
+  const cap = (host.spec as { maxSessions?: unknown }).maxSessions;
+  return typeof cap === "number" ? cap : undefined;
 }
 
 const TERMINAL_STATE_CACHE_SIZE = 256;

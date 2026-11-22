@@ -34,6 +34,8 @@ import type {
 
 import type { ConnectionState } from "@orca/design";
 import type {
+  SearchParams,
+  SearchResult,
   AgentsListParams,
   AgentsListResult,
   ArtifactsGetParams,
@@ -405,6 +407,14 @@ export interface OrcaBridge {
      */
     get: (params: WorkflowsGetParams) => Promise<BridgeResult<WorkflowsGetResult>>;
     validateInputs?: (params: WorkflowsValidateInputsParams) => Promise<BridgeResult<WorkflowsValidateInputsResult>>;
+  };
+  /**
+   * `search` (#255): substring search over event text and text artifact contents, answered
+   * by the daemon within a limit and a deadline. The palette's search section calls it when
+   * the daemon lists the method; hits are places (run and seq, or run, name and version).
+   */
+  search: {
+    query: (params: Params<SearchParams> & { query: string }) => Promise<BridgeResult<SearchResult>>;
   };
   agents: {
     /**

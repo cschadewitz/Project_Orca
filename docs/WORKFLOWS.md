@@ -334,6 +334,61 @@ the agent is told `cancelled` and the *tool call* fails while the run carries on
   When it elapses ORCA sends `session/cancel`; an agent that does not end the turn within
   its `cancelGraceMs` (default 10s) is killed and the step fails with `AGENT_TRANSPORT`.
 
+## Agent session caps
+
+Nothing limits how many agent sessions a daemon opens unless you say so: `parallel`
+concurrency and plan dispatch concurrency shape one run or one plan, and two runs can each
+fan out. Three optional caps in `orca.config.yaml` bound the whole daemon (#873):
+
+```yaml
+limits:
+  maxAgentSessions: 6        # every agent session this daemon holds open, across all runs
+  agentSlotWaitMs: 3600000   # optional: fail a step that waited an hour for a slot
+hosts:
+  - { id: box-b, type: ssh, host: box-b.example, maxSessions: 3 }   # sessions on that host
+agents:
+  - { id: claude, command: claude-code-acp, maxSessions: 2 }        # one provider/account
+```
+
+- **The default is unlimited.** A cap applies only when it is written; none is derived
+  from the machine's cores or memory. Each must be a positive integer.
+- A step takes one slot from every cap that applies to it when it opens an agent session.
+  The cap bounds live agent processes, so the slot comes back only once the session's
+  process is confirmed gone - after the step, at the end of the run for a `per-run` session
+  (which holds its slot for the whole run), after a failed open (once the process it spawned
+  has exited, even if cleanup gave up waiting), or after the agent's
+  connection drops and ORCA has cleaned the process up. A queued open never starts beside a
+  process that is still shutting down.
+- Runs are still admitted at once. A step that cannot have a slot waits *before* it spawns
+  anything: `step.waiting` with `on: agent-slot` and a detail such as
+  `waiting for an agent slot: 3 of 3 in use on host box-b`. The run shows as blocked, the
+  timeline shows the reason, and `orca plan explain <slug>` lists it for a dispatched item.
+  Cancelling the run takes the step out of the queue; restarting the daemon loses nothing,
+  because a waiting step never opened a session.
+- Waiters for the same cap go in order: steps in a plan by plan priority, other steps by
+  age, and the two sides by age. A step bound for another host or agent is not held up by a
+  full one.
+- Caps are read from the current configuration each time, so applying an edit that raises
+  one lets waiting steps go at once.
+- A `per-run` agent keeps its slot until its run ends, and a run cannot move on while one of
+  its own steps waits. So when a cap is full only of `per-run` sessions of the waiting step's
+  **own** run (two `per-run` agents in one run under a daemon cap of one), no slot can ever
+  come back: that step fails at once with `CONFIG_INVALID`, naming the cap and the agents
+  holding it. Raise the cap or make those agents `per-step`.
+- When the slots in the way are pinned by runs *above* the step, or by other runs whose own
+  children wait on the queue, the wait may never end - but not provably (a `parallel` with
+  `join: any` can finish another way and cancel the waiting branch). Those steps are never
+  failed as impossible: their wait reason adds "it may never be granted", and
+  `limits.agentSlotWaitMs`, when you set it, fails any wait longer than that with
+  `STEP_TIMEOUT`. With no deadline set, a long queue is never cut off. A session already
+  being torn down never counts as stuck.
+- A slot whose agent process exit cannot be confirmed stays held - the process may still be
+  running - and `agents.list` reports it as `teardownUnconfirmed`, with a warning in the log.
+- A cancel always wins: a step cancelled while waiting, or after its slot was granted but
+  before its session opened, spawns nothing and gives the slot back.
+- `hello` reports the daemon-wide cap, sessions open and queue depth; `agents.list` adds the
+  per-agent and per-host caps and use (optional fields; older clients ignore them).
+
 ## Templates
 
 Markdown files with front matter (`id`, `name`, `description`, `version`, `requires`,
