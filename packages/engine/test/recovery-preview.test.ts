@@ -2,7 +2,10 @@
 import { describe, expect, it } from "vitest";
 import type { Artifact, OrcaEventInput } from "@orca/core";
 import { memoryStores, type Stores } from "@orca/store";
-import { previewRecovery, runLeaseResource } from "../src/index.js";
+import { previewRecovery, runLeaseResource, workflowRevision } from "../src/index.js";
+
+const definition = { id: "wf", version: "1", nodes: { start: { type: "start" } }, edges: [] } as never;
+const REVISION = workflowRevision(definition);
 
 const ws = { hostId: "local", cwd: "/tmp/w" };
 type Step = { id: string; node: string; type: string; attempt?: number };
@@ -26,7 +29,7 @@ function artifact(id: string, stepRunId: string): Artifact {
 /** spec (agent, done) -> review (gate, answered) -> build (agent, started then failed) -> run failed. */
 async function failedRun(
   stores: Stores,
-  opts: { actor?: string; stored?: boolean; buildArtifact?: boolean } = {},
+  opts: { actor?: string; stored?: boolean; revision?: string; generation?: boolean } = {},
 ): Promise<void> {
   const runId = "run_1";
   const e = (event: Omit<OrcaEventInput, "runId">) => stores.events.append({ ...event, runId } as OrcaEventInput);
@@ -41,7 +44,7 @@ async function failedRun(
       ...(opts.stored === false ? {} : { workflowStored: true as const }),
       provenance: {
         configGeneration: "gen_1",
-        workflow: { id: "wf", version: "1", revision: "r" },
+        workflow: { id: "wf", version: "1", revision: opts.revision ?? REVISION },
         inputs: [],
         selections: [
           { nodeId: "spec", agent: { value: "writer", source: "role" }, host: { value: "local", source: "default" } },
@@ -83,8 +86,8 @@ async function failedRun(
   });
   await e({ type: "run.failed", payload: { error: { code: "AGENT_FAILED", message: "lost connection" } } });
   await stores.artifacts.put(artifact("art_spec", "s_spec"), "x");
-  if (opts.stored !== false)
-    await stores.workflows.put({ id: "wf", version: "1", nodes: { start: { type: "start" } }, edges: [] } as never);
+  if (opts.stored !== false) await stores.workflows.put(definition);
+  if (opts.generation !== false) await stores.execution.putGeneration("gen_1", { id: "gen_1" });
 }
 
 describe("previewRecovery", () => {
@@ -97,15 +100,20 @@ describe("previewRecovery", () => {
     expect((await stores.events.read("run_1")).length).toBe(before);
 
     const byKind = Object.fromEntries(a.options.map((o) => [o.kind, o]));
-    expect(byKind.resume).toMatchObject({ available: false, blockers: ["terminal"] });
-    expect(byKind["new-run"]!.available).toBe(true);
-    expect(byKind["checkpoint-attempt"]!.available).toBe(true);
+    expect(byKind.resume).toMatchObject({ readiness: "blocked", blockers: ["terminal"] });
+    expect(byKind["new-run"]!.readiness).toBe("available");
+    // The generation is on file, but only a writer can show it restores: unverified, not available.
+    expect(byKind["checkpoint-attempt"]).toMatchObject({
+      readiness: "unverified",
+      blockers: [],
+      unverified: ["generation-restore"],
+    });
 
     expect(a.uncertain).toEqual([
       expect.objectContaining({ nodeId: "build", effect: "uncertain", agent: "coder", status: "failed" }),
     ]);
     const afterReview = a.checkpoints.find((c) => c.nodeId === "review")!;
-    expect(afterReview.eligible).toBe(true);
+    expect(afterReview.readiness).toBe("unverified");
     expect(afterReview.reused.map((s) => [s.nodeId, s.effect, s.asksAgain])).toEqual([
       ["spec", "reused", false],
       ["review", "reused", false],
@@ -151,15 +159,16 @@ describe("previewRecovery", () => {
     // Copy the log without the artifact store contents.
     for (const event of await stores.events.read("run_1"))
       await fresh.events.append({ type: event.type, runId: event.runId, payload: event.payload } as OrcaEventInput);
-    await fresh.workflows.put({ id: "wf", version: "1", nodes: { start: { type: "start" } }, edges: [] } as never);
+    await fresh.workflows.put(definition);
+    await fresh.execution.putGeneration("gen_1", { id: "gen_1" });
     const a = await previewRecovery(fresh, "run_1");
     for (const c of a.checkpoints) {
-      expect(c.eligible).toBe(false);
+      expect(c.readiness).toBe("blocked");
       expect(c.blockers).toContain("missing-artifact");
     }
     expect(a.checkpoints[0]!.reused[0]!.missingArtifactIds).toEqual(["art_spec"]);
     expect(a.options.find((o) => o.kind === "checkpoint-attempt")).toMatchObject({
-      available: false,
+      readiness: "blocked",
       blockers: ["missing-artifact"],
     });
   });
@@ -170,7 +179,7 @@ describe("previewRecovery", () => {
     await stores.leases.acquire({ resource: runLeaseResource("run_1"), holder: "other", ttlMs: 60_000 });
     const a = await previewRecovery(stores, "run_1", { principalId: "bob" });
     const checkpoint = a.options.find((o) => o.kind === "checkpoint-attempt")!;
-    expect(checkpoint.available).toBe(false);
+    expect(checkpoint.readiness).toBe("blocked");
     expect(checkpoint.blockers).toEqual(expect.arrayContaining(["cross-principal", "workflow-unpinned", "leased"]));
     // The owner is not refused for being who they are.
     const owner = await previewRecovery(stores, "run_1", { principalId: "alice" });
@@ -189,7 +198,7 @@ describe("previewRecovery", () => {
     await stores.leases.acquire({ resource: runLeaseResource("run_2"), holder: "gone", ttlMs: 1 });
     const a = await previewRecovery(stores, "run_2", { now: Date.now() + 60_000 });
     const resume = a.options.find((o) => o.kind === "resume")!;
-    expect(resume).toMatchObject({ available: true, blockers: [] });
+    expect(resume).toMatchObject({ readiness: "available", blockers: [] });
     expect(resume.runsAgain).toEqual([expect.objectContaining({ nodeId: "a", attempt: 1, effect: "uncertain" })]);
     expect(a.options.find((o) => o.kind === "checkpoint-attempt")!.blockers).toContain("not-terminal");
     expect(a.uncertain.map((s) => s.nodeId)).toEqual(["a"]);
@@ -233,7 +242,7 @@ describe("previewRecovery", () => {
     // The parent's pinned definition is unreadable, and another process holds its lease.
     const lease = await stores.leases.acquire({ resource: runLeaseResource("run_p"), holder: "other", ttlMs: 60_000 });
     let resume = (await previewRecovery(stores, "run_c")).options.find((o) => o.kind === "resume")!;
-    expect(resume).toMatchObject({ available: false, targetRunId: "run_p" });
+    expect(resume).toMatchObject({ readiness: "blocked", targetRunId: "run_p" });
     expect(resume.blockers).toEqual(expect.arrayContaining(["leased", "workflow-missing"]));
     expect(resume.runsAgain.map((s) => [s.runId, s.nodeId, s.effect])).toEqual([
       ["run_p", "fan", "restarts"],
@@ -242,9 +251,37 @@ describe("previewRecovery", () => {
 
     // Readable and free: available, and still targeting the parent.
     await stores.leases.release(lease);
-    await stores.workflows.put({ id: "wf", version: "1", nodes: { start: { type: "start" } }, edges: [] } as never);
+    await stores.workflows.put(definition);
     resume = (await previewRecovery(stores, "run_c")).options.find((o) => o.kind === "resume")!;
-    expect(resume).toMatchObject({ available: true, blockers: [], targetRunId: "run_p" });
+    expect(resume).toMatchObject({ readiness: "available", blockers: [], targetRunId: "run_p" });
+  });
+
+  it("a changed definition revision or a missing generation blocks continuing history", async () => {
+    const changed = memoryStores();
+    await failedRun(changed, { revision: "an-older-revision" });
+    expect(
+      (await previewRecovery(changed, "run_1")).options.find((o) => o.kind === "checkpoint-attempt")!.blockers,
+    ).toContain("workflow-revision-mismatch");
+    const lost = memoryStores();
+    await failedRun(lost, { generation: false });
+    expect(
+      (await previewRecovery(lost, "run_1")).options.find((o) => o.kind === "checkpoint-attempt")!.blockers,
+    ).toContain("generation-missing");
+  });
+
+  it("--checkpoint names one step attempt; the option describes exactly that one", async () => {
+    const stores = memoryStores();
+    await failedRun(stores);
+    const a = await previewRecovery(stores, "run_1", { checkpoint: "s_spec" });
+    const option = a.options.find((o) => o.kind === "checkpoint-attempt")!;
+    expect(option.checkpointStepRunId).toBe("s_spec");
+    expect(option.runsAgain.map((s) => s.nodeId)).toEqual(["review", "build"]);
+    expect((await previewRecovery(stores, "run_1", { checkpoint: "review" })).options[2]!.checkpointStepRunId).toBe(
+      "s_review",
+    );
+    await expect(previewRecovery(stores, "run_1", { checkpoint: "nope" })).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+    });
   });
 
   it("an unknown run is RUN_NOT_FOUND", async () => {

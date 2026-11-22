@@ -580,7 +580,7 @@ export const commands: Record<string, Command> = {
   },
 
   recovery: {
-    help: "recovery <runId> [--checkpoint <nodeId>] [--json]  Preview how a run could be recovered (resume, new run, checkpoint attempt) without changing anything.",
+    help: "recovery <runId> [--checkpoint <stepRunId|nodeId>] [--json]  Preview how a run could be recovered (resume, new run, checkpoint attempt) without changing anything.",
     run: recoveryCommand,
   },
 

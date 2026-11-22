@@ -12,9 +12,11 @@ import {
   type RecoveryRunFacts,
 } from "@orca/core";
 import { lapsed, type Stores } from "@orca/store";
-import { INLINE_SEP, runLeaseResource } from "./orchestrator.js";
+import { INLINE_SEP, runLeaseResource, workflowRevision } from "./orchestrator.js";
 
 export interface RecoveryPreviewOptions {
+  /** The checkpoint to describe: a step run id, or a node id that names exactly one. */
+  checkpoint?: string | undefined;
   /** The principal asking; compared with the run's recorded creator for history-based recovery. */
   principalId?: string | undefined;
   /** The version a new run of this workflow would use now, when known. */
@@ -64,6 +66,7 @@ export async function previewRecovery(
     principalId: options.principalId,
     resumeAncestors,
     artifactPresent: (id) => present.has(id),
+    checkpoint: options.checkpoint,
     currentWorkflowVersion: options.currentWorkflowVersion,
     currentConfigGeneration: options.currentConfigGeneration,
   });
@@ -83,12 +86,26 @@ async function runFacts(
   const created = first.payload;
   const rootId = state.run.workflowId.split(INLINE_SEP)[0]!;
   const workflowStored = created.workflowStored === true;
-  const workflowReadable = workflowStored
-    ? await stores.workflows.get(rootId, state.run.workflowVersion).then(
-        (definition) => definition !== undefined,
-        () => false,
-      )
-    : true;
+  const definition = workflowStored
+    ? await stores.workflows.get(rootId, state.run.workflowVersion).catch(() => undefined)
+    : undefined;
+  const workflowReadable = !workflowStored || definition !== undefined;
+  // The interpreter refuses to continue a run whose stored definition no longer has the revision
+  // its provenance recorded, or whose recorded generation is gone (orchestrator loadContext).
+  const provenance = state.run.provenance;
+  const revision: RecoveryRunFacts["revision"] = !provenance
+    ? "not-recorded"
+    : !definition
+      ? "unknown"
+      : workflowRevision(definition) === provenance.workflow.revision
+        ? "matches"
+        : "mismatch";
+  const generation: RecoveryRunFacts["generation"] = !provenance
+    ? "not-recorded"
+    : await stores.execution.getGeneration(provenance.configGeneration).then(
+        (snapshot) => (snapshot === undefined ? "missing" : "present"),
+        () => "unreadable",
+      );
   const executionInputsAvailable = created.executionInputsStored
     ? await stores.execution.getInputs(runId).then(
         (inputs) => inputs !== undefined,
@@ -97,5 +114,8 @@ async function runFacts(
     : true;
   const lease = await stores.leases.get(runLeaseResource(runId));
   const leased = lease !== undefined && !lapsed(lease, now);
-  return { facts: { state, workflowStored, workflowReadable, executionInputsAvailable, leased }, created };
+  return {
+    facts: { state, workflowStored, workflowReadable, revision, generation, executionInputsAvailable, leased },
+    created,
+  };
 }

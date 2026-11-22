@@ -7,7 +7,7 @@ checkpoint attempt are later work; host reconnection and reassignment stay with 
 
 ```sh
 orca recovery <runId>                       # options, reasons, uncertain effects, checkpoints
-orca recovery <runId> --checkpoint <nodeId> # what a checkpoint after that step reuses and repeats
+orca recovery <runId> --checkpoint <stepRunId|nodeId> # one checkpoint: what it reuses and repeats
 orca recovery <runId> --json                # the RecoveryAssessment, for tools
 ```
 
@@ -27,6 +27,14 @@ that feeds it is `previewRecovery` in `packages/engine/src/recovery-preview.ts`.
 | **Resume** | Re-drives the existing run from its own log, exactly as `orca resume` does today. The topmost paused ancestor is the run actually re-driven, and it re-attaches down to this one; each run in that chain attempts its unfinished last step again. | The run has not ended, and for every run in that chain: no live lease held by another process, readable launch inputs, and a readable pinned definition. |
 | **New run** | An intentional fresh execution of the workflow. Reuses nothing. | Always. The preview lists what the old run did so it is visible what would run again. |
 | **Checkpoint attempt** | A separately identified new run that would start after a completed step of a failed run, reusing that step's and its predecessors' recorded results and artifacts, linked to the original. Previewed only. | The run failed, it is a top-level run, the asker is the principal that started it (when the run recorded one), its workflow version is pinned and readable, its launch inputs are readable, it is not leased, and every artifact the checkpoint reuses reads back. |
+
+Each option and checkpoint has a **readiness**: `available` (nothing blocks it and nothing is
+unconfirmed), `unverified` (nothing blocks it, but the read path cannot confirm something the
+interpreter checks when it drives the run) or `blocked`. Unverified is never shown as available.
+Today the one unverified case is a run whose provenance records a configuration generation: the
+read path checks the snapshot is on file (missing blocks), but only a writer can show it still
+restores with its agents and plugins. The read path does check the stored definition's revision
+against the one the run recorded; a mismatch blocks, as it does in the interpreter.
 
 Every refusal has a reason code (`RecoveryBlocker`) and one sentence saying what to do instead
 (`RECOVERY_BLOCKER_TEXT`). A missing artifact is a blocker on the checkpoints that need it, never an
@@ -48,16 +56,23 @@ Each step in a preview carries one effect:
   to review. A container's children are assessed as runs of their own.
 - **not-started**: it was scheduled or skipped and never ran.
 
-A gate, decision or step that asked a person is marked `asksAgain` whenever it would run again.
-Approvals, permission answers and saved rules are never carried to a step that runs again; a
-reused step's recorded decision is history, not new authority.
+A gate, or any step that recorded a request to a person, is marked `asksAgain` when it would run
+again. A decision made by an expression or an agent is not a prompt. Resume is the same run, so
+an answer it already recorded for the step it re-attempts still stands (`answerCarried`) and
+nobody is asked again; a new run or checkpoint attempt asks everyone anew, and a reused step's
+recorded decision there is history, not new authority.
 
 ## Checkpoints
 
 Every completed, non-terminal step is a checkpoint at its point in the history. A checkpoint
 reuses the latest attempt of each node up to and including that step, when that attempt
 completed. What ran after it last time is listed as a guide: routing is re-evaluated, so a new
-attempt need not take the same path. The option's own preview uses the latest eligible checkpoint.
+attempt need not take the same path.
+
+A checkpoint is one step attempt, named by its step run id. `--checkpoint` takes that id, or a
+node id that completed exactly once; after a loop a node id names several points in history and
+is refused with their ids. The checkpoint-attempt option's readiness, reasons and repeat list
+describe the named checkpoint, and without one the latest checkpoint that is not blocked.
 
 ## Drift
 

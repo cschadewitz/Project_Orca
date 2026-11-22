@@ -1,5 +1,5 @@
 /**
- * `orca recovery <runId> [--checkpoint <nodeId>] [--json]` - what recovering a run would do,
+ * `orca recovery <runId> [--checkpoint <stepRunId|nodeId>] [--json]` - what recovering a run would do,
  * before anything does it (#357, phase 1).
  *
  * Read-only: it takes no lease and writes nothing. It lists Resume, New run and Checkpoint
@@ -12,6 +12,7 @@ import {
   loadWorkflows,
   OrcaError,
   RECOVERY_BLOCKER_TEXT,
+  RECOVERY_UNVERIFIED_TEXT,
   type RecoveryAssessment,
   type RecoveryCheckpoint,
   type RecoveryOption,
@@ -26,18 +27,15 @@ import type { CommandContext } from "./index.js";
 export async function recoveryCommand(ctx: CommandContext): Promise<number> {
   const runId = ctx.positionals[0];
   if (!runId) throw new OrcaError("CONFIG_INVALID", "recovery needs a run id");
-  const assessment = await readRecovery(ctx.cwd, ctx.configPath, runId);
-  const only = typeof ctx.flags.checkpoint === "string" ? ctx.flags.checkpoint : undefined;
-  if (only !== undefined && !assessment.checkpoints.some((c) => c.nodeId === only))
-    throw new OrcaError("CONFIG_INVALID", `run ${runId} has no completed step '${only}' to recover from`);
+  const checkpoint = typeof ctx.flags.checkpoint === "string" ? ctx.flags.checkpoint : undefined;
+  // The checkpoint is chosen once, in the assessment, so the option's readiness and repeat list
+  // and the detail below describe the same step attempt.
+  const assessment = await readRecovery(ctx.cwd, ctx.configPath, runId, checkpoint);
   if (ctx.flags.json) {
-    const shown = only
-      ? { ...assessment, checkpoints: assessment.checkpoints.filter((c) => c.nodeId === only) }
-      : assessment;
-    ctx.out(JSON.stringify(shown, null, 2));
+    ctx.out(JSON.stringify(assessment, null, 2));
     return 0;
   }
-  for (const line of formatRecovery(assessment, only)) ctx.out(line);
+  for (const line of formatRecovery(assessment, checkpoint !== undefined)) ctx.out(line);
   return 0;
 }
 
@@ -52,6 +50,7 @@ export async function readRecovery(
   cwd: string,
   configPath: string | undefined,
   runId: string,
+  checkpoint?: string,
 ): Promise<RecoveryAssessment> {
   const { config, configDir } = await loadConfig(cwd, configPath);
   const storeDir = resolve(configDir, config.storeDir);
@@ -67,7 +66,7 @@ export async function readRecovery(
         .then((workflows) => (workflows.has(rootId) ? workflows.get(rootId).version : undefined))
         .catch(() => undefined)
     : undefined;
-  return previewRecovery(stores, runId, { currentWorkflowVersion });
+  return previewRecovery(stores, runId, { currentWorkflowVersion, checkpoint });
 }
 
 const KIND_LABEL: Record<RecoveryOption["kind"], string> = {
@@ -83,19 +82,33 @@ const EFFECT_LABEL: Record<RecoveryStep["effect"], string> = {
   restarts: "did not complete; it acts only inside ORCA and starts again",
 };
 
+const READINESS_LABEL: Record<RecoveryOption["readiness"], string> = {
+  available: "available",
+  unverified: "not blocked, but unverified",
+  blocked: "not available",
+};
+
 function step(s: RecoveryStep): string {
   const who = s.agent ? ` (agent ${s.agent})` : "";
-  const asks = s.asksAgain ? "; asks a person again" : "";
+  const asks = s.asksAgain
+    ? "; asks a person again"
+    : s.answerCarried
+      ? "; continues with the answer this run already recorded"
+      : "";
   const missing = s.missingArtifactIds.length ? `; missing artifacts: ${s.missingArtifactIds.join(", ")}` : "";
   return `${s.nodeId} attempt ${s.attempt}${who}: ${EFFECT_LABEL[s.effect]}${asks}${missing}`;
 }
 
-export function formatRecovery(a: RecoveryAssessment, only?: string): string[] {
+export function formatRecovery(a: RecoveryAssessment, selected = false): string[] {
   const out = [`Recovery for run ${a.runId} (${a.workflowId}@${a.workflowVersion}, ${a.status})`, ""];
   for (const option of a.options) {
     const target = option.targetRunId ? ` (re-drives ${option.targetRunId})` : "";
-    out.push(`${KIND_LABEL[option.kind]}: ${option.available ? "available" : "not available"}${target}`);
+    const at = option.checkpointStepRunId
+      ? ` (after ${a.checkpoints.find((c) => c.stepRunId === option.checkpointStepRunId)?.nodeId} ${option.checkpointStepRunId})`
+      : "";
+    out.push(`${KIND_LABEL[option.kind]}: ${READINESS_LABEL[option.readiness]}${target}${at}`);
     for (const blocker of option.blockers) out.push(`  - ${RECOVERY_BLOCKER_TEXT[blocker]}`);
+    for (const reason of option.unverified) out.push(`  ? ${RECOVERY_UNVERIFIED_TEXT[reason]}`);
     if (option.kind !== "new-run") for (const s of option.runsAgain) out.push(`  ${step(s)}`);
   }
   if (a.uncertain.length) {
@@ -113,16 +126,21 @@ export function formatRecovery(a: RecoveryAssessment, only?: string): string[] {
         `Configuration has changed since this run (${a.drift.recordedConfigGeneration} -> ${a.drift.currentConfigGeneration}); agents may resolve differently.`,
       );
   }
-  const checkpoints = only ? a.checkpoints.filter((c) => c.nodeId === only) : a.checkpoints;
+  const chosen = a.options.find((o) => o.kind === "checkpoint-attempt")?.checkpointStepRunId;
+  const checkpoints = selected ? a.checkpoints.filter((c) => c.stepRunId === chosen) : a.checkpoints;
   if (checkpoints.length) out.push("", "Checkpoints:");
-  for (const c of checkpoints) out.push(...checkpoint(c, Boolean(only)));
-  out.push("", "Nothing was changed. Approvals and permissions are never carried forward to steps that run again.");
+  for (const c of checkpoints) out.push(...checkpoint(c, selected));
+  out.push(
+    "",
+    "Nothing was changed. A new run or checkpoint attempt asks every person again; resume continues with the answers this run already recorded.",
+  );
   return out;
 }
 
 function checkpoint(c: RecoveryCheckpoint, detail: boolean): string[] {
-  const lines = [`  after ${c.nodeId}: ${c.eligible ? "eligible" : "not eligible"}`];
+  const lines = [`  after ${c.nodeId} attempt ${c.attempt} (${c.stepRunId}): ${READINESS_LABEL[c.readiness]}`];
   for (const blocker of c.blockers) lines.push(`    - ${RECOVERY_BLOCKER_TEXT[blocker]}`);
+  for (const reason of c.unverified) lines.push(`    ? ${RECOVERY_UNVERIFIED_TEXT[reason]}`);
   if (!detail) return lines;
   lines.push("    Reuses:");
   for (const s of c.reused) lines.push(`      ${step(s)}`);

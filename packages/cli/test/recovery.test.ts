@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, it } from "vitest";
-import { assessRecovery, RECOVERY_BLOCKER_TEXT, type StepRun } from "@orca/core";
+import { assessRecovery, RECOVERY_BLOCKER_TEXT, RECOVERY_UNVERIFIED_TEXT, type StepRun } from "@orca/core";
 import { commands, type CommandContext } from "../src/commands/index.js";
 import { formatRecovery } from "../src/commands/recovery.js";
 
@@ -65,7 +65,9 @@ edges:
   expect(await tree(dir)).toEqual(before);
   const text = preview.lines.join("\n");
   expect(text).toContain(`Recovery for run ${runId} (gated@`);
-  expect(text).toContain("Resume: available");
+  // A run with provenance has a recorded generation: on file, but restoring it is a writer's check.
+  expect(text).toContain("Resume: not blocked, but unverified");
+  expect(text).toContain(RECOVERY_UNVERIFIED_TEXT["generation-restore"]);
   expect(text).toContain(
     "gate attempt 1: did not complete; it acts only inside ORCA and starts again; asks a person again",
   );
@@ -120,16 +122,19 @@ it("lists options with reasons, the uncertain step, and one checkpoint in detail
     workflowStored: true,
     workflowReadable: true,
     executionInputsAvailable: true,
+    revision: "not-recorded",
+    generation: "not-recorded",
+    checkpoint: "spec",
     leased: false,
     artifactPresent: () => true,
     currentWorkflowVersion: "2",
   });
-  const text = formatRecovery(a, "spec").join("\n");
+  const text = formatRecovery(a, true).join("\n");
   expect(text).toContain("Resume: not available");
   expect(text).toContain(RECOVERY_BLOCKER_TEXT.terminal);
-  expect(text).toContain("Checkpoint attempt: available");
+  expect(text).toContain("Checkpoint attempt: available (after spec s1)");
   expect(text).toContain("Review before anything runs these again:\n  build attempt 1: uncertain");
-  expect(text).toContain("after spec: eligible\n    Reuses:\n      spec attempt 1: reused");
+  expect(text).toContain("after spec attempt 1 (s1): available\n    Reuses:\n      spec attempt 1: reused");
   expect(text).toContain("The workflow is now at 2; recovery from history uses 1.");
-  expect(text).toMatch(/^Nothing was changed\. Approvals and permissions are never carried forward/m);
+  expect(text).toMatch(/^Nothing was changed\. A new run or checkpoint attempt asks every person again/m);
 });

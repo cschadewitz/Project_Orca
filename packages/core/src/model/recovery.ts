@@ -4,24 +4,27 @@
  * Three ways back from interrupted, failed or uncertain work, never presented as each other:
  *
  * - **Resume** re-drives an existing run that has not ended, from its own log. An interrupted
- *   step is attempted again as a new attempt; the earlier attempt's effects are not undone.
+ *   step is attempted again as a new attempt; the earlier attempt's effects are not undone. It
+ *   is the same run, so an answer it already recorded still stands.
  * - **New run** is an intentional fresh execution of the workflow. It reuses nothing.
- * - **Checkpoint attempt** is a separately identified new run that would start after a
- *   completed step of a failed run, reusing that step's and its predecessors' recorded results
- *   and artifacts, with provenance links back to the original. Phase 1 only assesses and
- *   previews it; there is no execution control yet.
+ * - **Checkpoint attempt** is a separately identified new run that would start after one
+ *   completed step attempt of a failed run, reusing that point's recorded results and artifacts,
+ *   with provenance links back to the original. Phase 1 only assesses and previews it; there is
+ *   no execution control yet.
  *
- * Nothing here mutates history, carries an approval or a permission forward, or decides that
- * an effect happened. A step that started and did not complete is reported as an *uncertain
- * effect* the operator has to review before anything runs it again.
+ * Nothing here mutates history or decides that an effect happened. A step that started, did not
+ * complete and can act outside ORCA is reported as an *uncertain effect* the operator has to
+ * review before anything runs it again. What the read path cannot confirm (a recorded
+ * configuration generation actually restoring) is reported as *unverified*, never as available.
  */
 import { z } from "zod";
+import { OrcaError } from "../errors.js";
 import type { RunState, StepRun, StepStatus } from "./run.js";
 
 export const RecoveryKindSchema = z.enum(["resume", "new-run", "checkpoint-attempt"]);
 export type RecoveryKind = z.infer<typeof RecoveryKindSchema>;
 
-/** Why an option or a checkpoint is not available. Each has one sentence an operator can act on. */
+/** Why an option or a checkpoint cannot be used. Each has one sentence an operator can act on. */
 export const RecoveryBlockerSchema = z.enum([
   "terminal",
   "not-terminal",
@@ -31,6 +34,8 @@ export const RecoveryBlockerSchema = z.enum([
   "cross-principal",
   "workflow-unpinned",
   "workflow-missing",
+  "workflow-revision-mismatch",
+  "generation-missing",
   "execution-inputs-missing",
   "missing-artifact",
   "no-checkpoint",
@@ -49,6 +54,10 @@ export const RECOVERY_BLOCKER_TEXT: Record<RecoveryBlocker, string> = {
   "workflow-unpinned":
     "The run predates pinned workflow versions, so the definition it ran is not stored. Start a new run instead.",
   "workflow-missing": "The workflow version this run used is no longer readable. Start a new run instead.",
+  "workflow-revision-mismatch":
+    "The stored workflow definition no longer matches the revision this run recorded, so its history cannot be continued. Start a new run instead.",
+  "generation-missing":
+    "The configuration generation this run recorded is not on file, so its history cannot be continued. Start a new run instead.",
   "execution-inputs-missing":
     "The run's recorded launch inputs are unavailable, so its history cannot be continued. Start a new run instead.",
   "missing-artifact":
@@ -56,9 +65,24 @@ export const RECOVERY_BLOCKER_TEXT: Record<RecoveryBlocker, string> = {
   "no-checkpoint": "No completed step of this run can be reused. Start a new run instead.",
 };
 
+/** What the read path could not confirm. An option with any of these is unverified, not available. */
+export const RecoveryUnverifiedSchema = z.enum(["generation-restore", "generation-unreadable"]);
+export type RecoveryUnverified = z.infer<typeof RecoveryUnverifiedSchema>;
+
+export const RECOVERY_UNVERIFIED_TEXT: Record<RecoveryUnverified, string> = {
+  "generation-restore":
+    "The configuration generation this run recorded is on file, but whether it still restores (its agents and plugins) is checked only when the run is driven.",
+  "generation-unreadable":
+    "The configuration generation this run recorded could not be read here; whether it is usable is checked only when the run is driven.",
+};
+
+/** `available`: nothing blocks it and nothing is unconfirmed. Never a promise that it will succeed. */
+export const RecoveryReadinessSchema = z.enum(["available", "unverified", "blocked"]);
+export type RecoveryReadiness = z.infer<typeof RecoveryReadinessSchema>;
+
 /** What an operator should know about a step before recovery runs or reuses it. */
 export const RecoveryEffectSchema = z.enum([
-  /** Started and did not complete: it may have changed the workspace or external systems. */
+  /** Started, did not complete and can act outside ORCA: it may have changed the workspace or external systems. */
   "uncertain",
   /** Completed; its changes stay, and running it again repeats its work on top of them. */
   "repeats",
@@ -85,20 +109,27 @@ export const RecoveryStepSchema = z.object({
   effect: RecoveryEffectSchema,
   /** The agent the run's provenance recorded for this node, when it is an agent step. */
   agent: z.string().optional(),
-  /** A person is asked again: decisions and permissions are never carried forward. */
+  /**
+   * A person will be asked. True for a gate, or a step that recorded a request to a person,
+   * unless resume continues with an answer this run already recorded for it.
+   */
   asksAgain: z.boolean(),
+  /** Resume only: the answer this run recorded for the step still stands, so nobody is asked again. */
+  answerCarried: z.boolean(),
   artifactIds: z.array(z.string()),
   missingArtifactIds: z.array(z.string()),
 });
 export type RecoveryStep = z.infer<typeof RecoveryStepSchema>;
 
 export const RecoveryCheckpointSchema = z.object({
-  /** The completed step a checkpoint attempt would start after. */
+  /** The exact completed step attempt a checkpoint attempt would start after. */
   stepRunId: z.string(),
   nodeId: z.string(),
-  eligible: z.boolean(),
+  attempt: z.number().int().positive(),
+  readiness: RecoveryReadinessSchema,
   blockers: z.array(RecoveryBlockerSchema),
-  /** This step and every completed step scheduled before it, latest attempt per node. */
+  unverified: z.array(RecoveryUnverifiedSchema),
+  /** The latest attempt of each node up to and including this step, when that attempt completed. */
   reused: z.array(RecoveryStepSchema),
   /** What ran after this point last time. Routing is re-evaluated, so this is a guide, not a promise. */
   ranAfter: z.array(RecoveryStepSchema),
@@ -107,11 +138,14 @@ export type RecoveryCheckpoint = z.infer<typeof RecoveryCheckpointSchema>;
 
 export const RecoveryOptionSchema = z.object({
   kind: RecoveryKindSchema,
-  available: z.boolean(),
+  readiness: RecoveryReadinessSchema,
   blockers: z.array(RecoveryBlockerSchema),
+  unverified: z.array(RecoveryUnverifiedSchema),
   /** Resume only: the run that would actually be re-driven (the topmost paused ancestor). */
   targetRunId: z.string().optional(),
-  /** Steps this option would run again, with their effect review. */
+  /** Checkpoint attempt only: the step attempt this option describes. */
+  checkpointStepRunId: z.string().optional(),
+  /** Steps this option would run, with their effect review. */
   runsAgain: z.array(RecoveryStepSchema),
 });
 export type RecoveryOption = z.infer<typeof RecoveryOptionSchema>;
@@ -136,43 +170,48 @@ export const RecoveryAssessmentSchema = z.object({
 });
 export type RecoveryAssessment = z.infer<typeof RecoveryAssessmentSchema>;
 
-/** What resume needs to know about one run it would drive. */
+/** What continuing one run's history needs, as the read path found it. */
 export interface RecoveryRunFacts {
   state: RunState;
-  workflowStored: boolean;
-  workflowReadable: boolean;
-  executionInputsAvailable: boolean;
-  leased: boolean;
-}
-
-export interface RecoveryFacts {
-  state: RunState;
-  /** `run.created`'s recorded principal, when the run recorded one. */
-  creatorPrincipalId?: string | undefined;
-  /** The principal asking. Absent for a local operator with no principal model. */
-  principalId?: string | undefined;
   /** `run.created.workflowStored`. */
   workflowStored: boolean;
   /** The stored definition for (workflowId, workflowVersion) could be read. */
   workflowReadable: boolean;
+  /**
+   * The stored definition's revision against `provenance.workflow.revision`. `not-recorded` for a
+   * run with no provenance (the interpreter does not check one); `unknown` when unreadable.
+   */
+  revision: "matches" | "mismatch" | "not-recorded" | "unknown";
+  /** The recorded configuration generation's snapshot. `not-recorded` for a run with no provenance. */
+  generation: "present" | "missing" | "unreadable" | "not-recorded";
   /** Recorded launch inputs are present (or the run never stored any). */
   executionInputsAvailable: boolean;
   /** A live lease on the run is held by someone (not lapsed). */
   leased: boolean;
+}
+
+export interface RecoveryFacts extends RecoveryRunFacts {
+  /** `run.created`'s recorded principal, when the run recorded one. */
+  creatorPrincipalId?: string | undefined;
+  /** The principal asking. Absent for a local operator with no principal model. */
+  principalId?: string | undefined;
   /**
    * The paused ancestors resume would re-drive with this run, nearest first; the last is the run
-   * actually re-driven. Empty for a top-level run or one whose parent is not paused. Each is
-   * checked as the run itself is, because resume drives all of them.
+   * actually re-driven. Each is checked as the run itself is, because resume drives all of them.
    */
   resumeAncestors?: readonly RecoveryRunFacts[];
   /** False for an artifact id the store cannot read. */
   artifactPresent: (artifactId: string) => boolean;
+  /**
+   * The checkpoint the checkpoint-attempt option describes: a step run id, or a node id when
+   * exactly one checkpoint is at that node. Absent: the latest checkpoint that is not blocked.
+   */
+  checkpoint?: string | undefined;
   currentWorkflowVersion?: string | undefined;
   currentConfigGeneration?: string | undefined;
 }
 
 const TERMINAL: ReadonlySet<string> = new Set(["completed", "failed", "cancelled"]);
-const HUMAN_NODES: ReadonlySet<string> = new Set(["gate", "decision"]);
 const SETTLED_STEP: ReadonlySet<StepStatus> = new Set(["completed", "skipped"]);
 /**
  * Node types whose own work stays inside ORCA. A container's effects belong to its child runs,
@@ -192,16 +231,44 @@ const INTERNAL_NODES: ReadonlySet<string> = new Set([
 const mayActOutside = (step: StepRun): boolean =>
   !INTERNAL_NODES.has(step.nodeType) || step.agentSessionId !== undefined;
 
+/** What continuing this run's recorded history requires and cannot be confirmed here. */
+function pinChecks(member: RecoveryRunFacts): { blockers: RecoveryBlocker[]; unverified: RecoveryUnverified[] } {
+  const blockers: RecoveryBlocker[] = [];
+  const unverified: RecoveryUnverified[] = [];
+  if (member.leased) blockers.push("leased");
+  if (!member.executionInputsAvailable) blockers.push("execution-inputs-missing");
+  if (member.workflowStored && !member.workflowReadable) blockers.push("workflow-missing");
+  if (member.revision === "mismatch") blockers.push("workflow-revision-mismatch");
+  if (member.generation === "missing") blockers.push("generation-missing");
+  if (member.generation === "unreadable") unverified.push("generation-unreadable");
+  if (member.generation === "present") unverified.push("generation-restore");
+  return { blockers, unverified };
+}
+
+function readinessOf(blockers: readonly unknown[], unverified: readonly unknown[]): RecoveryReadiness {
+  return blockers.length ? "blocked" : unverified.length ? "unverified" : "available";
+}
+
 export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
   const { state } = facts;
   const run = state.run;
   const steps = state.stepOrder.map((id) => state.steps[id]).filter((s): s is StepRun => Boolean(s));
-  const viewIn = (owner: RunState) => {
+
+  /**
+   * `continue`: resume, the same run, so an answer it recorded for a step still stands.
+   * `fresh`: a new run or checkpoint attempt, where every request to a person is asked anew.
+   */
+  const viewIn = (owner: RunState, mode: "continue" | "fresh") => {
     const agentFor = new Map((owner.run.provenance?.selections ?? []).map((s) => [s.nodeId, s.agent.value]));
-    const humanSteps = new Set(Object.values(owner.humanInputs).map((input) => input.stepRunId));
+    const inputs = Object.values(owner.humanInputs);
     return (step: StepRun, effect: RecoveryEffect): RecoveryStep => {
       const artifactIds = step.result?.artifactIds ?? [];
       const agent = agentFor.get(step.nodeId);
+      const asked = inputs.filter((input) => input.stepRunId === step.id);
+      // A decision is a prompt only when it asked someone; an expression or agent decision is not.
+      const human = step.nodeType === "gate" || asked.length > 0;
+      const answered = asked.length > 0 && asked.every((input) => input.answer !== undefined);
+      const carried = mode === "continue" && human && answered;
       return {
         runId: owner.run.id,
         stepRunId: step.id,
@@ -211,59 +278,51 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
         status: step.status,
         effect,
         ...(agent !== undefined && step.nodeType === "agent" ? { agent } : {}),
-        asksAgain: effect !== "reused" && (HUMAN_NODES.has(step.nodeType) || humanSteps.has(step.id)),
+        asksAgain: effect !== "reused" && human && !carried,
+        answerCarried: carried,
         artifactIds,
         missingArtifactIds: artifactIds.filter((id) => !facts.artifactPresent(id)),
       };
     };
   };
-  const view = viewIn(state);
+  const fresh = viewIn(state, "fresh");
   // A step that began, never reported success and can act outside ORCA may have acted. A skipped
   // or merely scheduled step never ran; a completed one is known done.
   const isUncertain = (step: StepRun): boolean =>
     step.startedAt !== undefined && !SETTLED_STEP.has(step.status) && mayActOutside(step);
-  const uncertain = steps.filter(isUncertain).map((step) => view(step, "uncertain"));
-
+  const effectOf = (step: StepRun): RecoveryEffect => {
+    if (step.startedAt === undefined || step.status === "skipped") return "not-started";
+    if (isUncertain(step)) return "uncertain";
+    return step.status === "completed" ? "repeats" : "restarts";
+  };
+  const uncertain = steps.filter(isUncertain).map((step) => fresh(step, "uncertain"));
   const terminal = TERMINAL.has(run.status);
-  const child = Boolean(run.parentRunId);
-  const shared: RecoveryBlocker[] = [];
-  if (facts.leased) shared.push("leased");
-  if (!facts.executionInputsAvailable) shared.push("execution-inputs-missing");
 
   // Resume: what the interpreter does today (orchestrator resume). It re-drives the topmost
   // paused ancestor, which re-attaches down to this run, and each run it drives re-attempts its
   // last step when that did not complete. Every run in that chain is checked, not only this one.
-  const ancestors = facts.resumeAncestors ?? [];
-  const chain: RecoveryRunFacts[] = [
-    {
-      state,
-      workflowStored: facts.workflowStored,
-      workflowReadable: facts.workflowReadable,
-      executionInputsAvailable: facts.executionInputsAvailable,
-      leased: facts.leased,
-    },
-    ...ancestors,
-  ];
+  const chain: RecoveryRunFacts[] = [facts, ...(facts.resumeAncestors ?? [])];
   const resumeTargetRunId = chain.at(-1)!.state.run.id;
   const resumeBlockers: RecoveryBlocker[] = terminal ? ["terminal"] : [];
+  const resumeUnverified: RecoveryUnverified[] = [];
   const resumeRunsAgain: RecoveryStep[] = [];
   for (const member of terminal ? [] : [...chain].reverse()) {
-    if (member.leased) resumeBlockers.push("leased");
-    if (!member.executionInputsAvailable) resumeBlockers.push("execution-inputs-missing");
-    if (member.workflowStored && !member.workflowReadable) resumeBlockers.push("workflow-missing");
+    const checks = pinChecks(member);
+    resumeBlockers.push(...checks.blockers);
+    resumeUnverified.push(...checks.unverified);
     const order = member.state.stepOrder;
     const last = member.state.steps[order[order.length - 1] ?? ""];
-    if (last && last.status !== "completed") resumeRunsAgain.push(viewIn(member.state)(last, effectOf(last)));
+    if (last && last.status !== "completed")
+      resumeRunsAgain.push(viewIn(member.state, "continue")(last, effectOf(last)));
   }
 
-  // Checkpoints: every completed step, in scheduling order. A loop back to an earlier node makes
-  // several, one for each point in the history.
-  const latest = new Map<string, StepRun>();
-  for (const step of steps) latest.set(step.nodeId, step);
+  // Checkpoints: every completed, non-terminal step attempt, in scheduling order. A loop back to
+  // an earlier node makes several, one for each point in the history.
+  const own = pinChecks(facts);
   const checkpointBlockers: RecoveryBlocker[] = [];
   if (!terminal) checkpointBlockers.push("not-terminal");
   else if (run.status !== "failed") checkpointBlockers.push("not-failed");
-  if (child) checkpointBlockers.push("child-run");
+  if (run.parentRunId) checkpointBlockers.push("child-run");
   if (
     facts.creatorPrincipalId !== undefined &&
     facts.principalId !== undefined &&
@@ -271,54 +330,59 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
   )
     checkpointBlockers.push("cross-principal");
   if (!facts.workflowStored) checkpointBlockers.push("workflow-unpinned");
-  else if (!facts.workflowReadable) checkpointBlockers.push("workflow-missing");
-  checkpointBlockers.push(...shared);
+  checkpointBlockers.push(...own.blockers);
 
   const checkpoints: RecoveryCheckpoint[] = [];
   steps.forEach((step, index) => {
     if (step.status !== "completed") return;
     if (step.result?.outcome) return; // A terminal step ended the run; nothing follows it.
-    // What the history held at that point: the latest attempt of each node up to and including
-    // this step, when that attempt completed. Later attempts are not part of the checkpoint.
     const upTo = new Map<string, StepRun>();
     for (const s of steps.slice(0, index + 1)) upTo.set(s.nodeId, s);
     const reused = [...upTo.values()]
       .filter((s) => s.status === "completed")
       .sort((x, y) => steps.indexOf(x) - steps.indexOf(y))
-      .map((s) => view(s, "reused"));
-    const after = steps.slice(index + 1);
+      .map((s) => fresh(s, "reused"));
     const blockers = [...checkpointBlockers];
     if (reused.some((s) => s.missingArtifactIds.length)) blockers.push("missing-artifact");
     checkpoints.push({
       stepRunId: step.id,
       nodeId: step.nodeId,
-      eligible: blockers.length === 0,
+      attempt: step.attempt,
+      readiness: readinessOf(blockers, own.unverified),
       blockers: unique(blockers),
+      unverified: unique(own.unverified),
       reused,
-      ranAfter: after.map((s) => view(s, effectOf(s))),
+      ranAfter: steps.slice(index + 1).map((s) => fresh(s, effectOf(s))),
     });
   });
-  const bestCheckpoint = [...checkpoints].reverse().find((c) => c.eligible);
-  const checkpointOption: RecoveryOption = {
-    kind: "checkpoint-attempt",
-    available: Boolean(bestCheckpoint),
-    blockers: bestCheckpoint
-      ? []
-      : unique(
-          checkpoints.length
-            ? checkpoints.flatMap((c) => c.blockers)
-            : [...checkpointBlockers, "no-checkpoint" as const],
-        ),
-    runsAgain: bestCheckpoint?.ranAfter ?? [],
-  };
+  const selected = selectCheckpoint(checkpoints, facts.checkpoint);
+  const checkpointOption: RecoveryOption = selected
+    ? {
+        kind: "checkpoint-attempt",
+        readiness: selected.readiness,
+        blockers: selected.blockers,
+        unverified: selected.unverified,
+        checkpointStepRunId: selected.stepRunId,
+        runsAgain: selected.ranAfter,
+      }
+    : {
+        kind: "checkpoint-attempt",
+        readiness: "blocked",
+        blockers: unique([...checkpointBlockers, "no-checkpoint" as const]),
+        unverified: [],
+        runsAgain: [],
+      };
 
-  // A new run reuses nothing: every step of the workflow may run again, including the ones
-  // whose effects are uncertain here. It is listed so that is visible, not to forbid it.
+  // A new run reuses nothing and runs on today's configuration: every step may run again,
+  // including the ones whose effects are uncertain here. Listed so that is visible.
+  const latest = new Map<string, StepRun>();
+  for (const step of steps) latest.set(step.nodeId, step);
   const newRun: RecoveryOption = {
     kind: "new-run",
-    available: true,
+    readiness: "available",
     blockers: [],
-    runsAgain: [...latest.values()].map((s) => view(s, effectOf(s))),
+    unverified: [],
+    runsAgain: [...latest.values()].map((s) => fresh(s, effectOf(s))),
   };
 
   const recordedConfig = run.provenance?.configGeneration;
@@ -337,8 +401,9 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
     options: [
       {
         kind: "resume",
-        available: resumeBlockers.length === 0,
+        readiness: readinessOf(resumeBlockers, resumeUnverified),
         blockers: unique(resumeBlockers),
+        unverified: unique(resumeUnverified),
         ...(resumeTargetRunId !== run.id ? { targetRunId: resumeTargetRunId } : {}),
         runsAgain: resumeRunsAgain,
       },
@@ -358,12 +423,32 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
         }
       : {}),
   };
+}
 
-  function effectOf(step: StepRun): RecoveryEffect {
-    if (step.startedAt === undefined || step.status === "skipped") return "not-started";
-    if (isUncertain(step)) return "uncertain";
-    return step.status === "completed" ? "repeats" : "restarts";
-  }
+/**
+ * The checkpoint a caller named, by step run id or by a node id that names exactly one; without
+ * a name, the latest one that is not blocked (else the latest). A node id that names several is
+ * refused with their step run ids, because after a loop a node id is not a point in history.
+ */
+function selectCheckpoint(
+  checkpoints: readonly RecoveryCheckpoint[],
+  name: string | undefined,
+): RecoveryCheckpoint | undefined {
+  if (name === undefined)
+    return [...checkpoints].reverse().find((c) => c.readiness !== "blocked") ?? checkpoints.at(-1);
+  const exact = checkpoints.find((c) => c.stepRunId === name);
+  if (exact) return exact;
+  const atNode = checkpoints.filter((c) => c.nodeId === name);
+  if (atNode.length === 1) return atNode[0];
+  if (atNode.length > 1)
+    throw new OrcaError(
+      "CONFIG_INVALID",
+      `'${name}' completed more than once in this run; name one step run instead: ${atNode
+        .map((c) => `${c.stepRunId} (attempt ${c.attempt})`)
+        .join(", ")}`,
+      { checkpoints: atNode.map((c) => c.stepRunId) },
+    );
+  throw new OrcaError("CONFIG_INVALID", `this run has no completed step '${name}' to recover from`);
 }
 
 function unique<T>(items: readonly T[]): T[] {
