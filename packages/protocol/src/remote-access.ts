@@ -11,11 +11,11 @@
  * - **Connection profiles**: the nonsecret description of a remote daemon as typed fields
  *   only (`user@host`, ssh port, key file, one jump host, the daemon's port on the remote
  *   loopback). No free-form ssh options, and no ssh config file is read.
- * - **`SshTunnel`**: `ssh -F none -N -L 127.0.0.1:<local>:127.0.0.1:<remote>` per profile in
- *   use (two chained processes behind a jump host), with each server's host key pinned in
- *   an app-owned known-hosts file on first connect and that pin as the only trust source,
- *   distinct refusals for the ways it fails, restarts with backoff on the same local port,
- *   and `transportVerified()` to gate credentials on the live, verified tunnel.
+ * - **`SshTunnel`**: one `ssh -F none -W 127.0.0.1:<daemon port>` per connection, so every
+ *   connection that carries a credential is its own authenticated ssh channel (behind a
+ *   jump host, through a persistent app-owned ssh to it), with each server's host key pinned
+ *   in an app-owned known-hosts file on first connect and that pin as the only trust source,
+ *   and distinct refusals for the ways it fails.
  * - **`CredentialSlots`**: one encrypted credential per profile. The cipher is the caller's
  *   (Electron `safeStorage` in the app); there is no plaintext fallback.
  */
@@ -33,7 +33,8 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { createServer } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
+import { Duplex, type Readable, type Writable } from "node:stream";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
@@ -255,8 +256,16 @@ export interface HopSpec {
   knownHostsFile: string;
   /** The name the pin is recorded under, independent of the address ssh dials. */
   hostKeyAlias: string;
-  /** The one `-L` forward, `127.0.0.1:<local>:<host>:<port>`. */
-  forward: string;
+  /** A persistent `-L` forward, `127.0.0.1:<local>:<host>:<port>` (the jump host). */
+  forward?: string | undefined;
+  /** Or one connection's `-W <host>:<port>`, carried on stdin/stdout (the daemon). */
+  stdio?: string | undefined;
+}
+
+/** A profile's ssh processes: the optional persistent jump, and the per-connection daemon hop. */
+export interface TunnelHops {
+  jump?: HopSpec | undefined;
+  daemon: HopSpec;
 }
 
 /**
@@ -297,7 +306,7 @@ export function hopArgs(hop: HopSpec): string[] {
   return [
     "-F",
     "none",
-    "-N",
+    ...(hop.stdio ? [] : ["-N"]),
     "-T",
     // `-v` is what tells ORCA the forward is bound ("Entering interactive session") and which
     // host key the server presented. Its output is parsed, never shown or logged.
@@ -306,8 +315,7 @@ export function hopArgs(hop: HopSpec): string[] {
     // `-i` goes through ssh's `%` token expansion; the path is absolute, so no `~`.
     ...(hop.identityFile ? ["-i", hop.identityFile.replace(/%/g, "%%")] : []),
     ...(hop.port ? ["-p", String(hop.port)] : []),
-    "-L",
-    hop.forward,
+    ...(hop.stdio ? ["-W", hop.stdio] : ["-L", hop.forward ?? ""]),
     "--",
     hop.target,
   ];
@@ -322,28 +330,23 @@ function userOf(destination: string): string | undefined {
 }
 
 /**
- * The hops for a profile, in start order. Without a jump host: one ssh to the server. With
- * one: an ssh to the jump host forwarding a private loopback port to the server's sshd, then
- * the ssh to the server through that port, each with its own pinned key. Exported for tests.
+ * The ssh processes for a profile. The daemon hop is one `ssh -W 127.0.0.1:<daemon port>`
+ * per connection. Behind a jump host, a persistent ssh to the jump host forwards a private
+ * loopback port to the server's sshd, and each daemon hop reaches the server through that
+ * port; each server has its own pinned key. Exported for tests.
  */
-export function tunnelHops(
-  profile: ConnectionProfile,
-  localPort: number,
-  knownHostsFile: string,
-  jumpPort?: number,
-): HopSpec[] {
-  const daemon = `127.0.0.1:${localPort}:127.0.0.1:${profile.remotePort}`;
+export function tunnelHops(profile: ConnectionProfile, knownHostsFile: string, jumpPort?: number): TunnelHops {
   const server = {
     identityFile: profile.identityFile,
     knownHostsFile,
     hostKeyAlias: `orca-${profile.id}`,
-    forward: daemon,
+    stdio: `127.0.0.1:${profile.remotePort}`,
   };
-  if (!profile.jump) return [{ ...server, target: profile.destination, port: profile.sshPort }];
+  if (!profile.jump) return { daemon: { ...server, target: profile.destination, port: profile.sshPort } };
   if (!jumpPort) throw new Error("A jump host needs a private loopback port");
   const user = userOf(profile.destination);
-  return [
-    {
+  return {
+    jump: {
       target: profile.jump.destination,
       port: profile.jump.sshPort,
       identityFile: profile.jump.identityFile,
@@ -351,8 +354,8 @@ export function tunnelHops(
       hostKeyAlias: `orca-${profile.id}-jump`,
       forward: `127.0.0.1:${jumpPort}:${hostOf(profile.destination)}:${profile.sshPort ?? 22}`,
     },
-    { ...server, target: user ? `${user}@127.0.0.1` : "127.0.0.1", port: jumpPort },
-  ];
+    daemon: { ...server, target: user ? `${user}@127.0.0.1` : "127.0.0.1", port: jumpPort },
+  };
 }
 
 export async function ephemeralLoopbackPort(): Promise<number> {
@@ -368,11 +371,20 @@ export async function ephemeralLoopbackPort(): Promise<number> {
   });
 }
 
-/** One start of the tunnel: its ssh processes, and whether all of them are bound and alive. */
+/** The jump host's ssh, one start of it: whether it is bound and still alive. */
 interface Generation {
   children: ChildProcess[];
   ready: boolean;
   lost: boolean;
+}
+
+/** One `ssh -W` stream to the daemon: one TCP connection's worth of authenticated channel. */
+interface Stream {
+  child: ChildProcess;
+  socket?: Duplex;
+  authenticated: boolean;
+  /** Settles once ssh has authenticated the server against its pin (or failed to). */
+  ready: Promise<void>;
 }
 
 function alive(child: ChildProcess): boolean {
@@ -380,19 +392,49 @@ function alive(child: ChildProcess): boolean {
 }
 
 /**
- * One app-owned ssh tunnel. `open()` establishes it once (no retries: the caller is
- * probing and the person is waiting on the answer). After that, an unexpected exit restarts
- * ssh with backoff on the same local port until `close()`, except for failures only the
- * person can fix (changed host key, failed auth, no ssh), which stop it in `failed`.
+ * The socket-like surface `http.Agent` and `ws` touch on a connection they did not dial.
+ * A stdio stream has no TCP options; these are no-ops.
+ */
+function asSocket(stream: Duplex): Duplex {
+  const socket = stream as Duplex & Record<string, unknown>;
+  const self = () => socket;
+  for (const method of ["setKeepAlive", "setNoDelay", "setTimeout", "ref", "unref"])
+    if (typeof socket[method] !== "function") socket[method] = self;
+  return socket;
+}
+
+/**
+ * One app-owned ssh connection to a profile's daemon.
  *
- * **Credentials follow `transportVerified()`, not the URL.** The local port is only a
- * number: while ssh is down, any local process could listen on it. A caller hands a
- * credential to a request only while every ssh process of the current start has proved its
- * forward bound (after authenticating the server against its pin) and is still running, so
- * the port is that ssh's. Loss turns it false synchronously, before any restart.
+ * **Credential-bearing traffic never crosses an unauthenticated hop.** Each connection to the
+ * daemon is its own `ssh -W 127.0.0.1:<daemon port>` process: ssh authenticates the server
+ * against its pin and the person's key, then carries that connection's bytes over its own
+ * stdio. `connect()` returns that stream, so a client that sends through it is bound to the
+ * exact authenticated channel, and the bytes go nowhere if ssh fails first. When the stream's
+ * ssh ends, so does the connection; nothing is redialled under it. No local port forward
+ * exists that another local process could take over while ssh is down.
+ *
+ * `url` is a loopback listener the tunnel holds for its whole life, so the address is unique
+ * and anything that does dial it still goes over a fresh authenticated stream. The app's own
+ * client never dials it: it uses `connect()`.
+ *
+ * Behind a jump host, a persistent app-owned ssh forwards a private loopback port to the
+ * server's sshd (with its own pin), restarted with backoff while the tunnel lives. Each
+ * daemon stream connects through that port and authenticates the *server* end to end, so a
+ * process that took the private port could not impersonate it; a jump loss still ends every
+ * stream at once.
+ *
+ * `open()` establishes it once (no retries: the caller is probing and the person is waiting
+ * on the answer). A stream that cannot authenticate afterwards turns the state to
+ * `reconnecting` (or `failed` for what only the person can fix: changed or missing host
+ * key, failed auth, no ssh), and the next successful stream turns it back to `open`.
  */
 export class SshTunnel {
-  private generation: Generation | undefined;
+  private jump: Generation | undefined;
+  private hops: TunnelHops | undefined;
+  private listener: Server | undefined;
+  private readonly accepted = new Set<Socket>();
+  private readonly streams = new Set<Stream>();
   private port: number | undefined;
   private closed = false;
   private restartTimer: NodeJS.Timeout | undefined;
@@ -417,20 +459,12 @@ export class SshTunnel {
     return this.fingerprint;
   }
   /**
-   * True only while the current start's ssh processes have all bound their forwards and are
-   * still running: the local port is then provably ssh's, behind a pinned, authenticated
-   * server. False before the first open, while reconnecting, after failure and after close.
+   * True while the tunnel is open and, behind a jump host, the jump's ssh is bound and
+   * running. Advisory: the binding that matters is that credential-bearing bytes only ever
+   * travel through `connect()`.
    */
   transportVerified(): boolean {
-    const generation = this.generation;
-    return (
-      !this.closed &&
-      this.stateNow.phase === "open" &&
-      generation !== undefined &&
-      generation.ready &&
-      !generation.lost &&
-      generation.children.every(alive)
-    );
+    return !this.closed && this.stateNow.phase === "open" && this.jumpUp();
   }
   /**
    * The remote end refused a forwarded connection within `withinMs`: ssh works, but nothing
@@ -442,31 +476,77 @@ export class SshTunnel {
 
   async open(): Promise<string> {
     if (this.closed) throw new TunnelRefusal("closed");
-    if (this.generation) throw new Error("Tunnel already open");
-    this.port = await (this.options.pickPort ?? ephemeralLoopbackPort)();
+    if (this.listener) throw new Error("Tunnel already open");
     this.setState({ phase: "starting" });
     try {
-      await this.launch();
+      const { profile, knownHostsFile } = this.options;
+      mkdirSync(dirname(knownHostsFile), { recursive: true });
+      this.port = await this.listen();
+      this.hops = tunnelHops(profile, knownHostsFile, profile.jump ? await ephemeralLoopbackPort() : undefined);
+      if (this.hops.jump) await this.launchJump();
+      await this.probe();
+      this.attempt = 0;
+      this.setState({ phase: "open", localPort: this.port });
     } catch (error) {
-      this.closed = true;
-      this.setState({ phase: "failed", refusal: error instanceof TunnelRefusal ? error.code : "ssh-failed" });
-      throw error;
+      const refusal = error instanceof TunnelRefusal ? error.code : "ssh-failed";
+      await this.shutdown();
+      this.setState({ phase: "failed", refusal });
+      throw error instanceof TunnelRefusal ? error : new TunnelRefusal(refusal);
     }
     return this.url!;
   }
 
+  /**
+   * A new connection to the daemon over its own authenticated ssh stream. Bytes written
+   * before ssh has authenticated wait in ssh, and are discarded if it fails. Throws a
+   * `TunnelRefusal` when the tunnel is closed, failed, or its jump host is down.
+   */
+  connect(): Duplex {
+    if (this.closed || !this.hops) throw new TunnelRefusal("closed");
+    if (this.stateNow.phase === "failed") throw new TunnelRefusal(this.stateNow.refusal);
+    if (!this.jumpUp()) throw new TunnelRefusal("unreachable");
+    const stream = this.spawnStream();
+    const { stdin, stdout } = stream.child;
+    if (!stdin || !stdout) {
+      stream.child.kill();
+      throw new TunnelRefusal("ssh-failed");
+    }
+    const socket = asSocket(stdioDuplex(stdin, stdout));
+    // ssh never authenticated: there is no connection, and nothing was carried.
+    stream.ready.catch((refusal: unknown) => socket.destroy(refusal as Error));
+    socket.once("close", () => {
+      if (alive(stream.child)) stream.child.kill();
+    });
+    stream.socket = socket;
+    return socket;
+  }
+
   async close(): Promise<void> {
-    if (this.closed && !this.generation) return;
+    if (this.closed && !this.listener && !this.jump && this.streams.size === 0) return;
+    this.closed = true;
+    await this.shutdown();
+    this.setState({ phase: "closed" });
+  }
+
+  private async shutdown(): Promise<void> {
     this.closed = true;
     if (this.restartTimer) clearTimeout(this.restartTimer);
     this.restartTimer = undefined;
-    const generation = this.generation;
-    this.generation = undefined;
-    if (generation) {
-      generation.lost = true;
-      await Promise.all(generation.children.map(stop));
-    }
-    this.setState({ phase: "closed" });
+    const streams = [...this.streams];
+    this.streams.clear();
+    for (const stream of streams) stream.socket?.destroy();
+    const jump = this.jump;
+    this.jump = undefined;
+    if (jump) jump.lost = true;
+    for (const socket of this.accepted) socket.destroy();
+    this.accepted.clear();
+    const listener = this.listener;
+    this.listener = undefined;
+    await Promise.all([
+      ...streams.map((stream) => stop(stream.child)),
+      ...(jump ? jump.children.map(stop) : []),
+      listener ? new Promise<void>((resolve) => listener.close(() => resolve())) : undefined,
+    ]);
   }
 
   private setState(state: TunnelState): void {
@@ -474,29 +554,153 @@ export class SshTunnel {
     this.options.onState?.(state);
   }
 
-  /** Start every hop in order; resolve once all forward. On failure nothing is left running. */
-  private async launch(): Promise<void> {
-    const generation: Generation = { children: [], ready: false, lost: false };
-    this.generation = generation;
-    const { profile, knownHostsFile } = this.options;
-    try {
-      mkdirSync(dirname(knownHostsFile), { recursive: true });
-      const jumpPort = profile.jump ? await (this.options.pickPort ?? ephemeralLoopbackPort)() : undefined;
-      // A test seam's fixed port would collide with itself; the jump port is private anyway.
-      const hops = tunnelHops(
-        profile,
-        this.port!,
-        knownHostsFile,
-        jumpPort === this.port ? await ephemeralLoopbackPort() : jumpPort,
+  private jumpUp(): boolean {
+    if (!this.hops?.jump) return true;
+    const jump = this.jump;
+    return jump !== undefined && jump.ready && !jump.lost && jump.children.every(alive);
+  }
+
+  /** Hold the tunnel's loopback address; each connection to it gets its own stream. */
+  private async listen(): Promise<number> {
+    const server = createServer((socket) => {
+      this.accepted.add(socket);
+      socket.on("error", () => {});
+      socket.once("close", () => this.accepted.delete(socket));
+      let upstream: Duplex;
+      try {
+        upstream = this.connect();
+      } catch {
+        socket.destroy();
+        return;
+      }
+      socket.pipe(upstream).pipe(socket);
+      socket.once("close", () => upstream.destroy());
+      upstream.once("close", () => socket.destroy());
+    });
+    this.listener = server;
+    const port = this.options.pickPort ? await this.options.pickPort() : 0;
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", (error: NodeJS.ErrnoException) =>
+        reject(error.code === "EADDRINUSE" || error.code === "EACCES" ? new TunnelRefusal("forward-failed") : error),
       );
-      // A pin that was enrolled and is now gone must not be re-enrolled by accept-new.
-      if (hops.some((hop) => pinState(hop.knownHostsFile) === "broken")) throw new TunnelRefusal("host-key-missing");
-      for (const [index, hop] of hops.entries()) await this.startHop(generation, hop, index === hops.length - 1);
-      if (generation.lost || this.generation !== generation) throw new TunnelRefusal("ssh-failed");
-      for (const hop of hops) markPinEnrolled(hop.knownHostsFile);
+      server.listen({ host: "127.0.0.1", port, exclusive: true }, () => resolve());
+    });
+    const address = server.address();
+    if (typeof address !== "object" || !address) throw new TunnelRefusal("forward-failed");
+    return address.port;
+  }
+
+  /** The first stream: authenticates (and on first use pins) the server, then ends. */
+  private async probe(): Promise<void> {
+    const stream = this.spawnStream();
+    // EOF at once: ssh opens the channel, the daemon sees an empty connection, and ssh
+    // exits. A refused channel is still logged, which is what `remoteRefused` reads.
+    stream.child.stdin?.end();
+    try {
+      await stream.ready;
+    } catch (error) {
+      if (alive(stream.child)) stream.child.kill();
+      throw error;
+    }
+    const linger = setTimeout(() => alive(stream.child) && stream.child.kill(), 10_000);
+    linger.unref?.();
+    stream.child.once("exit", () => clearTimeout(linger));
+  }
+
+  /** Spawn one `ssh -W` to the daemon. Throws `host-key-missing` without spawning. */
+  private spawnStream(): Stream {
+    const hop = this.hops!.daemon;
+    if (pinState(hop.knownHostsFile) === "broken") throw new TunnelRefusal("host-key-missing");
+    let child: ChildProcess;
+    try {
+      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", hopArgs(hop));
+    } catch {
+      throw new TunnelRefusal("ssh-missing");
+    }
+    let settle!: (error?: TunnelRefusal) => void;
+    const stream: Stream = {
+      child,
+      authenticated: false,
+      ready: new Promise<void>((resolve, reject) => {
+        let settled = false;
+        settle = (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (error) reject(error);
+          else resolve();
+        };
+      }),
+    };
+    const timer = setTimeout(() => {
+      settle(new TunnelRefusal("timeout"));
+      child.kill();
+    }, this.options.readyTimeoutMs ?? 30_000);
+    this.streams.add(stream);
+    let tail = "";
+    watchLines(child, (line) => {
+      tail = (tail + line + "\n").slice(-STDERR_TAIL);
+      const key = /Server host key: \S+ (SHA256:[A-Za-z0-9+/=]+)/.exec(line);
+      if (key) this.fingerprint = key[1];
+      if (/channel \d+: open failed: (connect failed|administratively prohibited)/.test(line))
+        this.channelRefusedAt = Date.now();
+      // Printed once the server is authenticated against its pin and the person's key accepted.
+      if (/^debug1: Entering interactive session/.test(line) && !stream.authenticated) {
+        stream.authenticated = true;
+        markPinEnrolled(hop.knownHostsFile);
+        settle();
+        if (!this.closed && this.stateNow.phase === "reconnecting" && this.jumpUp()) {
+          this.attempt = 0;
+          this.setState({ phase: "open", localPort: this.port! });
+        }
+      }
+    });
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      const refusal = error.code === "ENOENT" ? "ssh-missing" : "ssh-failed";
+      tail = "";
+      settle(new TunnelRefusal(refusal));
+      this.streamFailed(refusal);
+    });
+    child.once("exit", () => {
+      this.streams.delete(stream);
+      if (stream.authenticated) return;
+      const refusal = classifySshFailure(tail);
+      settle(new TunnelRefusal(refusal));
+      this.streamFailed(refusal);
+    });
+    return stream;
+  }
+
+  /** A stream after `open()` could not authenticate: show it, and stop for good if it must. */
+  private streamFailed(refusal: TunnelRefusalCode): void {
+    if (this.closed || this.stateNow.phase === "starting" || this.stateNow.phase === "failed") return;
+    if (PERMANENT.has(refusal)) {
+      this.fail(refusal);
+      return;
+    }
+    if (this.stateNow.phase === "open") {
+      this.attempt += 1;
+      this.setState({ phase: "reconnecting", attempt: this.attempt, refusal });
+    }
+  }
+
+  private fail(refusal: TunnelRefusalCode): void {
+    this.setState({ phase: "failed", refusal });
+    for (const stream of this.streams) stream.socket?.destroy();
+    for (const stream of this.streams) if (alive(stream.child)) stream.child.kill();
+  }
+
+  /** Start the jump host's ssh; resolve once its forward is bound. */
+  private async launchJump(): Promise<void> {
+    const hop = this.hops!.jump!;
+    const generation: Generation = { children: [], ready: false, lost: false };
+    this.jump = generation;
+    try {
+      if (pinState(hop.knownHostsFile) === "broken") throw new TunnelRefusal("host-key-missing");
+      await this.startJump(generation, hop);
+      if (generation.lost || this.jump !== generation) throw new TunnelRefusal("ssh-failed");
+      markPinEnrolled(hop.knownHostsFile);
       generation.ready = true;
-      this.attempt = 0;
-      this.setState({ phase: "open", localPort: this.port! });
     } catch (error) {
       generation.lost = true;
       await Promise.all(generation.children.map(stop));
@@ -504,27 +708,18 @@ export class SshTunnel {
     }
   }
 
-  /** Start one ssh; resolve once its forward is bound, reject with a classified refusal. */
-  private startHop(generation: Generation, hop: HopSpec, daemonHop: boolean): Promise<void> {
-    const args = hopArgs(hop);
-    const binary = this.options.sshBinary ?? "ssh";
+  private startJump(generation: Generation, hop: HopSpec): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let child: ChildProcess;
       try {
-        child = (this.options.spawn ?? defaultSpawn)(binary, args);
+        child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", hopArgs(hop));
       } catch {
         reject(new TunnelRefusal("ssh-missing"));
         return;
       }
       generation.children.push(child);
       let tail = "";
-      let lineBuffer = "";
       let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settle(new TunnelRefusal("timeout"));
-        child.kill();
-      }, this.options.readyTimeoutMs ?? 30_000);
       const settle = (error?: TunnelRefusal) => {
         if (settled) return;
         settled = true;
@@ -532,57 +727,45 @@ export class SshTunnel {
         if (error) reject(error);
         else resolve();
       };
-      child.stderr?.setEncoding("utf8");
-      child.stderr?.on("data", (chunk: string) => {
-        tail = (tail + chunk).slice(-STDERR_TAIL);
-        lineBuffer += chunk;
-        let newline: number;
-        while ((newline = lineBuffer.indexOf("\n")) >= 0) {
-          const line = lineBuffer.slice(0, newline);
-          lineBuffer = lineBuffer.slice(newline + 1);
-          if (daemonHop) {
-            const key = /Server host key: \S+ (SHA256:[A-Za-z0-9+/=]+)/.exec(line);
-            if (key) this.fingerprint = key[1];
-            if (/channel \d+: open failed: (connect failed|administratively prohibited)/.test(line))
-              this.channelRefusedAt = Date.now();
-          }
-          // Printed once every forward is bound: with ExitOnForwardFailure a forward that
-          // could not bind is fatal before this line (the "listening on" line comes earlier,
-          // before the bind is attempted).
-          if (/^debug1: Entering interactive session/.test(line)) settle();
-        }
-        if (lineBuffer.length > STDERR_TAIL) lineBuffer = lineBuffer.slice(-STDERR_TAIL);
+      const timer = setTimeout(() => {
+        settle(new TunnelRefusal("timeout"));
+        child.kill();
+      }, this.options.readyTimeoutMs ?? 30_000);
+      watchLines(child, (line) => {
+        tail = (tail + line + "\n").slice(-STDERR_TAIL);
+        // Printed once the forward is bound: with ExitOnForwardFailure a forward that could
+        // not bind is fatal before this line (the "listening on" line comes before the bind).
+        if (/^debug1: Entering interactive session/.test(line)) settle();
       });
-      child.stdout?.resume();
       child.once("error", (error: NodeJS.ErrnoException) => {
-        settle(new TunnelRefusal(error.code === "ENOENT" ? "ssh-missing" : "ssh-failed"));
-        this.lose(generation, error.code === "ENOENT" ? "ssh-missing" : "ssh-failed");
+        const refusal = error.code === "ENOENT" ? "ssh-missing" : "ssh-failed";
+        settle(new TunnelRefusal(refusal));
+        this.loseJump(generation, refusal);
       });
       child.once("exit", () => {
         const refusal = classifySshFailure(tail);
         settle(new TunnelRefusal(refusal));
-        this.lose(generation, refusal);
+        this.loseJump(generation, refusal);
       });
     });
   }
 
-  /**
-   * A process of `generation` ended. Credentials stop at once (`lost`); the rest of the
-   * start is stopped; a start that had been open restarts unless the cause needs the person.
-   */
-  private lose(generation: Generation, refusal: TunnelRefusalCode): void {
+  /** The jump's ssh ended: every daemon stream through it ends now, then it restarts. */
+  private loseJump(generation: Generation, refusal: TunnelRefusalCode): void {
     if (generation.lost) return;
     generation.lost = true;
     const wasReady = generation.ready;
     generation.ready = false;
     for (const child of generation.children) if (alive(child)) child.kill();
-    if (wasReady && this.generation === generation && !this.closed) this.scheduleRestart(refusal);
+    for (const stream of this.streams) stream.socket?.destroy();
+    for (const stream of this.streams) if (alive(stream.child)) stream.child.kill();
+    if (wasReady && this.jump === generation && !this.closed) this.scheduleRestart(refusal);
   }
 
   private scheduleRestart(refusal: TunnelRefusalCode): void {
     if (this.closed) return;
     if (PERMANENT.has(refusal)) {
-      this.setState({ phase: "failed", refusal });
+      this.fail(refusal);
       return;
     }
     this.attempt += 1;
@@ -592,14 +775,73 @@ export class SshTunnel {
     this.restartTimer = setTimeout(() => {
       this.restartTimer = undefined;
       if (this.closed) return;
-      this.launch().catch((error: unknown) => {
-        if (this.closed) return;
-        // `launch` failed before every forward was bound; nothing of it is left running.
-        this.scheduleRestart(error instanceof TunnelRefusal ? error.code : "ssh-failed");
-      });
+      this.launchJump()
+        .then(() => {
+          if (this.closed) return;
+          this.attempt = 0;
+          this.setState({ phase: "open", localPort: this.port! });
+        })
+        .catch((error: unknown) => {
+          if (this.closed) return;
+          // `launchJump` failed before its forward was bound; nothing of it is left running.
+          this.scheduleRestart(error instanceof TunnelRefusal ? error.code : "ssh-failed");
+        });
     }, delay);
     this.restartTimer.unref?.();
   }
+}
+
+/** One connection over a child's stdin/stdout. Destroying it ends the child's stdio. */
+function stdioDuplex(stdin: Writable, stdout: Readable): Duplex {
+  const duplex = new Duplex({
+    read: () => {
+      stdout.resume();
+    },
+    write: (chunk: Buffer, _encoding, callback) => {
+      stdin.write(chunk, (error) => callback(error ?? null));
+    },
+    final: (callback) => {
+      stdin.end(() => callback());
+    },
+    destroy: (error, callback) => {
+      stdin.destroy();
+      stdout.destroy();
+      callback(error);
+    },
+  });
+  stdout.on("data", (chunk: Buffer) => {
+    if (!duplex.push(chunk)) stdout.pause();
+  });
+  stdout.once("end", () => duplex.push(null));
+  // The process is gone: the connection is over, whatever was still to be written.
+  // Give a reader the last bytes first; a connection nobody reads still closes.
+  stdout.once("close", () => {
+    if (duplex.readableEnded) duplex.destroy();
+    else {
+      const timer = setTimeout(() => duplex.destroy(), 2_000);
+      timer.unref?.();
+      duplex.once("end", () => {
+        clearTimeout(timer);
+        duplex.destroy();
+      });
+    }
+  });
+  stdin.on("error", (error) => duplex.destroy(error));
+  return duplex;
+}
+
+function watchLines(child: ChildProcess, onLine: (line: string) => void): void {
+  let buffer = "";
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk: string) => {
+    buffer += chunk;
+    let newline: number;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      onLine(buffer.slice(0, newline).replace(/\r$/, ""));
+      buffer = buffer.slice(newline + 1);
+    }
+    if (buffer.length > STDERR_TAIL) buffer = buffer.slice(-STDERR_TAIL);
+  });
 }
 
 async function stop(child: ChildProcess): Promise<void> {
@@ -612,7 +854,9 @@ async function stop(child: ChildProcess): Promise<void> {
 }
 
 function defaultSpawn(command: string, args: readonly string[]): ChildProcess {
-  return spawn(command, [...args], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  // A `-W` stream carries the connection on stdin/stdout; a forwarding ssh reads nothing.
+  const stdin = args.includes("-W") ? "pipe" : "ignore";
+  return spawn(command, [...args], { stdio: [stdin, "pipe", "pipe"], windowsHide: true });
 }
 
 // ---------------------------------------------------------------------------------------

@@ -21,7 +21,7 @@ export interface DaemonTokenSource {
 export class CredentialTransportUnavailable extends Error {
   override readonly name = "CredentialTransportUnavailable";
   constructor() {
-    super("The SSH tunnel to the daemon is not verified; no credential was sent.");
+    super("The SSH connection to the daemon is not available; no credential was sent.");
   }
 }
 

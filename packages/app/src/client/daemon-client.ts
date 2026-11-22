@@ -163,7 +163,7 @@ import {
   CredentialTransportUnavailable,
   type DaemonTokenSource,
 } from "./auth.js";
-import { DaemonSubscription, type DaemonSubscriptionOptions } from "./subscription.js";
+import { DaemonSubscription, type DaemonSubscriptionOptions, type SocketFactory } from "./subscription.js";
 import { observeOwnedDiagnostic, type OwnedDiagnosticObserver } from "../main/diagnostics/source-producers.js";
 
 /** Where `orca serve` listens unless told otherwise; 6722 spells ORCA on a phone keypad. */
@@ -203,6 +203,8 @@ export interface DaemonClientOptions {
   onAuthFailure?: () => void;
   /** Current subscription verification only; ordinary hello probes never publish. */
   onHello?: (hello: HelloResult) => void;
+  /** How the push stream opens its socket; a saved profile's comes from its tunnel. */
+  socket?: SocketFactory;
 }
 
 export class DaemonClient {
@@ -609,6 +611,7 @@ export class DaemonClient {
         return hello.identity;
       },
       ...(this.options.auth ? { auth: { tokens: this.options.auth } } : {}),
+      ...(this.options.socket ? { socket: this.options.socket } : {}),
     });
   }
 }

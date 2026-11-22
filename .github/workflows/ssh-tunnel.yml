@@ -12,6 +12,7 @@ on:
       - packages/protocol/src/remote-access.ts
       - packages/protocol/test/remote-access.test.ts
       - packages/app/src/main/remote-profiles.ts
+      - packages/app/src/client/stream-transport.ts
       - packages/app/src/main/workspace.ts
       - packages/app/src/main/connection-target.ts
       - packages/app/test/remote-profiles*.test.ts

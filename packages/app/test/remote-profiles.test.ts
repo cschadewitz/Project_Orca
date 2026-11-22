@@ -4,7 +4,17 @@
  * remote-access tests run the real ssh against a real sshd.
  */
 import { PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
-import type { SecretCipher, SshTunnel, SshTunnelOptions, TunnelState } from "@orca/protocol/remote-access";
+import {
+  TunnelRefusal,
+  type SecretCipher,
+  type SshTunnel,
+  type SshTunnelOptions,
+  type TunnelState,
+} from "@orca/protocol/remote-access";
+import { connect as netConnect, type Socket } from "node:net";
+import { WebSocketServer } from "ws";
+import { z } from "zod";
+import { streamTransport } from "../src/client/stream-transport.js";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,12 +38,22 @@ const cipher: SecretCipher = {
 class FakeTunnel {
   closed = 0;
   refused = false;
-  verified = true;
+  connects = 0;
+  onStream?: (stream: Socket) => void;
   stateNow: TunnelState = { phase: "starting" };
   constructor(
     readonly options: SshTunnelOptions,
     private readonly outcome: Promise<string>,
+    /** Where an authenticated stream ends up: the stand-in daemon's port. */
+    private readonly daemonPort?: number,
   ) {}
+  connect(): Socket {
+    if (this.stateNow.phase !== "open" || !this.daemonPort) throw new TunnelRefusal("closed");
+    this.connects += 1;
+    const stream = netConnect(this.daemonPort, "127.0.0.1");
+    this.onStream?.(stream);
+    return stream;
+  }
   get state(): TunnelState {
     return this.stateNow;
   }
@@ -52,23 +72,20 @@ class FakeTunnel {
   remoteRefused(): boolean {
     return this.refused;
   }
-  transportVerified(): boolean {
-    return this.verified && this.stateNow.phase === "open";
-  }
   async close(): Promise<void> {
     this.closed += 1;
     this.stateNow = { phase: "closed" };
   }
 }
 
-function store(outcome: () => Promise<string> = () => Promise.resolve("http://127.0.0.1:41000")) {
+function store(outcome: () => Promise<string> = () => Promise.resolve("http://127.0.0.1:41000"), daemonPort?: number) {
   const dir = mkdtempSync(join(tmpdir(), "orca-profiles-"));
   const tunnels: FakeTunnel[] = [];
   const profiles = new RemoteProfiles({
     dir,
     cipher,
     tunnel: (options) => {
-      const tunnel = new FakeTunnel(options, outcome());
+      const tunnel = new FakeTunnel(options, outcome(), daemonPort);
       tunnels.push(tunnel);
       return tunnel as unknown as SshTunnel;
     },
@@ -220,64 +237,6 @@ describe("pending work does not outlive a profile change", () => {
   });
 });
 
-describe("credentials follow the verified tunnel, not the loopback URL", () => {
-  it("offers no credential over HTTP or the WebSocket while the tunnel cannot be verified", async () => {
-    // An impostor on the tunnel's local port: what any local process could do while ssh is down.
-    const seen: (string | undefined)[] = [];
-    const impostor = createServer((request, response) => {
-      seen.push(request.headers.authorization);
-      response.end("{}");
-    });
-    await new Promise<void>((resolve) => impostor.listen(0, "127.0.0.1", resolve));
-    const address = impostor.address();
-    const url = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
-    try {
-      const { profiles, tunnels } = store(() => Promise.resolve(url));
-      profiles.save({ name: "Lab", destination: "lab" });
-      profiles.importCredential("lab", TOKEN);
-      const lease = await profiles.open("lab");
-      tunnels[0]!.verified = false;
-      expect(() => lease.auth.read()).toThrow(CredentialTransportUnavailable);
-
-      const onAuthFailure = vi.fn();
-      const client = new DaemonClient(lease.url, fetch, {
-        auth: lease.auth,
-        requireAuthentication: true,
-        onAuthFailure,
-      });
-      await expect(client.hello("probe")).rejects.toBeInstanceOf(CredentialTransportUnavailable);
-      expect(onAuthFailure).not.toHaveBeenCalled();
-
-      const offered: (string[] | undefined)[] = [];
-      const states: string[] = [];
-      const stream = new DaemonSubscription({
-        url: client.socketUrl,
-        params: {},
-        onNotification: () => {},
-        onState: (state) => states.push(state),
-        backoffMs: [60_000],
-        auth: { tokens: lease.auth },
-        socket: (_url, _handlers, protocols) => {
-          offered.push(protocols);
-          return { send: () => {}, close: () => {} };
-        },
-      });
-      expect(offered).toEqual([]);
-      expect(states).toContain("reconnecting");
-      expect(states).not.toContain("auth-failed");
-      stream.close();
-      expect(seen).toEqual([]);
-
-      // Once verified again, the same lease sends the credential.
-      tunnels[0]!.verified = true;
-      expect(lease.auth.read()).toBe(TOKEN);
-      await lease.release();
-    } finally {
-      await new Promise((resolve) => impostor.close(resolve));
-    }
-  });
-});
-
 const hello = {
   protocol: PROTOCOL_VERSION,
   orcaVersion: "test",
@@ -286,6 +245,153 @@ const hello = {
 };
 const reply = (result: unknown) => new Response(JSON.stringify({ kind: "response", id: 1, ok: true, result }));
 
+describe("credentials travel only on the tunnel's authenticated streams", () => {
+  /** A stand-in daemon: what the far end of an authenticated ssh stream reaches. */
+  async function daemonRig(stall = false) {
+    const rpc: (string | undefined)[] = [];
+    const sockets: (string | undefined)[] = [];
+    const server = createServer((request, response) => {
+      rpc.push(request.headers.authorization);
+      request.resume();
+      request.on("end", () => {
+        if (!stall) response.end(JSON.stringify({ kind: "response", id: 1, ok: true, result: hello }));
+      });
+    });
+    const wss = new WebSocketServer({ server, handleProtocols: () => "orca.v1" });
+    wss.on("connection", (socket, request) => {
+      sockets.push(request.headers["sec-websocket-protocol"]);
+      socket.on("error", () => {});
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    // An impostor where the tunnel's URL points: it must never hear from the client.
+    const offered: (string | undefined)[] = [];
+    const impostor = createServer((request, response) => {
+      offered.push(request.headers.authorization ?? request.headers["sec-websocket-protocol"]?.toString());
+      response.end("{}");
+    });
+    impostor.on("upgrade", (request, socket) => {
+      offered.push(request.headers["sec-websocket-protocol"]);
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => impostor.listen(0, "127.0.0.1", resolve));
+    const impostorAddress = impostor.address();
+    const url = `http://127.0.0.1:${typeof impostorAddress === "object" && impostorAddress ? impostorAddress.port : 0}`;
+    const close = async () => {
+      for (const client of wss.clients) client.terminate();
+      server.closeAllConnections();
+      impostor.closeAllConnections();
+      await new Promise((resolve) => wss.close(resolve));
+      await new Promise((resolve) => server.close(resolve));
+      await new Promise((resolve) => impostor.close(resolve));
+    };
+    return { port, rpc, sockets, offered, url, close };
+  }
+
+  it("sends RPCs and the socket's credential over connect() streams, never to the URL", async () => {
+    const daemon = await daemonRig();
+    try {
+      const { profiles, tunnels } = store(() => Promise.resolve(daemon.url), daemon.port);
+      profiles.save({ name: "Lab", destination: "lab" });
+      profiles.importCredential("lab", TOKEN);
+      const lease = await profiles.open("lab");
+      const client = new DaemonClient(lease.url, lease.transport.fetch, {
+        auth: lease.auth,
+        requireAuthentication: true,
+        socket: lease.transport.socket,
+      });
+      expect((await client.hello("probe")).orcaVersion).toBe("test");
+      expect(daemon.rpc).toEqual([`Bearer ${TOKEN}`]);
+
+      const opened = vi.fn();
+      const handle = lease.transport.socket(
+        client.socketUrl,
+        { onOpen: opened, onMessage: () => {}, onClose: () => {} },
+        ["orca.v1", `orca.bearer.${TOKEN}`],
+      );
+      await vi.waitFor(() => expect(opened).toHaveBeenCalled());
+      expect(daemon.sockets.map((header) => header?.split(/,\s*/))).toEqual([["orca.v1", `orca.bearer.${TOKEN}`]]);
+      handle.close();
+
+      expect(tunnels[0]!.connects).toBeGreaterThanOrEqual(2);
+      expect(daemon.offered).toEqual([]);
+      await lease.release();
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it("fails a request whose stream is lost mid-flight, without redialling or reissuing it", async () => {
+    const daemon = await daemonRig(true);
+    try {
+      const { profiles, tunnels } = store(() => Promise.resolve(daemon.url), daemon.port);
+      profiles.save({ name: "Lab", destination: "lab" });
+      profiles.importCredential("lab", TOKEN);
+      const lease = await profiles.open("lab");
+      const streams: Socket[] = [];
+      tunnels[0]!.onStream = (stream) => streams.push(stream);
+      const client = new DaemonClient(lease.url, lease.transport.fetch, {
+        auth: lease.auth,
+        requireAuthentication: true,
+      });
+      const call = client.call("runs.list", {}, z.unknown());
+      // ssh dies once the request is on the wire, before any answer: the connection ends with it.
+      await vi.waitFor(() => expect(daemon.rpc).toHaveLength(1));
+      streams[0]!.destroy();
+      await expect(call).rejects.toThrow();
+      expect(tunnels[0]!.connects).toBe(1);
+      expect(daemon.offered).toEqual([]);
+      await lease.release();
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it("refuses every connection after release, a profile change, or a tunnel failure, and reads stop", async () => {
+    const daemon = await daemonRig();
+    try {
+      const { profiles, tunnels } = store(() => Promise.resolve(daemon.url), daemon.port);
+      profiles.save({ name: "Lab", destination: "lab" });
+      profiles.importCredential("lab", TOKEN);
+
+      // Released: the transport has nothing to connect through.
+      const first = await profiles.open("lab");
+      const client = new DaemonClient(first.url, first.transport.fetch, { auth: first.auth });
+      await first.release();
+      expect(() => first.auth.read()).toThrow(CredentialTransportUnavailable);
+      await expect(first.transport.fetch(`${first.url}/rpc`, { method: "POST", body: "{}" })).rejects.toBeInstanceOf(
+        CredentialTransportUnavailable,
+      );
+      await expect(client.hello("after-release")).rejects.toBeInstanceOf(CredentialTransportUnavailable);
+      const closes = vi.fn();
+      first.transport.socket(client.socketUrl, { onOpen: () => {}, onMessage: () => {}, onClose: closes }, ["orca.v1"]);
+      await vi.waitFor(() => expect(closes).toHaveBeenCalled());
+      expect(tunnels[0]!.connects).toBe(0);
+
+      // Failed for good (say the host key changed): no reads, no connections.
+      const second = await profiles.open("lab");
+      tunnels[1]!.stateNow = { phase: "failed", refusal: "host-key-changed" };
+      expect(() => second.auth.read()).toThrow(CredentialTransportUnavailable);
+      await expect(second.transport.fetch(`${second.url}/rpc`, { method: "POST", body: "{}" })).rejects.toThrow();
+      expect(tunnels[1]!.connects).toBe(0);
+
+      // The pin reset that failure allows also ends the lease that predates it.
+      profiles.forgetHostKey("lab");
+      tunnels[1]!.stateNow = { phase: "open", localPort: 41000 };
+      await expect(second.transport.fetch(`${second.url}/rpc`, { method: "POST", body: "{}" })).rejects.toBeInstanceOf(
+        CredentialTransportUnavailable,
+      );
+      expect(tunnels[1]!.connects).toBe(0);
+      await second.release();
+      expect(daemon.rpc).toEqual([]);
+      expect(daemon.offered).toEqual([]);
+    } finally {
+      await daemon.close();
+    }
+  });
+});
+
 function lease(id: string, url: string, released: string[], refused = false): ProfileLease {
   const auth: DaemonTokenSource = { read: () => TOKEN, refresh: () => true };
   return {
@@ -293,7 +399,9 @@ function lease(id: string, url: string, released: string[], refused = false): Pr
     url,
     auth,
     remoteRefused: () => refused,
-    transportVerified: () => true,
+    transport: streamTransport(() => {
+      throw new Error("workspace tests use their own fetch");
+    }),
     release: vi.fn(async () => {
       released.push(id);
     }),

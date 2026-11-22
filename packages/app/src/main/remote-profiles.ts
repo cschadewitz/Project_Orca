@@ -26,6 +26,7 @@ import {
   type TunnelState,
 } from "@orca/protocol/remote-access";
 import { CredentialTransportUnavailable, type DaemonTokenSource } from "../client/auth.js";
+import { streamTransport, type StreamTransport } from "../client/stream-transport.js";
 import type { RemoteProfileView } from "../daemon-connection.js";
 import { ConnectionRefusal } from "./connection-target.js";
 
@@ -41,10 +42,13 @@ export interface ProfileLease {
   readonly profile: ConnectionProfile;
   readonly url: string;
   readonly auth: DaemonTokenSource;
+  /**
+   * The only way the client reaches the daemon: each connection is its own authenticated
+   * ssh stream, refused once the lease is released or the profile changed.
+   */
+  readonly transport: StreamTransport;
   /** The remote refused the forwarded connection just now: ssh works, no daemon listens. */
   remoteRefused(): boolean;
-  /** The tunnel is up, bound and its ssh still running: the only time `auth` yields a token. */
-  transportVerified(): boolean;
   release(): Promise<void>;
 }
 
@@ -294,15 +298,22 @@ export class RemoteProfiles {
     let released = false;
     const slots = this.slots;
     let cached: string | undefined;
+    // Nothing of this lease outlives its release or a change to the profile.
+    const usable = () => !released && this.revision(id) === revision;
+    const transport = streamTransport(() => {
+      if (!usable()) throw new CredentialTransportUnavailable();
+      return current.tunnel.connect();
+    });
     return {
       profile,
       url,
-      // The credential is released only to a verified tunnel: while ssh is down or
-      // restarting, the local port could belong to anything, so nothing is offered.
+      // The credential only ever travels on `transport`: every connection is its own
+      // authenticated ssh stream, so it goes to the pinned server or nowhere. Reads stop
+      // once the tunnel has failed for good, the lease is released or the profile changed.
       auth: {
         read: () => {
-          if (!current.tunnel.transportVerified() || this.revision(id) !== revision)
-            throw new CredentialTransportUnavailable();
+          const phase = current.tunnel.state.phase;
+          if (!usable() || phase === "failed" || phase === "closed") throw new CredentialTransportUnavailable();
           return (cached ??= slots.read(id));
         },
         refresh: () => {
@@ -310,11 +321,12 @@ export class RemoteProfiles {
           return true;
         },
       },
+      transport,
       remoteRefused: () => current.tunnel.remoteRefused(),
-      transportVerified: () => current.tunnel.transportVerified(),
       release: async () => {
         if (released) return;
         released = true;
+        transport.close();
         await this.releaseTunnel(id, current);
       },
     };

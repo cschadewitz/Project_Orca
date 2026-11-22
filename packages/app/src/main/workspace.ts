@@ -33,6 +33,7 @@ import type { MacUpdateTarget } from "./mac-updates.js";
 import type { WorkspaceSnapshot, WorkspaceSource } from "../bridge.js";
 import type { DaemonClient } from "../client/daemon-client.js";
 import type { DaemonSubscription } from "../client/subscription.js";
+import type { StreamTransport } from "../client/stream-transport.js";
 import type { BundledDaemon, DaemonExit } from "./daemon-process.js";
 import type { MacOwnedStopResult } from "./mac-update-restart.js";
 import {
@@ -87,7 +88,14 @@ export interface WorkspaceDeps {
   /** Build the read client for a daemon URL. */
   client: (
     url: string,
-    options: { workspace: string; bundled: boolean; tokenFile?: string; auth?: DaemonTokenSource },
+    options: {
+      workspace: string;
+      bundled: boolean;
+      tokenFile?: string;
+      auth?: DaemonTokenSource;
+      /** A saved profile's connections: every request and the socket go over these streams. */
+      transport?: StreamTransport;
+    },
   ) => DaemonClient;
   /** Open the push stream on a client, wired to the broadcast and the connection machine. */
   subscribe: (client: DaemonClient) => DaemonSubscription;
@@ -985,7 +993,12 @@ export class Workspace {
     let client: DaemonClient;
     try {
       if (this.closed) throw new Error("Workspace closed");
-      client = this.deps.client(lease.url, { workspace: path, bundled: false, auth: lease.auth });
+      client = this.deps.client(lease.url, {
+        workspace: path,
+        bundled: false,
+        auth: lease.auth,
+        transport: lease.transport,
+      });
     } catch (error) {
       await lease.release();
       throw error;
@@ -1421,7 +1434,7 @@ export class Workspace {
       workspace: target.path,
       bundled: this.daemon !== undefined,
       ...(this.daemon?.tokenFile ? { tokenFile: this.daemon.tokenFile } : {}),
-      ...(lease ? { auth: lease.auth } : {}),
+      ...(lease ? { auth: lease.auth, transport: lease.transport } : {}),
     });
     this.adoptLease(lease);
     this.source = target.readOnly

@@ -678,7 +678,9 @@ const workspace = new Workspace({
       // subscribing or falling back to a different store. Never retain the invalid input.
       return new DaemonClient("");
     }
-    const candidate = new DaemonClient(url, fetch, {
+    // A saved profile's requests and socket travel only on its tunnel's authenticated streams.
+    const candidate = new DaemonClient(url, options.transport?.fetch ?? fetch, {
+      ...(options.transport ? { socket: options.transport.socket } : {}),
       requireAuthentication: options.bundled || !isLoopbackDaemon(url),
       // A profile's credential comes from its keychain slot and always requires authentication.
       ...(options.auth ? { requireAuthentication: true } : {}),
