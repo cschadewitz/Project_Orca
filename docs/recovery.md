@@ -187,6 +187,23 @@ checkpoint as in the preview; without it, the latest one that is not blocked is 
   run that recorded no configuration generation has nothing to pin an admission to, so it is
   started directly.
 
+## Over the daemon
+
+Protocol 2.5 carries the same three actions for the app:
+
+- `runs.recovery` (`runs.read`) answers the assessment above for one run, with the caller as
+  the principal. It writes nothing, so a `--read-only` daemon answers it.
+- `runs.reviewEffect` (`runs.control`) records a review of one uncertain step attempt, as
+  `orca recovery review` does, and returns the run.
+- `runs.recover` (`runs.start`, on a daemon with retry-safe admission) starts a checkpoint
+  attempt as `orca recovery start` does: one attempt per idempotency key, authorized as a new
+  run of the source's workflow and only for the principal that started the source. The daemon
+  then drives it once, under the same first-attachment policy as `runs.admit`, and its receipt
+  reads back and reconciles through `admissions.get` and `admissions.reconcile`.
+
+Run views say where a run and its steps came from: `checkpoint` on a run summary, and
+`reusedFrom`, `reusedChildren` and `effectReview` on a step.
+
 ## Drift
 
 When the workflow a new run would use is at a different version, or the configuration
@@ -196,7 +213,7 @@ resolve differently and is shown for review, not refused.
 
 ## Not yet
 
-The app's recovery panel and daemon methods (phase 2, next), reconciling an
+The app's recovery panel (phase 2, next), reconciling an
 uncertain effect automatically, the operations console (#340), host-specific orphan handling
 (#344), and agent-context recovery for approvals (the Approved, then Continue contract recorded
 on #357).

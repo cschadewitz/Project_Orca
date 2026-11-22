@@ -106,6 +106,7 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "runs.list": { permission: "runs.read", resource: "run-list" },
   "runs.get": { permission: "runs.read", resource: "run" },
   "runs.events": { permission: "runs.read", resource: "run" },
+  "runs.recovery": { permission: "runs.read", resource: "run" },
   search: { permission: "runs.read", resource: "search" },
   // Exact target checks live in the authenticated revision service, including after the input closes.
   "inputs.revise": { permission: "inputs.answer", resource: "none", audit: "decision" },
@@ -144,6 +145,11 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "runs.start": { permission: "runs.start", resource: "workflow", param: "workflowId", audit: "mutation" },
   "runs.resume": { permission: "runs.control", resource: "run", audit: "mutation" },
   "runs.cancel": { permission: "runs.control", resource: "run", audit: "mutation" },
+  "runs.reviewEffect": { permission: "runs.control", resource: "run", audit: "mutation" },
+  // A checkpoint attempt is a new run of the source's workflow: the admission authority also
+  // checks that workflow (and request/work item) like runs.admit, and the engine that the
+  // caller started the source.
+  "runs.recover": { permission: "runs.start", resource: "run", audit: "mutation" },
   // `always` additionally needs `permissions.grant`; the guard checks it before anything else.
   "inputs.answer": { permission: "inputs.answer", resource: "input", audit: "decision" },
   "claims.release": { permission: "claims.release", resource: "claim", audit: "mutation" },

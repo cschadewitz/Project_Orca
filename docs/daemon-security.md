@@ -219,6 +219,7 @@ that the two match. A method that is missing from the table is refused with
 | `runs.list` | `runs.read` | filtered to visible runs; `total` and paging recomputed | — |
 | `runs.get` | `runs.read` | the run | — |
 | `runs.events` | `runs.read` | the run | — |
+| `runs.recovery` | `runs.read` | the run; read-only, a run started by another principal is shown as not theirs to recover | — |
 | `search` | `runs.read` | a run-restricted caller must name one run, which is authorized before the scan (no `runId` is `AUTH_FORBIDDEN`), and a named run it cannot see answers empty; artifact hits and artifact events need `artifacts.read` | — |
 | `inputs.revise` | `inputs.answer` | also requires `runs.control`; exact durable run, input and declared destination | decision |
 | `inputs.replaceRevision` | `inputs.answer` | also requires `runs.control`; exact undelivered destination/attempt and CAS | mutation |
@@ -245,6 +246,8 @@ that the two match. A method that is missing from the table is refused with
 | `continuations.get` | `runs.read` | the sealed receipt's run; a locator or CAS token is not authority | — |
 | `continuations.reconcile` | `runs.control` | original principal and run; original decision also requires `inputs.answer`, execution authority is rechecked separately | mutation |
 | `runs.cancel` | `runs.control` | the run | mutation |
+| `runs.reviewEffect` | `runs.control` | the run; one review of an uncertain step attempt | mutation |
+| `runs.recover` | `runs.start` | the source run, plus its workflow and authorized associations as `runs.admit`; only the principal that started it; prompt durable receipt | mutation |
 | `inputs.answer` | `inputs.answer` | the exact open gate and its run; `always` also needs `permissions.grant` | decision |
 | `claims.release` | `claims.release` | the claim's owning run | mutation |
 | `templates.get` | `config.read` | workspace-wide authorized source catalog | — |

@@ -12,6 +12,7 @@ import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
 import { CLAIMS_LIST_METHOD, CLAIMS_RELEASE_METHOD } from "./claims.js";
 import { CONFIG_GET_METHOD, CONFIG_SET_METHOD, CONFIG_APPLY_METHOD } from "./config.js";
 import { INPUTS_ANSWER_METHOD, RUNS_CANCEL_METHOD, RUNS_RESUME_METHOD, RUNS_START_METHOD } from "./control.js";
+import { RUNS_RECOVERY_METHOD, RUNS_REVIEW_EFFECT_METHOD } from "./recovery.js";
 import { INPUTS_LIST_METHOD } from "./inputs.js";
 import {
   DECISIONS_DECIDE_METHOD,
@@ -68,6 +69,11 @@ export const READ_METHODS = [
    * artifacts the reads above return, answered under `runs.read` like them.
    */
   SEARCH_METHOD,
+  /**
+   * `runs.recovery` (protocol 2.5, #357): how a run could be recovered, read from its log and
+   * the store. It writes nothing, so a `--read-only` daemon answers it like the reads above.
+   */
+  RUNS_RECOVERY_METHOD,
 ] as const;
 
 /**
@@ -119,6 +125,8 @@ export const CONTROL_METHODS = [
   RUNS_RESUME_METHOD,
   RUNS_CANCEL_METHOD,
   RUNS_START_METHOD,
+  // Protocol 2.5 (#357): appends a review to a run's log under its lease.
+  RUNS_REVIEW_EFFECT_METHOD,
   CONFIG_SET_METHOD,
   DEPENDENCIES_WAIVE_METHOD,
   DECISIONS_DECIDE_METHOD,

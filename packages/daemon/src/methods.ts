@@ -63,6 +63,18 @@ import {
   AdmissionsReconcileParamsSchema,
 } from "@orca/protocol";
 import { checkAdmissionScope, type AdmissionRetryModel, type AdmissionAuthorities } from "./admission-retry.js";
+import {
+  RUNS_RECOVER_METHOD,
+  RUNS_RECOVERY_METHOD,
+  RUNS_REVIEW_EFFECT_METHOD,
+  RunsRecoverParamsSchema,
+  RunsRecoveryParamsSchema,
+  RunsReviewEffectParamsSchema,
+  type RunsRecoveryParams,
+  type RunsRecoveryResult,
+  type RunsReviewEffectParams,
+  type RunsReviewEffectResult,
+} from "@orca/protocol";
 import type { RequestSubmissionModel } from "./request-submission.js";
 import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine";
 import type { Maintenance } from "./maintenance.js";
@@ -681,6 +693,18 @@ export const runsCancel: Method<RunsCancelParams, RunsCancelResult> = {
   handle: (params, ctx) => control(ctx).cancelRun(params, ctx.mutationActor),
 };
 
+/** `runs.recovery` (#357): how this run could be recovered. Read-only. */
+export const runsRecovery: Method<RunsRecoveryParams, RunsRecoveryResult> = {
+  params: RunsRecoveryParamsSchema,
+  handle: (params, ctx) => reads(ctx).runsRecovery(params, ctx.mutationActor?.principalId),
+};
+
+/** `runs.reviewEffect` (#357): an operator's review of a step that may have acted and never finished. */
+export const runsReviewEffect: Method<RunsReviewEffectParams, RunsReviewEffectResult> = {
+  params: RunsReviewEffectParamsSchema,
+  handle: (params, ctx) => control(ctx).reviewEffect(params, ctx.mutationActor),
+};
+
 /** `runs.start`: a workflow and its vars. No request, no work item, no documents - by decision. */
 export const runsStart: Method<RunsStartParams, RunsStartResult> = {
   params: RunsStartParamsSchema,
@@ -814,6 +838,7 @@ export const methods: MethodTable = {
   [WORKFLOWS_LIST_METHOD]: workflowsList,
   [WORKFLOWS_GET_METHOD]: workflowsGet,
   [SEARCH_METHOD]: search,
+  [RUNS_RECOVERY_METHOD]: runsRecovery,
 };
 
 /**
@@ -855,6 +880,7 @@ export const controlMethods: MethodTable = {
   [RUNS_RESUME_METHOD]: runsResume,
   [RUNS_CANCEL_METHOD]: runsCancel,
   [RUNS_START_METHOD]: runsStart,
+  [RUNS_REVIEW_EFFECT_METHOD]: runsReviewEffect,
   [CLAIMS_RELEASE_METHOD]: claimsRelease,
 };
 
@@ -963,6 +989,21 @@ export function methodsFor(ctx: MethodContext): MethodTable {
         return model.admit(command, idempotencyKey === undefined ? {} : { idempotencyKey }, await authority.direct());
       },
     };
+    if (model.supportsCheckpoints)
+      table[RUNS_RECOVER_METHOD] = {
+        params: RunsRecoverParamsSchema,
+        handle: async (params, invocation) => {
+          const { idempotencyKey, expectedScope, ...command } = params;
+          const authority = await authorities(invocation);
+          await checkAdmissionScope(expectedScope, authority);
+          const response = await model.recover(
+            command,
+            idempotencyKey === undefined ? {} : { idempotencyKey },
+            authority,
+          );
+          return response.state === "resolved" ? { ...response.result, operationId: response.operationId } : response;
+        },
+      };
     table["admissions.get"] = {
       params: AdmissionsGetParamsSchema,
       handle: async (params, invocation) => {

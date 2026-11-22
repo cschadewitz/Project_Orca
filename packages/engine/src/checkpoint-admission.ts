@@ -116,6 +116,26 @@ export class CheckpointAdmissionService {
     );
   }
 
+  /** An admission's receipt, verified against its run and policy when it was accepted. Writes nothing. */
+  inspect(
+    operationId: string,
+    authority: CheckpointAdmissionAuthority,
+  ): Promise<RetryResult<CheckpointAdmissionResult>> {
+    return this.authorities.run(authority, async () => {
+      const scope = this.scope(authority);
+      if ((await this.options.retries.operationKind(operationId, scope)) !== "run.recover") throw unavailable();
+      return (await this.options.retries.inspect(operationId, scope)) as RetryResult<CheckpointAdmissionResult>;
+    });
+  }
+
+  private scope(authority: CheckpointAdmissionAuthority) {
+    return {
+      principalId: authority.actor.principalId,
+      workspaceId: authority.workspaceId,
+      authorize: (value: unknown) => authority.authorize(value as CheckpointAdmissionCommand),
+    };
+  }
+
   /**
    * Finish an admission that returned a recoverable failure: create its reserved attempt if it
    * is still the source's pending reservation, or keep failing if that reservation was retired.
@@ -125,11 +145,7 @@ export class CheckpointAdmissionService {
     authority: CheckpointAdmissionAuthority,
   ): Promise<RetryResult<CheckpointAdmissionResult>> {
     return this.authorities.run(authority, async () => {
-      const scope = {
-        principalId: authority.actor.principalId,
-        workspaceId: authority.workspaceId,
-        authorize: (value: unknown) => authority.authorize(value as CheckpointAdmissionCommand),
-      };
+      const scope = this.scope(authority);
       if ((await this.options.retries.operationKind(operationId, scope)) !== "run.recover") throw unavailable();
       return (await this.options.retries.reconcile(operationId, scope)) as RetryResult<CheckpointAdmissionResult>;
     });

@@ -153,7 +153,14 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * optional `contentHash` on `ArtifactView`. New method names in `hello.methods` and an
  * optional field: a 2.3 client never calls them and strips the field.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 4 };
+/**
+ * 2.5 adds recovery (#357): `runs.recovery` (a read), `runs.reviewEffect` (a control write) and
+ * `runs.recover` (a checkpoint attempt through retry-safe admission, receipts through
+ * `admissions.get`/`admissions.reconcile`), plus optional `checkpoint` on `RunSummaryView` and
+ * `reusedFrom`, `reusedChildren` and `effectReview` on `StepView`. New method names and optional
+ * fields: a 2.4 client never calls them and strips the fields.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 5 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is
