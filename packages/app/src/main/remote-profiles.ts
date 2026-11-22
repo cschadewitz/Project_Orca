@@ -1,7 +1,7 @@
 /**
  * Saved SSH connection profiles for remote daemons (#874), main process only.
  *
- * A profile is nonsecret (`user@host`, ports, ProxyJump, a few ssh options) and lives in
+ * A profile is nonsecret typed fields (`user@host`, ports, key path, one jump host) and lives in
  * `<dir>/profiles.json`. Beside it, per profile: the pinned host key
  * (`known_hosts/<id>`) and the encrypted daemon credential (`credentials/<id>.credential`,
  * sealed with the OS keychain through `safeStorage`). The renderer sees only
@@ -24,7 +24,7 @@ import {
   type SshTunnelOptions,
   type TunnelState,
 } from "@orca/protocol/remote-access";
-import type { DaemonTokenSource } from "../client/auth.js";
+import { CredentialTransportUnavailable, type DaemonTokenSource } from "../client/auth.js";
 import type { RemoteProfileView } from "../daemon-connection.js";
 import { ConnectionRefusal } from "./connection-target.js";
 
@@ -42,6 +42,8 @@ export interface ProfileLease {
   readonly auth: DaemonTokenSource;
   /** The remote refused the forwarded connection just now: ssh works, no daemon listens. */
   remoteRefused(): boolean;
+  /** The tunnel is up, bound and its ssh still running: the only time `auth` yields a token. */
+  transportVerified(): boolean;
   release(): Promise<void>;
 }
 
@@ -107,11 +109,20 @@ export class RemoteProfiles {
       name: profile.name,
       destination: profile.destination,
       ...(profile.sshPort ? { sshPort: profile.sshPort } : {}),
-      ...(profile.proxyJump ? { proxyJump: profile.proxyJump } : {}),
-      ...(profile.sshArgs?.length ? { sshArgs: [...profile.sshArgs] } : {}),
+      ...(profile.identityFile ? { identityFile: profile.identityFile } : {}),
+      ...(profile.jump
+        ? {
+            jump: {
+              destination: profile.jump.destination,
+              ...(profile.jump.sshPort ? { sshPort: profile.jump.sshPort } : {}),
+              ...(profile.jump.identityFile ? { identityFile: profile.jump.identityFile } : {}),
+            },
+          }
+        : {}),
       remotePort: profile.remotePort,
       hasCredential: this.slots.has(profile.id),
-      hostKeyPinned: pinnedHostKey(this.pins(profile.id)),
+      hostKeyPinned:
+        pinnedHostKey(this.pins(profile.id)) && (!profile.jump || pinnedHostKey(`${this.pins(profile.id)}.jump`)),
     };
   }
 
@@ -144,7 +155,9 @@ export class RemoteProfiles {
       existing &&
       (existing.destination !== profile.destination ||
         existing.sshPort !== profile.sshPort ||
-        existing.remotePort !== profile.remotePort)
+        existing.remotePort !== profile.remotePort ||
+        existing.jump?.destination !== profile.jump?.destination ||
+        existing.jump?.sshPort !== profile.jump?.sshPort)
     ) {
       // Another server, or another daemon on it: the old key and credential belong to that one.
       this.forgetHostKey(id);
@@ -180,6 +193,7 @@ export class RemoteProfiles {
   forgetHostKey(id: string): void {
     if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(id)) throw new ConnectionRefusal("Invalid profile");
     rmSync(this.pins(id), { force: true });
+    rmSync(`${this.pins(id)}.jump`, { force: true });
   }
 
   /** Open (or share) the profile's tunnel and hand out its credential source. */
@@ -217,14 +231,20 @@ export class RemoteProfiles {
     return {
       profile,
       url,
+      // The credential is released only to a verified tunnel: while ssh is down or
+      // restarting, the local port could belong to anything, so nothing is offered.
       auth: {
-        read: () => (cached ??= slots.read(id)),
+        read: () => {
+          if (!current.tunnel.transportVerified()) throw new CredentialTransportUnavailable();
+          return (cached ??= slots.read(id));
+        },
         refresh: () => {
           cached = undefined;
           return true;
         },
       },
       remoteRefused: () => current.tunnel.remoteRefused(),
+      transportVerified: () => current.tunnel.transportVerified(),
       release: async () => {
         if (released) return;
         released = true;

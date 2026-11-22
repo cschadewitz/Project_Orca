@@ -12,6 +12,19 @@ export interface DaemonTokenSource {
   refresh(): boolean;
 }
 
+/**
+ * The credential's transport cannot be verified right now: an app-managed SSH tunnel is
+ * down, restarting or replaced, so the local port may not be the tunnel's (#874). Thrown by
+ * `DaemonTokenSource.read()` before anything is sent. Not an authentication failure: the
+ * caller treats it as an unreachable daemon and retries later, never as a refused credential.
+ */
+export class CredentialTransportUnavailable extends Error {
+  override readonly name = "CredentialTransportUnavailable";
+  constructor() {
+    super("The SSH tunnel to the daemon is not verified; no credential was sent.");
+  }
+}
+
 export function isLoopbackDaemon(url: string): boolean {
   const host = new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase();
   return host === "localhost" || host === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);

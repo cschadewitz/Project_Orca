@@ -157,7 +157,12 @@ import {
   type WorkflowsListResult,
 } from "@orca/protocol";
 import { type ZodType } from "zod";
-import { assertCredentialDestination, authenticationCode, type DaemonTokenSource } from "./auth.js";
+import {
+  assertCredentialDestination,
+  authenticationCode,
+  CredentialTransportUnavailable,
+  type DaemonTokenSource,
+} from "./auth.js";
 import { DaemonSubscription, type DaemonSubscriptionOptions } from "./subscription.js";
 import { observeOwnedDiagnostic, type OwnedDiagnosticObserver } from "../main/diagnostics/source-producers.js";
 
@@ -242,7 +247,9 @@ export class DaemonClient {
       let token: string | undefined;
       try {
         token = this.options.auth?.read();
-      } catch {
+      } catch (error) {
+        // Nothing was sent: the transport is down, not the credential.
+        if (error instanceof CredentialTransportUnavailable) throw error;
         if (publishAuthFailure) this.options.onAuthFailure?.();
         if (publishAuthFailure) this.observeError({ code: "AUTH_INVALID", message: "" });
         throw new DaemonClientError({ code: "AUTH_INVALID", message: "Daemon authentication failed" });

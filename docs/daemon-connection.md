@@ -62,7 +62,9 @@ explicit current-authority `runs.resume` boundary documented in
 The default way to reach a daemon on another machine is a saved **SSH profile**: the
 app runs the tunnel itself and the daemon stays bound to the server's loopback. In
 the connection dialog, **Add profile…** takes a name, `user@host`, an optional SSH
-port, optional ProxyJump hops and the daemon's port on the server (default 6722).
+port, an optional private key path, an optional jump host and the daemon's port on
+the server (default 6722). These typed fields are all a profile holds: there are no
+free-form ssh options, and no ssh config file (yours or the system's) is read.
 **Import credential…** opens a file picker in the main process and seals the chosen
 daemon credential (for example one printed by `orca auth issue … --preset client` on
 the server) into the profile's slot in the OS keychain; the token never reaches the
@@ -72,15 +74,28 @@ URL, and a refused probe closes the candidate tunnel and leaves the previous
 connection and saved target as they were.
 
 The main process owns each tunnel:
-`ssh -N -L 127.0.0.1:<ephemeral>:127.0.0.1:<daemon port> [user@]host` with
-`BatchMode=yes` (your existing keys and agent, never a prompt) and
-`ExitOnForwardFailure=yes`. The server's host key is pinned in a per-profile
-known-hosts file on the first successful connect (`StrictHostKeyChecking=accept-new`)
-and enforced afterwards (`yes`). If the tunnel drops while in use, ssh is restarted
-with backoff (1 s doubling to 30 s) on the same local port, so the connection shows
-reconnecting and the stream resumes under the existing epoch and cursor rules; no
-operation is reissued. A changed host key, failed authentication or a missing ssh
-stops the restarts. Leaving the profile, removing it or quitting stops its tunnel.
+`ssh -F none -N -L 127.0.0.1:<ephemeral>:127.0.0.1:<daemon port> [user@]host` with
+`BatchMode=yes` (your keys or agent, never a prompt), `ExitOnForwardFailure=yes`, and
+every other option that matters set on the command line (no `ProxyCommand`, no agent
+or X11 forwarding, no local commands, no connection sharing, no DNS or IP host-key
+checks). The server's host key is pinned in an app-owned known-hosts file, recorded
+under a per-profile alias, on the first successful connect
+(`StrictHostKeyChecking=accept-new`) and enforced afterwards (`yes`); that file is both
+the user and the global known-hosts source, so nothing else can vouch for the server.
+A jump host is a second app-owned ssh, forwarding a private loopback port to the
+server's sshd, with its own pin; the ssh to the server goes through it and is checked
+against the server's pin.
+
+The credential is offered only while the tunnel is verified: every ssh of the current
+start has authenticated its server against its pin, bound its forward, and is still
+running, so the local port is provably the tunnel's. While the tunnel is down or
+restarting, HTTP requests and the WebSocket send nothing and fail as an unreachable
+daemon (not as a refused credential). If the tunnel drops while in use, ssh is
+restarted with backoff (1 s doubling to 30 s) on the same local port, so the
+connection shows reconnecting and the stream resumes under the existing epoch and
+cursor rules; no operation is reissued. A changed host key, failed authentication or
+a missing ssh stops the restarts. Leaving the profile, removing it or quitting stops
+its tunnel.
 
 Each failure has its own message: no ssh client, changed host key (with **Forget
 host key** for a server that was deliberately rebuilt), failed SSH authentication,
@@ -93,8 +108,7 @@ Profiles live in `<userData>/remote-daemons/` (`profiles.json`, `known_hosts/`,
 `credentials/`); the saved target is the profile's id in the app preferences, and it
 replaces a saved URL. `ORCA_DAEMON_URL` and `ORCA_DAEMON_TOKEN_FILE` keep their
 precedence: an environment override still pins the launch and disables profile
-switching. Extra ssh options a profile carries are limited to `-o Key=Value`, `-i`,
-`-F`, `-4`, `-6` and `-C`, and may not override the options above. The tunnel and the
+switching. The tunnel and the
 credential slots live in `@orca/protocol/remote-access`, which the daemon can import
 for delegation (#883). Windows uses the built-in OpenSSH client (`ssh.exe`).
 

@@ -18,26 +18,27 @@ export interface DaemonTargetSnapshot {
  * A saved SSH connection profile as the renderer sees it (#874): where it points and
  * whether a credential and a pinned host key exist, never the credential or the key.
  */
-export interface RemoteProfileView {
-  id: string;
-  name: string;
+export interface RemoteProfileHop {
   destination: string;
   sshPort?: number;
-  proxyJump?: string;
-  sshArgs?: string[];
+  /** An absolute private key path. Absent: the keys the SSH agent offers. */
+  identityFile?: string;
+}
+export interface RemoteProfileView extends RemoteProfileHop {
+  id: string;
+  name: string;
+  /** One jump host, with its own pinned host key. */
+  jump?: RemoteProfileHop;
   remotePort: number;
   hasCredential: boolean;
   hostKeyPinned: boolean;
 }
 
 /** What the dialog sends to create (`id` absent) or edit a profile. */
-export interface RemoteProfileInput {
+export interface RemoteProfileInput extends RemoteProfileHop {
   id?: string;
   name: string;
-  destination: string;
-  sshPort?: number;
-  proxyJump?: string;
-  sshArgs?: string[];
+  jump?: RemoteProfileHop;
   remotePort?: number;
 }
 

@@ -19,11 +19,11 @@ import {
   CredentialStorageUnavailable,
   ephemeralLoopbackPort,
   profileIdFor,
-  sshArgsProblem,
   sshOptionPath,
   SshTunnel,
   TunnelRefusal,
-  tunnelArgs,
+  tunnelHops,
+  hopArgs,
   type SecretCipher,
   type TunnelState,
 } from "@orca/protocol/remote-access";
@@ -35,7 +35,14 @@ const profile = (extra: Record<string, unknown> = {}) =>
 describe("connection profiles", () => {
   it("accepts user@host and defaults the daemon port", () => {
     expect(profile()).toMatchObject({ destination: "casey@lab.example", remotePort: 6722 });
-    expect(profile({ destination: "[::1]", sshPort: 2222, proxyJump: "jump@bastion:22,edge" })).toBeTruthy();
+    expect(
+      profile({
+        destination: "[::1]",
+        sshPort: 2222,
+        identityFile: "C:\\Users\\casey\\.ssh\\id_ed25519",
+        jump: { destination: "jump@bastion", sshPort: 22, identityFile: "/home/casey/.ssh/id" },
+      }),
+    ).toBeTruthy();
   });
   it.each(["-oProxyCommand=x", "a b", "host;rm", "user@-host", "", "a@b@c"])(
     "refuses destination %j",
@@ -48,19 +55,22 @@ describe("connection profiles", () => {
       false,
     );
   });
-  it("allows ordinary ssh options and refuses ones the tunnel's safety depends on", () => {
-    expect(sshArgsProblem(["-o", "IdentitiesOnly=yes", "-i", "/k", "-4", "-oCompression=yes"])).toBeUndefined();
-    for (const args of [
-      ["-o", "StrictHostKeyChecking=no"],
-      ["-oUserKnownHostsFile=/dev/null"],
-      ["-o", "localcommand=x"],
-      ["-L", "1:2:3"],
-      ["-R", "1"],
-      ["-o"],
-      ["-o", "NoEquals"],
-      ["host"],
+  it("has only typed fields: no free-form ssh options, config files or multi-hop strings", () => {
+    for (const extra of [
+      { sshArgs: ["-o", "StrictHostKeyChecking=no"] },
+      { options: { ProxyCommand: "x" } },
+      { configFile: "/tmp/x" },
+      { proxyJump: "a,b" },
+      { identityFile: "~/.ssh/id" },
+      { identityFile: "relative/key" },
+      { identityFile: '/a"b' },
+      { jump: { destination: "j", proxyCommand: "x" } },
+      { jump: { destination: "-oProxyCommand=x" } },
     ])
-      expect(sshArgsProblem(args), args.join(" ")).toBeTruthy();
+      expect(
+        ConnectionProfileSchema.safeParse({ id: "x", name: "X", destination: "h", ...extra }).success,
+        JSON.stringify(extra),
+      ).toBe(false);
   });
   it("derives unique file-safe ids", () => {
     expect(profileIdFor("Build Box #2", new Set())).toBe("build-box-2");
@@ -70,16 +80,64 @@ describe("connection profiles", () => {
 });
 
 describe("tunnel arguments", () => {
-  it("puts ORCA's options before the profile's and pins accept-new until a key is known", () => {
+  const options = (args: string[]) => args.flatMap((arg, i) => (args[i - 1] === "-o" ? [arg] : []));
+  it("reads no ssh config, makes the pin the only trust source, and pins accept-new until a key is known", () => {
     const pins = join(dir(), "lab.known_hosts");
-    const args = tunnelArgs(profile({ sshArgs: ["-o", "IdentitiesOnly=yes"], sshPort: 2200 }), 41000, pins);
-    expect(args).toContain("StrictHostKeyChecking=accept-new");
-    expect(args).toContain("-L");
+    const [hop, ...rest] = tunnelHops(profile({ sshPort: 2200, identityFile: "/k/100%" }), 41000, pins);
+    expect(rest).toEqual([]);
+    const args = hopArgs(hop!);
+    expect(args.slice(0, 2)).toEqual(["-F", "none"]);
+    const quoted = `"${pins.replace(/\\/g, "/")}"`;
+    expect(options(args)).toEqual(
+      expect.arrayContaining([
+        "BatchMode=yes",
+        "ExitOnForwardFailure=yes",
+        "StrictHostKeyChecking=accept-new",
+        `UserKnownHostsFile=${quoted}`,
+        `GlobalKnownHostsFile=${quoted}`,
+        "HostKeyAlias=orca-lab",
+        "CheckHostIP=no",
+        "UpdateHostKeys=no",
+        "ProxyCommand=none",
+        "ProxyJump=none",
+        "ControlPath=none",
+        "ForwardAgent=no",
+        "PermitLocalCommand=no",
+        "IdentitiesOnly=yes",
+      ]),
+    );
+    expect(args.filter((arg) => arg === "-L")).toHaveLength(1);
     expect(args[args.indexOf("-L") + 1]).toBe("127.0.0.1:41000:127.0.0.1:6722");
-    expect(args.indexOf("BatchMode=yes")).toBeLessThan(args.indexOf("IdentitiesOnly=yes"));
+    expect(args[args.indexOf("-i") + 1]).toBe("/k/100%%");
     expect(args.slice(-2)).toEqual(["--", "casey@lab.example"]);
-    writeFileSync(pins, "[lab.example]:2200 ssh-ed25519 AAAA\n");
-    expect(tunnelArgs(profile(), 41000, pins)).toContain("StrictHostKeyChecking=yes");
+    writeFileSync(pins, "orca-lab ssh-ed25519 AAAA\n");
+    expect(options(hopArgs(tunnelHops(profile(), 41000, pins)[0]!))).toContain("StrictHostKeyChecking=yes");
+  });
+  it("chains a jump host as its own pinned ssh, then reaches the server through a private port", () => {
+    const pins = join(dir(), "lab.known_hosts");
+    const hops = tunnelHops(
+      profile({ sshPort: 2200, jump: { destination: "j@bastion", sshPort: 2022 } }),
+      41000,
+      pins,
+      41999,
+    );
+    expect(hops).toEqual([
+      expect.objectContaining({
+        target: "j@bastion",
+        port: 2022,
+        knownHostsFile: `${pins}.jump`,
+        hostKeyAlias: "orca-lab-jump",
+        forward: "127.0.0.1:41999:lab.example:2200",
+      }),
+      expect.objectContaining({
+        target: "casey@127.0.0.1",
+        port: 41999,
+        knownHostsFile: pins,
+        hostKeyAlias: "orca-lab",
+        forward: "127.0.0.1:41000:127.0.0.1:6722",
+      }),
+    ]);
+    for (const hop of hops) expect(hopArgs(hop).slice(0, 2)).toEqual(["-F", "none"]);
   });
   it("quotes option paths for Windows and ssh tokens", () => {
     expect(sshOptionPath("C:\\Users\\A B\\100%\\k")).toBe('"C:/Users/A B/100%%/k"');
@@ -151,6 +209,8 @@ function fakeTunnel(script: (ssh: FakeSsh, n: number, args: readonly string[]) =
 }
 
 const listening = "debug1: Local forwarding listening on 127.0.0.1 port 41234.\ndebug1: Entering interactive session.";
+const firstChild = (tunnel: SshTunnel) =>
+  (tunnel as unknown as { generation: { children: ChildProcess[] } }).generation.children[0]!;
 const until = async (check: () => boolean) => {
   for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5));
   expect(check()).toBe(true);
@@ -237,6 +297,54 @@ describe("SshTunnel with a fake ssh", () => {
     await tunnel.close();
   });
 
+  it("verifies the transport only while every ssh of the current start is bound and alive", async () => {
+    const { tunnel, spawned } = fakeTunnel((ssh, n) => {
+      if (n === 1) ssh.say(listening);
+    });
+    expect(tunnel.transportVerified()).toBe(false);
+    await tunnel.open();
+    expect(tunnel.transportVerified()).toBe(true);
+    // Loss is visible synchronously, before ssh's exit is even delivered or a restart begins.
+    spawned[0]!.exitCode = 255;
+    expect(tunnel.transportVerified()).toBe(false);
+    spawned[0]!.exitCode = null;
+    spawned[0]!.exit(255);
+    await until(() => tunnel.state.phase === "reconnecting");
+    expect(tunnel.transportVerified()).toBe(false);
+    await tunnel.close();
+    expect(tunnel.transportVerified()).toBe(false);
+  });
+
+  it("starts a jump host first and restarts the whole chain when either ssh drops", async () => {
+    const { tunnel, spawned } = fakeTunnel((ssh) => ssh.say(listening), {
+      profile: profile({ jump: { destination: "j@bastion" } }),
+    });
+    await tunnel.open();
+    expect(spawned).toHaveLength(2);
+    expect(tunnel.transportVerified()).toBe(true);
+    spawned[0]!.exit(255);
+    await until(() => spawned[1]!.killed);
+    expect(tunnel.transportVerified()).toBe(false);
+    await until(() => spawned.length === 4 && tunnel.state.phase === "open");
+    expect(tunnel.transportVerified()).toBe(true);
+    await tunnel.close();
+  });
+
+  it("leaves nothing running when the server hop fails behind a working jump host", async () => {
+    const { tunnel, spawned } = fakeTunnel(
+      (ssh, n) => {
+        if (n === 1) ssh.say(listening);
+        else {
+          ssh.say("Host key verification failed.");
+          ssh.exit(255);
+        }
+      },
+      { profile: profile({ jump: { destination: "j@bastion" } }) },
+    );
+    await expect(tunnel.open()).rejects.toMatchObject({ code: "host-key-changed" });
+    expect(spawned[0]!.killed).toBe(true);
+  });
+
   it("is single-use once closed", async () => {
     const { tunnel } = fakeTunnel((ssh) => ssh.say(listening));
     await tunnel.close();
@@ -315,7 +423,7 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
         name: "Live",
         destination: live!.destination,
         ...(live!.sshPort ? { sshPort: live!.sshPort } : {}),
-        sshArgs: ["-i", live!.identity, "-o", "IdentitiesOnly=yes"],
+        identityFile: live!.identity,
         remotePort,
         ...extra,
       }),
@@ -341,7 +449,8 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
     const states: string[] = [];
     (first as unknown as { options: { onState?: (s: TunnelState) => void } }).options.onState = (s) =>
       states.push(s.phase);
-    (first as unknown as { child: ChildProcess }).child.kill();
+    firstChild(first).kill();
+    await until(() => !first.transportVerified());
     await until(() => states.includes("open"));
     expect(first.localPort).toBe(port);
     expect(await (await fetch(url)).text()).toBe("orca");
@@ -360,9 +469,7 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
     const remote = await daemon();
     const pins = join(dir(), "live.known_hosts");
     const wrongKey = join(dir(), "none");
-    await expect(
-      open(remote, pins, { sshArgs: ["-i", wrongKey, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none"] }).open(),
-    ).rejects.toMatchObject({ code: "auth-failed" });
+    await expect(open(remote, pins, { identityFile: wrongKey }).open()).rejects.toMatchObject({ code: "auth-failed" });
     await expect(open(remote, pins, {}, join(dir(), "no-ssh-here")).open()).rejects.toMatchObject({
       code: "ssh-missing",
     });
@@ -376,7 +483,7 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
         name: "Live",
         destination: live!.destination,
         ...(live!.sshPort ? { sshPort: live!.sshPort } : {}),
-        sshArgs: ["-i", live!.identity, "-o", "IdentitiesOnly=yes"],
+        identityFile: live!.identity,
         remotePort: remote,
       }),
       knownHostsFile: pins,
@@ -384,6 +491,62 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
     });
     tunnels.push(tunnel);
     await expect(tunnel.open()).rejects.toMatchObject({ code: "forward-failed" });
+  }, 60_000);
+
+  it("ignores every ssh config: the effective settings are ORCA's", async () => {
+    const pins = join(dir(), "live.known_hosts");
+    const hop = tunnelHops(
+      ConnectionProfileSchema.parse({
+        id: "live",
+        name: "Live",
+        destination: live!.destination,
+        sshPort: live!.sshPort,
+      }),
+      41000,
+      pins,
+    )[0]!;
+    // `ssh -G` prints the configuration ssh would use for exactly this argv, then exits.
+    const { execFileSync } = await import("node:child_process");
+    const printed = execFileSync("ssh", ["-G", ...hopArgs(hop).filter((arg) => arg !== "-N" && arg !== "-v")], {
+      encoding: "utf8",
+    });
+    const settings = new Map<string, string[]>();
+    for (const line of printed.split(/\r?\n/)) {
+      const [key, ...value] = line.split(" ");
+      if (key) settings.set(key, [...(settings.get(key) ?? []), value.join(" ")]);
+    }
+    expect(settings.get("stricthostkeychecking")).toEqual(["accept-new"]);
+    expect(settings.get("batchmode")).toEqual(["yes"]);
+    expect(settings.get("exitonforwardfailure")).toEqual(["yes"]);
+    expect(settings.get("hostkeyalias")).toEqual(["orca-live"]);
+    expect(settings.get("forwardagent")).toEqual(["no"]);
+    expect(settings.get("permitlocalcommand")).toEqual(["no"]);
+    expect(settings.get("localforward")).toEqual(["[127.0.0.1]:41000 [127.0.0.1]:6722"]);
+    expect(settings.get("remoteforward")).toBeUndefined();
+    expect(settings.get("dynamicforward")).toBeUndefined();
+    expect(settings.get("proxycommand")).toBeUndefined();
+    expect(settings.get("localcommand")).toBeUndefined();
+    // Both known-hosts sources are the pin file and nothing else.
+    for (const key of ["userknownhostsfile", "globalknownhostsfile"])
+      expect(settings.get(key)?.join(" ").replace(/\\/g, "/")).toBe(pins.replace(/\\/g, "/"));
+  }, 60_000);
+
+  it("reaches the server through an app-owned jump host with its own pin", async () => {
+    const remote = await daemon();
+    const pins = join(dir(), "live.known_hosts");
+    const tunnel = open(remote, pins, {
+      jump: {
+        destination: live!.destination,
+        ...(live!.sshPort ? { sshPort: live!.sshPort } : {}),
+        identityFile: live!.identity,
+      },
+    });
+    const url = await tunnel.open();
+    expect(await (await fetch(url)).text()).toBe("orca");
+    expect(statSync(pins).size).toBeGreaterThan(0);
+    expect(statSync(`${pins}.jump`).size).toBeGreaterThan(0);
+    expect(readFileSync(pins, "utf8")).toMatch(/^orca-live /);
+    expect(readFileSync(`${pins}.jump`, "utf8")).toMatch(/^orca-live-jump /);
   }, 60_000);
 
   it("tells a missing remote daemon apart from a broken tunnel", async () => {

@@ -3,6 +3,7 @@ import { isCompatible, PROTOCOL_VERSION, type HelloResult } from "@orca/protocol
 import { authenticationCode } from "../client/auth.js";
 import type { DaemonClient } from "../client/daemon-client.js";
 import { daemonEndpoint, type DaemonConnectionRequest } from "../daemon-connection.js";
+import { CredentialTransportUnavailable } from "../client/auth.js";
 import { CredentialStorageUnavailable, TunnelRefusal } from "@orca/protocol/remote-access";
 
 export interface ConnectionCandidate {
@@ -36,6 +37,7 @@ export function connectionFailure(error: unknown): string {
   if (code === "AUTH_FORBIDDEN") return "This credential is not authorized to access the daemon.";
   return error instanceof ConnectionRefusal ||
     error instanceof TunnelRefusal ||
+    error instanceof CredentialTransportUnavailable ||
     error instanceof CredentialStorageUnavailable
     ? error.message
     : "The daemon could not be reached or returned an invalid handshake.";

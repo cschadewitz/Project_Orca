@@ -31,7 +31,12 @@ import {
 } from "@orca/protocol";
 
 import type { DaemonIdentity } from "../daemon-connection.js";
-import { assertCredentialDestination, authenticationCode, type DaemonTokenSource } from "./auth.js";
+import {
+  assertCredentialDestination,
+  authenticationCode,
+  CredentialTransportUnavailable,
+  type DaemonTokenSource,
+} from "./auth.js";
 
 /** What the subscription needs of an open connection. */
 export interface SocketHandle {
@@ -208,7 +213,12 @@ export class DaemonSubscription {
     try {
       token = this.opts.auth?.tokens.read();
       assertCredentialDestination(this.opts.url, token);
-    } catch {
+    } catch (error) {
+      // A tunnel that is not verified yet: reconnect later, as for a dropped socket.
+      if (error instanceof CredentialTransportUnavailable) {
+        this.onClose();
+        return;
+      }
       this.authenticationFailed(false);
       return;
     }

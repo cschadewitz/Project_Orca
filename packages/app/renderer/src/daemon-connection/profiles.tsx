@@ -14,10 +14,20 @@ interface Draft {
   name: string;
   destination: string;
   sshPort: string;
-  proxyJump: string;
+  identityFile: string;
+  jumpDestination: string;
+  jumpPort: string;
   remotePort: string;
 }
-const EMPTY: Draft = { name: "", destination: "", sshPort: "", proxyJump: "", remotePort: "" };
+const EMPTY: Draft = {
+  name: "",
+  destination: "",
+  sshPort: "",
+  identityFile: "",
+  jumpDestination: "",
+  jumpPort: "",
+  remotePort: "",
+};
 
 function toInput(draft: Draft): RemoteProfileInput | string {
   const port = (value: string, label: string): number | undefined | string => {
@@ -29,12 +39,26 @@ function toInput(draft: Draft): RemoteProfileInput | string {
   if (typeof sshPort === "string") return sshPort;
   const remotePort = port(draft.remotePort, "Daemon port");
   if (typeof remotePort === "string") return remotePort;
+  const jumpPort = port(draft.jumpPort, "Jump host port");
+  if (typeof jumpPort === "string") return jumpPort;
+  const identityFile = draft.identityFile.trim();
+  const jump = draft.jumpDestination.trim();
   return {
     ...(draft.id ? { id: draft.id } : {}),
     name: draft.name.trim(),
     destination: draft.destination.trim(),
     ...(sshPort ? { sshPort } : {}),
-    ...(draft.proxyJump.trim() ? { proxyJump: draft.proxyJump.trim() } : {}),
+    ...(identityFile ? { identityFile } : {}),
+    // The jump host uses the same key file as the server; its own pin is kept beside the server's.
+    ...(jump
+      ? {
+          jump: {
+            destination: jump,
+            ...(jumpPort ? { sshPort: jumpPort } : {}),
+            ...(identityFile ? { identityFile } : {}),
+          },
+        }
+      : {}),
     ...(remotePort ? { remotePort } : {}),
   };
 }
@@ -96,9 +120,9 @@ export function ConnectionProfiles({
         SSH profiles
       </h3>
       <Text style="caption" as="p">
-        ORCA opens an SSH tunnel with your existing keys and agent, pins the server&apos;s host key on the first
-        connect, and keeps the profile&apos;s daemon credential in the system keychain. The daemon stays on the
-        server&apos;s loopback.
+        ORCA opens its own SSH tunnel with your keys or agent, pins the server&apos;s host key on the first connect, and
+        keeps the profile&apos;s daemon credential in the system keychain. Your ssh config is not used: enter the user,
+        port and key here. The daemon stays on the server&apos;s loopback.
       </Text>
       {list.length === 0 && !editing && (
         <Text style="caption" as="p">
@@ -165,7 +189,9 @@ export function ConnectionProfiles({
                     name: profile.name,
                     destination: profile.destination,
                     sshPort: profile.sshPort ? String(profile.sshPort) : "",
-                    proxyJump: profile.proxyJump ?? "",
+                    identityFile: profile.identityFile ?? "",
+                    jumpDestination: profile.jump?.destination ?? "",
+                    jumpPort: profile.jump?.sshPort ? String(profile.jump.sshPort) : "",
                     remotePort: String(profile.remotePort),
                   })
                 }
@@ -256,8 +282,10 @@ function ProfileEditor({
     <div className="orca-field" role="group" aria-label={initial.id ? "Edit profile" : "New profile"}>
       {field("name", "Name", "How this daemon is named in the app.", false)}
       {field("destination", "Server", "user@host, as you would pass it to ssh.")}
-      {field("sshPort", "SSH port", "Leave empty for 22 or your ssh config.")}
-      {field("proxyJump", "ProxyJump", "Optional jump hosts, [user@]host[:port], comma separated.")}
+      {field("sshPort", "SSH port", "Leave empty for 22.")}
+      {field("identityFile", "Key file", "Optional full path to a private key. Empty: the keys your SSH agent offers.")}
+      {field("jumpDestination", "Jump host", "Optional user@host to reach the server through.")}
+      {field("jumpPort", "Jump host SSH port", "Leave empty for 22.")}
       {field("remotePort", "Daemon port", "The daemon's port on the server's loopback. Default 6722.")}
       <div className="orca-dialog__actions">
         <Button size="sm" onClick={cancel}>

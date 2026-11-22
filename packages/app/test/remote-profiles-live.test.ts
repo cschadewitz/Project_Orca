@@ -11,7 +11,9 @@ import type { ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openAuthDirectory, startDaemon, type DaemonHandle } from "@orca/daemon";
 import type { SecretCipher, SshTunnel, TunnelState } from "@orca/protocol/remote-access";
+import { createServer } from "node:http";
 import { DaemonClient } from "../src/client/daemon-client.js";
+import { CredentialTransportUnavailable } from "../src/client/auth.js";
 import type { DaemonSubscription } from "../src/client/subscription.js";
 import { ConnectionTarget } from "../src/main/connection-target.js";
 import { RemoteProfiles } from "../src/main/remote-profiles.js";
@@ -70,7 +72,7 @@ describe.skipIf(!live)("profile connection over a real ssh", () => {
       name: "Live",
       destination: live!.destination,
       ...(live!.sshPort ? { sshPort: live!.sshPort } : {}),
-      sshArgs: ["-i", live!.identity, "-o", "IdentitiesOnly=yes"],
+      identityFile: live!.identity,
       remotePort,
     });
     profiles.importCredential(view.id, token);
@@ -121,12 +123,31 @@ describe.skipIf(!live)("profile connection over a real ssh", () => {
     expect((await workspace.client.hello("ssh-live")).orcaVersion).toBe("ssh-live");
     await vi.waitFor(() => expect(streams[0]!.state).toBe("live"), { timeout: 20_000 });
 
-    // Tunnel loss: ssh dies, the app restarts it on the same port, and the stream comes back
-    // on the same connection epoch (no switch, no reissue).
+    // Tunnel loss: ssh dies. Before it restarts, an impostor takes the local port, as any
+    // local process could. No credential may reach it: the tunnel is not verified.
     const epoch = target.epoch;
-    (tunnels[0] as unknown as { child: ChildProcess }).child.kill();
+    const port = Number(new URL(target.url).port);
+    (tunnels[0] as unknown as { generation: { children: ChildProcess[] } }).generation.children[0]!.kill();
     await vi.waitFor(() => expect(states.some((s) => s.phase === "reconnecting")).toBe(true), { timeout: 20_000 });
-    await vi.waitFor(() => expect(states.at(-1)?.phase).toBe("open"), { timeout: 20_000 });
+    const offered: (string | undefined)[] = [];
+    const impostor = createServer((request, response) => {
+      offered.push(request.headers.authorization ?? request.headers["sec-websocket-protocol"]);
+      response.end("{}");
+    });
+    await new Promise<void>((resolve, reject) => {
+      impostor.once("error", reject);
+      impostor.listen(port, "127.0.0.1", resolve);
+    });
+    await expect(workspace.client.hello("during-loss")).rejects.toBeInstanceOf(CredentialTransportUnavailable);
+    // Let the stream's reconnect attempts and ssh's restart attempts run against the impostor.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(offered.filter(Boolean)).toEqual([]);
+    expect(subscriptionStates).not.toContain("auth-failed");
+    await new Promise((resolve) => impostor.close(resolve));
+
+    // The port is free again: ssh restarts on it and the stream comes back on the same
+    // connection epoch (no switch, no reissue).
+    await vi.waitFor(() => expect(states.at(-1)?.phase).toBe("open"), { timeout: 40_000 });
     await vi.waitFor(() => expect(subscriptionStates.filter((s) => s === "live").length).toBeGreaterThanOrEqual(2), {
       timeout: 30_000,
     });

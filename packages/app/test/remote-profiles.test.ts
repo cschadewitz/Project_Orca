@@ -9,8 +9,9 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
 import { DaemonClient } from "../src/client/daemon-client.js";
-import type { DaemonTokenSource } from "../src/client/auth.js";
+import { CredentialTransportUnavailable, type DaemonTokenSource } from "../src/client/auth.js";
 import { DaemonSubscription } from "../src/client/subscription.js";
 import { ConnectionTarget, connectionFailure } from "../src/main/connection-target.js";
 import { RemoteProfiles, type ProfileLease } from "../src/main/remote-profiles.js";
@@ -27,6 +28,7 @@ const cipher: SecretCipher = {
 class FakeTunnel {
   closed = 0;
   refused = false;
+  verified = true;
   stateNow: TunnelState = { phase: "starting" };
   constructor(
     readonly options: SshTunnelOptions,
@@ -49,6 +51,9 @@ class FakeTunnel {
   }
   remoteRefused(): boolean {
     return this.refused;
+  }
+  transportVerified(): boolean {
+    return this.verified && this.stateNow.phase === "open";
   }
   async close(): Promise<void> {
     this.closed += 1;
@@ -151,6 +156,64 @@ describe("RemoteProfiles", () => {
   });
 });
 
+describe("credentials follow the verified tunnel, not the loopback URL", () => {
+  it("offers no credential over HTTP or the WebSocket while the tunnel cannot be verified", async () => {
+    // An impostor on the tunnel's local port: what any local process could do while ssh is down.
+    const seen: (string | undefined)[] = [];
+    const impostor = createServer((request, response) => {
+      seen.push(request.headers.authorization);
+      response.end("{}");
+    });
+    await new Promise<void>((resolve) => impostor.listen(0, "127.0.0.1", resolve));
+    const address = impostor.address();
+    const url = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
+    try {
+      const { profiles, tunnels } = store(() => Promise.resolve(url));
+      profiles.save({ name: "Lab", destination: "lab" });
+      profiles.importCredential("lab", TOKEN);
+      const lease = await profiles.open("lab");
+      tunnels[0]!.verified = false;
+      expect(() => lease.auth.read()).toThrow(CredentialTransportUnavailable);
+
+      const onAuthFailure = vi.fn();
+      const client = new DaemonClient(lease.url, fetch, {
+        auth: lease.auth,
+        requireAuthentication: true,
+        onAuthFailure,
+      });
+      await expect(client.hello("probe")).rejects.toBeInstanceOf(CredentialTransportUnavailable);
+      expect(onAuthFailure).not.toHaveBeenCalled();
+
+      const offered: (string[] | undefined)[] = [];
+      const states: string[] = [];
+      const stream = new DaemonSubscription({
+        url: client.socketUrl,
+        params: {},
+        onNotification: () => {},
+        onState: (state) => states.push(state),
+        backoffMs: [60_000],
+        auth: { tokens: lease.auth },
+        socket: (_url, _handlers, protocols) => {
+          offered.push(protocols);
+          return { send: () => {}, close: () => {} };
+        },
+      });
+      expect(offered).toEqual([]);
+      expect(states).toContain("reconnecting");
+      expect(states).not.toContain("auth-failed");
+      stream.close();
+      expect(seen).toEqual([]);
+
+      // Once verified again, the same lease sends the credential.
+      tunnels[0]!.verified = true;
+      expect(lease.auth.read()).toBe(TOKEN);
+      await lease.release();
+    } finally {
+      await new Promise((resolve) => impostor.close(resolve));
+    }
+  });
+});
+
 const hello = {
   protocol: PROTOCOL_VERSION,
   orcaVersion: "test",
@@ -166,6 +229,7 @@ function lease(id: string, url: string, released: string[], refused = false): Pr
     url,
     auth,
     remoteRefused: () => refused,
+    transportVerified: () => true,
     release: vi.fn(async () => {
       released.push(id);
     }),

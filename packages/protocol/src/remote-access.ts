@@ -8,12 +8,14 @@
  *
  * Three parts:
  *
- * - **Connection profiles**: the nonsecret description of a remote daemon (`user@host`, ssh
- *   port, ProxyJump, a few extra ssh options, the daemon's port on the remote loopback).
- * - **`SshTunnel`**: one `ssh -N -L 127.0.0.1:<local>:127.0.0.1:<remote>` process per
- *   profile in use, with the server's host key pinned in a per-profile known-hosts file on
- *   first connect, distinct refusals for the ways it fails, and restarts with backoff on the
- *   same local port after it was open, so a client's URL stays valid across a tunnel loss.
+ * - **Connection profiles**: the nonsecret description of a remote daemon as typed fields
+ *   only (`user@host`, ssh port, key file, one jump host, the daemon's port on the remote
+ *   loopback). No free-form ssh options, and no ssh config file is read.
+ * - **`SshTunnel`**: `ssh -F none -N -L 127.0.0.1:<local>:127.0.0.1:<remote>` per profile in
+ *   use (two chained processes behind a jump host), with each server's host key pinned in
+ *   an app-owned known-hosts file on first connect and that pin as the only trust source,
+ *   distinct refusals for the ways it fails, restarts with backoff on the same local port,
+ *   and `transportVerified()` to gate credentials on the live, verified tunnel.
  * - **`CredentialSlots`**: one encrypted credential per profile. The cipher is the caller's
  *   (Electron `safeStorage` in the app); there is no plaintext fallback.
  */
@@ -37,96 +39,35 @@ import { z } from "zod";
 export const DEFAULT_REMOTE_DAEMON_PORT = 6722;
 
 const PROFILE_ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const USER = "[A-Za-z0-9._][A-Za-z0-9._-]{0,63}";
+const HOST = "(?:[A-Za-z0-9][A-Za-z0-9._-]{0,252}|\\[[0-9A-Fa-f:.]+\\])";
 /** `[user@]host`: no option-looking leading dash, no whitespace, nothing a shell would read. */
-const DESTINATION = /^(?:[A-Za-z0-9._][A-Za-z0-9._-]{0,63}@)?(?:[A-Za-z0-9][A-Za-z0-9._-]{0,252}|\[[0-9A-Fa-f:.]+\])$/;
-/** One or more `[user@]host[:port]` hops for `-J`. */
-const JUMP =
-  /^(?:(?:[A-Za-z0-9._][A-Za-z0-9._-]{0,63}@)?(?:[A-Za-z0-9][A-Za-z0-9._-]{0,252}|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?)(?:,(?:(?:[A-Za-z0-9._][A-Za-z0-9._-]{0,63}@)?(?:[A-Za-z0-9][A-Za-z0-9._-]{0,252}|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?))*$/;
+const DESTINATION = new RegExp(`^(?:${USER}@)?${HOST}$`);
+/** An absolute key path, as ssh's `-i` takes it. No `~` (ORCA does not expand it), no quotes or newlines. */
+const KEY_PATH = /^(?:\/|[A-Za-z]:[\\/])[^"\r\n\0]{1,1023}$/;
 
+const Port = z.number().int().min(1).max(65535);
 /**
- * `-o` keys a profile may not set, because the tunnel's safety depends on ORCA's value: the
- * host-key pin, no prompts, failing on a forward that did not bind, and nothing but the one
- * forward. ssh keeps the first value it sees for an option and ORCA's come first, so this
- * list is about a clear refusal rather than the only line of defence.
+ * One SSH hop, as typed fields only. There is no free-form ssh argument and no ssh config
+ * file: everything else about the connection is ORCA's (see `hopArgs`).
  */
-const RESERVED_OPTIONS = new Set(
-  [
-    "BatchMode",
-    "StrictHostKeyChecking",
-    "UserKnownHostsFile",
-    "GlobalKnownHostsFile",
-    "KnownHostsCommand",
-    "UpdateHostKeys",
-    "ExitOnForwardFailure",
-    "LocalForward",
-    "RemoteForward",
-    "DynamicForward",
-    "ClearAllForwardings",
-    "PermitLocalCommand",
-    "LocalCommand",
-    "RemoteCommand",
-    "RequestTTY",
-    "SessionType",
-    "StdinNull",
-    "ForkAfterAuthentication",
-    "ControlMaster",
-    "ControlPath",
-    "ControlPersist",
-    "Tunnel",
-    "TunnelDevice",
-    "LogLevel",
-  ].map((key) => key.toLowerCase()),
-);
-
-/** Why a profile's extra ssh arguments are refused, or undefined when they are fine. */
-export function sshArgsProblem(args: readonly string[]): string | undefined {
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if (arg === "-4" || arg === "-6" || arg === "-C") continue;
-    if (arg === "-i" || arg === "-F" || arg === "-o") {
-      const value = args[++i];
-      if (value === undefined || value.startsWith("-")) return `${arg} needs a value`;
-      if (arg === "-o") {
-        const problem = optionProblem(value);
-        if (problem) return problem;
-      }
-      continue;
-    }
-    if (arg.startsWith("-o") && arg.length > 2) {
-      const problem = optionProblem(arg.slice(2));
-      if (problem) return problem;
-      continue;
-    }
-    return `Unsupported ssh argument ${JSON.stringify(arg)}. Use -o Key=Value, -i, -F, -4, -6 or -C.`;
-  }
-  return undefined;
-}
-
-function optionProblem(option: string): string | undefined {
-  const key = /^\s*([A-Za-z]+)\s*[= ]/.exec(option)?.[1];
-  if (!key) return `Write ssh options as Key=Value (got ${JSON.stringify(option)}).`;
-  if (RESERVED_OPTIONS.has(key.toLowerCase())) return `ORCA manages the ssh option ${key} for its tunnels.`;
-  return undefined;
-}
+const HopShape = {
+  /** `user@host` or `host` (the OS user name is the default user). */
+  destination: z.string().regex(DESTINATION, "Enter user@host or a host name"),
+  sshPort: Port.optional(),
+  /** A private key file. Absent: the keys your SSH agent offers. */
+  identityFile: z.string().regex(KEY_PATH, "Enter the key file's full path").optional(),
+};
 
 export const ConnectionProfileSchema = z
   .object({
     id: z.string().regex(PROFILE_ID),
     name: z.string().trim().min(1).max(80),
-    /** `user@host` or `host`; the user's ssh config may supply the rest. */
-    destination: z.string().regex(DESTINATION, "Enter user@host or a host name"),
-    sshPort: z.number().int().min(1).max(65535).optional(),
-    proxyJump: z.string().regex(JUMP, "Enter ProxyJump hops as [user@]host[:port], comma separated").optional(),
-    sshArgs: z
-      .array(z.string().min(1).max(512))
-      .max(16)
-      .superRefine((args, ctx) => {
-        const problem = sshArgsProblem(args);
-        if (problem) ctx.addIssue({ code: "custom", message: problem });
-      })
-      .optional(),
+    ...HopShape,
+    /** One jump host. The tunnel to it is ORCA's own, with its own pinned host key. */
+    jump: z.object(HopShape).strict().optional(),
     /** The daemon's port on the remote loopback. */
-    remotePort: z.number().int().min(1).max(65535).default(DEFAULT_REMOTE_DAEMON_PORT),
+    remotePort: Port.default(DEFAULT_REMOTE_DAEMON_PORT),
   })
   .strict();
 export type ConnectionProfile = z.infer<typeof ConnectionProfileSchema>;
@@ -227,7 +168,10 @@ export type TunnelState =
 
 export interface SshTunnelOptions {
   profile: ConnectionProfile;
-  /** The per-profile pin file. Missing or empty: the first connect pins (accept-new). */
+  /**
+   * The per-profile pin file for the daemon's server. Missing or empty: the first connect
+   * pins (accept-new). A jump host has its own beside it, `<file>.jump`.
+   */
   knownHostsFile: string;
   /** Default `ssh` from PATH. */
   sshBinary?: string;
@@ -235,7 +179,7 @@ export interface SshTunnelOptions {
   spawn?: (command: string, args: readonly string[]) => ChildProcess;
   /** Test seam: pick the local port. Default: an ephemeral loopback port from the OS. */
   pickPort?: () => Promise<number>;
-  /** How long ssh may take to authenticate and bind. Default 30 s. */
+  /** How long each ssh may take to authenticate and bind. Default 30 s. */
   readyTimeoutMs?: number;
   /** Restart backoff after the tunnel was open. Default 1 s doubling to 30 s. */
   backoff?: { initialMs: number; maxMs: number };
@@ -254,46 +198,113 @@ export function pinnedHostKey(knownHostsFile: string): boolean {
   }
 }
 
-/** The ssh argv for one tunnel. Exported for tests and for the docs; ORCA's options come first. */
-export function tunnelArgs(profile: ConnectionProfile, localPort: number, knownHostsFile: string): string[] {
-  const args = [
+/** One ssh process: who to reach, which pin and alias to check it against, what to forward. */
+export interface HopSpec {
+  /** `[user@]host` to hand ssh. For the hop behind a jump host, `[user@]127.0.0.1`. */
+  target: string;
+  port?: number | undefined;
+  identityFile?: string | undefined;
+  knownHostsFile: string;
+  /** The name the pin is recorded under, independent of the address ssh dials. */
+  hostKeyAlias: string;
+  /** The one `-L` forward, `127.0.0.1:<local>:<host>:<port>`. */
+  forward: string;
+}
+
+/**
+ * The full argv for one hop. Nothing from an ssh config file applies (`-F none`: not the
+ * user's, not the system's), so `Host *` blocks, `Include`, `Match exec`, `ProxyCommand`,
+ * `LocalCommand`, extra forwards and other trust sources cannot change the tunnel. Every
+ * option that matters is set here, and the pin file is both the user and the global
+ * known-hosts source, so the pin is the only host trust.
+ */
+export function hopArgs(hop: HopSpec): string[] {
+  const pins = sshOptionPath(hop.knownHostsFile);
+  const options = [
+    "BatchMode=yes",
+    "ExitOnForwardFailure=yes",
+    `StrictHostKeyChecking=${pinnedHostKey(hop.knownHostsFile) ? "yes" : "accept-new"}`,
+    `UserKnownHostsFile=${pins}`,
+    `GlobalKnownHostsFile=${pins}`,
+    `HostKeyAlias=${hop.hostKeyAlias}`,
+    "CheckHostIP=no",
+    "UpdateHostKeys=no",
+    "VerifyHostKeyDNS=no",
+    "CanonicalizeHostname=no",
+    "ProxyCommand=none",
+    "ProxyJump=none",
+    "ControlMaster=no",
+    "ControlPath=none",
+    "ForwardAgent=no",
+    "ForwardX11=no",
+    "PermitLocalCommand=no",
+    "ClearAllForwardings=no",
+    "Tunnel=no",
+    "AddKeysToAgent=no",
+    "ConnectTimeout=15",
+    "ServerAliveInterval=15",
+    "ServerAliveCountMax=3",
+    ...(hop.identityFile ? ["IdentitiesOnly=yes"] : []),
+  ];
+  return [
+    "-F",
+    "none",
     "-N",
     "-T",
-    // `-v` is what tells ORCA the forward is bound ("Entering interactive session")
-    // and which host key the server presented. Its output is parsed, never shown or logged.
+    // `-v` is what tells ORCA the forward is bound ("Entering interactive session") and which
+    // host key the server presented. Its output is parsed, never shown or logged.
     "-v",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ExitOnForwardFailure=yes",
-    "-o",
-    `StrictHostKeyChecking=${pinnedHostKey(knownHostsFile) ? "yes" : "accept-new"}`,
-    "-o",
-    `UserKnownHostsFile=${sshOptionPath(knownHostsFile)}`,
-    "-o",
-    "UpdateHostKeys=no",
-    "-o",
-    "ControlMaster=no",
-    "-o",
-    "ControlPath=none",
-    "-o",
-    "ClearAllForwardings=no",
-    "-o",
-    "PermitLocalCommand=no",
-    "-o",
-    "ConnectTimeout=15",
-    "-o",
-    "ServerAliveInterval=15",
-    "-o",
-    "ServerAliveCountMax=3",
+    ...options.flatMap((option) => ["-o", option]),
+    // `-i` goes through ssh's `%` token expansion; the path is absolute, so no `~`.
+    ...(hop.identityFile ? ["-i", hop.identityFile.replace(/%/g, "%%")] : []),
+    ...(hop.port ? ["-p", String(hop.port)] : []),
     "-L",
-    `127.0.0.1:${localPort}:127.0.0.1:${profile.remotePort}`,
+    hop.forward,
+    "--",
+    hop.target,
   ];
-  if (profile.sshPort) args.push("-p", String(profile.sshPort));
-  if (profile.proxyJump) args.push("-J", profile.proxyJump);
-  args.push(...(profile.sshArgs ?? []));
-  args.push("--", profile.destination);
-  return args;
+}
+
+function hostOf(destination: string): string {
+  return destination.slice(destination.lastIndexOf("@") + 1);
+}
+function userOf(destination: string): string | undefined {
+  const at = destination.lastIndexOf("@");
+  return at < 0 ? undefined : destination.slice(0, at);
+}
+
+/**
+ * The hops for a profile, in start order. Without a jump host: one ssh to the server. With
+ * one: an ssh to the jump host forwarding a private loopback port to the server's sshd, then
+ * the ssh to the server through that port, each with its own pinned key. Exported for tests.
+ */
+export function tunnelHops(
+  profile: ConnectionProfile,
+  localPort: number,
+  knownHostsFile: string,
+  jumpPort?: number,
+): HopSpec[] {
+  const daemon = `127.0.0.1:${localPort}:127.0.0.1:${profile.remotePort}`;
+  const server = {
+    identityFile: profile.identityFile,
+    knownHostsFile,
+    hostKeyAlias: `orca-${profile.id}`,
+    forward: daemon,
+  };
+  if (!profile.jump) return [{ ...server, target: profile.destination, port: profile.sshPort }];
+  if (!jumpPort) throw new Error("A jump host needs a private loopback port");
+  const user = userOf(profile.destination);
+  return [
+    {
+      target: profile.jump.destination,
+      port: profile.jump.sshPort,
+      identityFile: profile.jump.identityFile,
+      knownHostsFile: `${knownHostsFile}.jump`,
+      hostKeyAlias: `orca-${profile.id}-jump`,
+      forward: `127.0.0.1:${jumpPort}:${hostOf(profile.destination)}:${profile.sshPort ?? 22}`,
+    },
+    { ...server, target: user ? `${user}@127.0.0.1` : "127.0.0.1", port: jumpPort },
+  ];
 }
 
 export async function ephemeralLoopbackPort(): Promise<number> {
@@ -309,14 +320,31 @@ export async function ephemeralLoopbackPort(): Promise<number> {
   });
 }
 
+/** One start of the tunnel: its ssh processes, and whether all of them are bound and alive. */
+interface Generation {
+  children: ChildProcess[];
+  ready: boolean;
+  lost: boolean;
+}
+
+function alive(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
 /**
  * One app-owned ssh tunnel. `open()` establishes it once (no retries: the caller is
  * probing and the person is waiting on the answer). After that, an unexpected exit restarts
  * ssh with backoff on the same local port until `close()`, except for failures only the
  * person can fix (changed host key, failed auth, no ssh), which stop it in `failed`.
+ *
+ * **Credentials follow `transportVerified()`, not the URL.** The local port is only a
+ * number: while ssh is down, any local process could listen on it. A caller hands a
+ * credential to a request only while every ssh process of the current start has proved its
+ * forward bound (after authenticating the server against its pin) and is still running, so
+ * the port is that ssh's. Loss turns it false synchronously, before any restart.
  */
 export class SshTunnel {
-  private child: ChildProcess | undefined;
+  private generation: Generation | undefined;
   private port: number | undefined;
   private closed = false;
   private restartTimer: NodeJS.Timeout | undefined;
@@ -341,6 +369,22 @@ export class SshTunnel {
     return this.fingerprint;
   }
   /**
+   * True only while the current start's ssh processes have all bound their forwards and are
+   * still running: the local port is then provably ssh's, behind a pinned, authenticated
+   * server. False before the first open, while reconnecting, after failure and after close.
+   */
+  transportVerified(): boolean {
+    const generation = this.generation;
+    return (
+      !this.closed &&
+      this.stateNow.phase === "open" &&
+      generation !== undefined &&
+      generation.ready &&
+      !generation.lost &&
+      generation.children.every(alive)
+    );
+  }
+  /**
    * The remote end refused a forwarded connection within `withinMs`: ssh works, but nothing
    * listens on the daemon port. Lets a caller turn a failed probe into the right sentence.
    */
@@ -350,8 +394,9 @@ export class SshTunnel {
 
   async open(): Promise<string> {
     if (this.closed) throw new TunnelRefusal("closed");
-    if (this.child) throw new Error("Tunnel already open");
+    if (this.generation) throw new Error("Tunnel already open");
     this.port = await (this.options.pickPort ?? ephemeralLoopbackPort)();
+    this.setState({ phase: "starting" });
     try {
       await this.launch();
     } catch (error) {
@@ -363,18 +408,15 @@ export class SshTunnel {
   }
 
   async close(): Promise<void> {
-    if (this.closed && !this.child) return;
+    if (this.closed && !this.generation) return;
     this.closed = true;
     if (this.restartTimer) clearTimeout(this.restartTimer);
     this.restartTimer = undefined;
-    const child = this.child;
-    this.child = undefined;
-    if (child && child.exitCode === null && child.signalCode === null) {
-      const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-      child.kill();
-      const timer = setTimeout(() => child.kill("SIGKILL"), 3_000);
-      await exited;
-      clearTimeout(timer);
+    const generation = this.generation;
+    this.generation = undefined;
+    if (generation) {
+      generation.lost = true;
+      await Promise.all(generation.children.map(stop));
     }
     this.setState({ phase: "closed" });
   }
@@ -384,14 +426,37 @@ export class SshTunnel {
     this.options.onState?.(state);
   }
 
-  /** Start ssh and resolve once the forward listens; reject with a classified refusal. */
-  private launch(): Promise<void> {
-    const port = this.port!;
+  /** Start every hop in order; resolve once all forward. On failure nothing is left running. */
+  private async launch(): Promise<void> {
+    const generation: Generation = { children: [], ready: false, lost: false };
+    this.generation = generation;
     const { profile, knownHostsFile } = this.options;
-    mkdirSync(dirname(knownHostsFile), { recursive: true });
-    const args = tunnelArgs(profile, port, knownHostsFile);
+    try {
+      mkdirSync(dirname(knownHostsFile), { recursive: true });
+      const jumpPort = profile.jump ? await (this.options.pickPort ?? ephemeralLoopbackPort)() : undefined;
+      // A test seam's fixed port would collide with itself; the jump port is private anyway.
+      const hops = tunnelHops(
+        profile,
+        this.port!,
+        knownHostsFile,
+        jumpPort === this.port ? await ephemeralLoopbackPort() : jumpPort,
+      );
+      for (const [index, hop] of hops.entries()) await this.startHop(generation, hop, index === hops.length - 1);
+      if (generation.lost || this.generation !== generation) throw new TunnelRefusal("ssh-failed");
+      generation.ready = true;
+      this.attempt = 0;
+      this.setState({ phase: "open", localPort: this.port! });
+    } catch (error) {
+      generation.lost = true;
+      await Promise.all(generation.children.map(stop));
+      throw error;
+    }
+  }
+
+  /** Start one ssh; resolve once its forward is bound, reject with a classified refusal. */
+  private startHop(generation: Generation, hop: HopSpec, daemonHop: boolean): Promise<void> {
+    const args = hopArgs(hop);
     const binary = this.options.sshBinary ?? "ssh";
-    if (this.attempt === 0) this.setState({ phase: "starting" });
     return new Promise<void>((resolve, reject) => {
       let child: ChildProcess;
       try {
@@ -400,18 +465,18 @@ export class SshTunnel {
         reject(new TunnelRefusal("ssh-missing"));
         return;
       }
-      this.child = child;
+      generation.children.push(child);
       let tail = "";
       let lineBuffer = "";
-      let ready = false;
+      let settled = false;
       const timer = setTimeout(() => {
-        if (ready) return;
+        if (settled) return;
         settle(new TunnelRefusal("timeout"));
         child.kill();
       }, this.options.readyTimeoutMs ?? 30_000);
       const settle = (error?: TunnelRefusal) => {
-        if (ready) return;
-        ready = true;
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         if (error) reject(error);
         else resolve();
@@ -424,34 +489,43 @@ export class SshTunnel {
         while ((newline = lineBuffer.indexOf("\n")) >= 0) {
           const line = lineBuffer.slice(0, newline);
           lineBuffer = lineBuffer.slice(newline + 1);
-          const key = /Server host key: \S+ (SHA256:[A-Za-z0-9+/=]+)/.exec(line);
-          if (key) this.fingerprint = key[1];
-          if (/channel \d+: open failed: (connect failed|administratively prohibited)/.test(line))
-            this.channelRefusedAt = Date.now();
+          if (daemonHop) {
+            const key = /Server host key: \S+ (SHA256:[A-Za-z0-9+/=]+)/.exec(line);
+            if (key) this.fingerprint = key[1];
+            if (/channel \d+: open failed: (connect failed|administratively prohibited)/.test(line))
+              this.channelRefusedAt = Date.now();
+          }
           // Printed once every forward is bound: with ExitOnForwardFailure a forward that
           // could not bind is fatal before this line (the "listening on" line comes earlier,
           // before the bind is attempted).
-          if (!ready && /^debug1: Entering interactive session/.test(line)) {
-            this.attempt = 0;
-            this.setState({ phase: "open", localPort: port });
-            settle();
-          }
+          if (/^debug1: Entering interactive session/.test(line)) settle();
         }
         if (lineBuffer.length > STDERR_TAIL) lineBuffer = lineBuffer.slice(-STDERR_TAIL);
       });
       child.stdout?.resume();
       child.once("error", (error: NodeJS.ErrnoException) => {
-        if (this.child === child) this.child = undefined;
         settle(new TunnelRefusal(error.code === "ENOENT" ? "ssh-missing" : "ssh-failed"));
+        this.lose(generation, error.code === "ENOENT" ? "ssh-missing" : "ssh-failed");
       });
       child.once("exit", () => {
-        const wasReady = ready;
-        if (this.child === child) this.child = undefined;
         const refusal = classifySshFailure(tail);
         settle(new TunnelRefusal(refusal));
-        if (wasReady && !this.closed) this.scheduleRestart(refusal);
+        this.lose(generation, refusal);
       });
     });
+  }
+
+  /**
+   * A process of `generation` ended. Credentials stop at once (`lost`); the rest of the
+   * start is stopped; a start that had been open restarts unless the cause needs the person.
+   */
+  private lose(generation: Generation, refusal: TunnelRefusalCode): void {
+    if (generation.lost) return;
+    generation.lost = true;
+    const wasReady = generation.ready;
+    generation.ready = false;
+    for (const child of generation.children) if (alive(child)) child.kill();
+    if (wasReady && this.generation === generation && !this.closed) this.scheduleRestart(refusal);
   }
 
   private scheduleRestart(refusal: TunnelRefusalCode): void {
@@ -468,13 +542,22 @@ export class SshTunnel {
       this.restartTimer = undefined;
       if (this.closed) return;
       this.launch().catch((error: unknown) => {
-        // `launch` rejected before the forward listened; its exit handler did not restart.
-        const code = error instanceof TunnelRefusal ? error.code : "ssh-failed";
-        this.scheduleRestart(code);
+        if (this.closed) return;
+        // `launch` failed before every forward was bound; nothing of it is left running.
+        this.scheduleRestart(error instanceof TunnelRefusal ? error.code : "ssh-failed");
       });
     }, delay);
     this.restartTimer.unref?.();
   }
+}
+
+async function stop(child: ChildProcess): Promise<void> {
+  if (!alive(child)) return;
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  child.kill();
+  const timer = setTimeout(() => child.kill("SIGKILL"), 3_000);
+  await exited;
+  clearTimeout(timer);
 }
 
 function defaultSpawn(command: string, args: readonly string[]): ChildProcess {
