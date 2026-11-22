@@ -972,9 +972,12 @@ store while it does (#897):
 
 1. Before the installer runs, the updater closes admission on the bundled daemon, waits until
    it reports no active work, stops it and observes that exact process exit, as for every
-   update. It then writes `update-handoff.json` into the store: the exact store and workspace
-   directories, the first-run journal claim of the daemon it stopped, and the version being
-   installed. The updater never deletes the record, which holds nothing open by itself: if the
+   update. It then publishes `update-handoff.json.<claim>` into the store: the exact store and
+   workspace directories, the first-run journal claim of the daemon it stopped, and the version
+   being installed. The file is named by that claim and created exclusively, so the updater never
+   replaces a record: a stale updater can only publish for the daemon it stopped itself, never
+   over a newer handoff, which names another claim. Readers look only at the record for the claim
+   they directly follow. The updater never deletes the record, which holds nothing open by itself: if the
    installer never starts, the recovered daemon of this version directly follows the stopped
    claim, cannot carry under a record naming another version, and spends it under its own fence.
    Any later reservation follows another claim, so an unused record grants it nothing.
