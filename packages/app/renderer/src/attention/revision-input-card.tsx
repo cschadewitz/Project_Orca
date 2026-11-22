@@ -1,5 +1,5 @@
 /** Explicit correction card shared by inbox and step detail. The parent retains it after the originating gate closes. */
-import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import type {
   RevisionBoundaryView,
   PendingRevisionView,
@@ -44,6 +44,7 @@ export interface RevisionInputCardProps {
 }
 export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
   const scope = revisionDraftScope(props.connectionScope, props.boundary);
+  const currentLabelId = useId();
   const [draftScope, setDraftScope] = useState(scope);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -191,18 +192,24 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
         {props.pending && (
           <>
             <Text style="caption">{REVISION_LABELS[props.pending.state]}</Text>
-            <Text style="caption">Current correction</Text>
-            {/* Values are machine text, so their indented JSON is in a well (rule 8); a person's
-                text, and the sentence said when there is none, stay sans. */}
-            {props.pending.payload?.kind === "values" ? (
-              <Well>{JSON.stringify(props.pending.payload.values, null, 2)}</Well>
-            ) : (
-              <pre className={textClass("body")} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                {props.pending.payload?.kind === "text"
-                  ? props.pending.payload.text
-                  : "Correction content is unavailable."}
-              </pre>
-            )}
+            {/* Named, so the current correction is told apart from the compose preview below it,
+                which shows text the same way. Values are machine text, so their indented JSON
+                is in a well (rule 8); a person's text, and the sentence said when there is none,
+                stay sans. */}
+            <div role="group" aria-labelledby={currentLabelId}>
+              <Text style="caption" id={currentLabelId}>
+                Current correction
+              </Text>
+              {props.pending.payload?.kind === "values" ? (
+                <Well>{JSON.stringify(props.pending.payload.values, null, 2)}</Well>
+              ) : (
+                <pre className={textClass("body")} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                  {props.pending.payload?.kind === "text"
+                    ? props.pending.payload.text
+                    : "Correction content is unavailable."}
+                </pre>
+              )}
+            </div>
             {props.pending.unavailableReason && (
               <Text style="caption">{REVISION_REASONS[props.pending.unavailableReason]}</Text>
             )}

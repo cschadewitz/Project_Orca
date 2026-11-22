@@ -199,6 +199,15 @@ signature against the pinned workflow identity before it uses anything.
   promotion, or a green watchdog, as evidence of installed servers.
 - **Pause.** `ORCA_FEED_PAUSE` stops server publication and server promotions (except a halt)
   exactly as it does for desktops.
+- **Stop.** The servers' stop switch is separate from the pause: **Server feed (stop or
+  resume)** (`feed-server-stop.yml`, main only, `action` `stop` or `resume`) sets or clears
+  `serverStop: true` in `rings.json`. While it is set, the Worker answers every server's
+  channel file with 503 and `X-Orca-Feed-Stop: servers`, and the server updater activates
+  nothing, not even a version it was offered and staged before
+  ([Automatic server updates](#automatic-server-updates)). Stopping is always allowed;
+  resuming is refused while the feed is paused. Publication and promotion leave the switch as
+  it is. The watchdog expects the stop answer on every server channel exactly while
+  `rings.json` sets it.
 - **Watchdog.** The feed watchdog also checks each ring's server channel with the same
   canaries: a request without a token must get 401; the channel file must parse strictly and
   name a published release (never a prerelease in `stable`); and each of the three files must
@@ -209,6 +218,7 @@ signature against the pinned workflow identity before it uses anything.
 The Worker needs no new binding or secret for this. Redeploy it from main (whatever pins its
 source) before the first server publication: an older Worker ignores `rings.json`'s server
 rings and answers 404 for `server/`, and reads a `"channel": "server"` token like any other.
+The stop switch also needs a Worker from main that knows `serverStop`; an older one ignores it.
 
 ### Pulling a bad build
 
@@ -220,7 +230,10 @@ containing it can do depends on how far it got, so find out first.
    Secrets and variables → Actions → Variables). From then on **Desktop feed (publish
    signed)** refuses to start and **Desktop feed (promote)** refuses everything except a
    halt. The pause is checked when a job starts: it does **not** stop a job that already
-   passed that check.
+   passed that check. If the bad build is a **server** bundle, also dispatch **Server feed
+   (stop or resume)** with `stop`: the pause only stops new offers, while the stop keeps
+   every server with automatic updates from activating anything, including a bad version it
+   already staged. Resume once the fixed version is offered.
 2. **Check for jobs already running.** In the Actions tab, look for in-progress or queued
    runs of both feed workflows (they share one concurrency group, so at most one runs and
    the rest queue). Cancel any you did not mean to happen, and let a running one finish or
@@ -563,7 +576,8 @@ reach the registry and has sufficient staging disk space.
 python3 /srv/dev/orca-live/orca-release.py --deployment /srv/dev/orca-live/deployment.json update v0.6.1
 ```
 
-The tag is explicit; no background apply is installed. Staging permits current work to
+The tag is explicit. Nothing is applied in the background unless you opt in to
+[automatic server updates](#automatic-server-updates). Staging permits current work to
 continue. Activation acquires the deployment update lock and exclusive launch lock,
 verifies the service identity and old hello, then closes daemon admission. Active CLI/ACP
 processes (including idle but still open Kepler sessions), concurrent updates and daemon
@@ -627,6 +641,109 @@ activation check that the service runs the selected release follows the recorded
 than `packages/cli/dist/main.js`. Install the updated adapter (step 2 of the bootstrap) before
 the first bundle update.
 
+### Automatic server updates
+
+From the 0.8 line a server can follow its ring on the update feed's
+[server channel](#server-bundle-channel) unattended (#878). It is opt-in: add an `autoUpdate`
+object to `deployment.json`.
+
+```json
+"autoUpdate": {
+  "feed": "https://feed.example.org",
+  "tokenFile": "/srv/dev/orca-live/feed-token",
+  "interval": "1h",
+  "maxDeferralHours": 72,
+  "quietHours": "08:00-18:00",
+  "settleSeconds": 10
+}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `feed` | Required. The feed's https origin. |
+| `tokenFile` | Required. An absolute path to a **server** token (`feed-token.js RING --server`). The file must be a regular file owned by the service user, mode 600. The token decides the ring. |
+| `interval` | Optional, default `1h`. How often the timer checks (`30min`, `1h`, `1d` and so on). |
+| `maxDeferralHours` | Optional, default `72`. How long a staged update may wait for idle before the check reports it overdue. |
+| `quietHours` | Optional. A local-time window (`HH:MM-HH:MM`, which may wrap past midnight) in which nothing is activated. Staging still happens. |
+| `settleSeconds` | Optional, default `10`. The delay between the new daemon's first good hello and a second one. |
+
+Then install the timer once, as the service user:
+
+```sh
+python3 /srv/dev/orca-live/orca-release.py --deployment /srv/dev/orca-live/deployment.json install-timer
+loginctl enable-linger "$USER"   # once, so user timers run without a login session
+```
+
+`install-timer` writes and enables `orca-auto-update.service` and `orca-auto-update.timer` in
+`~/.config/systemd/user`. The timer runs 5 minutes after boot, then every `interval` with a
+randomized delay of up to 5 minutes, and catches up a missed run. Each run is one
+`orca-release.py … auto-update`. You can also run that command by hand to check now.
+
+A run does the following:
+
+1. Takes the deployment update lock without waiting. If a manual update (or another check)
+   holds it, the run defers and exits successfully. Manual and timer updates never overlap.
+2. Refuses while an interrupted activation journal exists (`blocked`, nonzero exit). Inspect
+   it and run `recover` first. While a file named `auto-update.stop` exists in the
+   deployment root, it activates nothing (`stopped`, exit 0); this is the local stop.
+3. Reads `server/latest-linux-x64.yml` with the token. It parses the file exactly as
+   `feed-server.js` writes it. If nothing is offered (404) or the offer is not newer than
+   `current`, nothing changes. A server never moves backwards. If the feed answers with the
+   servers' stop (503 and `X-Orca-Feed-Stop: servers`, see
+   [Server bundle channel](#server-bundle-channel)), the run activates nothing, not even an
+   already staged release (`stopped`, exit 0).
+4. Stages the offer while work continues. It reuses an already staged `releases/vX.Y.Z` only
+   if that release was staged from the exact signed files offered now: staging from a bundle
+   records a receipt with the SHA-256 and size of the archive, manifest and signature, and
+   all six must equal the channel file's (the commit alone is not enough). A release of the
+   same version without a matching receipt is refused (`failed`); inspect it. Otherwise it
+   downloads the three files from the feed, checks their sizes and SHA-256 against the
+   channel file, then stages them exactly as `stage --bundle DIR`: the pinned keyless
+   signature, manifest, archive digest, demo, config validation and a temporary daemon's
+   hello. The channel file is only a pointer and is never trusted on its own.
+5. Checks again just before activating, because staging can take long: the local stop file,
+   quiet hours against the clock read **now**, and the channel file, read again. A stop
+   gives `stopped`, quiet hours defer, and an offer that is gone or differs in any byte gives
+   `withdrawn` (exit 0); the staged release is kept, and nothing is activated.
+6. Activates through the [normal update](#normal-update) path, with closed admission, the
+   exact version/protocol/capability hello, and a second hello after `settleSeconds`, all
+   before admission reopens. Both settled hellos must come from the very same service
+   process: its PID, the unit's invocation ID (new on every start, including a supervisor
+   restart), the process's start time and the boot are recorded before the first and must
+   be unchanged after the second. A restart while settling is a failure even if the
+   restarted daemon answers healthy hellos, so it is rolled back.
+   - **Work is never cancelled.** Active daemon work, open CLI/ACP processes or quiet hours
+     **defer** the activation (exit 0, retried next run). Past `maxDeferralHours` the run
+     reports `overdue` with a nonzero exit, so the failed unit shows in `systemctl --user
+     status`, but it still cancels nothing.
+   - **Rollback is automatic only while admission has stayed closed.** If the new daemon
+     fails its hello or the settled re-check, `current` goes back to the previous release,
+     which must pass its own hello before admission reopens (`rolled-back`, nonzero exit).
+   - **Once admission has reopened, nothing is rolled back.** That includes an uncertain
+     resume: the new release may already hold work the old one would discard (#566's
+     baseline). The run closes admission again if the daemon allows it, keeps the
+     activation journal (which blocks launches and further updates), and reports
+     `failed-not-rolled-back`. Inspect it, then run `recover`.
+   - **Removing the activation journal can fail on its own** (`finalize-failed`, nonzero
+     exit): the new release is active and admission is open. The journal is then written
+     again durably, so launches and updates stay blocked until you inspect it and run
+     `recover`. Only if even that write fails does the report say so: whether the journal
+     survives a restart is then unknown, so check it.
+   - **A release with another store epoch is never activated unattended** (`refused`). Use
+     the [documented migration](#recovery-and-store-compatibility).
+7. After a successful update, keeps exactly two complete releases (the new `current` and
+   the one it replaced) and removes older `releases/vX.Y.Z`. Staging leftovers are kept for
+   inspection.
+
+Every run writes its outcome to `auto-update.json` in the deployment root and to the
+journal (`journalctl --user -u orca-auto-update`). The file records the time, `current`,
+the offered version, the outcome (`none`, `current`, `updated`, `deferred`, `overdue`,
+`stopped`, `withdrawn`, `rolled-back`, `failed-not-rolled-back`, `finalize-failed`,
+`refused`, `blocked` or `failed`) and a detail line. The feed's pause switch (`ORCA_FEED_PAUSE`) stops new versions
+from being offered; the servers' stop switch also stops servers acting on what they were
+offered before. To stop one server's updates, create `auto-update.stop` in its deployment
+root (remove it to resume), or run `systemctl --user disable --now orca-auto-update.timer`.
+
 ### Updating a server from the app
 
 A server the adapter launched can also be updated from the desktop app, over the same SSH
@@ -661,7 +778,7 @@ What the daemon reports is a hint, never what the app runs:
   moved the server in between, it refuses with `Server moved:` and nothing changes.
 
 The connection dialog shows the server's version, protocol, ring and host key, and whether it
-is older than the app. **Update now** runs, over the profile's own ssh (the pinned host key, the
+is older than the app. **Update now** runs, over the profile's own ssh (the pins its tunnel sealed, the
 profile's key, no forwards, no ssh config):
 
 ```sh
@@ -680,14 +797,19 @@ installs through the daemon's RPC. The app streams what the updater prints and t
   says what the server last reported, if anything; check the server before trying again.
 - **Work is running**: the barrier refused (`Daemon busy`, `Busy: admission.lock`, or an
   unmanaged ORCA process); nothing was cancelled and the old release keeps serving.
-- **Another update is running**: `Busy: update.lock`, held by the scheduled updater or another
-  operator; this one did not start.
+- **Another update is running**: `Busy: update.lock`, held by an
+  [automatic update](#automatic-server-updates) run or another operator; this one did not
+  start. A timer run that finds the app's update holding the lock defers in turn.
 - **The server moved**: `Server moved:`, another update finished between your check and this
   one; nothing changed, check again.
 - **Failed**: the updater's own `orca-release:` message, and whether the previous release was
   restored and healthy.
 - **SSH refused before it started**: a missing ssh client, a changed or missing host key, or a
   refused key, so nothing ran; the app's own message, never ssh's output.
+
+An update from the app is a manual update: `auto-update.stop` and the feed's stop switches
+stop only the timer. An activation journal left by an interrupted or `finalize-failed` run
+blocks it like any other update (`Recovery pending; run recover first`) until you `recover`.
 
 A development build of the app (a version that is not a release tag) offers no update.
 

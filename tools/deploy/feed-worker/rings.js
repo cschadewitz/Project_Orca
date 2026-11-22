@@ -11,6 +11,11 @@
  * full version, since a server outside a rollout keeps the full version. This is a rule about
  * what the feed offers: it says nothing about what any host has installed or is running, which
  * is the server updater's to establish (#878, #879).
+ *
+ * `serverStop: true` is the servers' stop switch (#878): while it is set, the Worker answers
+ * every server's channel file with 503 and `X-Orca-Feed-Stop: servers`, so no server activates
+ * anything, not even a version it was offered and staged before. Publication and promotion
+ * leave it as it is; only resumeServers clears it.
  */
 
 export const RINGS = ["internal", "preview", "stable"];
@@ -88,7 +93,24 @@ export function validateRings(value) {
     throw new Error("rings.json is not format 1");
   validateRingMap(value.rings, "desktop");
   if (value.server !== undefined) validateRingMap(value.server, "server");
+  if (value.serverStop !== undefined && value.serverStop !== true)
+    throw new Error("rings.json serverStop must be true or absent");
   return value;
+}
+
+/** Stop every server from activating anything offered (always allowed: it only stops). */
+export function stopServers(rings) {
+  const next = validateRings(JSON.parse(JSON.stringify(rings)));
+  next.serverStop = true;
+  return { rings: next, message: "servers stopped: every server's channel answers 503 until resumed" };
+}
+
+/** Lift the servers' stop switch. */
+export function resumeServers(rings) {
+  const next = validateRings(JSON.parse(JSON.stringify(rings)));
+  if (!next.serverStop) throw new Error("servers are not stopped");
+  delete next.serverStop;
+  return { rings: next, message: "servers resumed: each server ring offers its version again" };
 }
 
 /** The ring map of CHANNEL inside RINGS (created empty for the server channel on demand). */
