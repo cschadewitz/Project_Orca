@@ -3,29 +3,30 @@
 #
 # release-publish.yml stages a final as a draft with only the Ubuntu .deb and (with
 # ORCA_RELEASE_AUTO_SIGN on) dispatches `Windows signed (spike)` for the same commit. When that
-# signed run succeeds, this finds the single draft (not a prerelease) whose target is the
+# signed run succeeds, its last job dispatches this with its run id (GitHub starts no
+# `workflow_run` for a run the workflow token dispatched, so nothing here waits for one); this
+# waits for that run to finish, then finds the single draft (not a prerelease) whose target is the
 # commit it signed, re-checks both installers' Authenticode signature, timestamp and
 # publisher (ORCA_FEED_PUBLISHER_CN), and uploads them to the draft by id. Before every write
 # tools/deploy/release-attach.sh re-reads that exact draft (still a draft, same target and
 # name, only the expected assets, no other record) and stops if it changed, so a draft
 # published in the meantime is never written to. It records the run id and each installer's
 # digest in the draft's notes as HTML comments, which feed-auto.yml uses to feed exactly these
-# bytes once published. When it succeeds, Release (accept Windows arm64) runs native acceptance
-# on the attached arm64 installer (#889). It never publishes, tags or touches the feed.
+# bytes once published. When it succeeds, it dispatches the x64 upgrade check and Release
+# (accept Windows arm64), native acceptance of the attached arm64 installer (#889), for that
+# draft. It never publishes, tags or touches the feed.
 #
 # The signing run is checked first (a successful windows-signed.yml run of this repository,
 # dispatched from main, with exactly one unexpired signed artifact). The record is written
 # before the upload. A reconcile every 6 hours (and a manual dispatch without a run id)
 # re-dispatches the attach for any final draft still missing its installer or record, with
-# the recorded run when there is one, so an interrupted or displaced run recovers by itself.
+# the recorded run when there is one, and dispatches the arm64 acceptance for any draft still
+# waiting for it, so an interrupted or displaced run recovers by itself.
 # The automatic paths are off unless ORCA_RELEASE_AUTO_SIGN is `true`; a dispatch with a run id
 # always works.
 name: Release (attach signed installer)
 
 on:
-  workflow_run:
-    workflows: ["Windows signed (spike)"]
-    types: [completed]
   schedule:
     - cron: "29 */6 * * *"
   workflow_dispatch:
@@ -52,12 +53,8 @@ jobs:
       contents: write
       actions: read
     if: >-
-      (github.event_name == 'workflow_dispatch' && inputs.signed_run_id != '' &&
-       github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' && vars.ORCA_RELEASE_AUTO_SIGN == 'true' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.event == 'workflow_dispatch')
+      github.event_name == 'workflow_dispatch' && inputs.signed_run_id != '' &&
+      github.ref == 'refs/heads/main'
     runs-on: windows-latest
     outputs:
       id: ${{ steps.attached.outputs.id }}
@@ -67,7 +64,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
-      RUN_ID: ${{ inputs.signed_run_id || github.event.workflow_run.id }}
+      RUN_ID: ${{ inputs.signed_run_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -79,6 +76,9 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::invalid signed run id"; exit 1; }
+          # The signing run dispatches this from its own last job, so wait for it to finish
+          # (30 minutes at most); select then refuses anything but a successful run.
+          bash tools/deploy/release-attach.sh wait-run "$RUN_ID"
           # stdout carries only the output assignments; notes go to stderr.
           bash tools/deploy/release-attach.sh select "$RUN_ID" >> "$GITHUB_OUTPUT"
 
@@ -146,6 +146,27 @@ jobs:
           gh workflow run release-upgrade-check.yml --repo "$GITHUB_REPOSITORY" --ref main -f release_id="$ID"
           echo "Dispatched Release (upgrade check) for release \`$ID\`." >> "$GITHUB_STEP_SUMMARY"
 
+  # Native acceptance of the attached arm64 installer, dispatched rather than left to a
+  # `workflow_run`, which GitHub does not start when the workflow token dispatched this run.
+  # This job checks nothing out and can only dispatch.
+  accept-arm64:
+    name: dispatch the arm64 acceptance for the draft
+    needs: attach
+    if: needs.attach.outputs.id != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch Release (accept Windows arm64)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ID: ${{ needs.attach.outputs.id }}
+        run: |
+          set -euo pipefail
+          [[ "$ID" =~ ^[0-9]+$ ]] || { echo "::error::invalid release id"; exit 1; }
+          gh workflow run release-accept-arm64.yml --repo "$GITHUB_REPOSITORY" --ref main -f release_id="$ID"
+          echo "Dispatched Release (accept Windows arm64) for release \`$ID\`." >> "$GITHUB_STEP_SUMMARY"
+
   reconcile:
     name: re-dispatch attachments still missing
     if: >-
@@ -179,3 +200,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: bash tools/deploy/release-attach.sh upgrade-reconcile
+
+      # A draft whose recorded arm64 installer is attached but not yet accepted (a failed,
+      # canceled or displaced acceptance): accept the oldest one again. Does nothing otherwise.
+      - name: Dispatch the arm64 acceptance for a draft still waiting for it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release-accept-arm64.yml --repo "$GITHUB_REPOSITORY" --ref main

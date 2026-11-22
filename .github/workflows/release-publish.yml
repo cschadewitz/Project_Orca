@@ -30,7 +30,8 @@
 # artifacts go to a **draft** prerelease named `vX.Y.Z-dryrun.<run number>`. Nothing is
 # tagged (a draft has no tag until it is published), nothing is marked latest, no feed is
 # touched, and the "tag already exists" refusal does not apply, so it can rehearse a
-# version that is already released. Delete the draft when you are done with it.
+# version that is already released. The run reads the draft back and then deletes it, with any
+# dry-run draft older than a day, so none pile up; the built artifacts stay on the run.
 #
 # The rehearsed ref is untrusted, so it never meets a write token. The workflow's token is
 # read-only; every job that runs the ref's code (check, and the desktop and app-smoke calls)
@@ -502,7 +503,7 @@ jobs:
           fi
           python3 tools/deploy/release-assets.py artifacts "$VERSION"
           printf '%s\n' \
-            "> **Dry run, not a release.** Built from \`$SHA\` by run $GITHUB_RUN_ID. Delete this draft when done." \
+            "> **Dry run, not a release.** Built from \`$SHA\` by run $GITHUB_RUN_ID, which deletes this draft when it ends." \
             "" \
             "The notes a release would carry are in [CHANGELOG.md at that commit]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$SHA/CHANGELOG.md)." \
             > "$RUNNER_TEMP/notes.md"
@@ -517,5 +518,37 @@ jobs:
             --title "v$VERSION (dry run)" \
             --notes-file "$RUNNER_TEMP/notes.md" \
             "${assets[@]}"
-          echo "Dry run uploaded to draft v$VERSION with ${#assets[@]} artifacts. Nothing was tagged or published." \
+          # Read the draft back: still a draft prerelease at the commit, with exactly these files.
+          want=$(for f in "${assets[@]}"; do basename "$f"; done | sort | jq -R . | jq -sc .)
+          got=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq \
+            ".[] | select(.draft and .name == \"v$VERSION (dry run)\") | [.prerelease, .target_commitish, ([.assets[].name] | sort)] | tojson")
+          if [ "$got" != "$(jq -nc --arg sha "$SHA" --argjson want "$want" '[true, $sha, $want]')" ]; then
+            echo "::error::the v$VERSION dry-run draft does not read back as uploaded: $got"
+            exit 1
+          fi
+          echo "Dry run uploaded to draft v$VERSION with ${#assets[@]} artifacts and read it back. Nothing was tagged or published." \
             >> "$GITHUB_STEP_SUMMARY"
+
+      # Nobody has to delete rehearsals by hand: this run's draft goes once it has been read
+      # back (or a failed upload left part of one), and so does any other dry-run draft older
+      # than a day, which a canceled run left. Only drafts named like a dry run are touched;
+      # a draft has no tag, so nothing else needs removing.
+      - name: Delete this run's draft and stale dry-run drafts
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          own=""
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dryrun\.[0-9]+$ ]]; then own="v$VERSION (dry run)"; fi
+          cutoff=$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)
+          ids=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[]' |
+            jq -r --arg own "$own" --arg cutoff "$cutoff" '
+              select(.draft and .prerelease and (.name | test("^v[0-9]+[.][0-9]+[.][0-9]+-dryrun[.][0-9]+ [(]dry run[)]$")))
+              | select(.name == $own or .created_at < $cutoff) | .id')
+          for id in $ids; do
+            [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::unexpected release id $id"; exit 1; }
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            echo "Deleted dry-run draft $id." >> "$GITHUB_STEP_SUMMARY"
+          done

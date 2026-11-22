@@ -83,6 +83,9 @@ if (method === "DELETE" && (m = path.match(/^releases\/assets\/(\d+)$/))) {
   if (state.tags[m[1]]) out = { object: { sha: state.tags[m[1]] } };
 } else if ((m = path.match(/^actions\/runs\/(\d+)$/))) {
   out = state.runs[m[1]];
+  // A run still going for its first reads (wait-run polls it).
+  const seq = (state.statusSeq || {})[m[1]];
+  if (out && seq && seq.length) out = { ...out, status: seq.shift() };
 } else if ((m = path.match(/^actions\/runs\/(\d+)\/jobs/))) {
   if (state.runs[m[1]]) out = { jobs: (state.jobs || {})[m[1]] || [] };
 } else if ((m = path.match(/^commits\/(.+)$/))) {
@@ -253,6 +256,27 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     const result = f.run(ATTACH, ["select", "100"]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(`artifact=windows-signed-${SHA}\nsha=${SHA}\nid=7\nversion=0.8.0\n`);
+  });
+
+  it("waits for the signing run that dispatched the attach to finish, and gives up on one that never does", () => {
+    const f = setup();
+    f.edit((st) => {
+      st.statusSeq = { 100: ["queued", "in_progress", "in_progress"] };
+    });
+    const fast = { WAIT_RUN_SECONDS: "0" };
+    const done = f.run(ATTACH, ["wait-run", "100"], fast);
+    expect(done.status, done.stderr).toBe(0);
+    expect(done.stdout).toBe("");
+    expect(done.stderr).toContain("Run 100 has finished.");
+    expect(f.state().statusSeq["100"]).toEqual([]);
+
+    f.edit((st) => {
+      st.statusSeq = { 100: ["in_progress", "in_progress", "in_progress"] };
+    });
+    const stuck = f.run(ATTACH, ["wait-run", "100"], { ...fast, WAIT_RUN_TRIES: "2" });
+    expect(stuck.status).toBe(1);
+    expect(stuck.stderr).toContain("run 100 is still in_progress");
+    expect(f.run(ATTACH, ["wait-run", "x"]).status).not.toBe(0);
   });
 
   it.each([

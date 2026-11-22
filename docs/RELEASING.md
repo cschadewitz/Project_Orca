@@ -90,9 +90,11 @@ the release id from the job summary, `SHA` the commit and `V` the version:
 2. The signing run itself checks Authenticode status `Valid`, a timestamp, the expected
    publisher, and that `latest-x64.yml` `files[0]` (`url`, `size`, base64 **SHA-512**)
    describes exactly `ORCA-$V-win-x64.exe`.
-3. **Automatic** (same switch): when it succeeds, **Release (attach signed installer)**
-   (`release-attach-signed.yml`, `tools/deploy/release-attach.sh`) first checks the signing
-   run itself: a successful `windows-signed.yml` run of this repository, dispatched from
+3. **Automatic** (same switch): the signing run's last job dispatches **Release (attach
+   signed installer)** (`release-attach-signed.yml`, `tools/deploy/release-attach.sh`) with
+   its own run id. It is a dispatch, not a `workflow_run`, because GitHub starts no
+   `workflow_run` for a run the workflow token dispatched, which is how the sign job starts
+   it. The attach waits for the signing run to finish, then checks the signing run itself: a successful `windows-signed.yml` run of this repository, dispatched from
    `main`, with exactly one unexpired signed artifact. It finds the one final draft targeting
    `SHA`, re-checks both installers' (x64 and arm64) signature, timestamp and publisher,
    records the run and each installer's digest in the draft's notes, then uploads them by id
@@ -120,8 +122,10 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    signing run's checks in step 2 are not that acceptance. If either fails, stop: the draft
    stays a draft and nothing is public.
 
-   The arm64 `.exe` is accepted **automatically** (#889): when the attach completes,
-   **Release (accept Windows arm64)** (`release-accept-arm64.yml`) downloads the draft's
+   The arm64 `.exe` is accepted **automatically** (#889): the attach dispatches
+   **Release (accept Windows arm64)** (`release-accept-arm64.yml`) for the draft once both
+   installers are attached (the 6-hourly reconcile dispatches it again for a draft still
+   waiting). It downloads the draft's
    exact arm64 bytes, and on a GitHub-hosted Windows arm64 machine re-checks the signature,
    installs it silently over the newest earlier published final that has an arm64 installer
    (a fresh install only when the full release list, read successfully, has none), checks
@@ -577,8 +581,10 @@ qualifies, so fixing forward after a failed publish still works.
 
 Use it before merging a release pull request, or to try a risky change through the
 release graph before it lands. A failure costs nothing, unlike a failed `release-publish`
-after merge, which leaves a bump on `main` with no tag. Delete the draft when you are done
-(`gh release delete vX.Y.Z-dryrun.N`). Learned from T3 Code's preview release train (#863).
+after merge, which leaves a bump on `main` with no tag. Nobody deletes the draft by hand:
+once the run has read it back (or if a failed upload left part of one), its last step deletes
+it, together with any other `vX.Y.Z-dryrun.N (dry run)` draft older than a day that a
+canceled run left behind. The built files stay in the run's artifacts. Learned from T3 Code's preview release train (#863).
 
 ## Doing it by hand
 
