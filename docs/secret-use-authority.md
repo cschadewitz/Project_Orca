@@ -185,6 +185,11 @@ command, arguments and environment, with secret references as references).
   docs/WORKFLOWS.md for what a grant covers of the arguments and environment). Any secret reference in the server's `env` is then read like every
   other reference in that session: on the agent's host, under `secrets.use`, with no
   fallback to another host.
+- **Skills** are decided in the same call and the same set. A use is `{ kind: "skill", id,
+  digest }`, the content digest of exactly what will be sent; a grant entry is `{ kind:
+  "skill", id, digest }`, written by `orca auth issue --skill <id>` from the skill as it is
+  on disk then (refused if the catalog pins another digest). A skill's content travels in
+  the prompt, so it has no host binding. `'*'` covers every skill.
 - `agents.ping` has no run and so no owner: it starts only the agent's own inline servers.
 
 ## Ping

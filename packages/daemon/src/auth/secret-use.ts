@@ -48,6 +48,12 @@ function refuse(use: SecretUse | undefined): OrcaError {
 }
 
 function refuseCapability(use: CapabilityUse | undefined): OrcaError {
+  if (use?.kind === "skill")
+    return new OrcaError("CONFIG_INVALID", `skill '${use.id}' is not granted to this run`, {
+      kind: use.kind,
+      id: use.id,
+      reason: "unauthorized",
+    });
   return new OrcaError(
     "CONFIG_INVALID",
     use
@@ -174,10 +180,17 @@ export function secretUseAuthority(opts: SecretUseAuthorityOptions): SecretUseCh
 export function capabilityUseAuthority(opts: SecretUseAuthorityOptions): CapabilityUseCheck {
   return useDecision<CapabilityUse>(opts, {
     event: "capability.use",
-    names: (uses) => ({ mcpServers: joined(uses.map((u) => u.id)) }),
+    names: (uses) => {
+      const servers = uses.filter((u) => u.kind === "mcpServer").map((u) => u.id);
+      const skills = uses.filter((u) => u.kind === "skill").map((u) => u.id);
+      return {
+        ...(servers.length || !skills.length ? { mcpServers: joined(servers) } : {}),
+        ...(skills.length ? { skills: joined(skills) } : {}),
+      };
+    },
     covers: coversCapability,
     refuse: refuseCapability,
-    missing: (use) => `MCP server '${use.id}' not granted`,
+    missing: (use) => `${use.kind === "skill" ? "skill" : "MCP server"} '${use.id}' not granted`,
     together: true,
   });
 }

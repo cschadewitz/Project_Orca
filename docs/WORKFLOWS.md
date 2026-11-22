@@ -587,9 +587,8 @@ nodes:
     what the agent passes on. That is the agent's behaviour, not something ORCA enforces.
 
   The executable being there is not proof the server works: the agent starts it, over
-  ACP's stdio transport, which every ACP agent supports. Skills resolve and appear in
-  validation and the preview, but a step that selects one is refused at launch (and warned
-  about at validation): delivering them is the next part of #337.
+  ACP's stdio transport, which every ACP agent supports. Skills are delivered under the
+  same decision; see [Skills](#skills).
 - **Who decides.** The workspace and agent scopes live in `orca.config.yaml`, which only
   config authority can change. A workflow or node can only narrow that, or turn on what the
   agent permits. A caller's role override picks a different configured agent, and then that
@@ -615,7 +614,26 @@ the digest it found so you can review the change and update the pin. A run is pi
 configuration, so only a skill's files could change under it: a step whose skill no longer
 hashes to what its launch recorded is refused rather than given the edited skill.
 
-This version resolves skills but does not deliver them yet (#337).
+**How a skill reaches a session (#337).** A step's selected skills travel in its prompts,
+not through any host's filesystem: every prompt the step sends starts with each skill file
+as an ACP `resource` block, its text inline, named
+`orca-skill://<id>/<file>?digest=<sha256:...>`. So no host path is involved, and a skill
+on the daemon's machine reaches an agent on an SSH host the same way.
+
+- The run's owner must hold one current credential with `capabilities.use` whose grant
+  covers the step's whole set, servers and skills together. A named skill grant pins the
+  content digest (`orca auth issue <principal> --skill review`), so an edited skill needs a
+  new grant; `'*'` (and the `owner` preset) covers every skill.
+- The skill is read once at session open, hashed over exactly the bytes that are sent, and
+  refused if that is not what the launch recorded. Every file must be UTF-8 text, and a
+  step's skills together may be at most 256 KiB.
+- The agent must say at `initialize` that it accepts embedded context
+  (`promptCapabilities.embeddedContext`). One that does not refuses the step: ORCA does not
+  fall back to leaving the skill out or pasting it in as plain text.
+- **A skill is instructions, not authority.** It grants nothing: tool calls still go through
+  the agent's permission policy and ORCA's asks. ORCA delivers the skills it lists in the
+  preview and nothing else, but it cannot stop an agent from also loading skills of its own
+  (for example from the user's home directory); those are not shown as selected.
 
 ## Secret references
 

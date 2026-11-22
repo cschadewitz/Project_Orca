@@ -14,7 +14,7 @@ import {
   mcpServerDefinitionDigest,
   secretHostBinding,
   type AgentHost,
-  type CapabilityUse,
+  type McpServerUse,
 } from "@orca/agents";
 import { HostSpecSchema } from "@orca/core";
 import {
@@ -36,7 +36,7 @@ afterEach(async () => {
 const LOCAL_BINDING = secretHostBinding({ id: "local", type: "local" });
 const GITHUB = { command: "/opt/mcp/gh-mcp", args: [], env: { GITHUB_TOKEN: { secret: "github-token" } } };
 const DEFINITION = mcpServerDefinitionDigest(GITHUB);
-const use = (over: Partial<CapabilityUse> = {}): CapabilityUse => ({
+const use = (over: Partial<McpServerUse> = {}): McpServerUse => ({
   kind: "mcpServer",
   id: "github",
   hostId: "local",
@@ -170,6 +170,32 @@ describe("capability use authority", () => {
     g.ownership.record("root", "owner");
     await g.credentials.issue({ principal: "owner", preset: "owner" });
     await g.check({ runId: "root", uses: [use({ definition: bare, absoluteCommand: false })] });
+  });
+
+  it("grants a skill by its exact content, and takes servers and skills as one set", async () => {
+    const f = fixture();
+    f.ownership.record("root", "ci-bot");
+    const digest = `sha256:${"a".repeat(64)}`;
+    const skill = { kind: "skill" as const, id: "review", digest };
+    await f.credentials.issue({
+      principal: "ci-bot",
+      permissions: client,
+      scope: PRESETS.client.scope,
+      capabilities: [
+        { kind: "mcpServer", id: "github", host: "local", binding: LOCAL_BINDING, definition: DEFINITION },
+        { kind: "skill", id: "review", digest },
+      ],
+    });
+    await f.check({ runId: "root", uses: [use(), skill] });
+    expect(f.audit.records.at(-1)?.target).toEqual({ runId: "root", mcpServers: "github", skills: "review" });
+    // An edited skill has another digest: not covered.
+    await expect(
+      f.check({ runId: "root", uses: [{ ...skill, digest: `sha256:${"b".repeat(64)}` }] }),
+    ).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      details: { kind: "skill", id: "review", reason: "unauthorized" },
+    });
+    await expect(f.check({ runId: "root", uses: [{ ...skill, id: "other" }] })).rejects.toMatchObject(unauthorized);
   });
 
   it("stops at the next decision once the credential is revoked, and refuses unowned runs", async () => {

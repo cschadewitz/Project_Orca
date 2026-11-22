@@ -56,7 +56,7 @@ Only `issue` and `rotate` print a token, once; nothing else ever shows one.
 
 | Step      | Command                                                                                                                                  |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Provision | `orca auth issue <principal> [--preset client] [--workflow-scope <id>]... [--runs-scope owned\|all] [--secret <id>@<host>\|'*']... [--mcp-server <id>@<host>\|'*']... [--expires-at <ISO>] [--label <text>]` |
+| Provision | `orca auth issue <principal> [--preset client] [--workflow-scope <id>]... [--runs-scope owned\|all] [--secret <id>@<host>\|'*']... [--mcp-server <id>@<host>\|'*']... [--skill <id>\|'*']... [--expires-at <ISO>] [--label <text>]` |
 | Inspect   | `orca auth list`: id, principal, `active`/`expired`/`revoked`, scope and expiry                                                          |
 | Rotate    | `orca auth rotate <id> [--expires-at <ISO>]`: keeps the current expiry unless given. The bootstrap credential rotates only by restarting `orca serve`. |
 | Revoke    | `orca auth revoke <id>`                                                                                                                  |
@@ -125,9 +125,9 @@ A credential holds a list of these permissions, and optionally a `secrets` grant
 a list of `{ secret, provider, host, binding }` entries naming the secret references its principal's runs may use
 (see [secret-use-authority.md](secret-use-authority.md)). `--secret` writes it and adds
 `secrets.use`; `rotate` keeps it. Likewise an optional `capabilities` grant, `"*"` or a list
-of `{ kind: "mcpServer", id, host, binding, definition }` entries naming the catalog MCP
-servers its principal's runs may be given (#337); `--mcp-server` writes it and adds
-`capabilities.use`.
+of `{ kind: "mcpServer", id, host, binding, definition }` and `{ kind: "skill", id, digest }`
+entries naming the catalog MCP servers and skills its principal's runs may be given (#337);
+`--mcp-server` and `--skill` write it and add `capabilities.use`.
 
 | Permission           | Grants                                                                     |
 | -------------------- | -------------------------------------------------------------------------- |
@@ -147,7 +147,7 @@ servers its principal's runs may be given (#337); `--mcp-server` writes it and a
 | `config.write`       | `config.set` (also requires `config.read`), `config.apply`.                                 |
 | `daemon.maintenance` | The update coordinator's admission control.                                |
 | `secrets.use`        | The principal's runs may receive values for the references its `secrets` grant names (#336). |
-| `capabilities.use`   | The principal's runs may be given the catalog MCP servers its `capabilities` grant names (#337). |
+| `capabilities.use`   | The principal's runs may be given the catalog MCP servers and skills its `capabilities` grant names (#337). |
 | `secrets.read`       | Secret reference metadata (`secrets.list`, `secrets.check`), never a value. Workspace-wide. |
 
 `config.read` authorizes legacy unredacted editor bytes. Every `config.set` form,

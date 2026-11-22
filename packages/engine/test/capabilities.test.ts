@@ -32,6 +32,7 @@ import {
   type GenerationMaterial,
 } from "@orca/engine";
 import { memoryStores } from "@orca/store";
+import type * as acp from "@agentclientprotocol/sdk";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -111,6 +112,8 @@ function setup(
     stores?: ReturnType<typeof memoryStores>;
     pause?: boolean;
     capabilityUse?: CapabilityUseCheck;
+    /** What sessions report for ACP `promptCapabilities.embeddedContext`; true by default. */
+    embeddedContext?: boolean;
   } = {},
 ) {
   const config: OrcaConfig = parseOrcaConfig({
@@ -131,6 +134,7 @@ function setup(
   const workflows = new WorkflowRegistry();
   for (const w of [opts.workflow ?? flow].flat()) workflows.register(parseWorkflow(w));
   const opened: { mcp: string[]; envKeys: string[][]; commands: string[] }[] = [];
+  const prompts: (string | acp.ContentBlock[])[] = [];
   let n = 0;
   const orchestrator = new Orchestrator({
     stores: opts.stores ?? memoryStores(),
@@ -160,7 +164,11 @@ function setup(
         terminated: closed,
         configOptions: [],
         setConfigOption: async () => [],
-        prompt: async () => ({ stopReason: "end_turn" as const, durationMs: 1 }),
+        promptCapabilities: { embeddedContext: opts.embeddedContext ?? true },
+        prompt: async (input) => {
+          prompts.push(input);
+          return { stopReason: "end_turn" as const, durationMs: 1 };
+        },
         onUpdate: () => () => {},
         cancel: async () => {},
         close: async () => close(),
@@ -168,7 +176,7 @@ function setup(
       return session;
     },
   });
-  return { orchestrator, registry, config, workflows, opened };
+  return { orchestrator, registry, config, workflows, opened, prompts };
 }
 
 /** `setup` with configuration generations wired the way bootstrap wires them, so runs record provenance. */
@@ -375,7 +383,7 @@ describe("scoped capabilities before agent work", () => {
     });
   });
 
-  it("refuses a step that selects a skill, which cannot be delivered yet, and names it", async () => {
+  it("refuses a step that selects a skill where there is no use decision, and names it", async () => {
     const dir = await tempDir();
     await writeFile(join(dir, "review.md"), "review carefully");
     const { orchestrator } = setup({
@@ -384,7 +392,7 @@ describe("scoped capabilities before agent work", () => {
     });
     await expect(orchestrator.startRun({ workflowId: "flow" })).rejects.toMatchObject({
       code: "CONFIG_INVALID",
-      message: expect.stringMatching(/cannot deliver skills/),
+      message: expect.stringMatching(/selects skill 'review', and this daemon has no server-verified use check/),
     });
   });
 
@@ -415,7 +423,7 @@ describe("scoped capabilities before agent work", () => {
     ).rejects.toMatchObject({ message: expect.stringMatching(/agent 'codex' is not permitted/) });
   });
 
-  it("validates a workflow against the registry: errors under the node, undeliverable entries as warnings", async () => {
+  it("validates a workflow against the registry: errors under the node, and a resolvable skill is no warning", async () => {
     const dir = await tempDir();
     await writeFile(join(dir, "review.md"), "review carefully");
     const config = parseOrcaConfig({
@@ -440,9 +448,8 @@ edges: [{ from: s, to: a }, { from: a, to: e }]
         message: expect.stringMatching(/no MCP server 'ghost'/),
       },
     ]);
-    expect(result.warnings).toEqual([
-      { path: "workflow(w).nodes.a.capabilities.skills", message: expect.stringMatching(/cannot deliver skills/) },
-    ]);
+    // Whether a run may be given it, and whether its agent accepts it, is decided at session open.
+    expect(result.warnings).toEqual([]);
   });
 });
 
@@ -559,6 +566,100 @@ describe("delivering catalog MCP servers (#337)", () => {
     expect(made.opened).toHaveLength(1);
     expect(made.asked).toHaveLength(2);
     expect(steps).toBe(1);
+  });
+});
+
+describe("delivering skills (#337)", () => {
+  async function withSkill(opts: { embeddedContext?: boolean; allow?: boolean } = {}) {
+    const dir = await tempDir();
+    await mkdir(join(dir, "review"));
+    await writeFile(join(dir, "review", "SKILL.md"), "# Review\nreview carefully");
+    await writeFile(join(dir, "review", "checklist.txt"), "- tests\n");
+    const asked: CapabilityUse[][] = [];
+    const made = setup(
+      {
+        capabilities: { ...catalog, skills: { review: { path: join(dir, "review"), version: "1" } } },
+        agents: [
+          {
+            id: "claude",
+            command: "x",
+            roles: ["planner"],
+            mcpServers: inlineServers,
+            capabilities: { skills: { available: ["review"] } },
+          },
+        ],
+      },
+      {
+        ...(opts.embeddedContext === undefined ? {} : { embeddedContext: opts.embeddedContext }),
+        workflow: flow.replace(
+          "capabilities: { mcpServers: { enable: [files] } }",
+          "capabilities: { skills: { enable: [review] } }",
+        ),
+        capabilityUse: async ({ uses }) => {
+          asked.push(uses);
+          if (opts.allow === false) throw new Error("not granted");
+        },
+      },
+    );
+    return { ...made, asked, dir };
+  }
+
+  it("puts a granted skill's files in each prompt of its step, inline and named by digest", async () => {
+    const made = await withSkill();
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("completed");
+    const digest = skillDigest({ path: join(made.dir, "review") }, undefined);
+    if (!("digest" in digest)) throw new Error(digest.error);
+    // `plan` selects no skill; `build` does.
+    expect(typeof made.prompts[0]).toBe("string");
+    const build = made.prompts[1] as acp.ContentBlock[];
+    expect(build.slice(0, 2)).toEqual([
+      {
+        type: "resource",
+        resource: {
+          uri: `orca-skill://review/SKILL.md?digest=${digest.digest}`,
+          mimeType: "text/markdown",
+          text: "# Review\nreview carefully",
+        },
+      },
+      {
+        type: "resource",
+        resource: {
+          uri: `orca-skill://review/checklist.txt?digest=${digest.digest}`,
+          mimeType: "text/plain",
+          text: "- tests\n",
+        },
+      },
+    ]);
+    expect(build[2]).toMatchObject({ type: "text" });
+    expect(made.asked).toEqual([[{ kind: "skill", id: "review", digest: digest.digest }]]);
+  });
+
+  it("refuses the step when its skill is not granted, before any session opens", async () => {
+    const made = await withSkill({ allow: false });
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(made.opened).toHaveLength(1);
+    expect(made.prompts).toHaveLength(1);
+  });
+
+  it("refuses the step when the agent does not accept embedded context, and never pastes the skill in", async () => {
+    const made = await withSkill({ embeddedContext: false });
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(JSON.stringify(await made.orchestrator.events(run.id))).toMatch(
+      /agent 'claude' does not accept embedded context.*skill 'review'/,
+    );
+    expect(JSON.stringify(made.prompts)).not.toContain("review carefully");
+  });
+
+  it("refuses a skill that is not UTF-8 text rather than sending part of it", async () => {
+    const made = await withSkill();
+    await writeFile(join(made.dir, "review", "logo.bin"), Buffer.from([0xff, 0xfe, 0x00]));
+    await expect(made.orchestrator.startAndRun({ workflowId: "flow" })).resolves.toMatchObject({
+      run: { status: "failed" },
+    });
+    expect(JSON.stringify(made.prompts)).not.toContain("review carefully");
   });
 });
 

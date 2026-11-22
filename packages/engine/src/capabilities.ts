@@ -27,17 +27,25 @@ import type { AgentRegistry } from "@orca/agents";
 /** A skill larger than this is refused rather than hashed: skills are instructions, not data. */
 const SKILL_MAX_BYTES = 16 * 1024 * 1024;
 
+/** One file of a skill as read: its path inside the skill (POSIX separators) and its bytes. */
+export interface SkillFile {
+  rel: string;
+  bytes: Buffer;
+}
+
 /**
- * `sha256:` over a skill's files: each file's path relative to the skill (POSIX separators),
- * its size and its bytes, in sorted path order. A single-file skill hashes the same way with
- * its own name as the path. A symbolic link is refused rather than followed, so a digest
- * always describes files that are inside the skill.
+ * Read a skill's files, refusing a symbolic link rather than following it, so a skill is
+ * always files that are inside it. A single-file skill is one file named by its own name.
+ * Sorted by path.
  */
-export function skillDigest(skill: SkillDefinition, baseDir: string | undefined): SkillDigestResult {
+export function readSkillFiles(
+  skill: SkillDefinition,
+  baseDir: string | undefined,
+): { files: SkillFile[] } | { error: string } {
   if (!isAbsolute(skill.path) && baseDir === undefined)
     return { error: `skill path '${skill.path}' is relative, and no config directory is known to resolve it against` };
   const root = isAbsolute(skill.path) ? skill.path : resolve(baseDir!, skill.path);
-  const files: { rel: string; abs: string; size: number }[] = [];
+  const found: { rel: string; abs: string; size: number }[] = [];
   let total = 0;
   const visit = (abs: string, rel: string): string | undefined => {
     const stat = lstatSync(abs);
@@ -53,13 +61,13 @@ export function skillDigest(skill: SkillDefinition, baseDir: string | undefined)
     if (!stat.isFile()) return `skill path '${skill.path}' contains something that is neither a file nor a directory`;
     total += stat.size;
     if (total > SKILL_MAX_BYTES) return `skill '${skill.path}' is larger than ${SKILL_MAX_BYTES} bytes`;
-    files.push({ rel, abs, size: stat.size });
+    found.push({ rel, abs, size: stat.size });
     return undefined;
   };
   try {
     const top = lstatSync(root);
     const problem = top.isFile()
-      ? (files.push({ rel: relative(resolve(root, ".."), root).split(sep).join("/"), abs: root, size: top.size }),
+      ? (found.push({ rel: relative(resolve(root, ".."), root).split(sep).join("/"), abs: root, size: top.size }),
         top.size > SKILL_MAX_BYTES ? `skill '${skill.path}' is larger than ${SKILL_MAX_BYTES} bytes` : undefined)
       : visit(root, "");
     if (problem) return { error: problem };
@@ -72,16 +80,35 @@ export function skillDigest(skill: SkillDefinition, baseDir: string | undefined)
           : `skill path '${skill.path}' cannot be read (${code ?? "error"})`,
     };
   }
-  const hash = createHash("sha256");
   try {
-    for (const file of files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0))) {
-      hash.update(`${file.rel}\0${file.size}\0`);
-      hash.update(readFileSync(file.abs));
-    }
+    return {
+      files: found
+        .sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0))
+        .map((f) => ({ rel: f.rel, bytes: readFileSync(f.abs) })),
+    };
   } catch (error) {
     return { error: `skill path '${skill.path}' cannot be read (${(error as NodeJS.ErrnoException).code ?? "error"})` };
   }
-  return { digest: `sha256:${hash.digest("hex")}` };
+}
+
+/**
+ * `sha256:` over a skill's files: each file's path relative to the skill (POSIX separators),
+ * its size and its bytes, in sorted path order. Computed from the bytes given, so content
+ * read once can be both hashed and delivered.
+ */
+export function skillFilesDigest(files: readonly SkillFile[]): string {
+  const hash = createHash("sha256");
+  for (const file of files) {
+    hash.update(`${file.rel}\0${file.bytes.length}\0`);
+    hash.update(file.bytes);
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
+/** A skill's content digest as it is on disk now (`skillFilesDigest` over `readSkillFiles`). */
+export function skillDigest(skill: SkillDefinition, baseDir: string | undefined): SkillDigestResult {
+  const read = readSkillFiles(skill, baseDir);
+  return "error" in read ? read : { digest: skillFilesDigest(read.files) };
 }
 
 /** The `capabilities` field of the agent instruction a node carries, if it has one. */
@@ -120,26 +147,25 @@ export function resolveNodeCapabilities(input: NodeCapabilityInput): ResolveCapa
 }
 
 /**
- * What a step's resolved set needs that ORCA cannot give a session.
+ * What a step's resolved set needs that this orchestrator cannot give a session.
  *
- * - **Catalog MCP servers** (#337) are given to a session only through the server-verified
- *   use decision (the run owner's `capabilities` grant), after their command is found on the
- *   agent's host. A caller with no such decision (`catalogServers: false`) refuses them.
- * - **Skills** resolve, with identities, sources and content digests that validation and the
- *   launch preview show, but are not delivered yet: a step that selects one is refused rather
- *   than started without it.
+ * Catalog MCP servers and skills (#337) are given to a session only through the
+ * server-verified use decision (the run owner's `capabilities` grant). A caller with no such
+ * decision (`catalog: false`) refuses them. Whether the host has each server's command, and
+ * whether the agent accepts skills, is checked when the session opens.
  *
  * The agent's own legacy inline `mcpServers` need neither: config authority put them on it.
  */
 export function deliveryIssues(
   result: ResolveCapabilitiesResult,
   nodePath: string,
-  delivery: { catalogServers: boolean } = { catalogServers: true },
+  delivery: { catalog: boolean } = { catalog: true },
 ): CapabilityIssue[] {
+  if (delivery.catalog) return [];
   const issues: CapabilityIssue[] = [];
   const list = (ids: string[]) => ids.map((id) => `'${id}'`).join(", ");
   const servers = result.manifest.mcpServers.filter((m) => m.catalog).map((m) => m.id);
-  if (servers.length && !delivery.catalogServers)
+  if (servers.length)
     issues.push({
       path: `${nodePath}.capabilities.mcpServers`,
       message: `selects catalog MCP server${servers.length > 1 ? "s" : ""} ${list(servers)}, and this daemon has no server-verified use check to give ${
@@ -150,11 +176,45 @@ export function deliveryIssues(
   if (skills.length)
     issues.push({
       path: `${nodePath}.capabilities.skills`,
-      message: `selects skill${skills.length > 1 ? "s" : ""} ${list(skills)}, but this version of ORCA cannot deliver skills to an agent session yet. Remove ${
+      message: `selects skill${skills.length > 1 ? "s" : ""} ${list(skills)}, and this daemon has no server-verified use check to give ${
         skills.length > 1 ? "them" : "it"
-      } from the selection to run this step`,
+      } to a session with. Run it through a daemon or an admitted run`,
     });
   return issues;
+}
+
+/** The most skill content one step may carry inline in its prompts. */
+export const SKILL_DELIVERY_MAX_BYTES = 256 * 1024;
+
+/**
+ * A selected skill as it will be delivered: its files read once, digest computed over the
+ * very bytes that will be sent, and each file decoded as UTF-8 text. Refused when it no
+ * longer hashes to `expected` (what the launch recorded), is not text, or the step's skills
+ * together are larger than `SKILL_DELIVERY_MAX_BYTES`.
+ */
+export function readSkillForDelivery(
+  id: string,
+  skill: SkillDefinition,
+  baseDir: string | undefined,
+  expected: string | undefined,
+): { files: { rel: string; text: string }[]; digest: string; bytes: number } | { error: string } {
+  const read = readSkillFiles(skill, baseDir);
+  if ("error" in read) return read;
+  const digest = skillFilesDigest(read.files);
+  if (expected !== undefined && digest !== expected)
+    return { error: `skill '${id}' changed since the run was launched (now ${digest}); start a new run to use it` };
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const files: { rel: string; text: string }[] = [];
+  let bytes = 0;
+  for (const file of read.files) {
+    bytes += file.bytes.length;
+    try {
+      files.push({ rel: file.rel, text: decoder.decode(file.bytes) });
+    } catch {
+      return { error: `skill '${id}' file '${file.rel}' is not UTF-8 text, and skills are delivered as text` };
+    }
+  }
+  return { files, digest, bytes };
 }
 
 /** The refusal a launch or a session open throws for a step whose capabilities do not resolve. */
@@ -256,7 +316,7 @@ const INLINE_PATH_SEP = "::";
 export function preflightCapabilities(
   registry: AgentRegistry,
   def: WorkflowDefinition,
-  delivery: { catalogServers: boolean } = { catalogServers: true },
+  delivery: { catalog: boolean } = { catalog: true },
 ): void {
   for (const step of agentInstructions(def)) {
     if (!registry.canResolve(step.agent)) continue;

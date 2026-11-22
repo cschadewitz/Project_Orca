@@ -152,48 +152,62 @@ export function grantCovers(
 export const CapabilityGrantSchema = z.union([
   z.literal("*"),
   z.array(
-    z
-      .object({
-        kind: z.literal("mcpServer"),
-        id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
-        host: z.string().min(1),
-        binding: z.string().regex(/^h1:[0-9a-f]{32}$/),
-        /** `mcpServerDefinitionDigest` of the definition when granted. */
-        definition: z.string().regex(/^m1:[0-9a-f]{32}$/),
-      })
-      .strict(),
+    z.discriminatedUnion("kind", [
+      z
+        .object({
+          kind: z.literal("mcpServer"),
+          id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+          host: z.string().min(1),
+          binding: z.string().regex(/^h1:[0-9a-f]{32}$/),
+          /** `mcpServerDefinitionDigest` of the definition when granted. */
+          definition: z.string().regex(/^m1:[0-9a-f]{32}$/),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("skill"),
+          id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+          /** The skill's content digest when granted: an edited skill is not covered. */
+          digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+        })
+        .strict(),
+    ]),
   ),
 ]);
 export type CapabilityGrant = z.infer<typeof CapabilityGrantSchema>;
 
 /**
- * Whether `grant` covers one use: that server, defined that way, on that host. A narrow grant
- * covers only a server whose command is an absolute path, so the definition it pins names the
- * executable itself rather than whatever a `PATH` search or a working directory turns up.
+ * Whether `grant` covers one use. A server: that id, defined that way, on that host and
+ * endpoint, and only when its command is an absolute path, so the definition pinned names
+ * the executable itself rather than whatever a `PATH` search or a working directory turns
+ * up. A skill: that id with exactly that content digest.
  */
 export function capabilityGrantCovers(
   grant: CapabilityGrant | undefined,
-  use: {
-    kind: "mcpServer";
-    id: string;
-    hostId: string;
-    hostBinding: string;
-    definition: string;
-    absoluteCommand: boolean;
-  },
+  use:
+    | {
+        kind: "mcpServer";
+        id: string;
+        hostId: string;
+        hostBinding: string;
+        definition: string;
+        absoluteCommand: boolean;
+      }
+    | { kind: "skill"; id: string; digest: string },
 ): boolean {
   if (grant === undefined) return false;
+  if (grant === "*") return true;
+  if (use.kind === "skill") return grant.some((g) => g.kind === "skill" && g.id === use.id && g.digest === use.digest);
   return (
-    grant === "*" ||
-    (use.absoluteCommand &&
-      grant.some(
-        (g) =>
-          g.kind === use.kind &&
-          g.id === use.id &&
-          g.host === use.hostId &&
-          g.binding === use.hostBinding &&
-          g.definition === use.definition,
-      ))
+    use.absoluteCommand &&
+    grant.some(
+      (g) =>
+        g.kind === "mcpServer" &&
+        g.id === use.id &&
+        g.host === use.hostId &&
+        g.binding === use.hostBinding &&
+        g.definition === use.definition,
+    )
   );
 }
 
