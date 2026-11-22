@@ -11,6 +11,10 @@
  *   stopped, converts it explicitly (store-format-carryover.ts): a verified whole-store backup
  *   into `format-backups/`, a check that nothing else wrote meanwhile, a read of the store under
  *   the current format, and only then the marker. Any failure leaves the prior format in charge.
+ *   The desktop app's bundled daemon does the same automatically on the first start after an
+ *   update, and only then, when the caller hands {@link enterStoreFormat} a
+ *   {@link CarryoverAuthority}: proof that this process holds the store's exclusive writer fence
+ *   and that the updater handed it the store (#897). The fence must hold throughout.
  * - An older format this build no longer reads: refuse, naming the release to open it with first.
  * - A format this build does not know (in practice, one written by a newer ORCA): refuse for
  *   reads and writes alike. The store is never rewritten.
@@ -19,7 +23,8 @@
  * them together. Changing the epoch means appending to {@link STORE_FORMAT_HISTORY}.
  */
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
+import { createDurable, syncDirectory, syncFile } from "./durable-file.js";
 import type { Stats } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -27,15 +32,22 @@ import { OrcaError } from "@orca/core";
 import { withFileLock } from "./file-lock.js";
 import {
   CarryoverRefused,
+  posixPrivateCopy,
   pruneFormatBackups,
   stageCarryover,
   STORE_FORMAT_BACKUP_DIR,
+  type PrivateCopyBackend,
 } from "./store-format-carryover.js";
 
 export {
+  CarryoverRefused,
+  posixPrivateCopy,
+  stageCarryover,
   STORE_FORMAT_BACKUP_DIR,
   STORE_FORMAT_BACKUP_MANIFEST,
   STORE_FORMAT_BACKUP_RETENTION,
+  STORE_UPDATE_HANDOFF_FILE,
+  type PrivateCopyBackend,
 } from "./store-format-carryover.js";
 
 /** Oldest first. `release` is the first release line that wrote the format. */
@@ -60,7 +72,16 @@ export type StoreFormatMarker = z.infer<typeof MarkerSchema>;
 
 /** NEWER, TOO_OLD and DAMAGED describe the marker; the rest are carryover refusals. */
 export type StoreFormatReason =
-  "NEWER" | "TOO_OLD" | "DAMAGED" | "CARRYOVER_REQUIRED" | "BUSY" | "UNREADABLE" | "BACKUPS_UNSAFE";
+  | "NEWER"
+  | "TOO_OLD"
+  | "DAMAGED"
+  | "CARRYOVER_REQUIRED"
+  | "BUSY"
+  | "UNREADABLE"
+  | "BACKUPS_UNSAFE"
+  | "FENCE_LOST"
+  | "APP_OWNED"
+  | "UNDURABLE";
 export class StoreFormatError extends OrcaError {
   override readonly name = "StoreFormatError";
   constructor(
@@ -78,11 +99,36 @@ export type StoreFormatOutcome =
   /** Carried forward explicitly by {@link carryStoreForward}, after a verified backup. */
   | { status: "carried"; epoch: string; from: string | "unmarked"; backup: string };
 
+/** A writer fence this process holds over the store: `check()` is true only while it still does. */
+export interface StoreWriteFence {
+  check(): boolean;
+}
+
+/**
+ * Permission to carry an older-format store forward during startup (#897). Only the desktop
+ * app's bundled daemon gets one, on the first start after an update, from proof that it holds
+ * the store's exclusive writer fence and that the updater handed it this exact store.
+ */
+export interface CarryoverAuthority {
+  fence: StoreWriteFence;
+  /** Where private copies may go; defaults to the POSIX owner-only backups directory. */
+  privacy?: PrivateCopyBackend;
+  /** Called once with how it ended; not called when the carryover was interrupted by an error. */
+  settle: (outcome: "carried" | "refused") => void | Promise<void>;
+  /** Injected for tests. */
+  afterCopy?: () => Promise<void>;
+}
+
 export interface StoreFormatOptions {
   /** The ORCA version doing the open, recorded in the marker. */
   appVersion: string;
   /** "read" checks only and never writes (closed update validation). */
   mode: "write" | "read";
+  /**
+   * Asked only when the store needs carrying forward (CARRYOVER_REQUIRED) in write mode.
+   * `undefined` keeps the refusal, exactly as without this option.
+   */
+  carryover?: () => Promise<CarryoverAuthority | undefined>;
   /** Injected for tests. */
   now?: () => Date;
 }
@@ -193,7 +239,18 @@ const carryoverRequired = (storeDir: string, from: string) =>
     storeDir,
   );
 
-async function stamp(storeDir: string, appVersion: string, now: Date, backup: string | undefined): Promise<void> {
+/**
+ * Write the marker durably: flushed before the rename that makes it current, and the rename
+ * flushed before this returns, so no writer is admitted on a marker a crash could still undo.
+ * `guard` runs with no await between it and that rename; when it throws, nothing is changed.
+ */
+async function stamp(
+  storeDir: string,
+  appVersion: string,
+  now: Date,
+  backup: string | undefined,
+  guard: () => void = () => undefined,
+): Promise<void> {
   const value: StoreFormatMarker = {
     format: 1,
     epoch: STORE_FORMAT_EPOCH,
@@ -202,8 +259,16 @@ async function stamp(storeDir: string, appVersion: string, now: Date, backup: st
     ...(backup ? { backup } : {}),
   };
   const tmp = join(storeDir, `${STORE_FORMAT_FILE}.${randomUUID()}.tmp`);
-  await writeFile(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
+  await createDurable(tmp, JSON.stringify(value, null, 2) + "\n");
+  try {
+    guard();
+  } catch (error) {
+    await rm(tmp, { force: true });
+    throw error;
+  }
   await rename(tmp, join(storeDir, STORE_FORMAT_FILE));
+  if (process.platform === "win32") await syncFile(join(storeDir, STORE_FORMAT_FILE));
+  await syncDirectory(storeDir);
 }
 
 /**
@@ -228,14 +293,52 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
   };
   if (options.mode === "read") return { status: await classify(await check()), epoch: current };
   await mkdir(storeDir, { recursive: true });
-  return withFileLock(join(storeDir, LOCK), async () => {
+  return withFileLock(join(storeDir, LOCK), async (): Promise<StoreFormatOutcome> => {
     const marker = await check();
-    const status = await classify(marker);
+    let status: Awaited<ReturnType<typeof classify>>;
+    try {
+      status = await classify(marker);
+    } catch (error) {
+      if (!(error instanceof StoreFormatError) || error.reason !== "CARRYOVER_REQUIRED" || !options.carryover)
+        throw error;
+      const authority = await options.carryover();
+      if (!authority) throw error;
+      let outcome: StoreFormatOutcome;
+      try {
+        outcome = await carryLocked(storeDir, marker, {
+          appVersion: options.appVersion,
+          fence: authority.fence,
+          ...(authority.privacy ? { privacy: authority.privacy } : {}),
+          ...(authority.afterCopy ? { afterCopy: authority.afterCopy } : {}),
+          ...(options.now ? { now: options.now } : {}),
+        });
+      } catch (refusal) {
+        if (refusal instanceof StoreFormatError) await authority.settle("refused");
+        throw refusal;
+      }
+      await authority.settle("carried");
+      return outcome;
+    }
     const now = (options.now ?? (() => new Date()))();
     if (status !== "current" || marker?.writtenBy !== options.appVersion)
       await stamp(storeDir, options.appVersion, now, marker?.backup);
     return { status, epoch: current };
   });
+}
+
+export interface CarryForwardOptions {
+  appVersion: string;
+  now?: () => Date;
+  afterCopy?: () => Promise<void>;
+  /**
+   * The writer fence the caller holds (#897). Checked before the copy, after it, after the read
+   * check and just before the marker; once it no longer holds, nothing is carried (FENCE_LOST).
+   */
+  fence?: StoreWriteFence;
+  /** Where private copies may go; defaults to the POSIX owner-only backups directory. */
+  privacy?: PrivateCopyBackend;
+  /** Injected for tests; defaults to this process's platform. */
+  platform?: NodeJS.Platform;
 }
 
 /**
@@ -244,45 +347,60 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
  * when quiescence cannot be confirmed (store-format-carryover.ts), and stamps the current
  * format only after a verified backup and a read check. Throws {@link StoreFormatError}.
  */
-export async function carryStoreForward(
+export async function carryStoreForward(storeDir: string, options: CarryForwardOptions): Promise<StoreFormatOutcome> {
+  return withFileLock(join(storeDir, LOCK), async () =>
+    carryLocked(storeDir, await readStoreFormat(storeDir), options),
+  );
+}
+
+const fenceLost = (storeDir: string) =>
+  new CarryoverRefused(
+    "FENCE_LOST",
+    `This ORCA no longer provably holds the only write access to ${storeDir}, so the store was not carried forward and its prior format stays in charge. Close every ORCA app, daemon and command using this workspace, then start ORCA again.`,
+  );
+
+/** Under the format lock, with the marker read under it. */
+async function carryLocked(
   storeDir: string,
-  options: {
-    appVersion: string;
-    now?: () => Date;
-    afterCopy?: () => Promise<void>;
-    /** Injected for tests; defaults to this process's platform. */
-    platform?: NodeJS.Platform;
-  },
+  marker: StoreFormatMarker | undefined,
+  options: CarryForwardOptions,
 ): Promise<StoreFormatOutcome> {
   const current = STORE_FORMAT_EPOCH;
-  return withFileLock(join(storeDir, LOCK), async () => {
-    const marker = await readStoreFormat(storeDir);
-    if (marker) judge(storeDir, marker, current);
-    if (marker?.epoch === current) return { status: "current", epoch: current };
-    if (!marker && !(await holdsData(storeDir)))
-      throw new StoreFormatError("UNREADABLE", `${storeDir} holds no ORCA store to carry forward.`, storeDir);
-    // The copies hold the execution key and private records. On Windows nothing here can yet
-    // verify that the destination's ACL keeps them at least as private as the originals (#897).
-    if ((options.platform ?? process.platform) === "win32")
-      throw new StoreFormatError(
-        "BACKUPS_UNSAFE",
-        "carry-forward is not available on Windows yet: ORCA cannot verify that a backup there keeps the store's private records as private as the originals. Nothing was changed.",
-        storeDir,
-      );
-    const from = marker?.epoch ?? "unmarked";
-    const now = (options.now ?? (() => new Date()))();
-    let backup: string;
-    try {
-      const staged = await stageCarryover(storeDir, from, current, now, {
-        ...(options.afterCopy ? { afterCopy: options.afterCopy } : {}),
-      });
-      backup = await staged.commit();
-    } catch (error) {
-      if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
-      throw error;
-    }
-    await stamp(storeDir, options.appVersion, now, backup);
-    await pruneFormatBackups(storeDir, backup);
-    return { status: "carried", epoch: current, from, backup };
-  });
+  if (marker) judge(storeDir, marker, current);
+  if (marker?.epoch === current) return { status: "current", epoch: current };
+  if (!marker && !(await holdsData(storeDir)))
+    throw new StoreFormatError("UNREADABLE", `${storeDir} holds no ORCA store to carry forward.`, storeDir);
+  // The marker may only become durable after the backup it names. POSIX orders the two with a
+  // directory fsync after each rename; Windows has no barrier ORCA has verified for a directory
+  // entry (a rename), so a power loss could keep the marker and lose the backup. Fail closed
+  // there until one is (#910): nothing is copied and the prior format stays in charge.
+  if ((options.platform ?? process.platform) === "win32")
+    throw new StoreFormatError(
+      "UNDURABLE",
+      "On Windows this ORCA cannot yet guarantee that the backup reaches the disk before the store's format changes, so the store was not carried forward. Nothing was changed. Keep using the ORCA version that last wrote this store.",
+      storeDir,
+    );
+  const privacy = options.privacy ?? posixPrivateCopy;
+  const fence = () => {
+    if (options.fence && !options.fence.check()) throw fenceLost(storeDir);
+  };
+  const from = marker?.epoch ?? "unmarked";
+  const now = (options.now ?? (() => new Date()))();
+  let backup: string;
+  try {
+    const staged = await stageCarryover(storeDir, from, current, now, {
+      ...(options.afterCopy ? { afterCopy: options.afterCopy } : {}),
+      fence,
+      privacy,
+    });
+    backup = await staged.commit();
+    // The backup is published and durable; the marker is what changes the format, and the fence
+    // is checked once more with no await between that check and the marker's rename.
+    await stamp(storeDir, options.appVersion, now, backup, fence);
+  } catch (error) {
+    if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
+    throw error;
+  }
+  await pruneFormatBackups(storeDir, backup, privacy);
+  return { status: "carried", epoch: current, from, backup };
 }

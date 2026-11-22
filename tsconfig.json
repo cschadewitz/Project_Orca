@@ -18,6 +18,7 @@
       "@orca/cli": ["./packages/cli/src/index.ts"],
       "@orca/protocol/update-window": ["./packages/protocol/src/update-window.ts"],
       "@orca/protocol/first-run-fence": ["./packages/protocol/src/first-run-fence.ts"],
+      "@orca/protocol/update-handoff": ["./packages/protocol/src/update-handoff.ts"],
       "@orca/protocol/remote-access": ["./packages/protocol/src/remote-access.ts"],
       "@orca/protocol/server-setup": ["./packages/protocol/src/server-setup.ts"],
       "@orca/protocol": ["./packages/protocol/src/index.ts"],
@@ -32,6 +33,7 @@
     // and ESLint's type-aware rules — which resolve files through this project — both see it.
     "packages/app/src/preload/**/*.cts",
     "packages/*/test/**/*.ts",
+    "packages/cli/native-probe/**/*.ts",
     "docs/preparation/tool-execution-guards/contract.ts",
     "examples/**/*.ts",
     "vitest.config.ts",

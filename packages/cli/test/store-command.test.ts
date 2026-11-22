@@ -1,5 +1,5 @@
-/** `orca store format | carry-forward | sqlite` and the startup refusal that points to it (#566, #339). */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+/** `orca store format | carry-forward | sqlite` and the startup refusal that points to it (#566, #339, #897). */
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -54,6 +54,22 @@ describe("orca store", () => {
     const again = ctx(dir, ["carry-forward"]);
     expect(await storeCommand(again)).toBe(0);
     expect(again.lines[0]).toContain("nothing to do");
+  });
+
+  it("refuses to carry forward a desktop app's own store, whose write fence it cannot hold (#897)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-store-command-"));
+    dirs.push(dir);
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
+    await mkdir(join(dir, ".orca", "runs"), { recursive: true });
+    await writeFile(join(dir, ".orca", "runs", "run_old.jsonl"), LOG);
+    // The app's first-run ownership journal marks the workspace as the app's.
+    await mkdir(join(dir, ".orca-first-run-ownership"), { mode: 0o700 });
+    await expect(storeCommand(ctx(dir, ["carry-forward"]))).rejects.toMatchObject({
+      code: "STORE_FORMAT",
+      details: { reason: "APP_OWNED" },
+    });
+    expect(await readdir(join(dir, ".orca"))).toEqual(["runs"]);
+    expect(await readFile(join(dir, ".orca", "runs", "run_old.jsonl"), "utf8")).toBe(LOG);
   });
 
   it("sqlite import, verify, backup and restore round-trip a store's metadata", async () => {

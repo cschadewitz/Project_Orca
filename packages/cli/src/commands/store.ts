@@ -27,10 +27,13 @@ import {
   readStoreFormat,
   restoreSqliteMetadata,
   STORE_FORMAT_EPOCH,
+  StoreFormatError,
   verifySqliteMetadata,
 } from "@orca/store";
+import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
 import { loadConfig } from "../bootstrap.js";
 import { readOrcaVersion } from "../version.js";
+import { storePrivacy } from "../store-privacy.js";
 import type { CommandContext } from "./index.js";
 
 export async function storeCommand(ctx: CommandContext): Promise<number> {
@@ -55,7 +58,12 @@ export async function storeCommand(ctx: CommandContext): Promise<number> {
       return 0;
     }
     case "carry-forward": {
-      const outcome = await carryStoreForward(storeDir, { appVersion: readOrcaVersion() });
+      refuseAppOwned(configDir, storeDir);
+      const privacy = storePrivacy();
+      const outcome = await carryStoreForward(storeDir, {
+        appVersion: readOrcaVersion(),
+        ...(privacy ? { privacy } : {}),
+      });
       if (outcome.status === "carried")
         ctx.out(`carried ${storeDir} forward from ${outcome.from} to ${outcome.epoch}; backup in ${outcome.backup}`);
       else ctx.out(`${storeDir} is already in store format ${outcome.epoch}; nothing to do`);
@@ -123,4 +131,23 @@ async function sqliteCommand(ctx: CommandContext, storeDir: string): Promise<num
         `unknown store sqlite action '${action ?? ""}' (import | backup <file> | restore <file> | verify)`,
       );
   }
+}
+
+/**
+ * The desktop app's own workspaces are written only by the daemon the app launches, which holds
+ * the workspace's first-run writer fence. This command cannot hold that fence, and the format
+ * lock does not keep that daemon out, so it refuses there: the app carries its store forward
+ * itself on the first start after an update (#897).
+ */
+function refuseAppOwned(configDir: string, storeDir: string): void {
+  for (const path of [configDir, storeDir])
+    try {
+      assertNoUnownedFirstRunMutation(path);
+    } catch {
+      throw new StoreFormatError(
+        "APP_OWNED",
+        `${storeDir} belongs to the ORCA desktop app, which carries it forward itself after an update. This command cannot hold the app's write fence, so it changed nothing.`,
+        storeDir,
+      );
+    }
 }

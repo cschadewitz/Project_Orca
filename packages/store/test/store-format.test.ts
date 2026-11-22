@@ -7,6 +7,7 @@ import {
   carryStoreForward,
   enterStoreFormat,
   FileExecutionStore,
+  posixPrivateCopy,
   readStoreFormat,
   STORE_FORMAT_BACKUP_DIR,
   STORE_FORMAT_BACKUP_MANIFEST,
@@ -318,15 +319,19 @@ describe("store format marker (#566)", () => {
     });
   });
 
-  it("refuses to carry forward on Windows, where private copies cannot be verified yet", async () => {
+  it("refuses to carry forward on Windows, where no verified barrier orders the backup before the marker", async () => {
     const dir = await store();
     await mkdir(dir, { recursive: true });
     await legacy(dir);
     const before = await contents(dir);
-    await expect(carryStoreForward(dir, { appVersion: "0.7.1", platform: "win32" })).rejects.toMatchObject({
-      reason: "BACKUPS_UNSAFE",
-    });
+    // Even with a backend that verifies private copies: nothing is copied at all.
+    for (const privacy of [undefined, posixPrivateCopy])
+      await expect(
+        carryStoreForward(dir, { appVersion: "0.7.1", platform: "win32", ...(privacy ? { privacy } : {}) }),
+      ).rejects.toMatchObject({ reason: "UNDURABLE" });
     expect(await contents(dir)).toEqual(before);
+    expect(await backups(dir)).toEqual([]);
+    expect(await readStoreFormat(dir)).toBeUndefined();
   });
 
   it("refuses to carry forward a store that holds links", async () => {

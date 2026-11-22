@@ -2,10 +2,12 @@
  * Carrying an older-format store forward (#566): a verified whole-store backup and a read
  * check under the new readers, both done before the current format is stamped.
  *
- * Only the explicit `orca store carry-forward` runs this, with the person stating every other
- * ORCA process is stopped. Even so nothing here assumes the store is quiet: pre-0.7.1 writers
- * hold no lock this code can see, so quiescence is checked as well: no live run lease (a lease
- * lookup that fails refuses), and the store's complete
+ * Two callers run this. The explicit `orca store carry-forward`, with the person stating every
+ * other ORCA process is stopped; and the desktop app's bundled daemon on the first start after an
+ * update, only while it holds the store's exclusive writer fence (`fence`, #897), which is checked
+ * before the copy, after it, after the read check and just before the marker. Neither assumes
+ * the store is quiet: pre-0.7.1 writers hold no lock this code can see, so quiescence is checked
+ * as well: no live run lease (a lease lookup that fails refuses), and the store's complete
  * file signature (path, type, size, mtime, inode) unchanged from before the copy, after it, and
  * again just before the marker is written. Each copied file's bytes are compared with the
  * source. Any difference discards the staged copy and refuses startup with the prior format
@@ -13,13 +15,20 @@
  *
  * Backups are directories under `format-backups/` that this code names and marks with
  * `format-backup.json`; retention removes only those, never anything else it finds there.
+ *
+ * The copies hold the execution key and private records, so they are only ever written where
+ * a {@link PrivateCopyBackend} has verified they stay private to this user: on POSIX an
+ * owner-only backups directory, which nobody else can traverse; on Windows, where traversal
+ * is not a barrier, every directory is created with an owner-only protected DACL and every
+ * directory and file copied is verified owner-only afterwards (#897).
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { chmod, copyFile, lstat, mkdir, readdir, readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readdir, readFile, rename, rm, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { fileStores } from "./document-store.js";
+import { createCopy, createDurable, syncDirectory } from "./durable-file.js";
 import { FileLeaseStore, lapsed } from "./lease-store.js";
 
 export const STORE_FORMAT_BACKUP_DIR = "format-backups";
@@ -28,13 +37,18 @@ export const STORE_FORMAT_BACKUP_MANIFEST = "format-backup.json";
 const BACKUP_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-from-[a-z0-9-]{1,64}(-\d{1,4})?$/;
 const SCRATCH_NAME = /^\.(partial|validate)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** Never copied or compared: the backups themselves, locks, update-window guards, the marker. */
+/** The desktop updater's handoff record (`@orca/protocol/update-handoff`, #897). */
+export const STORE_UPDATE_HANDOFF_FILE = "update-handoff.json";
+
+/** Never copied or compared: the backups themselves, locks, update-window guards, the marker, the
+ * updater's handoff (rewritten by the carrying daemon itself before it copies). */
 const skipped = (name: string, top: boolean) =>
   name.endsWith(".lock") ||
   (top &&
     (name === STORE_FORMAT_BACKUP_DIR ||
       name.startsWith(".orca-update-window") ||
-      name.startsWith("store-format.json")));
+      name.startsWith("store-format.json") ||
+      name.startsWith(STORE_UPDATE_HANDOFF_FILE)));
 
 const ManifestSchema = z.object({
   format: z.literal(1),
@@ -46,7 +60,7 @@ const ManifestSchema = z.object({
   signature: z.string().regex(/^[0-9a-f]{64}$/),
 });
 
-export type CarryoverFailure = "BUSY" | "UNREADABLE" | "BACKUPS_UNSAFE";
+export type CarryoverFailure = "BUSY" | "UNREADABLE" | "BACKUPS_UNSAFE" | "FENCE_LOST";
 export class CarryoverRefused extends Error {
   constructor(
     readonly failure: CarryoverFailure,
@@ -54,6 +68,45 @@ export class CarryoverRefused extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * Where the private copies may be written. `mkdir` creates one new directory, private to this
+ * user, and fails if anything is already there. `privateRoot` says whether an existing directory
+ * is private to this user. `privateEntry` checks each directory and file after it is copied.
+ */
+export interface PrivateCopyBackend {
+  mkdir(path: string): Promise<void>;
+  privateRoot(path: string): Promise<boolean>;
+  privateEntry(path: string, kind: "dir" | "file"): Promise<boolean>;
+}
+
+/** POSIX: the owner-only backups directory keeps everything under it from anyone else. */
+export const posixPrivateCopy: PrivateCopyBackend = {
+  async mkdir(path) {
+    await mkdir(path, { mode: 0o700 });
+  },
+  async privateRoot(path) {
+    const info = await lstat(path);
+    return info.isDirectory() && (info.mode & 0o077) === 0 && info.uid === process.getuid?.();
+  },
+  privateEntry: () => Promise.resolve(true),
+};
+
+const unsafeCopy = (path: string) =>
+  new CarryoverRefused(
+    "BACKUPS_UNSAFE",
+    `${path} could not be verified as private to this user, so the store was not copied there. Nothing was changed.`,
+  );
+
+/** A new private directory, verified; any failure is a refusal, never a half-private copy. */
+async function privateDirectory(privacy: PrivateCopyBackend, path: string): Promise<void> {
+  try {
+    await privacy.mkdir(path);
+  } catch {
+    throw unsafeCopy(path);
+  }
+  if (!(await privacy.privateEntry(path, "dir").catch(() => false))) throw unsafeCopy(path);
 }
 
 interface Entry {
@@ -114,20 +167,26 @@ function digest(path: string): Promise<string> {
   });
 }
 
-async function copyTree(source: string, target: string, entries: Snapshot): Promise<void> {
-  // Directories first, owner-only while filling; their recorded modes are restored last.
-  for (const [path, entry] of entries)
-    if (entry.type === "dir") await mkdir(join(target, path), { recursive: true, mode: 0o700 });
+/** `target` is a new private directory; `entries` lists parents before their children. */
+async function copyTree(source: string, target: string, entries: Snapshot, privacy: PrivateCopyBackend): Promise<void> {
+  // Directories first, private while filling; on POSIX their recorded modes are restored last.
+  for (const [path, entry] of entries) if (entry.type === "dir") await privateDirectory(privacy, join(target, path));
   for (const [path, entry] of entries) {
     if (entry.type === "file") {
-      await copyFile(join(source, path), join(target, path));
-      await chmod(join(target, path), entry.mode);
+      await createCopy(join(source, path), join(target, path));
+      if (!(await privacy.privateEntry(join(target, path), "file").catch(() => false)))
+        throw unsafeCopy(join(target, path));
+      if (process.platform !== "win32") await chmod(join(target, path), entry.mode);
       const info = await lstat(join(source, path));
       await utimes(join(target, path), info.atime, info.mtime);
     }
   }
-  for (const [path, entry] of [...entries].reverse())
-    if (entry.type === "dir") await chmod(join(target, path), entry.mode);
+  if (process.platform !== "win32")
+    for (const [path, entry] of [...entries].reverse())
+      if (entry.type === "dir") await chmod(join(target, path), entry.mode);
+  // Every file is flushed already; flush each directory's entries, deepest first.
+  for (const [path, entry] of [...entries].reverse()) if (entry.type === "dir") await syncDirectory(join(target, path));
+  await syncDirectory(target);
 }
 
 async function verifyCopy(source: string, target: string, entries: Snapshot): Promise<boolean> {
@@ -152,23 +211,18 @@ async function readsUnderCurrentFormat(copy: string): Promise<void> {
   for (const plan of await stores.plan.journal.listPlans()) await stores.plan.journal.read(plan);
 }
 
-/**
- * The backups directory, made owner-only; refuses one that is not a real directory of ours.
- * POSIX only: carryStoreForward refuses on Windows before any copy, because ACLs there are
- * not verified (#897).
- */
-async function backupRoot(storeDir: string): Promise<string> {
+/** The backups directory, created private; refuses one that is not a private directory of ours. */
+async function backupRoot(storeDir: string, privacy: PrivateCopyBackend): Promise<string> {
   const root = join(storeDir, STORE_FORMAT_BACKUP_DIR);
-  try {
-    await mkdir(root, { mode: 0o700 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
+  if (!(await present(root)))
+    try {
+      await privacy.mkdir(root);
+    } catch {
+      // Another carryover may have created it meanwhile; it is verified below either way.
+      if (!(await present(root))) throw unsafeCopy(root);
+    }
   const info = await lstat(root);
-  if (
-    !info.isDirectory() ||
-    (process.platform !== "win32" && ((info.mode & 0o077) !== 0 || info.uid !== process.getuid?.()))
-  )
+  if (!info.isDirectory() || !(await privacy.privateRoot(root).catch(() => false)))
     throw new CarryoverRefused(
       "BACKUPS_UNSAFE",
       `${root} is not a private directory owned by this user, so no backup was written. Fix or move it aside, then start ORCA again.`,
@@ -192,8 +246,16 @@ export async function stageCarryover(
   from: string,
   to: string,
   now: Date,
-  hooks: { afterCopy?: () => Promise<void> } = {},
+  hooks: {
+    afterCopy?: () => Promise<void>;
+    /** Throws {@link CarryoverRefused} (FENCE_LOST) once the writer fence no longer holds. */
+    fence?: () => void;
+    privacy?: PrivateCopyBackend;
+  } = {},
 ): Promise<{ commit(): Promise<string> }> {
+  const fence = hooks.fence ?? (() => undefined);
+  const privacy = hooks.privacy ?? posixPrivateCopy;
+  fence();
   let leases;
   try {
     leases = await new FileLeaseStore(storeDir).list();
@@ -209,19 +271,20 @@ export async function stageCarryover(
       "BUSY",
       `Run ${live[0]!.resource} is still being interpreted by pid ${live[0]!.pid} on ${live[0]!.host}. The store format changes only once no run is active. Let it finish or stop it, then start ORCA again.`,
     );
-  const root = await backupRoot(storeDir);
+  const root = await backupRoot(storeDir, privacy);
   const partial = join(root, `.partial-${randomUUID()}`);
   const validate = join(root, `.validate-${randomUUID()}`);
   try {
     const before = await snapshot(storeDir);
-    await mkdir(partial, { mode: 0o700 });
-    await copyTree(storeDir, partial, before);
+    await privateDirectory(privacy, partial);
+    await copyTree(storeDir, partial, before, privacy);
     await hooks.afterCopy?.();
+    fence();
     if (!sameSnapshot(before, await snapshot(storeDir)) || !(await verifyCopy(storeDir, partial, before))) throw busy();
     // The readers may write (keys, generation records); they get a throwaway copy, never the backup.
     const staged = await snapshot(partial);
-    await mkdir(validate, { mode: 0o700 });
-    await copyTree(partial, validate, before);
+    await privateDirectory(privacy, validate);
+    await copyTree(partial, validate, before, privacy);
     try {
       await readsUnderCurrentFormat(validate);
       // The readers may write, but only inside the throwaway copy: with links refused, every
@@ -238,6 +301,7 @@ export async function stageCarryover(
     } finally {
       await rm(validate, { recursive: true, force: true });
     }
+    fence();
     const manifest: z.infer<typeof ManifestSchema> = {
       format: 1,
       tool: "orca-store-format",
@@ -247,21 +311,26 @@ export async function stageCarryover(
       files: [...before.values()].filter((e) => e.type === "file").length,
       signature: signatureOf(before),
     };
-    await writeFile(join(partial, STORE_FORMAT_BACKUP_MANIFEST), JSON.stringify(manifest, null, 2) + "\n", {
-      mode: 0o600,
-      flag: "wx",
-    });
+    // The copy is durable (createCopy, copyTree) before its manifest, and the manifest before
+    // the copy can be published.
+    await createDurable(join(partial, STORE_FORMAT_BACKUP_MANIFEST), JSON.stringify(manifest, null, 2) + "\n");
+    await syncDirectory(partial);
     return {
       async commit() {
-        if (!sameSnapshot(before, await snapshot(storeDir))) {
+        try {
+          if (!sameSnapshot(before, await snapshot(storeDir))) throw busy();
+          const name = `${now.toISOString().replace(/[:.]/g, "-")}-from-${from}`;
+          let target = join(root, name);
+          for (let n = 1; await present(target); n++) target = join(root, `${name}-${n}`);
+          // Checked with no await between it and the rename that publishes the backup.
+          fence();
+          await rename(partial, target);
+          await syncDirectory(root);
+          return target;
+        } catch (error) {
           await rm(partial, { recursive: true, force: true });
-          throw busy();
+          throw error;
         }
-        const name = `${now.toISOString().replace(/[:.]/g, "-")}-from-${from}`;
-        let target = join(root, name);
-        for (let n = 1; await present(target); n++) target = join(root, `${name}-${n}`);
-        await rename(partial, target);
-        return target;
       },
     };
   } catch (error) {
@@ -297,8 +366,12 @@ async function isOurBackup(root: string, name: string): Promise<boolean> {
  * one the marker names). Remove scratch directories of interrupted carryovers. Leave anything
  * else, including entries that look like backups but carry no valid manifest.
  */
-export async function pruneFormatBackups(storeDir: string, keep: string): Promise<void> {
-  const root = await backupRoot(storeDir);
+export async function pruneFormatBackups(
+  storeDir: string,
+  keep: string,
+  privacy: PrivateCopyBackend = posixPrivateCopy,
+): Promise<void> {
+  const root = await backupRoot(storeDir, privacy);
   const names = await readdir(root);
   for (const name of names)
     if (SCRATCH_NAME.test(name) && (await lstat(join(root, name))).isDirectory())

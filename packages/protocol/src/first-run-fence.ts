@@ -241,12 +241,30 @@ export function firstRunAttempts(journal: string): string[] | undefined {
     return undefined;
   return attempts;
 }
-/** All CLI/bootstrap routes refuse first-run stores without the main-only launch capability. */
+/**
+ * What a first-run writer holds once {@link enterFirstRunWriter} admits it, for checks only: it
+ * has no release or close capability. `check()` is true only while this process still holds the
+ * workspace's kernel-lifetime fence (no other participating writer can enter), its attempt is
+ * still the journal's latest with this writer recorded, and the store is the same directory the
+ * claim bound. Store carryover (#897) requires it to hold before, during and after the copy.
+ */
+export interface FirstRunWriterHold {
+  readonly workspace: z.infer<typeof FenceDirectorySchema>;
+  readonly store: z.infer<typeof FenceDirectorySchema>;
+  readonly storeDir: string;
+  readonly reservationId: string;
+  /** This writer's own claim, and the claim immediately before it in the journal (none for the first). */
+  readonly claimHash: string;
+  readonly previous: string | null;
+  check(): boolean;
+}
+/** All CLI/bootstrap routes refuse first-run stores without the main-only launch capability.
+ * Returns the writer's hold for a first-run store, `undefined` for any other store. */
 export async function enterFirstRunWriter(
   configDir: string,
   storeDir: string,
   token: string | undefined,
-): Promise<void> {
+): Promise<FirstRunWriterHold | undefined> {
   let path = realpathSync(configDir);
   let root: string | undefined;
   for (let depth = 0; depth < 256; depth++) {
@@ -353,6 +371,32 @@ export async function enterFirstRunWriter(
     fenceWrite(join(attempt, "writer.json"), writer);
     fence.retainLifetime?.();
     // Do not return a close/release capability to the runtime.
+    const writerText = JSON.stringify(writer) + "\n";
+    const attemptName = names.at(-1)!;
+    const held = writer;
+    const owned = root;
+    return {
+      workspace,
+      store,
+      storeDir,
+      reservationId: claim.reservationId,
+      claimHash: held.claimHash,
+      previous: claim.previous,
+      check() {
+        try {
+          return (
+            fence.listening &&
+            JSON.stringify(fenceDirectory(owned)) === JSON.stringify(workspace) &&
+            JSON.stringify(fenceDirectory(storeDir)) === JSON.stringify(store) &&
+            firstRunAttempts(journal)?.at(-1) === attemptName &&
+            fenceRead(join(attempt, "claim.json")) === claimText &&
+            fenceRead(join(attempt, "writer.json")) === writerText
+          );
+        } catch {
+          return false;
+        }
+      },
+    };
   } catch (error) {
     await new Promise<void>((resolve) => fence.close(() => resolve()));
     throw error;

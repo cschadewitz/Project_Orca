@@ -1528,6 +1528,7 @@ const updates = new Updates(
     },
     prepareDaemon: (token) => workspace.prepareUpdate(token),
     stopDaemon: (token) => workspace.stopForUpdate(token),
+    handOff: (token, from, to) => workspace.handOffForUpdate(token, from, to),
     resume: (token) => workspace.cancelUpdate(token),
     releaseDrafts: () => {
       windowsDraftRelease?.();
