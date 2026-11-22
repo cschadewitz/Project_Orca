@@ -167,7 +167,8 @@ A **run** is one token walking a **graph** from `start` to an `end` node
    `step.inputs` for every artifact it resolves (that is the audit record of what the
    step read — `step.started` precedes input resolution);
 3. appends `step.completed` / `step.failed` (retrying a retryable failure up to the
-   node's `maxAttempts` — agent nodes may instead set `completion.maxAttempts`);
+   node's `maxAttempts` — agent nodes may instead set `completion.maxAttempts` — unless
+   the attempt may have acted outside ORCA, see `docs/recovery.md`);
 4. **routes**: evaluates outgoing edges in order, first `when` that is truthy
    wins, else the single unconditional edge;
 5. ends the run with `run.completed` whenever the step's result carries an `outcome`

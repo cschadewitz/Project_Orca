@@ -17,6 +17,7 @@ it("discovers the adapter's Python tests, including the ones that once ran nowhe
   for (const name of [
     "test_release.py",
     "test_server_bundle.py",
+    "test_server_setup.py",
     "test_auto_update.py",
     "test_operator_compatibility.py",
     "test_auth.py",

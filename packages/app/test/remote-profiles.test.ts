@@ -30,6 +30,7 @@ import { DaemonSubscription } from "../src/client/subscription.js";
 import { ConnectionTarget, connectionFailure } from "../src/main/connection-target.js";
 import { installationId, principalFor, revokeCommand, type CredentialRecord } from "../src/main/remote-credentials.js";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
 import {
   helloVerdict,
   RemoteProfiles,
@@ -69,8 +70,32 @@ class FakeServer {
   /** Holds every command until released, to look at what happens meanwhile. */
   gate?: Promise<void> | undefined;
   private next = 0;
+  /** Standard input each command was given (the server setup's program, #881). */
+  readonly inputs: string[] = [];
+  /** What `python3 -` (the server setup, #881) prints and exits with. */
+  setup: RemoteResult = {
+    code: 0,
+    stdout: [
+      "Staging v0.8.0 (noise the app never reads)",
+      'orca-setup: {"detail": "", "result": "ok", "step": "platform"}',
+      'orca-setup: {"detail": "v0.8.0 staged from the signed bundle", "result": "changed", "step": "stage"}',
+      'orca-setup: {"detail": "could not enable lingering", "result": "warning", "step": "linger"}',
+      'orca-setup: {"account": "casey", "command": "/home/casey/.local/share/orca-server/orca", "done": true, "port": 6722, "root": "/home/casey/.local/share/orca-server", "version": "0.8.0"}',
+    ].join("\n"),
+    serverLines: [],
+  };
+  /** What `python3 - --inspect` (the read-only check before a setup, #881) prints. */
+  inspect: RemoteResult = {
+    code: 0,
+    stdout: [
+      'orca-setup: {"detail": "", "result": "ok", "step": "platform"}',
+      'orca-setup: {"account": "casey", "current": null, "inspected": true, "root": "/home/casey/.local/share/orca-server"}',
+    ].join("\n"),
+    serverLines: [],
+  };
   run(command: readonly string[]): RemoteResult {
     this.commands.push([...command]);
+    if (command[0] === "python3") return command.includes("--inspect") ? this.inspect : this.setup;
     if (this.fail) return { code: this.fail.code, stdout: "", serverLines: this.fail.lines };
     const words = [...command];
     const flag = (name: string) => {
@@ -148,9 +173,10 @@ class FakeTunnel {
     private readonly daemonPort?: number,
     private readonly server = new FakeServer(),
   ) {}
-  async exec(command: readonly string[]): Promise<RemoteResult> {
+  async exec(command: readonly string[], _timeoutMs?: number, input?: string): Promise<RemoteResult> {
     await Promise.resolve();
     await this.server.gate;
+    if (input !== undefined) this.server.inputs.push(input);
     return this.server.run(command);
   }
   async runOnce(command: readonly string[]): Promise<RemoteResult> {
@@ -180,6 +206,7 @@ class FakeTunnel {
         // ssh's accept-new on first use: the probe pins the server's key.
         const pins = this.options.knownHostsFile;
         if (pinState(pins) === "none") {
+          if (this.options.pinnedOnly) throw new TunnelRefusal("host-key-missing");
           mkdirSync(dirname(pins), { recursive: true });
           writeFileSync(pins, "orca-lab ssh-ed25519 AAAAFIRSTUSE\n");
         }
@@ -1550,5 +1577,261 @@ describe("server commands (#875)", () => {
     });
     expect(positionals).toEqual(["auth", "revoke", "-7S0Qb1r7CC7"]);
     expect(values).toMatchObject({ json: true, config: "/srv/orca.config.yaml" });
+  });
+});
+
+describe("setting a machine up as a managed server (#881)", () => {
+  const scripts = fileURLToPath(new URL("../../../tools/deploy/", import.meta.url));
+  const managed = "/home/casey/.local/share/orca-server/orca";
+  const inspectAndSetUp = async (profiles: RemoteProfiles, version = "0.8.0") => {
+    const { inspection } = await profiles.inspectServer("lab", { version, scripts });
+    return profiles.setUpServer("lab", { version, scripts, confirmation: inspection!.confirmation });
+  };
+
+  it("first inspects read only: shows keys and account, and pins and installs nothing", async () => {
+    const { profiles, server, dir } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const { inspection, outcome } = await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    expect(outcome.kind).toBe("inspected");
+    expect(inspection).toMatchObject({
+      destination: "casey@lab",
+      account: "casey",
+      firstUse: true,
+      version: "0.8.0",
+      current: null,
+      scope: "install-and-sign-in",
+      fingerprints: { server: [expect.stringMatching(/^ssh-ed25519 SHA256:/)] },
+    });
+    expect(inspection!.fingerprints).not.toHaveProperty("jump");
+    expect(server.commands).toEqual([["python3", "-", "--version", "0.8.0", "--port", "6722", "--inspect"]]);
+    // The first-seen key was not pinned for the profile.
+    expect(pinState(join(dir, "known_hosts", "lab"))).toBe("none");
+    expect(profiles.list()[0]).toMatchObject({ hostKeyPinned: false });
+  });
+
+  it("then, confirmed, pins exactly those keys and sets up pinned-only as that account, then signs in", async () => {
+    const { profiles, server, tunnels, dir } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab", serverConfig: "/srv/old/orca.config.yaml" });
+    const result = await inspectAndSetUp(profiles);
+    expect(result.setup).toMatchObject({ kind: "ready", version: "0.8.0", command: managed, port: 6722 });
+    expect(result.setup.steps.map((step) => [step.step, step.result])).toEqual([
+      ["platform", "ok"],
+      ["stage", "changed"],
+      ["linger", "warning"],
+    ]);
+    expect(result.signIn).toEqual({ ok: true });
+    expect(pinState(join(dir, "known_hosts", "lab"))).toBe("pinned");
+    // Exactly `python3 -` with the version, port and confirmed account, and this build's own
+    // two files on its input; over a pinned-only tunnel sealed to the inspected keys.
+    expect(server.commands[1]).toEqual([
+      "python3",
+      "-",
+      "--version",
+      "0.8.0",
+      "--port",
+      "6722",
+      "--expect-account",
+      "casey",
+      "--expect-root",
+      "/home/casey/.local/share/orca-server",
+      "--expect-current",
+      "none",
+    ]);
+    expect(tunnels[1]!.options).toMatchObject({
+      knownHostsFile: join(dir, "known_hosts", "lab"),
+      pinnedOnly: true,
+      expectKeys: tunnels[0]!.pinnedKeys,
+    });
+    const adapter = readFileSync(join(scripts, "orca-release.py")).toString("base64");
+    expect(server.inputs[1]).toBe(
+      `EMBEDDED_ADAPTER = "${adapter}"\n${readFileSync(join(scripts, "orca-server-setup.py"), "utf8")}`,
+    );
+    // Its own tunnels, closed again; then the sign-in through the managed launcher, which passes
+    // the server's config itself.
+    expect(tunnels[0]!.closed).toBe(1);
+    expect(tunnels[1]!.closed).toBe(1);
+    expect(profiles.list()[0]).toMatchObject({ serverCommand: managed, hasCredential: true });
+    expect(profiles.list()[0]).not.toHaveProperty("serverConfig");
+    const issue = server.commands.find((command) => command[2] === "issue")!;
+    expect(issue[0]).toBe(managed);
+    expect(issue).not.toContain("--config");
+  });
+
+  it("a confirmation is used once, for that profile revision and version only, and expires", async () => {
+    const { profiles, server, dir } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const { inspection } = await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    const confirmation = inspection!.confirmation;
+    const setUp = (version = "0.8.0", code = confirmation) =>
+      profiles.setUpServer("lab", { version, scripts, confirmation: code });
+    await expect(setUp("0.8.0", "0000-0000-0000")).rejects.toThrow("not current");
+    // A failed attempt used it up: inspect again.
+    await expect(setUp()).rejects.toThrow("not current");
+
+    // Edited after the inspection: what was confirmed is not this profile any more.
+    await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    profiles.save({ id: "lab", name: "Lab", destination: "casey@lab", sshPort: 2222 });
+    const again = (await profiles.inspectServer("lab", { version: "0.8.0", scripts })).inspection!;
+    profiles.save({ id: "lab", name: "Lab", destination: "casey@lab", sshPort: 2200 });
+    await expect(setUp("0.8.0", again.confirmation)).rejects.toThrow("not current");
+
+    // Another version than the one confirmed.
+    const third = (await profiles.inspectServer("lab", { version: "0.8.0", scripts })).inspection!;
+    await expect(setUp("0.8.1", third.confirmation)).rejects.toThrow("not current");
+
+    // Expired.
+    const fourth = (await profiles.inspectServer("lab", { version: "0.8.0", scripts })).inspection!;
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 16 * 60_000);
+    try {
+      await expect(setUp("0.8.0", fourth.confirmation)).rejects.toThrow("not current");
+    } finally {
+      clock.mockRestore();
+    }
+    expect(server.commands.filter((command) => !command.includes("--inspect"))).toEqual([]);
+    expect(pinState(join(dir, "known_hosts", "lab"))).toBe("none");
+  });
+
+  it("refuses to set up through a key other than the one confirmed", async () => {
+    const { profiles, server, dir } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const { inspection } = await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    // A pin for another key appeared meanwhile: it is kept, and the setup refuses through it.
+    mkdirSync(join(dir, "known_hosts"), { recursive: true });
+    writeFileSync(join(dir, "known_hosts", "lab"), "orca-lab ssh-ed25519 AAAAANOTHERKEY\n");
+    await expect(
+      profiles.setUpServer("lab", { version: "0.8.0", scripts, confirmation: inspection!.confirmation }),
+    ).rejects.toThrow(TunnelRefusal);
+    expect(server.commands.filter((command) => !command.includes("--inspect"))).toEqual([]);
+  });
+
+  it("reports a server the inspection refuses, with nothing to confirm", async () => {
+    const { profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    server.inspect = {
+      code: 2,
+      stdout:
+        'orca-setup: {"detail": "Found an ORCA installation this setup did not make: launcher /usr/local/bin/orca.", "result": "refused", "step": "inventory"}',
+      serverLines: [],
+    };
+    const result = await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    expect(result.outcome).toMatchObject({ kind: "refused", step: "inventory" });
+    expect(result).not.toHaveProperty("inspection");
+  });
+
+  it("changes nothing on the profile when the setup refuses, fails or cannot say", async () => {
+    for (const [setup, kind] of [
+      [
+        {
+          code: 2,
+          stdout: 'orca-setup: {"detail": "current is v0.7.9, not v0.8.0.", "result": "refused", "step": "existing"}',
+          serverLines: [],
+        },
+        "refused",
+      ],
+      [
+        {
+          code: 1,
+          stdout: [
+            'orca-setup: {"detail": "no complete server bundle yet; retry later", "result": "failed", "step": "stage"}',
+            'orca-setup: {"detail": "everything this run changed is back as it was", "result": "ok", "step": "cleanup"}',
+          ].join("\n"),
+          serverLines: [],
+        },
+        "failed",
+      ],
+      [
+        {
+          code: 1,
+          stdout: [
+            'orca-setup: {"detail": "health failed", "result": "failed", "step": "start"}',
+            'orca-setup: {"detail": "Could not confirm everything is back: active is not back as it was", "result": "failed", "step": "cleanup"}',
+          ].join("\n"),
+          serverLines: [],
+        },
+        "unknown",
+      ],
+      [
+        // Failed, and then the session ended before the put-back was reported.
+        {
+          code: 255,
+          stdout: 'orca-setup: {"detail": "health failed", "result": "failed", "step": "start"}',
+          serverLines: [],
+        },
+        "unknown",
+      ],
+      [{ code: 127, stdout: "", serverLines: ["sh: python3: not found"] }, "no-python"],
+      [
+        { code: 255, stdout: 'orca-setup: {"detail": "", "result": "ok", "step": "platform"}', serverLines: [] },
+        "unknown",
+      ],
+    ] as const) {
+      const { profiles, server } = store();
+      profiles.save({ name: "Lab", destination: "casey@lab" });
+      server.setup = { ...setup, serverLines: [...setup.serverLines] };
+      const result = await inspectAndSetUp(profiles);
+      expect(result.setup.kind).toBe(kind);
+      expect(result).not.toHaveProperty("signIn");
+      expect(profiles.list()[0]).not.toHaveProperty("serverCommand");
+      expect(server.commands.filter((command) => command[2] === "issue")).toEqual([]);
+    }
+  });
+
+  it("saves nothing and signs in nowhere when the server reports other than what was confirmed", async () => {
+    const done = (fields: Record<string, unknown>) =>
+      `orca-setup: ${JSON.stringify({
+        done: true,
+        account: "casey",
+        command: managed,
+        root: "/home/casey/.local/share/orca-server",
+        version: "0.8.0",
+        port: 6722,
+        ...fields,
+      })}`;
+    for (const [fields, words] of [
+      [{ port: 7000 }, "port 7000, not 6722"],
+      [{ version: "0.8.1" }, "version 0.8.1, not 0.8.0"],
+      [{ account: "root" }, "account root, not casey"],
+      [{ command: "/tmp/evil" }, "launcher /tmp/evil"],
+      [{ root: "/srv/other", command: "/srv/other/orca" }, "directory /srv/other"],
+    ] as const) {
+      const { profiles, server, dir } = store();
+      profiles.save({ name: "Lab", destination: "casey@lab", serverConfig: "/srv/old/orca.config.yaml" });
+      server.setup = { code: 0, stdout: done(fields), serverLines: [] };
+      const result = await inspectAndSetUp(profiles);
+      expect(result.setup).toMatchObject({ kind: "mismatch", detail: expect.stringContaining(words) });
+      expect(result).not.toHaveProperty("signIn");
+      expect(profiles.list()[0]).toMatchObject({ remotePort: 6722, serverConfig: "/srv/old/orca.config.yaml" });
+      expect(profiles.list()[0]).not.toHaveProperty("serverCommand");
+      expect(pinState(join(dir, "known_hosts", "lab"))).toBe("pinned");
+      expect(server.commands.filter((command) => command[2] === "issue")).toEqual([]);
+    }
+  });
+
+  it("holds the profile while its server is set up: no connect, edit, removal or second setup", async () => {
+    const { profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const { inspection } = await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    let release!: () => void;
+    server.gate = new Promise<void>((resolve) => (release = resolve));
+    const running = profiles.setUpServer("lab", { version: "0.8.0", scripts, confirmation: inspection!.confirmation });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await expect(profiles.open("lab")).rejects.toThrow("being set up");
+    expect(() => profiles.save({ id: "lab", name: "Lab", destination: "casey@other" })).toThrow("being set up");
+    await expect(profiles.remove("lab")).rejects.toThrow("being set up");
+    expect(() => profiles.forgetHostKey("lab")).toThrow();
+    await expect(profiles.inspectServer("lab", { version: "0.8.0", scripts })).rejects.toThrow("being set up");
+    release();
+    server.gate = undefined;
+    await expect(running).resolves.toMatchObject({ setup: { kind: "ready" }, signIn: { ok: true } });
+  });
+
+  it("installs only a release version", async () => {
+    const { profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    await expect(profiles.inspectServer("lab", { version: "0.8.0-dryrun.1", scripts })).rejects.toThrow(
+      "release version",
+    );
+    expect(server.commands).toEqual([]);
   });
 });

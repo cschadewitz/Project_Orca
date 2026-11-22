@@ -644,7 +644,11 @@ export class SshTunnel {
   }
 
   /** Run a command on the server of an open tunnel (see `run`). */
-  async exec(command: readonly string[], timeoutMs = 60_000): Promise<RemoteResult> {
+  /**
+   * `input`, when given, is the command's standard input (a program for `python3 -`, say),
+   * written once and closed; otherwise the command reads an empty standard input.
+   */
+  async exec(command: readonly string[], timeoutMs = 60_000, input?: string): Promise<RemoteResult> {
     if (this.closed || !this.hops) throw new TunnelRefusal("closed");
     if (!this.jumpUp()) throw new TunnelRefusal("unreachable");
     const hop = this.hops.daemon;
@@ -723,7 +727,9 @@ export class SshTunnel {
         }
         resolve({ code: exitCode ?? 255, stdout: Buffer.concat(stdout).toString("utf8"), serverLines });
       });
-      child.stdin?.end();
+      // A command that exits before reading all of it closes the pipe: that is its result, not ours.
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(input);
     });
   }
 

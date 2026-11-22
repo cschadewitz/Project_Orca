@@ -254,6 +254,10 @@ export function summarise(event: OrcaEvent, subject: string): string {
       return `${subject} cancelled`;
     case "step.skipped":
       return `${subject} skipped, ${event.payload.reason}`;
+    case "step.effect.reviewed":
+      return event.payload.decision === "run-again"
+        ? `${subject} reviewed, may run again`
+        : `${subject} reviewed, abandoned`;
 
     case "agent.session.opened":
       return `${subject} opened a session with ${event.payload.agentId}`;

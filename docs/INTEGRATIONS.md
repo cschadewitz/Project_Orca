@@ -283,6 +283,7 @@ implements `JevProvider` — the scripted one the tests use, for instance.
     maxStateChars: 96000 # default; over it the step fails, nothing is truncated
     timeoutMs: 60000 # default
     onError: fail # default; `record` is for shadow mode (below)
+    repeatable: true # asking again is safe, so maxAttempts may repeat a sent request (below)
     produces: { kind: evaluation, name: coverageCheck } # defaults: kind evaluation, name = node id
 ```
 
@@ -350,7 +351,13 @@ pnpm run orca --config examples/jev/orca.config.yaml run ai-sdlc-jev-shadow --va
 ```
 
 Under `onError: fail` (the default), `maxAttempts:` on the node retries what the API says
-to retry — 429, 529, 5xx, a network error, a timeout — and nothing else.
+to retry — 429, 529, 5xx, a network error, a timeout — and nothing else. Once the request was
+sent, its outcome can be unknown (a timeout or a lost response), so an attempt is repeated only
+when the node sets `repeatable: true`, permitting ORCA to ask the model again; without it the
+run fails and the step waits for a [side-effect review](recovery.md#side-effect-review).
+`repeatable` is permission, not a claim that nothing happened: an attempt still failing when
+`maxAttempts` is spent waits for review too, and so does an invalid or wrong-model answer.
+Failures before the request is sent are retried either way.
 
 ### Bounded input, and what the model is not for
 

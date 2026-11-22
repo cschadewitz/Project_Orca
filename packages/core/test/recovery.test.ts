@@ -2,6 +2,10 @@
 import { describe, expect, it } from "vitest";
 import {
   assessRecovery,
+  mayHaveActed,
+  needsEffectReview,
+  reduceRun,
+  type OrcaEvent,
   RECOVERY_BLOCKER_TEXT,
   RECOVERY_UNVERIFIED_TEXT,
   RecoveryBlockerSchema,
@@ -30,6 +34,9 @@ function stepRun(id: string, nodeId: string, status: StepRun["status"], extra: P
   };
 }
 function facts(status: RunState["run"]["status"], steps: StepRun[], extra: Partial<RecoveryFacts> = {}): RecoveryFacts {
+  // A paused run paused on its open step, as the reducer records it.
+  if (status === "paused")
+    for (const s of steps) if (["scheduled", "running", "waiting"].includes(s.status)) s.parked = true;
   return {
     state: {
       run: {
@@ -195,5 +202,37 @@ describe("assessRecovery", () => {
 
   it("no drift is reported when nothing is known about the current workflow or configuration", () => {
     expect(assessRecovery(facts("failed", [stepRun("s1", "a", "completed")])).drift).toBeUndefined();
+  });
+
+  it("a step that sent an agent prompt may have acted, even with no session of its own (#357)", () => {
+    // A decision step answered on the run's pooled session: a turn, but no session.opened.
+    let seq = 0;
+    const ev = (type: string, payload: unknown) =>
+      ({ seq: ++seq, id: `e${seq}`, runId: "run", at, type, payload }) as unknown as OrcaEvent;
+    const log = [
+      ev("run.created", { workflowId: "wf", workflowVersion: "1", workspace: { hostId: "h", cwd: "/" }, vars: {} }),
+      ev("run.started", {}),
+      ev("step.scheduled", { stepRunId: "d", nodeId: "pick", nodeType: "decision", attempt: 1 }),
+      ev("step.started", { stepRunId: "d", inputArtifactIds: [] }),
+    ];
+    const before = reduceRun(log).steps.d!;
+    expect(mayHaveActed(before)).toBe(false);
+    log.push(
+      ev("agent.turn.started", {
+        stepRunId: "d",
+        sessionId: "pooled",
+        promptHash: "h",
+        promptPreview: "p",
+        followUp: 0,
+      }),
+    );
+    log.push(ev("run.failed", { error: { code: "AGENT_FAILED", message: "lost" } }));
+    const after = reduceRun(log).steps.d!;
+    expect(after.dispatched).toBe(true);
+    expect(needsEffectReview(after)).toBe(true);
+    // A non-agent node that states it did nothing outside ORCA is not uncertain.
+    const quiet = stepRun("q", "deploy", "failed", { nodeType: "custom:deploy", noEffect: true });
+    expect(mayHaveActed(quiet)).toBe(false);
+    expect(mayHaveActed({ ...quiet, noEffect: undefined })).toBe(true);
   });
 });

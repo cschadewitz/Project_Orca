@@ -196,6 +196,14 @@ describe("what a row says, per event type", () => {
       event: { type: "step.skipped", payload: { stepRunId: STEP, reason: "the branch it needed failed" } },
       reads: "build skipped, the branch it needed failed",
     },
+    {
+      event: { type: "step.effect.reviewed", payload: { stepRunId: STEP, decision: "run-again" } },
+      reads: "build reviewed, may run again",
+    },
+    {
+      event: { type: "step.effect.reviewed", payload: { stepRunId: STEP, decision: "abandon" } },
+      reads: "build reviewed, abandoned",
+    },
 
     {
       event: {
