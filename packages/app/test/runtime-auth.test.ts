@@ -180,20 +180,39 @@ describe("authentication reconnect", () => {
     machine.close();
   });
 
-  it("says the link is unauthorized from a refusal until the link changes again (#882)", async () => {
+  it("loses authority on a refusal and regains it only from a hello answered after it (#882)", async () => {
+    let answer!: () => void;
+    let gated = false;
+    const seen: (number | undefined)[] = [];
     const machine = new ConnectionMachine({
-      hello: async () => ({ protocol: PROTOCOL_VERSION, orcaVersion: "test", capabilities: [] }),
+      hello: async () => {
+        if (gated) await new Promise<void>((resolve) => (answer = resolve));
+        return { protocol: PROTOCOL_VERSION, orcaVersion: "test", capabilities: [] };
+      },
       onChange: () => {},
+      onAuthority: (authority) => seen.push(authority),
     });
+    const flush = async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    };
     machine.linkChanged("live");
-    await Promise.resolve();
-    expect(machine.authorized).toBe(true);
-    // Refused without any reconnect: the last handshake's identity is still remembered.
+    await flush();
+    const first = machine.authority;
+    expect(first).toBeDefined();
+    // Refused with no reconnect: the last handshake is still remembered, the authority is not.
     machine.authenticationFailed("AUTH_INVALID");
-    expect(machine.authorized).toBe(false);
-    machine.linkChanged("connecting");
+    expect(machine.authority).toBeUndefined();
+    // Reconnecting, and even a live socket, is not authority until its hello answers.
+    gated = true;
+    machine.linkChanged("reconnecting");
     machine.linkChanged("live");
-    expect(machine.authorized).toBe(true);
+    await flush();
+    expect(machine.authority).toBeUndefined();
+    answer();
+    await flush();
+    expect(machine.authority).toBeDefined();
+    expect(machine.authority).not.toBe(first);
+    expect(seen).toEqual([undefined, machine.authority]);
     machine.close();
   });
 });

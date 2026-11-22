@@ -301,8 +301,11 @@ each other:
   alerts manager remembers the last 512 ids it already presented, so one that comes
   back is not posted or brought forward again. Each alert also carries the workspace
   it was verified on, and a click routes only while its machine still reaches that
-  workspace, and for the focused daemon only while it is authorized on the current
-  link (a refusal ends that even though the last workspace id is still known); a
+  workspace, and for the focused daemon only under a current authority
+  (`ConnectionMachine.authority`). A refusal ends that authority even though the last
+  workspace id is still known: the focused machine's alerts and its Machines section
+  are cleared, reads and renderer reports in flight are dropped, and only a `hello`
+  answered after the refusal grants a new one (a reconnecting socket does not); a
   click on an alert from a repointed, refused or unwatched machine just brings the
   window forward.
 - **Changing a watched profile.** A profile is not edited, removed, reset or given a

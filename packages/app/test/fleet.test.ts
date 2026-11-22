@@ -441,6 +441,7 @@ describe("the focused machine", () => {
     epoch: 1,
     state: "live",
     since: new Date(START).toISOString(),
+    authority: 1,
     ...over,
   });
 
@@ -466,6 +467,36 @@ describe("the focused machine", () => {
       ["profile:beta", true],
       ["profile:alpha", false],
     ]);
+  });
+
+  it("drops the focused machine's work on a refusal and shows nothing read before it, after a fresh hello", async () => {
+    const t = setup();
+    let open!: () => void;
+    t.focusedDaemon.runs = runs(["Before refusal"]);
+    t.fleet.setFocused(focused({ key: "bundled", name: "This computer", authority: 1 }));
+    await settle();
+    expect(t.machine("bundled")!.work!.runs[0]!.name).toBe("Before refusal");
+    // A read is in flight when the daemon refuses the credential.
+    t.focusedDaemon.gate = new Promise((resolve) => (open = resolve));
+    t.focusedDaemon.runs = runs(["Read before refusal, answered late"]);
+    t.fleet.focusedChanged({ method: "run.changed", params: {} } as unknown as DaemonNotification);
+    await settle();
+    t.fleet.setFocused(focused({ key: "bundled", name: "This computer", state: "disconnected", authority: undefined }));
+    expect(t.machine("bundled")!.work).toBeUndefined();
+    // Reconnecting is not authority: still nothing, and the late answer is dropped.
+    t.fleet.setFocused(focused({ key: "bundled", name: "This computer", state: "reconnecting", authority: undefined }));
+    open();
+    await settle(0);
+    expect(t.machine("bundled")!.work).toBeUndefined();
+    t.fleet.focusedChanged({ method: "run.changed", params: {} } as unknown as DaemonNotification);
+    await settle();
+    expect(t.machine("bundled")!.work).toBeUndefined();
+    // A fresh authenticated hello grants a new authority; only what is read under it shows.
+    t.focusedDaemon.gate = undefined;
+    t.focusedDaemon.runs = runs(["After the new hello"]);
+    t.fleet.setFocused(focused({ key: "bundled", name: "This computer", authority: 2 }));
+    await settle();
+    expect(t.machine("bundled")!.work!.runs.map((r) => r.name)).toEqual(["After the new hello"]);
   });
 
   it("reads the focused machine through the workspace and drops a read from a previous epoch", async () => {
@@ -537,6 +568,7 @@ describe("what a machine showed", () => {
     epoch,
     state: "live",
     since: new Date(START).toISOString(),
+    authority: 1,
   });
 
   async function watchedWithWork() {
@@ -638,6 +670,7 @@ describe("an alert changing hands (#882)", () => {
     epoch,
     state: "live",
     since: new Date(START).toISOString(),
+    authority: 1,
     ...(workspaceId ? { workspaceId } : {}),
   });
   const permission = (question: string) => {
@@ -764,17 +797,17 @@ describe("an alert changing hands (#882)", () => {
     daemon.live(ID_A);
     await settle(0);
     const item = w.shown[0]!.item;
-    w.t.fleet.setFocused({ ...focusOn("profile:alpha", 2, ID_A.workspaceId), authorized: true });
+    w.t.fleet.setFocused({ ...focusOn("profile:alpha", 2, ID_A.workspaceId), authority: 1 });
     expect(w.t.fleet.routeAlert(item)?.machine?.focused).toBe(true);
     // The focused stream is refused; no reconnect, same cached workspace id.
     w.t.fleet.setFocused({
       ...focusOn("profile:alpha", 2, ID_A.workspaceId),
       state: "disconnected",
-      authorized: false,
+      authority: undefined,
     });
     expect(w.t.fleet.routeAlert(item)).toBeUndefined();
     // Authorized again on the same workspace: routed again.
-    w.t.fleet.setFocused({ ...focusOn("profile:alpha", 2, ID_A.workspaceId), authorized: true });
+    w.t.fleet.setFocused({ ...focusOn("profile:alpha", 2, ID_A.workspaceId), authority: 1 });
     expect(w.t.fleet.routeAlert(item)?.machine?.focused).toBe(true);
   });
 

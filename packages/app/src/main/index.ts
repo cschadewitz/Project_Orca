@@ -669,7 +669,7 @@ function focusedMachine(): FocusedMachine | undefined {
     epoch: target.epoch,
     state: state.state,
     since: state.since,
-    authorized: connection.authorized,
+    authority: connection.authority,
   };
 }
 
@@ -756,6 +756,15 @@ const connection = new ConnectionMachine({
   onChange: (snapshot) => {
     send("orca:connection", snapshot);
     syncFocus();
+  },
+  // A refusal takes the focused daemon's alerts down with it: they were read under an
+  // authority the app no longer has, and the renderer's next report after a fresh hello
+  // states them again (#882).
+  onAuthority: (authority) => {
+    if (authority === undefined) focusedAlerts = { waiting: 0, items: [] };
+    if (!fleetStarted) return;
+    syncFocus();
+    publishAlerts();
   },
   onDiagnostic: observeDiagnostic,
 });
@@ -1591,6 +1600,8 @@ const alerts = createAlerts(
 
 ipcMain.on("orca:alerts.update", (_event, update: AlertsUpdate, epoch: number) => {
   if (epoch !== workspace.connectionTarget.epoch) return;
+  // Read before or during a refusal: not shown until a fresh hello grants authority again.
+  if (!connection.authorized) return;
   focusedAlerts = update;
   publishAlerts();
 });

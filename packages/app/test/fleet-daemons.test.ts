@@ -106,6 +106,7 @@ describe("three daemons at once", () => {
         epoch: 1,
         state: "live",
         since: new Date().toISOString(),
+        authority: 1,
       });
       await until(() => (machine("profile:alpha")?.state === "live" ? true : undefined), "alpha live");
       await until(() => (machine("profile:beta")?.state === "live" ? true : undefined), "beta live");

@@ -121,11 +121,12 @@ export interface FocusedMachine {
   epoch: number;
   state: ConnectionState;
   /**
-   * False once the focused daemon has refused the app's credential on this connection, and
-   * until a connection is authorized again. The workspace id above survives a refusal; the
-   * authority to act on that workspace does not.
+   * The app's current authority on the focused daemon (`ConnectionMachine.authority`):
+   * undefined from a refusal until a fresh authenticated hello grants a new one. The
+   * workspace id above survives a refusal; the authority to act on it does not. A focused
+   * read or click is only good under the grant it started under.
    */
-  authorized?: boolean | undefined;
+  authority: number | undefined;
   since: string;
 }
 
@@ -312,7 +313,7 @@ export class Fleet {
     const machine = item.machine;
     if (!machine) return item;
     const focused = this.focused?.key === machine.key;
-    if (focused && this.focused?.authorized === false) return undefined;
+    if (focused && this.focused?.authority === undefined) return undefined;
     const now = focused ? this.focused?.workspaceId : this.verifiedOn(machine.key);
     if (now !== machine.workspaceId || (!focused && now === undefined)) return undefined;
     return { ...item, machine: { ...machine, focused } };
@@ -398,7 +399,11 @@ export class Fleet {
     if (this.closed) return;
     const previous = this.focused;
     this.focused = focused;
-    if (previous?.epoch !== focused?.epoch || previous?.key !== focused?.key) {
+    if (
+      previous?.epoch !== focused?.epoch ||
+      previous?.key !== focused?.key ||
+      previous?.authority !== focused?.authority
+    ) {
       this.focusedWork = undefined;
       this.focusedReadEpoch += 1;
     }
@@ -412,7 +417,8 @@ export class Fleet {
         void this.openMember(member);
       }
     }
-    if (focused && focused.state !== "disconnected" && focused.state !== "mismatch") this.focusedChanged();
+    if (focused && focused.authority !== undefined && focused.state !== "disconnected" && focused.state !== "mismatch")
+      this.focusedChanged();
     this.publish();
   }
 
@@ -717,7 +723,7 @@ export class Fleet {
   private async readFocused(): Promise<void> {
     const source = this.deps.focusedReader();
     const focused = this.focused;
-    if (!source || !focused || source.epoch !== focused.epoch) return;
+    if (!source || !focused || source.epoch !== focused.epoch || focused.authority === undefined) return;
     if (this.focusedReading) {
       this.focusedReadAgain = true;
       return;

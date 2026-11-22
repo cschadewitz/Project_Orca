@@ -106,6 +106,11 @@ export interface ConnectionMachineOptions {
   hello: () => Promise<HelloResult>;
   /** Publish a post-subscribe handshake only after its connection lifetime is checked. */
   onHello?: (hello: HelloResult) => void;
+  /**
+   * The app's authority on this daemon changed (#882): lost on an authentication refusal,
+   * granted again only by a hello answered after it. See `authority`.
+   */
+  onAuthority?: (authority: number | undefined) => void;
   onDiagnostic?: OwnedDiagnosticObserver;
   /** Called with every snapshot the renderer has not already been told about. */
   onChange: (snapshot: ConnectionSnapshot) => void;
@@ -158,12 +163,24 @@ export class ConnectionMachine {
   }
 
   /**
-   * Whether the daemon has accepted the app's credential on the current link: false from an
-   * authentication refusal until the link changes again (#882). Not part of the snapshot the
-   * renderer sees; the main process routes alert clicks by it.
+   * The app's current authority on this daemon, as a grant number (#882): undefined from an
+   * authentication refusal until a `hello` answered after that refusal grants a new one. A
+   * reconnecting link alone does not restore it. Anything read or posted under one grant is
+   * not shown under another. Not part of the snapshot the renderer sees; the main process
+   * fences the focused machine's alerts, reads and clicks by it.
    */
+  get authority(): number | undefined {
+    return this.grant;
+  }
   get authorized(): boolean {
-    return this.link !== "auth-failed";
+    return this.grant !== undefined;
+  }
+  private grants = 1;
+  private grant: number | undefined = 1;
+  private setAuthority(grant: number | undefined): void {
+    if (this.grant === grant) return;
+    this.grant = grant;
+    this.opts.onAuthority?.(grant);
   }
 
   /** What a window that has just opened should be handed. Never undefined, never stale. */
@@ -178,6 +195,7 @@ export class ConnectionMachine {
    */
   linkChanged(link: SubscriptionState, retries: RetryCount = { consecutive: 0, atCap: 0 }): void {
     if (this.done || (this.link === link && this.failuresAtCap === retries.atCap)) return;
+    if (link === "auth-failed") this.setAuthority(undefined);
     const arrived = this.link !== link;
     // Invalidate on departure too: an old HTTP reply can arrive while the replacement
     // socket is still verifying, before its transition to live starts another handshake.
@@ -206,6 +224,7 @@ export class ConnectionMachine {
     else if (code === "AUTH_FORBIDDEN")
       observeOwnedDiagnostic(this.opts.onDiagnostic, "connection", "authorization_denied");
     this.handshake += 1;
+    this.setAuthority(undefined);
     this.linkChanged("auth-failed");
   }
 
@@ -232,6 +251,8 @@ export class ConnectionMachine {
   reset(fileMode: boolean): void {
     if (this.done) return;
     this.handshake += 1;
+    // Another daemon: nothing it has refused yet.
+    this.setAuthority(++this.grants);
     this.link = "connecting";
     this.compatible = true;
     this.daemonGone = false;
@@ -304,6 +325,8 @@ export class ConnectionMachine {
     // A current subscription probe can precede the next live transition. Its verdict
     // supersedes any older post-subscribe handshake even when the client is unchanged.
     this.handshake += 1;
+    // Answered, so authorized: after a refusal this is the fresh grant.
+    if (this.grant === undefined) this.setAuthority(++this.grants);
     this.orcaVersion = result.orcaVersion;
     this.daemonProtocol = formatProtocolVersion(result.protocol);
     this.capabilities = result.capabilities;
