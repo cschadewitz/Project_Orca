@@ -563,7 +563,8 @@ reach the registry and has sufficient staging disk space.
 python3 /srv/dev/orca-live/orca-release.py --deployment /srv/dev/orca-live/deployment.json update v0.6.1
 ```
 
-The tag is explicit; no background apply is installed. Staging permits current work to
+The tag is explicit. Nothing is applied in the background unless you opt in to
+[automatic server updates](#automatic-server-updates). Staging permits current work to
 continue. Activation acquires the deployment update lock and exclusive launch lock,
 verifies the service identity and old hello, then closes daemon admission. Active CLI/ACP
 processes (including idle but still open Kepler sessions), concurrent updates and daemon
@@ -624,6 +625,88 @@ A bundle release's daemon command line is `runtime/bin/node …/orca-daemon.mjs`
 activation check that the service runs the selected release follows the recorded entry rather
 than `packages/cli/dist/main.js`. Install the updated adapter (step 2 of the bootstrap) before
 the first bundle update.
+
+### Automatic server updates
+
+From the 0.8 line a server can follow its ring on the update feed's
+[server channel](#server-bundle-channel) unattended (#878). It is opt-in: add an `autoUpdate`
+object to `deployment.json`.
+
+```json
+"autoUpdate": {
+  "feed": "https://feed.example.org",
+  "tokenFile": "/srv/dev/orca-live/feed-token",
+  "interval": "1h",
+  "maxDeferralHours": 72,
+  "quietHours": "08:00-18:00",
+  "settleSeconds": 10
+}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `feed` | Required. The feed's https origin. |
+| `tokenFile` | Required. An absolute path to a **server** token (`feed-token.js RING --server`). The file must be a regular file owned by the service user, mode 600. The token decides the ring. |
+| `interval` | Optional, default `1h`. How often the timer checks (`30min`, `1h`, `1d` and so on). |
+| `maxDeferralHours` | Optional, default `72`. How long a staged update may wait for idle before the check reports it overdue. |
+| `quietHours` | Optional. A local-time window (`HH:MM-HH:MM`, which may wrap past midnight) in which nothing is activated. Staging still happens. |
+| `settleSeconds` | Optional, default `10`. The delay between the new daemon's first good hello and a second one. |
+
+Then install the timer once, as the service user:
+
+```sh
+python3 /srv/dev/orca-live/orca-release.py --deployment /srv/dev/orca-live/deployment.json install-timer
+loginctl enable-linger "$USER"   # once, so user timers run without a login session
+```
+
+`install-timer` writes and enables `orca-auto-update.service` and `orca-auto-update.timer` in
+`~/.config/systemd/user`. The timer runs 5 minutes after boot, then every `interval` with a
+randomized delay of up to 5 minutes, and catches up a missed run. Each run is one
+`orca-release.py … auto-update`. You can also run that command by hand to check now.
+
+A run does the following:
+
+1. Takes the deployment update lock without waiting. If a manual update (or another check)
+   holds it, the run defers and exits successfully. Manual and timer updates never overlap.
+2. Refuses while an interrupted activation journal exists (`blocked`, nonzero exit). Inspect
+   it and run `recover` first.
+3. Reads `server/latest-linux-x64.yml` with the token. It parses the file exactly as
+   `feed-server.js` writes it. If nothing is offered (404) or the offer is not newer than
+   `current`, nothing changes. A server never moves backwards.
+4. Stages the offer while work continues. It reuses an already staged `releases/vX.Y.Z` of the
+   same commit. Otherwise it downloads the three files from the feed, checks their sizes and
+   SHA-256 against the channel file, then stages them exactly as `stage --bundle DIR`: the
+   pinned keyless signature, manifest, archive digest, demo, config validation and a
+   temporary daemon's hello. The channel file is only a pointer and is never trusted on its
+   own.
+5. Activates through the [normal update](#normal-update) path, with closed admission, the
+   exact version/protocol/capability hello, and a second hello after `settleSeconds` from
+   the same service process, all before admission reopens.
+   - **Work is never cancelled.** Active daemon work, open CLI/ACP processes or quiet hours
+     **defer** the activation (exit 0, retried next run). Past `maxDeferralHours` the run
+     reports `overdue` with a nonzero exit, so the failed unit shows in `systemctl --user
+     status`, but it still cancels nothing.
+   - **Rollback is automatic only while admission has stayed closed.** If the new daemon
+     fails its hello or the settled re-check, `current` goes back to the previous release,
+     which must pass its own hello before admission reopens (`rolled-back`, nonzero exit).
+   - **Once admission has reopened, nothing is rolled back.** That includes an uncertain
+     resume: the new release may already hold work the old one would discard (#566's
+     baseline). The run closes admission again if the daemon allows it, keeps the
+     activation journal (which blocks launches and further updates), and reports
+     `failed-not-rolled-back`. Inspect it, then run `recover`.
+   - **A release with another store epoch is never activated unattended** (`refused`). Use
+     the [documented migration](#recovery-and-store-compatibility).
+6. After a successful update, keeps exactly two complete releases (the new `current` and
+   the one it replaced) and removes older `releases/vX.Y.Z`. Staging leftovers are kept for
+   inspection.
+
+Every run writes its outcome to `auto-update.json` in the deployment root and to the
+journal (`journalctl --user -u orca-auto-update`). The file records the time, `current`,
+the offered version, the outcome (`none`, `current`, `updated`, `deferred`, `overdue`,
+`rolled-back`, `failed-not-rolled-back`, `refused`, `blocked` or `failed`) and a detail line.
+The feed's pause switch (`ORCA_FEED_PAUSE`) stops new versions from being offered, so paused
+servers stay where they are. To stop a server's own updates, run
+`systemctl --user disable --now orca-auto-update.timer`.
 
 ### Recovery and store compatibility
 
