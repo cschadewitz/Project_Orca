@@ -79,8 +79,11 @@ import {
   type WorkflowsListParams,
   type WorkflowsListResult,
   type WorkItemView,
+  type SearchParams,
+  type SearchResult,
 } from "@orca/protocol";
 import { PlanModel } from "./plan-model.js";
+import { searchStore, type SearchScope } from "./search-model.js";
 import { workflowSummaryView, workflowView } from "./workflow-model.js";
 
 /** Resolve an inline graph only within the stored root, without any live-definition fallback. */
@@ -744,6 +747,23 @@ export class ReadModel {
     const privateInputs = await this.orc.stores.execution.getInputs(artifact.producedBy.runId);
     const text = await store.content(artifact.id);
     return { artifact: view, text: privateInputs ? redactExecutionValue(text, privateInputs.secrets) : text, asOf };
+  }
+
+  /**
+   * `search` (#255): a bounded substring scan over event text and text artifacts, newest run
+   * first. `scope` is the caller's view - which runs, and whether artifacts - and is absent
+   * for a daemon that does not authenticate, which shows everything to everyone.
+   */
+  search(params: SearchParams, scope?: SearchScope): Promise<SearchResult> {
+    return searchStore(
+      {
+        orc: this.orc,
+        isoNow: () => this.clock.isoNow(),
+        publicName: async (artifact) => (await this.publicArtifactView(artifact)).name,
+      },
+      params,
+      scope,
+    );
   }
 
   /**

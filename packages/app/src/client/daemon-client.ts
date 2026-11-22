@@ -153,6 +153,10 @@ import {
   type WorkflowsGetResult,
   type WorkflowsListParams,
   type WorkflowsListResult,
+  SEARCH_METHOD,
+  SearchResultSchema,
+  type SearchParams,
+  type SearchResult,
 } from "@orca/protocol";
 import { appHelloOffer, appSpeaks } from "./protocol-window.js";
 import { type ZodType } from "zod";
@@ -391,6 +395,14 @@ export class DaemonClient {
   /** Artifact metadata only — the docked panel's version list and a step's chips (#159). */
   artifactsList(params: Params<ArtifactsListParams> = {}): Promise<ArtifactsListResult> {
     return this.call(ARTIFACTS_LIST_METHOD, params, ArtifactsListResultSchema);
+  }
+
+  /**
+   * `search` (#255): event text and text artifacts, matched by the daemon within a limit and a
+   * deadline. Ask `hello.methods` first: a daemon before protocol 2.2 does not answer it.
+   */
+  search(params: Params<SearchParams> & { query: string }): Promise<SearchResult> {
+    return this.call(SEARCH_METHOD, params, SearchResultSchema);
   }
 
   /** One artifact's body, or the reason it is not being shown. */

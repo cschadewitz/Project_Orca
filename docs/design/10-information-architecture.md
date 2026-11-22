@@ -219,7 +219,7 @@ rather than opening a second one onto the same store.
 dependency, decide or reopen a decision, update a risk, release a claim, toggle density —
 every write the daemon serves, as of #178), **navigation**
 (recent runs, work items, agents, config files, workflows), and **search** (step and artifact
-names). Typing a bare run id — `run_` and a ULID, or `run_` and a UUID, which is what a
+names, and through the daemon, event text and artifact contents). Typing a bare run id — `run_` and a ULID, or `run_` and a UUID, which is what a
 run started from a request or the app is given — or an `orca://` URL jumps straight to it. A
 row that acts on an object names it and follows the name with its id token
 (`labelMachine`), and matches the whole id it never draws, so pasting an id or typing the
@@ -234,11 +234,17 @@ and takes the selection with it.
 Every object row is an `orca://` URL and opens through the route table above, which is what
 keeps one resolver rather than three (#206). Two limits are worth writing down rather than
 approximating: navigation lists the **ten most recent runs** and the configured agents, since
-a person looking for the two-hundredth run types its id and the jump row takes it; and search
-covers **step and artifact names** only. Event text and artifact *contents* need a
-daemon-side search method — the protocol has none, `runs.events` pages rather than matches —
-and scanning every log in the store from the renderer on each keystroke is not a search, it
-is a denial of service against your own daemon.
+a person looking for the two-hundredth run types its id and the jump row takes it; and event
+text and artifact *contents* are searched by the daemon, never by the renderer (#255). The
+palette waits a moment after the last keystroke, then asks the daemon's `search` method,
+which reads the runs the caller may see, newest first, within a hit limit and a deadline, and
+answers with places: a run and the step an event belongs to, or a run, an artifact name and a
+version. Each hit is still an `orca://` URL. Only text artifacts are read, secrets are
+redacted before matching, and identifiers are not searched (the jump row takes those). A scan
+cut short by the limit or the deadline ends in a disabled **More matches may exist** row
+rather than implying it found everything. A daemon that does not list `search` in
+`hello.methods`, such as a 0.7 daemon, gets step and artifact names only. There is no index
+yet, so a search is a bounded scan rather than a lookup.
 
 ## What the app deliberately does not have
 

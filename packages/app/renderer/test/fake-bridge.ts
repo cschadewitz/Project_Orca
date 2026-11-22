@@ -31,6 +31,8 @@
  * fails to compile instead of quietly holding a second opinion about what the bridge is.
  */
 import type {
+  SearchParams,
+  SearchResult,
   AgentsListParams,
   AgentsListResult,
   ArtifactsGetParams,
@@ -136,6 +138,7 @@ export type MethodName =
   | "claims.list"
   | "artifacts.list"
   | "artifacts.get"
+  | "search"
   | "workflows.list"
   | "workflows.get"
   | "agents.list"
@@ -175,6 +178,7 @@ export interface Handlers {
   "workflows.list": (params: Params<WorkflowsListParams>) => Answer<WorkflowsListResult>;
   "workflows.get": (params: WorkflowsGetParams) => Answer<WorkflowsGetResult>;
   "agents.list": (params: Params<AgentsListParams>) => Answer<AgentsListResult>;
+  search: (params: Params<SearchParams> & { query: string }) => Answer<SearchResult>;
   "inputs.answer": (
     params: Params<InputsAnswerParams> & { requestId: string; optionId: string },
   ) => Answer<InputsAnswerResult>;
@@ -365,6 +369,9 @@ const defaults: Handlers = {
       ),
       asOf: AS_OF,
     }),
+
+  // No fixture corpus: a test that wants hits scripts them (`search` in `script`).
+  search: () => ok({ hits: [], scannedRuns: 0, asOf: AS_OF }),
 
   "artifacts.list": (params) => {
     const matches = ARTIFACTS.filter(
@@ -793,6 +800,7 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
       list: (params = {}) => call("workflows.list", params) as Promise<BridgeResult<WorkflowsListResult>>,
       get: (params) => call("workflows.get", params) as Promise<BridgeResult<WorkflowsGetResult>>,
     },
+    search: { query: (params) => call("search", params) as Promise<BridgeResult<SearchResult>> },
     agents: { list: (params = {}) => call("agents.list", params) as Promise<BridgeResult<AgentsListResult>> },
     config: {
       get: (params = {}) => call("config.get", params) as Promise<BridgeResult<ConfigGetResult>>,

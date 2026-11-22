@@ -45,6 +45,8 @@ import {
   type RunsEventsResult,
   type RunSummaryView,
   type WorkflowSummaryView,
+  type SearchHit,
+  type SearchResult,
 } from "@orca/protocol";
 import type { OrcaEvent } from "@orca/core";
 import type { MethodContext, MethodTable } from "../methods.js";
@@ -317,6 +319,11 @@ export class Authorizer {
           const invocation = bindPrincipal(
             {
               ...ctx,
+              readScope: {
+                allowsRun: (runId: string) =>
+                  isUnrestricted(principal.scope) ? Promise.resolve(true) : this.runs.allows(principal, runId),
+                artifacts: holds(principal, "artifacts.read"),
+              },
               mutationActor: {
                 principalId: principal.id,
                 ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
@@ -403,6 +410,22 @@ export class Authorizer {
         return original(params);
       case "subscription":
         return original(params);
+
+      case "search": {
+        const empty = (): SearchResult => ({ hits: [], scannedRuns: 0, asOf: this.now().toISOString() });
+        // A run the caller cannot see answers as one with no matches, never as a refusal.
+        if (restricted && params.runId !== undefined && !(await this.runs.allows(principal, params.runId as string)))
+          return empty();
+        const result = (await original(params)) as SearchResult;
+        const artifacts = holds(principal, "artifacts.read");
+        const hits: SearchHit[] = [];
+        for (const hit of result.hits) {
+          if (!artifacts && (hit.kind === "artifact" || artifactEvent(hit.type))) continue;
+          if (restricted && !(await this.runs.allows(principal, hit.runId))) continue;
+          hits.push(hit);
+        }
+        return { ...result, hits };
+      }
 
       case "run": {
         const runId = params.runId as string;

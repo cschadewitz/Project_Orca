@@ -219,6 +219,7 @@ that the two match. A method that is missing from the table is refused with
 | `runs.list` | `runs.read` | filtered to visible runs; `total` and paging recomputed | — |
 | `runs.get` | `runs.read` | the run | — |
 | `runs.events` | `runs.read` | the run | — |
+| `search` | `runs.read` | only visible runs are read; a named run the caller cannot see answers empty; artifact hits and artifact events need `artifacts.read` | — |
 | `inputs.revise` | `inputs.answer` | also requires `runs.control`; exact durable run, input and declared destination | decision |
 | `inputs.replaceRevision` | `inputs.answer` | also requires `runs.control`; exact undelivered destination/attempt and CAS | mutation |
 | `inputs.revisionPending` | `runs.read` | exact run; protected payload also requires `inputs.answer` and `runs.control` | — |
@@ -294,6 +295,11 @@ events, which carry artifact data, metadata or references. This applies even to 
 unrestricted run scope, and covers live delivery and replay. Event pages retain their
 scan cursors and `lastSeq`; clients must follow those cursors even when a filtered page
 is empty. Sequence gaps do not contain artifact content.
+
+`search` (#255) scans only what those reads would return to the caller. Hidden runs are
+never opened, and a hit is never reported from one. Without `artifacts.read` it reads no
+artifact bodies and skips the artifact events listed above. Artifact text is redacted the
+way `artifacts.get` redacts it before it is matched. Identifier fields are not searched.
 
 Lifecycle events remain visible, with `step.started.inputArtifactIds` and
 `step.completed.result.artifactIds` emptied. `journal.list` omits artifact IDs from
