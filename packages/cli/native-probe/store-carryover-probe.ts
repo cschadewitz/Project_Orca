@@ -20,7 +20,6 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, lstatSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { windowsDirectory, windowsPrivateChild } from "@orca/protocol/first-run-fence";
 import { carryStoreForward, readStoreFormat, STORE_FORMAT_BACKUP_DIR, STORE_FORMAT_EPOCH } from "@orca/store";
@@ -35,6 +34,17 @@ const me = execFileSync("whoami", ["/user", "/fo", "csv", "/nh"], { encoding: "u
   .trim()
   .split(",")[1]!
   .replace(/"/g, "");
+/** This user's own profile from the registry: the process inherits the launcher's USERPROFILE. */
+const profile = (() => {
+  const text = execFileSync(
+    "reg",
+    ["query", `HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\${me}`, "/v", "ProfileImagePath"],
+    { encoding: "utf8" },
+  );
+  const match = /ProfileImagePath\s+REG_(?:EXPAND_)?SZ\s+(.+)/.exec(text);
+  if (!match) throw new Error(`no profile for ${me}`);
+  return match[1]!.trim().replace(/%SystemDrive%/i, process.env.SystemDrive ?? "C:");
+})();
 const elevated = (() => {
   try {
     execFileSync("net", ["session"], { stdio: "ignore" });
@@ -65,7 +75,7 @@ $out = foreach ($p in (Get-Content -LiteralPath $env:PROBE_PATHS)) {
   }
 }
 ConvertTo-Json -InputObject @($out) -Depth 5 -Compress`;
-  const list = join(homedir(), "orca-probe-paths.txt");
+  const list = join(profile, "orca-probe-paths.txt");
   writeFileSync(list, paths.join("\r\n"));
   const text = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
     encoding: "utf8",
@@ -82,7 +92,7 @@ const walk = (root: string): string[] =>
 
 /** A store as the app lays it out: boundary-created private directories, inheriting files. */
 function appStore(name: string): string {
-  const workspace = join(homedir(), name);
+  const workspace = join(profile, name);
   rmSync(workspace, { recursive: true, force: true });
   windowsPrivateChild(workspace);
   const store = join(workspace, ".orca");
@@ -124,7 +134,7 @@ function diagnose(error: unknown, path: string): never {
       return { path: p, parent: "refused", owner: owner(p) };
     }
   });
-  process.stderr.write(JSON.stringify({ home: homedir(), user: me, report }, null, 2) + "\n");
+  process.stderr.write(JSON.stringify({ home: profile, user: me, report }, null, 2) + "\n");
   throw error;
 }
 function owner(path: string): string {
@@ -142,7 +152,7 @@ const safely = (name: string) => {
   try {
     return appStore(name);
   } catch (error) {
-    return diagnose(error, join(homedir(), name));
+    return diagnose(error, join(profile, name));
   }
 };
 
