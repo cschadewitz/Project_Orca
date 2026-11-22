@@ -248,10 +248,11 @@ jobs:
     name: "server bundle receipt: release ${{ needs.resolve.outputs.id }} v${{ inputs.version }} ${{ inputs.source_sha }} ${{ needs.verify.outputs.receipt }}"
     needs: [resolve, verify]
     runs-on: ubuntu-24.04
-    # Shared with the signed-installer attach and the final's publication.
-    concurrency:
-      group: release-draft-writes
-      cancel-in-progress: false
+    # Deliberately not in `release-draft-writes`: a pending member of that group would be
+    # displaced by this job (GitHub keeps one pending run per group). The workflow-level group
+    # serializes runs for one version; every write re-reads the release first, the record goes
+    # last, and publication requires the receipt, so an interleaved publish fails closed. A
+    # run that never attaches leaves no record, and the 6-hourly reconcile dispatches it again.
     permissions:
       contents: write
     steps:

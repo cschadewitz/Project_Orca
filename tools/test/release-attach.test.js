@@ -1060,6 +1060,54 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
       expect(f.state().releases[0].draft).toBe(true);
     });
 
+    describe("before the 0.8 line (0.7.1 keeps its approved desktop asset set)", () => {
+      const V = "0.7.1";
+      const deb = { id: 61, name: `ORCA-${V}-linux-amd64.deb`, digest: "sha256:" + "d".repeat(64) };
+      const exe = { id: 62, name: `ORCA-${V}-win-x64.exe`, digest: "sha256:" + "e".repeat(64) };
+      const final = (over = {}) =>
+        draft({
+          id: 71,
+          name: `v${V}`,
+          tag_name: `v${V}`,
+          body: `Notes.\n\n<!-- orca-signed-run: 100 ${exe.digest} -->\n\n<!-- orca-x64-only -->`,
+          assets: [deb, exe],
+          ...over,
+        });
+
+      it("publishes with the installers alone: no server bundle, record or receipt", () => {
+        const f = setup({ releases: [final()] });
+        const result = f.run(ATTACH, ["publish", "71", V, SHA, deb.digest, exe.digest]);
+        expect(result.status, result.stderr).toBe(0);
+        expect(f.state().releases[0].draft).toBe(false);
+        expect(f.state().releases[0].assets).toHaveLength(2);
+      });
+
+      it("treats server files on it as unexpected, and never builds, attaches or reconciles one", () => {
+        const f = setup({ releases: [final({ assets: [deb, exe, ...serverFiles(V)] })] });
+        f.edit((st) => (st.onMain = [SHA]));
+        const result = f.run(ATTACH, ["publish", "71", V, SHA, deb.digest, exe.digest]);
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("unexpected assets");
+        expect(f.run(ATTACH, ["server-target", V, SHA]).stderr).toContain("before the server bundle's 0.8.0 line");
+        const b = bundleDir(V);
+        expect(f.run(ATTACH, ["server-attach", "71", SHA, V, "330", b.dir]).stderr).toContain(
+          "before the server bundle's 0.8.0 line",
+        );
+        f.edit((st) => (st.releases = [final({ assets: [deb, exe] })]));
+        expect(f.run(ATTACH, ["server-reconcile"]).status).toBe(0);
+        expect(f.writes()).toEqual([]);
+      });
+
+      it("starts the bundle with the 0.8.0 release candidates", () => {
+        const f = setup({
+          releases: [bare({ id: 72, name: "v0.8.0-rc.1", tag_name: "v0.8.0-rc.1", draft: false, prerelease: true })],
+        });
+        f.edit((st) => (st.tags["v0.8.0-rc.1"] = SHA));
+        expect(f.run(ATTACH, ["server-reconcile"]).status).toBe(0);
+        expect(f.writes()).toHaveLength(1);
+      });
+    });
+
     it("reconciles only unrecorded releases on a version line newer than Latest", () => {
       const f = setup({
         releases: [

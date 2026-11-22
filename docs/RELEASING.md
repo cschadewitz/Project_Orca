@@ -108,11 +108,11 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    must show `draft: true`, `name: "v$V"`, `target_commitish` equal to `SHA`, and exactly the
    `.deb` and the two `.exe`s (plus the three server bundle files of step 3a). `tag_name` may
    read `v$V` or `untagged-…`; step 6 sets it.
-3a. **Automatic, always on:** the same Release (publish) run's `server-bundle` job dispatches
+3a. **Automatic, from the 0.8 line on** ([The server bundle](#the-server-bundle)): the same Release (publish) run's `server-bundle` job dispatches
    **Release (server bundle)** (`release-server-bundle.yml`) for `SHA`, which builds, signs,
    checks and attaches the headless server bundle ([The server bundle](#the-server-bundle))
    and records it in the draft's notes. A reconcile every 6 hours re-dispatches it for any
-   release newer than Latest without that record. Step 6 refuses a final without it.
+   release newer than Latest without that record. Step 6 refuses a final from that line without it.
 4. If either automatic step did not run (the switch is off, or the signing run was refused),
    dispatch **Windows signed (spike)** for `SHA` by hand, then **Release (attach signed
    installer)** with that run's id (`signed_run_id`); with the switch on the attach follows
@@ -147,7 +147,7 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    equal to the signing record. It also needs either the arm64 installer the same signing
    run recorded, with acceptance verified against the acceptance run and its evidence
    (`tools/deploy/feed-arches.js verify`), or the x64-only decision with no arm64 installer,
-   and the server bundle with its receipt ([The server bundle](#the-server-bundle)): the three
+   and, from the 0.8 line, the server bundle with its receipt ([The server bundle](#the-server-bundle)): the three
    files with exactly the digests its one record names, the signed manifest naming this
    version, commit and archive digest, and a successful receipt job of the recorded Release
    (server bundle) run committing to this release id, version, commit and those digests. It refuses a version that is not newer than the current
@@ -168,8 +168,12 @@ after checking which one, if any, is valid.
 
 ### The server bundle
 
-Every real release, final or rc, also carries a prebuilt headless server (#876), for servers
-that should install and update without a toolchain, `gh` or a clone:
+From the 0.8 release line (`SERVER_FROM=0.8.0` in `tools/deploy/release-attach.sh`: the 0.8.0
+release candidates and every final from 0.8.0 on), every real release also carries a prebuilt
+headless server (#876), for servers that should install and update without a toolchain, `gh`
+or a clone. Releases before it (0.7.x, including 0.7.1) keep their approved desktop asset set:
+nothing is dispatched, reconciled or required for them, and server files on such a draft are
+unexpected assets.
 
 | File | What it is |
 |---|---|

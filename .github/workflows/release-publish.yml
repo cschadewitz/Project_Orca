@@ -425,7 +425,7 @@ jobs:
           gh workflow run windows-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f source_sha="$SHA"
           echo "Dispatched Windows signed (spike) for \`$SHA\`." >> "$GITHUB_STEP_SUMMARY"
 
-  # Every real release, final or rc, carries the signed headless server bundle (#876).
+  # From the 0.8 line, every real release, final or rc, gets the signed headless server bundle (#876).
   # release-server-bundle.yml builds it from the same commit, signs it keylessly with its own
   # identity on main, checks it on a clean host and attaches it; a final cannot be published
   # without it (release-attach.sh publish). This job checks nothing out and can only dispatch.
@@ -445,6 +445,13 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::invalid release commit"; exit 1; }
+          # The bundle starts with the 0.8 line (SERVER_FROM in tools/deploy/release-attach.sh);
+          # an earlier release keeps its approved desktop asset set.
+          SERVER_FROM=0.8.0
+          if [ "$(printf '%s\n%s\n' "$SERVER_FROM" "${VERSION%%-*}" | sort -V | head -n1)" != "$SERVER_FROM" ]; then
+            echo "v$VERSION is before the server bundle's $SERVER_FROM line; nothing dispatched." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           gh workflow run release-server-bundle.yml --repo "$GITHUB_REPOSITORY" --ref main \
             -f version="$VERSION" -f source_sha="$SHA"
           echo "Dispatched Release (server bundle) for v$VERSION at \`$SHA\`." >> "$GITHUB_STEP_SUMMARY"

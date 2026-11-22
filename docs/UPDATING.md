@@ -507,8 +507,8 @@ admission to reopen. All runtime parts and shipped assets move together.
 
 ### Prebuilt server bundle
 
-From the first release that carries it, every release also publishes a signed prebuilt
-server, `orca-server-X.Y.Z-linux-x64.tar.xz`, beside its manifest and signature
+From the 0.8 release line (0.8.0's release candidates on), every release also publishes a
+signed prebuilt server, `orca-server-X.Y.Z-linux-x64.tar.xz`, beside its manifest and signature
 ([RELEASING.md](RELEASING.md#the-server-bundle)). Staging from it needs no toolchain, clone or
 GitHub CLI:
 

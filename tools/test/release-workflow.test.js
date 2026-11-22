@@ -286,7 +286,12 @@ it("signs the server bundle only from main, in a job that runs none of the relea
   // The clean-host check gates the attach, and the attach shares the draft-writes queue.
   expect(verify.needs).toEqual(["resolve", "sign"]);
   expect(attach.needs).toEqual(["resolve", "verify"]);
-  expect(attach.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  // Not in release-draft-writes: joining it could displace a pending attach or publication.
+  expect(attach.concurrency).toBeUndefined();
+  expect(file.concurrency).toEqual({
+    group: "release-server-bundle-${{ inputs.version || 'reconcile' }}",
+    "cancel-in-progress": false,
+  });
   const staging = verify.steps.find((step) => step.name === "Stage it with Python 3 alone").run;
   expect(staging).toContain("python:3.12-slim-bookworm");
   expect(staging).toContain("stage --bundle");
@@ -372,4 +377,14 @@ it("binds each server bundle run to its version and commit (#876)", () => {
   );
   expect(file.jobs.attach.needs).toEqual(["resolve", "verify"]);
   expect(file.jobs.attach.steps.at(-1).env.VERIFIED).toBe("${{ needs.verify.outputs.digests }}");
+});
+
+it("starts the server bundle with the 0.8 line in the dispatch and in release-attach.sh alike (#876)", () => {
+  const dispatch = workflow("release-publish.yml").jobs["server-bundle"].steps[0].run;
+  const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
+  const from = script.match(/^SERVER_FROM=(\S+)$/m)[1];
+  expect(from).toBe("0.8.0");
+  expect(dispatch).toContain(`SERVER_FROM=${from}`);
+  expect(dispatch.indexOf("SERVER_FROM=")).toBeLessThan(dispatch.indexOf("gh workflow run"));
+  expect(dispatch).toContain('"${VERSION%%-*}" | sort -V | head -n1)" != "$SERVER_FROM"');
 });
