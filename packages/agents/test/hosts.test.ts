@@ -30,6 +30,8 @@ describe("hosts", () => {
       "~/.ssh/ci",
       "ci@build.example",
     ]);
+    expect(host.sftpArgs().slice(-5)).toEqual(["~/.ssh/ci", "-s", "ci@build.example", "--", "sftp"]);
+    expect(host.sftpArgs().slice(0, -4)).toEqual(host.baseArgs().slice(0, -1));
     expect(host.remoteCommand("cd /w && exec claude-code-acp")).toEqual([
       "bash",
       "-lc",

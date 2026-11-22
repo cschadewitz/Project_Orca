@@ -1,4 +1,4 @@
-/** Remote filesystem quoting and failures are tested without an SSH server. */
+/** Per-command remote filesystem quoting and failures, tested without an SSH server (the SFTP path: ssh-sftp.test.ts). */
 import { afterEach, expect, it, vi } from "vitest";
 import { AgentSpecSchema, HostSpecSchema } from "@orca/core";
 import { SshHost } from "@orca/agents";
@@ -7,6 +7,7 @@ afterEach(() => vi.restoreAllMocks());
 const host = () =>
   new SshHost(
     HostSpecSchema.parse({ id: "remote", type: "ssh", host: "invalid", sshBinary: "orca-no-such-ssh-binary" }) as never,
+    { sftp: false },
   );
 
 it("maps SSH spawn failure to a transport error with host context", async () => {
