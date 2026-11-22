@@ -595,6 +595,23 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(f.writes()).toEqual([dispatchAttach(100)]);
   });
 
+  it("attaches a successful signing run whose hand-off dispatch failed, through reconcile", () => {
+    // windows-signed.yml's hand-off job has continue-on-error, so the run still succeeds.
+    const f = setup();
+    f.edit((st) => {
+      st.jobs["100"] = [
+        { name: "windows-signed (sign)", status: "completed", conclusion: "success" },
+        { name: "dispatch the attach for this signed run", status: "completed", conclusion: "failure" },
+      ];
+    });
+    expect(f.run(ATTACH, ["select", "100"]).stdout).toBe(
+      `artifact=windows-signed-${SHA}\nsha=${SHA}\nid=7\nversion=0.8.0\n`,
+    );
+    const result = f.run(ATTACH, ["reconcile"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(f.writes()).toEqual([dispatchAttach(100)]);
+  });
+
   it("leaves an installer attached without a record alone", () => {
     const f = setup({ releases: [draft({ assets: [DEB, { name: "ORCA-0.8.0-win-x64.exe", digest: "sha256:0" }] })] });
     const result = f.run(ATTACH, ["reconcile"]);

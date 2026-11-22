@@ -65,22 +65,22 @@ it("rehearses a release on dry_run without tagging, publishing or feeding anythi
   const rehearsal = file.jobs.rehearsal;
   expect(rehearsal.if).toBe("${{ inputs.dry_run }}");
   expect(rehearsal.needs).toEqual(["check", "desktop", "app-verification"]);
-  const upload = named(rehearsal.steps, "Upload the rehearsal to a draft prerelease");
-  expect(upload.run).toContain("--draft --prerelease --latest=false");
-  expect(upload.run).toContain("-dryrun\\.[0-9]+$");
-  expect(upload.run).not.toContain("--draft=false");
-  expect(upload.run).not.toMatch(/git (tag|push)/);
-  expect(upload.run).not.toContain("${{");
-  // It reads the draft back, then deletes it with any dry-run draft older than a day, so
-  // nobody deletes rehearsals by hand.
-  expect(upload.run).toContain("[true, $sha, $want]");
-  const cleanup = rehearsal.steps.at(-1);
-  expect(cleanup.name).toBe("Delete this run's draft and stale dry-run drafts");
-  expect(cleanup.if).toBe("${{ always() }}");
-  expect(cleanup.run).toContain('test("^v[0-9]+[.][0-9]+[.][0-9]+-dryrun[.][0-9]+ [(]dry run[)]$")');
-  expect(cleanup.run).toContain("select(.draft and .prerelease and");
-  expect(cleanup.run).toContain('gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"');
-  expect(cleanup.run).not.toContain("${{");
+  // It checks the assets and creates no release or draft, so there is nothing to clean up.
+  expect(rehearsal.permissions).toBeUndefined(); // the workflow's read-only token
+  expect(rehearsal.steps.map((s) => s.name ?? s.uses.split("@")[0])).toEqual([
+    "actions/checkout",
+    "Download the desktop artifacts",
+    "Check the rehearsal's release assets",
+  ]);
+  const assets = named(rehearsal.steps, "Check the rehearsal's release assets");
+  expect(assets.env).toEqual({
+    SHA: "${{ needs.check.outputs.sha }}",
+    VERSION: "${{ needs.check.outputs.version }}",
+  });
+  expect(assets.run).toContain("-dryrun\\.[0-9]+$");
+  expect(assets.run).toContain('python3 tools/deploy/release-assets.py artifacts "$VERSION"');
+  expect(assets.run).not.toMatch(/gh |git (tag|push)/);
+  expect(assets.run).not.toContain("${{");
 });
 
 it("drafts a final with the Ubuntu .deb only, leaving tag and publication to a maintainer", () => {
@@ -147,22 +147,23 @@ it("never hands a write token to the ref under test (#863)", () => {
   expect(reviewed.run).toContain('if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]');
   expect(release.findIndex((s) => s.run === "pnpm install --frozen-lockfile")).toBeGreaterThan(sha + 1);
 
-  // Only the two writers get contents write (sign and server-bundle may only dispatch), and
+  // Only the publish job gets contents write (sign and server-bundle may only dispatch), and
   // every checkout drops its credentials.
   for (const [name, job] of Object.entries(file.jobs)) {
     if (job.uses) continue;
-    const expected = ["publish", "rehearsal"].includes(name)
-      ? { contents: "write" }
-      : ["sign", "server-bundle", "record-line-release"].includes(name)
-        ? { actions: "write" }
-        : name === "check"
-          ? { contents: "read", checks: "read" }
-          : null;
+    const expected =
+      name === "publish"
+        ? { contents: "write" }
+        : ["sign", "server-bundle", "record-line-release"].includes(name)
+          ? { actions: "write" }
+          : name === "check"
+            ? { contents: "read", checks: "read" }
+            : null;
     expect(job.permissions ?? null, name).toEqual(expected);
     for (const step of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@")))
       expect(step.with["persist-credentials"], name).toBe(false);
   }
-  // The rehearsal writer runs this workflow's revision, not the rehearsed ref.
+  // The rehearsal's asset check runs this workflow's revision, not the rehearsed ref.
   expect(file.jobs.rehearsal.steps[0].with.ref).toBe("${{ github.sha }}");
 
   // The rehearsed ref is built on hosted runners, without the runner health endpoint.
@@ -211,6 +212,8 @@ it("attaches only re-verified signed x64 and arm64 installers, through the re-va
   expect(handOff.needs).toEqual(["resolve", "sign"]);
   expect(handOff.if).toBe("github.ref == 'refs/heads/main' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
   expect(handOff.permissions).toEqual({ actions: "write" });
+  // A failed dispatch never fails the signing run, so select and reconcile still accept it.
+  expect(handOff["continue-on-error"]).toBe(true);
   expect(handOff.steps.every((s) => !s.uses)).toBe(true);
   expect(handOff.steps[0].run).toContain(
     'gh workflow run release-attach-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f signed_run_id="$GITHUB_RUN_ID"',
