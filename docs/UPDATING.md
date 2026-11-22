@@ -252,11 +252,12 @@ with only the Ubuntu amd64 `.deb`: no tag, nothing latest, no feed write
 The feed never takes the ordinary release-job builds: their Windows installers are unsigned.
 For a final the order is:
 
-1. Dispatch **Windows signed (spike)** from main with `source_sha` set to the draft's pinned
-   merge commit, **before** publication.
-2. Attach that run's signed x64 installer to the draft, run native acceptance on the exact
-   draft assets, and only then publish the draft (which creates the tag). RELEASING.md has
-   the steps and checks.
+1. Staging the draft dispatches **Windows signed (spike)** for the draft's pinned merge
+   commit, **before** publication (automatic while `ORCA_RELEASE_AUTO_SIGN` is `true`).
+2. **Release (attach signed installer)** attaches that run's signed x64 installer to the
+   draft and records the run (automatic under the same switch, otherwise dispatched with
+   the run id). Native acceptance runs on the exact draft assets, and only then is the
+   draft published (which creates the tag). RELEASING.md has the steps and checks.
 3. **Architecture gate.** Rings select versions, not architectures, so the feed itself must
    leave out any architecture without native acceptance. Windows arm64 has none yet, so
    `feed-publish.yml` serves x64 only (`FEED_ARCHES: x64`): the signed run's arm64 installer
@@ -266,8 +267,13 @@ For a final the order is:
    and blockmaps even if the bucket holds some, while x64 files of every completed snapshot
    stay reachable. Add arm64 to both, in a reviewed change, only after it passes native
    acceptance, then deploy the Worker; do not rely on ring assignment to scope architecture.
-4. Dispatch **Desktop feed (publish signed)** (`feed-publish.yml`) from main with the version
-   and the id of **that same** signing run. Before dispatching, confirm the run's x64
+4. **Desktop feed (automatic)** (`feed-auto.yml`, on while `ORCA_FEED_AUTO` is `true`)
+   dispatches **Desktop feed (publish signed)** (`feed-publish.yml`) from main when the
+   release is published, with the signing run that **Release (attach signed installer)**
+   recorded in the draft's notes, and only if the published installer's digest still equals
+   the recorded one. A daily run retries every release published in the last 7 days. To feed
+   by hand (a version without that record, such as v0.7.0), dispatch `feed-publish.yml` from
+   main with the version and the id of **that same** signing run. Before dispatching, confirm the run's x64
    installer SHA-256 equals the accepted installer's; the job also refuses any served
    installer whose SHA-256 differs from the published release's asset digest.
 
@@ -302,17 +308,22 @@ One-time setup (Casey):
 3. Mint a token per person with `node tools/deploy/feed-token.js RING`. Give each person their
    token; merge the printed entries into one JSON object and store it with
    `npx wrangler secret put FEED_TOKENS`. Revoke a person by removing their entry.
-4. Create the `desktop-feed` environment (Settings → Environments) and protect it: add
-   yourself (and Cal) as required reviewers, and under deployment branches allow only `main`.
-   Store `ORCA_FEED_ACCESS_KEY_ID` and `ORCA_FEED_SECRET_ACCESS_KEY` from the R2 token as
-   **environment** secrets there, not repository secrets, so only a reviewed run from main can
+4. Create the `desktop-feed` environment (Settings → Environments) and under deployment
+   branches allow only `main`. No required reviewers (the owner's decision, 2026-11-21): feeding is automatic, and every run
+   re-checks the release, the signing run, signatures, metadata and installer digests before
+   writing. Store `ORCA_FEED_ACCESS_KEY_ID` and `ORCA_FEED_SECRET_ACCESS_KEY` from the R2 token
+   as **environment** secrets there, not repository secrets, so only a run from main can
    write the bucket. Both feed workflows also refuse to run from any other ref.
-5. Set repository variables `ORCA_FEED_ACCOUNT_ID` (the Cloudflare account id),
+5. Set repository variables `ORCA_RELEASE_AUTO_SIGN` (`true` to sign and attach finals
+   automatically, RELEASING.md), `ORCA_FEED_AUTO` (`true` to feed published finals automatically),
+   `ORCA_FEED_ACCOUNT_ID` (the Cloudflare account id),
    `ORCA_FEED_BUCKET` and `ORCA_FEED_PUBLISHER_CN` (the exact signing certificate CN, as in
    `WINDOWS_SIGNING_PUBLISHER_CN`). Until `ORCA_FEED_BUCKET` is set, neither feed workflow
    does anything.
-6. Before the first real version, exercise `feed-r2.sh` against a throwaway bucket: R2's
-   handling of conditional writes (`If-None-Match`, `If-Match`) has not been verified from CI.
+6. Nothing to do by hand for conditional writes: every feed write job first runs
+   `feed-r2.sh probe`, which writes a throwaway `ci-probe/` key (never served) with
+   `If-None-Match` and `If-Match` conditions that must hold or be refused, deletes it, and
+   stops the job before any real write if R2 does not honour them.
 7. Before giving testers tokens, run the packaged acceptance on real Windows with signed
    builds from the feed: an opted-in preview install on stable `N` is offered and installs
    rc `N+1-rc.x`; a stable install on `N` is not offered it; neither is offered an older

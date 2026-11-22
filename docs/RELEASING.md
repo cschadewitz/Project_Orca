@@ -79,35 +79,56 @@ Work on the draft **by id, never by tag**: a draft has no tag yet, and the API c
 its `tag_name` as a temporary `untagged-…` value. With `R=cschadewitz/Project_Orca`, `ID`
 the release id from the job summary, `SHA` the commit and `V` the version:
 
-1. Dispatch **Windows signed (spike)** from `main` with `source_sha` set to `SHA`, while
-   `main` still matches it outside notes, docs and workflows (later product drift on `main`
-   makes the source check refuse it). Its environment reviewer approves the run.
-2. Verify the signing run's output: Authenticode status `Valid`, a timestamp, the expected
-   publisher, and the run's `latest-x64.yml` `files[0]` (`url`, `size`, base64 **SHA-512**)
-   describing exactly `ORCA-$V-win-x64.exe` (`release-assets.py` checks this). Record the
-   installer's **SHA-256** separately: that is what the release page and the notes'
-   verification step show.
-3. Check the draft:
+1. **Automatic** while the repository variable `ORCA_RELEASE_AUTO_SIGN` is `true` (off by
+   default): the same run's `sign` job dispatches **Windows signed (spike)** from `main` with
+   `source_sha` set to `SHA` (while `main` still matches it outside notes, docs and
+   workflows; later product drift on `main` makes the source check refuse it). Dispatching
+   changes no protection: the signed run still waits on whatever the `windows-signing`
+   environment requires. Removing its required reviewer is a separate setting (the owner
+   chose no reviewer, main only, on 2026-11-21).
+2. The signing run itself checks Authenticode status `Valid`, a timestamp, the expected
+   publisher, and that `latest-x64.yml` `files[0]` (`url`, `size`, base64 **SHA-512**)
+   describes exactly `ORCA-$V-win-x64.exe`.
+3. **Automatic** (same switch): when it succeeds, **Release (attach signed installer)**
+   (`release-attach-signed.yml`, `tools/deploy/release-attach.sh`) first checks the signing
+   run itself: a successful `windows-signed.yml` run of this repository, dispatched from
+   `main`, with exactly one unexpired signed artifact. It finds the one final draft targeting
+   `SHA`, re-checks the x64 installer's signature, timestamp and publisher, records the run
+   and the installer's digest in the draft's notes, then uploads it by id and reads both
+   back. Before each write it re-reads that exact draft (still a draft, same target and name,
+   only the `.deb` or `.deb` + `.exe`, no other run's record) and stops if anything changed.
+   Because the record comes first, an interrupted upload is resumed with the same run, and a
+   later signing run of the same commit is refused. A reconcile every 6 hours re-dispatches
+   the attach for any final draft missing its installer or record (the recorded run if there
+   is one); an installer attached by hand without a record is left alone. A rerun is a
+   no-op; different bytes under the same name stop it. Its summary gives the installer's **SHA-256**. To check by hand:
    `gh api repos/$R/releases/$ID --jq '{draft, name, tag_name, target_commitish, assets: [.assets[] | {name, digest}]}'`
-   must show `draft: true`, `name: "v$V"`, `target_commitish` equal to `SHA`, and only the
-   `.deb`, whose `digest` matches the run's artifact. `tag_name` may read `v$V` or
-   `untagged-…`; step 5 sets it.
-4. Attach the signed installer by id:
-   `gh api -X POST -H 'Content-Type: application/octet-stream' "https://uploads.github.com/repos/$R/releases/$ID/assets?name=ORCA-$V-win-x64.exe" --input <file>`,
-   then repeat step 3: exactly the `.exe` and the `.deb`, the `.exe`'s `digest` equal to
-   `sha256:` and the SHA-256 recorded in step 2.
+   must show `draft: true`, `name: "v$V"`, `target_commitish` equal to `SHA`, and exactly the
+   `.deb` and the `.exe`. `tag_name` may read `v$V` or `untagged-…`; step 6 sets it.
+4. If either automatic step did not run (the switch is off, or the signing run was refused),
+   dispatch **Windows signed (spike)** for `SHA` by hand, then **Release (attach signed
+   installer)** with that run's id (`signed_run_id`); with the switch on the attach follows
+   on its own. Attaching entirely by hand (no record, so the feed must then be dispatched by
+   hand too) is
+   `gh api -X POST -H 'Content-Type: application/octet-stream' "https://uploads.github.com/repos/$R/releases/$ID/assets?name=ORCA-$V-win-x64.exe" --input <file>`.
 5. Run native acceptance on the exact staged bytes before anything is public: the signed
-   x64 `.exe` and the Ubuntu amd64 `.deb`, each with a digest equal to what step 4's check
+   x64 `.exe` and the Ubuntu amd64 `.deb`, each with a digest equal to what step 3's check
    shows on the draft (signature, install, first launch, a built-in sample, reopen). The
    signing run's checks in step 2 are not that acceptance. If either fails, stop: the draft
    stays a draft and nothing is public.
-6. Publish with the tag and target stated explicitly:
-   `gh api -X PATCH repos/$R/releases/$ID -f tag_name=v$V -f target_commitish=$SHA -F draft=false -f make_latest=true`.
-   Then `git ls-remote origin refs/tags/v$V` must print `SHA`,
-   `gh api repos/$R/releases/latest --jq .id` must print `ID`, and both public downloads
-   (from the published page's URLs) must hash to the digests accepted in step 5.
-7. Only then, where the desktop feed is enabled, feed that signing run to **Desktop feed
-   (publish signed)** ([UPDATING.md](UPDATING.md)).
+6. Publish by dispatching **Release (publish final)** (`release-publish-final.yml`) from
+   `main` with `release_id=$ID`, `version=$V`, and what step 5 accepted: `source_sha=$SHA`,
+   `deb_sha256` and `exe_sha256` (the digests of the exact files that passed). Immediately
+   before publishing it compares all of them with the draft: still a draft, named `v$V`,
+   targeting `SHA`, exactly those two assets with those digests, and the installer's digest
+   equal to the signing record. It refuses a version that is not newer than the current
+   Latest and an existing tag at another commit, publishes with the tag and target stated
+   explicitly, and reads back the published digests, the tag and Latest. It shares one queue
+   with the attach, so the two never interleave; publish only through it, not by editing the
+   draft by hand.
+7. Where the desktop feed is enabled, publishing feeds that signing run automatically
+   (step 6 dispatches **Desktop feed (automatic)**, which dispatches **Desktop feed (publish signed)**; see
+   [UPDATING.md](UPDATING.md)). Check that run went green.
 
 If `publish` fails or is re-run for a final, it refuses to make a second draft while any
 draft named or tagged `v$V` exists, and prints their ids. Reuse such a draft when step 3's

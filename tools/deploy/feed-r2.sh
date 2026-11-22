@@ -7,6 +7,8 @@
 #                                          in the internal ring
 #   feed-r2.sh promote RING VERSION PERCENT
 #                                          offer VERSION to PERCENT of RING (0 halts a rollout)
+#   feed-r2.sh probe                       prove the bucket honours If-None-Match and If-Match
+#                                          on a throwaway key (run before every write job)
 #
 # Environment: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (an R2 API token limited to the
 # bucket), FEED_ACCOUNT_ID (Cloudflare account id), FEED_BUCKET.
@@ -49,22 +51,32 @@ put_once() {
   echo "$key already present with identical bytes"
 }
 
-# Read-modify-write rings.json, conditional on the copy read, so a concurrent writer fails
-# this step instead of being overwritten. The workflows also share one concurrency group.
+# Read-modify-write rings.json, conditional on the copy read, so a concurrent writer's change
+# is never overwritten: on a precondition failure the change is re-read and reapplied, up to
+# five times. The transition itself is re-validated each time (feed-rings.js).
 update_rings() {
-  local condition
-  if s3 get-object --bucket "$FEED_BUCKET" --key rings.json --query ETag --output text \
-    "$work/rings.json" >"$work/etag" 2>"$work/error"; then
-    condition=(--if-match "$(cat "$work/etag")")
-  elif grep -q NoSuchKey "$work/error"; then
-    condition=(--if-none-match '*')
-  else
-    cat "$work/error" >&2
-    fail "could not read rings.json"
-  fi
-  node "$here/feed-rings.js" "$work/rings.json" "$@" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
-  s3 put-object --bucket "$FEED_BUCKET" --key rings.json --body "$work/rings.json" \
-    --content-type application/json --cache-control no-store "${condition[@]}" >/dev/null
+  local condition attempt
+  for attempt in 1 2 3 4 5; do
+    if s3 get-object --bucket "$FEED_BUCKET" --key rings.json --query ETag --output text \
+      "$work/rings.json" >"$work/etag" 2>"$work/error"; then
+      condition=(--if-match "$(cat "$work/etag")")
+    elif grep -q NoSuchKey "$work/error"; then
+      rm -f "$work/rings.json"
+      condition=(--if-none-match '*')
+    else
+      cat "$work/error" >&2
+      fail "could not read rings.json"
+    fi
+    node "$here/feed-rings.js" "$work/rings.json" "$@" >"$work/rings-message"
+    if s3 put-object --bucket "$FEED_BUCKET" --key rings.json --body "$work/rings.json" \
+      --content-type application/json --cache-control no-store "${condition[@]}" >/dev/null 2>"$work/put-error"; then
+      tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}" <"$work/rings-message"
+      return 0
+    fi
+    grep -Eq 'PreconditionFailed|\(412\)' "$work/put-error" || { cat "$work/put-error" >&2; fail "could not write rings.json"; }
+    echo "rings.json changed while updating it (attempt $attempt); retrying"
+  done
+  fail "rings.json kept changing; gave up after 5 attempts"
 }
 
 case "${1:-}" in
@@ -109,7 +121,33 @@ case "${1:-}" in
     exists "$3/complete.json" || fail "no complete feed snapshot for $3"
     update_rings promote "$2" "$3" "$4"
     ;;
+  probe)
+    # Everything above relies on R2 refusing conditional writes that do not hold. Prove it on
+    # a throwaway key outside any served path before writing anything real.
+    key="ci-probe/${GITHUB_RUN_ID:-local}-$$"
+    printf one >"$work/probe"
+    attempt() { # EXPECT (ok|refused) CONDITION...
+      local expect=$1
+      shift
+      if s3 put-object --bucket "$FEED_BUCKET" --key "$key" --body "$work/probe" "$@" >/dev/null 2>"$work/put-error"; then
+        [[ "$expect" == ok ]] || { cleanup; fail "R2 accepted a write whose condition ($*) did not hold"; }
+      else
+        grep -Eq 'PreconditionFailed|\(412\)' "$work/put-error" || { cat "$work/put-error" >&2; cleanup; fail "probe write failed"; }
+        [[ "$expect" == refused ]] || { cleanup; fail "R2 refused a write whose condition ($*) held"; }
+      fi
+    }
+    cleanup() { s3 delete-object --bucket "$FEED_BUCKET" --key "$key" >/dev/null 2>&1 || true; }
+    cleanup
+    attempt ok --if-none-match '*'
+    attempt refused --if-none-match '*'
+    etag=$(s3 get-object --bucket "$FEED_BUCKET" --key "$key" --query ETag --output text "$work/probe-read") ||
+      { cleanup; fail "could not read the probe back"; }
+    attempt refused --if-match '"00000000000000000000000000000000"'
+    attempt ok --if-match "$etag"
+    cleanup
+    echo "R2 honours If-None-Match and If-Match." | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+    ;;
   *)
-    fail "usage: feed-r2.sh snapshot DIR VERSION ARCHES | promote RING VERSION PERCENT"
+    fail "usage: feed-r2.sh snapshot DIR VERSION ARCHES | promote RING VERSION PERCENT | probe"
     ;;
 esac
