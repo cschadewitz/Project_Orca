@@ -389,6 +389,100 @@ agents:
 - `hello` reports the daemon-wide cap, sessions open and queue depth; `agents.list` adds the
   per-agent and per-host caps and use (optional fields; older clients ignore them).
 
+## MCP servers and skills for agent steps
+
+ORCA can pass an agent session **outbound** MCP servers (servers the *agent* talks to, given
+in ACP `session/new`) and select **skills** for it (#335). This is unrelated to ORCA's own
+**inbound** MCP interface (`orca mcp`, [mcp-operator.md](mcp-operator.md)), which lets an MCP
+client drive ORCA.
+
+Define each server and skill once, in a catalog in `orca.config.yaml`, then select from it at
+four scopes, each applied over the one before:
+
+```yaml
+capabilities:
+  mcpServers:                       # the catalog: id -> definition
+    github: { command: github-mcp-server, args: [stdio] }
+    db: { command: db-mcp }
+  skills:
+    review-checklist: { path: skills/review-checklist, version: "3" }   # relative to this file
+  workspace:                        # workspace scope: what every agent starts with
+    mcpServers: { enable: [github] }
+agents:
+  - id: claude
+    command: claude-code-acp
+    mcpServers: [{ name: notes, command: notes-mcp }]   # legacy inline form, still on
+    capabilities:                   # agent scope
+      mcpServers: { available: [db] }   # off by default; a workflow or node may turn it on
+```
+
+```yaml
+# a workflow
+capabilities:                       # workflow scope, for every agent step in this file
+  mcpServers: { disable: [notes] }
+nodes:
+  migrate:
+    type: agent
+    agent: { role: builder }
+    capabilities:                   # node scope, for this step only
+      mcpServers: { enable: [db] }
+```
+
+- A selection is `replace: [...]`, or `enable: [...]` and/or `disable: [...]`. `replace` sets
+  the whole list from that scope on and cannot be combined with the other two.
+- The config scopes (`capabilities.workspace` and `agents[].capabilities`) may also list
+  `available`: entries the agent does not get by default but a workflow or node may turn on.
+- **A workflow or node can never grant more than the config permits.** It may turn on only
+  what the workspace or agent scope enabled or listed as `available`, and an agent-scope
+  `disable` or `replace` takes that permission away again. Anything else fails before the
+  run starts, naming the field: `workflow.nodes.migrate.capabilities.mcpServers.enable[0]:
+  ... agent 'claude' is not permitted to use it`.
+- Unknown ids, an id listed twice, the same id in `enable` and `disable`, and a legacy inline
+  server named like a catalog entry are all errors at the field that caused them: the config
+  scopes when the config loads, workflow and node scopes when the workflow is validated and
+  again when a run is launched under its role overrides.
+- **Legacy `agents[].mcpServers` keep working unchanged.** Each inline server is on for its
+  agent, as if it were in the catalog and enabled at the agent scope, so a config with no
+  `capabilities` behaves exactly as before. Workflows and nodes can `disable` one by its `name`.
+- One resolver decides what a step gets, and validation, the launch preview, the run's launch
+  record and the session open all call it, so they agree. The preview lists every agent step,
+  nested loop and parallel bodies included (a nested step under its qualified id, such as
+  `review-loop::review`), with each server's and skill's id and the scope that decided it
+  (`source`), plus a skill's version and content digest - never a command, argument or
+  environment value. A nested graph runs under its workflow's scope; a `subworkflow` that
+  names another workflow runs under that workflow's own.
+- **What reaches an agent session today is the agent's own inline `mcpServers`, narrowed by
+  any scope.** Catalog servers and skills resolve and appear in validation and the preview,
+  but a step that selects one is refused at launch (and warned about at validation) rather
+  than started with or without it. Passing them to sessions waits for delivery that checks
+  the caller, the host and the agent can take each one (#337).
+- **Who decides.** The workspace and agent scopes live in `orca.config.yaml`, which only
+  config authority can change. A workflow or node can only narrow that, or turn on what the
+  agent permits. A caller's role override picks a different configured agent, and then that
+  agent's ceiling applies (an override cannot name an unconfigured agent). The host is the
+  agent's configured `hostId`: a run cannot move an agent to another host.
+- A `per-run` session is reused only by steps that resolve to the same set; a step with a
+  different set gets its own session.
+- **Availability is not permission, and ORCA does not see every MCP call.** ORCA decides
+  which servers an agent session is given and evaluates the
+  [permission requests](#permissions) the agent sends over ACP. Calls an agent makes to an
+  MCP server without asking are between the agent and that server: whether a given agent
+  asks before each MCP tool call is its own behaviour, not something ORCA enforces. Nothing
+  in a skill grants anything.
+
+### Skills
+
+A skill is a directory (or a single file) on the daemon's machine. ORCA never fetches or
+installs one. Its identity is its catalog id, the author's `version` label, and a content
+digest: `sha256:` over every file's relative path, size and bytes. A symbolic link inside a
+skill is refused rather than followed. Set `digest: sha256:...` on the catalog entry to pin
+the content; a skill whose files no longer hash to the pin is refused, and the error shows
+the digest it found so you can review the change and update the pin. A run is pinned to its
+configuration, so only a skill's files could change under it: a step whose skill no longer
+hashes to what its launch recorded is refused rather than given the edited skill.
+
+As with catalog servers, this version resolves skills but does not deliver them yet (#337).
+
 ## Templates
 
 Markdown files with front matter (`id`, `name`, `description`, `version`, `requires`,
