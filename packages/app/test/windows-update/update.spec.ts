@@ -139,6 +139,17 @@ async function installedVersion(): Promise<string> {
   return stdout.trim();
 }
 
+/** Installer, uninstaller, elevation and app processes, one per line, for the log. */
+async function installerProcesses(): Promise<string> {
+  const { stdout } = await execute("powershell", [
+    "-NoProfile",
+    "-Command",
+    "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'ORCA|Un_|elevate|nsis' } | " +
+      "ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.Name, $_.CommandLine }",
+  ]).catch(() => ({ stdout: "(process list failed)" }));
+  return stdout.trim().split(/\r?\n/).join(" | ");
+}
+
 test.describe.configure({ mode: "serial" });
 
 test("the installed version is the one being updated from", async () => {
@@ -195,8 +206,17 @@ test("an internal token is offered the next version, downloads it and installs i
     await stop(launched);
   }
   await test.step("installed version", async () => {
-    await expect
-      .poll(installedVersion, { timeout: 300_000, intervals: [2_000], message: `Windows reports ${TO} installed` })
-      .toBe(TO);
+    // What the update left running while Windows still reports the old version, in the log:
+    // an installer that never started reads differently from one that waits or fails.
+    const watch = setInterval(() => {
+      void installerProcesses().then((lines) => process.stdout.write(`[installer] ${lines || "none"}\n`));
+    }, 15_000);
+    try {
+      await expect
+        .poll(installedVersion, { timeout: 300_000, intervals: [2_000], message: `Windows reports ${TO} installed` })
+        .toBe(TO);
+    } finally {
+      clearInterval(watch);
+    }
   });
 });
