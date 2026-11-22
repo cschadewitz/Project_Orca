@@ -10,6 +10,7 @@ on:
     paths:
       - packages/store/src/store-format*.ts
       - packages/store/src/durable-file.ts
+      - packages/store/src/backup-archive.ts
       - packages/cli/src/store-privacy.ts
       - packages/cli/native-probe/**
       - packages/protocol/src/first-run-fence.ts

@@ -32,10 +32,16 @@ import { OrcaError } from "@orca/core";
 import { withFileLock } from "./file-lock.js";
 import {
   CarryoverRefused,
+  chooseBackupSlot,
+  ensureBackupSlots,
+  findRecoveryRecord,
   posixPrivateCopy,
   pruneFormatBackups,
   stageCarryover,
   STORE_FORMAT_BACKUP_DIR,
+  storeMatchesArchive,
+  windowsBootId,
+  type BackupSlot,
   type PrivateCopyBackend,
 } from "./store-format-carryover.js";
 
@@ -46,9 +52,20 @@ export {
   STORE_FORMAT_BACKUP_DIR,
   STORE_FORMAT_BACKUP_MANIFEST,
   STORE_FORMAT_BACKUP_RETENTION,
+  STORE_FORMAT_BACKUP_SLOTS,
   STORE_UPDATE_HANDOFF_FILE,
+  windowsBootId,
   type PrivateCopyBackend,
+  type SlotIdentity,
 } from "./store-format-carryover.js";
+
+/**
+ * Windows store format carryover (#910) stays refused (UNDURABLE) until an automated power-cut (#947)
+ * test on NTFS proves the slot archive and the recovery record survive in every order Windows
+ * may write them. The machinery below is complete and tested with this switched on; turning it
+ * on for real is a one-line change made together with that proof.
+ */
+export const WINDOWS_STORE_CARRYOVER = false;
 
 /** Oldest first. `release` is the first release line that wrote the format. */
 export const STORE_FORMAT_HISTORY: readonly { epoch: string; release: string }[] = [
@@ -81,7 +98,8 @@ export type StoreFormatReason =
   | "BACKUPS_UNSAFE"
   | "FENCE_LOST"
   | "APP_OWNED"
-  | "UNDURABLE";
+  | "UNDURABLE"
+  | "INTERRUPTED";
 export class StoreFormatError extends OrcaError {
   override readonly name = "StoreFormatError";
   constructor(
@@ -129,8 +147,20 @@ export interface StoreFormatOptions {
    * `undefined` keeps the refusal, exactly as without this option.
    */
   carryover?: () => Promise<CarryoverAuthority | undefined>;
+  /**
+   * Windows (#910): where private files may be created. With it, a Windows write-mode open of a
+   * store this build may write also creates the store's two backup slots if they are missing, so
+   * that a later format carryover finds slots older than the current boot.
+   */
+  privacy?: PrivateCopyBackend;
   /** Injected for tests. */
   now?: () => Date;
+  /** Injected for tests; defaults to this process's platform. */
+  platform?: NodeJS.Platform;
+  /** Injected for tests: Windows' boot counter ({@link windowsBootId}). */
+  bootId?: () => number | undefined;
+  /** Tests and the NTFS probe only: carry forward on Windows despite {@link WINDOWS_STORE_CARRYOVER}. */
+  windowsCarryover?: boolean;
 }
 
 /** Read the marker without checking it; `undefined` when the store has none. */
@@ -282,6 +312,9 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
   const check = async () => {
     const marker = await readStoreFormat(storeDir);
     if (marker) judge(storeDir, marker, current);
+    // Windows (#910): a backup archive recording a conversion this ORCA cannot open outlives a
+    // lost marker, so the marker alone is not trusted to say the store is not newer.
+    if ((options.platform ?? process.platform) === "win32") await refuseNewerRecord(storeDir, marker, current);
     return marker;
   };
   const classify = async (marker: StoreFormatMarker | undefined) => {
@@ -308,12 +341,17 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
         outcome = await carryLocked(storeDir, marker, {
           appVersion: options.appVersion,
           fence: authority.fence,
-          ...(authority.privacy ? { privacy: authority.privacy } : {}),
+          ...((authority.privacy ?? options.privacy) ? { privacy: authority.privacy ?? options.privacy! } : {}),
           ...(authority.afterCopy ? { afterCopy: authority.afterCopy } : {}),
           ...(options.now ? { now: options.now } : {}),
+          ...(options.platform ? { platform: options.platform } : {}),
+          ...(options.bootId ? { bootId: options.bootId } : {}),
+          ...(options.windowsCarryover !== undefined ? { windowsCarryover: options.windowsCarryover } : {}),
         });
       } catch (refusal) {
-        if (refusal instanceof StoreFormatError) await authority.settle("refused");
+        // UNDURABLE waits for Windows to restart, with nothing copied: the handoff stays bound to
+        // this writer's claim, as after an interruption, so the next start retries under it.
+        if (refusal instanceof StoreFormatError && refusal.reason !== "UNDURABLE") await authority.settle("refused");
         throw refusal;
       }
       await authority.settle("carried");
@@ -322,6 +360,9 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
     const now = (options.now ?? (() => new Date()))();
     if (status !== "current" || marker?.writtenBy !== options.appVersion)
       await stamp(storeDir, options.appVersion, now, marker?.backup);
+    if ((options.platform ?? process.platform) === "win32" && options.privacy)
+      // Best effort: without slots a later carryover only waits for a restart (UNDURABLE).
+      await ensureBackupSlots(storeDir, options.privacy, (options.bootId ?? windowsBootId)()).catch(() => undefined);
     return { status, epoch: current };
   });
 }
@@ -339,6 +380,10 @@ export interface CarryForwardOptions {
   privacy?: PrivateCopyBackend;
   /** Injected for tests; defaults to this process's platform. */
   platform?: NodeJS.Platform;
+  /** Injected for tests: Windows' boot counter ({@link windowsBootId}). */
+  bootId?: () => number | undefined;
+  /** Tests and the NTFS probe only: carry forward on Windows despite {@link WINDOWS_STORE_CARRYOVER}. */
+  windowsCarryover?: boolean;
 }
 
 /**
@@ -359,6 +404,25 @@ const fenceLost = (storeDir: string) =>
     `This ORCA no longer provably holds the only write access to ${storeDir}, so the store was not carried forward and its prior format stays in charge. Close every ORCA app, daemon and command using this workspace, then start ORCA again.`,
   );
 
+const HISTORY = STORE_FORMAT_HISTORY.map((f) => f.epoch);
+
+/**
+ * Restoring a Windows slot archive by hand is not supported: a ZIP round trip keeps the bytes but
+ * not the access rules that keep the execution key and private records to this user.
+ */
+const NO_WINDOWS_RESTORE =
+  "Do not extract that backup into a store by hand: extraction does not restore the access rules that keep the store's private records to you, and ORCA cannot restore it for you yet.";
+
+async function refuseNewerRecord(storeDir: string, marker: StoreFormatMarker | undefined, current: string) {
+  const { newer } = await findRecoveryRecord(storeDir, marker?.epoch, current, HISTORY);
+  if (newer)
+    throw new StoreFormatError(
+      "NEWER",
+      `The backup in ${newer.path} records that this store was converted to format ${newer.manifest.to}, which is newer than this ORCA can open. Nothing was changed. Install the ORCA version that converted it. ${NO_WINDOWS_RESTORE}`,
+      storeDir,
+    );
+}
+
 /** Under the format lock, with the marker read under it. */
 async function carryLocked(
   storeDir: string,
@@ -370,21 +434,70 @@ async function carryLocked(
   if (marker?.epoch === current) return { status: "current", epoch: current };
   if (!marker && !(await holdsData(storeDir)))
     throw new StoreFormatError("UNREADABLE", `${storeDir} holds no ORCA store to carry forward.`, storeDir);
-  // The marker may only become durable after the backup it names. POSIX orders the two with a
-  // directory fsync after each rename; Windows has no barrier ORCA has verified for a directory
-  // entry (a rename), so a power loss could keep the marker and lose the backup. Fail closed
-  // there until one is (#910): nothing is copied and the prior format stays in charge.
-  if ((options.platform ?? process.platform) === "win32")
-    throw new StoreFormatError(
-      "UNDURABLE",
-      "On Windows this ORCA cannot yet guarantee that the backup reaches the disk before the store's format changes, so the store was not carried forward. Nothing was changed. Keep using the ORCA version that last wrote this store.",
-      storeDir,
-    );
   const privacy = options.privacy ?? posixPrivateCopy;
   const fence = () => {
     if (options.fence && !options.fence.check()) throw fenceLost(storeDir);
   };
+  // The marker may only become durable after the backup it names. POSIX orders the two with a
+  // directory fsync after each rename. Windows documents no such barrier for a directory entry,
+  // so there the backup goes into a slot file that already existed before Windows last started,
+  // rewritten in place and flushed before the marker is created (#910). Until a slot is that
+  // old, carryover fails closed: nothing is copied and the prior format stays in charge.
+  let slot: BackupSlot | undefined;
   const from = marker?.epoch ?? "unmarked";
+  if ((options.platform ?? process.platform) === "win32") {
+    if (!(options.windowsCarryover ?? WINDOWS_STORE_CARRYOVER))
+      throw new StoreFormatError(
+        "UNDURABLE",
+        "This ORCA does not yet change a store's format on Windows, because it cannot yet prove that the backup it takes first survives a power cut. Nothing was changed. Keep using the ORCA version that last opened this store until an update that can carry it forward.",
+        storeDir,
+      );
+    const boot = (options.bootId ?? windowsBootId)();
+    try {
+      fence();
+      await ensureBackupSlots(storeDir, privacy, boot);
+    } catch (error) {
+      if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
+      throw error;
+    }
+    // The marker is created by a rename, whose directory entry Windows does not promise to keep
+    // across a power cut, so the marker may be older than the slot archive written before it.
+    // That archive is the durable record: finish its conversion if the store is still exactly
+    // what it archived, and otherwise refuse without touching it.
+    const records = await findRecoveryRecord(storeDir, marker?.epoch, current, HISTORY);
+    if (records.newer) await refuseNewerRecord(storeDir, marker, current);
+    if (records.pending.length > 1)
+      throw new StoreFormatError(
+        "INTERRUPTED",
+        `Both backups in ${join(storeDir, STORE_FORMAT_BACKUP_DIR)} record an unfinished change of this store's format, so which one applies cannot be decided. Nothing was changed, and both backups are kept. Open the store with the ORCA version that last wrote it. ${NO_WINDOWS_RESTORE}`,
+        storeDir,
+      );
+    const record = records.pending[0];
+    if (record) {
+      fence();
+      if (record.manifest.to !== current || !(await storeMatchesArchive(storeDir, record.path)))
+        throw new StoreFormatError(
+          "INTERRUPTED",
+          `A change of this store's format to ${record.manifest.to} was interrupted, and the store has changed since the backup taken for it in ${record.path}. Nothing was changed, and that backup is kept. Open the store with the ORCA version that last wrote it. ${NO_WINDOWS_RESTORE}`,
+          storeDir,
+        );
+      const now = (options.now ?? (() => new Date()))();
+      await stamp(storeDir, options.appVersion, now, record.path, fence);
+      return { status: "carried", epoch: current, from, backup: record.path };
+    }
+    slot = await chooseBackupSlot(storeDir, privacy, {
+      keep: marker?.backup,
+      boot,
+      markerEpoch: marker?.epoch,
+      history: HISTORY,
+    });
+    if (!slot)
+      throw new StoreFormatError(
+        "UNDURABLE",
+        "This ORCA keeps the backup it takes before changing the store's format in a file that must already have been on disk when Windows last started, and none is yet, so the store was not carried forward. Nothing else was changed. Restart Windows, then start ORCA again.",
+        storeDir,
+      );
+  }
   const now = (options.now ?? (() => new Date()))();
   let backup: string;
   try {
@@ -392,6 +505,7 @@ async function carryLocked(
       ...(options.afterCopy ? { afterCopy: options.afterCopy } : {}),
       fence,
       privacy,
+      ...(slot ? { slot } : {}),
     });
     backup = await staged.commit();
     // The backup is published and durable; the marker is what changes the format, and the fence

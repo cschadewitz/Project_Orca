@@ -13,8 +13,11 @@
  * source. Any difference discards the staged copy and refuses startup with the prior format
  * still authoritative.
  *
- * Backups are directories under `format-backups/` that this code names and marks with
- * `format-backup.json`; retention removes only those, never anything else it finds there.
+ * On Linux and macOS, backups are directories under `format-backups/` that this code names and
+ * marks with `format-backup.json`; retention removes only those, never anything else it finds
+ * there. On Windows, a backup is one ZIP archive written in place into one of two backup slot
+ * files under `format-backups/` that existed before Windows last started (backup-archive.ts,
+ * #910): the two slots are the retention.
  *
  * The copies hold the execution key and private records, so they are only ever written where
  * a {@link PrivateCopyBackend} has verified they stay private to this user: on POSIX an
@@ -23,10 +26,12 @@
  * directory and file copied is verified owner-only afterwards (#897).
  */
 import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { chmod, lstat, mkdir, readdir, readFile, rename, rm, utimes } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readdir, readFile, rename, rm, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { readArchive, writeArchiveSlot } from "./backup-archive.js";
 import { fileStores } from "./document-store.js";
 import { createCopy, createDurable, syncDirectory } from "./durable-file.js";
 import { FileLeaseStore, lapsed } from "./lease-store.js";
@@ -36,6 +41,45 @@ export const STORE_FORMAT_BACKUP_RETENTION = 2;
 export const STORE_FORMAT_BACKUP_MANIFEST = "format-backup.json";
 const BACKUP_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-from-[a-z0-9-]{1,64}(-\d{1,4})?$/;
 const SCRATCH_NAME = /^\.(partial|validate)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Windows backup slots (#910), under `format-backups/`. Created whenever a Windows ORCA opens the
+ * store for writing, each holding its {@link SlotIdentity}; usable once Windows has restarted
+ * since (the boot that created it is no longer the current one), which proves its directory
+ * entry is on disk.
+ */
+export const STORE_FORMAT_BACKUP_SLOTS = ["store-backup-1.zip", "store-backup-2.zip"] as const;
+
+/**
+ * Which file a slot is and in which Windows session it was created. `volume` and `file` are the
+ * NTFS volume serial and file ID, so a copied or replaced slot no longer matches; `createdBoot` is
+ * the Windows `BootId`, which Windows increases on every start and which no clock can move.
+ */
+const SlotIdentitySchema = z.object({
+  format: z.literal(1),
+  tool: z.literal("orca-backup-slot"),
+  slot: z.string().min(1).max(64),
+  volume: z.string().regex(/^\d{1,24}$/),
+  file: z.string().regex(/^\d{1,24}$/),
+  createdBoot: z.number().int().nonnegative(),
+});
+export type SlotIdentity = z.infer<typeof SlotIdentitySchema>;
+
+const BOOT_ID_KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\\PrefetchParameters";
+/** Windows' boot counter (`BootId`), or `undefined` when it cannot be read: no slot is then usable. */
+export function windowsBootId(): number | undefined {
+  try {
+    const text = execFileSync("reg", ["query", BOOT_ID_KEY, "/v", "BootId"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 10_000,
+    });
+    const match = /BootId\s+REG_DWORD\s+0x([0-9a-f]+)/i.exec(text);
+    return match ? Number.parseInt(match[1]!, 16) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** The desktop updater's handoff record (`@orca/protocol/update-handoff`, #897). */
 export const STORE_UPDATE_HANDOFF_FILE = "update-handoff.json";
@@ -58,7 +102,10 @@ const ManifestSchema = z.object({
   createdAt: z.string().min(1).max(64),
   files: z.number().int().nonnegative(),
   signature: z.string().regex(/^[0-9a-f]{64}$/),
+  /** Windows (#910): the slot the backup was archived into, as the slot recorded itself. */
+  slot: SlotIdentitySchema.optional(),
 });
+type Manifest = z.infer<typeof ManifestSchema>;
 
 export type CarryoverFailure = "BUSY" | "UNREADABLE" | "BACKUPS_UNSAFE" | "FENCE_LOST";
 export class CarryoverRefused extends Error {
@@ -251,6 +298,12 @@ export async function stageCarryover(
     /** Throws {@link CarryoverRefused} (FENCE_LOST) once the writer fence no longer holds. */
     fence?: () => void;
     privacy?: PrivateCopyBackend;
+    /**
+     * Windows (#910): the backup slot ({@link chooseBackupSlot}) the backup is archived into, in
+     * place and flushed, instead of being published by rename. Its identity goes into the
+     * manifest, so the archive itself records which slot it was written into.
+     */
+    slot?: BackupSlot;
   } = {},
 ): Promise<{ commit(): Promise<string> }> {
   const fence = hooks.fence ?? (() => undefined);
@@ -302,7 +355,7 @@ export async function stageCarryover(
       await rm(validate, { recursive: true, force: true });
     }
     fence();
-    const manifest: z.infer<typeof ManifestSchema> = {
+    const manifest: Manifest = {
       format: 1,
       tool: "orca-store-format",
       from,
@@ -310,6 +363,7 @@ export async function stageCarryover(
       createdAt: now.toISOString(),
       files: [...before.values()].filter((e) => e.type === "file").length,
       signature: signatureOf(before),
+      ...(hooks.slot ? { slot: hooks.slot.identity } : {}),
     };
     // The copy is durable (createCopy, copyTree) before its manifest, and the manifest before
     // the copy can be published.
@@ -319,6 +373,12 @@ export async function stageCarryover(
       async commit() {
         try {
           if (!sameSnapshot(before, await snapshot(storeDir))) throw busy();
+          if (hooks.slot) {
+            fence();
+            await archiveInto(hooks.slot.path, partial, before);
+            await rm(partial, { recursive: true, force: true });
+            return hooks.slot.path;
+          }
           const name = `${now.toISOString().replace(/[:.]/g, "-")}-from-${from}`;
           let target = join(root, name);
           for (let n = 1; await present(target); n++) target = join(root, `${name}-${n}`);
@@ -381,4 +441,245 @@ export async function pruneFormatBackups(
   ours.sort();
   for (const name of ours.slice(0, Math.max(0, ours.length - STORE_FORMAT_BACKUP_RETENTION)))
     if (join(root, name) !== keep) await rm(join(root, name), { recursive: true, force: true });
+}
+
+/**
+ * Archive the staged, verified copy into `slot` (flushed before this returns), then read the
+ * archive back and compare every entry with the staged copy. Throws when they differ.
+ */
+async function archiveInto(slot: string, partial: string, entries: Snapshot): Promise<void> {
+  const listed = [...entries].map(([path, entry]) => ({ path, type: entry.type }));
+  listed.push({ path: STORE_FORMAT_BACKUP_MANIFEST, type: "file" });
+  const withTimes = await Promise.all(
+    listed.map(async (entry) => ({ ...entry, mtime: (await lstat(join(partial, entry.path))).mtime })),
+  );
+  await writeArchiveSlot(slot, partial, withTimes, []);
+  const archived = await readArchive(slot);
+  const expected = new Map<string, string>();
+  for (const entry of listed)
+    expected.set(
+      entry.type === "dir" ? `${entry.path}/` : entry.path,
+      entry.type === "dir" ? "" : await digest(join(partial, entry.path)),
+    );
+  if (
+    archived.entries.size !== expected.size ||
+    [...expected].some(([name, hash]) => archived.entries.get(name) !== hash)
+  )
+    throw new Error(`the backup archived into ${slot} does not match the staged copy`);
+}
+
+/** A Windows backup slot a carryover may archive into. */
+export interface BackupSlot {
+  path: string;
+  identity: SlotIdentity;
+}
+
+/** What a slot holds now: its own identity only, a store backup archive, or anything else. */
+type SlotContent =
+  | { kind: "blank"; identity: SlotIdentity }
+  | { kind: "archive"; identity: SlotIdentity; manifest: Manifest }
+  | { kind: "other" };
+
+const IDENTITY_LIMIT = 4096;
+
+async function fileIdentity(path: string): Promise<{ volume: string; file: string }> {
+  const info = await lstat(path, { bigint: true });
+  return { volume: info.dev.toString(), file: info.ino.toString() };
+}
+
+/** Read a slot's content: its identity, and for an archive the backup's manifest (only). */
+async function readSlot(path: string): Promise<SlotContent> {
+  try {
+    const info = await lstat(path);
+    if (!info.isFile()) return { kind: "other" };
+    // An identity is a short JSON object; anything else is read as an archive.
+    const head = info.size <= IDENTITY_LIMIT ? await readFile(path) : undefined;
+    if (head && head[0] === 0x7b) {
+      const parsed = SlotIdentitySchema.safeParse(JSON.parse(head.toString("utf8")));
+      return parsed.success ? { kind: "blank", identity: parsed.data } : { kind: "other" };
+    }
+    const listing = await readArchive(path, {
+      only: [STORE_FORMAT_BACKUP_MANIFEST],
+      keep: [STORE_FORMAT_BACKUP_MANIFEST],
+    });
+    const text = listing.texts.get(STORE_FORMAT_BACKUP_MANIFEST);
+    const manifest = text ? ManifestSchema.safeParse(JSON.parse(text.toString("utf8"))) : undefined;
+    return manifest?.success && manifest.data.slot
+      ? { kind: "archive", identity: manifest.data.slot, manifest: manifest.data }
+      : { kind: "other" };
+  } catch {
+    return { kind: "other" };
+  }
+}
+
+/** Whether `identity` is this very file (same volume and file ID) and this slot's name. */
+async function isThisSlot(path: string, name: string, identity: SlotIdentity): Promise<boolean> {
+  const actual = await fileIdentity(path).catch(() => undefined);
+  return identity.slot === name && identity.volume === actual?.volume && identity.file === actual?.file;
+}
+
+/** Overwrite `path` in place with this file's identity, flushed. The file is never replaced. */
+async function writeIdentity(path: string, name: string, boot: number): Promise<void> {
+  const identity: SlotIdentity = {
+    format: 1,
+    tool: "orca-backup-slot",
+    slot: name,
+    ...(await fileIdentity(path)),
+    createdBoot: boot,
+  };
+  const handle = await open(path, "r+");
+  try {
+    const bytes = Buffer.from(JSON.stringify(identity) + "\n", "utf8");
+    await handle.write(bytes, 0, bytes.length, 0);
+    await handle.truncate(bytes.length);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Windows (#910): make sure the backups directory and both backup slots exist, each private to
+ * this user and recording its own identity. A slot whose identity is missing or names another
+ * file (copied or replaced) is stamped anew with the current boot, unless it holds a backup
+ * archive, which is never overwritten here. A slot stamped now is usable only after Windows
+ * restarts. With no `boot` (BootId unreadable), slots are created but not stamped.
+ */
+export async function ensureBackupSlots(
+  storeDir: string,
+  privacy: PrivateCopyBackend,
+  boot: number | undefined,
+): Promise<void> {
+  const root = await backupRoot(storeDir, privacy);
+  for (const name of STORE_FORMAT_BACKUP_SLOTS) {
+    const path = join(root, name);
+    if (!(await present(path)))
+      try {
+        await createDurable(path, "");
+      } catch (error) {
+        // Another ORCA may have created it meanwhile; it is checked below either way.
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    const info = await lstat(path);
+    if (!info.isFile() || !(await privacy.privateEntry(path, "file").catch(() => false))) throw unsafeCopy(path);
+    if (boot === undefined) continue;
+    const content = await readSlot(path);
+    // A backup, or anything else not empty and not an identity (a damaged backup, say), is kept.
+    if (content.kind === "archive" || (content.kind === "other" && info.size > 0)) continue;
+    if (content.kind === "blank" && (await isThisSlot(path, name, content.identity))) continue;
+    await writeIdentity(path, name, boot);
+  }
+}
+
+/**
+ * The epochs `manifest` converted between are both ones the store has already settled on: a
+ * finished carryover's backup, safe to overwrite once it is not the marker's own backup.
+ */
+function settled(manifest: Manifest, markerEpoch: string | undefined, history: readonly string[]): boolean {
+  if (!markerEpoch) return false;
+  const to = history.indexOf(manifest.to);
+  return to >= 0 && to <= history.indexOf(markerEpoch);
+}
+
+/**
+ * Windows (#910): the backup slot a carryover may overwrite, or `undefined` when none may be yet.
+ * A slot qualifies only if it is a private regular file whose recorded identity is this very
+ * file, created in an earlier Windows session than the current one (`boot`), so its directory
+ * entry survived a restart. It must not be `keep` (the backup the marker names), and if it holds
+ * an archive, that archive must be a settled one (see {@link findRecoveryRecord}): a backup
+ * whose conversion the marker does not yet reflect is never overwritten. A slot holding only its
+ * identity is preferred, then the archive written longest ago.
+ */
+export async function chooseBackupSlot(
+  storeDir: string,
+  privacy: PrivateCopyBackend,
+  options: {
+    keep: string | undefined;
+    boot: number | undefined;
+    markerEpoch: string | undefined;
+    history: readonly string[];
+  },
+): Promise<BackupSlot | undefined> {
+  if (options.boot === undefined) return undefined;
+  const root = join(storeDir, STORE_FORMAT_BACKUP_DIR);
+  const eligible: (BackupSlot & { order: string })[] = [];
+  for (const name of STORE_FORMAT_BACKUP_SLOTS) {
+    const path = join(root, name);
+    if (path === options.keep) continue;
+    const info = await lstat(path).catch(() => undefined);
+    if (!info?.isFile() || !(await privacy.privateEntry(path, "file").catch(() => false))) continue;
+    const content = await readSlot(path);
+    if (content.kind === "other") continue;
+    if (content.identity.createdBoot === options.boot) continue;
+    if (!(await isThisSlot(path, name, content.identity))) continue;
+    if (content.kind === "archive" && !settled(content.manifest, options.markerEpoch, options.history)) continue;
+    eligible.push({
+      path,
+      identity: content.identity,
+      order: content.kind === "blank" ? "" : content.manifest.createdAt,
+    });
+  }
+  eligible.sort((a, b) => a.order.localeCompare(b.order));
+  const chosen = eligible[0];
+  return chosen ? { path: chosen.path, identity: chosen.identity } : undefined;
+}
+
+export interface RecoveryRecord {
+  path: string;
+  manifest: Manifest;
+}
+
+/**
+ * Windows (#910): a slot archive is the durable record of a carryover across marker loss. It is
+ * flushed before the marker is created, and names its conversion (`from`, `to`) and its own
+ * slot. Every slot is examined before anything is returned:
+ *
+ * - `newer`: a record converting to an epoch outside `history` or after `current`, written by a
+ *   newer ORCA. It takes precedence over everything else: the store must not be opened.
+ * - `pending`: every record whose `from` is what the marker says now (or "unmarked" with no
+ *   marker) and whose `to` is not: unfinished, as the marker may have been lost after it. More
+ *   than one is ambiguous, and the caller refuses.
+ */
+export async function findRecoveryRecord(
+  storeDir: string,
+  markerEpoch: string | undefined,
+  current: string,
+  history: readonly string[],
+): Promise<{ newer: RecoveryRecord | undefined; pending: RecoveryRecord[] }> {
+  const root = join(storeDir, STORE_FORMAT_BACKUP_DIR);
+  const mine = history.indexOf(current);
+  let newer: RecoveryRecord | undefined;
+  const pending: RecoveryRecord[] = [];
+  for (const name of STORE_FORMAT_BACKUP_SLOTS) {
+    const path = join(root, name);
+    const content = await readSlot(path);
+    if (content.kind !== "archive" || !(await isThisSlot(path, name, content.identity))) continue;
+    const record = { path, manifest: content.manifest };
+    const to = history.indexOf(content.manifest.to);
+    if (to < 0 || to > mine) newer ??= record;
+    else if (content.manifest.from === (markerEpoch ?? "unmarked") && content.manifest.to !== markerEpoch)
+      pending.push(record);
+  }
+  return { newer, pending };
+}
+
+/** Whether the store's files are, byte for byte, the ones archived in `slot` (a full read). */
+export async function storeMatchesArchive(storeDir: string, slot: string): Promise<boolean> {
+  try {
+    const archived = await readArchive(slot);
+    const now = await snapshot(storeDir);
+    const expected = new Map<string, string>();
+    for (const [path, entry] of now)
+      expected.set(
+        entry.type === "dir" ? `${path}/` : path,
+        entry.type === "dir" ? "" : await digest(join(storeDir, path)),
+      );
+    archived.entries.delete(STORE_FORMAT_BACKUP_MANIFEST);
+    return (
+      archived.entries.size === expected.size &&
+      [...expected].every(([name, hash]) => archived.entries.get(name) === hash)
+    );
+  } catch {
+    return false;
+  }
 }

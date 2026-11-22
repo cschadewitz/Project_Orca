@@ -5,7 +5,9 @@
  * POSIX: file data is fsynced before close, and a directory is fsynced after an entry in it is
  * created or renamed. Windows cannot open a directory for flushing from Node: `syncDirectory` is
  * a no-op there and orders nothing, so format carryover, whose marker must not outlive its
- * backup, refuses on Windows (UNDURABLE) until a verified barrier exists (#910).
+ * backup, writes the Windows backup in place into a slot file that survived a Windows restart
+ * and flushes that file instead; the archive then records the conversion across a lost marker
+ * (backup-archive.ts, store-format-carryover.ts, #910).
  */
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";

@@ -6,9 +6,14 @@
  * Bundled (esbuild, `__ORCA_FIRST_RUN_BUNDLED__`) beside the packaged first-run boundary, as the
  * desktop app's daemon is. It builds a store the way the app does (private directories from the
  * boundary, files inheriting their owner-only DACL) and gives one source file an explicit ACE for
- * Everyone. Carrying it forward must be refused on Windows (UNDURABLE: no verified barrier orders
- * the backup before the marker yet, #910) with nothing written. The private-copy path itself is
- * then exercised directly: the backup is staged and published with `windowsPrivateCopy` (no
+ * Everyone. Carrying it forward is refused (UNDURABLE) while Windows carryover is switched off,
+ * touching nothing (#910). Switched on, it is first refused with only the two backup slots
+ * created, each recording its NTFS file ID and Windows' real BootId, which must be readable here.
+ * Told the BootId has moved on, as after a restart (a real restart is the power-cut test's), it
+ * must carry: the backup archived into slot 1, the marker naming it, and Windows' own
+ * `Expand-Archive` reading the archived files back byte for byte (a format check only). With the marker then deleted, as
+ * after a power cut, the archive finishes the conversion without being rewritten.
+ * The private-copy path itself is then exercised directly: the backup is staged and published with `windowsPrivateCopy` (no
  * marker), and every published entry's security descriptor is read back with PowerShell:
  *
  * - owner is this user, and every ACE names only this user or SYSTEM;
@@ -21,7 +26,7 @@
  * refused (BACKUPS_UNSAFE). Prints one JSON result; exits non-zero on failure.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, lstatSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, lstatSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { windowsDirectory, windowsPrivateChild } from "@orca/protocol/first-run-fence";
 import {
@@ -30,7 +35,11 @@ import {
   readStoreFormat,
   stageCarryover,
   STORE_FORMAT_BACKUP_DIR,
+  STORE_FORMAT_BACKUP_MANIFEST,
+  STORE_FORMAT_BACKUP_SLOTS,
   STORE_FORMAT_EPOCH,
+  STORE_FORMAT_FILE,
+  windowsBootId,
 } from "@orca/store";
 import { windowsPrivateCopy } from "../src/store-privacy.js";
 
@@ -84,9 +93,14 @@ $out = foreach ($p in (Get-Content -LiteralPath $env:PROBE_PATHS)) {
   }
 }
 ConvertTo-Json -InputObject @($out) -Depth 5 -Compress`;
+  const text = powershell(script, paths);
+  return JSON.parse(text) as Descriptor[];
+}
+/** Windows PowerShell, with `paths` listed in the file $env:PROBE_PATHS names. */
+function powershell(script: string, paths: string[]): string {
   const list = join(profile, "orca-probe-paths.txt");
   writeFileSync(list, paths.join("\r\n"));
-  const text = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+  return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
     encoding: "utf8",
     // Windows PowerShell cannot load its own modules with PowerShell 7's PSModulePath, which the
     // runner's pwsh step passes down.
@@ -96,7 +110,6 @@ ConvertTo-Json -InputObject @($out) -Depth 5 -Compress`;
     },
     maxBuffer: 16 * 1024 * 1024,
   });
-  return JSON.parse(text) as Descriptor[];
 }
 const walk = (root: string): string[] =>
   readdirSync(root).flatMap((name) => {
@@ -174,17 +187,66 @@ const store = safely("orca-carryover-probe");
 // A source file readable by Everyone: its copy must not carry that ACE.
 grantEveryone(join(store, "runs", "run_old.jsonl"));
 const root = join(store, STORE_FORMAT_BACKUP_DIR);
-// Fails closed on Windows before anything is copied, whatever privacy backend is offered.
-const undurable = await carryStoreForward(store, { appVersion: "0.0.0-probe", privacy: windowsPrivateCopy }).then(
-  () => undefined,
-  (error: { details?: { reason?: string } }) => error.details?.reason,
+// Switched off (the shipped default), carryover is refused and nothing is created.
+const outcome = (options: Parameters<typeof carryStoreForward>[1]) =>
+  carryStoreForward(store, options).then(
+    (result) => result,
+    (error: { details?: { reason?: string }; message?: string }) => error.details?.reason ?? error.message ?? "failed",
+  );
+const off = await outcome({ appVersion: "0.0.0-probe", privacy: windowsPrivateCopy });
+check(off === "UNDURABLE", `carry-forward switched off: ${JSON.stringify(off)}`);
+check(!existsSync(root), "carry-forward switched off: backups folder created");
+// Switched on, in the boot that creates the slots: refused, with only the two slots created.
+const boot = windowsBootId();
+check(typeof boot === "number", "Windows BootId could not be read");
+const carry = (bootId: number | undefined) =>
+  outcome({ appVersion: "0.0.0-probe", privacy: windowsPrivateCopy, windowsCarryover: true, bootId: () => bootId });
+const undurable = await carry(boot);
+check(undurable === "UNDURABLE", `carry-forward with new slots: ${JSON.stringify(undurable)}`);
+check((await readStoreFormat(store)) === undefined, "carry-forward with new slots: marker written");
+const slots = STORE_FORMAT_BACKUP_SLOTS.map((name) => join(root, name));
+check(
+  JSON.stringify(readdirSync(root).sort()) === JSON.stringify([...STORE_FORMAT_BACKUP_SLOTS].sort()),
+  `carry-forward with new slots: backups folder holds ${readdirSync(root).join(", ")}`,
 );
-check(undurable === "UNDURABLE", `carry-forward on Windows: ${undurable ?? "carried"}`);
-check((await readStoreFormat(store)) === undefined, "carry-forward on Windows: marker written");
-check(!existsSync(root), "carry-forward on Windows: backups folder created");
+for (const path of slots) {
+  const identity = JSON.parse(readFileSync(path, "utf8")) as { createdBoot?: number; file?: string };
+  check(identity.createdBoot === boot, `${path}: created in boot ${identity.createdBoot}, expected ${boot}`);
+  check(identity.file === lstatSync(path, { bigint: true }).ino.toString(), `${path}: file ID not recorded`);
+}
+// As after a restart: the next BootId.
+const carried = await carry((boot ?? 0) + 1);
+check(
+  typeof carried === "object" && carried.status === "carried" && carried.backup === slots[0],
+  `carry-forward after a restart: ${JSON.stringify(carried)}`,
+);
+check(
+  (await readStoreFormat(store))?.backup === slots[0],
+  "carry-forward after a restart: marker does not name slot 1",
+);
+// As after a power cut that lost the marker: the archive finishes the conversion, unrewritten.
+const archived = readFileSync(slots[0]!);
+rmSync(join(store, STORE_FORMAT_FILE));
+const recovered = await carry((boot ?? 0) + 2);
+check(
+  typeof recovered === "object" && recovered.status === "carried" && recovered.backup === slots[0],
+  `carry-forward after a lost marker: ${JSON.stringify(recovered)}`,
+);
+check(readFileSync(slots[0]!).equals(archived), "carry-forward after a lost marker: slot 1 rewritten");
+// Windows' own Expand-Archive reads the archive back, byte for byte: a format check, not a
+// supported restore (extraction does not restore the store's access rules, #947).
+const restored = join(profile, "orca-carryover-probe-restored");
+rmSync(restored, { recursive: true, force: true });
+powershell(`Expand-Archive -LiteralPath '${slots[0]}' -DestinationPath '${restored}'`, []);
+for (const file of [".workspace-identified", "private-execution/payload", "runs/run_old.jsonl"])
+  check(
+    existsSync(join(restored, file)) && readFileSync(join(restored, file)).equals(readFileSync(join(store, file))),
+    `Expand-Archive: ${file} differs from the store`,
+  );
+check(existsSync(join(restored, STORE_FORMAT_BACKUP_MANIFEST)), "Expand-Archive: no backup manifest");
 const staged = await stageCarryover(store, "unmarked", STORE_FORMAT_EPOCH, new Date(), { privacy: windowsPrivateCopy });
 const backup = await staged.commit();
-const entries = descriptors([root, backup, ...walk(backup)]);
+const entries = descriptors([root, ...slots, backup, ...walk(backup)]);
 for (const entry of entries) {
   const where = entry.path.slice(store.length);
   check(entry.owner === me, `${where}: owner ${entry.owner}, expected ${me}`);
