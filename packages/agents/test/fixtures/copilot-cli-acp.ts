@@ -15,7 +15,7 @@
 import { isAbsolute } from "node:path";
 import { PassThrough } from "node:stream";
 import { vi } from "vitest";
-import type { AgentSpec } from "@orca/core";
+import { literalEnv, type AgentSpec } from "@orca/core";
 import { LocalHost, stdioAcpStream, type ProcessExit } from "@orca/agents";
 
 export const COPILOT_VERSION = "1.0.103";
@@ -236,7 +236,7 @@ const flagName = (arg: string) => arg.split("=", 1)[0]!;
  */
 export function copilotProfileFindings(spec: AgentSpec, ambient: Record<string, string | undefined> = {}): string[] {
   const findings: string[] = [];
-  const env = { ...ambient, ...spec.env };
+  const env = { ...ambient, ...literalEnv(spec.env) };
   const placeholder = (value: string | undefined) => value?.includes(PLACEHOLDER) ?? false;
 
   if (placeholder(spec.command) || placeholder(env.COPILOT_HOME))

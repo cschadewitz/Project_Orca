@@ -1,16 +1,33 @@
 /** Explicit correction card shared by inbox and step detail. The parent retains it after the originating gate closes. */
-import { useEffect, useRef, useState, type JSX } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import type {
   RevisionBoundaryView,
   PendingRevisionView,
   RevisionCommand,
   ReplacePendingRevisionCommand,
+  RevisionPayload,
   RevisionResult,
 } from "../../../../protocol/src/revision-input.js";
-import { Button, Card, Text, Well, textClass } from "../ui/index.js";
+import { Button, Card, Text, Well, textClass, unit } from "../ui/index.js";
 import { useWritability } from "../chrome/use-connection.js";
 import { useUpdateDraft } from "../update-drafts.js";
-import { revisionDraftScope, revisionDraftPayload, REVISION_LABELS, REVISION_REASONS } from "./revision-input-model.js";
+import { diffText, gutterFor, type DiffLine } from "../artifacts/diff.js";
+import {
+  addToDraft,
+  composeModes,
+  composeRevisionText,
+  recordRevisionVersion,
+  revisionDraftScope,
+  revisionDraftPayload,
+  revisionPayloadText,
+  REVISION_LABELS,
+  REVISION_REASONS,
+  type RevisionComposeMode,
+  type RevisionVersionSeen,
+  draftAfterSourceLoss,
+  recordImport,
+  type ImportedDraft,
+} from "./revision-input-model.js";
 
 export interface RevisionInputCardProps {
   boundary: RevisionBoundaryView;
@@ -27,15 +44,46 @@ export interface RevisionInputCardProps {
 }
 export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
   const scope = revisionDraftScope(props.connectionScope, props.boundary);
+  const currentLabelId = useId();
   const [draftScope, setDraftScope] = useState(scope);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState("");
   const [stale, setStale] = useState(false);
+  const [chosenMode, setMode] = useState<RevisionComposeMode>("replace");
+  const [history, setHistory] = useState<readonly RevisionVersionSeen[]>(() =>
+    recordRevisionVersion([], props.pending),
+  );
+  // Provenance of text copied into the draft from the protected read (current or earlier versions).
+  const [imported, setImported] = useState<ImportedDraft | undefined>(undefined);
+  const [sourceScope, setSourceScope] = useState(scope);
+  const [revoked, setRevoked] = useState(0);
+  const intent = useRef<{ command: string; key: string } | undefined>(undefined);
+  // History and copied text are protected content like the read they came from. When that read
+  // stops supplying content (denied, unavailable) or the connection/target changes, both go in
+  // this same render, before anything commits, and the retry intent that may carry them with it.
+  const authorized = Boolean(props.pending?.payload) && sourceScope === scope;
+  if (!authorized) {
+    if (history.length) setHistory([]);
+    if (imported) {
+      setText((draft) => draftAfterSourceLoss(draft, imported));
+      setImported(undefined);
+      setRevoked((count) => count + 1);
+      intent.current = undefined;
+    }
+    if (sourceScope !== scope) setSourceScope(scope);
+  } else {
+    const next = recordRevisionVersion(history, props.pending);
+    if (next !== history) setHistory(next);
+  }
+  useEffect(() => {
+    if (!revoked) return;
+    setOutcome("Copied correction text was removed because it is no longer available. Your own text is kept.");
+    props.announce("Copied correction text removed. Your own text is kept.");
+  }, [revoked]);
   const [reviewedVersion, setReviewedVersion] = useState(
     props.pending?.expectedRevision ?? props.boundary.target.expectedRevision,
   );
-  const intent = useRef<{ command: string; key: string } | undefined>(undefined);
   const activeScope = useRef(scope);
   activeScope.current = scope;
   const mounted = useRef(true);
@@ -48,6 +96,25 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
   useUpdateDraft(Boolean(text));
   const writable = useWritability();
   const version = props.pending?.expectedRevision ?? props.boundary.target.expectedRevision;
+  const kind = props.boundary.capability.payload.kind;
+  const pendingPayload = props.pending?.payload;
+  const modes = composeModes(kind, pendingPayload);
+  const mode = modes.includes(chosenMode) ? chosenMode : modes[0]!;
+  // The one payload the next agent receives: composed from the pending correction on screen now,
+  // which is the version the submit is checked against (expectedRevision), never an older copy.
+  const composed = props.pending ? composeRevisionText(pendingPayload, text, mode) : text;
+  const result = useMemo((): { payload?: RevisionPayload; error?: string } => {
+    if (!text.trim()) return {};
+    try {
+      return { payload: revisionDraftPayload(composed, kind, props.boundary.capability.payload.maxBytes) };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, [composed, kind, text, props.boundary.capability.payload.maxBytes]);
+  const currentKey = props.pending
+    ? JSON.stringify([props.pending.target.revisionId, props.pending.expectedRevision])
+    : undefined;
+  const earlier = authorized ? history.filter((entry) => entry.key !== currentKey) : [];
   const moved = scope !== draftScope;
   const reason = !writable.can
     ? writable.reason
@@ -68,11 +135,7 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
     if (reason) return;
     let payload;
     try {
-      payload = revisionDraftPayload(
-        text,
-        props.boundary.capability.payload.kind,
-        props.boundary.capability.payload.maxBytes,
-      );
+      payload = revisionDraftPayload(composed, kind, props.boundary.capability.payload.maxBytes);
     } catch (error) {
       setOutcome((error as Error).message);
       return;
@@ -92,6 +155,7 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
       props.onReceipt(result);
       if (result.state === "resolved") {
         setText("");
+        setImported(undefined);
         intent.current = undefined;
         setOutcome(
           `${REVISION_LABELS[result.result.state]} correction. It applies only to the displayed destination and attempt.`,
@@ -128,22 +192,54 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
         {props.pending && (
           <>
             <Text style="caption">{REVISION_LABELS[props.pending.state]}</Text>
-            <Text style="caption">Current correction</Text>
-            {/* Values are machine text, so their indented JSON is in a well (rule 8); a person's
-                text, and the sentence said when there is none, stay sans. */}
-            {props.pending.payload?.kind === "values" ? (
-              <Well>{JSON.stringify(props.pending.payload.values, null, 2)}</Well>
-            ) : (
-              <pre className={textClass("body")} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                {props.pending.payload?.kind === "text"
-                  ? props.pending.payload.text
-                  : "Correction content is unavailable."}
-              </pre>
-            )}
+            {/* Named, so the current correction is told apart from the compose preview below it,
+                which shows text the same way. Values are machine text, so their indented JSON
+                is in a well (rule 8); a person's text, and the sentence said when there is none,
+                stay sans. */}
+            <div role="group" aria-labelledby={currentLabelId}>
+              <Text style="caption" id={currentLabelId}>
+                Current correction
+              </Text>
+              {props.pending.payload?.kind === "values" ? (
+                <Well>{JSON.stringify(props.pending.payload.values, null, 2)}</Well>
+              ) : (
+                <pre className={textClass("body")} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                  {props.pending.payload?.kind === "text"
+                    ? props.pending.payload.text
+                    : "Correction content is unavailable."}
+                </pre>
+              )}
+            </div>
             {props.pending.unavailableReason && (
               <Text style="caption">{REVISION_REASONS[props.pending.unavailableReason]}</Text>
             )}
           </>
+        )}
+        {props.pending && pendingPayload && !moved && (
+          <ComposeControls
+            modes={modes}
+            mode={mode}
+            disabled={busy}
+            onMode={(next) => {
+              setMode(next);
+              props.announce(
+                next === "append"
+                  ? "Your draft will be added after the pending correction."
+                  : "Your draft will replace the pending correction.",
+              );
+            }}
+            onCopyCurrent={() => {
+              if (kind === "values" && text.trim()) return;
+              const next = addToDraft(text, revisionPayloadText(pendingPayload));
+              setImported(recordImport(imported, text, next));
+              setText(next);
+              setMode("replace");
+              props.announce("Current correction copied into the draft. Submitting replaces the pending correction.");
+            }}
+            copyDisabledReason={
+              kind === "values" && text.trim() ? "Clear the draft to start from the current values." : undefined
+            }
+          />
         )}
         <label className="orca-attn__free">
           <Text style="caption">
@@ -154,16 +250,30 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
             aria-label="Correction"
             value={text}
             readOnly={busy}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => {
+              const next = event.target.value;
+              setText(next);
+              // Emptying the draft empties what was copied into it. Any other edit after a copy
+              // leaves the mix ambiguous, so losing the source clears it (draftAfterSourceLoss).
+              if (!next.trim()) setImported(undefined);
+            }}
           />
         </label>
+        {result.error && <Text style="caption">{result.error}</Text>}
+        {result.payload && props.pending && !moved && (
+          <ComposedPreview payload={result.payload} pending={pendingPayload} mode={mode} />
+        )}
         <Button
           tone="primary"
-          disabled={reason !== undefined || !text.trim()}
-          disabledReason={reason ?? "Enter a correction first."}
+          disabled={reason !== undefined || !text.trim() || result.error !== undefined}
+          disabledReason={reason ?? result.error ?? "Enter a correction first."}
           onClick={() => void submit()}
         >
-          {props.pending ? "Replace pending correction" : "Request changes"}
+          {!props.pending
+            ? "Request changes"
+            : mode === "append"
+              ? "Add to pending correction"
+              : "Replace pending correction"}
         </Button>
         {!moved && (stale || reviewedVersion !== version) && (
           <Button
@@ -182,6 +292,7 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
             disabledReason="Wait for the outstanding correction request."
             onClick={() => {
               setText("");
+              setImported(undefined);
               setDraftScope(scope);
               setStale(false);
               setReviewedVersion(version);
@@ -193,7 +304,160 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
           </Button>
         )}
         {outcome && <Text style="caption">{outcome}</Text>}
+        {earlier.length > 0 && !moved && (
+          <EarlierVersions
+            versions={earlier}
+            disabled={busy}
+            draftEmpty={!text.trim()}
+            onUse={(entry) => {
+              if (entry.payload.kind === "values" && text.trim()) return;
+              const next = addToDraft(text, revisionPayloadText(entry.payload));
+              setImported(recordImport(imported, text, next));
+              setText(next);
+              props.announce("Earlier correction added to the draft. Nothing is sent until you submit.");
+            }}
+          />
+        )}
       </div>
     </Card>
+  );
+}
+
+const MODE_LABELS: Record<RevisionComposeMode, string> = {
+  append: "Add after pending",
+  replace: "Replace pending",
+};
+
+/** Two explicit ways the draft meets the pending correction. Neither sends anything. */
+function ComposeControls(props: {
+  modes: readonly RevisionComposeMode[];
+  mode: RevisionComposeMode;
+  disabled: boolean;
+  onMode: (mode: RevisionComposeMode) => void;
+  onCopyCurrent: () => void;
+  copyDisabledReason: string | undefined;
+}): JSX.Element {
+  return (
+    <div className="orca-attn__compose">
+      {props.modes.length > 1 && (
+        <div className="orca-seg" role="group" aria-label="How the draft meets the pending correction">
+          {props.modes.map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={`orca-seg__btn ${textClass("label")}`}
+              aria-pressed={option === props.mode}
+              disabled={props.disabled}
+              onClick={() => props.onMode(option)}
+            >
+              {MODE_LABELS[option]}
+            </button>
+          ))}
+        </div>
+      )}
+      <Button
+        size="sm"
+        disabled={props.disabled || props.copyDisabledReason !== undefined}
+        disabledReason={props.copyDisabledReason ?? "This correction is still with the daemon."}
+        onClick={props.onCopyCurrent}
+      >
+        Edit a copy of the current correction
+      </Button>
+    </div>
+  );
+}
+
+/** The whole payload the next agent receives, and what changes from the pending one. */
+function ComposedPreview(props: {
+  payload: RevisionPayload;
+  pending: RevisionPayload | undefined;
+  mode: RevisionComposeMode;
+}): JSX.Element {
+  const after = revisionPayloadText(props.payload);
+  const diff = useMemo(
+    () => (props.pending ? diffText(revisionPayloadText(props.pending), after) : undefined),
+    [props.pending, after],
+  );
+  return (
+    <section className="orca-attn__compose-preview" aria-label="What the agent will receive">
+      <Text style="caption">
+        {props.mode === "append"
+          ? "The agent will receive the pending correction with your draft after it:"
+          : "The agent will receive only this, in place of the pending correction:"}
+      </Text>
+      {props.payload.kind === "values" ? (
+        <Well>{after}</Well>
+      ) : (
+        <pre className={textClass("body")} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+          {after}
+        </pre>
+      )}
+      {diff && (
+        <div role="group" aria-label="Changes from the pending correction" className={textClass("mono-body")}>
+          <Text style="caption">
+            Changes from the pending correction: {unit(diff.added, "added")}, {unit(diff.removed, "removed")}
+          </Text>
+          {diff.lines.map((line, index) => (
+            <DiffRow key={`${line.op}-${index}`} line={line} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DiffRow({ line }: { line: DiffLine }): JSX.Element {
+  const modifier = line.op === "add" ? " orca-diff__line--add" : line.op === "del" ? " orca-diff__line--del" : "";
+  return (
+    <span className={`orca-diff__line orca-attn__diff-line${modifier}`}>
+      <span className="orca-attn__diff-gutter" aria-hidden="true">
+        {gutterFor(line.op)}
+      </span>
+      {line.op !== "same" && (
+        <span className="orca-visually-hidden">{line.op === "add" ? "Added: " : "Removed: "}</span>
+      )}
+      {line.text}
+    </span>
+  );
+}
+
+/** Versions this window has read. Copying one into the draft never resubmits it or edits history. */
+function EarlierVersions(props: {
+  versions: readonly RevisionVersionSeen[];
+  disabled: boolean;
+  draftEmpty: boolean;
+  onUse: (entry: RevisionVersionSeen) => void;
+}): JSX.Element {
+  return (
+    <section aria-label="Earlier corrections" className="orca-attn__compose-history">
+      <Text style="caption">Earlier corrections read in this window (not stored)</Text>
+      <ul className="orca-attn__compose-list">
+        {props.versions.map((entry) => {
+          const blocked = entry.payload.kind === "values" && !props.draftEmpty;
+          return (
+            <li key={entry.key}>
+              <Text style="caption">Read as {REVISION_LABELS[entry.state].toLowerCase()}</Text>
+              {entry.payload.kind === "values" ? (
+                <Well>{revisionPayloadText(entry.payload)}</Well>
+              ) : (
+                <pre className={textClass("body")} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                  {entry.payload.text}
+                </pre>
+              )}
+              <Button
+                size="sm"
+                disabled={props.disabled || blocked}
+                disabledReason={
+                  blocked ? "Clear the draft to start from these values." : "This correction is still with the daemon."
+                }
+                onClick={() => props.onUse(entry)}
+              >
+                {entry.payload.kind === "values" ? "Use as draft" : "Add to draft"}
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }

@@ -1,13 +1,16 @@
 /** Host construction from config (`local` / `ssh`) and the registry the engine looks agents up in. */
 import {
   describeError,
+  EMPTY_CAPABILITIES,
   OrcaError,
   systemClock,
   type AgentSelector,
   type AgentSpec,
+  type CapabilitiesConfig,
   type Clock,
   type HostSpec,
   type RunOverrides,
+  type SecretsConfig,
 } from "@orca/core";
 import type { AgentHost } from "../host.js";
 import { LocalHost } from "./local-host.js";
@@ -218,6 +221,12 @@ export class AgentRegistry {
   private readonly roleOverrides = new Map<string, string>();
   /** True on a `withOverrides` view: it shares the parent's maps, so it must not write to them. */
   private readonly readOnly: boolean = false;
+  /** The `capabilities` catalog and workspace scope (#335) agents select from. */
+  private catalog: CapabilitiesConfig = EMPTY_CAPABILITIES;
+  /** Where relative skill paths resolve: the config file's directory. */
+  private catalogBaseDir: string | undefined;
+  /** Where each secret reference is read, and on which host (#336). */
+  private secretsCatalog: SecretsConfig = {};
 
   constructor(clock: Clock = systemClock) {
     this.health = new AgentHealthTracker(clock);
@@ -236,6 +245,25 @@ export class AgentRegistry {
     this.writable("add an agent");
     this.agents.set(spec.id, spec);
     return this;
+  }
+  /** Install the capability catalog (#335). `baseDir` anchors relative skill paths. */
+  setCapabilities(catalog: CapabilitiesConfig | undefined, baseDir?: string): this {
+    this.writable("set capabilities");
+    this.catalog = catalog ?? EMPTY_CAPABILITIES;
+    this.catalogBaseDir = baseDir;
+    return this;
+  }
+  /** Install the secret reference catalog (#336). Metadata only: never a value. */
+  setSecrets(secrets: SecretsConfig | undefined): this {
+    this.writable("set secrets");
+    this.secretsCatalog = secrets ?? {};
+    return this;
+  }
+  secrets(): SecretsConfig {
+    return this.secretsCatalog;
+  }
+  capabilities(): { catalog: CapabilitiesConfig; baseDir: string | undefined } {
+    return { catalog: this.catalog, baseDir: this.catalogBaseDir };
   }
   mapRole(role: string, agentId: string): this {
     this.writable("map a role");
@@ -258,6 +286,9 @@ export class AgentRegistry {
       agents: this.agents,
       roles: this.roles,
       health: this.health,
+      catalog: this.catalog,
+      catalogBaseDir: this.catalogBaseDir,
+      secretsCatalog: this.secretsCatalog,
       roleOverrides: new Map([...this.roleOverrides, ...Object.entries(roles)]),
       readOnly: true,
     });
@@ -278,10 +309,18 @@ export class AgentRegistry {
         throw new OrcaError("AGENT_NOT_FOUND", `agent '${id}' not configured`, { known: [...this.agents.keys()] });
   }
   static fromConfig(
-    cfg: { hosts: HostSpec[]; agents: AgentSpec[]; roles: Record<string, string> },
-    opts: { clock?: Clock } = {},
+    cfg: {
+      hosts: HostSpec[];
+      agents: AgentSpec[];
+      roles: Record<string, string>;
+      capabilities?: CapabilitiesConfig | undefined;
+      secrets?: SecretsConfig | undefined;
+    },
+    opts: { clock?: Clock; configDir?: string | undefined } = {},
   ): AgentRegistry {
     const r = new AgentRegistry(opts.clock);
+    r.setCapabilities(cfg.capabilities, opts.configDir);
+    r.setSecrets(cfg.secrets);
     for (const h of cfg.hosts) r.addHost(createHost(h));
     for (const a of cfg.agents) r.addAgent(a);
     for (const [role, id] of Object.entries(cfg.roles)) r.mapRole(role, id);

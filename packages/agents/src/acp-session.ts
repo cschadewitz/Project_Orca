@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import * as acp from "@agentclientprotocol/sdk";
 import {
   describeError,
+  literalEnv,
   newId,
   OrcaError,
   silentLogger,
@@ -20,8 +21,17 @@ import {
   type AgentSpec,
   type Clock,
   type Logger,
+  type SecretsConfig,
   type SessionConfigOption,
 } from "@orca/core";
+import {
+  checkSecretUse,
+  fillMcpSecrets,
+  planSessionSecrets,
+  redactError,
+  redactingLogger,
+  type AuthorizeSecretUse,
+} from "./secrets.js";
 import { processCleanup } from "./process-cleanup.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
@@ -33,6 +43,7 @@ import {
 } from "./permissions.js";
 import {
   summarizeUpdate,
+  withStartupTermination,
   type AgentSession,
   type PromptOptions,
   type SessionUpdateEvent,
@@ -40,6 +51,19 @@ import {
 } from "./session.js";
 
 export interface OpenSessionOptions {
+  /**
+   * Where each `{ secret: <id> }` in the agent's env, or its MCP servers' env, is read (#336).
+   * Every reference is resolved on `host` before the agent is spawned; a missing, unreadable
+   * or other-host reference fails the open with nothing started.
+   */
+  secrets?: SecretsConfig | undefined;
+  /**
+   * The use check for this session's secret references (#336), asked at every open before
+   * anything is read. Without one, a session whose agent uses a reference is refused.
+   */
+  authorizeSecretUse?: AuthorizeSecretUse | undefined;
+  /** Handed every resolved secret value, before anything else happens, so the caller can redact it. */
+  onSecretValues?: (values: readonly string[]) => void;
   host: AgentHost;
   agent: AgentSpec;
   cwd: string;
@@ -128,7 +152,34 @@ function withinRoots(path: string, roots: string[]): boolean {
 
 export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSession> {
   if (opts.requireContextRecovery && !opts.resumeSessionId?.trim()) throw contextRecoveryFailure("missing-session-id");
-  const logger = (opts.logger ?? silentLogger).child({ agent: opts.agent.id, host: opts.host.id });
+  // Secret references (#336) are checked before anything starts; the host reads them as part
+  // of starting the agent. From then on every error this session throws, the handshake's
+  // and each later call's, has the values redacted, stderr tails included, so a caller can
+  // return or write it as it is.
+  const secretPlan = planSessionSecrets(opts.host, opts.agent, opts.secrets);
+  await checkSecretUse(secretPlan, opts.host, opts.agent.id, opts.authorizeSecretUse);
+  const values: string[] = [];
+  const redacted = <T>(work: () => Promise<T>) =>
+    work().catch((error: unknown) => {
+      throw redactError(error, values);
+    });
+  const session = await redacted(() => openPlanned(opts, secretPlan, values));
+  for (const method of ["prompt", "setConfigOption", "cancel", "close"] as const) {
+    const original = session[method].bind(session) as (...args: unknown[]) => Promise<unknown>;
+    (session as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => redacted(() => original(...args));
+  }
+  return session;
+}
+
+async function openPlanned(
+  opts: OpenSessionOptions,
+  secretPlan: ReturnType<typeof planSessionSecrets>,
+  values: string[],
+): Promise<AgentSession> {
+  const logger = redactingLogger(
+    (opts.logger ?? silentLogger).child({ agent: opts.agent.id, host: opts.host.id }),
+    () => values,
+  );
   const clock = opts.clock ?? systemClock;
   const roots = [opts.cwd, ...(opts.additionalDirectories ?? [])];
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
@@ -189,10 +240,16 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     throw acp.RequestError.invalidParams({ path, reason: "protected: ORCA's own files are not open to agents" });
   };
 
-  const proc: AgentProcessHandle = await opts.host.spawnAgent(opts.agent, {
+  const proc: AgentProcessHandle = await opts.host.spawnAgent(secretPlan.agent, {
     cwd: opts.cwd,
     ...(opts.env ? { env: opts.env } : {}),
+    ...(secretPlan.deliveries.length ? { secrets: secretPlan.deliveries } : {}),
+    ...(secretPlan.withheldEnv.length ? { withheldEnv: secretPlan.withheldEnv } : {}),
   });
+  const secretValues = proc.secretValues ?? new Map<string, string>();
+  values.push(...secretValues.values());
+  if (values.length) opts.onSecretValues?.([...values]);
+  const mcpServers = fillMcpSecrets(secretPlan, secretValues);
 
   const app = acp
     .client({ name: ORCA_CLIENT_INFO.name })
@@ -286,8 +343,17 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   const conn = app.connect(proc.stream);
   const closed = conn.closed.then(() => undefined);
   void closed.then(() => activeTurn?.abort.abort("agent connection closed"));
-  void proc.exited.then(() => activeTurn?.abort.abort("agent process exited"));
+  // A handle whose exit cannot be observed rejects; that ends no turn, and must not surface as
+  // an unhandled rejection either.
+  void proc.exited.then(
+    () => activeTurn?.abort.abort("agent process exited"),
+    () => undefined,
+  );
   const cleanupProcess = processCleanup(proc, opts.exitGraceMs);
+  // Settles when the owned process's exit is observed. A rejection means the exit cannot be
+  // observed at all, which is not evidence it is gone, so it stays a rejection for callers.
+  const terminated: Promise<void> = proc.exited.then(() => undefined);
+  void terminated.catch(() => undefined);
   /** Startup failure, close and cancellation all share one bounded cleanup. */
   let terminating: Promise<void> | undefined;
   const terminate = (reason?: unknown): Promise<void> => {
@@ -353,11 +419,12 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     logger.debug("initialized", { protocolVersion: init.protocolVersion, agentInfo: init.agentInfo });
     const newSession: acp.NewSessionRequest = {
       cwd: opts.cwd,
-      mcpServers: opts.agent.mcpServers.map((m) => ({
+      mcpServers: mcpServers.map((m) => ({
         name: m.name,
         command: m.command,
         args: m.args,
-        env: Object.entries(m.env).map(([name, value]) => ({ name, value })),
+        // Every reference was resolved above, so only literal values remain.
+        env: Object.entries(literalEnv(m.env)).map(([name, value]) => ({ name, value })),
       })),
     };
     if (opts.additionalDirectories) newSession.additionalDirectories = opts.additionalDirectories;
@@ -410,18 +477,22 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     try {
       await terminate(e);
     } catch (cleanupError) {
-      // Keep the handshake as the primary failure and retain it as the cause.
-      throw new OrcaError(
-        failure.code,
-        failure.message,
-        {
-          ...failure.details,
-          cleanup: describeError(cleanupError),
-        },
-        { cause: failure },
+      // Keep the handshake as the primary failure and retain it as the cause. The process may
+      // still be alive: carry its exit so a caller counting live processes can wait for it.
+      throw withStartupTermination(
+        new OrcaError(
+          failure.code,
+          failure.message,
+          {
+            ...failure.details,
+            cleanup: describeError(cleanupError),
+          },
+          { cause: failure },
+        ),
+        proc.exited,
       );
     }
-    throw failure;
+    throw withStartupTermination(failure, proc.exited);
   }
 
   const cancelGraceMs = opts.cancelGraceMs ?? opts.agent.cancelGraceMs;
@@ -473,6 +544,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     cwd: opts.cwd,
     acpSessionId,
     closed,
+    terminated,
 
     async prompt(input, options: PromptOptions = {}): Promise<TurnResult> {
       if (activeTurn) throw new OrcaError("RUN_STATE", "a prompt turn is already active on this session");

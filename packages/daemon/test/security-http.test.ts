@@ -175,11 +175,20 @@ describe("operation authorization", () => {
     expect(alice.methods).not.toContain("config.get");
     expect(alice.capabilities).toEqual(["runs.read", "runs.subscribe", "runs.control"]);
     expect(alice.storeDir).toBeUndefined();
+    // Where the server's updater is (#879) is the operator's, like the store's path.
+    expect(alice.deployment).toBeUndefined();
     const viewer = (await h.rpc(h.tokens.viewer, "hello", hello)).body.result as Record<string, unknown>;
     expect(viewer.capabilities).toEqual(["runs.read", "runs.subscribe"]);
     expect(viewer.methods).not.toContain("runs.cancel");
     const owner = (await h.rpc(h.tokens.owner, "hello", hello)).body.result as Record<string, unknown>;
     expect(owner.storeDir).toBe("/srv/store");
+    expect(owner.deployment).toEqual({
+      kind: "managed",
+      adapter: "/opt/orca/orca-release.py",
+      manifest: "/etc/orca/deployment.json",
+      ring: "preview",
+    });
+    expect(viewer.deployment).toBeUndefined();
   });
 });
 
@@ -197,6 +206,28 @@ describe("resource isolation", () => {
     const page = await h.rpc(h.tokens.alice, "runs.list", { offset: 1 });
     expect((page.body.result as { runs: unknown[]; total: number }).runs).toEqual([]);
     expect((page.body.result as { total: number }).total).toBe(1);
+  });
+
+  it("reads operations facts only for the rows a scoped caller is shown", async () => {
+    const events = h.stores.events;
+    const readRange = events.readRange.bind(events);
+    const tails: string[] = [];
+    events.readRange = async (runId, range) => {
+      if (range?.before === Number.MAX_SAFE_INTEGER) tails.push(runId);
+      return readRange(runId, range);
+    };
+    try {
+      const alice = await h.rpc(h.tokens.alice, "runs.list", { operations: true });
+      const rows = (alice.body.result as { runs: { id: string; operations?: { lastSeq: number } }[] }).runs;
+      expect(rows.map((r) => r.id)).toEqual([h.runs.alice]);
+      expect(rows[0]!.operations?.lastSeq).toEqual(expect.any(Number));
+      expect(tails).toEqual([h.runs.alice]);
+      // `runIds` never widens what a scoped caller sees.
+      const asked = await h.rpc(h.tokens.alice, "runs.list", { runIds: [h.runs.bob, h.runs.alice] });
+      expect(ids(asked)).toEqual([h.runs.alice]);
+    } finally {
+      events.readRange = readRange;
+    }
   });
 
   it("answers another principal's run exactly as it answers a run that does not exist", async () => {

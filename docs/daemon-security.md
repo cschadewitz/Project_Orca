@@ -56,7 +56,7 @@ Only `issue` and `rotate` print a token, once; nothing else ever shows one.
 
 | Step      | Command                                                                                                                                  |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Provision | `orca auth issue <principal> [--preset client] [--workflow-scope <id>]... [--runs-scope owned\|all] [--expires-at <ISO>] [--label <text>]` |
+| Provision | `orca auth issue <principal> [--preset client] [--workflow-scope <id>]... [--runs-scope owned\|all] [--secret <id>@<host>\|'*']... [--expires-at <ISO>] [--label <text>]` |
 | Inspect   | `orca auth list`: id, principal, `active`/`expired`/`revoked`, scope and expiry                                                          |
 | Rotate    | `orca auth rotate <id> [--expires-at <ISO>]`: keeps the current expiry unless given. The bootstrap credential rotates only by restarting `orca serve`. |
 | Revoke    | `orca auth revoke <id>`                                                                                                                  |
@@ -121,7 +121,10 @@ directory.
 
 ## Principals, permissions and scopes
 
-A credential holds a list of these permissions:
+A credential holds a list of these permissions, and optionally a `secrets` grant: `"*"` or
+a list of `{ secret, provider, host, binding }` entries naming the secret references its principal's runs may use
+(see [secret-use-authority.md](secret-use-authority.md)). `--secret` writes it and adds
+`secrets.use`; `rotate` keeps it.
 
 | Permission           | Grants                                                                     |
 | -------------------- | -------------------------------------------------------------------------- |
@@ -140,6 +143,8 @@ A credential holds a list of these permissions:
 | `config.read`        | `config.get`, which returns the configuration **unredacted**; `config.changed`. |
 | `config.write`       | `config.set` (also requires `config.read`), `config.apply`.                                 |
 | `daemon.maintenance` | The update coordinator's admission control.                                |
+| `secrets.use`        | The principal's runs may receive values for the references its `secrets` grant names (#336). |
+| `secrets.read`       | Secret reference metadata (`secrets.list`, `secrets.check`), never a value. Workspace-wide. |
 
 `config.read` authorizes legacy unredacted editor bytes. Every `config.set` form,
 including empty patch/structured edits and `validateOnly`, returns those bytes and
@@ -169,7 +174,7 @@ A **resource scope** limits which resources those permissions apply to:
 
 A scope that is anything other than `{ workflows: "*", runs: "all" }` is **restricted**. A
 restricted principal can never hold the workspace-wide permissions (`permissions.grant`,
-`plan.*`, `agents.*`, `config.*`, `daemon.maintenance`). Each of them would reveal or change
+`plan.*`, `agents.*`, `config.*`, `daemon.maintenance`, `secrets.read`). Each of them would reveal or change
 something the scope hides: the plan links runs across owners, agent health names claimed
 work, and the configuration lists everything. `issue` rejects such a credential, and the
 permission check rejects it again at call time.
@@ -178,7 +183,7 @@ Presets are expanded into the record at issue time:
 
 | Preset     | Permissions                                                                 | Scope                    |
 | ---------- | --------------------------------------------------------------------------- | ------------------------ |
-| `owner`    | All existing operator grants; excludes explicit opt-in host telemetry. | Unrestricted.            |
+| `owner`    | All existing operator grants; excludes explicit opt-in host telemetry. Grants every secret reference (`secrets: "*"`). | Unrestricted.            |
 | `operator` | Existing operator grants except `config.*`, `permissions.grant` and `daemon.maintenance`; excludes `host.telemetry.read`. | Unrestricted.            |
 | `viewer`   | `runs.read`, `artifacts.read`, `workflows.read`, `plan.read`, `agents.read`. | Unrestricted.            |
 | `client`   | `runs.read`, `artifacts.read`, `workflows.read`, `runs.start`, `runs.control`, `inputs.answer`. | `{ workflows: "*", runs: "owned" }`; narrow `workflows` at issue time. |
@@ -219,6 +224,8 @@ that the two match. A method that is missing from the table is refused with
 | `runs.list` | `runs.read` | filtered to visible runs; `total` and paging recomputed | — |
 | `runs.get` | `runs.read` | the run | — |
 | `runs.events` | `runs.read` | the run | — |
+| `runs.recovery` | `runs.read` | the run; read-only, a run started by another principal is shown as not theirs to recover; without `artifacts.read` no artifact is read or named | — |
+| `search` | `runs.read` | a run-restricted caller must name one run, which is authorized before the scan (no `runId` is `AUTH_FORBIDDEN`), and a named run it cannot see answers empty; artifact hits and artifact events need `artifacts.read` | — |
 | `inputs.revise` | `inputs.answer` | also requires `runs.control`; exact durable run, input and declared destination | decision |
 | `inputs.replaceRevision` | `inputs.answer` | also requires `runs.control`; exact undelivered destination/attempt and CAS | mutation |
 | `inputs.revisionPending` | `runs.read` | exact run; protected payload also requires `inputs.answer` and `runs.control` | — |
@@ -235,6 +242,8 @@ that the two match. A method that is missing from the table is refused with
 | `requests.admissions` | `plan.write` | plus `runs.start`; own admissions in this workspace | — |
 | `runs.start` | `runs.start` | the workflow; the new run is attributed to the caller | mutation |
 | `runs.admit` | `runs.start` | the workflow and authorized associations; prompt durable receipt | mutation |
+| `admissions.find` | `runs.start` | own direct admission by idempotency key; never claims the key | — |
+| `admissions.fence` | `runs.start` | the workflow; claims an unused key so no later admission under it admits a run | mutation |
 | `admissions.get` | `runs.start` | own operation, original grants and resources; Request also needs `plan.write` | — |
 | `admissions.reconcile` | `runs.start` | own operation, original grants/resources; attachment requires current execution authority | mutation |
 | `runs.resume` | `runs.control` | the run | mutation |
@@ -242,6 +251,8 @@ that the two match. A method that is missing from the table is refused with
 | `continuations.get` | `runs.read` | the sealed receipt's run; a locator or CAS token is not authority | — |
 | `continuations.reconcile` | `runs.control` | original principal and run; original decision also requires `inputs.answer`, execution authority is rechecked separately | mutation |
 | `runs.cancel` | `runs.control` | the run | mutation |
+| `runs.reviewEffect` | `runs.control` | the run; one review of an uncertain step attempt | mutation |
+| `runs.recover` | `runs.start` | the source run, plus its workflow and authorized associations as `runs.admit`; only the principal that started it; prompt durable receipt | mutation |
 | `inputs.answer` | `inputs.answer` | the exact open gate and its run; `always` also needs `permissions.grant` | decision |
 | `claims.release` | `claims.release` | the claim's owning run | mutation |
 | `templates.get` | `config.read` | workspace-wide authorized source catalog | — |
@@ -294,6 +305,15 @@ events, which carry artifact data, metadata or references. This applies even to 
 unrestricted run scope, and covers live delivery and replay. Event pages retain their
 scan cursors and `lastSeq`; clients must follow those cursors even when a filtered page
 is empty. Sequence gaps do not contain artifact content.
+
+`search` (#255) scans only what those reads would return to the caller. A caller whose
+scope is limited to some runs searches one run it names, authorized before the scan;
+without a `runId` it is refused, because walking the store and checking runs one by one
+would let hidden runs spend its deadline and change which visible hits it gets and whether
+the answer says it was cut short. Hidden runs are never opened, and a hit is never reported
+from one. The deadline is cooperative: a storage read in flight finishes. Without `artifacts.read` it reads no
+artifact bodies and skips the artifact events listed above. Artifact text is redacted the
+way `artifacts.get` redacts it before it is matched. Identifier fields are not searched.
 
 Lifecycle events remain visible, with `step.started.inputArtifactIds` and
 `step.completed.result.artifactIds` emptied. `journal.list` omits artifact IDs from

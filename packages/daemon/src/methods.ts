@@ -7,7 +7,9 @@ import {
   RunsContinueParamsSchema,
   ContinuationsGetParamsSchema,
   ContinuationsReconcileParamsSchema,
+  type ManagedDeployment,
 } from "@orca/protocol";
+import type { SearchScope } from "./search-model.js";
 import {
   OPERATOR_METHODS,
   OperatorTargetSchema,
@@ -53,8 +55,32 @@ import {
   RequestsAdmissionParamsSchema,
   RequestsAdmissionsParamsSchema,
 } from "@orca/protocol";
-import { RunsAdmitParamsSchema, AdmissionsGetParamsSchema, AdmissionsReconcileParamsSchema } from "@orca/protocol";
-import { checkAdmissionScope, type AdmissionRetryModel, type AdmissionAuthorities } from "./admission-retry.js";
+import {
+  RunsAdmitParamsSchema,
+  AdmissionsFenceParamsSchema,
+  AdmissionsFindParamsSchema,
+  AdmissionsGetParamsSchema,
+  AdmissionsReconcileParamsSchema,
+} from "@orca/protocol";
+import {
+  checkAdmissionScope,
+  newAdmissionFence,
+  type AdmissionRetryModel,
+  type AdmissionAuthorities,
+} from "./admission-retry.js";
+import {
+  eventTypeReadable,
+  RUNS_RECOVER_METHOD,
+  RUNS_RECOVERY_METHOD,
+  RUNS_REVIEW_EFFECT_METHOD,
+  RunsRecoverParamsSchema,
+  RunsRecoveryParamsSchema,
+  RunsReviewEffectParamsSchema,
+  type RunsRecoveryParams,
+  type RunsRecoveryResult,
+  type RunsReviewEffectParams,
+  type RunsReviewEffectResult,
+} from "@orca/protocol";
 import type { RequestSubmissionModel } from "./request-submission.js";
 import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine";
 import type { Maintenance } from "./maintenance.js";
@@ -98,7 +124,6 @@ import {
   JournalListParamsSchema,
   PLANS_LIST_METHOD,
   PLAN_GET_METHOD,
-  PROTOCOL_VERSION,
   PlanGetParamsSchema,
   PlansListParamsSchema,
   RISKS_LIST_METHOD,
@@ -129,9 +154,16 @@ import {
   WORKFLOWS_LIST_METHOD,
   WorkflowsGetParamsSchema,
   WorkflowsListParamsSchema,
-  formatProtocolVersion,
-  isCompatible,
+  PROTOCOL_WINDOW,
+  describeProtocolRefusal,
+  negotiateProtocol,
   type AgentsListParams,
+  type HelloParams,
+  SEARCH_METHOD,
+  SearchParamsSchema,
+  type SearchParams,
+  type SearchResult,
+  type ProtocolWindow,
   type AgentsListResult,
   type AgentsPingParams,
   type AgentsPingResult,
@@ -205,6 +237,18 @@ import { templateMethods } from "./template-methods.js";
 import { workflowDraftMethods } from "./workflow-draft-methods.js";
 
 export interface MethodContext {
+  /**
+   * What an authenticated caller may read, installed by the guard on every invocation:
+   * whether it may walk every run or only one it named and the guard authorized, and whether
+   * it holds `artifacts.read`. Methods that scan across runs (`search`) narrow their scan
+   * with it rather than filtering afterwards.
+   */
+  readScope?: SearchScope;
+  /**
+   * The protocols this daemon answers `hello` in (#880). Absent means this build's own
+   * `PROTOCOL_WINDOW`; a test sets it to stand a daemon one major ahead of its clients.
+   */
+  protocolWindow?: ProtocolWindow;
   /** Guard-owned current workspace authority, rechecked after reads and under the config writer lock. */
   configurationAuthority?: (write: boolean, read?: boolean) => Promise<void>;
   /** Internal authenticated mount; never a collector constructed by the method table. */
@@ -261,6 +305,8 @@ export interface MethodContext {
   maintenance?: Maintenance | undefined;
   processId?: number | undefined;
   storeDir?: string | undefined;
+  /** The managed server updater that launched this daemon (#879), reported in `hello`. */
+  deployment?: ManagedDeployment | undefined;
   capabilities: readonly DaemonCapability[];
   /** The projection the read methods answer from. Without it they refuse; `hello` does not need it. */
   reads?: ReadModel | undefined;
@@ -363,22 +409,30 @@ function agents(ctx: MethodContext): AgentModel {
 }
 
 /** `hello`: check the client's protocol version and describe this daemon. */
-export const hello: Method<{ client: string; protocol: { major: number; minor: number } }, HelloResult> = {
+export const hello: Method<HelloParams, HelloResult> = {
   params: HelloParamsSchema,
   handle(params, ctx) {
-    if (!isCompatible(params.protocol, PROTOCOL_VERSION)) {
-      throw new OrcaError(
-        "NOT_SUPPORTED",
-        `client speaks protocol ${formatProtocolVersion(params.protocol)}, daemon speaks ${formatProtocolVersion(PROTOCOL_VERSION)}`,
-        { client: params.protocol, daemon: PROTOCOL_VERSION },
-      );
+    /* #880: the client's own version first, then the previous major it can fall back to.
+       The daemon answers in the highest protocol both sides share, inside its window. */
+    const window = ctx.protocolWindow ?? PROTOCOL_WINDOW;
+    const offered = params.fallback ? [params.protocol, params.fallback] : [params.protocol];
+    const negotiated = negotiateProtocol(offered, window);
+    if (!negotiated) {
+      throw new OrcaError("NOT_SUPPORTED", describeProtocolRefusal(offered, window), {
+        client: params.protocol,
+        ...(params.fallback ? { fallback: params.fallback } : {}),
+        daemon: window.current,
+        ...(window.previous ? { previous: window.previous } : {}),
+      });
     }
     return {
-      protocol: PROTOCOL_VERSION,
+      protocol: negotiated.protocol,
       orcaVersion: ctx.orcaVersion,
       ...(ctx.processId === undefined ? {} : { processId: ctx.processId }),
       ...(ctx.identity ? { identity: ctx.identity } : {}),
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
+      ...(ctx.deployment ? { deployment: ctx.deployment } : {}),
+      ...(ctx.agents ? { sessionSlots: ctx.agents.sessionSlotsSummary() } : {}),
       capabilities: [
         ...(Object.keys(createOperatorMutationMethods(ctx)) as DaemonCapability[]),
         ...(ctx.hostResourceRead ? ["operator.hostResources" as const] : []),
@@ -442,7 +496,11 @@ export const runsGet: Method<Parameters<ReadModel["runsGet"]>[0], RunsGetResult>
 /** `runs.events`: one page of a run's log, by sequence number, forwards or backwards. */
 export const runsEvents: Method<Parameters<ReadModel["runsEvents"]>[0], RunsEventsResult> = {
   params: RunsEventsParamsSchema,
-  handle: (params, ctx) => reads(ctx).runsEvents(params),
+  handle: async (params, ctx) => {
+    const page = await reads(ctx).runsEvents(params);
+    // Withhold event types newer than the client's event schema; the cursors stay (#357).
+    return { ...page, events: page.events.filter((e) => eventTypeReadable(e.type, params.protocol)) };
+  },
 };
 
 /** `inputs.list`: the gates and permission asks waiting on a person. */
@@ -521,6 +579,16 @@ export const artifactsList: Method<Parameters<ReadModel["artifactsList"]>[0], Ar
 export const artifactsGet: Method<Parameters<ReadModel["artifactsGet"]>[0], ArtifactsGetResult> = {
   params: ArtifactsGetParamsSchema,
   handle: (params, ctx) => reads(ctx).artifactsGet(params),
+};
+
+/**
+ * `search` (#255): event text and text artifacts, newest run first, within a limit and a
+ * deadline. The guard supplies `readScope` for an authenticated caller, so the scan never
+ * opens a run or an artifact that caller could not read.
+ */
+export const search: Method<SearchParams, SearchResult> = {
+  params: SearchParamsSchema,
+  handle: (params, ctx) => reads(ctx).search(params, ctx.readScope),
 };
 
 /** `workflows.list`: every workflow this daemon has registered, as rows. */
@@ -633,6 +701,19 @@ export const runsResume: Method<RunsResumeParams, RunsResumeResult> = {
 export const runsCancel: Method<RunsCancelParams, RunsCancelResult> = {
   params: RunsCancelParamsSchema,
   handle: (params, ctx) => control(ctx).cancelRun(params, ctx.mutationActor),
+};
+
+/** `runs.recovery` (#357): how this run could be recovered. Read-only. */
+export const runsRecovery: Method<RunsRecoveryParams, RunsRecoveryResult> = {
+  params: RunsRecoveryParamsSchema,
+  handle: (params, ctx) =>
+    reads(ctx).runsRecovery(params, ctx.mutationActor?.principalId, ctx.readScope?.artifacts ?? true),
+};
+
+/** `runs.reviewEffect` (#357): an operator's review of a step that may have acted and never finished. */
+export const runsReviewEffect: Method<RunsReviewEffectParams, RunsReviewEffectResult> = {
+  params: RunsReviewEffectParamsSchema,
+  handle: (params, ctx) => control(ctx).reviewEffect(params, ctx.mutationActor),
 };
 
 /** `runs.start`: a workflow and its vars. No request, no work item, no documents - by decision. */
@@ -767,6 +848,8 @@ export const methods: MethodTable = {
   [ARTIFACTS_GET_METHOD]: artifactsGet,
   [WORKFLOWS_LIST_METHOD]: workflowsList,
   [WORKFLOWS_GET_METHOD]: workflowsGet,
+  [SEARCH_METHOD]: search,
+  [RUNS_RECOVERY_METHOD]: runsRecovery,
 };
 
 /**
@@ -808,6 +891,7 @@ export const controlMethods: MethodTable = {
   [RUNS_RESUME_METHOD]: runsResume,
   [RUNS_CANCEL_METHOD]: runsCancel,
   [RUNS_START_METHOD]: runsStart,
+  [RUNS_REVIEW_EFFECT_METHOD]: runsReviewEffect,
   [CLAIMS_RELEASE_METHOD]: claimsRelease,
 };
 
@@ -916,13 +1000,52 @@ export function methodsFor(ctx: MethodContext): MethodTable {
         return model.admit(command, idempotencyKey === undefined ? {} : { idempotencyKey }, await authority.direct());
       },
     };
+    if (model.supportsCheckpoints)
+      table[RUNS_RECOVER_METHOD] = {
+        params: RunsRecoverParamsSchema,
+        handle: async (params, invocation) => {
+          const { idempotencyKey, expectedScope, ...command } = params;
+          const authority = await authorities(invocation);
+          await checkAdmissionScope(expectedScope, authority);
+          const response = await model.recover(
+            command,
+            idempotencyKey === undefined ? {} : { idempotencyKey },
+            authority,
+          );
+          return response.state === "resolved" ? { ...response.result, operationId: response.operationId } : response;
+        },
+      };
     table["admissions.get"] = {
       params: AdmissionsGetParamsSchema,
-      handle: async (params, invocation) => model.inspect(params.operationId, await authorities(invocation)),
+      handle: async (params, invocation) => {
+        const authority = await authorities(invocation);
+        await checkAdmissionScope(params.expectedScope, authority);
+        return model.inspect(params.operationId, authority);
+      },
+    };
+    table["admissions.find"] = {
+      params: AdmissionsFindParamsSchema,
+      handle: async (params, invocation) => {
+        const authority = await authorities(invocation);
+        await checkAdmissionScope(params.expectedScope, authority);
+        return model.find(params.idempotencyKey, authority);
+      },
+    };
+    table["admissions.fence"] = {
+      params: AdmissionsFenceParamsSchema,
+      handle: async (params, invocation) => {
+        const authority = await authorities(invocation);
+        await checkAdmissionScope(params.expectedScope, authority);
+        return model.fence(params.idempotencyKey, params.workflowId, authority);
+      },
     };
     table["admissions.reconcile"] = {
       params: AdmissionsReconcileParamsSchema,
-      handle: async (params, invocation) => model.reconcile(params.operationId, await authorities(invocation)),
+      handle: async (params, invocation) => {
+        const authority = await authorities(invocation);
+        await checkAdmissionScope(params.expectedScope, authority);
+        return model.reconcile(params.operationId, authority, newAdmissionFence(ctx.maintenance), params.kind);
+      },
     };
   }
   if (ctx.continuationAdmissions && ctx.continuationAccess) {

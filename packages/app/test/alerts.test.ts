@@ -10,7 +10,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AlertItem } from "../src/bridge.js";
-import { createAlerts, GATE_DELAY_MS, type AlertNotification, type AlertsPort } from "../src/main/alerts.js";
+import {
+  createAlerts,
+  GATE_DELAY_MS,
+  NOTIFIED_LEDGER_SIZE,
+  type AlertNotification,
+  type AlertsPort,
+} from "../src/main/alerts.js";
 import { DEFAULT_PREFERENCES, type AlertPreferences } from "../src/preferences/schema.js";
 
 const START = Date.UTC(2026, 2, 1, 9, 0, 0);
@@ -260,5 +266,55 @@ describe("close", () => {
     alerts.focusChanged(false);
     expect(r.shown).toEqual([]);
     expect(r.badges).toEqual([1]);
+  });
+});
+
+describe("an item that leaves and comes back (#882)", () => {
+  it("is not notified, nor brought forward, a second time", () => {
+    const r = recorder(true);
+    const alerts = createAlerts(r.port, preferences({ permission: true, failure: true }));
+    const ask = item({ id: "ws:a\u0001in-1", tier: "permission" });
+    const failed = item({ id: "ws:a\u0001run-1", tier: "failure" });
+    alerts.update({ waiting: 1, items: [ask, failed] });
+    expect(r.shown).toHaveLength(2);
+    expect(r.focused).toHaveLength(1);
+    // Its source changes hands: for a moment nobody states it.
+    alerts.update({ waiting: 0, items: [] });
+    vi.advanceTimersByTime(5_000);
+    alerts.update({ waiting: 1, items: [ask, failed] });
+    expect(r.shown).toHaveLength(2);
+    expect(r.focused).toHaveLength(1);
+    // A different ask is still new.
+    alerts.update({ waiting: 2, items: [ask, failed, item({ id: "ws:a\u0001in-2", tier: "permission" })] });
+    expect(r.shown).toHaveLength(3);
+  });
+
+  it("keeps a gate that left inside its delay waiting from when it was asked", () => {
+    const r = recorder();
+    const alerts = createAlerts(r.port, preferences({ gate: true }));
+    const gate = item({ id: "g", tier: "gate" });
+    alerts.update({ waiting: 1, items: [gate] });
+    vi.advanceTimersByTime(30_000);
+    alerts.update({ waiting: 0, items: [] });
+    alerts.update({ waiting: 1, items: [gate] });
+    vi.advanceTimersByTime(GATE_DELAY_MS - 30_000);
+    expect(r.shown.map((n) => n.item.id)).toEqual(["g"]);
+  });
+
+  it("remembers a bounded number of them, oldest forgotten first", () => {
+    const r = recorder();
+    const alerts = createAlerts(r.port, preferences({ permission: true }));
+    const asks = Array.from({ length: NOTIFIED_LEDGER_SIZE + 1 }, (_, i) =>
+      item({ id: `in-${i}`, tier: "permission" }),
+    );
+    for (const ask of asks) {
+      alerts.update({ waiting: 1, items: [ask] });
+      alerts.update({ waiting: 0, items: [] });
+    }
+    const before = r.shown.length;
+    alerts.update({ waiting: 1, items: [asks[asks.length - 1]!] });
+    expect(r.shown.length).toBe(before);
+    alerts.update({ waiting: 1, items: [asks[0]!] });
+    expect(r.shown.length).toBe(before + 1);
   });
 });

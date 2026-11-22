@@ -132,3 +132,48 @@
   background: var(--surface-selected);
   box-shadow: inset var(--stroke-rail) 0 0 0 var(--accent);
 }
+
+/* ---------- recovery (#357) ---------- */
+
+/* A fact of the run's history: where a reused step came from, a review of a step's effect. */
+.orca-step__note {
+  padding: 0 var(--space-3) var(--space-2);
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
+
+.orca-recovery {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.orca-recovery__list,
+.orca-recovery__reasons {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.orca-recovery__reasons {
+  gap: var(--space-1);
+  padding-left: var(--space-3);
+}
+.orca-recovery__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.orca-recovery__row,
+.orca-recovery__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.orca-recovery__report--failed {
+  color: var(--status-failed);
+}

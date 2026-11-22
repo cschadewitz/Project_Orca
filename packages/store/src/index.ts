@@ -14,6 +14,29 @@ export * from "./protected-event-store.js";
 
 export { workspaceIdentity, renewWorkspaceIdentity } from "./workspace-identity.js";
 export * from "./store-format.js";
+export * from "./store-contracts.js";
 
 export * from "./admission-retry-store.js";
 export * from "./continuation-admission-store.js";
+
+export { sqliteStores, sqliteCollection, SQLITE_METADATA_FILE, type SqliteStoresOptions } from "./sqlite/stores.js";
+export {
+  SQLITE_CHECKPOINT,
+  SqliteDatabase,
+  type SqliteCheckpointEvent,
+  type SqliteCheckpointOptions,
+  type SqliteCheckpointResult,
+  type SqliteOptions,
+} from "./sqlite/database.js";
+export { SqliteDocumentStore } from "./sqlite/documents.js";
+export { SqliteEventStore } from "./sqlite/events.js";
+export { SqlitePlanJournal } from "./sqlite/journal.js";
+export { SqliteArtifactStore } from "./sqlite/artifacts.js";
+export {
+  backupSqliteMetadata,
+  importFileMetadata,
+  restoreSqliteMetadata,
+  verifySqliteMetadata,
+  type SqliteImportReport,
+  type SqliteVerifyReport,
+} from "./sqlite/maintenance.js";

@@ -26,12 +26,14 @@ import {
   PRESETS,
   PermissionSchema,
   ResourceScopeSchema,
+  SecretGrantSchema,
   WORKSPACE_PERMISSIONS,
   isUnrestricted,
   type Permission,
   type PresetName,
   type Principal,
   type ResourceScope,
+  type SecretGrant,
 } from "./principal.js";
 
 export const TOKEN_PREFIX = "orca1";
@@ -46,6 +48,8 @@ export const CredentialRecordSchema = z.object({
   secretSha256: z.string().regex(/^[0-9a-f]{64}$/),
   permissions: z.array(PermissionSchema),
   scope: ResourceScopeSchema,
+  /** The secret references this credential's principal may use (#336). Absent: none. */
+  secrets: SecretGrantSchema.optional(),
   createdAt: z.string(),
   expiresAt: z.string().optional(),
   revokedAt: z.string().optional(),
@@ -74,6 +78,8 @@ export interface IssueOptions {
   preset?: PresetName | undefined;
   permissions?: readonly Permission[] | undefined;
   scope?: ResourceScope | undefined;
+  /** The secret references it may use (#336); a preset's grant when not given. */
+  secrets?: SecretGrant | undefined;
   /** An absolute expiry; or `ttlMs` from now. Neither means it lasts until revoked. */
   expiresAt?: Date | undefined;
   ttlMs?: number | undefined;
@@ -138,6 +144,7 @@ export class CredentialStore {
     const preset = opts.preset ? PRESETS[opts.preset] : undefined;
     const permissions = [...new Set(opts.permissions ?? preset?.permissions ?? [])];
     const scope = opts.scope ?? preset?.scope;
+    const secrets = opts.secrets ?? (preset && "secrets" in preset ? preset.secrets : undefined);
     if (!scope) throw new CredentialError("a credential needs a preset or an explicit scope");
     if (permissions.length === 0) throw new CredentialError("a credential needs at least one permission");
     const parsedScope = ResourceScopeSchema.parse(scope);
@@ -159,6 +166,7 @@ export class CredentialStore {
       secretSha256: sha256(secret).toString("hex"),
       permissions: permissions.map((p) => PermissionSchema.parse(p)),
       scope: parsedScope,
+      ...(secrets !== undefined ? { secrets: SecretGrantSchema.parse(secrets) } : {}),
       createdAt: this.now().toISOString(),
       ...(expiresAt ? { expiresAt: expiresAt.toISOString() } : {}),
       ...(opts.bootstrap ? { bootstrap: true as const } : {}),
@@ -193,6 +201,7 @@ export class CredentialStore {
         label: old.label,
         permissions: old.permissions,
         scope: old.scope,
+        secrets: old.secrets,
         expiresAt: opts.expiresAt,
         ttlMs: opts.ttlMs,
         bootstrap: old.bootstrap,
@@ -283,8 +292,22 @@ export class CredentialStore {
         credentialId: record.id,
         permissions: new Set(record.permissions),
         scope: record.scope,
+        ...(record.secrets !== undefined ? { secrets: record.secrets } : {}),
       },
     };
+  }
+
+  /**
+   * Every principal record `principalId` holds right now: its credentials that are neither
+   * revoked nor expired, re-read from the file. Empty when the file cannot be read.
+   */
+  currentForPrincipal(principalId: string): Principal[] {
+    this.reload();
+    if (this.broken) return [];
+    return this.records
+      .filter((r) => r.principal === principalId)
+      .map((r) => this.check(r))
+      .flatMap((c) => (c.ok ? [c.principal] : []));
   }
 
   private reload(strict = false): void {

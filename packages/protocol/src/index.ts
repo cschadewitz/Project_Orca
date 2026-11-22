@@ -16,8 +16,11 @@ export * from "./inputs.js";
 export * from "./claims.js";
 export * from "./subscriptions.js";
 export * from "./artifacts.js";
+export * from "./search.js";
 export * from "./agents.js";
 export * from "./control.js";
+export * from "./recovery.js";
+export * from "./event-support.js";
 export * from "./workflows.js";
 export * from "./config.js";
 export * from "./plan.js";
@@ -46,3 +49,4 @@ export * from "./workflow-drafts.js";
 export * from "./first-run-config.js";
 
 export * from "./scoped-permissions.js";
+export * from "./run-follower.js";

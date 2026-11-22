@@ -11,6 +11,7 @@
       "@orca/agents": ["./packages/agents/src/index.ts"],
       "@orca/engine": ["./packages/engine/src/index.ts"],
       "@orca/testing/child-bundle": ["./packages/testing/src/child-bundle.ts"],
+      "@orca/testing/two-daemons": ["./packages/testing/src/two-daemons.ts"],
       "@orca/testing": ["./packages/testing/src/index.ts"],
       "@orca/integrations/mcp": ["./packages/integrations/src/mcp/index.ts"],
       "@orca/integrations": ["./packages/integrations/src/index.ts"],
@@ -18,6 +19,8 @@
       "@orca/protocol/update-window": ["./packages/protocol/src/update-window.ts"],
       "@orca/protocol/first-run-fence": ["./packages/protocol/src/first-run-fence.ts"],
       "@orca/protocol/update-handoff": ["./packages/protocol/src/update-handoff.ts"],
+      "@orca/protocol/remote-access": ["./packages/protocol/src/remote-access.ts"],
+      "@orca/protocol/server-setup": ["./packages/protocol/src/server-setup.ts"],
       "@orca/protocol": ["./packages/protocol/src/index.ts"],
       "@orca/daemon": ["./packages/daemon/src/index.ts"],
       "@orca/design": ["./packages/design/src/index.ts"]

@@ -98,4 +98,15 @@ it("strips Electron events from onShow and preserves explicit epoch fencing", as
   bridge.daemonConnection!.activate(2);
   await bridge.scopedPermissions!.call("scopedPermissions.cancel", params);
   expect(invoke).toHaveBeenLastCalledWith("orca:scopedPermissions", { method: "scopedPermissions.cancel", params }, 2);
+  // The Machines surface (#882): watching is a main-process choice, never a write to a daemon,
+  // and a pushed snapshot reaches the listener without Electron's event.
+  await bridge.daemonConnection!.fleet!.watch("build-box", true);
+  expect(invoke).toHaveBeenLastCalledWith("orca:fleet.watch", "build-box", true);
+  const machines = vi.fn();
+  const stop = bridge.daemonConnection!.fleet!.subscribe(machines);
+  events.emit("orca:fleet", { sender: "raw Electron event" }, { machines: [] }, 2);
+  expect(machines).toHaveBeenCalledExactlyOnceWith({ machines: [] });
+  stop();
+  events.emit("orca:fleet", {}, { machines: [] }, 2);
+  expect(machines).toHaveBeenCalledOnce();
 });

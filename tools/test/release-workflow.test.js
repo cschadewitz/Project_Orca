@@ -125,23 +125,29 @@ it("never hands a write token to the ref under test (#863)", () => {
   expect(guard.env.DEFAULT).toBe("refs/heads/${{ github.event.repository.default_branch }}");
 
   // A real release runs the released commit's tooling with write, so that commit must be
-  // on the default branch (any commit on it, so a fix-forward release still works).
+  // on the default branch or its version's release line (any commit on them, so a
+  // fix-forward release still works). release-lines.test.js runs the check itself.
   const sha = release.findIndex((s) => s.id === "sha");
   const reviewed = release[sha + 1];
-  expect(reviewed.name).toBe("A real release builds a reviewed commit from the default branch");
+  expect(reviewed.name).toBe("A real release builds a reviewed commit from its lane");
   expect(reviewed.if).toBe("${{ !inputs.dry_run }}");
-  expect(reviewed.run).toContain('git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"');
+  // The lane policy is main's copy, never the released commit's.
+  expect(reviewed.run).toContain('git show "refs/remotes/origin/$DEFAULT_BRANCH:tools/release-lane.js" > "$policy"');
+  expect(reviewed.run).toContain('node "$policy" verify "$SHA" "$version"');
   expect(reviewed.run).toContain('if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]');
   expect(release.findIndex((s) => s.run === "pnpm install --frozen-lockfile")).toBeGreaterThan(sha + 1);
 
-  // Only the two writers get contents write (sign may only dispatch), and every checkout drops its credentials.
+  // Only the two writers get contents write (sign and server-bundle may only dispatch), and
+  // every checkout drops its credentials.
   for (const [name, job] of Object.entries(file.jobs)) {
     if (job.uses) continue;
     const expected = ["publish", "rehearsal"].includes(name)
       ? { contents: "write" }
-      : name === "sign"
+      : ["sign", "server-bundle", "record-line-release"].includes(name)
         ? { actions: "write" }
-        : null;
+        : name === "check"
+          ? { contents: "read", checks: "read" }
+          : null;
     expect(job.permissions ?? null, name).toEqual(expected);
     for (const step of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@")))
       expect(step.with["persist-credentials"], name).toBe(false);
@@ -184,16 +190,21 @@ it("signs a final's commit right after staging its draft, and only a final", () 
   );
 });
 
-it("attaches only a re-verified signed x64 installer, through the re-validating script", () => {
+it("attaches only re-verified signed x64 and arm64 installers, through the re-validating script", () => {
   const text = readFileSync(".github/workflows/release-attach-signed.yml", "utf8");
   const wf = workflow("release-attach-signed.yml");
   expect(text).toContain('workflows: ["Windows signed (spike)"]');
   // Attachment and publication share one queue, so they never interleave; reconcile, which
   // only dispatches, queues on its own.
-  expect(wf.jobs.attach.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  expect(wf.jobs.attach.concurrency).toEqual({
+    group: "release-draft-writes",
+    "cancel-in-progress": false,
+    queue: "max",
+  });
   expect(workflow("release-publish-final.yml").concurrency).toEqual({
     group: "release-draft-writes",
     "cancel-in-progress": false,
+    queue: "max",
   });
   expect(wf.jobs.reconcile.concurrency.group).toBe("release-attach-reconcile");
   expect(wf.permissions).toEqual({ contents: "read" });
@@ -202,12 +213,15 @@ it("attaches only a re-verified signed x64 installer, through the re-validating 
   expect(wf.jobs.attach.if).toContain("github.event.workflow_run.head_branch == 'main'");
   expect(wf.jobs.reconcile.if).toContain("github.event_name == 'schedule' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
   const steps = wf.jobs.attach.steps.map((s) => s.name ?? s.uses);
-  const verify = steps.indexOf("Verify the x64 installer's signature, timestamp and publisher");
+  const verify = steps.indexOf("Verify both installers' signatures, timestamps and publisher");
   const attachStep = steps.findIndex((n) => n?.startsWith("Attach it to the draft by id"));
   expect(verify).toBeGreaterThan(0);
   expect(attachStep).toBeGreaterThan(verify);
-  expect(wf.jobs.attach.steps[attachStep].run).toContain("bash tools/deploy/release-attach.sh attach");
-  expect(wf.jobs.reconcile.steps.at(-1).run).toBe("bash tools/deploy/release-attach.sh reconcile");
+  expect(wf.jobs.attach.steps[verify].run).toContain("foreach ($arch in 'x64', 'arm64')");
+  expect(wf.jobs.attach.steps[attachStep].run).toContain(
+    'bash tools/deploy/release-attach.sh attach "$ID" "$SHA" "$VERSION" "$RUN_ID" "$file" "$arm_file"',
+  );
+  expect(wf.jobs.reconcile.steps.at(-2).run).toBe("bash tools/deploy/release-attach.sh reconcile");
   expect(text).not.toMatch(/draft=false|make_latest|feed-r2/);
   const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
   // The signing run itself is checked before any draft is selected, on every path.
@@ -215,6 +229,7 @@ it("attaches only a re-verified signed x64 installer, through the re-validating 
     'if [[ "$facts" != ".github/workflows/windows-signed.yml $REPO $REPO workflow_dispatch main completed success" ]]; then',
   );
   expect(script).toContain('marker="<!-- orca-signed-run: $run $want -->"');
+  expect(script).toContain('arm_marker="<!-- orca-signed-run-arm64: $run $arm_want -->"');
   // Only `publish` (Release (publish final)) publishes; attach and reconcile never do.
   const attachPart = script.slice(script.indexOf("\n  attach)"), script.indexOf("\n  publish)"));
   expect(attachPart).not.toMatch(/draft=false|make_latest|"draft": *false/);
@@ -242,5 +257,170 @@ it("publishes a final only from main, through the checking script, and hands ove
   expect(job.permissions).toEqual({ contents: "write", actions: "write" });
   expect(job.steps[1].run).toBe('bash tools/deploy/release-attach.sh publish "$ID" "$VERSION" "$SHA" "$DEB" "$EXE"');
   expect(job.steps[1].run).not.toContain("${{");
+  // After the publish read-back: the feed handover, then main's record of a line release.
+  expect(job.steps[1].id).toBe("publish");
   expect(job.steps[2].run).toBe('gh workflow run feed-auto.yml --repo "$GITHUB_REPOSITORY" --ref main');
+  expect(job.steps[3].name).toBe("Record a line release on main");
+  expect(job.steps[3].run).toContain("gh workflow run release-sync-main.yml");
+});
+
+it("never lets the notes handover suppress the feed, or the feed's suppress the notes", () => {
+  const steps = workflow("release-publish-final.yml").jobs.publish.steps;
+  const feed = steps.findIndex((s) => s.run?.includes("feed-auto.yml"));
+  const notes = steps.findIndex((s) => s.run?.includes("release-sync-main.yml"));
+  // A failed step skips every later step that keeps the default success() condition, so the
+  // feed goes first and the notes step runs on the publish's outcome alone.
+  expect(feed).toBeGreaterThan(1);
+  expect(notes).toBe(steps.length - 1);
+  expect(feed).toBeLessThan(notes);
+  expect(steps[feed]["continue-on-error"]).toBeUndefined();
+  expect(steps[notes].if).toBe("${{ !cancelled() && steps.publish.outcome == 'success' }}");
+  for (const s of steps.slice(1, feed)) expect(s.run ?? "").not.toContain("release-sync-main");
+});
+
+it("dispatches the signed server bundle for every real release, never a rehearsal (#876)", () => {
+  const job = workflow("release-publish.yml").jobs["server-bundle"];
+  expect(job.needs).toEqual(["check", "publish"]);
+  expect(job.if).toBe("${{ !inputs.dry_run }}");
+  expect(job.steps.some((step) => step.uses)).toBe(false);
+  expect(job.steps[0].run).toContain(
+    'gh workflow run release-server-bundle.yml --repo "$GITHUB_REPOSITORY" --ref main \\\n  -f version="$VERSION" -f source_sha="$SHA"',
+  );
+});
+
+it("signs the server bundle only from main, in a job that runs none of the release commit (#876)", () => {
+  const file = workflow("release-server-bundle.yml");
+  expect(file.permissions).toEqual({ contents: "read" });
+  expect(Object.keys(file.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
+  const { resolve, build, sign, verify, attach, reconcile } = file.jobs;
+  expect(resolve.if).toBe("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'");
+  expect(reconcile.if).toBe("github.event_name == 'schedule' && github.ref == 'refs/heads/main'");
+
+  // id-token only where nothing from the release commit runs, and nowhere else.
+  for (const [name, job] of Object.entries(file.jobs))
+    expect(job.permissions?.["id-token"] ?? null, name).toBe(name === "sign" ? "write" : null);
+  expect(sign.permissions).toEqual({ contents: "read", "id-token": "write" });
+  expect(sign.steps.some((step) => step.uses?.startsWith("actions/checkout@"))).toBe(false);
+  expect(sign.steps.some((step) => /pnpm|node /.test(step.run ?? ""))).toBe(false);
+  const signing = sign.steps.find((step) => step.name === "Sign").run;
+  expect(signing).toContain('cosign sign-blob --yes --bundle "$manifest.sigstore.json" "$manifest"');
+
+  // The release commit is built with a read-only token; main's tooling does everything else.
+  expect(build.permissions).toEqual({ contents: "read" });
+  expect(build.steps[0].with).toEqual({ ref: "${{ inputs.source_sha }}", "persist-credentials": false });
+  for (const job of [resolve, verify, attach, reconcile])
+    expect(job.steps[0].with).toEqual({ ref: "${{ github.sha }}", "persist-credentials": false });
+
+  // The clean-host check gates the attach, and the attach shares the draft-writes queue: it
+  // rewrites the release notes like every other member, so it must never interleave with one.
+  expect(verify.needs).toEqual(["resolve", "sign"]);
+  expect(attach.needs).toEqual(["resolve", "verify"]);
+  expect(attach.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
+  expect(file.concurrency).toEqual({
+    group: "release-server-bundle-${{ inputs.version || 'reconcile' }}",
+    "cancel-in-progress": false,
+  });
+  const staging = verify.steps.find((step) => step.name === "Stage it with Python 3 alone").run;
+  expect(staging).toContain("python:3.12-slim-bookworm");
+  expect(staging).toContain("stage --bundle");
+  expect(staging).toContain("for tool in gh git mise pnpm node; do");
+});
+
+it("pins the same signer identity in the workflow and the adapter (#876)", () => {
+  const adapter = readFileSync(new URL("../../tools/deploy/orca-release.py", import.meta.url), "utf8");
+  expect(adapter).toContain('BUNDLE_REPOSITORY = "cschadewitz/Project_Orca"');
+  expect(adapter).toContain(
+    'BUNDLE_SIGNER = f"https://github.com/{BUNDLE_REPOSITORY}/.github/workflows/release-server-bundle.yml@refs/heads/main"',
+  );
+  expect(adapter).toContain('BUNDLE_TRIGGER = "workflow_dispatch"');
+  const sign = workflow("release-server-bundle.yml").jobs.sign.steps;
+  expect(sign.find((step) => step.uses?.startsWith("sigstore/cosign-installer@")).with).toEqual({
+    "cosign-release": "v3.1.4",
+  });
+  expect(adapter).toContain('COSIGN_VERSION = "v3.1.4"');
+});
+
+it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unattended (#889)", () => {
+  const text = readFileSync(".github/workflows/release-accept-arm64.yml", "utf8");
+  const wf = workflow("release-accept-arm64.yml");
+  expect(wf.on.workflow_run).toEqual({ workflows: ["Release (attach signed installer)"], types: ["completed"] });
+  expect(wf.permissions).toEqual({ contents: "read" });
+  expect(wf.jobs.select.if).toContain("vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
+  expect(wf.jobs.select.if).toContain("github.event.workflow_run.head_branch == 'main'");
+  expect(wf.jobs.select.if).toContain("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'");
+  // Only the jobs that read drafts and write the record may write; the installer runs read-only.
+  expect(wf.jobs.select.permissions).toEqual({ contents: "write" });
+  expect(wf.jobs.accept.permissions).toBeUndefined();
+  expect(wf.jobs.accept["runs-on"]).toBe("windows-11-arm");
+  expect(wf.jobs.record.permissions).toEqual({ contents: "write" });
+  expect(wf.jobs.record.concurrency).toEqual({
+    group: "release-draft-writes",
+    "cancel-in-progress": false,
+    queue: "max",
+  });
+  expect(wf.jobs.record.needs).toEqual(["select", "accept"]);
+  expect(wf.jobs.record.steps.at(-1).run).toBe(
+    'bash tools/deploy/release-attach.sh accept "$ID" "$SHA" "$VERSION" "$GITHUB_RUN_ID" "$DIGEST"',
+  );
+  const accept = wf.jobs.accept.steps.map((s) => s.run ?? "").join("\n");
+  for (const needle of ["Get-AuthenticodeSignature", "0xAA64", "'/S'", "tools/deploy/windows-launch-check.js"])
+    expect(accept).toContain(needle);
+  // The downloaded bytes are the recorded ones, checked before anything runs them.
+  expect(text).toContain('== "$DIGEST" ]] || { echo "::error::downloaded bytes are not $DIGEST"; exit 1; }');
+  expect(text).not.toMatch(/secrets\.|draft=false|make_latest|feed-r2/);
+  // The baseline is read from the full release list, failing closed; the evidence is kept
+  // before the record that points at it.
+  expect(text).toContain("gh api --paginate \"repos/$REPO/releases\" --jq '.[]' | jq -s . > releases.json");
+  expect(text).toContain('node tools/deploy/feed-arches.js baseline-run "$VERSION" releases.json');
+  expect(text).toContain(
+    'node tools/deploy/feed-arches.js baseline "$VERSION" "$REPO" releases.json baseline-run.json',
+  );
+  expect(text).not.toContain("releases/latest");
+  const record = wf.jobs.record.steps.map((s) => s.name ?? s.uses);
+  expect(record.indexOf("Keep the evidence with this run")).toBeLessThan(
+    record.indexOf("Record it, re-validating the draft first"),
+  );
+  const keep = wf.jobs.record.steps.find((s) => s.name === "Keep the evidence with this run");
+  expect(keep.with).toMatchObject({ name: "arm64-acceptance-evidence", "retention-days": 90, overwrite: true });
+  // The x64-only decision: dispatch only, from main, in the draft-writes queue.
+  expect(wf.jobs["x64-only"].if).toBe(
+    "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.x64_only",
+  );
+  expect(wf.jobs["x64-only"].concurrency).toEqual({
+    group: "release-draft-writes",
+    "cancel-in-progress": false,
+    queue: "max",
+  });
+  expect(wf.jobs["x64-only"].steps.at(-1).run).toContain('bash tools/deploy/release-attach.sh x64-only "$ID" "$sha"');
+  expect(wf.jobs.select.if).toContain("!inputs.x64_only");
+});
+
+it("binds each server bundle run to its version and commit (#876)", () => {
+  const file = workflow("release-server-bundle.yml");
+  expect(file["run-name"]).toBe("Release (server bundle) v${{ inputs.version }} at ${{ inputs.source_sha }}");
+  const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
+  expect(script).toContain("|Release (server bundle) v$version at $sha");
+  // The receipt names the jobs exactly as the workflow does.
+  for (const job of ["sign", "verify"]) expect(script).toContain(`"${file.jobs[job].name}"`);
+  expect(file.jobs.attach.name).toBe(
+    "server bundle receipt: release ${{ needs.resolve.outputs.id }} v${{ inputs.version }} ${{ inputs.source_sha }} ${{ needs.verify.outputs.receipt }}",
+  );
+  expect(script).toContain('receipt="server bundle receipt: release $id v$version $sha $(receipt_hash');
+  // The receipt is computed only after the clean-host stage, and the attach uploads only those bytes.
+  const steps = file.jobs.verify.steps.map((step) => step.name ?? step.uses);
+  expect(steps.indexOf("The receipt for exactly these bytes")).toBeGreaterThan(
+    steps.indexOf("Stage it with Python 3 alone"),
+  );
+  expect(file.jobs.attach.needs).toEqual(["resolve", "verify"]);
+  expect(file.jobs.attach.steps.at(-1).env.VERIFIED).toBe("${{ needs.verify.outputs.digests }}");
+});
+
+it("starts the server bundle with the 0.8 line in the dispatch and in release-attach.sh alike (#876)", () => {
+  const dispatch = workflow("release-publish.yml").jobs["server-bundle"].steps[0].run;
+  const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
+  const from = script.match(/^SERVER_FROM=(\S+)$/m)[1];
+  expect(from).toBe("0.8.0");
+  expect(dispatch).toContain(`SERVER_FROM=${from}`);
+  expect(dispatch.indexOf("SERVER_FROM=")).toBeLessThan(dispatch.indexOf("gh workflow run"));
+  expect(dispatch).toContain('"${VERSION%%-*}" | sort -V | head -n1)" != "$SERVER_FROM"');
 });

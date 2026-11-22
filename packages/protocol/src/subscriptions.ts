@@ -43,6 +43,7 @@ import { z } from "zod";
 import { AgentUpdateSummarySchema, GateOptionSchema, OrcaEventSchema, RunOutcomeSchema } from "@orca/core/schemas";
 import { AgentViewSchema } from "./agents.js";
 import { ConfigDocumentSchema } from "./config.js";
+import { ProtocolVersionSchema } from "./version.js";
 import { InputAgentSchema, InputKindSchema } from "./inputs.js";
 import { LiveDecisionTargetSchema } from "./live-input.js";
 import { DisplayStatusSchema } from "./status.js";
@@ -454,6 +455,11 @@ export const SubscribeParamsSchema = z
      * per-run, so this needs a `runId` - a store-wide subscription has no single cursor.
      */
     since: z.number().int().nonnegative().optional(),
+    /**
+     * Protocol 2.5: the protocol this client reads events in. `event.appended` frames for
+     * event types added after it are not sent (`EVENT_TYPES_SINCE`); absent means 2.0.
+     */
+    protocol: ProtocolVersionSchema.optional(),
   })
   .refine((p) => p.since === undefined || p.runId !== undefined, {
     message: "'since' needs a 'runId': a cursor is a sequence number within one run",

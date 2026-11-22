@@ -45,6 +45,8 @@ import {
   type RunsEventsResult,
   type RunSummaryView,
   type WorkflowSummaryView,
+  type SearchHit,
+  type SearchResult,
 } from "@orca/protocol";
 import type { OrcaEvent } from "@orca/core";
 import type { MethodContext, MethodTable } from "../methods.js";
@@ -317,6 +319,11 @@ export class Authorizer {
           const invocation = bindPrincipal(
             {
               ...ctx,
+              readScope: {
+                // Restricted: only the named run, which `case "search"` authorizes first.
+                runs: isUnrestricted(principal.scope) ? "all" : "named",
+                artifacts: holds(principal, "artifacts.read"),
+              },
               mutationActor: {
                 principalId: principal.id,
                 ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
@@ -403,6 +410,30 @@ export class Authorizer {
         return original(params);
       case "subscription":
         return original(params);
+
+      case "search": {
+        const named = params.runId as string | undefined;
+        if (restricted) {
+          /* A caller limited to some runs searches one named run. Walking the store and asking
+             run by run would read facts of hidden runs and spend this caller's deadline on
+             them, so hidden work could change which visible hits are found and whether the
+             answer says it was cut short. Workspace-wide search for a restricted caller waits
+             for an authorization-scoped run catalog. */
+          if (named === undefined) throw new Denied(authForbidden(), "search-needs-named-run");
+          // A run the caller cannot see answers as one with no matches, never as a refusal.
+          if (!(await this.runs.allows(principal, named)))
+            return { hits: [], scannedRuns: 0, asOf: this.now().toISOString() };
+        }
+        const result = (await original(params)) as SearchResult;
+        const artifacts = holds(principal, "artifacts.read");
+        // A second line behind the scan's own scope; it never calls the resolver.
+        const hits: SearchHit[] = result.hits.filter(
+          (hit) =>
+            (artifacts || (hit.kind !== "artifact" && !artifactEvent(hit.type))) &&
+            (!restricted || hit.runId === named),
+        );
+        return { ...result, hits };
+      }
 
       case "run": {
         const runId = params.runId as string;
@@ -497,11 +528,12 @@ export class Authorizer {
   /** `hello` tells a principal about the methods and capabilities it may actually use. */
   private hello(principal: Principal, result: HelloResult): HelloResult {
     const everything = PERMISSIONS.every((p) => holds(principal, p));
-    const { storeDir, ...rest } = result;
+    const { storeDir, deployment, ...rest } = result;
     return {
       ...rest,
-      // The store's path on disk is the configuration's business.
+      // The store's path on disk is the configuration's business, and so is the installation's.
       ...(storeDir !== undefined && holds(principal, "config.read") ? { storeDir } : {}),
+      ...(deployment !== undefined && holds(principal, "config.read") ? { deployment } : {}),
       capabilities: result.capabilities.filter((c) => {
         if (c === "inputs.revise" || c === "inputs.replaceRevision")
           return holds(principal, "inputs.answer") && holds(principal, "runs.control");
@@ -559,8 +591,11 @@ export class Authorizer {
     const rows: RunSummaryView[] = [];
     const seen = new Set<string>();
     let last: Page;
+    // Visibility first, on plain rows: the operations facts (the log's tail, the lease) are
+    // read only for the rows this principal is then shown, never for a hidden run (#340).
+    const { operations, ...plain } = params;
     for (let offset = 0; ;) {
-      last = (await original({ ...params, limit: PAGE, offset })) as Page;
+      last = (await original({ ...plain, limit: PAGE, offset })) as Page;
       for (const row of last.runs) {
         if (seen.has(row.id)) continue;
         seen.add(row.id);
@@ -571,11 +606,20 @@ export class Authorizer {
       if (last.runs.length === 0 || offset >= last.total) break;
     }
     const visible = await this.visible(principal, rows, (r) => r.id);
-    return {
-      ...last,
-      runs: visible.slice(params.offset as number, (params.offset as number) + (params.limit as number)),
-      total: visible.length,
-    };
+    let page = visible.slice(params.offset as number, (params.offset as number) + (params.limit as number));
+    if (operations === true && page.length) {
+      const detailed = (await original({
+        ...plain,
+        runIds: page.map((r) => r.id),
+        operations: true,
+        offset: 0,
+        limit: page.length,
+      })) as Page;
+      const byId = new Map(detailed.runs.map((r) => [r.id, r]));
+      // A row that moved out of the filter between the two reads keeps its plain form.
+      page = page.map((r) => byId.get(r.id) ?? r);
+    }
+    return { ...last, runs: page, total: visible.length };
   }
 
   /**

@@ -7,11 +7,12 @@
 import { z } from "zod";
 import { OPERATOR_METHODS } from "./operator-reads.js";
 import { ProtocolVersionSchema } from "./version.js";
-import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD } from "./agents.js";
+import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD, SessionSlotsSummarySchema } from "./agents.js";
 import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
 import { CLAIMS_LIST_METHOD, CLAIMS_RELEASE_METHOD } from "./claims.js";
 import { CONFIG_GET_METHOD, CONFIG_SET_METHOD, CONFIG_APPLY_METHOD } from "./config.js";
 import { INPUTS_ANSWER_METHOD, RUNS_CANCEL_METHOD, RUNS_RESUME_METHOD, RUNS_START_METHOD } from "./control.js";
+import { RUNS_RECOVERY_METHOD, RUNS_REVIEW_EFFECT_METHOD } from "./recovery.js";
 import { INPUTS_LIST_METHOD } from "./inputs.js";
 import {
   DECISIONS_DECIDE_METHOD,
@@ -33,6 +34,7 @@ import {
 import { RUNS_EVENTS_METHOD, RUNS_GET_METHOD, RUNS_LIST_METHOD } from "./runs.js";
 import { SUBSCRIBE_METHOD, UNSUBSCRIBE_METHOD } from "./subscriptions.js";
 import { WORKFLOWS_GET_METHOD, WORKFLOWS_LIST_METHOD } from "./workflows.js";
+import { SEARCH_METHOD } from "./search.js";
 
 export const HELLO_METHOD = "hello";
 
@@ -62,6 +64,16 @@ export const READ_METHODS = [
    * with" is not a different class from reading what it has run.
    */
   CONFIG_GET_METHOD,
+  /**
+   * `search` (protocol 2.2, #255): a bounded substring scan over the same events and
+   * artifacts the reads above return, answered under `runs.read` like them.
+   */
+  SEARCH_METHOD,
+  /**
+   * `runs.recovery` (protocol 2.5, #357): how a run could be recovered, read from its log and
+   * the store. It writes nothing, so a `--read-only` daemon answers it like the reads above.
+   */
+  RUNS_RECOVERY_METHOD,
 ] as const;
 
 /**
@@ -113,6 +125,8 @@ export const CONTROL_METHODS = [
   RUNS_RESUME_METHOD,
   RUNS_CANCEL_METHOD,
   RUNS_START_METHOD,
+  // Protocol 2.5 (#357): appends a review to a run's log under its lease.
+  RUNS_REVIEW_EFFECT_METHOD,
   CONFIG_SET_METHOD,
   DEPENDENCIES_WAIVE_METHOD,
   DECISIONS_DECIDE_METHOD,
@@ -138,11 +152,24 @@ export const AGENT_METHODS = [AGENTS_LIST_METHOD, AGENTS_PING_METHOD] as const;
  */
 export const SUBSCRIPTION_METHODS = [SUBSCRIBE_METHOD, UNSUBSCRIBE_METHOD] as const;
 
-export const HelloParamsSchema = z.object({
-  /** Client identity for logs and the daemon's session list, e.g. `orca-app/0.3.1`. */
-  client: z.string().min(1),
-  protocol: ProtocolVersionSchema,
-});
+export const HelloParamsSchema = z
+  .object({
+    /** Client identity for logs and the daemon's session list, e.g. `orca-app/0.3.1`. */
+    client: z.string().min(1),
+    protocol: ProtocolVersionSchema,
+    /**
+     * The previous-major version this client can also speak, sent only while its build has a
+     * compatibility window open (protocol 2.1, #880). A daemon that does not speak `protocol`
+     * answers in this one instead, and says so in `HelloResult.protocol`.
+     */
+    fallback: ProtocolVersionSchema.optional(),
+  })
+  .refine((p) => p.fallback === undefined || p.fallback.major === p.protocol.major - 1, {
+    /* A fallback is the previous major and nothing else: a same-major or skipped-major pair
+     is a malformed offer, refused as such before any version is matched. */
+    message: "hello fallback must be exactly one major below protocol",
+    path: ["fallback"],
+  });
 export type HelloParams = z.infer<typeof HelloParamsSchema>;
 
 /** What a daemon can do; a client checks these rather than the ORCA version. */
@@ -178,6 +205,39 @@ export const DAEMON_CAPABILITIES = [
 export const DaemonCapabilitySchema = z.enum(DAEMON_CAPABILITIES);
 export type DaemonCapability = z.infer<typeof DaemonCapabilitySchema>;
 
+/**
+ * An absolute POSIX path on the daemon's machine that is safe to put, single-quoted, in a
+ * remote shell command: no `..` segment, no quote, whitespace, glob or other shell character.
+ * The managed updater's own paths (`/srv/dev/orca-live/...`) fit; anything else is not offered.
+ */
+export const ServerPathSchema = z
+  .string()
+  .max(512)
+  .regex(/^\/[A-Za-z0-9._/-]+$/, "an absolute path of letters, digits and . _ / -")
+  .refine((path) => !path.split("/").includes(".."), "no '..' segment");
+
+/** A server ring, as the update feed names it (docs/UPDATING.md "Rings and controlled rollouts"). */
+export const ServerRingSchema = z.enum(["internal", "preview", "stable"]);
+export type ServerRing = z.infer<typeof ServerRingSchema>;
+
+/**
+ * How this daemon was installed, when the managed server updater (`orca-release.py`, Debian)
+ * launched it (#879). The app updates such a server by running that updater over the
+ * person's own SSH connection, never through the daemon: these are the two paths to run it
+ * with, and the ring it follows when its deployment names one. Absent for every other daemon
+ * (a desktop's bundled daemon, a source checkout, `orca serve` by hand), which the app then
+ * explains it cannot update.
+ */
+export const ManagedDeploymentSchema = z.object({
+  kind: z.literal("managed"),
+  /** The updater script: `orca-release.py`, outside the replaceable releases. */
+  adapter: ServerPathSchema,
+  /** The deployment manifest it takes as `--deployment`. */
+  manifest: ServerPathSchema,
+  ring: ServerRingSchema.optional(),
+});
+export type ManagedDeployment = z.infer<typeof ManagedDeploymentSchema>;
+
 export const HelloResultSchema = z.object({
   identity: z.object({ workspaceId: z.uuid(), instanceId: z.uuid() }).optional(),
   protocol: ProtocolVersionSchema,
@@ -189,5 +249,16 @@ export const HelloResultSchema = z.object({
   capabilities: z.array(DaemonCapabilitySchema),
   /** Every method this daemon answers, `hello` included. Added in protocol 1.1; absent from an older daemon. */
   methods: z.array(z.string()).optional(),
+  /**
+   * Agent session slots at the moment of the handshake (#873): the daemon-wide cap when one is
+   * configured, sessions open and steps queued. Present when the daemon serves the agent
+   * surface; `agents.list` carries the per-agent and per-host detail. Optional.
+   */
+  sessionSlots: SessionSlotsSummarySchema.optional(),
+  /**
+   * The managed server updater that launched this daemon (#879), for a caller holding
+   * `config.read`. Absent for any other daemon. Protocol 2.2.
+   */
+  deployment: ManagedDeploymentSchema.optional(),
 });
 export type HelloResult = z.infer<typeof HelloResultSchema>;

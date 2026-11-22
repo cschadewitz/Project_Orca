@@ -8,12 +8,24 @@
 import { ConfigurationGenerations, type GenerationMaterial } from "./configuration-generation.js";
 import { configuredGenerationSecrets, launchProvenance } from "./configuration-provenance.js";
 
-import { AgentRegistry, LocalHost, openAcpSession, type AgentSession, type OpenSessionOptions } from "@orca/agents";
+import {
+  AgentRegistry,
+  LocalHost,
+  openAcpSession,
+  startupTermination,
+  type AgentHost,
+  type AgentSession,
+  type OpenSessionOptions,
+  type SecretUse,
+} from "@orca/agents";
 import { applyModel, currentModel, selectedModel } from "./session-model.js";
 import {
   describeError,
   evaluateCondition,
+  effectAbandoned,
   evaluateExpression,
+  mayHaveActed,
+  needsEffectReview,
   newId,
   OrcaError,
   outgoing,
@@ -30,10 +42,16 @@ import {
   TemplateRegistry,
   validateWorkflowInputs,
   WorkflowRegistry,
+  capabilityManifestKey,
+  redactCapabilityManifest,
   type AgentSelector,
+  type AgentSpec,
+  type CapabilityScope,
+  type EffectReviewDecision,
   type Artifact,
   type ArtifactRef,
   type RunOverrides,
+  type RunCheckpoint,
   type ArtifactSpec,
   type Clock,
   type Edge,
@@ -43,6 +61,7 @@ import {
   type NodeDef,
   type OrcaEvent,
   type OrcaEventInput,
+  type RemoteDaemonSpec,
   type RunState,
   type RunSummary,
   type StepResult,
@@ -64,6 +83,7 @@ import {
   type EventFilter,
   type EventListener,
   type EventRange,
+  type ExecutionInputs,
   type HeldLease,
   type Lease,
   type Stores,
@@ -91,10 +111,30 @@ import { recoverReleasedWorkItem } from "./program/work-items.js";
 import { RunContext } from "./run-context.js";
 import type { LiveHumanInput, ExecutionResumeAuthority, ExecutionActivity } from "./live-input.js";
 import { protectExecutionInputs } from "./execution-inputs.js";
+import { checkpointSeed } from "./checkpoint-attempt.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
+import {
+  capabilityRefusal,
+  deliveryIssues,
+  nodeCapabilityScope,
+  preflightCapabilities,
+  preflightSecretReferences,
+  resolveNodeCapabilities,
+} from "./capabilities.js";
+import { SessionSlots, type ConfiguredSessionLimits, type SessionSlot, type SessionSlotCaps } from "./session-slots.js";
 
 /** Opens an agent session; defaults to ACP over stdio (local or ssh). Integrations can substitute other transports. */
-export type SessionFactory = (options: OpenSessionOptions) => Promise<AgentSession>;
+/**
+ * Where a session is opened for (#883): the run, and the configuration generation the run is
+ * bound to, with the remotes that generation configures. A delegating session resolves its
+ * remote from these, never from whatever generation is current when it opens.
+ */
+export interface SessionOrigin {
+  runId: string;
+  generationId?: string;
+  remotes?: readonly RemoteDaemonSpec[];
+}
+export type SessionFactory = (options: OpenSessionOptions & { origin?: SessionOrigin }) => Promise<AgentSession>;
 
 export interface OrchestratorOptions {
   /** Trusted current authority for bounded first attachment of admitted roots. */
@@ -124,6 +164,21 @@ export interface OrchestratorOptions {
   };
   workspaceProvider?: WorkspaceProvider;
   sessionFactory?: SessionFactory;
+  /**
+   * The server-verified use check for secret references (#336): resolves when the run may use
+   * every one of `uses` now, throws when not. Asked at every session open, immediately before
+   * the host reads anything. Without it, a launch whose agent steps use a secret reference is
+   * refused, and so is any session that would deliver one.
+   */
+  secretUse?: (request: { runId: string; uses: SecretUse[] }) => Promise<void>;
+  /**
+   * Daemon-wide session ceiling (#873) for an orchestrator built without configuration
+   * generations. With generations, the current generation's `limits.maxAgentSessions` wins.
+   * Absent means unlimited.
+   */
+  maxAgentSessions?: number;
+  /** Likewise `limits.agentSlotWaitMs`: how long a step may wait for a slot. Absent: no deadline. */
+  agentSlotWaitMs?: number;
   /** Planning layer; created over `stores` when omitted. */
   plan?: PlanService;
   clock?: Clock;
@@ -181,7 +236,12 @@ export interface StartRunOptions {
   /** Only trusted in-process callers supply actor metadata; transports bind it server-side. */
   actor?: MutationActor;
   workflowId?: string;
-  inline?: { graph: WorkflowGraph; id: string; version?: string };
+  /**
+   * A nested graph of a running workflow (in-process only). `capabilities` is the enclosing
+   * workflow's scope (#335): the graph is part of that file, so it runs under it, exactly as
+   * `walkInline` reconstructs it on resume.
+   */
+  inline?: { graph: WorkflowGraph; id: string; version?: string; capabilities?: CapabilityScope | undefined };
   vars?: Record<string, unknown>;
   /** Trusted captured-launch attribution; never accepted from wire launch params. */
   itemWorkflowSource?: "config.program.itemWorkflow";
@@ -207,6 +267,56 @@ export interface StartRunOptions {
    * written - so a client never validates one definition and starts another.
    */
   expectedWorkflowRevision?: string;
+  /**
+   * Trusted in-process only: create this run as a checkpoint attempt (#357) with this id,
+   * starting from `seed`, its launch inputs' sensitivity inherited from the source's `inputs`.
+   * See `startCheckpointAttempt`.
+   */
+  checkpoint?: { runId: string; seed: RunCheckpoint; inputs?: ExecutionInputs | undefined };
+}
+
+/** Starting a checkpoint attempt of a failed run (#357). */
+export interface CheckpointAttemptOptions {
+  /** The failed run to recover. */
+  runId: string;
+  /** The checkpoint: a step run id, or a node id that names exactly one. The latest usable one when absent. */
+  checkpoint?: string | undefined;
+  /** Who starts it; a run that recorded its creator is recovered only by that principal. */
+  actor?: MutationActor | undefined;
+  /** Trusted admission journal only (see CheckpointAdmissionService). */
+  admissionRunId?: string | undefined;
+  directAdmissionId?: string | undefined;
+}
+
+/**
+ * The execution-store record of the `n`th checkpoint attempt (from 1) started from a run (#357).
+ * Records are write-once, so each attempt takes the next number.
+ */
+export const checkpointAttemptKey = (sourceRunId: string, n: number): string =>
+  `checkpoint-attempt:${sourceRunId}:${n}`;
+
+/** A reserved checkpoint attempt that was retired before it was created (#357). */
+const checkpointRetiredKey = (attemptRunId: string): string => `checkpoint-attempt-retired:${attemptRunId}`;
+export async function checkpointReservationRetired(
+  stores: Pick<Stores, "execution">,
+  attemptRunId: string,
+): Promise<boolean> {
+  return (await stores.execution.getGeneration(checkpointRetiredKey(attemptRunId))) !== undefined;
+}
+
+/** The checkpoint attempts started from a run, oldest first. */
+export async function checkpointAttempts(
+  stores: Pick<Stores, "execution">,
+  sourceRunId: string,
+): Promise<{ runId: string; checkpointStepRunId: string }[]> {
+  const found: { runId: string; checkpointStepRunId: string }[] = [];
+  for (let n = 1; ; n++) {
+    const record = (await stores.execution.getGeneration(checkpointAttemptKey(sourceRunId, n))) as
+      { runId?: unknown; checkpointStepRunId?: unknown } | undefined;
+    if (record === undefined) return found;
+    if (typeof record.runId !== "string" || typeof record.checkpointStepRunId !== "string") throw unavailable();
+    found.push({ runId: record.runId, checkpointStepRunId: record.checkpointStepRunId });
+  }
 }
 
 export const INLINE_SEP = "::";
@@ -220,6 +330,82 @@ export const INLINE_SEP = "::";
  */
 export function workflowRevision(def: WorkflowDefinition): string {
   return `sha256:${sha256(canonicalJson(def))}`;
+}
+
+/**
+ * The definition an inline id (`root::loopNode`, `root::parallelNode::branch`) names inside its
+ * root definition, built the way the interpreter builds it, so its `workflowRevision` is the one
+ * an inline run recorded. Pure: it reads nothing, so a read-only recovery preview can use it.
+ */
+export function inlineWorkflowDefinition(root: WorkflowDefinition, workflowId: string): WorkflowDefinition {
+  const [, ...path] = workflowId.split(INLINE_SEP);
+  let graph: WorkflowGraph = root;
+  for (let i = 0; i < path.length; i++) {
+    const node: NodeDef | undefined = graph.nodes[path[i]!];
+    if (!node) throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: node '${path[i]}' not found`);
+    if (node.type === "loop") {
+      if (!("graph" in node.body))
+        throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: loop body is a reference`);
+      graph = node.body.graph;
+    } else if (node.type === "parallel") {
+      if (node.forEach) {
+        if (!node.forEach.body || !("graph" in node.forEach.body))
+          throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: forEach body is a reference`);
+        graph = node.forEach.body.graph;
+      } else {
+        const branch = path[++i];
+        const ref = branch !== undefined ? node.branches?.[branch] : undefined;
+        if (!ref || !("graph" in ref))
+          throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: branch '${branch}' not found`);
+        graph = ref.graph;
+      }
+    } else
+      throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: node '${path[i]}' has no nested graph`);
+  }
+  // A nested graph is part of its root's file, so it runs under the root's workflow scope (#335).
+  return inlineDefinition(workflowId, graph, root.version, root.capabilities);
+}
+
+function inlineDefinition(
+  id: string,
+  graph: WorkflowGraph,
+  version: string,
+  capabilities?: CapabilityScope,
+): WorkflowDefinition {
+  return {
+    id,
+    name: id,
+    version,
+    vars: {},
+    inputs: {},
+    start: graph.start,
+    nodes: graph.nodes,
+    edges: graph.edges,
+    ...(capabilities ? { capabilities } : {}),
+  };
+}
+
+/**
+ * Refuse to re-attempt a run's last step when it may have acted and nobody has reviewed it, or an
+ * operator abandoned it (#357). An abandon decision is a denial on its own: it holds even when
+ * the cancellation that should follow it never landed.
+ */
+function assertLastStepReviewed(state: RunState): void {
+  const last = state.steps[state.stepOrder.at(-1) ?? ""];
+  if (last && effectAbandoned(last))
+    throw new OrcaError(
+      "EFFECT_ABANDONED",
+      `step '${last.nodeId}' (${last.id}) of run ${state.run.id} was abandoned after side-effect review and must not run again. ` +
+        `Record the same review again to finish ending the run ('orca recovery review ${state.run.id} ${last.id} --abandon'), or start a new run.`,
+      { runId: state.run.id, stepRunId: last.id, nodeId: last.nodeId },
+    );
+  if (last && needsEffectReview(last))
+    throw new OrcaError(
+      "EFFECT_REVIEW_REQUIRED",
+      `step '${last.nodeId}' (${last.id}) of run ${state.run.id} started and never finished, and it may have changed the workspace or external systems. ` +
+        `Check what it did, then mark it to run again or abandon the run ('orca recovery review ${state.run.id} ${last.id} --run-again|--abandon').`,
+      { runId: state.run.id, stepRunId: last.id, nodeId: last.nodeId },
+    );
 }
 
 function versionCollision(def: WorkflowDefinition): OrcaError {
@@ -277,6 +463,12 @@ export class Orchestrator {
   liveInput: OrchestratorOptions["liveInput"];
   workspaceProvider: WorkspaceProvider;
   sessionFactory: SessionFactory;
+  /**
+   * The use check for secret references (#336). Settable so an embedder can wire its
+   * authority once it exists (the daemon builds it after the orchestrator); a launch that
+   * would use a reference is refused while it is unset.
+   */
+  secretUse: OrchestratorOptions["secretUse"];
   readonly plan: PlanService;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -303,7 +495,24 @@ export class Orchestrator {
    */
   private readonly terminalStates = new Map<string, RunState>();
   /** Per-run pooled sessions. `current.step` is the step using the session right now, so events from a long-lived session are attributed correctly. */
-  private readonly sessions = new Map<string, { session: AgentSession; current: { step: StepRun } }>();
+  private readonly sessions = new Map<
+    string,
+    {
+      session: AgentSession;
+      current: { step: StepRun };
+      close: () => Promise<void>;
+      returnSlot: () => Promise<void>;
+      /** `capabilityManifestKey` of what the session was opened with (#335). */
+      capabilities: string;
+    }
+  >();
+  private readonly maxAgentSessions: number | undefined;
+  private readonly agentSlotWaitMs: number | undefined;
+  /**
+   * Open agent sessions against the optional caps (#873). Unlimited unless configured; see
+   * `session-slots.ts`. Read by the daemon for `hello` and `agents.list`.
+   */
+  readonly sessionSlots: SessionSlots = new SessionSlots(() => this.configuredSessionLimits());
   private readonly sessionOpenedListeners = new Set<AgentSessionOpenedListener>();
 
   constructor(o: OrchestratorOptions) {
@@ -324,6 +533,9 @@ export class Orchestrator {
     this.humanInput = o.humanInput ?? o.liveInput?.port ?? autoHumanInput();
     this.workspaceProvider = o.workspaceProvider ?? new LocalWorkspaceProvider(process.cwd());
     this.sessionFactory = o.sessionFactory ?? openAcpSession;
+    this.secretUse = o.secretUse;
+    this.maxAgentSessions = o.maxAgentSessions;
+    this.agentSlotWaitMs = o.agentSlotWaitMs;
     this.clock = o.clock ?? systemClock;
     this.logger = o.logger ?? silentLogger;
     this.leaseHolder = o.lease?.holder ?? newId("orc", this.clock.now());
@@ -353,7 +565,7 @@ export class Orchestrator {
     // launch vars - all before anything is written, provisioned or appended, so a refused
     // launch leaves no definition, workspace, run, agent or child behind.
     const def = opts.inline
-      ? this.inlineDefinition(opts.inline.id, opts.inline.graph, opts.inline.version ?? "1")
+      ? this.inlineDefinition(opts.inline.id, opts.inline.graph, opts.inline.version ?? "1", opts.inline.capabilities)
       : await this.selectDefinition(opts.workflowId!, opts.workflowVersion, generation?.workflows);
     if (opts.expectedWorkflowRevision !== undefined && opts.expectedWorkflowRevision !== workflowRevision(def))
       throw new OrcaError(
@@ -362,6 +574,12 @@ export class Orchestrator {
       );
     if (opts.overrides)
       this.validateOverrides(def, opts.overrides, generation?.agents, generation?.workflows, generation?.templates);
+    // Every agent step's MCP servers and skills resolve and can be delivered, under this run's
+    // role overrides, before anything is written (#335).
+    preflightCapabilities((generation?.agents ?? this.agents).withOverrides(opts.overrides), def);
+    // A step whose agent uses a secret reference needs a use check to run (#336).
+    if (!this.secretUse)
+      preflightSecretReferences((generation?.agents ?? this.agents).withOverrides(opts.overrides), def);
     const inputs = validateWorkflowInputs(def, opts.vars ?? {});
     if (!inputs.validation.ok) {
       const { errors, warnings } = inputs.validation;
@@ -401,7 +619,18 @@ export class Orchestrator {
         (opts.directAdmissionId && opts.requestAdmissionId))
     )
       throw new OrcaError("RUN_STATE", "Invalid reserved admission identity");
-    const runId = opts.admissionRunId ?? newId("run", this.clock.now());
+    if (
+      opts.checkpoint &&
+      (opts.parentRunId || opts.inline || (opts.admissionRunId && opts.admissionRunId !== opts.checkpoint.runId))
+    )
+      throw new OrcaError("RUN_STATE", "a checkpoint attempt is a top-level run with its own reserved id");
+    const runId = opts.admissionRunId ?? opts.checkpoint?.runId ?? newId("run", this.clock.now());
+    if (
+      opts.checkpoint &&
+      ((await this.stores.events.readRange(runId, { limit: 1 })).length ||
+        (await this.stores.execution.getInputs(runId)))
+    )
+      throw new OrcaError("RUN_STATE", "this checkpoint attempt was already prepared");
     if (
       opts.admissionRunId &&
       ((await this.stores.events.readRange(runId, { limit: 1 })).length ||
@@ -425,7 +654,8 @@ export class Orchestrator {
         : this.workspaceProvider;
     // Record only after every admission/inherited-integrity check, before public run creation.
     const workflowStored = await this.recordDefinition(def);
-    let protectedInputs = protectExecutionInputs(runId, def, vars, parentInputs);
+    // A checkpoint attempt keeps everything its source treated as sensitive, overlays included.
+    let protectedInputs = protectExecutionInputs(runId, def, vars, opts.checkpoint?.inputs ?? parentInputs);
     const configuredSecrets = generation ? configuredGenerationSecrets(generation) : [];
     if (configuredSecrets.length)
       protectedInputs = {
@@ -433,7 +663,7 @@ export class Orchestrator {
         secrets: [...(protectedInputs?.secrets ?? []), ...configuredSecrets],
       };
     // Authenticate actor and lineage even for public application inputs.
-    if (!protectedInputs && (opts.actor || opts.parentRunId || generation))
+    if (!protectedInputs && (opts.actor || opts.parentRunId || generation || opts.checkpoint))
       protectedInputs = {
         runId,
         workflowId: def.id,
@@ -471,6 +701,7 @@ export class Orchestrator {
         ...(opts.parentStepRunId ? { parentStepRunId: opts.parentStepRunId } : {}),
         ...(opts.overrides ? { overrides: opts.overrides } : {}),
         ...(workflowStored ? { workflowStored: true as const } : {}),
+        ...(opts.checkpoint ? { checkpoint: opts.checkpoint.seed } : {}),
       },
     };
     await this.stores.events.append(
@@ -495,7 +726,10 @@ export class Orchestrator {
     const inflight = this.running.get(runId);
     if (inflight) return inflight;
     const release = this.runtimeActivity?.enter("execution");
-    const p = this.executeLeased(runId, recovery)
+    // Driving a run re-attaches to every unfinished run below it. Refuse before any of them is
+    // touched, rather than letting one refuse mid-way and fail the container step waiting on it.
+    const p = this.assertEffectsReviewed(runId)
+      .then(() => this.executeLeased(runId, recovery))
       .then(async () => {
         const projected = this.live.get(runId)?.publicState() ?? (await this.getState(runId));
         if (isTerminal(projected)) this.cacheTerminalState(runId, projected);
@@ -512,6 +746,168 @@ export class Orchestrator {
 
   async startAndRun(opts: StartRunOptions): Promise<RunState> {
     return this.run(await this.startRun(opts));
+  }
+
+  /**
+   * Create (not drive) a checkpoint attempt of a failed run (#357): a new top-level run on the
+   * source's pinned workflow and recorded configuration, with its launch inputs and workspace,
+   * that reuses the steps up to the checkpoint and routes on from it. Refused with
+   * `RECOVERY_BLOCKED` and the preview's reasons when the checkpoint is not usable. Taken under
+   * the source's lease, and one attempt per source at a time: attempts share its workspace.
+   */
+  async startCheckpointAttempt(opts: CheckpointAttemptOptions): Promise<string> {
+    const sourceRunId = opts.runId;
+    if (this.running.has(sourceRunId) || this.live.has(sourceRunId))
+      throw new OrcaError("RUN_LEASED", `run ${sourceRunId} is being driven in this process`, { runId: sourceRunId });
+    const holder = newId("orc", this.clock.now());
+    const lease = await this.stores.leases.acquire({
+      resource: runLeaseResource(sourceRunId),
+      holder,
+      ttlMs: this.leaseTtlMs,
+      note: "checkpoint attempt",
+    });
+    if (!ownsLease(lease, holder))
+      throw new OrcaError(
+        "RUN_LEASED",
+        `run ${sourceRunId} is being interpreted by pid ${lease.pid} on ${lease.host}: recover it once that stops`,
+        { runId: sourceRunId, ...describeLease(lease) },
+      );
+    try {
+      return await this.stores.leases.withOwnership(lease, async () => {
+        const attempts = await checkpointAttempts(this.stores, sourceRunId);
+        const prior = attempts.at(-1);
+        const own = opts.admissionRunId !== undefined && prior?.runId === opts.admissionRunId;
+        if (opts.admissionRunId !== undefined && (await checkpointReservationRetired(this.stores, opts.admissionRunId)))
+          throw new OrcaError(
+            "RUN_STATE",
+            `checkpoint attempt ${opts.admissionRunId} was retired before it was created`,
+            {
+              runId: sourceRunId,
+              attemptRunId: opts.admissionRunId,
+            },
+          );
+        if (prior && !own) {
+          if ((await this.stores.events.lastSeq(prior.runId)) !== undefined) {
+            const summary = await this.getSummary(prior.runId);
+            if (!isTerminalStatus(summary.status))
+              throw new OrcaError(
+                "RUN_STATE",
+                `checkpoint attempt ${prior.runId} of run ${sourceRunId} has not finished; recover from it, or wait`,
+                { runId: sourceRunId, attemptRunId: prior.runId },
+              );
+          } else if (!(await checkpointReservationRetired(this.stores, prior.runId)))
+            // Reserved but never created (interrupted): its admission may still create it, so
+            // it keeps the workspace until that admission completes or the reservation is retired.
+            throw new OrcaError(
+              "RUN_STATE",
+              `checkpoint attempt ${prior.runId} of run ${sourceRunId} was reserved and not created; reconcile its admission, or retire it with 'orca recovery retire ${sourceRunId} ${prior.runId}'`,
+              { runId: sourceRunId, attemptRunId: prior.runId },
+            );
+        }
+        const { seed, source } = await checkpointSeed(this.stores, sourceRunId, {
+          checkpoint: opts.checkpoint,
+          principalId: opts.actor?.principalId,
+          leaseHolder: holder,
+          newStepId: () => newId("step", this.clock.now()),
+        });
+        const first = (await this.stores.events.readRange(sourceRunId, { limit: 1 }))[0];
+        if (first?.type !== "run.created") throw unavailable();
+        const inputs = await this.stores.execution.getInputs(sourceRunId);
+        if (first.payload.executionInputsStored && !inputs) throw unavailable();
+        const provenance = source.run.provenance;
+        let generation: GenerationMaterial | undefined;
+        if (provenance) {
+          if (!this.generations) throw unavailable();
+          generation = await this.generations.restore(provenance.configGeneration);
+        }
+        const runId = opts.admissionRunId ?? newId("run", this.clock.now());
+        // Named before the run exists, so a crash in between still keeps a second attempt out.
+        // An admission recovering its own reserved attempt finds it already named.
+        if (!own)
+          await this.stores.execution.putGeneration(checkpointAttemptKey(sourceRunId, attempts.length + 1), {
+            runId,
+            sourceRunId,
+            checkpointStepRunId: seed.stepRunId,
+          });
+        return this.startRun(
+          {
+            ...(opts.actor ? { actor: opts.actor } : {}),
+            workflowId: source.run.workflowId,
+            workflowVersion: source.run.workflowVersion,
+            ...(provenance ? { expectedWorkflowRevision: provenance.workflow.revision } : {}),
+            vars: structuredClone(inputs?.vars ?? first.payload.vars),
+            workspace: structuredClone(source.run.workspace),
+            ...(source.run.requestId ? { requestId: source.run.requestId } : {}),
+            ...(source.run.workItemId ? { workItemId: source.run.workItemId } : {}),
+            ...(source.run.overrides ? { overrides: structuredClone(source.run.overrides) } : {}),
+            ...(opts.admissionRunId ? { admissionRunId: opts.admissionRunId } : {}),
+            ...(opts.directAdmissionId ? { directAdmissionId: opts.directAdmissionId } : {}),
+            checkpoint: { runId, seed, inputs },
+          },
+          generation,
+        );
+      });
+    } finally {
+      await this.stores.leases.release(lease).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Retire a checkpoint attempt that was reserved and never created (an interruption between
+   * the two), so another attempt of its source may start (#357). Only the source's latest
+   * reservation, and only while it has no log; afterwards its admission can never create it.
+   */
+  async retireCheckpointReservation(sourceRunId: string, attemptRunId: string): Promise<void> {
+    const holder = newId("orc", this.clock.now());
+    const lease = await this.stores.leases.acquire({
+      resource: runLeaseResource(sourceRunId),
+      holder,
+      ttlMs: this.leaseTtlMs,
+      note: "retire checkpoint reservation",
+    });
+    if (!ownsLease(lease, holder))
+      throw new OrcaError(
+        "RUN_LEASED",
+        `run ${sourceRunId} is being interpreted by pid ${lease.pid} on ${lease.host}`,
+        {
+          runId: sourceRunId,
+          ...describeLease(lease),
+        },
+      );
+    try {
+      await this.stores.leases.withOwnership(lease, async () => {
+        const latest = (await checkpointAttempts(this.stores, sourceRunId)).at(-1);
+        if (latest?.runId !== attemptRunId)
+          throw new OrcaError(
+            "RUN_STATE",
+            `${attemptRunId} is not the latest checkpoint attempt of run ${sourceRunId}`,
+            {
+              runId: sourceRunId,
+              attemptRunId,
+            },
+          );
+        if ((await this.stores.events.lastSeq(attemptRunId)) !== undefined)
+          throw new OrcaError(
+            "RUN_STATE",
+            `checkpoint attempt ${attemptRunId} was created; it is a run, not a reservation`,
+            {
+              runId: sourceRunId,
+              attemptRunId,
+            },
+          );
+        // Private inputs without run.created: creation may have begun. Ambiguous, not a reservation.
+        if (await this.stores.execution.getInputs(attemptRunId))
+          throw new OrcaError(
+            "RUN_STATE",
+            `checkpoint attempt ${attemptRunId} has execution inputs and no log: its creation may have begun, so it cannot be retired; reconcile its admission`,
+            { runId: sourceRunId, attemptRunId },
+          );
+        if (!(await checkpointReservationRetired(this.stores, attemptRunId)))
+          await this.stores.execution.putGeneration(checkpointRetiredKey(attemptRunId), { sourceRunId });
+      });
+    } finally {
+      await this.stores.leases.release(lease).catch(() => undefined);
+    }
   }
 
   async cancel(runId: string, reason?: string, actor?: MutationActor): Promise<void> {
@@ -790,6 +1186,117 @@ export class Orchestrator {
   }
 
   /**
+   * Record an operator's review of a step attempt that may have acted and never reported an
+   * outcome (#357). `run-again` lets resume attempt the step again; `abandon` ends the run
+   * there, cancelled, and nothing runs the step again. The same review again is a no-op, so a
+   * retried request is safe; a different decision, or a step that needs no review (it settled,
+   * parked on purpose, or was never uncertain) is refused rather than recorded.
+   */
+  async reviewEffect(
+    runId: string,
+    stepRunId: string,
+    decision: EffectReviewDecision,
+    options: { actor?: MutationActor; note?: string } = {},
+  ): Promise<RunState> {
+    if (this.running.has(runId) || this.live.has(runId))
+      throw new OrcaError("RUN_LEASED", `run ${runId} is being driven in this process; review it once it stops`, {
+        runId,
+      });
+    const holder = newId("orc", this.clock.now());
+    const lease = await this.stores.leases.acquire({
+      resource: runLeaseResource(runId),
+      holder,
+      ttlMs: this.leaseTtlMs,
+      note: "effect review",
+    });
+    if (!ownsLease(lease, holder))
+      throw new OrcaError(
+        "RUN_LEASED",
+        `run ${runId} is being interpreted by pid ${lease.pid} on ${lease.host}: review it once that stops`,
+        { runId, ...describeLease(lease) },
+      );
+    const reason = "abandoned after side-effect review";
+    let children: string[] = [];
+    try {
+      await this.stores.leases.withOwnership(lease, async () => {
+        const state = reduceRun(await this.stores.events.read(runId));
+        const step = state.steps[stepRunId];
+        if (!step) throw new OrcaError("RUN_STATE", `run ${runId} has no step run ${stepRunId}`, { runId, stepRunId });
+        const recorded = step.effectReview?.decision;
+        if (recorded !== undefined && recorded !== decision)
+          throw new OrcaError("RUN_STATE", `step run ${stepRunId} was already reviewed: ${recorded}`, {
+            runId,
+            stepRunId,
+            decision: recorded,
+          });
+        if (recorded === undefined) {
+          if (!needsEffectReview(step))
+            throw new OrcaError(
+              "RUN_STATE",
+              `step run ${stepRunId} needs no effect review: it ${step.parked ? "paused on purpose" : `is ${step.status}`}`,
+              { runId, stepRunId, status: step.status },
+            );
+          if (decision === "abandon" && isTerminal(state))
+            throw new OrcaError("RUN_STATE", `run ${runId} has already ended; there is nothing to abandon`, { runId });
+          // From this append on, the abandon decision alone refuses every execution entry
+          // (assertLastStepReviewed), even if the cancellation below never lands.
+          await this.stores.events.append({
+            type: "step.effect.reviewed",
+            runId,
+            payload: {
+              stepRunId,
+              decision,
+              ...(options.note ? { note: options.note } : {}),
+              ...(options.actor ? { actor: options.actor } : {}),
+            },
+          });
+        }
+        // The same review again records nothing new; an abandon that did not finish ending the
+        // run (a crash after the decision) finishes it here.
+        if (decision !== "abandon" || isTerminal(state)) return;
+        // End the run under the same ownership that recorded the decision, so no other
+        // interpreter can attach in between.
+        for (const open of openSteps(state))
+          await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: open.id } });
+        await this.stores.events.append({
+          type: "run.cancelled",
+          runId,
+          payload: { reason, ...(options.actor ? { actor: options.actor } : {}) },
+        });
+        children = Object.values(state.steps).flatMap((s) => s.childRunIds);
+      });
+    } finally {
+      await this.stores.leases.release(lease);
+    }
+    // The children it was waiting on, each under its own lease, as cancel does. A crash here
+    // leaves them for the same review again, or an ordinary cancel, to close.
+    for (const child of children) await this.cancel(child, reason, options.actor);
+    return this.getState(runId);
+  }
+
+  /**
+   * Every unfinished run from `rootId` down that nobody else is driving: none may hold an
+   * interrupted step nobody reviewed. Read-only; the interpreter checks again under the lease.
+   */
+  private async assertEffectsReviewed(rootId: string): Promise<void> {
+    const queue = [rootId];
+    const seen = new Set<string>();
+    while (queue.length) {
+      const id = queue.shift()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      // A run another interpreter is driving right now is that interpreter's: its open step is
+      // in flight, not interrupted, and taking the lease refuses this attach on its own.
+      const lease = await this.stores.leases.get(runLeaseResource(id));
+      if (lease && lease.holder !== this.leaseHolder && !lapsed(lease, this.clock.now())) continue;
+      const state = await this.getState(id);
+      if (isTerminal(state)) continue;
+      assertLastStepReviewed(state);
+      for (const step of Object.values(state.steps)) queue.push(...step.childRunIds);
+    }
+  }
+
+  /**
    * Internal durable-continuation attachment. The acknowledgement waits only for the
    * fenced durable transition, never for execution. The callback already owns the
    * mutation fence: use rc.emitOwned, not rc.emit/withOwnership or public answer/resume.
@@ -845,6 +1352,8 @@ export class Orchestrator {
         rc.leaseLost = true;
         throw new OrcaError("RUN_LEASED", "continuation execution lease was lost");
       }
+      // Every execution entry enforces the review fence, this one included (#357).
+      assertLastStepReviewed(rc.state);
       const context = rc;
       await context.withOwnership(async () => {
         const first = (await this.stores.events.readRange(runId, { limit: 1 }))[0];
@@ -1205,35 +1714,7 @@ export class Orchestrator {
   }
 
   private walkInline(root: WorkflowDefinition, workflowId: string): WorkflowDefinition {
-    const [, ...path] = workflowId.split(INLINE_SEP);
-    let graph: WorkflowGraph = root;
-    for (let i = 0; i < path.length; i++) {
-      const node: NodeDef | undefined = graph.nodes[path[i]!];
-      if (!node)
-        throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: node '${path[i]}' not found`);
-      if (node.type === "loop") {
-        if (!("graph" in node.body))
-          throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: loop body is a reference`);
-        graph = node.body.graph;
-      } else if (node.type === "parallel") {
-        if (node.forEach) {
-          if (!node.forEach.body || !("graph" in node.forEach.body))
-            throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: forEach body is a reference`);
-          graph = node.forEach.body.graph;
-        } else {
-          const branch = path[++i];
-          const ref = branch !== undefined ? node.branches?.[branch] : undefined;
-          if (!ref || !("graph" in ref))
-            throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: branch '${branch}' not found`);
-          graph = ref.graph;
-        }
-      } else
-        throw new OrcaError(
-          "WORKFLOW_NOT_FOUND",
-          `inline workflow ${workflowId}: node '${path[i]}' has no nested graph`,
-        );
-    }
-    return this.inlineDefinition(workflowId, graph, root.version);
+    return inlineWorkflowDefinition(root, workflowId);
   }
 
   /**
@@ -1260,8 +1741,13 @@ export class Orchestrator {
     }
   }
 
-  private inlineDefinition(id: string, graph: WorkflowGraph, version: string): WorkflowDefinition {
-    return { id, name: id, version, vars: {}, inputs: {}, start: graph.start, nodes: graph.nodes, edges: graph.edges };
+  private inlineDefinition(
+    id: string,
+    graph: WorkflowGraph,
+    version: string,
+    capabilities?: CapabilityScope,
+  ): WorkflowDefinition {
+    return inlineDefinition(id, graph, version, capabilities);
   }
 
   // -------------------------------------------------------------- interpreter
@@ -1340,6 +1826,9 @@ export class Orchestrator {
       }
       // Terminal again only if it finished between the summary and here; releasing is enough.
       if (isTerminal(rc.state)) return rc.state;
+      // An interrupted step that may have acted is never attempted again on its own (#357).
+      // Refused before anything is written, so the run stays as it was for an operator.
+      assertLastStepReviewed(rc.state);
       const context = rc;
       await context.withOwnership(async () => {
         await this.liveInput?.prepareExecution?.(runId);
@@ -1510,8 +1999,24 @@ export class Orchestrator {
           return rc.state;
         }
         if (outcome.kind === "failed") {
-          const willRetry = outcome.retryable !== false && attempt < retryBudget(node);
-          await rc.emit({ type: "step.failed", payload: { stepRunId, error: outcome.error, willRetry } });
+          // A retry budget repeats an attempt only when the log durably shows it never acted
+          // outside ORCA: no agent turn was sent, and a node that leaves no such evidence said so
+          // itself. One that may have acted fails the run instead, for an operator's review (#357).
+          const step = rc.state.steps[stepRunId]!;
+          // `repeatable` permits a repeat without claiming anything about the effect: only `none`
+          // is recorded, so an attempt left over when the budget is spent still needs review.
+          const acted = mayHaveActed(outcome.effect === "none" ? { ...step, noEffect: true } : step);
+          const repeatable = outcome.effect === "repeatable" && step.dispatched !== true;
+          const willRetry = outcome.retryable !== false && attempt < retryBudget(node) && (!acted || repeatable);
+          await rc.emit({
+            type: "step.failed",
+            payload: {
+              stepRunId,
+              error: outcome.error,
+              willRetry,
+              ...(outcome.effect === "none" ? { effect: "none" as const } : {}),
+            },
+          });
           if (willRetry) {
             attempt++;
             continue;
@@ -1615,7 +2120,11 @@ export class Orchestrator {
         kind: "failed",
         error: err,
         retryable:
-          err.code !== "WORKFLOW_INVALID" && err.code !== "NOT_SUPPORTED" && err.code !== "AGENT_MODEL_NOT_FOUND",
+          err.code !== "WORKFLOW_INVALID" &&
+          err.code !== "NOT_SUPPORTED" &&
+          err.code !== "AGENT_MODEL_NOT_FOUND" &&
+          // A delegated step the remote refuses for good (#883): a retry meets the same refusal.
+          err.code !== "DELEGATION_REFUSED",
       };
     }
   }
@@ -1688,7 +2197,16 @@ export class Orchestrator {
             self.startRun({
               ...("workflow" in target
                 ? { workflowId: target.workflow }
-                : { inline: { graph: target.graph, id: target.inlineId, version: rc.definition.version } }),
+                : {
+                    inline: {
+                      graph: target.graph,
+                      id: target.inlineId,
+                      version: rc.definition.version,
+                      // The enclosing workflow's scope (#335). A registered child workflow
+                      // (`workflowId` above) runs under its own definition's instead.
+                      ...(rc.definition.capabilities ? { capabilities: rc.definition.capabilities } : {}),
+                    },
+                  }),
               parentRunId: rc.id,
               parentStepRunId: step.id,
               ...(options.vars ? { vars: { ...rc.state.run.vars, ...options.vars } } : { vars: rc.state.run.vars }),
@@ -1763,6 +2281,13 @@ export class Orchestrator {
    * attempt 1, so it never picks up children from an earlier visit. Children already attached
    * to the current attempt are skipped so one prior child is claimed at most once.
    */
+  private sessionOrigin(rc: RunContext): SessionOrigin {
+    const generation = this.contextGenerations.get(rc);
+    return generation
+      ? { runId: rc.id, generationId: generation.snapshot.id, remotes: generation.snapshot.config.remotes }
+      : { runId: rc.id };
+  }
+
   private interruptedChild(rc: RunContext, step: StepRun, branch: string | undefined): string | undefined {
     if (step.attempt <= 1) return undefined;
     const claimed = new Set(step.childRunIds);
@@ -1823,6 +2348,11 @@ export class Orchestrator {
     extra: { path?: string; parents?: string[]; agentSessionId?: string; agentId?: string },
   ): Promise<Artifact> {
     const { extractStructuredData } = await import("@orca/core");
+    // A secret value a session of this run read (#336) is replaced before anything is derived
+    // or written: the stored body, its digest and byte count, its structured data, and what
+    // planning takes from it all describe the redacted text. The agent's own file in the
+    // workspace is the agent's, and is left as it wrote it.
+    content = rc.redactRuntimeSecrets(content);
     const name = spec.name ?? spec.kind;
     const mediaType = spec.mediaType ?? (extra.path?.endsWith(".json") ? "application/json" : "text/markdown");
     const artifact: Artifact = {
@@ -1864,14 +2394,60 @@ export class Orchestrator {
 
   // ----------------------------------------------------------------- sessions
 
+  /**
+   * The step's MCP servers and skills (#335), resolved the way the launch preflight and the
+   * launch record did. A step that no longer resolves, or whose skills no longer hash to what
+   * the launch recorded, is refused before any process starts: a run is pinned to its config
+   * generation, so only skill files on disk can change under it.
+   */
+  private stepCapabilities(
+    rc: RunContext,
+    step: StepRun,
+    agent: AgentSpec,
+  ): { mcpServers: AgentSpec["mcpServers"]; key: string } {
+    const registry = this.contextGenerations.get(rc)?.agents ?? this.agents;
+    const node = rc.definition.nodes[step.nodeId];
+    const resolved = resolveNodeCapabilities({
+      registry,
+      agent,
+      workflow: rc.definition.capabilities,
+      nodeId: step.nodeId,
+      node: nodeCapabilityScope(node).scope,
+      digests: true,
+    });
+    const issues = [...resolved.errors, ...deliveryIssues(resolved, `workflow.nodes.${step.nodeId}`)];
+    if (issues.length) throw capabilityRefusal(step.nodeId, issues);
+    const redacted = redactCapabilityManifest(resolved.manifest);
+    const key = capabilityManifestKey(redacted);
+    const recorded = rc.state.run.provenance?.selections.find((s) => s.nodeId === step.nodeId);
+    // Records from before #335 carry no manifest, and nothing to compare.
+    if (recorded?.capabilities && capabilityManifestKey(recorded.capabilities) !== key)
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `capabilities for step '${step.nodeId}' changed since the run was launched; a skill's files were edited. Start a new run to use the edited skill`,
+        { nodeId: step.nodeId, launched: recorded.capabilities, now: redacted },
+      );
+    return { mcpServers: resolved.manifest.mcpServers.map((m) => m.server), key };
+  }
+
+  /** A child's values redact its ancestors too: a child's result is written to its parent's log. */
+  private rememberSecrets(rc: RunContext, values: readonly string[]): void {
+    const seen = new Set<string>();
+    for (let at: RunContext | undefined = rc; at && !seen.has(at.id);) {
+      seen.add(at.id);
+      at.addRuntimeSecrets(values);
+      const parent: string | undefined = at.state.run.parentRunId;
+      at = parent ? this.live.get(parent) : undefined;
+    }
+  }
+
   private async openSession(
     rc: RunContext,
     step: StepRun,
     selector: AgentSelector,
   ): Promise<{ session: AgentSession; release: () => Promise<void> }> {
-    const { agent, host } = (this.contextGenerations.get(rc)?.agents ?? this.agents)
-      .withOverrides(rc.state.run.overrides)
-      .resolve(selector);
+    const registry = this.contextGenerations.get(rc)?.agents ?? this.agents;
+    const { agent, host } = registry.withOverrides(rc.state.run.overrides).resolve(selector);
     if (
       rc.workspace.rootProvisioning &&
       (process.platform !== "linux" || !(host instanceof LocalHost) || host.id !== rc.workspace.hostId)
@@ -1879,7 +2455,20 @@ export class Orchestrator {
       throw new OrcaError("RUN_STATE", "Owned root workspace requires its matching supported local execution host");
     const key = `${rc.id}:${agent.id}`;
     const model = selectedModel(rc.state.run.overrides, agent);
-    const pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
+    const capabilities = this.stepCapabilities(rc, step, agent);
+    let pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
+    if (pooled && pooled.capabilities !== capabilities.key) {
+      // A per-run session carries the MCP servers it was opened with. A step whose scope
+      // differs gets its own session rather than a broader or narrower one (#335).
+      rc.logger.info("pooled session has other capabilities; reopening it", { agent: agent.id });
+      this.sessions.delete(key);
+      await pooled.close().catch(() => undefined);
+      void pooled.returnSlot();
+      await rc
+        .emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: pooled.session.id } })
+        .catch(() => undefined);
+      pooled = undefined;
+    }
     if (pooled) {
       pooled.current.step = step;
       const now = currentModel(pooled.session);
@@ -1903,12 +2492,14 @@ export class Orchestrator {
         if (e instanceof OrcaError && e.code === "AGENT_MODEL_NOT_FOUND") throw e;
         rc.logger.warn("pooled session refused the model; reopening it", { agent: agent.id, model });
         this.sessions.delete(key);
-        await pooled.session.close().catch(() => undefined);
+        await pooled.close().catch(() => undefined);
+        void pooled.returnSlot();
         await rc
           .emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: pooled.session.id } })
           .catch(() => undefined);
       }
     }
+    const slot = await this.takeSessionSlot(rc, step, agent, host);
     const current = { step };
     let pendingAsks = 0;
     const humanInput = abortableHumanInput(this.humanInput, rc.abort.signal);
@@ -1921,10 +2512,18 @@ export class Orchestrator {
     try {
       session = await this.sessionFactory({
         host,
-        agent,
+        // Only the step's resolved MCP servers reach `session/new` (#335).
+        agent: { ...agent, mcpServers: capabilities.mcpServers },
+        origin: this.sessionOrigin(rc),
         cwd: rc.workspace.cwd,
         logger: rc.logger,
         clock: this.clock,
+        // Secret references are read on the session's own host, at this open, every time (#336).
+        secrets: registry.secrets(),
+        ...(this.secretUse
+          ? { authorizeSecretUse: (uses: SecretUse[]) => this.secretUse!({ runId: rc.id, uses }) }
+          : {}),
+        onSecretValues: (values) => this.rememberSecrets(rc, values),
         onSessionContinuity: (state) => {
           continuity = state;
         },
@@ -2020,8 +2619,44 @@ export class Orchestrator {
       });
     } catch (e) {
       handshake.failed(e);
+      // A failed open whose process was spawned carries that process's exit; its bounded
+      // cleanup may have given up before observing it, so the slot waits for the exit too.
+      // An exit that cannot be observed at all (the handle's promise rejects) is not evidence
+      // the process is gone: the slot stays held and is reported as unconfirmed.
+      const exited = startupTermination(e);
+      // Teardown has begun: a retry of this step in the same run must wait for this slot,
+      // not count it as a per-run session the run holds for good.
+      if (exited) slot.closing();
+      if (exited)
+        void exited.then(
+          () => slot.release(),
+          (error: unknown) => this.unconfirmedTeardown(rc, slot, agent.id, undefined, error),
+        );
+      else slot.release();
       throw e;
     }
+    // The cap bounds live agent processes, not connections. However the session ends -
+    // closed by its step, by the run, or by the agent's connection dropping - it is closed
+    // (once: the owned-process cleanup), and its slot goes back only once that process is
+    // confirmed gone (`terminated`). A close whose cleanup could not observe the exit keeps the
+    // slot until the process does exit, rather than letting a queued open start beside it.
+    let closing: Promise<void> | undefined;
+    const closeOnce = () => (closing ??= session.close());
+    let returning: Promise<void> | undefined;
+    const returnSlot = () =>
+      (returning ??= (async () => {
+        slot.closing();
+        await closeOnce().catch(() => undefined);
+        try {
+          await session.terminated;
+        } catch (error) {
+          // No positive evidence the process is gone: keep the slot, and say so.
+          this.unconfirmedTeardown(rc, slot, agent.id, session.id, error);
+          return;
+        }
+        slot.release();
+      })());
+    void session.closed.then(returnSlot, returnSlot);
     // Until the release function or pool takes ownership, every startup failure
     // must close the newly created session, including a failed opened-event append.
     try {
@@ -2049,13 +2684,17 @@ export class Orchestrator {
         }
       }
       const close = async () => {
-        await session.close();
+        try {
+          await closeOnce();
+        } finally {
+          void returnSlot();
+        }
         await rc
           .emit({ type: "agent.session.closed", payload: { stepRunId: current.step.id, sessionId: session.id } })
           .catch(() => undefined);
       };
       if (agent.sessionMode === "per-run") {
-        const pooled = { session, current };
+        const pooled = { session, current, close: closeOnce, returnSlot, capabilities: capabilities.key };
         this.sessions.set(key, pooled);
         // A pooled session whose connection went away (wedged agent killed after a cancel, or a
         // crash) must not be handed to the next step; let that step open a fresh one instead.
@@ -2066,24 +2705,178 @@ export class Orchestrator {
       }
       return { session, release: close };
     } catch (error) {
-      await session.close().catch((cleanupError: unknown) =>
+      await closeOnce().catch((cleanupError: unknown) =>
         rc.logger.warn("agent session startup cleanup failed", {
           sessionId: session.id,
           error: describeError(cleanupError),
         }),
       );
+      void returnSlot();
       throw error;
     }
+  }
+
+  /**
+   * Take a session slot for this step (#873), waiting when a configured cap is full. Waiting
+   * is a `step.waiting` on `agent-slot` whose detail names the cap and its use; once the slot
+   * is ours the step goes back to waiting on its agent turn. Cancelling the run while the
+   * step waits leaves the queue without ever having held a slot.
+   */
+  private async takeSessionSlot(
+    rc: RunContext,
+    step: StepRun,
+    agent: { id: string; maxSessions?: number | undefined; sessionMode: "per-step" | "per-run" },
+    host: AgentHost,
+  ): Promise<SessionSlot> {
+    const request = {
+      agentId: agent.id,
+      hostId: host.id,
+      caps: () => this.sessionSlotCaps(agent, host),
+      signal: rc.abort.signal,
+      runs: this.runAncestry(rc),
+      deadlineMs: this.sessionSlotWaitMs(),
+      ...(agent.sessionMode === "per-run" ? { pinnedTo: rc.id } : {}),
+    };
+    const immediate = this.sessionSlots.tryAcquire(request);
+    if (immediate) {
+      if (!rc.abort.signal.aborted) return immediate;
+      immediate.release();
+      throw new OrcaError("CANCELLED", "cancelled");
+    }
+    let waited = false;
+    const slot = await this.sessionSlots.acquire({
+      ...request,
+      priority: await this.planPriority(rc).catch(() => undefined),
+      onWait: async (detail) => {
+        waited = true;
+        await rc
+          .emit({ type: "step.waiting", payload: { stepRunId: step.id, on: "agent-slot", detail } })
+          .catch(() => undefined);
+      },
+    });
+    if (waited)
+      await rc.emit({ type: "step.waiting", payload: { stepRunId: step.id, on: "agent-turn" } }).catch(() => undefined);
+    // A cancel that lands after the queue granted the slot but before the open must not spawn:
+    // this is the last await before `openSession` calls the factory.
+    if (rc.abort.signal.aborted) {
+      slot.release();
+      throw new OrcaError("CANCELLED", "cancelled");
+    }
+    return slot;
+  }
+
+  /**
+   * The caps this open is subject to. They are read from the *current* configuration, so an
+   * operator who raises or lowers a cap changes the next open in every run, including runs
+   * pinned to an older generation; the run's own specs answer only for an agent or host the
+   * current configuration no longer has.
+   */
+  private sessionSlotCaps(agent: { id: string; maxSessions?: number | undefined }, host: AgentHost): SessionSlotCaps {
+    const registry = this.generations?.current.agents ?? this.agents;
+    const currentAgent = registry.listAgents().find((a) => a.id === agent.id);
+    const currentHost = registry.hasHost(host.id) ? registry.host(host.id) : undefined;
+    return {
+      daemon: this.daemonSessionCap(),
+      agent: (currentAgent ?? agent).maxSessions,
+      host: hostCap(currentHost ?? host),
+    };
+  }
+
+  private sessionSlotWaitMs(): number | undefined {
+    const generation = this.generations?.current;
+    return generation ? generation.snapshot.config.limits?.agentSlotWaitMs : this.agentSlotWaitMs;
+  }
+
+  private daemonSessionCap(): number | undefined {
+    const generation = this.generations?.current;
+    return generation ? generation.snapshot.config.limits?.maxAgentSessions : this.maxAgentSessions;
+  }
+
+  private configuredSessionLimits(): ConfiguredSessionLimits {
+    const registry = this.generations?.current.agents ?? this.agents;
+    const agents: Record<string, number> = {};
+    for (const a of registry.listAgents()) if (a.maxSessions !== undefined) agents[a.id] = a.maxSessions;
+    const hosts: Record<string, number> = {};
+    for (const h of registry.listHosts()) {
+      const cap = hostCap(h);
+      if (cap !== undefined) hosts[h.id] = cap;
+    }
+    const daemon = this.daemonSessionCap();
+    const wait = this.sessionSlotWaitMs();
+    return {
+      ...(daemon === undefined ? {} : { maxAgentSessions: daemon }),
+      ...(wait === undefined ? {} : { agentSlotWaitMs: wait }),
+      agents,
+      hosts,
+    };
+  }
+
+  /**
+   * A session whose process exit could not be confirmed keeps its slot - the cap bounds live
+   * processes, and this one may still be running - and the operator hears about it: a warning
+   * here and `teardownUnconfirmed` in `agents.list`.
+   */
+  private unconfirmedTeardown(
+    rc: RunContext,
+    slot: SessionSlot,
+    agentId: string,
+    sessionId: string | undefined,
+    error: unknown,
+  ): void {
+    slot.unconfirmed();
+    rc.logger.warn("agent process exit not confirmed; its session slot stays held", {
+      agent: agentId,
+      ...(sessionId ? { sessionId } : {}),
+      error: describeError(error),
+    });
+  }
+
+  /** This run and every run above it that this process is driving, nearest first. */
+  private runAncestry(rc: RunContext): string[] {
+    const runs = [rc.id];
+    let run = rc.state.run;
+    for (let depth = 0; run.parentRunId && depth < 32; depth++) {
+      runs.push(run.parentRunId);
+      const parent = this.live.get(run.parentRunId)?.state.run;
+      if (!parent) break;
+      run = parent;
+    }
+    return runs;
+  }
+
+  /**
+   * The plan priority of the work item this run (or the nearest ancestor run with one)
+   * belongs to: its `computeSchedule()` score. Undefined outside a plan. Asked only when a
+   * step has to wait, so an uncapped daemon never computes a schedule here.
+   */
+  private async planPriority(rc: RunContext): Promise<number | undefined> {
+    let run = rc.state.run;
+    for (let depth = 0; !run.workItemId && run.parentRunId && depth < 16; depth++) {
+      const parent = this.live.get(run.parentRunId)?.state.run;
+      if (!parent) break;
+      run = parent;
+    }
+    if (!run.workItemId) return undefined;
+    const plan = await this.plan.planForRun(run);
+    if (!plan) return undefined;
+    return (await this.plan.schedule(plan.id)).priorities[run.workItemId]?.score;
   }
 
   private async closeRunSessions(runId: string): Promise<void> {
     for (const [key, s] of this.sessions) {
       if (key.startsWith(`${runId}:`)) {
         this.sessions.delete(key);
-        await s.session.close().catch(() => undefined);
+        await s.close().catch(() => undefined);
+        void s.returnSlot();
       }
     }
   }
+}
+
+/** A host's configured cap; a plugin host whose spec has no such field is unlimited. */
+function hostCap(host: AgentHost): number | undefined {
+  const cap = (host.spec as { maxSessions?: unknown }).maxSessions;
+  return typeof cap === "number" ? cap : undefined;
 }
 
 const TERMINAL_STATE_CACHE_SIZE = 256;

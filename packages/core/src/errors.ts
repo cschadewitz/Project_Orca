@@ -34,6 +34,23 @@ export type OrcaErrorCode =
   /** Expected revision/destination/attempt no longer accepts this mutation. */
   | "REVISION_STALE"
   | "CONTINUATION_STALE"
+  /**
+   * A step that may have acted outside ORCA was interrupted, and nobody has reviewed it (#357).
+   * Nothing runs it again until an operator marks it to run again or abandons the run.
+   * `details` has `runId`, `stepRunId` and `nodeId`.
+   */
+  | "EFFECT_REVIEW_REQUIRED"
+  /**
+   * An operator abandoned that step after reviewing it (#357): nothing may run it again, even
+   * while the run's cancellation is still to finish. `details` as for EFFECT_REVIEW_REQUIRED.
+   */
+  | "EFFECT_ABANDONED"
+  /**
+   * The recovery asked for is not possible for this run now (#357): a checkpoint attempt of a
+   * run that did not fail, whose pin, inputs or artifacts are gone, or with an unreviewed step.
+   * `details` has `runId`, `blockers` (RecoveryBlocker codes) and `checkpointStepRunId` when known.
+   */
+  | "RECOVERY_BLOCKED"
   /** Another interpreter holds the run's single-writer lease; see store/lease-store.ts. */
   | "RUN_LEASED"
   | "CLAIM_NOT_FOUND"
@@ -62,6 +79,19 @@ export type OrcaErrorCode =
    * is left unchanged.
    */
   | "STORE_FORMAT"
+  /**
+   * A delegated step (#883) that the remote daemon, or the way to it, refuses for a reason a
+   * retry cannot fix: a refused credential, an incompatible protocol, a daemon that admits no
+   * runs, a workflow it does not have or will not run for this parent, a changed host key.
+   * `details.reason` names which and `details.profile` the remote. Not retried.
+   */
+  | "DELEGATION_REFUSED"
+  /**
+   * The remote run a delegated step started finished without success. `details` carries the
+   * remote `runId`, its `outcome` and its error, when it reported one. Retried like any step
+   * failure: a retry is a new step attempt and so a new remote run.
+   */
+  | "DELEGATED_RUN_FAILED"
   | "INTERNAL";
 
 export class OrcaError extends Error {

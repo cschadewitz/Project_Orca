@@ -1,7 +1,16 @@
 /** Authenticated direct admission and fixed-kind receipt dispatch. No execution is awaited by admit. */
 import type { RuntimeActivity } from "./runtime-activity.js";
 import { OrcaError, type SubmissionAuthority } from "@orca/core";
-import { readAdmissionExecutionStatus, type Orchestrator, type ExecutionResumeAuthority } from "@orca/engine";
+import { ProtocolFault } from "@orca/protocol";
+import {
+  readAdmissionExecutionStatus,
+  type CheckpointAdmissionAuthority,
+  type CheckpointAdmissionCommand,
+  type CheckpointAdmissionResult,
+  type CheckpointAdmissionService,
+  type Orchestrator,
+  type ExecutionResumeAuthority,
+} from "@orca/engine";
 import type {
   DirectAdmissionAuthority,
   DirectAdmissionCommand,
@@ -56,6 +65,31 @@ export function directAdmissionAuthority(options: {
   };
 }
 
+/**
+ * A checkpoint attempt's authority (#357): a direct admission's, for the source run's workflow
+ * (and its request and work item), because an attempt is a new run of it. Whether this
+ * principal may recover that run at all (it started it) is the engine's own check.
+ */
+export function checkpointAdmissionAuthority(
+  direct: DirectAdmissionAuthority,
+  orchestrator: Pick<Orchestrator, "getSummary">,
+): CheckpointAdmissionAuthority {
+  return {
+    workspaceId: direct.workspaceId,
+    actor: direct.actor,
+    authorize: async (command) => {
+      const source = await orchestrator.getSummary(command.runId);
+      await direct.authorize({
+        workflowId: source.workflowId,
+        ...(source.requestId ? { requestId: source.requestId } : {}),
+        ...(source.workItemId ? { workItemId: source.workItemId } : {}),
+      });
+    },
+    onRunAdmitted: (runId) => direct.onRunAdmitted(runId),
+    ...(direct.verifyRunAdmitted ? { verifyRunAdmitted: (runId: string) => direct.verifyRunAdmitted!(runId) } : {}),
+  };
+}
+
 export interface AdmissionAuthorities {
   readonly executionAuthority?: ExecutionResumeAuthority | undefined;
   /** Rechecks live authentication/grants before an ID lookup, including missing IDs. */
@@ -81,6 +115,8 @@ export class AdmissionRetryModel {
       claims: RegisteredRetryClaims;
       requests: RequestSubmissionService;
       direct: DirectAdmissionService;
+      /** Checkpoint attempts (#357); absent means `runs.recover` is not offered. */
+      checkpoints?: CheckpointAdmissionService | undefined;
       orchestrator: Orchestrator;
       execute(runId: string, authority?: ExecutionResumeAuthority): Promise<void>;
       checkResumeAuthority?(runId: string, authority?: ExecutionResumeAuthority): Promise<void>;
@@ -112,19 +148,116 @@ export class AdmissionRetryModel {
       release?.();
     }
   }
+  get supportsCheckpoints(): boolean {
+    return this.options.checkpoints !== undefined;
+  }
+
+  /**
+   * Start a checkpoint attempt of a failed run (#357): one per idempotency key, then driven
+   * here under the same first-attachment policy as an admitted run. A refused recovery
+   * (`RECOVERY_BLOCKED`, `RUN_STATE`) is thrown before anything is written.
+   */
+  async recover(
+    command: CheckpointAdmissionCommand,
+    retry: RetryOptions,
+    authorities: AdmissionAuthorities,
+  ): Promise<RetryResult<CheckpointAdmissionResult>> {
+    const checkpoints = this.options.checkpoints;
+    if (!checkpoints) throw new OrcaError("NOT_SUPPORTED", "Checkpoint attempts are not configured");
+    const release = this.options.runtimeActivity?.enter("dispatch", true);
+    try {
+      const authority = checkpointAdmissionAuthority(await authorities.direct(), this.options.orchestrator);
+      const response = await checkpoints.startAttempt(command, retry, authority);
+      if (response.state === "resolved" && response.result.state === "accepted")
+        this.dispatchCheckpoint(response.operationId, response.result.runId, authority);
+      return response;
+    } finally {
+      release?.();
+    }
+  }
+
+  /** A direct admission's receipt by its idempotency key, or `absent`; never claims (#883). */
+  async find(
+    idempotencyKey: string,
+    authorities: AdmissionAuthorities,
+  ): Promise<{ state: "absent" } | RetryResult<unknown>> {
+    await authorities.check();
+    const authority = await authorities.direct();
+    return this.options.direct.withRetryAuthority(authority, () =>
+      this.options.claims.find("run.admit", idempotencyKey, {
+        principalId: authority.actor.principalId,
+        workspaceId: authority.workspaceId,
+        authorize: (command: unknown) => authority.authorize(command as DirectAdmissionCommand),
+      }),
+    );
+  }
+  /**
+   * Fence a direct admission's idempotency key (#883): afterwards no `runs.admit` under it can
+   * admit a run. Answers the admission already under the key when there is one (so the caller
+   * can cancel its run), else the fence's own `fenced` receipt.
+   */
+  async fence(
+    idempotencyKey: string,
+    workflowId: string,
+    authorities: AdmissionAuthorities,
+  ): Promise<{ state: "absent" } | RetryResult<unknown>> {
+    const existing = await this.find(idempotencyKey, authorities);
+    if (existing.state !== "absent") return existing;
+    const authority = await authorities.direct();
+    try {
+      return await this.options.direct.fence(workflowId, { idempotencyKey }, authority);
+    } catch (error) {
+      // An admission claimed the key between the lookup and the fence: answer it instead.
+      if ((error as { code?: string }).code !== "RETRY_CONFLICT") throw error;
+      const raced = await this.find(idempotencyKey, authorities);
+      if (raced.state === "absent") throw error;
+      return raced;
+    }
+  }
+  /**
+   * The operator endpoints carry request and direct receipts only: a checkpoint attempt's
+   * (`run.recover`) is refused there before any lookup that could reconcile it (#357), and
+   * stays on `admissions.get` / `admissions.reconcile`.
+   */
+  async refuseCheckpointReceipt(operationId: string, authorities: AdmissionAuthorities): Promise<void> {
+    await authorities.check();
+    if ((await this.options.claims.operationKind(operationId, authorities)) === "run.recover")
+      throw new OrcaError(
+        "NOT_SUPPORTED",
+        "A checkpoint attempt's receipt is read and reconciled through admissions.get and admissions.reconcile",
+        { operationId },
+      );
+  }
+
   inspect(operationId: string, authorities: AdmissionAuthorities): Promise<RetryResult<unknown>> {
     return this.receipt(operationId, authorities, false);
   }
-  reconcile(operationId: string, authorities: AdmissionAuthorities): Promise<RetryResult<unknown>> {
-    return this.receipt(operationId, authorities, true);
+  /**
+   * `newAdmission` is the maintenance fence for work that can create a run: reconciling a
+   * checkpoint attempt's receipt can create its reserved run, so it is refused while new
+   * admission is closed (a drain), exactly as `runs.recover` is. Inspection never needs it.
+   */
+  reconcile(
+    operationId: string,
+    authorities: AdmissionAuthorities,
+    newAdmission?: () => void,
+    expectedKind?: "run.recover",
+  ): Promise<RetryResult<unknown>> {
+    return this.receipt(operationId, authorities, true, newAdmission, expectedKind);
   }
   private async receipt(
     operationId: string,
     authorities: AdmissionAuthorities,
     recover: boolean,
+    newAdmission?: () => void,
+    expectedKind?: "run.recover",
   ): Promise<RetryResult<unknown>> {
     await authorities.check();
     const kind = await this.options.claims.operationKind(operationId, authorities);
+    // A caller that named the kind it means (#357) is refused before any dispatch below can
+    // reconcile, create or drive another kind of admission.
+    if (expectedKind !== undefined && kind !== expectedKind)
+      throw new OrcaError("NOT_SUPPORTED", `This admission is not a ${expectedKind} receipt`, { operationId });
     if (kind === "request.submit") {
       const authority = await authorities.request();
       return this.options.requests.withRetryAuthority(authority, () => {
@@ -160,6 +293,22 @@ export class AdmissionRetryModel {
         return result;
       });
     }
+    if (kind === "run.recover" && this.options.checkpoints) {
+      const checkpoints = this.options.checkpoints;
+      const authority = checkpointAdmissionAuthority(await authorities.direct(), this.options.orchestrator);
+      if (recover) newAdmission?.();
+      const result = await (recover
+        ? checkpoints.reconcile(operationId, authority)
+        : checkpoints.inspect(operationId, authority));
+      if (recover && result.state === "resolved" && result.result.state === "accepted") {
+        const runId = result.result.runId;
+        if (await neverAttached(this.options.orchestrator, runId)) {
+          await this.options.checkResumeAuthority?.(runId, authorities.executionAuthority);
+          this.dispatchCheckpoint(operationId, runId, authority, authorities.executionAuthority);
+        }
+      }
+      return result;
+    }
     // Revision/continuation owners provide their authenticated inspection dispatcher at integration.
     throw new OrcaError("NOT_SUPPORTED", "This operation's receipt dispatcher is not installed");
   }
@@ -169,6 +318,40 @@ export class AdmissionRetryModel {
     authority: DirectAdmissionAuthority,
     executionAuthority?: ExecutionResumeAuthority,
   ): void {
+    this.attach(
+      runId,
+      () =>
+        this.options.direct.withRetryAuthority(authority, async () => {
+          const current = await this.options.claims.inspect(operationId, {
+            principalId: authority.actor.principalId,
+            workspaceId: authority.workspaceId,
+            authorize: (command) => authority.authorize(command as DirectAdmissionCommand),
+          });
+          return current.state === "resolved" && (current.result as DirectAdmissionResult).state === "accepted";
+        }),
+      executionAuthority,
+    );
+  }
+
+  private dispatchCheckpoint(
+    operationId: string,
+    runId: string,
+    authority: CheckpointAdmissionAuthority,
+    executionAuthority?: ExecutionResumeAuthority,
+  ): void {
+    const checkpoints = this.options.checkpoints!;
+    this.attach(
+      runId,
+      async () => {
+        const current = await checkpoints.inspect(operationId, authority);
+        return current.state === "resolved" && current.result.state === "accepted";
+      },
+      executionAuthority,
+    );
+  }
+
+  /** Verify the receipt is still accepted, then attach execution once if nothing ever has. */
+  private attach(runId: string, accepted: () => Promise<boolean>, executionAuthority?: ExecutionResumeAuthority): void {
     if (this.closing) return;
     const release = this.options.runtimeActivity?.enter("dispatch");
     // Own the scheduled verification before setImmediate can run. It reads and
@@ -179,26 +362,19 @@ export class AdmissionRetryModel {
           resolve();
           return;
         }
-        void this.options.direct
-          .withRetryAuthority(authority, async () => {
-            const current = await this.options.claims.inspect(operationId, {
-              principalId: authority.actor.principalId,
-              workspaceId: authority.workspaceId,
-              authorize: (command) => authority.authorize(command as DirectAdmissionCommand),
-            });
-            if (current.state !== "resolved" || (current.result as DirectAdmissionResult).state !== "accepted") return;
-            if (this.closing) return;
-            if (!(await neverAttached(this.options.orchestrator, runId))) return;
-            if (this.closing) return;
-            // Execution has its own run lease/lifecycle. Shutdown settles receipt
-            // verification, without waiting for a workflow or cancelling it.
-            const releaseExecution = this.options.runtimeActivity?.enter("execution");
-            void this.options
-              .execute(runId, executionAuthority)
-              .catch(() => this.options.executionFailed(runId))
-              .finally(() => releaseExecution?.());
-          })
-          .then(resolve, reject);
+        void (async () => {
+          if (!(await accepted())) return;
+          if (this.closing) return;
+          if (!(await neverAttached(this.options.orchestrator, runId))) return;
+          if (this.closing) return;
+          // Execution has its own run lease/lifecycle. Shutdown settles receipt
+          // verification, without waiting for a workflow or cancelling it.
+          const releaseExecution = this.options.runtimeActivity?.enter("execution");
+          void this.options
+            .execute(runId, executionAuthority)
+            .catch(() => this.options.executionFailed(runId))
+            .finally(() => releaseExecution?.());
+        })().then(resolve, reject);
       });
     });
     this.verifying.add(verification);
@@ -227,6 +403,19 @@ export async function neverAttached(orchestrator: Orchestrator, runId: string): 
   const status = await readAdmissionExecutionStatus(orchestrator.stores, runId);
   if (status.state !== "ready") return false;
   return !(await orchestrator.stores.leases.get(`run:${runId}`));
+}
+
+/**
+ * The maintenance fence for a call that can admit new work part-way (reconciling a reserved
+ * checkpoint attempt): throws, as the dispatch wrapper does for `runs.admit`, while new
+ * admission is closed. Undefined when this daemon has no maintenance boundary.
+ */
+export function newAdmissionFence(maintenance: { admissionClosed(): boolean } | undefined): (() => void) | undefined {
+  if (!maintenance) return undefined;
+  return () => {
+    if (maintenance.admissionClosed())
+      throw new ProtocolFault("PROTOCOL_MESSAGE", "Update admission is closed; retry later");
+  };
 }
 
 /** A client guard, never authority; reject before admission and exclude from intent comparison. */

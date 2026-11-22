@@ -16,7 +16,15 @@
  * repo-wide and forbids `import … from` in a file that emits CommonJS, so the value import
  * is written in the form the emit actually has; the type imports are erased either way.
  */
-import type { DaemonTargetSnapshot } from "../daemon-connection.js";
+import type {
+  DaemonTargetSnapshot,
+  FleetSnapshot,
+  ProfileRemoval,
+  ProfileResult,
+  RemoteProfileView,
+  ServerInspectionResultView,
+  ServerSetupView,
+} from "../daemon-connection.js";
 // A CommonJS file under `verbatimModuleSyntax` has no other way to spell a value import,
 // and emitting CommonJS is the whole point of this file — see the header.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -30,6 +38,7 @@ import type {
   WorkspaceSnapshot,
 } from "../bridge.js";
 import type { UpdateSnapshot } from "../update-contract.js";
+import type { ServerUpdateOutcome, ServerUpdateProgress, ServerUpdatePreview } from "../server-update.js";
 import type { MacUpdateView } from "../mac-update-contract.js";
 import type { LinuxUpdateNotice } from "../linux-update-contract.js";
 import type { DiagnosticsResult, DiagnosticsStatus } from "../diagnostics-contract.js";
@@ -181,6 +190,12 @@ const bridge: OrcaBridge = {
       };
     },
   },
+  recoveryIntents: {
+    list: (params) => call("orca:recoveryIntents.list", params),
+    start: (params) => call("orca:recoveryIntents.start", params),
+    finish: (params) => call("orca:recoveryIntents.finish", params),
+    dismiss: (params) => call("orca:recoveryIntents.dismiss", params),
+  },
   admissionIntents: {
     start: (workflowId) => call("orca:admissionIntents.start", workflowId),
     list: () => call("orca:admissionIntents.list"),
@@ -207,11 +222,50 @@ const bridge: OrcaBridge = {
         ipcRenderer.off("orca:daemon.show", forward);
       };
     },
-    connect: (url) =>
-      ipcRenderer.invoke("orca:daemon.connect", url, targetEpoch) as Promise<
+    connect: (target) =>
+      ipcRenderer.invoke("orca:daemon.connect", target, targetEpoch) as Promise<
         { ok: true } | { ok: false; message: string }
       >,
     cancel: () => ipcRenderer.send("orca:daemon.cancel"),
+    profiles: {
+      list: () => ipcRenderer.invoke("orca:profiles.list") as Promise<RemoteProfileView[]>,
+      save: (input) => ipcRenderer.invoke("orca:profiles.save", input) as Promise<ProfileResult<RemoteProfileView>>,
+      remove: (id) => ipcRenderer.invoke("orca:profiles.remove", id) as Promise<ProfileResult<ProfileRemoval>>,
+      importCredential: (id) =>
+        ipcRenderer.invoke("orca:profiles.importCredential", id) as Promise<ProfileResult<RemoteProfileView | null>>,
+      forgetHostKey: (id) =>
+        ipcRenderer.invoke("orca:profiles.forgetHostKey", id) as Promise<ProfileResult<RemoteProfileView>>,
+      useAutomaticSignIn: (id) =>
+        ipcRenderer.invoke("orca:profiles.useAutomaticSignIn", id) as Promise<ProfileResult<RemoteProfileView>>,
+      inspectServer: (id) =>
+        ipcRenderer.invoke("orca:profiles.inspectServer", id) as Promise<ProfileResult<ServerInspectionResultView>>,
+      setUpServer: (id, confirmation) =>
+        ipcRenderer.invoke("orca:profiles.setUpServer", id, confirmation) as Promise<ProfileResult<ServerSetupView>>,
+    },
+    fleet: {
+      read: () => ipcRenderer.sendSync("orca:fleet.read") as FleetSnapshot,
+      subscribe: (listener) => {
+        const forward = (_event: unknown, snapshot: FleetSnapshot) => listener(snapshot);
+        ipcRenderer.on("orca:fleet", forward);
+        return () => {
+          ipcRenderer.off("orca:fleet", forward);
+        };
+      },
+      watch: (id, watched) => ipcRenderer.invoke("orca:fleet.watch", id, watched) as Promise<ProfileResult<null>>,
+    },
+  },
+  serverUpdate: {
+    read: () => ipcRenderer.invoke("orca:server.read") as Promise<ServerUpdatePreview | undefined>,
+    approve: (approval) =>
+      ipcRenderer.invoke("orca:server.approve", approval) as Promise<{ ok: true } | { ok: false; message: string }>,
+    update: (request) => ipcRenderer.invoke("orca:server.update", request) as Promise<ServerUpdateOutcome>,
+    onProgress: (listener) => {
+      const forward = (_event: unknown, progress: ServerUpdateProgress) => listener(progress);
+      ipcRenderer.on("orca:server.update.progress", forward);
+      return () => {
+        ipcRenderer.off("orca:server.update.progress", forward);
+      };
+    },
   },
   updates: {
     read: () => ipcRenderer.sendSync("orca:update.read") as UpdateSnapshot,
@@ -251,6 +305,8 @@ const bridge: OrcaBridge = {
     cancel: (params) => call("orca:runs.cancel", params),
     resume: (params) => call("orca:runs.resume", params),
     start: (params) => call("orca:runs.start", params),
+    recovery: (params) => call("orca:runs.recovery", params),
+    reviewEffect: (params) => call("orca:runs.reviewEffect", params),
   },
   inputs: {
     revise: (params) => call("orca:inputs.revise", params),
@@ -287,6 +343,7 @@ const bridge: OrcaBridge = {
     get: (params) => call("orca:workflows.get", params),
     validateInputs: (params) => call("orca:workflows.validateInputs", params),
   },
+  search: { query: (params) => call("orca:search", params) },
   agents: { list: (params = {}) => call("orca:agents.list", params) },
   scopedPermissions: { call: (method, params) => call("orca:scopedPermissions", { method, params }) },
   templates: {
@@ -315,7 +372,8 @@ const bridge: OrcaBridge = {
   alerts: {
     // `send`, not `invoke`: the main process has no verdict to give back about what is
     // waiting, and a promise nobody awaits is a promise nobody notices rejecting.
-    update: (update: AlertsUpdate) => ipcRenderer.send("orca:alerts.update", update, targetEpoch),
+    update: (update: AlertsUpdate, authority: number | undefined) =>
+      ipcRenderer.send("orca:alerts.update", update, targetEpoch, authority),
     // A third push channel, one `ipcRenderer` listener per renderer listener as above.
     subscribe: (listener: (activation: AlertActivation) => void) => {
       const forward = (_event: unknown, activation: AlertActivation): void => listener(activation);

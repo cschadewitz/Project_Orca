@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { canaryMapDigest, channelProblems, parseChannel, watch } from "../deploy/feed-watchdog.js";
+import { canaryMapDigest, channelProblems, offerProblem, parseChannel, watch } from "../deploy/feed-watchdog.js";
 
 const TOKENS = { internal: "i".repeat(43), stable: "s".repeat(43) };
 const sha512 = (text) => createHash("sha512").update(text).digest("base64");
@@ -61,17 +61,21 @@ const run = (w, extra = {}) =>
 
 describe("feed watchdog", () => {
   it("passes a healthy feed and reports each ring", async () => {
-    const { problems, report } = await run(world());
+    const record = { format: 1, rings: { internal: { version: "0.7.1-rc.1" }, stable: { version: "0.7.0" } } };
+    const { problems, report } = await run(world(), { record });
     expect(problems).toEqual([]);
     expect(report).toEqual([
       "internal x64: 0.7.1-rc.1, served bytes match the published release",
       "stable x64: 0.7.0, served bytes match the published release",
+      "internal server: nothing offered (none in rings.json)",
+      "stable server: nothing offered (none in rings.json)",
     ]);
   });
 
   it("downloads each installer once, and sends tokens only to the feed", async () => {
     const w = world({ offers: { internal: "0.7.0", stable: "0.7.0" } });
-    expect((await run(w)).problems).toEqual([]);
+    const record = { format: 1, rings: { internal: { version: "0.7.0" }, stable: { version: "0.7.0" } } };
+    expect((await run(w, { record })).problems).toEqual([]);
     const installer = w.calls.filter((c) => c.href.endsWith("ORCA-0.7.0-win-x64.exe"));
     // One full download, and a HEAD with the other ring's own token.
     expect(installer.map((c) => c.method)).toEqual(["GET", "HEAD"]);
@@ -132,10 +136,26 @@ describe("feed watchdog", () => {
     );
   });
 
-  it("reports a ring that is offered nothing yet without failing", async () => {
-    const { problems, report } = await run(world({ offers: { internal: "0.7.0" } }));
+  it("reports a ring that is offered nothing, as recorded, without failing", async () => {
+    const record = { format: 1, rings: { internal: { version: "0.7.0" } } };
+    const { problems, report } = await run(world({ offers: { internal: "0.7.0" } }), { record });
     expect(problems).toEqual([]);
-    expect(report).toContain("stable x64: nothing offered yet");
+    expect(report).toContain("stable x64: nothing offered (none in rings.json)");
+  });
+
+  it("passes a feed that is off without a ring state, and fails a switched-on one without", async () => {
+    const off = await run(world());
+    expect(off.problems).toEqual([]);
+    expect(off.report[0]).toBe(
+      "no ring state (the feed is off): a 404 cannot be told from an empty ring; only servers-first is checked",
+    );
+    // Even when every channel answers 404, a switched-on feed without its ring state is red.
+    const on = await run(world({ offers: {} }), { commissioned: true });
+    expect(on.problems).toEqual([
+      "the feed is switched on (ORCA_FEED_BUCKET) but its ring state (rings.json) was not available",
+    ]);
+    const empty = await run(world({ offers: {} }), { commissioned: true, record: { format: 1, rings: {} } });
+    expect(empty.problems).toEqual([]);
   });
 
   it("refuses an empty or unknown canary list", async () => {
@@ -231,11 +251,29 @@ describe("feed-watchdog.yml", () => {
     expect(text).toContain("schedule:");
     // Canary tokens are read only by reviewed main, from their own environment, which holds
     // no write credential.
-    expect(text).toContain("if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != ''");
-    expect(text).toContain("environment: feed-canary");
-    expect(text).not.toMatch(/desktop-feed|ORCA_FEED_ACCESS_KEY|ORCA_FEED_SECRET/);
-    expect(text).toContain("FEED_CANARY_TOKENS: ${{ secrets.ORCA_FEED_CANARY_TOKENS }}");
-    expect(text).toContain("run: node tools/deploy/feed-watchdog.js");
+    const [, rings, watch] = /\n {2}rings:\n([\s\S]*?)\n {2}watch:\n([\s\S]*)$/.exec(text);
+    expect(watch).toContain("if: always() && github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != ''");
+    expect(watch).toContain("environment: feed-canary");
+    expect(watch).toContain("needs: rings");
+    expect(watch).not.toMatch(/desktop-feed|feed-reader|ORCA_FEED_(READER_)?(ACCESS_KEY|SECRET)/);
+    expect(watch).toContain("FEED_CANARY_TOKENS: ${{ secrets.ORCA_FEED_CANARY_TOKENS }}");
+    expect(watch).toContain("FEED_RINGS: ${{ needs.rings.outputs.rings }}");
+    expect(watch).toContain("FEED_COMMISSIONED: ${{ vars.ORCA_FEED_BUCKET != '' }}");
+    expect(watch).toContain("run: node tools/deploy/feed-watchdog.js");
+    // The live ring state is read by its own job, which holds the bucket credential and never a
+    // canary token, and only reads.
+    expect(rings).toContain(
+      "if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != '' && vars.ORCA_FEED_BUCKET != ''",
+    );
+    // A read-only key of its own, never the publishing key in desktop-feed.
+    expect(rings).toContain("environment: feed-reader");
+    expect(rings).toContain("AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_READER_ACCESS_KEY_ID }}");
+    expect(rings).toContain("AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_READER_SECRET_ACCESS_KEY }}");
+    expect(rings).not.toMatch(/desktop-feed|ORCA_FEED_ACCESS_KEY|ORCA_FEED_SECRET/);
+    expect(rings).not.toMatch(/CANARY/);
+    expect(rings).toContain('bash tools/deploy/feed-r2.sh read-rings "$RUNNER_TEMP/rings.json"');
+    expect(rings).not.toMatch(/feed-r2\.sh (?!read-rings)/);
+    expect(text).not.toMatch(/upload-artifact|download-artifact|actions: read/);
   });
 });
 
@@ -269,5 +307,248 @@ describe("canaryMapDigest", () => {
     expect(canaryMapDigest({ ...FULL, stable: "short" })).toBeUndefined();
     expect(canaryMapDigest({ ...FULL, stable: 42 })).toBeUndefined();
     expect(canaryMapDigest(undefined)).toBeUndefined();
+  });
+});
+
+describe("server bundle channel (#877)", () => {
+  const SHA = "c".repeat(40);
+  const hex = (text) => createHash("sha256").update(text).digest("hex");
+  const stem = (version) => `orca-server-${version}-linux-x64`;
+  const serverFiles = (version) => ({
+    [`server/${stem(version)}.tar.xz`]: `archive ${version}`,
+    [`server/${stem(version)}.manifest.json`]: `manifest ${version}`,
+    [`server/${stem(version)}.manifest.json.sigstore.json`]: `signature ${version}`,
+  });
+  const channel = (version, files = serverFiles(version)) => {
+    const [archive, manifest, signature] = Object.values(files);
+    return [
+      `version: ${version}`,
+      "platform: linux-x64",
+      `sourceSha: ${SHA}`,
+      `archive: ${stem(version)}.tar.xz`,
+      `archiveSha256: ${hex(archive)}`,
+      `archiveSize: ${archive.length}`,
+      `manifest: ${stem(version)}.manifest.json`,
+      `manifestSha256: ${hex(manifest)}`,
+      `manifestSize: ${manifest.length}`,
+      `signature: ${stem(version)}.manifest.json.sigstore.json`,
+      `signatureSha256: ${hex(signature)}`,
+      `signatureSize: ${signature.length}`,
+      "",
+    ].join("\n");
+  };
+  const release = (version, files = serverFiles(version)) => ({
+    draft: false,
+    published_at: "x",
+    assets: Object.entries(files).map(([path, body]) => ({ name: path.slice("server/".length), digest: sha256(body) })),
+  });
+
+  /** The desktop world, plus a server channel: `servers` maps ring to version. */
+  function serverWorld({ servers, files, releases, text, anonymous = 401 } = {}) {
+    const offered = servers ?? { internal: "0.8.0-rc.1", stable: "0.8.0" };
+    const bodies = { ...serverFiles("0.8.0-rc.1"), ...serverFiles("0.8.0"), ...files };
+    const base = world({
+      offers: {},
+      releases: releases ?? { "0.8.0-rc.1": release("0.8.0-rc.1"), "0.8.0": release("0.8.0") },
+    });
+    const fetch = async (url, init = {}) => {
+      const name = new URL(String(url)).pathname.slice(1);
+      if (String(url).startsWith("https://api.github.com/") || !name.startsWith("server/"))
+        return base.fetch(url, init);
+      base.calls.push({ href: String(url), auth: init.headers?.Authorization, method: init.method ?? "GET" });
+      const auth = init.headers?.Authorization;
+      if (!auth) return new Response(null, { status: anonymous });
+      const ring = Object.keys(TOKENS).find((r) => auth === `Bearer ${TOKENS[r]}`);
+      if (name === "server/latest-linux-x64.yml")
+        return offered[ring]
+          ? new Response(text?.(offered[ring]) ?? channel(offered[ring]), { status: 200 })
+          : new Response(null, { status: 404 });
+      if (bodies[name] === undefined) return new Response(null, { status: 404 });
+      if (init.method === "HEAD")
+        return new Response(null, { status: 200, headers: { "Content-Length": String(bodies[name].length) } });
+      return new Response(bodies[name], { status: 200 });
+    };
+    return { fetch, calls: base.calls };
+  }
+
+  it("passes a healthy server channel and downloads each file once", async () => {
+    const w = serverWorld({ servers: { internal: "0.8.0", stable: "0.8.0" } });
+    const record = { format: 1, rings: {}, server: { internal: { version: "0.8.0" }, stable: { version: "0.8.0" } } };
+    const { problems, report } = await run(w, { record });
+    expect(problems).toEqual([]);
+    expect(report.filter((line) => / server: /.test(line))).toEqual([
+      "internal server: 0.8.0, served bytes match the published release",
+      "stable server: 0.8.0, served bytes match the published release",
+    ]);
+    const archive = w.calls.filter((c) => c.href.endsWith(".tar.xz"));
+    expect(archive.map((c) => c.method)).toEqual(["GET", "HEAD"]);
+  });
+
+  it("fails when the server channel answers without a token", async () => {
+    const { problems } = await run(serverWorld({ anonymous: 200 }));
+    expect(problems).toContain("a server channel request without a token got 200, not 401");
+  });
+
+  it("fails when stable servers are offered a prerelease", async () => {
+    const { problems } = await run(serverWorld({ servers: { stable: "0.8.0-rc.1" } }));
+    expect(problems).toContain("stable server/latest-linux-x64.yml: stable offers the prerelease 0.8.0-rc.1");
+  });
+
+  it("fails on a channel file this feed does not write", async () => {
+    const { problems } = await run(
+      serverWorld({ text: (v) => channel(v).replace("platform: linux-x64", "platform: x") }),
+    );
+    expect(problems.join("\n")).toMatch(/internal server\/latest-linux-x64\.yml: not a server channel file/);
+  });
+
+  it("fails when a served file is not the release's asset, or not the listed bytes", async () => {
+    const releases = {
+      "0.8.0-rc.1": release("0.8.0-rc.1", {
+        ...serverFiles("0.8.0-rc.1"),
+        [`server/${stem("0.8.0-rc.1")}.tar.xz`]: "x",
+      }),
+    };
+    const { problems } = await run(serverWorld({ servers: { internal: "0.8.0-rc.1" }, releases }));
+    expect(problems.join("\n")).toContain(
+      `internal server: ${stem("0.8.0-rc.1")}.tar.xz is not release v0.8.0-rc.1's asset`,
+    );
+    const swapped = { [`server/${stem("0.8.0")}.manifest.json`]: "manifest tampered" };
+    const tampered = await run(
+      serverWorld({ servers: { stable: "0.8.0" }, files: swapped, text: () => channel("0.8.0") }),
+    );
+    expect(tampered.problems).toContain(
+      `stable server: server/${stem("0.8.0")}.manifest.json does not match the channel file's size and sha256`,
+    );
+  });
+
+  it("fails when a ring is offered a server version with no published release", async () => {
+    const { problems } = await run(serverWorld({ servers: { internal: "0.8.0" }, releases: {} }));
+    expect(problems).toContain("internal server: 0.8.0 has no published GitHub release");
+  });
+
+  describe("against the live ring state", () => {
+    // The desktop world offers internal 0.7.1-rc.1 and stable 0.7.0 on x64.
+    const desktop = { internal: { version: "0.7.1-rc.1" }, stable: { version: "0.7.0" } };
+    const both = (servers) => {
+      const d = world();
+      const s = serverWorld({ servers });
+      // Server paths and the 0.8 releases come from the server world, the rest from the desktop one.
+      const server = (url) =>
+        new URL(String(url)).pathname.startsWith("/server/") || String(url).includes("/tags/v0.8");
+      return { fetch: (url, init) => (server(url) ? s.fetch(url, init) : d.fetch(url, init)) };
+    };
+
+    it("passes when every ring is offered exactly what was recorded, an empty ring included", async () => {
+      const record = { format: 1, rings: desktop, server: { internal: { version: "0.8.0-rc.1" } } };
+      const { problems, report } = await run(both({ internal: "0.8.0-rc.1" }), { record });
+      expect(problems).toEqual([]);
+      expect(report).toContain("stable server: nothing offered (none in rings.json)");
+      expect(report.join("\n")).not.toContain("no ring state");
+    });
+
+    it("fails on a 404 where the record has an offer, on either channel", async () => {
+      const record = {
+        format: 1,
+        rings: { ...desktop, preview: { version: "0.7.0" } },
+        server: { internal: { version: "0.8.0-rc.1" }, stable: { version: "0.8.0" } },
+      };
+      const { problems } = await run(both({ internal: "0.8.0-rc.1" }), {
+        record,
+        tokens: { ...TOKENS },
+      });
+      expect(problems).toContain("stable server/latest-linux-x64.yml: got 404, but rings.json offers 0.8.0");
+      const missingDesktop = await run(
+        {
+          fetch: (url, init) =>
+            String(url).endsWith("latest-x64.yml") && init.headers?.Authorization
+              ? new Response(null, { status: 404 })
+              : both({}).fetch(url, init),
+        },
+        { record: { format: 1, rings: desktop } },
+      );
+      expect(missingDesktop.problems).toContain("internal latest-x64.yml: got 404, but rings.json offers 0.7.1-rc.1");
+    });
+
+    it("fails on an offer the record does not name, and accepts the rollout version", async () => {
+      const rolling = {
+        format: 1,
+        rings: desktop,
+        server: { internal: { version: "0.8.0-rc.1", rollout: { version: "0.8.0", percent: 10 } } },
+      };
+      expect((await run(both({ internal: "0.8.0" }), { record: rolling })).problems).toEqual([]);
+      const stale = { format: 1, rings: desktop, server: { internal: { version: "0.8.0" } } };
+      expect((await run(both({ internal: "0.8.0-rc.1" }), { record: stale })).problems).toContain(
+        "internal server/latest-linux-x64.yml: offers 0.8.0-rc.1, but rings.json offers 0.8.0",
+      );
+      const none = { format: 1, rings: desktop };
+      expect((await run(both({ internal: "0.8.0-rc.1" }), { record: none })).problems).toContain(
+        "internal server/latest-linux-x64.yml: offers 0.8.0-rc.1, but rings.json offers nothing",
+      );
+    });
+
+    it("expects every server channel to answer the stop while rings.json sets it, and never otherwise (#878)", async () => {
+      const stop = (inner) => ({
+        fetch: (url, init) =>
+          String(url).endsWith("/server/latest-linux-x64.yml") && init.headers?.Authorization
+            ? new Response(null, { status: 503, headers: { "X-Orca-Feed-Stop": "servers", "Retry-After": "3600" } })
+            : inner.fetch(url, init),
+      });
+      const server = { internal: { version: "0.8.0-rc.1" } };
+      const stopped = { format: 1, rings: desktop, server, serverStop: true };
+      const { problems, report } = await run(stop(both({ internal: "0.8.0-rc.1" })), { record: stopped });
+      expect(problems).toEqual([]);
+      expect(report).toContain("internal server: stopped (serverStop); no server activates anything");
+      expect(report).toContain("stable server: stopped (serverStop); no server activates anything");
+      // The switch set, but a ring still served: a failure.
+      expect((await run(both({ internal: "0.8.0-rc.1" }), { record: stopped })).problems).toContain(
+        "internal server/latest-linux-x64.yml: rings.json stops servers, but the feed answered 200",
+      );
+      // A stop the record does not set: a failure too.
+      expect(
+        (await run(stop(both({ internal: "0.8.0-rc.1" })), { record: { format: 1, rings: desktop, server } })).problems,
+      ).toContain("internal server/latest-linux-x64.yml: answers the servers' stop, but rings.json does not set it");
+    });
+
+    it("refuses a record that is not a valid ring state", async () => {
+      await expect(run(both({}), { record: { format: 1, rings: {}, server: { nightly: {} } } })).rejects.toThrow();
+    });
+
+    it("holds servers first without a record: desktops on a server-era version need servers on it", async () => {
+      const d = world({
+        offers: { internal: "0.8.0" },
+        bodies: { "ORCA-0.8.0-win-x64.exe": "eight" },
+        releases: {
+          "0.8.0": {
+            draft: false,
+            published_at: "x",
+            assets: [{ name: "ORCA-0.8.0-win-x64.exe", digest: sha256("eight") }, ...release("0.8.0").assets],
+          },
+          "0.8.0-rc.1": release("0.8.0-rc.1"),
+        },
+      });
+      const servers = (offered) => {
+        const s = serverWorld({ servers: offered });
+        return {
+          fetch: (url, init) =>
+            new URL(String(url)).pathname.startsWith("/server/") ? s.fetch(url, init) : d.fetch(url, init),
+        };
+      };
+      expect((await run(servers({}))).problems).toContain(
+        "internal server/latest-linux-x64.yml: got 404, but internal's desktops are offered 0.8.0 (servers first)",
+      );
+      expect((await run(servers({ internal: "0.8.0-rc.1" }))).problems).toContain(
+        "internal server/latest-linux-x64.yml: offers 0.8.0-rc.1, older than the 0.8.0 internal's desktops are offered (servers first)",
+      );
+      expect((await run(servers({ internal: "0.8.0" }))).problems).toEqual([]);
+    });
+  });
+});
+
+describe("offerProblem", () => {
+  it("tells an expected-empty ring from an unexpected 404, and needs a record to judge", () => {
+    expect(offerProblem("x", undefined, [], 404)).toBeNull();
+    expect(offerProblem("x", {}, [], 404)).toBeNull();
+    expect(offerProblem("x", {}, ["0.8.0"], 404)).toBe("x: got 404, but rings.json offers 0.8.0");
+    expect(offerProblem("x", {}, ["0.8.0", "0.8.1"], 200, "0.8.1")).toBeNull();
   });
 });

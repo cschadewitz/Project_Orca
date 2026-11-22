@@ -1,4 +1,4 @@
-/** The 228px surface nav: six entries, ⌘1–⌘6, collapsing to icon-only below the sidebar breakpoint. */
+/** The 228px surface nav: one entry per surface, ⌘1–⌘7, collapsing to icon-only below the sidebar breakpoint. */
 import type { JSX } from "react";
 import { textClass } from "../ui/index.js";
 import { SURFACES, type SurfaceId } from "./surfaces.js";

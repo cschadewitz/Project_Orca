@@ -1,5 +1,6 @@
 /** The desktop feed's workflow wiring: only verified signed bytes for a tagged commit enter it. */
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 const read = (name) => readFileSync(`.github/workflows/${name}`, "utf8");
@@ -17,10 +18,11 @@ describe("desktop feed workflows", () => {
     expect(feed).toContain("name: ${{ steps.source.outputs.artifact }}");
     const order = [
       "tools/deploy/feed-source.js",
+      "tools/deploy/feed-arches.js",
       "Get-AuthenticodeSignature",
-      'tools/deploy/release-assets.py signed "$VERSION" "$FEED_ARCHES"',
+      'tools/deploy/release-assets.py signed "$VERSION" "$ARCHES"',
       "Match the published release's installers",
-      'tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$FEED_ARCHES"',
+      'tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$ARCHES"',
     ].map((needle) => feed.indexOf(needle));
     expect(order.every((i) => i > 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -48,10 +50,16 @@ describe("desktop feed workflows", () => {
       expect(read(name)).toContain("PAUSE: ${{ vars.ORCA_FEED_PAUSE }}");
   });
 
-  it("serves only the natively accepted x64 installer, matching the published release", () => {
+  it("serves x64, and arm64 only with verified acceptance, matching the published release", () => {
     const feed = read("feed-publish.yml");
-    expect(feed).toMatch(/^env:\n {2}FEED_ARCHES: x64\n/m);
-    expect(feed).not.toMatch(/FEED_ARCHES: .*arm64/);
+    expect(feed).toMatch(/^env:\n {2}FEED_ARCHES: x64 arm64\n/m);
+    expect(feed).toContain('arches=$(node tools/deploy/feed-arches.js serve "$VERSION" "$REPO"');
+    expect(feed).toContain("--name arm64-acceptance-evidence");
+    expect(feed).toContain("gh api --paginate \"repos/$REPO/releases\" --jq '.[]' | jq -s .");
+    // Every step after the choice uses the chosen list, never the upper bound.
+    const after = feed.slice(feed.indexOf("Choose the architectures to serve"));
+    expect(after.match(/ARCHES: \$\{\{ steps\.arches\.outputs\.arches \}\}/g)).toHaveLength(4);
+    expect(after.split("\n").filter((line) => line.includes("$FEED_ARCHES") && !line.includes("[["))).toEqual([]);
     expect(feed).toContain('[[ "$actual" == "$published" ]]');
     expect(feed).toContain(".digest");
   });
@@ -88,5 +96,83 @@ describe("automatic feed dispatch", () => {
 
   it("queues feed-publish per version so no version's dispatch replaces another's", () => {
     expect(read("feed-publish.yml")).toContain("group: feed-publish-${{ inputs.version }}");
+  });
+});
+
+describe("server bundle channel workflows (#877)", () => {
+  const { parse } = createRequire(new URL("../../packages/cli/package.json", import.meta.url))("yaml");
+  const workflow = (name) => parse(read(name));
+
+  it("publishes the server bundle to internal servers before the desktop job runs", () => {
+    const wf = workflow("feed-publish.yml");
+    const { server, publish } = wf.jobs;
+    expect(publish.needs).toBe("server");
+    expect(server.if).toBe("github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''");
+    expect(server.environment).toBe("desktop-feed");
+    const names = server.steps.map((s) => s.name ?? s.uses);
+    expect(names[0]).toBe("Refuse while the feed is paused");
+    expect(server.steps[0].run).toContain('if [ "$PAUSE" = "true" ]; then');
+    const run = server.steps.map((s) => s.run ?? "").join("\n");
+    // Main's tooling only, the same verification a server runs, the tag's commit, then upload.
+    expect(server.steps[1].with).toMatchObject({ ref: "main", "persist-credentials": false });
+    const order = [
+      "hasServer",
+      "python3 -I tools/deploy/orca-release.py fetch-bundle",
+      "refs/tags/v$VERSION^{commit}",
+      "tools/deploy/feed-server.js channel",
+      "tools/deploy/feed-r2.sh probe",
+      'tools/deploy/feed-r2.sh server-snapshot "$RUNNER_TEMP/server" "$VERSION"',
+    ].map((needle) => run.indexOf(needle));
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // Versions before the 0.8 line skip every step after the check, so the desktop job runs.
+    for (const step of server.steps.slice(server.steps.findIndex((s) => s.id === "applies") + 1))
+      expect(step.if).toBe("steps.applies.outputs.applies == 'true'");
+  });
+
+  it("promotes either channel, refusing everything but a halt while paused", () => {
+    const wf = workflow("feed-promote.yml");
+    const channel = wf.on.workflow_dispatch.inputs.channel;
+    expect(channel).toMatchObject({ type: "choice", options: ["desktop", "server"], default: "desktop" });
+    const run = wf.jobs.promote.steps.find((s) => s.name === "Update the rings").run;
+    expect(run).toContain('desktop) bash tools/deploy/feed-r2.sh promote "$RING" "$VERSION" "$PERCENT" ;;');
+    expect(run).toContain('server) bash tools/deploy/feed-r2.sh promote-server "$RING" "$VERSION" "$PERCENT" ;;');
+    expect(wf.jobs.promote.steps[0].name).toBe("Refuse while the feed is paused");
+  });
+
+  it("stops or resumes every server from main, refusing only a resume while paused (#878)", () => {
+    const wf = workflow("feed-server-stop.yml");
+    expect(wf.on.workflow_dispatch.inputs.action).toMatchObject({ type: "choice", options: ["stop", "resume"] });
+    expect(wf.concurrency).toEqual({ group: "release-publication", "cancel-in-progress": false });
+    expect(wf.permissions).toEqual({ contents: "read" });
+    const { switch: job } = wf.jobs;
+    expect(job.if).toBe("github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''");
+    expect(job.environment).toBe("desktop-feed");
+    const guard = job.steps[0];
+    expect(guard.name).toBe("Refuse to resume while the feed is paused");
+    expect(guard.run).toContain('if [ "$PAUSE" = "true" ] && [ "$ACTION" = "resume" ]; then');
+    expect(job.steps[1].with).toMatchObject({ ref: "main", "persist-credentials": false });
+    const update = job.steps.find((s) => s.name === "Update the rings");
+    expect(update.run.indexOf("feed-r2.sh probe")).toBeLessThan(update.run.indexOf('feed-r2.sh "$ACTION-servers"'));
+  });
+
+  it("has the watchdog read the live ring state, with no ring-state artifacts", () => {
+    for (const name of ["feed-publish.yml", "feed-promote.yml", "feed-watchdog.yml"])
+      expect(read(name)).not.toMatch(/FEED_RINGS_RECORD|feed-rings-/);
+    expect(read("feed-watchdog.yml")).not.toMatch(/upload-artifact|download-artifact/);
+    const watchdog = workflow("feed-watchdog.yml");
+    expect(watchdog.permissions).toEqual({ contents: "read" });
+    const { rings, watch } = watchdog.jobs;
+    expect(rings.environment).toBe("feed-reader");
+    expect(rings.outputs).toEqual({ rings: "${{ steps.read.outputs.rings }}" });
+    expect(rings.steps.find((s) => s.id === "read").run).toContain("feed-r2.sh read-rings");
+    expect(watch.needs).toBe("rings");
+    expect(watch.environment).toBe("feed-canary");
+    const check = watch.steps.find((s) => s.name === "Check every ring and architecture");
+    expect(check.env).toMatchObject({
+      FEED_RINGS: "${{ needs.rings.outputs.rings }}",
+      FEED_COMMISSIONED: "${{ vars.ORCA_FEED_BUCKET != '' }}",
+    });
+    expect(JSON.stringify(watch)).not.toMatch(/ORCA_FEED_(READER_)?(ACCESS_KEY|SECRET)/);
   });
 });

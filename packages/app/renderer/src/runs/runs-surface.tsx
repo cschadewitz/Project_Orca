@@ -29,6 +29,11 @@
  *   daemon has no run control.
  * - **No progress bar, no ETA, no cost.** A running run draws an indeterminate meter and
  *   that is all ORCA can honestly say (rule 12).
+ * - **The board is a second view of the same filter (#340).** **Tree** and **Board** swap
+ *   the left column; the filters, the selection and the step detail stay. The board follows
+ *   the active runs the filter shows, live, and choosing a card opens that run in the tree,
+ *   which is where its steps, attempts, events and artifacts are. Its step counts are counts,
+ *   and the host load and usage it cannot measure per run say "unavailable".
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { CHROME_GLYPHS, STATUS_PRESENTATION, type ConnectionState } from "@orca/design";
@@ -37,7 +42,8 @@ import type { VirtualListHandle } from "../list/index.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { useControls } from "../attention/use-controls.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
-import { Menu, StateView, Text, countedOf, idText, textClass, type Crumb, type MenuItem } from "../ui/index.js";
+import { Button, Menu, StateView, Text, countedOf, idText, textClass, type Crumb, type MenuItem } from "../ui/index.js";
+import { useConnection } from "../chrome/use-connection.js";
 import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { StepDetail } from "../step/index.js";
 import { matchesText } from "./run-rows.js";
@@ -48,7 +54,10 @@ import { ALL_KINDS, Timeline } from "./timeline/timeline.js";
 import { useRunEvents } from "./timeline/use-run-events.js";
 import type { TimelineEntry } from "./timeline/timeline-entries.js";
 import { buildSelectionIndex, useRunSelection, EMPTY_INDEX, type SelectionIndex } from "./use-run-selection.js";
-import { useRuns, type StatusFilter } from "./use-runs.js";
+import { runFiltersSupported, useRuns, type StatusFilter } from "./use-runs.js";
+import { RunBoard } from "./board/run-board.js";
+import { useRunBoard } from "./board/use-run-board.js";
+import { boardRuns } from "./board/board-model.js";
 import "./runs.css";
 
 export interface RunsSurfaceProps {
@@ -80,6 +89,7 @@ export interface RunsSurfaceProps {
 /** A stable empty page, so the memos do not recompute before the data lands. */
 const EMPTY: readonly RunSummaryView[] = [];
 const NO_ENTRIES: readonly TimelineEntry[] = [];
+const NO_IDS: readonly string[] = [];
 
 /** "All statuses" plus the eight, in the design system's order. */
 const STATUS_ITEMS: readonly MenuItem[] = [
@@ -90,6 +100,17 @@ const STATUS_ITEMS: readonly MenuItem[] = [
 const statusLabel = (status: StatusFilter): string =>
   status === "all" ? "All statuses" : STATUS_PRESENTATION[status].word;
 
+/** The time half of the filter: how far back a run's creation may be. */
+const SINCE_ITEMS: readonly (MenuItem & { ms?: number })[] = [
+  { id: "any", label: "Any time" },
+  { id: "1h", label: "Last hour", ms: 3_600_000 },
+  { id: "24h", label: "Last 24 hours", ms: 86_400_000 },
+  { id: "7d", label: "Last 7 days", ms: 7 * 86_400_000 },
+];
+const ALL_WORKFLOWS = "\u0000all";
+
+type View = "tree" | "board";
+
 /** "7 runs", or "3 of 7 runs" once the text filter has narrowed what the daemon sent. */
 function countLabel(shown: number, total: number): string {
   return countedOf(shown, total, "run");
@@ -97,12 +118,23 @@ function countLabel(shown: number, total: number): string {
 
 export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): JSX.Element {
   const [status, setStatus] = useState<StatusFilter>("all");
+  const [workflowId, setWorkflowId] = useState<string | undefined>(undefined);
+  /* The instant is fixed when the range is chosen, so the read does not change under it. */
+  const [since, setSince] = useState<{ id: string; from?: string }>({ id: "any" });
+  const [view, setView] = useState<View>("tree");
   const [text, setText] = useState("");
   const [kind, setKind] = useState<string>(ALL_KINDS);
   /* A run opens with its timeline following: the last thing that happened is what a person
      clicked the run for. Scrolling away holds it, and picking another run starts again. */
   const [follow, setFollow] = useState(true);
-  const { state, reload } = useRuns(status);
+  /* A daemon older than protocol 2.3 ignores the workflow and time filters and answers one
+     unfiltered page; filtering that page here would show a partial answer as the whole one.
+     Against such a daemon the two filters are off, and say why. */
+  const daemonProtocol = useConnection().versions?.daemon;
+  const filtersSupported = runFiltersSupported(daemonProtocol);
+  const effectiveWorkflowId = filtersSupported ? workflowId : undefined;
+  const effectiveFrom = filtersSupported ? since.from : undefined;
+  const { state, reload } = useRuns(status, { workflowId: effectiveWorkflowId, createdFrom: effectiveFrom });
 
   const runs = state.phase === "ready" ? state.runs : EMPTY;
   const visible = useMemo(() => runs.filter((run) => matchesText(run, text)), [runs, text]);
@@ -235,7 +267,48 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
   );
 
   const live = connection === "live";
-  const filtered = status !== "all" || text.trim() !== "";
+  const filtered =
+    status !== "all" || effectiveWorkflowId !== undefined || effectiveFrom !== undefined || text.trim() !== "";
+
+  /* The workflows to choose from: every one the daemon has registered, those of the runs held
+     (a run outlives its workflow's registration), and the one chosen, so the menu can always
+     name the current filter. Registered ones come from `workflows.list`, because the runs
+     held are one page and the workflow a person is after may only have runs past it. */
+  const [registered, setRegistered] = useState<readonly string[]>([]);
+  useEffect(() => {
+    let live = true;
+    void window.orca.workflows.list({}).then((result) => {
+      if (live && result.ok) setRegistered(result.result.workflows.map((w) => w.id));
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const workflowItems = useMemo((): readonly MenuItem[] => {
+    const ids = new Set([...registered, ...runs.map((run) => run.workflowId)]);
+    if (workflowId !== undefined) ids.add(workflowId);
+    return [{ id: ALL_WORKFLOWS, label: "All workflows" }, ...[...ids].sort().map((id) => ({ id, label: id }))];
+  }, [registered, runs, workflowId]);
+  const sinceLabel = SINCE_ITEMS.find((item) => item.id === since.id)?.label ?? "Any time";
+
+  /* The board follows the active roots of what the filter shows, and keeps a run it was
+     following once that run finishes; a new filter starts the set again. */
+  const [following, setFollowing] = useState<readonly string[]>([]);
+  const filterKey = `${status}\n${effectiveWorkflowId ?? ""}\n${effectiveFrom ?? ""}\n${text}`;
+  useEffect(() => setFollowing([]), [filterKey]);
+  const boardIds = useMemo(() => boardRuns(visible, following), [visible, following]);
+  useEffect(() => {
+    if (boardIds.join("\n") !== following.join("\n")) setFollowing(boardIds);
+  }, [boardIds, following]);
+  const board = useRunBoard(view === "board" ? boardIds : NO_IDS, connection);
+  const openInTree = useCallback(
+    (runId: string) => {
+      pendingOpen.current = undefined;
+      setView("tree");
+      selection.selectRun(runId);
+    },
+    [selection],
+  );
   useRunWrites(selectedRunId, selectedRun?.name);
 
   return (
@@ -275,6 +348,64 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
             {CHROME_GLYPHS.crumbSeparator}
           </span>
         </Menu>
+        {filtersSupported ? (
+          <>
+            <Menu
+              label={`Filter by workflow, currently ${workflowId ?? "all workflows"}`}
+              items={workflowItems}
+              triggerClassName={`orca-btn ${textClass("caption")} orca-btn--ghost orca-btn--sm`}
+              onChoose={(item) => setWorkflowId(item.id === ALL_WORKFLOWS ? undefined : item.id)}
+            >
+              {workflowId ?? "All workflows"}
+              <span className="orca-runs__caret" aria-hidden="true">
+                {CHROME_GLYPHS.crumbSeparator}
+              </span>
+            </Menu>
+            <Menu
+              label={`Filter by start time, currently ${sinceLabel}`}
+              items={SINCE_ITEMS}
+              triggerClassName={`orca-btn ${textClass("caption")} orca-btn--ghost orca-btn--sm`}
+              onChoose={(item) => {
+                const ms = SINCE_ITEMS.find((candidate) => candidate.id === item.id)?.ms;
+                setSince(
+                  ms === undefined ? { id: "any" } : { id: item.id, from: new Date(Date.now() - ms).toISOString() },
+                );
+              }}
+            >
+              {sinceLabel}
+              <span className="orca-runs__caret" aria-hidden="true">
+                {CHROME_GLYPHS.crumbSeparator}
+              </span>
+            </Menu>
+          </>
+        ) : (
+          <>
+            <Button
+              size="sm"
+              tone="ghost"
+              disabled
+              disabledReason={`Filtering by workflow and start time needs daemon protocol 2.3; this daemon speaks ${daemonProtocol ?? "an older one"}`}
+            >
+              All workflows
+            </Button>
+            <Button size="sm" tone="ghost" disabled disabledReason="Filtering by start time needs daemon protocol 2.3">
+              Any time
+            </Button>
+          </>
+        )}
+        <div className="orca-runs__views" role="group" aria-label="View">
+          {(["tree", "board"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              className={`orca-btn ${textClass("caption")} orca-btn--ghost orca-btn--sm`}
+              aria-pressed={view === v}
+              onClick={() => setView(v)}
+            >
+              {v === "tree" ? "Tree" : "Board"}
+            </button>
+          ))}
+        </div>
         {state.phase === "ready" && (
           <Text style="caption" className="orca-runs__count">
             {countLabel(visible.length, state.total)}
@@ -298,7 +429,14 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
             onClearFilter={() => {
               setText("");
               setStatus("all");
+              setWorkflowId(undefined);
+              setSince({ id: "any" });
             }}
+            board={
+              view === "board" ? (
+                <RunBoard runs={board.runs} live={live} filtered={filtered} onOpen={openInTree} onRetry={board.retry} />
+              ) : undefined
+            }
           />
           {/* The boundary between the two lists in this column (#276), and a grid item between
               them. A deep run tree was stuck at two fifths of the left column however much the
@@ -332,7 +470,7 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
           {detail === undefined ? (
             <StateView kind="empty" title="Step detail" body="Select a run in the tree to see what it produced." />
           ) : (
-            <StepDetail detail={detail} stepRunId={selectedStepRunId} connection={connection} />
+            <StepDetail detail={detail} stepRunId={selectedStepRunId} connection={connection} onOpenRun={openInTree} />
           )}
         </aside>
       </div>
@@ -352,6 +490,8 @@ interface TreeBodyProps {
   onSelect: (row: TreeRow) => void;
   onRetry: () => void;
   onClearFilter: () => void;
+  /** The board, in place of the tree, when that view is chosen. */
+  board?: JSX.Element | undefined;
 }
 
 /** The tree, or the one state view that stands in for it. */
@@ -382,6 +522,8 @@ function TreeBody(props: TreeBodyProps): JSX.Element {
       />
     );
   }
+
+  if (props.board) return props.board;
 
   if (visible.length === 0) {
     return filtered ? (

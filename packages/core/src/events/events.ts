@@ -10,10 +10,12 @@ import { z } from "zod";
 import { ArtifactSchema } from "../model/artifact.js";
 import {
   BranchSkipReasonSchema,
+  EffectReviewDecisionSchema,
   ErrorInfoSchema,
   GateOptionSchema,
   HumanInputLiveIdentitySchema,
   RunOutcomeSchema,
+  RunCheckpointSchema,
   RunOverridesSchema,
   RunStatusSchema,
   StepResultSchema,
@@ -143,6 +145,8 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       workflowStored: z.literal(true).optional(),
       /** Exact launch values require the private execution store; missing records fail closed. */
       executionInputsStored: z.literal(true).optional(),
+      /** A checkpoint attempt (#357): the source, and the steps, artifacts and vars it reuses. */
+      checkpoint: RunCheckpointSchema.optional(),
     }),
   ),
   base("run.started", z.object({})),
@@ -174,9 +178,31 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
   base("step.inputs", z.object({ stepRunId: z.string(), artifactIds: z.array(z.string()) })),
   base("step.waiting", z.object({ stepRunId: z.string(), on: z.string(), detail: z.string().optional() })),
   base("step.completed", z.object({ stepRunId: z.string(), result: StepResultSchema })),
-  base("step.failed", z.object({ stepRunId: z.string(), error: ErrorInfoSchema, willRetry: z.boolean() })),
+  base(
+    "step.failed",
+    z.object({
+      stepRunId: z.string(),
+      error: ErrorInfoSchema,
+      willRetry: z.boolean(),
+      /** The executor stated this attempt did nothing outside ORCA (#357); see `StepRun.noEffect`. */
+      effect: z.literal("none").optional(),
+    }),
+  ),
   base("step.cancelled", z.object({ stepRunId: z.string() })),
   base("step.skipped", z.object({ stepRunId: z.string(), reason: z.string() })),
+  /**
+   * An operator reviewed a step attempt that started, never reported an outcome and may have
+   * acted outside ORCA (#357). Until one is recorded, nothing runs that step again on its own.
+   */
+  base(
+    "step.effect.reviewed",
+    z.object({
+      stepRunId: z.string(),
+      decision: EffectReviewDecisionSchema,
+      note: z.string().max(2000).optional(),
+      actor: MutationActorSchema.optional(),
+    }),
+  ),
 
   base(
     "agent.session.opened",

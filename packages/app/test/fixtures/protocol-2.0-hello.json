@@ -1,0 +1,30 @@
+{
+  "source": "Captured from the v0.7.0 tag (dc04a72): its DaemonClient.hello('orca-app/connection') against its own startDaemon with runs.read, runs.control, runs.subscribe. Protocol 2.0 wire, byte-for-byte JSON.",
+  "request": {
+    "kind": "request",
+    "id": 1,
+    "method": "hello",
+    "params": {
+      "client": "orca-app/connection",
+      "protocol": {
+        "major": 2,
+        "minor": 0
+      }
+    }
+  },
+  "response": {
+    "kind": "response",
+    "id": 1,
+    "ok": true,
+    "result": {
+      "protocol": {
+        "major": 2,
+        "minor": 0
+      },
+      "orcaVersion": "0.7.0",
+      "processId": 468,
+      "capabilities": ["runs.read", "runs.control", "runs.subscribe"],
+      "methods": ["hello", "maintenance"]
+    }
+  }
+}

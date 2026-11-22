@@ -22,6 +22,7 @@
  * without waiting on a real timer.
  */
 import {
+  PROTOCOL_VERSION,
   SUBSCRIBE_METHOD,
   SubscribeResultSchema,
   parseMessage,
@@ -31,7 +32,12 @@ import {
 } from "@orca/protocol";
 
 import type { DaemonIdentity } from "../daemon-connection.js";
-import { assertCredentialDestination, authenticationCode, type DaemonTokenSource } from "./auth.js";
+import {
+  assertCredentialDestination,
+  authenticationCode,
+  CredentialTransportUnavailable,
+  type DaemonTokenSource,
+} from "./auth.js";
 
 /** What the subscription needs of an open connection. */
 export interface SocketHandle {
@@ -208,7 +214,12 @@ export class DaemonSubscription {
     try {
       token = this.opts.auth?.tokens.read();
       assertCredentialDestination(this.opts.url, token);
-    } catch {
+    } catch (error) {
+      // A tunnel that is not verified yet: reconnect later, as for a dropped socket.
+      if (error instanceof CredentialTransportUnavailable) {
+        this.onClose();
+        return;
+      }
       this.authenticationFailed(false);
       return;
     }
@@ -251,7 +262,8 @@ export class DaemonSubscription {
     this.pendingSubscribe = ++this.requestId;
     // Resume where the stream got to. A cursor is a sequence number within one run, so it
     // only goes out when the subscription is for one run (the protocol refuses it otherwise).
-    const base = { ...this.opts.params };
+    // This build's event schema reads every type up to its own protocol (#357).
+    const base: SubscribeParams = { protocol: PROTOCOL_VERSION, ...this.opts.params };
     if (this.resetCursor) delete base.since;
     const params: SubscribeParams =
       this.opts.params.runId !== undefined && this.cursor !== undefined ? { ...base, since: this.cursor } : base;

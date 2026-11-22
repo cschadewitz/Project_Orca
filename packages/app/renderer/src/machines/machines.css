@@ -1,0 +1,150 @@
+/* What the Machines surface (#882) adds on top of the component layer, and no more.
+
+   The surface is a stack of content — a summary line and one section per machine — so it
+   scrolls at its root (AGENTS.md, "Say where your screen scrolls"). Every value is a token;
+   widths that are columns of text are in `ch`. */
+
+.orca-machines {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.orca-machines__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+}
+.orca-machines__summary > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.orca-machines__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+/* ---------- one machine ---------- */
+
+.orca-machine {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: var(--stroke-hairline) solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+/* The one machine writes go to. An edge, not a fill: it is a fact about the machine, not a
+   selection a person is making. */
+.orca-machine--focused {
+  border-color: var(--accent);
+}
+
+.orca-machine__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+}
+/* type: heading */
+.orca-machine__name {
+  margin: 0;
+  min-width: 0;
+  max-width: 40ch;
+}
+/* type: caption. Where it is comes second. */
+.orca-machine__detail {
+  min-width: 0;
+  max-width: 40ch;
+  color: var(--ink-secondary);
+}
+.orca-machine__state {
+  white-space: nowrap;
+}
+/* type: eyebrow */
+.orca-machine__focus {
+  margin-left: auto;
+  color: var(--accent);
+}
+.orca-machine__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.orca-machine__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  color: var(--ink-secondary);
+}
+
+/* type: caption */
+.orca-machine__reason,
+.orca-machine__unread,
+.orca-machine__idle,
+.orca-machine__hint {
+  margin: 0;
+  color: var(--ink-secondary);
+}
+
+.orca-machine__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+/* type: eyebrow */
+.orca-machine__group-head {
+  margin: 0;
+  color: var(--ink-secondary);
+}
+
+.orca-machine__list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* A row is one line: the chip, the run's name, and for an ask its question, which gives way. */
+.orca-machine__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) 0;
+}
+.orca-machine__row > .orca-truncate {
+  min-width: 0;
+}
+/* type: caption */
+.orca-machine__question {
+  flex: 1;
+  color: var(--ink-secondary);
+}
+
+/* type: body. The name of a run on the focused machine opens it; it looks like the text it is. */
+.orca-machine__link {
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ink-primary);
+  text-align: start;
+  cursor: pointer;
+}
+.orca-machine__link:hover {
+  text-decoration: underline;
+}
+.orca-machine__link:focus-visible {
+  outline: var(--stroke-focus) solid var(--border-focus);
+  outline-offset: var(--stroke-focus);
+}

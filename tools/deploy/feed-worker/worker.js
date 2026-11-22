@@ -1,9 +1,11 @@
 /**
- * Cloudflare Worker serving the private Windows desktop update feed from an R2 bucket.
+ * Cloudflare Worker serving the private update feed from an R2 bucket: the Windows desktop
+ * channel, and the headless server bundle channel under `server/` (#877).
  *
  * Every request needs `Authorization: Bearer <token>`. The Worker never sees plain tokens at
  * rest: the `FEED_TOKENS` secret maps each token's SHA-256 (hex) to the ring it belongs to,
- * `{"<sha256>": {"ring": "preview"}}`. The bucket holds immutable `<version>/` snapshots and
+ * `{"<sha256>": {"ring": "preview"}}`. A server's token may be limited to the server channel,
+ * `{"ring": "preview", "channel": "server"}`; it then reads nothing of the desktop channel. The bucket holds immutable `<version>/` snapshots and
  * `rings.json` (see rings.js). Nothing of a snapshot is served until its `complete.json`
  * exists, which feed-r2.sh writes last. The channel file a client asks for (`latest-x64.yml`)
  * resolves per token: the ring's version, or its partial rollout when the token's stable
@@ -11,19 +13,32 @@
  * in their file name, which is how electron-updater finds the old blockmap for a
  * differential download.
  *
+ * The server channel works the same way, from its own snapshots: `server/<version>/` holds the
+ * bundle, its manifest and the manifest's Sigstore signature (as attached to the GitHub
+ * release, #876) and `latest-linux-x64.yml`, and is served only once its own `complete.json`
+ * exists. `server/latest-linux-x64.yml` resolves per token from rings.json's `server` rings;
+ * `server/orca-server-<version>-linux-x64.*` is addressed by the version in its name. The
+ * server verifies the signature itself (orca-release.py), so the feed is transport only.
+ *
  * Responses are never cached and never redirect. Authorization is never logged.
  */
-import { RINGS, validateRings, versionFor } from "./rings.js";
+import { RINGS, isVersion, validateRings, versionFor } from "./rings.js";
 
 const CHANNEL = /^latest-(x64|arm64)\.yml$/;
 const PAYLOAD = /^ORCA-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-win-(x64|arm64)\.exe(?:\.blockmap)?$/;
 /**
- * Architectures the feed serves, matching `FEED_ARCHES` in feed-publish.yml. Only x64 has
- * native acceptance, so arm64 channel files and payloads answer 404 even if the bucket holds
- * them. Adding arm64 is a reviewed change here and there, then a Worker deploy.
+ * Architectures the feed can serve at all, matching `FEED_ARCHES` in feed-publish.yml;
+ * anything else answers 404 even if the bucket holds it. Which of them one version serves is
+ * that snapshot's own immutable record: `complete.json` lists the architectures feed-r2.sh
+ * published (#889), and a record without the list (every snapshot written before it)
+ * serves x64 only. That holds for channel files and for direct installer and blockmap reads.
  */
-export const SERVED_ARCHES = Object.freeze(["x64"]);
+export const SERVED_ARCHES = Object.freeze(["x64", "arm64"]);
+const LEGACY_ARCHES = Object.freeze(["x64"]);
 const TOKEN = /^Bearer ([A-Za-z0-9_-]{32,256})$/;
+const SERVER_CHANNEL = "server/latest-linux-x64.yml";
+const SERVER_PAYLOAD =
+  /^server\/(orca-server-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-linux-x64\.(?:tar\.xz|manifest\.json|manifest\.json\.sigstore\.json))$/;
 
 function respond(status, extra = {}, body = null) {
   return new Response(body, { status, headers: { "Cache-Control": "no-store", ...extra } });
@@ -34,14 +49,18 @@ async function sha256Hex(text) {
   return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** The caller's token hash and ring, or undefined for anything short of a known token. */
+/**
+ * The caller's token hash, ring and whether it is limited to the server channel, or undefined
+ * for anything short of a known token. An entry naming any other channel is refused outright.
+ */
 export async function authenticate(request, tokens) {
   const match = TOKEN.exec(request.headers.get("Authorization") ?? "");
   if (!match) return undefined;
   const hash = await sha256Hex(match[1]);
   const entry = Object.hasOwn(tokens, hash) ? tokens[hash] : undefined;
   if (!entry || !RINGS.includes(entry.ring)) return undefined;
-  return { hash, ring: entry.ring };
+  if (entry.channel !== undefined && entry.channel !== "server") return undefined;
+  return { hash, ring: entry.ring, serverOnly: entry.channel === "server" };
 }
 
 /**
@@ -65,12 +84,67 @@ export function parseRange(header) {
 
 function contentType(name) {
   if (name.endsWith(".yml")) return "text/yaml; charset=utf-8";
+  if (name.endsWith(".json")) return "application/json";
   return "application/octet-stream";
 }
 
-/** feed-r2.sh writes VERSION/complete.json last; until then nothing of VERSION is served. */
-async function complete(bucket, version) {
-  return Boolean(await bucket.head(`${version}/complete.json`));
+/**
+ * Whether server/VERSION/complete.json, which feed-r2.sh writes last, is exactly the record
+ * it writes for that version. Nothing of a server snapshot is served before.
+ */
+export function serverSnapshotComplete(text, version) {
+  let record;
+  try {
+    record = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  return (
+    !!record &&
+    typeof record === "object" &&
+    !Array.isArray(record) &&
+    Object.keys(record).length === 3 &&
+    record.format === 1 &&
+    record.version === version &&
+    record.platform === "linux-x64"
+  );
+}
+
+async function serverPublished(bucket, version) {
+  const object = await bucket.get(`server/${version}/complete.json`);
+  return object ? serverSnapshotComplete(await object.text(), version) : false;
+}
+
+/**
+ * The architectures VERSION's snapshot was published with, from VERSION/complete.json, which
+ * feed-r2.sh writes last: undefined (serve nothing) until it exists or if it is not a record
+ * this feed writes. A record without `arches` predates #889 and serves x64 only.
+ */
+export function snapshotArches(text, version) {
+  let record;
+  try {
+    record = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!record || typeof record !== "object" || Array.isArray(record)) return undefined;
+  if (record.version !== undefined && record.version !== version) return undefined;
+  if (record.arches === undefined) return record.format === 2 ? undefined : LEGACY_ARCHES;
+  const { arches } = record;
+  if (
+    record.format !== 2 ||
+    !Array.isArray(arches) ||
+    arches.length === 0 ||
+    new Set(arches).size !== arches.length ||
+    !arches.every((arch) => SERVED_ARCHES.includes(arch))
+  )
+    return undefined;
+  return arches;
+}
+
+async function published(bucket, version) {
+  const object = await bucket.get(`${version}/complete.json`);
+  return object ? snapshotArches(await object.text(), version) : undefined;
 }
 
 async function readRings(bucket) {
@@ -128,7 +202,30 @@ export async function handle(request, env) {
 
   // The query is ignored: electron-updater appends a random one to channel requests.
   const name = new URL(request.url).pathname.replace(/^\/+/, "");
-  if (name.includes("/")) return respond(404);
+
+  // The server bundle channel (#877): any token, including one limited to it.
+  if (name === SERVER_CHANNEL) {
+    let rings;
+    try {
+      rings = await readRings(env.FEED);
+    } catch {
+      return respond(503);
+    }
+    // The servers' stop switch (#878): no server may activate anything, even a version it was
+    // offered before; the updater only ever activates what a fresh channel file names.
+    if (rings?.serverStop === true) return respond(503, { "X-Orca-Feed-Stop": "servers", "Retry-After": "3600" });
+    const version = rings && (await versionFor(rings, caller.ring, caller.hash, "server"));
+    if (!version || !(await serverPublished(env.FEED, version))) return respond(404);
+    return serve(env.FEED, `server/${version}/latest-linux-x64.yml`, name, request);
+  }
+  const bundle = SERVER_PAYLOAD.exec(name);
+  if (bundle) {
+    if (!isVersion(bundle[2]) || !(await serverPublished(env.FEED, bundle[2]))) return respond(404);
+    return serve(env.FEED, `server/${bundle[2]}/${bundle[1]}`, name, request);
+  }
+
+  // Everything else is the desktop channel, which a server-only token never reads.
+  if (caller.serverOnly || name.includes("/")) return respond(404);
 
   const channel = CHANNEL.exec(name);
   if (channel) {
@@ -140,7 +237,7 @@ export async function handle(request, env) {
       return respond(503);
     }
     const version = rings && (await versionFor(rings, caller.ring, caller.hash));
-    if (!version || !(await complete(env.FEED, version))) return respond(404);
+    if (!version || !(await published(env.FEED, version))?.includes(channel[1])) return respond(404);
     // An rc snapshot carries prerelease-ARCH.yml; the client always asks for latest-ARCH.yml.
     for (const file of [`latest-${channel[1]}.yml`, `prerelease-${channel[1]}.yml`]) {
       if (await env.FEED.head(`${version}/${file}`)) return serve(env.FEED, `${version}/${file}`, name, request);
@@ -153,7 +250,7 @@ export async function handle(request, env) {
   const payload = PAYLOAD.exec(name);
   if (payload) {
     if (!SERVED_ARCHES.includes(payload[2])) return respond(404);
-    if (!(await complete(env.FEED, payload[1]))) return respond(404);
+    if (!(await published(env.FEED, payload[1]))?.includes(payload[2])) return respond(404);
     return serve(env.FEED, `${payload[1]}/${name}`, name, request);
   }
   return respond(404);

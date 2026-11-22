@@ -14,7 +14,12 @@ import { admissionRetryFaults } from "@orca/core";
 import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
 import { enterDaemonStoreFormat } from "./desktop-carryover.js";
 import { readOrcaVersion } from "./version.js";
-import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
+import {
+  CheckpointAdmissionService,
+  RegisteredRetryClaims,
+  DirectAdmissionService,
+  RetrySafeAdmissionService,
+} from "@orca/engine";
 
 import { createHash, randomUUID } from "node:crypto";
 
@@ -45,6 +50,7 @@ import {
 } from "@orca/core";
 import {
   ConfigurationGenerations,
+  capabilityChecker,
   FileAdmissionStore,
   MemoryAdmissionStore,
   autoHumanInput,
@@ -67,9 +73,11 @@ import {
   type PluginRestorationIdentityVerifier,
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
+import { delegatingSessionFactory, validateRemotes } from "@orca/daemon";
 import { fileStores, memoryStores, type Stores } from "@orca/store";
 import { bindLocalAdmissionExecution } from "./admission-execution-authority.js";
 import { cliHumanInput } from "./human-input-cli.js";
+import { localSecretUse } from "./local-secret-use.js";
 import {
   captureRuntimeObjects,
   capturePluginRestoration,
@@ -142,6 +150,8 @@ export interface OrcaApp {
   retryClaims?: RegisteredRetryClaims | undefined;
   retryClaimStore?: RetryClaimStore | undefined;
   directAdmissions?: DirectAdmissionService | undefined;
+  /** Retry-safe checkpoint attempts of failed runs (#357). */
+  checkpointAdmissions?: CheckpointAdmissionService | undefined;
   submissionAuthority?: SubmissionAuthority | undefined;
   plan: PlanService;
   workflows: WorkflowRegistry;
@@ -350,7 +360,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     );
   }
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
-  const agents = AgentRegistry.fromConfig(config);
+  const agents = AgentRegistry.fromConfig(config, { configDir: resolve(configDir) });
   const assets = await releaseAssets(config);
   const templates = await loadTemplates(assets.templates, configDir);
   const workflows = await loadWorkflows(assets.workflows, configDir);
@@ -473,6 +483,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       hasTemplate: (id) => templates.has(id),
       hasWorkflow: (id) => workflows.has(id),
       hasAgent: (s) => agents.canResolve(s),
+      checkCapabilities: capabilityChecker(agents),
       validateCustomNode: (n) => executors.validateNode(n),
     });
     for (const e of r.errors) problems.push(`${def.id}: ${e.path}: ${e.message}`);
@@ -485,7 +496,22 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       { problems },
     );
 
-  const openSession = makeSessionFactory({ configDir, storeDir: config.storeDir, configFile });
+  for (const problem of validateRemotes(config)) problems.push(problem);
+  if (problems.length)
+    throw new OrcaError("CONFIG_INVALID", `remote validation failed:\n${problems.map((p) => "  - " + p).join("\n")}`, {
+      problems,
+    });
+  // `type: orca-daemon` agents open a session on their remote daemon (#883); every other agent
+  // goes to the ACP factory unchanged. The remotes are read at each open, so an applied config
+  // edit reaches the next session.
+  let currentRemotes = () => config.remotes;
+  const delegating = (base: SessionFactory): SessionFactory =>
+    delegatingSessionFactory(base, {
+      remotes: () => currentRemotes(),
+      configDir,
+      receiptsDir: resolve(configDir, config.storeDir, "delegations"),
+    });
+  const openSession = delegating(makeSessionFactory({ configDir, storeDir: config.storeDir, configFile }));
   const orchestrator = new Orchestrator({
     stores,
     ...(opts.revisionRuntime ? { revisionRuntime: opts.revisionRuntime(stores) } : {}),
@@ -501,7 +527,10 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     // (`orca agent ping`), and standing grants a workspace recorded for its real runs are
     // durable workspace state of exactly the kind `ephemeral` means to leave alone.
     ...(opts.ephemeral
-      ? {}
+      ? // The bare ACP factory, no sidecar; delegating only when there is a remote to go to.
+        config.remotes.length
+        ? { sessionFactory: delegating(openAcpSession) }
+        : {}
       : {
           sessionFactory: (options: OpenSessionOptions) => {
             const current = agents.resolve(options.agent.id).agent;
@@ -547,6 +576,10 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     ...(bootstrapBound ? { runtimeBootstrapBound: true } : {}),
   });
   orchestrator.generations = generations;
+  currentRemotes = () => generations.current.snapshot.config.remotes;
+  // Session caps are read from the current generation (#873): an applied edit that raises
+  // one lets the steps queued for it go now rather than at the next release.
+  generations.onChange(() => orchestrator.sessionSlots.pump());
   // Explicit embedder/plugin ports and later facade replacements stay live. Only the
   // configured gate policy is restored; permission requests still use the live port.
   orchestrator.generationHumanInput = (generation) =>
@@ -576,6 +609,15 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       inputs?.keplerTaskDir,
     );
   };
+  // Secret references (#336): every local path - run, submit, resume, answer - decides from
+  // the root owner's durable record and current credentials. `orca serve` replaces it with
+  // the daemon's own. An ephemeral orchestrator (`orca agent ping`) has none: it never delivers.
+  if (!opts.ephemeral)
+    orchestrator.secretUse = localSecretUse({
+      configDir,
+      storeDir: resolve(configDir, config.storeDir),
+      orchestrator,
+    });
   const provided = await opts.requestSubmission?.({ orchestrator, config, configDir });
   const authority = provided?.authority ?? (await opts.submissionAuthority?.({ orchestrator, config, configDir }));
   if (authority) bindLocalAdmissionExecution(orchestrator, "request", authority);
@@ -595,6 +637,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
         captureLaunch: generations.captureLaunch,
         restoreLaunch: generations.restoreDirectLaunch,
       })
+    : undefined;
+  const checkpointAdmissions = retryClaims
+    ? new CheckpointAdmissionService({ orchestrator, retries: retryClaims })
     : undefined;
   const submission = {
     ...(retryClaims ? { retries: retryClaims } : {}),
@@ -628,6 +673,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       }
     },
     directAdmissions,
+    checkpointAdmissions,
     retrySafeAdmissions:
       directAdmissions && program.submissions
         ? new RetrySafeAdmissionService({ requests: program.submissions, direct: directAdmissions })

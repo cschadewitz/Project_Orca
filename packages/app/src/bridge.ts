@@ -20,6 +20,7 @@ import type { WorkflowDraftBridge } from "./workflow-draft-bridge.js";
 import type { DiagnosticsBridge } from "./diagnostics-contract.js";
 import type { FirstRunBridge } from "./first-run-contract.js";
 import type { DaemonConnectionBridge } from "./daemon-connection.js";
+import type { ManagedServerView, ServerUpdateBridge } from "./server-update.js";
 import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
 import type { MacUpdateCommand, MacUpdateView } from "./mac-update-contract.js";
 import type { LinuxUpdateAction, LinuxUpdateNotice } from "./linux-update-contract.js";
@@ -34,6 +35,8 @@ import type {
 
 import type { ConnectionState } from "@orca/design";
 import type {
+  SearchParams,
+  SearchResult,
   AgentsListParams,
   AgentsListResult,
   ArtifactsGetParams,
@@ -88,8 +91,12 @@ import type {
   RunsGetResult,
   RunsListParams,
   RunsListResult,
+  RunsRecoveryParams,
+  RunsRecoveryResult,
   RunsResumeParams,
   RunsResumeResult,
+  RunsReviewEffectParams,
+  RunsReviewEffectResult,
   RunsStartParams,
   RunsStartResult,
   ScheduleExplainParams,
@@ -106,6 +113,28 @@ import type {
 import type { Preferences, PreferencesPatch } from "./preferences/schema.js";
 
 export type BridgeResult<T> = { ok: true; result: T } | { ok: false; error: ProtocolError };
+
+/** A retained checkpoint-attempt intent (#357), as the renderer sees it: never its key. */
+export interface RecoveryIntentView {
+  id: string;
+  sourceRunId: string;
+  checkpoint: string;
+  /** The daemon reserved the attempt and it may not exist yet: Finish reconciles, nothing starts. */
+  reserved: boolean;
+  /**
+   * The attempt the daemon accepted for this intent, kept so it can be found after a reload or
+   * a lost answer. A separate new attempt needs this intent dismissed first.
+   */
+  attemptRunId?: string;
+}
+
+/** The answer to Start or Finish, for the renderer. */
+export type RecoveryIntentOutcome =
+  | { state: "accepted"; runId: string; intent: RecoveryIntentView }
+  /** The daemon is still admitting this intent; Start again asks with the same key. */
+  | { state: "pending"; intent: RecoveryIntentView }
+  /** The daemon reserved an attempt and did not confirm it was created; Finish reconciles it. */
+  | { state: "reserved"; intent: RecoveryIntentView; message: string };
 
 /**
  * The app-local code for a fail-closed protected-storage refusal (#857): the OS keychain or
@@ -139,6 +168,13 @@ type Params<T> = Partial<T>;
 export interface ConnectionSnapshot {
   /** Successful subscription attachments; independent of the visible quiet window. */
   generation?: number;
+  /**
+   * The app's current grant on this daemon (#882): absent from an authentication refusal
+   * until a fresh hello grants a new number. The renderer stamps its alert report with the
+   * grant its reads ran under, and the main process accepts a report only under that same
+   * grant, so nothing read before a refusal is posted after the next hello.
+   */
+  authority?: number;
   /** One of the design system's five. `file` arrives with workspace selection (#164). */
   state: ConnectionState;
   /** ISO 8601: when the app entered this state — the indicator's elapsed/last-seen reading. */
@@ -147,6 +183,12 @@ export interface ConnectionSnapshot {
   eventCursor?: number;
   /** Protocol versions for the `mismatch` rendering: "daemon 1.2 · app 1.3". */
   versions?: { app: string; daemon: string };
+  /**
+   * The daemon answered on the previous protocol major this app still speaks (#880). It is
+   * connected and writable, and whatever the newer major added is off because the daemon
+   * does not advertise it; the connection banner says so. Absent on the app's own protocol.
+   */
+  olderProtocol?: true;
   /** The daemon's own version, once it has answered `hello`. */
   orcaVersion?: string;
   /** What the daemon said it can do. Absent means it has not said, which is not an error. */
@@ -164,6 +206,11 @@ export interface ConnectionSnapshot {
    * the capability is then the coarse fallback (`renderer/src/connection.ts`).
    */
   methods?: readonly string[];
+  /**
+   * The connected server was launched by the managed server updater (#879), so the app may
+   * offer to update it over the profile's SSH connection. Absent for any other daemon.
+   */
+  managedServer?: ManagedServerView;
 }
 
 /** How the app arrived at the store it is showing. */
@@ -209,6 +256,15 @@ export interface AlertItem {
   inputId?: string;
   /** ISO 8601: when the ask was made. The gate delay is measured from it, not from arrival. */
   since: string;
+  /**
+   * The machine it is on (#882), set by the main process. `focused` is decided again when a
+   * person clicks: an alert from a machine that is not focused opens Machines, never a route
+   * on whichever daemon happens to be focused. `workspaceId` is the store the alert was
+   * verified on; a click is dropped once that machine no longer reaches that store. `grant`
+   * is the authority the alert was read under (the focused connection's grant, or a watched
+   * machine's), and a click is dropped once that grant is gone, even on the same store.
+   */
+  machine?: { key: string; name: string; focused: boolean; workspaceId?: string; grant?: number };
 }
 
 /** Everything open, as one statement. Absent items have gone away. */
@@ -261,7 +317,22 @@ export interface OrcaBridge {
     list(): Promise<BridgeResult<{ id: string; workflowId: string }[]>>;
     abandon(id: string): Promise<BridgeResult<{ abandoned: boolean }>>;
   };
+  /**
+   * Checkpoint attempts (#357). The intent (scope, source run, checkpoint, retry key, reserved
+   * receipt) is kept in main's encrypted journal, never renderer memory, so navigation, reload
+   * and restart reuse it. `start` asks with the retained key, `finish` reconciles a reserved
+   * receipt and never starts another attempt, and `dismiss` (after a confirmation) abandons an
+   * unresolved intent or forgets a started one so a separate attempt can begin.
+   */
+  recoveryIntents?: {
+    list(params: { runId: string }): Promise<BridgeResult<RecoveryIntentView[]>>;
+    start(params: { runId: string; checkpoint: string }): Promise<BridgeResult<RecoveryIntentOutcome>>;
+    finish(params: { id: string }): Promise<BridgeResult<RecoveryIntentOutcome>>;
+    dismiss(params: { id: string }): Promise<BridgeResult<{ abandoned: boolean }>>;
+  };
   daemonConnection?: DaemonConnectionBridge;
+  /** Update the connected managed server over its profile's SSH connection (#879). */
+  serverUpdate?: ServerUpdateBridge;
   updates: {
     read(): UpdateSnapshot;
     act(action: UpdateAction): Promise<BridgeResult<UpdateSnapshot>>;
@@ -298,6 +369,14 @@ export interface OrcaBridge {
      * watches the notification stream while the call is open. A write.
      */
     resume: (params: RunsResumeParams) => Promise<BridgeResult<RunsResumeResult>>;
+    /**
+     * Operator recovery (#357), present in an app that knows the methods. Each is still
+     * offered only when `hello.methods` lists it: a daemon before protocol 2.5 has none.
+     * `recovery` is a read and `reviewEffect` records a side-effect review. Starting a
+     * checkpoint attempt goes through `recoveryIntents`, whose key lives in main.
+     */
+    recovery?: (params: RunsRecoveryParams) => Promise<BridgeResult<RunsRecoveryResult>>;
+    reviewEffect?: (params: RunsReviewEffectParams) => Promise<BridgeResult<RunsReviewEffectResult>>;
   };
   inputs: {
     revise?: (
@@ -400,6 +479,14 @@ export interface OrcaBridge {
     get: (params: WorkflowsGetParams) => Promise<BridgeResult<WorkflowsGetResult>>;
     validateInputs?: (params: WorkflowsValidateInputsParams) => Promise<BridgeResult<WorkflowsValidateInputsResult>>;
   };
+  /**
+   * `search` (#255): substring search over event text and text artifact contents, answered
+   * by the daemon within a limit and a deadline. The palette's search section calls it when
+   * the daemon lists the method; hits are places (run and seq, or run, name and version).
+   */
+  search: {
+    query: (params: Params<SearchParams> & { query: string }) => Promise<BridgeResult<SearchResult>>;
+  };
   agents: {
     /**
      * Every configured agent with its handshake health, and what is claimed right now.
@@ -472,7 +559,7 @@ export interface OrcaBridge {
      * What is open right now, and the daemon's own count of it. Sent on every change; the
      * main process diffs it, so re-sending the same set posts nothing.
      */
-    update: (update: AlertsUpdate) => void;
+    update: (update: AlertsUpdate, authority: number | undefined) => void;
     /**
      * The person clicked a notification. Today every activation opens Attention; the
      * `item` on it is the card's identity, which is what turns into an `orca://` route

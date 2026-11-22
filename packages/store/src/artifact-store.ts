@@ -21,7 +21,7 @@
  * question `mediaType` answers.
  */
 import { randomUUID } from "node:crypto";
-import { link, mkdir, open, readFile, unlink } from "node:fs/promises";
+import { link, mkdir, open, readdir, readFile, unlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { ArtifactSchema, OrcaError, sha256, type Artifact, type Logger } from "@orca/core";
 import { JsonlLogDir } from "./jsonl-log.js";
@@ -139,6 +139,10 @@ function matches(a: Artifact, q: ArtifactQuery): boolean {
 export class InMemoryArtifactStore implements ArtifactStore {
   private readonly index = new Map<string, Artifact>();
   private readonly blobs = new Map<string, Buffer>();
+  /**
+   * Not hash-verified: test fixtures across the workspace put hand-written hashes through it.
+   * The capability matrix says so (`artifact.verifiedContent: false`, #338).
+   */
   async put(artifact: Artifact, content: ArtifactContent): Promise<void> {
     this.index.set(artifact.id, artifact);
     this.blobs.set(artifact.contentHash, toBytes(content));
@@ -173,10 +177,11 @@ export class FileArtifactStore implements ArtifactStore {
     this.log = new JsonlLogDir(join(dir, "artifacts"), logger ? { logger } : {});
   }
 
-  private get base(): string {
+  protected get base(): string {
     return join(this.dir, "artifacts");
   }
-  private async load(): Promise<Map<string, Artifact>> {
+  /** The whole index, by id, in first-written order. A backend with its own index overrides this. */
+  protected async load(): Promise<Map<string, Artifact>> {
     await mkdir(join(this.base, "blobs"), { recursive: true });
     const map = new Map<string, Artifact>();
     for (const a of await this.log.readCommitted("index", ArtifactSchema)) map.set(a.id, a);
@@ -187,7 +192,11 @@ export class FileArtifactStore implements ArtifactStore {
     const bytes = toBytes(content);
     verifyBlob(record, bytes);
     await publishBlob(join(this.base, "blobs"), record, bytes);
-    await this.log.append("index", () => record);
+    await this.index(record);
+  }
+  /** Record `artifact` in the index once its blob is durable; the commit point of a `put`. */
+  protected async index(artifact: Artifact): Promise<void> {
+    await this.log.append("index", () => artifact);
   }
   async get(id: string): Promise<Artifact | undefined> {
     return (await this.load()).get(id);
@@ -225,5 +234,20 @@ export class FileArtifactStore implements ArtifactStore {
   }
   async list(query: ArtifactQuery = {}): Promise<Artifact[]> {
     return [...(await this.load()).values()].filter((a) => matches(a, query));
+  }
+
+  /**
+   * Blob hashes no index record references, sorted. `put` publishes the blob before it appends the index record, so a put whose index
+   * append failed leaves exactly such a blob - invisible to `get`, `list` and every reader, and
+   * adopted again by a retried `put` of the same content. This is the compensation inventory
+   * (#338): it only reports, and never deletes, because a concurrent `put` may be between its
+   * blob and its record. The answer is a projection of the index as it is now, not permission to
+   * reclaim: a reclaimer re-checks under its own fence, or after a grace period, before deleting.
+   * Scratch files from an interrupted publish are not blobs and are skipped.
+   */
+  async unreferencedBlobs(): Promise<string[]> {
+    const referenced = new Set([...(await this.load()).values()].map((a) => a.contentHash));
+    const names = await readdir(join(this.base, "blobs"));
+    return names.filter((n) => /^[a-f0-9]{64}$/.test(n) && !referenced.has(n)).sort();
   }
 }

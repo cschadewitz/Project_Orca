@@ -43,6 +43,9 @@ import {
   bootstrapLocalOwner,
   openAuthDirectory,
   orchestratorResolver,
+  credentialSecretUse,
+  loopbackSecretUse,
+  LOCAL_PRINCIPAL,
   validateDeployment,
   WorkflowInputsModel,
   orchestratorDefinitionResolver,
@@ -55,12 +58,14 @@ import {
   HELLO_METHOD,
   PLAN_READ_METHODS,
   PROTOCOL_VERSION,
+  helloOffer,
   READ_METHODS,
   SUBSCRIPTION_METHODS,
   AgentsPingResultSchema,
   formatProtocolVersion,
   isProtocolFault,
 } from "@orca/protocol";
+import { managedDeployment } from "../managed-deployment.js";
 import {
   succeeded,
   toMermaid,
@@ -95,8 +100,10 @@ import { formatEvent, formatPaused, formatPendingInput, formatRunState, stepAgen
 import { daemonCall, DaemonRedirectError, isAuthenticationFailure } from "../daemon-client.js";
 import { parseVars, workflowGuards } from "./launch-options.js";
 import { authCommand } from "./auth.js";
+import { remoteCommand } from "./remote.js";
 import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
+import { recoveryCommand } from "./recovery.js";
 import { storeCommand } from "./store.js";
 import { planCommand } from "./plan.js";
 import { requireTemplatePack, selectionOverrides } from "./selection.js";
@@ -152,7 +159,9 @@ async function pingViaDaemon(
   try {
     hello = await daemonCall(ctx, url, HELLO_METHOD, {
       client: `orca-cli/${ORCA_VERSION}`,
-      protocol: PROTOCOL_VERSION,
+      // The client offer (#880), not this build's daemon version: a shipped daemon on an
+      // earlier minor of the same major refuses a newer-minor offer.
+      ...helloOffer(),
     });
   } catch (e) {
     if (
@@ -193,7 +202,9 @@ async function discoveredModels(ctx: CommandContext, url: string): Promise<Map<s
   try {
     hello = await daemonCall(ctx, url, HELLO_METHOD, {
       client: `orca-cli/${ORCA_VERSION}`,
-      protocol: PROTOCOL_VERSION,
+      // The client offer (#880), not this build's daemon version: a shipped daemon on an
+      // earlier minor of the same major refuses a newer-minor offer.
+      ...helloOffer(),
     });
   } catch (e) {
     if (
@@ -260,8 +271,14 @@ export const commands: Record<string, Command> = {
   auth: {
     help: "auth [issue <principal>|list|rotate <credentialId>|revoke <credentialId>]  Manage this workspace's daemon credentials.",
     usage:
-      "issue defaults to --preset client (owner, operator, viewer also supported).\n--workflow-scope id may be repeated; --runs-scope all|owned selects run scope.\n--label text names a credential; --expires-at ISO sets an expiry for issue or rotate.\n--json prints structured results. Only issue and rotate print a token, once. Restart serve to rotate its local bootstrap credential.\nLocal clients use ORCA_DAEMON_TOKEN, ORCA_DAEMON_TOKEN_FILE, or auth/local-client.token beside the workspace config.\n",
+      "issue defaults to --preset client (owner, operator, viewer also supported).\n--workflow-scope id may be repeated; --runs-scope all|owned selects run scope.\n--secret id@host (repeatable) or --secret '*' grants use of secret references and adds secrets.use; the owner preset grants '*'.\n--label text names a credential; --expires-at ISO sets an expiry for issue or rotate.\n--json prints structured results. Only issue and rotate print a token, once. Restart serve to rotate its local bootstrap credential.\nLocal clients use ORCA_DAEMON_TOKEN, ORCA_DAEMON_TOKEN_FILE, or auth/local-client.token beside the workspace config.\n",
     run: authCommand,
+  },
+  remote: {
+    help: "remote add [user@]host | remote enroll <id>  Make a Linux machine a managed ORCA server over SSH, in one step (#881); or enroll a configured remote daemon for delegated steps (#883).",
+    usage:
+      "add: --ssh-port N and --identity FILE choose how to reach it; --port N is the daemon's port there (default 6722).\nThe server's host key is pinned on first use under ~/.config/orca/known_hosts. Re-running verifies and repairs.\nIt refuses a machine with an ORCA installation it did not make. --json prints the typed result.\nenroll: trusts a host key only if it is already pinned in auth/remotes/<id>.known_hosts (.jump for the jump host) or matches a fingerprint you give: --host-key SHA256:... (and --jump-host-key), as ssh-keygen -l prints it on that machine. It refuses an unverified host before sending anything.\nIt then pins the keys, checks the credential in auth/remotes/<id>.token, and records the route, workspace and principal in auth/remotes/<id>.json. Delegated steps go only to an enrolled remote, over that route and those keys, with that credential. Enroll again after replacing the credential or changing the remote's route.\n--json prints the enrollment record.\n",
+    run: (ctx) => remoteCommand(ctx),
   },
 
   validate: {
@@ -424,6 +441,7 @@ export const commands: Record<string, Command> = {
           (ctx.flags.cwd as string | undefined) ??
           host.spec.workspaceRoot ??
           (host.spec.type === "local" ? ctx.cwd : "/tmp"),
+        secrets: app.agents.secrets(),
         logger: app.logger,
       });
       ctx.out(`OK ${agent.id} on ${host.id}: ACP session ${session.acpSessionId} in ${Date.now() - started}ms`);
@@ -573,8 +591,13 @@ export const commands: Record<string, Command> = {
     run: leasesCommand,
   },
 
+  recovery: {
+    help: "recovery <runId> [--checkpoint <stepRunId|nodeId>] [--json] | review <runId> <stepRunId> --run-again|--abandon [--note text] | start <runId> [--checkpoint <stepRunId|nodeId>] [--idempotency-key k] [--quiet] | retire <runId> <attemptRunId>  Preview how a run could be recovered (resume, new run, checkpoint attempt) without changing anything; record your review of a step that may have acted and never finished; start a checkpoint attempt of a failed run and follow it; or retire an attempt that was reserved and never created.",
+    run: recoveryCommand,
+  },
+
   store: {
-    help: "store [format | carry-forward]  Show the store's format; convert an older-format store once, with every other ORCA stopped.",
+    help: "store [format | carry-forward | sqlite import|backup <file>|restore <file>|verify]  Show the store's format; convert an older-format store once, with every other ORCA stopped; build, back up, restore or check the SQLite metadata.",
     run: storeCommand,
   },
 
@@ -735,9 +758,13 @@ export const commands: Record<string, Command> = {
       const keep = Boolean(ctx.flags.dir) || Boolean(ctx.flags.keep);
       assertNoUnownedFirstRunMutation(resolvePath(dir));
       await mkdir(dir, { recursive: true });
-      // commands/ -> (src|dist) -> cli -> packages -> repo root
+      // commands/ -> (src|dist) -> cli -> packages -> repo root. A managed release names its
+      // own directory in ORCA_RELEASE instead: the prebuilt server bundle is one file at the
+      // release root, so no path relative to the module reaches its shipped workflows (#876).
       const here = fileURLToPath(new URL(".", import.meta.url));
-      const repoRoot = join(here, "..", "..", "..", "..");
+      const repoRoot = process.env.ORCA_RELEASE
+        ? resolvePath(process.env.ORCA_RELEASE)
+        : join(here, "..", "..", "..", "..");
       const playbook = {
         greeting: "Scripted demo agent reporting for duty.",
         kinds: {
@@ -865,6 +892,7 @@ export const commands: Record<string, Command> = {
             promptLog: join(dir, ".orca-demo", "prompts.jsonl"),
           }),
         ],
+        remotes: [],
         roles: {},
         workflows: [join(repoRoot, "workflows", "*.yaml").replaceAll("\\", "/")],
         templates: [join(repoRoot, "templates", "**", "*.md").replaceAll("\\", "/")],
@@ -1039,6 +1067,15 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
       };
   // Refuse an unsafe bind before rotating the credential local clients already use.
   validateDeployment(auth, (ctx.flags.host as string | undefined) ?? "127.0.0.1");
+  // Secret references are delivered only under the run owner's current grant (#336).
+  app.orchestrator.secretUse = authDir
+    ? credentialSecretUse({
+        resolver: orchestratorResolver(app.orchestrator),
+        ownership: authDir.ownership,
+        credentials: authDir.credentials,
+        audit: authDir.audit,
+      })
+    : loopbackSecretUse(LOCAL_PRINCIPAL);
   const workspaceId = await workspaceIdentity(storeDir);
   const identity = createDaemonIdentity(workspaceId);
   const liveRuntime =
@@ -1083,6 +1120,7 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
           claims: app.retryClaims,
           direct: app.directAdmissions,
           requests: app.program.submissions,
+          checkpoints: app.checkpointAdmissions,
           orchestrator: app.orchestrator,
           checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
           execute: async (id, authority) => {
@@ -1174,6 +1212,7 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
     port,
     orcaVersion: ORCA_VERSION,
     storeDir,
+    deployment: managedDeployment(process.env),
     // With control on - the default - this process is one of the store's writers. It
     // takes each run's single-writer lease before it appends, exactly as a CLI does, and
     // refuses a run another live process holds (ADR 0008, #101). `--read-only` gives

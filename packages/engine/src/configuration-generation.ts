@@ -1,4 +1,5 @@
 /** Immutable launch generations. Persistence uses the existing protected execution store. */
+import { capabilityChecker } from "./capabilities.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
@@ -191,6 +192,7 @@ export class ConfigurationGenerations {
       hasTemplate: (id) => material.templates.has(id),
       hasWorkflow: (id) => material.workflows.has(id),
       hasAgent: (selector) => material.agents.canResolve(selector),
+      checkCapabilities: capabilityChecker(material.agents),
       ...(custom
         ? { validateCustomNode: custom }
         : executors
@@ -547,6 +549,8 @@ export class ConfigurationGenerations {
       throw pluginRestorationRefusal("legacy_generation");
     frozen(snapshot);
     const agents = snapshot.runtimeBinding ? new AgentRegistry() : AgentRegistry.fromConfig(snapshot.config);
+    agents.setCapabilities(snapshot.config.capabilities, snapshot.workspaceInputs?.configDir);
+    agents.setSecrets(snapshot.config.secrets);
     if (snapshot.runtimeBinding) {
       for (const host of runtimeAgents!.listHosts()) agents.addHost(host);
       for (const agent of snapshot.effectiveAgents ?? []) agents.addAgent(agent);
@@ -560,7 +564,7 @@ export class ConfigurationGenerations {
     readonlyRegistry(templates, ["register", "registerSource"]);
     return Object.freeze({
       snapshot,
-      agents: readonlyRegistry(agents, ["addHost", "addAgent", "mapRole"]),
+      agents: readonlyRegistry(agents, ["addHost", "addAgent", "mapRole", "setCapabilities", "setSecrets"]),
       workflows,
       templates,
       ...((restoredExecutors ?? this.runtimeExecutors.get(snapshot.runtimeBinding!))
@@ -638,6 +642,7 @@ export class ConfigurationGenerations {
         hasTemplate: (id) => material.templates.has(id),
         hasWorkflow: (id) => material.workflows.has(id),
         hasAgent: (selector) => material.agents.canResolve(selector),
+        checkCapabilities: capabilityChecker(material.agents),
         ...(this.options.validateCustomNode ? { validateCustomNode: this.options.validateCustomNode } : {}),
       });
       if (!validation.ok)

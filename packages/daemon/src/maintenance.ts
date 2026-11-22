@@ -204,6 +204,7 @@ export class Maintenance {
       const newAdmission = [
         "runs.start",
         "runs.admit",
+        "runs.recover",
         "requests.submit",
         "operator.admitRun",
         "operator.submitRequest",

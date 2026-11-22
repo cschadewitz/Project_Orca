@@ -43,6 +43,8 @@ import {
   type InputsAnswerResult,
   type RunsCancelParams,
   type RunsCancelResult,
+  type RunsReviewEffectParams,
+  type RunsReviewEffectResult,
   type RunsResumeParams,
   type RunsResumeResult,
   type RunsStartParams,
@@ -437,6 +439,23 @@ export class ControlModel {
   async cancelRun(params: RunsCancelParams, actor?: MutationActor): Promise<RunsCancelResult> {
     await refuseIfLeasedElsewhere(this.orc, params.runId);
     await leased(params.runId, () => this.orc.cancel(params.runId, params.reason, actor));
+    return { run: await this.runView(params.runId), asOf: this.clock.isoNow() };
+  }
+
+  /**
+   * `runs.reviewEffect` (#357): record an operator's review of a step attempt that may have
+   * acted outside ORCA and never finished. The engine takes the run's lease and appends one
+   * `step.effect.reviewed`; `abandon` also ends the run there. It drives nothing: resuming or
+   * starting a checkpoint attempt is a separate call.
+   */
+  async reviewEffect(params: RunsReviewEffectParams, actor?: MutationActor): Promise<RunsReviewEffectResult> {
+    await refuseIfLeasedElsewhere(this.orc, params.runId);
+    await leased(params.runId, () =>
+      this.orc.reviewEffect(params.runId, params.stepRunId, params.decision, {
+        ...(actor ? { actor } : {}),
+        ...(params.note ? { note: params.note } : {}),
+      }),
+    );
     return { run: await this.runView(params.runId), asOf: this.clock.isoNow() };
   }
 

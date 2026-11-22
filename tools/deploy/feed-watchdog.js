@@ -17,7 +17,26 @@
  * - the installer the feed serves has that entry's size and sha512, and its SHA-256 equals
  *   the published GitHub release asset's digest, so the feed serves the released bytes.
  *
- * It cannot read rings.json (that needs the bucket credential, which stays in the protected
+ * The server bundle channel (#877) is checked the same way with the same canaries:
+ * `server/latest-linux-x64.yml` must parse strictly (feed-server.js), name a published release
+ * the ring may hold, and its three files must be served with the listed sizes and SHA-256
+ * digests, equal to that release's recorded assets. A broken server channel fails the run.
+ * While rings.json sets the servers' stop switch (#878), every server channel must answer 503
+ * with `X-Orca-Feed-Stop: servers`, and nothing else may.
+ *
+ * What each ring should be offered comes from the feed's live rings.json, which a separate job
+ * of feed-watchdog.yml reads with a read-only bucket key (in the feed-reader environment, main
+ * only, never in the canary job) and hands over as FEED_RINGS. Against it, an x64 or server
+ * channel answering 404 for a ring that rings.json gives an offer is a failure, as is an offer
+ * of anything but that ring's full or rollout version, or an offer to a ring with none. When
+ * the feed is switched on (FEED_COMMISSIONED, from the ORCA_FEED_BUCKET variable) and no ring
+ * state was handed over (the read failed, or rings.json is missing), the run fails: an empty
+ * ring could not be told from a broken one. An empty ring state that exists is valid.
+ * Independently, a ring whose x64 desktops are offered a version from the server bundle's line
+ * must offer its servers that version or newer (servers first, rings.js). These are checks of
+ * what the feed offers, never of what any host has installed or is running.
+ *
+ * This process never holds the bucket credential and cannot read rings.json (that needs the bucket credential, which stays in the protected
  * desktop-feed environment), so it checks what a ring is offered, not what it should be offered.
  * The canary tokens live in the `feed-canary` environment, which only main can deploy to.
  * Tokens are only ever sent as Authorization headers; nothing here prints them. When the
@@ -30,7 +49,8 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RINGS } from "./feed-worker/rings.js";
+import { parseServerChannel } from "./feed-server.js";
+import { RINGS, compareVersions, hasServer, validateRings } from "./feed-worker/rings.js";
 import * as worker from "./feed-worker/worker.js";
 
 const ARCHES = ["x64", "arm64"];
@@ -135,11 +155,60 @@ export function canaryMapDigest(tokens) {
  * Run every check. `fetch` and the served architectures are injectable for tests. Resolves
  * to { problems, report }: report lines are safe to print, problems fail the run.
  */
-export async function watch({ url, tokens, repo, githubToken, fetch = globalThis.fetch, served }) {
+/** The versions RING may be offered on CHANNEL by rings.json: full, rollout or none. */
+export function recordedOffers(record, ring, channel) {
+  const entry = (channel === "server" ? record.server : record.rings)?.[ring];
+  return [entry?.version, entry?.rollout?.version].filter(Boolean);
+}
+
+/**
+ * Hold one channel's answer for a ring against what rings.json offers it: null when it agrees,
+ * otherwise the problem. STATUS is the HTTP status, VERSION the offered version on a 200.
+ */
+export function offerProblem(where, record, offers, status, version) {
+  if (!record) return null;
+  if (status === 404) return offers.length ? `${where}: got 404, but rings.json offers ${offers.join(" or ")}` : null;
+  if (!offers.length) return `${where}: offers ${version}, but rings.json offers nothing`;
+  if (!offers.includes(version)) return `${where}: offers ${version}, but rings.json offers ${offers.join(" or ")}`;
+  return null;
+}
+
+/**
+ * The ring state the workflow hands over: FEED_RINGS is the `rings` job's output, which is
+ * empty when that job failed or was skipped (never an empty ring state, which is `{...}`).
+ */
+export function ringState(env) {
+  const commissioned = env.FEED_COMMISSIONED === "true";
+  if (!env.FEED_RINGS) return { record: undefined, commissioned };
+  try {
+    return { record: validateRings(JSON.parse(env.FEED_RINGS)), commissioned };
+  } catch (error) {
+    throw new Error(`the feed's ring state is unreadable: ${error.message}`, { cause: error });
+  }
+}
+
+export async function watch({
+  url,
+  tokens,
+  repo,
+  githubToken,
+  fetch = globalThis.fetch,
+  served,
+  record,
+  commissioned = false,
+}) {
   const arches = served ?? worker.SERVED_ARCHES ?? ARCHES;
   const base = url.endsWith("/") ? url : `${url}/`;
   const problems = [];
   const report = [];
+  if (record) validateRings(record);
+  else if (commissioned)
+    problems.push("the feed is switched on (ORCA_FEED_BUCKET) but its ring state (rings.json) was not available");
+  else
+    report.push(
+      "no ring state (the feed is off): a 404 cannot be told from an empty ring; only servers-first is checked",
+    );
+  const desktopOffers = new Map();
   const feed = (name, token, method = "GET") =>
     fetch(new URL(name, base), {
       method,
@@ -174,8 +243,13 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
           problems.push(`${ring} latest-${arch}.yml: ${arch} is not served but got ${response.status}`);
         continue;
       }
+      // Only x64 is held against rings.json: a snapshot may leave arm64 out (#889).
+      const offers = arch === "x64" && record ? recordedOffers(record, ring, "desktop") : [];
       if (response.status === 404) {
-        report.push(`${ring} ${arch}: nothing offered yet`);
+        const problem = arch === "x64" ? offerProblem(`${ring} latest-x64.yml`, record, offers, 404) : null;
+        if (problem) problems.push(problem);
+        else
+          report.push(`${ring} ${arch}: nothing offered${record && arch === "x64" ? " (none in rings.json)" : " yet"}`);
         continue;
       }
       if (response.status !== 200) {
@@ -192,6 +266,14 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
       const found = channelProblems(ring, arch, channel);
       problems.push(...found);
       if (found.length) continue;
+      if (arch === "x64") {
+        desktopOffers.set(ring, channel.version);
+        const problem = offerProblem(`${ring} latest-x64.yml`, record, offers, 200, channel.version);
+        if (problem) {
+          problems.push(problem);
+          continue;
+        }
+      }
 
       if (!releases.has(channel.version))
         releases.set(channel.version, await github(`releases/tags/v${channel.version}`));
@@ -239,7 +321,116 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
       else report.push(`${ring} ${arch}: ${channel.version}, served bytes match the published release`);
     }
   }
+  await watchServers({ tokens, rings, feed, github, releases, problems, report, record, desktopOffers });
   return { problems, report };
+}
+
+/** The server bundle channel of every ring with a canary (#877). Adds to problems and report. */
+async function watchServers({ tokens, rings, feed, github, releases, problems, report, record, desktopOffers }) {
+  const anonymous = await feed("server/latest-linux-x64.yml");
+  if (anonymous.status !== 401)
+    problems.push(`a server channel request without a token got ${anonymous.status}, not 401`);
+  const served = new Map();
+  for (const ring of rings) {
+    const where = `${ring} server/latest-linux-x64.yml`;
+    const response = await feed("server/latest-linux-x64.yml", tokens[ring]);
+    const offers = record ? recordedOffers(record, ring, "server") : [];
+    // Servers first: desktops offered a server-era version imply servers on it or newer.
+    const desktop = desktopOffers.get(ring);
+    const needed = desktop && hasServer(desktop) ? desktop : undefined;
+    // The servers' stop switch (#878): every server channel answers 503 with the stop header
+    // while rings.json sets it, and never otherwise.
+    const stopped = response.status === 503 && response.headers.get("x-orca-feed-stop") === "servers";
+    if (record?.serverStop === true || stopped) {
+      if (record?.serverStop !== true)
+        problems.push(`${where}: answers the servers' stop, but rings.json does not set it`);
+      else if (!stopped) problems.push(`${where}: rings.json stops servers, but the feed answered ${response.status}`);
+      else report.push(`${ring} server: stopped (serverStop); no server activates anything`);
+      continue;
+    }
+    if (response.status === 404) {
+      const problem = offerProblem(where, record, offers, 404);
+      if (problem) problems.push(problem);
+      else if (needed) problems.push(`${where}: got 404, but ${ring}'s desktops are offered ${needed} (servers first)`);
+      else report.push(`${ring} server: nothing offered${record ? " (none in rings.json)" : " yet"}`);
+      continue;
+    }
+    if (response.status !== 200) {
+      problems.push(`${where}: got ${response.status}`);
+      continue;
+    }
+    let channel;
+    try {
+      channel = parseServerChannel(await response.text());
+    } catch (error) {
+      problems.push(`${where}: not a server channel file this feed publishes (${error.message})`);
+      continue;
+    }
+    if (ring === "stable" && channel.version.includes("-")) {
+      problems.push(`${where}: stable offers the prerelease ${channel.version}`);
+      continue;
+    }
+    const mismatch = offerProblem(where, record, offers, 200, channel.version);
+    if (mismatch) {
+      problems.push(mismatch);
+      continue;
+    }
+    if (needed && compareVersions(channel.version, needed) < 0) {
+      problems.push(
+        `${where}: offers ${channel.version}, older than the ${needed} ${ring}'s desktops are offered (servers first)`,
+      );
+      continue;
+    }
+    if (!releases.has(channel.version))
+      releases.set(channel.version, await github(`releases/tags/v${channel.version}`));
+    const release = releases.get(channel.version);
+    if (!release || release.draft !== false || !release.published_at) {
+      problems.push(`${ring} server: ${channel.version} has no published GitHub release`);
+      continue;
+    }
+    let ok = true;
+    for (const kind of ["archive", "manifest", "signature"]) {
+      const name = channel[kind];
+      const digest = `sha256:${channel[`${kind}Sha256`]}`;
+      const asset = release.assets?.find((a) => a.name === name);
+      if (asset?.digest !== digest) {
+        problems.push(
+          `${ring} server: ${name} is not release v${channel.version}'s asset (${asset?.digest ?? "missing"})`,
+        );
+        ok = false;
+        continue;
+      }
+      const path = `server/${name}`;
+      if (served.has(path)) {
+        // Downloaded for another ring: this ring's token must still reach the same bytes.
+        const head = await feed(path, tokens[ring], "HEAD");
+        if (head.status !== 200 || head.headers.get("content-length") !== String(channel[`${kind}Size`])) {
+          problems.push(
+            `${ring} server: HEAD ${path} got ${head.status}, length ${head.headers.get("content-length")}`,
+          );
+          ok = false;
+        }
+        continue;
+      }
+      const download = await feed(path, tokens[ring]);
+      if (download.status !== 200) {
+        served.set(path, true);
+        problems.push(`${ring} server: ${path} got ${download.status}`);
+        ok = false;
+        continue;
+      }
+      const bytes = Buffer.from(await download.arrayBuffer());
+      served.set(path, true);
+      if (
+        bytes.length !== channel[`${kind}Size`] ||
+        `sha256:${createHash("sha256").update(bytes).digest("hex")}` !== digest
+      ) {
+        problems.push(`${ring} server: ${path} does not match the channel file's size and sha256`);
+        ok = false;
+      }
+    }
+    if (ok) report.push(`${ring} server: ${channel.version}, served bytes match the published release`);
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -255,11 +446,19 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     console.error("::error::FEED_URL must be the feed's https origin");
     process.exit(1);
   }
+  let state;
+  try {
+    state = ringState(process.env);
+  } catch (error) {
+    console.error(`::error::${error.message}`);
+    process.exit(1);
+  }
   const { problems, report } = await watch({
     url,
     tokens,
     repo: process.env.GITHUB_REPOSITORY,
     githubToken: process.env.GITHUB_TOKEN,
+    ...state,
   });
   for (const line of report) console.log(line);
   for (const problem of problems) console.error(`::error::${problem}`);

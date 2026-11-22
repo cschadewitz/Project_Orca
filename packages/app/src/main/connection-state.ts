@@ -34,13 +34,8 @@
  * `DaemonSubscription`.
  */
 import type { ConnectionState } from "@orca/design";
-import {
-  PROTOCOL_VERSION,
-  formatProtocolVersion,
-  isCompatible,
-  type DaemonCapability,
-  type HelloResult,
-} from "@orca/protocol";
+import { formatProtocolVersion, type DaemonCapability, type HelloResult, type ManagedDeployment } from "@orca/protocol";
+import { appDaemonRelation, appProtocolLabel } from "../client/protocol-window.js";
 import type { ConnectionSnapshot } from "../bridge.js";
 import { authenticationCode } from "../client/auth.js";
 import type { RetryCount, SubscriptionState } from "../client/subscription.js";
@@ -111,6 +106,11 @@ export interface ConnectionMachineOptions {
   hello: () => Promise<HelloResult>;
   /** Publish a post-subscribe handshake only after its connection lifetime is checked. */
   onHello?: (hello: HelloResult) => void;
+  /**
+   * The app's authority on this daemon changed (#882): lost on an authentication refusal,
+   * granted again only by a hello answered after it. See `authority`.
+   */
+  onAuthority?: (authority: number | undefined) => void;
   onDiagnostic?: OwnedDiagnosticObserver;
   /** Called with every snapshot the renderer has not already been told about. */
   onChange: (snapshot: ConnectionSnapshot) => void;
@@ -135,9 +135,13 @@ export class ConnectionMachine {
   /* -- what the handshake said -- */
   private orcaVersion: string | undefined;
   private daemonProtocol: string | undefined;
+  /** True when the daemon answered on the previous major of this app's window (#880). */
+  private olderProtocol = false;
   private capabilities: readonly DaemonCapability[] | undefined;
   /** `hello.methods`: what this daemon answers, which is finer than what it can do. */
   private methods: readonly string[] | undefined;
+  /** `hello.deployment`: the managed server updater launched this daemon (#879). */
+  private deployment: ManagedDeployment | undefined;
   private cursor: number | undefined;
   /** Guards a slow `hello` answering after a newer one was asked for. */
   private handshake = 0;
@@ -158,6 +162,28 @@ export class ConnectionMachine {
     this.shown = this.snapshot();
   }
 
+  /**
+   * The app's current authority on this daemon, as a grant number (#882): undefined from an
+   * authentication refusal until a `hello` answered after that refusal grants a new one. A
+   * reconnecting link alone does not restore it. Anything read or posted under one grant is
+   * not shown under another. The snapshot carries it so the renderer can stamp what it
+   * reports with the grant it read under; the main process fences the focused machine's
+   * alerts, reads and clicks by it.
+   */
+  get authority(): number | undefined {
+    return this.grant;
+  }
+  get authorized(): boolean {
+    return this.grant !== undefined;
+  }
+  private grants = 1;
+  private grant: number | undefined = 1;
+  private setAuthority(grant: number | undefined): void {
+    if (this.grant === grant) return;
+    this.grant = grant;
+    this.opts.onAuthority?.(grant);
+  }
+
   /** What a window that has just opened should be handed. Never undefined, never stale. */
   get current(): ConnectionSnapshot {
     return this.shown;
@@ -170,6 +196,7 @@ export class ConnectionMachine {
    */
   linkChanged(link: SubscriptionState, retries: RetryCount = { consecutive: 0, atCap: 0 }): void {
     if (this.done || (this.link === link && this.failuresAtCap === retries.atCap)) return;
+    if (link === "auth-failed") this.setAuthority(undefined);
     const arrived = this.link !== link;
     // Invalidate on departure too: an old HTTP reply can arrive while the replacement
     // socket is still verifying, before its transition to live starts another handshake.
@@ -198,6 +225,7 @@ export class ConnectionMachine {
     else if (code === "AUTH_FORBIDDEN")
       observeOwnedDiagnostic(this.opts.onDiagnostic, "connection", "authorization_denied");
     this.handshake += 1;
+    this.setAuthority(undefined);
     this.linkChanged("auth-failed");
   }
 
@@ -224,6 +252,8 @@ export class ConnectionMachine {
   reset(fileMode: boolean): void {
     if (this.done) return;
     this.handshake += 1;
+    // Another daemon: nothing it has refused yet.
+    this.setAuthority(++this.grants);
     this.link = "connecting";
     this.compatible = true;
     this.daemonGone = false;
@@ -233,8 +263,10 @@ export class ConnectionMachine {
     this.failureObserved = false;
     this.orcaVersion = undefined;
     this.daemonProtocol = undefined;
+    this.olderProtocol = false;
     this.capabilities = undefined;
     this.methods = undefined;
+    this.deployment = undefined;
     this.cursor = undefined;
     /* No quiet window: leaving `live` is held back because a blip is not news, and a
        person who just asked for another store is not reading a blip. */
@@ -294,13 +326,18 @@ export class ConnectionMachine {
     // A current subscription probe can precede the next live transition. Its verdict
     // supersedes any older post-subscribe handshake even when the client is unchanged.
     this.handshake += 1;
+    // Answered, so authorized: after a refusal this is the fresh grant.
+    if (this.grant === undefined) this.setAuthority(++this.grants);
     this.orcaVersion = result.orcaVersion;
     this.daemonProtocol = formatProtocolVersion(result.protocol);
     this.capabilities = result.capabilities;
     /* Folded here because this is where the handshake is: the renderer never sees a
        `HelloResult`, so "is `config.set` served" can only be asked of the snapshot. */
     this.methods = result.methods;
-    this.compatible = isCompatible(PROTOCOL_VERSION, result.protocol);
+    this.deployment = result.deployment;
+    const relation = appDaemonRelation(result.protocol);
+    this.compatible = relation !== undefined;
+    this.olderProtocol = relation === "previous";
     if (!this.compatible) observeOwnedDiagnostic(this.opts.onDiagnostic, "connection", "protocol_mismatch");
     this.settle();
   }
@@ -382,14 +419,27 @@ export class ConnectionMachine {
     return {
       state: this.state,
       generation: this.generation,
+      ...(this.grant !== undefined ? { authority: this.grant } : {}),
       since: new Date(this.since).toISOString(),
       ...(this.cursor !== undefined ? { eventCursor: this.cursor } : {}),
       ...(this.daemonProtocol !== undefined
-        ? { versions: { app: formatProtocolVersion(PROTOCOL_VERSION), daemon: this.daemonProtocol } }
+        ? { versions: { app: appProtocolLabel(), daemon: this.daemonProtocol } }
         : {}),
+      ...(this.olderProtocol ? { olderProtocol: true as const } : {}),
       ...(this.orcaVersion !== undefined ? { orcaVersion: this.orcaVersion } : {}),
       ...(this.capabilities !== undefined ? { capabilities: this.capabilities } : {}),
       ...(this.methods !== undefined ? { methods: this.methods } : {}),
+      ...(this.deployment !== undefined
+        ? { managedServer: this.deployment.ring !== undefined ? { ring: this.deployment.ring } : {} }
+        : {}),
     };
+  }
+
+  /**
+   * Where the connected server's updater is, when the managed updater launched it (#879).
+   * Main reads it to run the update; the renderer only learns that the server is managed.
+   */
+  managedDeployment(): ManagedDeployment | undefined {
+    return this.deployment;
   }
 }

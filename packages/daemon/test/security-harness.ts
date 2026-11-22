@@ -122,6 +122,12 @@ export async function harness(extra: Partial<TokenAuthOptions> = {}, backingStor
     orcaVersion: "0.0.0-security",
     capabilities: ["runs.read", "runs.subscribe", "runs.control"],
     storeDir: "/srv/store",
+    deployment: {
+      kind: "managed",
+      adapter: "/opt/orca/orca-release.py",
+      manifest: "/etc/orca/deployment.json",
+      ring: "preview",
+    },
     reads,
     control,
     config,

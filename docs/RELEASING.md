@@ -27,7 +27,8 @@ Closing it proposes the release.
 3. When the work is done, **close the milestone**. `release-prepare.yml` checks that no
    issue in it is still open, takes the highest bump label, computes the next version, and
    opens a `release: vX.Y.Z` pull request that bumps `package.json`, renders the fragments
-   into a dated changelog section and deletes them.
+   into a dated changelog section and deletes them. A new minor's pull request targets
+   `main`; a patch's targets its release line `release/X.Y` ([Release lines](#release-lines)).
 4. Review that pull request. Its body is the release body verbatim — to change the notes,
    edit `CHANGELOG.md` on the release branch.
 5. **Merge it.** `release-publish.yml` re-runs `ci.yml`'s full check path against the
@@ -93,18 +94,26 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    (`release-attach-signed.yml`, `tools/deploy/release-attach.sh`) first checks the signing
    run itself: a successful `windows-signed.yml` run of this repository, dispatched from
    `main`, with exactly one unexpired signed artifact. It finds the one final draft targeting
-   `SHA`, re-checks the x64 installer's signature, timestamp and publisher, records the run
-   and the installer's digest in the draft's notes, then uploads it by id and reads both
-   back. Before each write it re-reads that exact draft (still a draft, same target and name,
-   only the `.deb` or `.deb` + `.exe`, no other run's record) and stops if anything changed.
+   `SHA`, re-checks both installers' (x64 and arm64) signature, timestamp and publisher,
+   records the run and each installer's digest in the draft's notes, then uploads them by id
+   (x64 first) and reads them back. Before each write it re-reads that exact draft (still a
+   draft, same target and name, only the `.deb`, `.deb` + x64 `.exe` or `.deb` + both
+   `.exe`s, no other run's record) and stops if anything changed.
    Because the record comes first, an interrupted upload is resumed with the same run, and a
    later signing run of the same commit is refused. A reconcile every 6 hours re-dispatches
-   the attach for any final draft missing its installer or record (the recorded run if there
-   is one); an installer attached by hand without a record is left alone. A rerun is a
+   the attach for any final draft missing an installer or record (the recorded run if there
+   is one), which also adds arm64 to a draft attached x64-only; an installer attached by hand
+   without a record is left alone. A rerun is a
    no-op; different bytes under the same name stop it. Its summary gives the installer's **SHA-256**. To check by hand:
    `gh api repos/$R/releases/$ID --jq '{draft, name, tag_name, target_commitish, assets: [.assets[] | {name, digest}]}'`
    must show `draft: true`, `name: "v$V"`, `target_commitish` equal to `SHA`, and exactly the
-   `.deb` and the `.exe`. `tag_name` may read `v$V` or `untagged-…`; step 6 sets it.
+   `.deb` and the two `.exe`s (plus the three server bundle files of step 3a). `tag_name` may
+   read `v$V` or `untagged-…`; step 6 sets it.
+3a. **Automatic, from the 0.8 line on** ([The server bundle](#the-server-bundle)): the same Release (publish) run's `server-bundle` job dispatches
+   **Release (server bundle)** (`release-server-bundle.yml`) for `SHA`, which builds, signs,
+   checks and attaches the headless server bundle ([The server bundle](#the-server-bundle))
+   and records it in the draft's notes. A reconcile every 6 hours re-dispatches it for any
+   release newer than Latest without that record. Step 6 refuses a final from that line without it.
 4. If either automatic step did not run (the switch is off, or the signing run was refused),
    dispatch **Windows signed (spike)** for `SHA` by hand, then **Release (attach signed
    installer)** with that run's id (`signed_run_id`); with the switch on the attach follows
@@ -116,15 +125,63 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    shows on the draft (signature, install, first launch, a built-in sample, reopen). The
    signing run's checks in step 2 are not that acceptance. If either fails, stop: the draft
    stays a draft and nothing is public.
+
+   The arm64 `.exe` is accepted **automatically** (#889): when the attach completes,
+   **Release (accept Windows arm64)** (`release-accept-arm64.yml`) downloads the draft's
+   exact arm64 bytes, and on a GitHub-hosted Windows arm64 machine re-checks the signature,
+   installs it silently over the newest earlier published final from 0.7.1 on that has an
+   arm64 installer (a fresh install only when the full release list, read successfully, has
+   none; finals before 0.7.1, whose arm64 installers carry no signing or acceptance records,
+   are never the baseline, so 0.7.1 itself is accepted as a fresh install), checks
+   the reported version, that the installed `ORCA.exe` is a signed ARM64 binary, and that
+   the app starts and reaches a live connection to its bundled daemon. Only then does it
+   keep an `arm64-acceptance-evidence` artifact (release id, version, commit, digest, mode,
+   prior version and digest; 90 days) and record `<!-- orca-arm64-accepted: RUN sha256:… -->`
+   in the draft's notes, pointing at that run. It retries after every attach run (including
+   the 6-hourly reconcile) and can be dispatched from `main` with a `release_id`. If it keeps
+   failing and the release must not wait, dispatch it with `x64_only` and the `release_id`:
+   that records `<!-- orca-x64-only -->` in the draft and removes its arm64 installer, and
+   attach, reconcile, acceptance, publication and the feed all keep to that decision.
+
+   The Windows upgrade part runs by itself. Once the installer is attached, step 3's
+   workflow dispatches **Release (upgrade check)** (`release-upgrade-check.yml`) for the
+   draft. On a GitHub-hosted Windows runner it verifies the signatures of the current
+   Latest's installer and the draft's, writes a store with the Latest release's own
+   `orca demo` (built from the commit its tag resolves to), installs the Latest, opens the store in its app, then
+   installs the draft's installer over it. The candidate's app must open the same store in
+   place: stamped with the store format and its version, no format backup, every run still
+   listed. The Latest's daemon must still read the stamped store, and the candidate must
+   refuse a store stamped by a newer format without changing it
+   (`packages/app/test/windows-upgrade/store-upgrade.spec.ts`). Both installers' bytes are
+   checked against the draft's and the Latest's asset digests first, and the Latest's CLI is
+   built from the commit its tag resolved to. A pass is recorded in the draft's notes as
+   `<!-- orca-upgrade-check: RUN sha256:… from vX.Y.Z -->`, and the run's record job is named
+   as its receipt: the draft's release id, version, commit and installer digest, and the same
+   for the Latest. The attach's 6-hourly reconcile dispatches the check again for a fully
+   attached draft with no record for its installer from the current Latest (never while one
+   is waiting or running, and at most three runs per draft). Every job that writes to a draft
+   shares one queue that keeps all waiting members (`queue: max`). To run it by
+   hand, dispatch it from `main` with `release_id=$ID`. A candidate that changes the store
+   format fails it on purpose until the automatic desktop carryover (#897) lands.
 6. Publish by dispatching **Release (publish final)** (`release-publish-final.yml`) from
    `main` with `release_id=$ID`, `version=$V`, and what step 5 accepted: `source_sha=$SHA`,
    `deb_sha256` and `exe_sha256` (the digests of the exact files that passed). Immediately
    before publishing it compares all of them with the draft: still a draft, named `v$V`,
    targeting `SHA`, exactly those two assets with those digests, and the installer's digest
-   equal to the signing record. It refuses a version that is not newer than the current
-   Latest and an existing tag at another commit, publishes with the tag and target stated
+   equal to the signing record. It also needs either the arm64 installer the same signing
+   run recorded, with acceptance verified against the acceptance run and its evidence
+   (`tools/deploy/feed-arches.js verify`), or the x64-only decision with no arm64 installer,
+   and, from the 0.8 line, the server bundle with its receipt ([The server bundle](#the-server-bundle)): the three
+   files with exactly the digests its one record names, the signed manifest naming this
+   version, commit and archive digest, and a successful receipt job of the recorded Release
+   (server bundle) run committing to this release id, version, commit and those digests. It refuses a version that is not newer than the current
+   Latest, a draft without exactly one x64 upgrade check record pointing at a successful run
+   whose receipt names exactly this draft, its x64 installer and the current Latest and its
+   installer (step 5), and an existing tag at another commit, publishes with the tag and target stated
    explicitly, and reads back the published digests, the tag and Latest. It shares one queue
-   with the attach, so the two never interleave; publish only through it, not by editing the
+   (`release-draft-writes`, which keeps every waiting job) with every job that rewrites a
+   release's notes, including the signed attach and the server bundle's attach, so none of
+   them interleave; publish only through it, not by editing the
    draft by hand.
 7. Where the desktop feed is enabled, publishing feeds that signing run automatically
    (step 6 dispatches **Desktop feed (automatic)**, which dispatches **Desktop feed (publish signed)**; see
@@ -136,6 +193,60 @@ checks pass for the commit you mean to release (upload the `.deb` by id if it is
 Delete a draft only when its target or assets are wrong, then dispatch **Release
 (publish)** again. More than one draft for the version is always a stop: delete the extras
 after checking which one, if any, is valid.
+
+### The server bundle
+
+From the 0.8 release line (`SERVER_FROM=0.8.0` in `tools/deploy/release-attach.sh`: the 0.8.0
+release candidates and every final from 0.8.0 on), every real release also carries a prebuilt
+headless server (#876), for servers that should install and update without a toolchain, `gh`
+or a clone. Releases before it (0.7.x, including 0.7.1) keep their approved desktop asset set:
+nothing is dispatched, reconciled or required for them, and server files on such a draft are
+unexpected assets.
+
+| File | What it is |
+|---|---|
+| `orca-server-X.Y.Z-linux-x64.tar.xz` | One directory: `orca-daemon.mjs` (the CLI, daemon and ACP facade, bundled by `build-daemon.js --server`), the two programs it starts beside itself (`native-io-worker.js`, `scripted-agent/main.js`), `runtime/bin/node` (the Node 24 the release workflow built with, and its licence), the shipped `workflows/` and `templates/`, `release-compatibility.json` and `orca-server.json`. |
+| `orca-server-X.Y.Z-linux-x64.manifest.json` | Version, source commit, the archive's name, size and **SHA-256**, the entry, the Node version and the compatibility contract. This is the file that is signed. |
+| `orca-server-X.Y.Z-linux-x64.manifest.json.sigstore.json` | The manifest's Sigstore bundle: a keyless cosign signature with its short-lived certificate and transparency-log entry. |
+
+**Release (server bundle)** (`release-server-bundle.yml`) produces them, unattended, from
+`main`: it confirms the release `vX.Y.Z` targets the commit and the commit is on `main`, builds
+that commit, assembles the archive (`tools/deploy/server-bundle.py`, deterministic for its
+inputs), signs the manifest with `cosign sign-blob` using the job's GitHub OIDC identity (no
+key exists anywhere to store, rotate or leak), stages the signed files with
+`orca-release.py stage --bundle` inside a `python:3.12-slim` container that has no `gh`, `git`,
+`mise`, `pnpm` or Node, and only then attaches them by release id and records their digests in
+the release notes (`<!-- orca-server-run: RUN archive manifest signature -->`).
+
+The expected signer is recorded in `tools/deploy/orca-release.py` (`BUNDLE_SIGNER` and its
+neighbours): the certificate must name
+`https://github.com/cschadewitz/Project_Orca/.github/workflows/release-server-bundle.yml@refs/heads/main`,
+issuer `https://token.actions.githubusercontent.com`, trigger `workflow_dispatch`. A pull
+request's runs carry a `refs/pull/…` identity and can never match. Moving or renaming the
+workflow is therefore a change to that constant in the same pull request, and servers
+verify with the adapter they have installed, so update the adapter on servers first.
+
+**Timing.** A final stays a draft until its bundle is attached: Release (publish final)
+refuses it without the bundle's **receipt**, which it checks right before publishing. The
+receipt is the one well-formed record (a missing record waits; a duplicate or malformed one
+is a stop to fix by hand, and is never written over), the three files with exactly the
+recorded digests, the signed manifest itself naming this version, commit and archive digest,
+and the recorded run: a successful Release (server bundle) dispatch from `main` of this
+repository whose run name is `Release (server bundle) vX.Y.Z at SHA`, whose signing and
+clean-host jobs passed, and whose attach job passed under the name
+`server bundle receipt: release ID vX.Y.Z SHA sha256:R`. `R` is the SHA-256 of
+`orca-server-receipt/1 release=ID version=X.Y.Z sha=SHA files=A M S` (the three files' digests,
+`sha256:`-prefixed, archive first), computed by the clean-host job from the exact files it
+verified, only after it passed; the attach job uploads only files with those digests. So the
+receipt is evidence from the trusted run itself, independent of the notes and the draft. A **release candidate** is different: it is published as
+soon as Release (publish) finishes, and its bundle is attached asynchronously by the run that
+job dispatches (normally within half an hour). Until the record is in its notes the rc has no
+usable bundle, and `orca-release.py stage --bundle` refuses it with "no complete server bundle
+yet". Check with
+`gh release view vX.Y.Z-rc.N --json body,assets --jq '[(.body | test("orca-server-run")), [.assets[].name | select(startswith("orca-server-"))]]'`.
+
+Dry runs build no server bundle: a rehearsed ref is untrusted and is never signed.
+linux-arm64 is deferred; the bundle is linux-x64 only.
 
 ## The artifacts
 
@@ -291,6 +402,125 @@ written here until they are.
 
 Release notes say which downloads are signed and supported; a prerelease's page carries
 unsigned CI output and its notes must say not to install that output.
+
+## Release lines
+
+A patch ships what was chosen for it, not whatever `main` holds. `main` is where all work
+merges, including the next minor's; each minor then gets a long-lived, protected **line
+branch** `release/X.Y`, and every patch of it is cut from that branch.
+
+**One lane per version** (`tools/release-lane.js`, used by prepare, publish and signing alike):
+
+| Version | Only lane |
+| --- | --- |
+| `X.Y.0` and its candidates (`X.Y.0-rc.N`) | `main` |
+| `X.Y.Z`, Z > 0, and its candidates | `release/X.Y`, and only while it is protected |
+
+A patch commit on `main`, or a `.0` commit on a line, is refused. A line counts as protected
+when the rules API reports, for that branch, a pull request requirement, no force pushes, no
+deletion, both `check (node 24)` and `release line check` as required checks that only GitHub
+Actions may satisfy, and branches kept up to date before merging; prepare, publish and signing all check that before they open, build or sign anything from a line.
+Dry runs are unchanged: they rehearse any ref and never tag, sign or feed.
+
+| Branch | Holds | Who merges into it |
+| --- | --- | --- |
+| `main` | everything, including the next minor's work | feature and fix pull requests |
+| `release/X.Y` | the `X.Y` line: its patches only | fix and backport pull requests, and the line's release pull requests |
+
+**Getting a fix onto a line.** Merge the fix to `main` as usual, then cherry-pick it onto
+`release/X.Y` in a pull request whose description names the issue (`Fixes #N`, plus `Backport
+of #PR` when it is a copy). The issue must be in a patch milestone of that line (`0.7.1`). A
+fix for code that only exists on the line goes straight to the line the same way.
+
+**What keeps minor work off a line.** Two gates, both automatic:
+
+- **Release line guard** (`release-line-guard.yml`, `tools/release-line-guard.js`), required
+  on every pull request into `release/X.Y`. An ordinary pull request must name at least one
+  issue, every issue in an `X.Y.Z` patch milestone of that line, none labelled
+  `release:minor` or `release:major` (nor the pull request itself). A pull request with the
+  `release` label or a `release/vX.Y.Z` head is instead checked as a release preparation: both
+  label and head, from this repository, a version whose lane is this line, and a diff of only
+  the `package.json` version, `CHANGELOG.md`, and deleted fragments. It runs as
+  `pull_request_target`, so its rules always come from `main`; it reads the pull request
+  through the API and runs none of its code.
+- **Release (prepare)** refuses a patch milestone that holds a `release:minor` or
+  `release:major` issue, and one whose title names a version the labels do not produce.
+
+**Cutting a patch.** Close its milestone (title `X.Y.Z`, or a `Release: vX.Y.Z` pin). Prepare
+checks out `release/X.Y` (creating it from the newest `vX.Y.*` final tag if it does not exist
+yet, then requiring it to be protected), renders the fragments on that branch only, and opens
+the release pull request against it. Merging that pull request runs **Release (publish)**,
+which first checks, with `main`'s copy of `release-lane.js`:
+
+- the commit is on its version's lane (and the line is protected);
+- for a merged release pull request, on either lane: head `release/vV` from this repository
+  into V's lane, `package.json` saying V at both the reviewed head and the merge commit, and
+  the merge commit's tree equal to that head's tree (keep the branch up to date before
+  merging);
+- on a line, also: the newest release line check recorded for this pull request into this
+  line, on that exact head, passed, posted by GitHub Actions from `main`'s
+  `release-line-guard.yml` on a `pull_request_target` event. An older pass does not outlive a
+  later failure, and a check run with the right name from anywhere else does not count.
+
+A final then goes through the same draft, signing, acceptance, upgrade check and publish-final
+chain ([Publishing a final](#publishing-a-final)). **Windows signed (spike)** compares a patch's
+source with the head of its protected line instead of `main`; its workflow, signing identity
+and environment are `main`'s as before. A line that moved past the release commit outside
+notes, docs and tests refuses it, exactly as `main` moving does.
+
+**Back on `main`.** A line's release pull request never merges into `main`, so once a line
+release is really published, **Release (sync main)** (`release-sync-main.yml`) records it there:
+publish-final dispatches it after publishing a final, and Release (publish) after publishing a
+line candidate. It reads the release back by tag (and id), refuses a draft or anything not
+published, and requires the tag's exact commit to be on the version's protected line, so a
+final that only reached its draft, or whose acceptance failed, leaves `main` alone. It then
+opens one pull request on `main`, `changelog: record vX.Y.Z` from the branch
+`release-sync/vX.Y.Z`, that adds the release's CHANGELOG section (`node tools/release.js sync`)
+and deletes the fragments the release commit consumed, each only where `main`'s copy is
+byte-identical to the released one; a differing copy is kept and named. It refuses to touch
+anything else, and stops there: the pull request waits for `main`'s normal review and checks,
+and nothing merges it automatically. A rerun never pushes over that branch: the same change (even
+on a newer `main`) is reused with its pull request, and an edit or a different change stops the
+run with nothing changed. Publish-final hands over to the feed first; the notes handover runs
+whether or not that worked, so neither can suppress the other. `main`'s
+`package.json` keeps the last minor it released, so the next minor is still computed from it.
+
+**Lines stop at 0.7 for now.** From 0.8 on a release must carry the signed server bundle, which
+is built and signed only from `main`, so `release-lane.js` refuses a patch of 0.8 or later
+before anything runs, rather than failing halfway through a release.
+
+**Which workflow copy runs.** Merging a line's release pull request runs the line branch's
+own `release-publish.yml` (a `pull_request` event uses the base branch's files); its lane checks
+read `main`'s `release-lane.js` regardless. Everything dispatched afterwards (signing, attach,
+acceptance, upgrade check, publish-final, feed) runs `main`'s workflows.
+
+**Starting a line that predates this, in order** (0.7 was the first; no step bypasses a
+required check):
+
+1. Merge release-line support to `main`, so the guard and `release-lane.js` exist there.
+2. Create `release/X.Y` at the commit the line should start from, and turn on the ruleset
+   below. From here nothing reaches the line without CI and the guard.
+3. Open a pull request into the line that copies the release-line tooling from `main` (it
+   names a tracking issue in an `X.Y.Z` milestone, so the guard passes it). Its CI runs from
+   the pull request's own `ci.yml`, which includes the line.
+4. Rehearse with a **Release (publish)** dry run of the release pull request's head, then
+   retarget that pull request to the line, update its branch, and merge it.
+
+**Not yet covered.** A minor's candidates are still cut from `main`; cutting `release/X.Y` at
+the first candidate, automatic backport pull requests from a label, and publishing a patch of
+an older line after a newer minor is Latest (publish-final and the upgrade check compare with
+Latest) are later work, as is building and signing the server bundle from a line, which 0.8
+patches need.
+
+**What the repository needs once.** A ruleset on `release/0.*` (and `release/1.*` when there is
+one), not on the `release/vX.Y.Z` pull request heads: pull requests only, no force pushes or
+deletion, the `check (node 24)` and `release line check` status checks required with GitHub
+Actions as their source (not "any source"), and branches kept up to date before merging. And a GitHub App with contents and pull-requests write,
+installed on this repository, with its id in the variable `ORCA_RELEASE_APP_ID` and its private
+key in the secret `ORCA_RELEASE_APP_PRIVATE_KEY`, both in a `release-bot` environment whose
+deployment branches are `main` only (so no other branch's workflow can read the key): prepare opens release pull requests, and
+the sync its notes pull requests, with it, so CI and the guard run on them. Without it those
+pull requests get no checks, and a line that requires them cannot merge a release.
 
 ## Changelog fragments
 

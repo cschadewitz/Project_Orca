@@ -36,6 +36,15 @@ const makeStore = async () => {
 };
 
 describe("JsonFileDocumentStore write batching", () => {
+  it("takes a putMany too large to pass as call arguments, in one write", async () => {
+    // Past the engine's argument limit: a spread of the batch used to overflow the stack.
+    const store = await makeStore();
+    const docs = Array.from({ length: 200_000 }, (_, i) => ({ id: `d${i}`, n: i }));
+    await store.putMany(docs);
+    expect(renames).toBe(1);
+    expect((await store.list()).length).toBe(docs.length);
+  });
+
   it("writes the file once for a putMany", async () => {
     const store = await makeStore();
     await store.putMany(Array.from({ length: 50 }, (_, i) => ({ id: `d${i}`, n: i })));

@@ -38,8 +38,27 @@ export class PreferencesFile {
   /** Main-process only: the renderer's generic preference patch cannot change targets. */
   saveDaemonUrl(url: string | null): void {
     const next = { ...this.read() };
+    delete next.daemonProfile;
     if (url === null) delete next.daemonUrl;
     else next.daemonUrl = daemonEndpoint(url);
+    this.persist(next);
+  }
+
+  /** Main-process only: a saved SSH profile replaces a saved URL (#874). */
+  saveDaemonProfile(id: string | null): void {
+    const next = { ...this.read() };
+    delete next.daemonUrl;
+    if (id === null) delete next.daemonProfile;
+    else next.daemonProfile = id;
+    this.persist(next);
+  }
+
+  /** Main-process only: the profiles the Machines surface watches (#882). Empty removes the field. */
+  saveWatchedProfiles(ids: readonly string[]): void {
+    const next = { ...this.read() };
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) delete next.watchedProfiles;
+    else next.watchedProfiles = PreferencesSchema.shape.watchedProfiles.unwrap().parse(unique);
     this.persist(next);
   }
 

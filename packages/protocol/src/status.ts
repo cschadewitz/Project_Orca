@@ -31,14 +31,16 @@ export type DisplayStatus = z.infer<typeof DisplayStatusSchema>;
 
 /**
  * What a parked step is parked on, as the engine records it in `step.waiting.on`
- * (`human-input`, `dependencies`, `plan`, `child-run`, `agent-turn`). Only the first three
- * change what a person should do about it; the last two are the run working.
+ * (`human-input`, `dependencies`, `plan`, `agent-slot`, `child-run`, `agent-turn`). Only the
+ * first four change what a person should do about it; the last two are the run working.
+ * `agent-slot` (#873) is a step queued for a configured session cap: blocked, like a
+ * dependency, because nothing is running for it and a cap somebody set is why.
  */
 export type WaitKind = "human" | "dependency" | "work";
 
 export function waitKind(on: string | undefined): WaitKind {
   if (on === "human-input") return "human";
-  if (on === "dependencies" || on === "plan") return "dependency";
+  if (on === "dependencies" || on === "plan" || on === "agent-slot") return "dependency";
   return "work";
 }
 

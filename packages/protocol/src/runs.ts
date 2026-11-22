@@ -16,10 +16,66 @@ import { z } from "zod";
 import { RunOutcomeSchema, WorkspaceSchema, OrcaEventSchema } from "@orca/core/schemas";
 import { DisplayStatusSchema } from "./status.js";
 import { ArtifactViewSchema, ViewErrorSchema, WorkItemViewSchema } from "./views.js";
+import { ProtocolVersionSchema } from "./version.js";
 
 export const RUNS_LIST_METHOD = "runs.list";
 export const RUNS_GET_METHOD = "runs.get";
 export const RUNS_EVENTS_METHOD = "runs.events";
+
+/**
+ * A facet the daemon can not answer for one run yet. It says so, with why, rather than
+ * sending a zero a screen would draw as "idle" or "free" (#340).
+ */
+export const UnavailableFacetSchema = z.object({
+  state: z.literal("unavailable"),
+  /** `not-collected`: nothing in this daemon measures it per run today. */
+  reason: z.enum(["not-collected"]),
+});
+export type UnavailableFacet = z.infer<typeof UnavailableFacetSchema>;
+
+/**
+ * Step attempts of one run by where they stand, counted from the log (#340). Honest counts,
+ * never a percentage: a workflow can branch, loop and fan out, so how many steps are still to
+ * come is not known until the run has taken them, and nothing here pretends otherwise.
+ */
+export const RunProgressViewSchema = z.object({
+  /** Every step attempt the run has scheduled so far. */
+  attempts: z.number().int().nonnegative(),
+  completed: z.number().int().nonnegative(),
+  /** Failed attempts, retried or not. */
+  failed: z.number().int().nonnegative(),
+  /** Scheduled or running. */
+  active: z.number().int().nonnegative(),
+  waiting: z.number().int().nonnegative(),
+  /** Skipped or cancelled. */
+  skipped: z.number().int().nonnegative(),
+});
+export type RunProgressView = z.infer<typeof RunProgressViewSchema>;
+
+/**
+ * What an operations view needs on top of a row (protocol 2.3, #340). Sent only when the
+ * caller asks with `operations: true`, so a plain list costs what it always has.
+ */
+export const RunOperationsViewSchema = z.object({
+  /** The highest sequence number in the run's log: the cursor this row is current as of. */
+  lastSeq: z.number().int().nonnegative(),
+  /** The timestamp of that last event, agent output included. */
+  lastActivityAt: z.string(),
+  progress: RunProgressViewSchema,
+  /** Who holds the run's lease, when anyone does. Absent: no process has claimed it. */
+  owner: z
+    .object({
+      holder: z.string(),
+      host: z.string(),
+      since: z.string(),
+      /** The holder stopped heartbeating; the run's status says `stale` when it matters. */
+      lapsed: z.boolean(),
+    })
+    .optional(),
+  /** Per-run host load and token or cost usage: not measured per run, so never a zero. */
+  facets: z.object({ host: UnavailableFacetSchema, usage: UnavailableFacetSchema }),
+});
+export type RunOperationsView = z.infer<typeof RunOperationsViewSchema>;
 
 /** One run as a row: the run list, the child rows of a run tree, an attention card's origin. */
 export const RunSummaryViewSchema = z.object({
@@ -59,6 +115,10 @@ export const RunSummaryViewSchema = z.object({
   /** The agent of the most recently opened session in this run. */
   agentId: z.string().optional(),
   error: ViewErrorSchema.optional(),
+  /** Protocol 2.3: present only when `runs.list` or `runs.get` was asked for `operations`. */
+  operations: RunOperationsViewSchema.optional(),
+  /** A checkpoint attempt (#357, protocol 2.5): the failed run and the completed step it started after. */
+  checkpoint: z.object({ runId: z.string(), stepRunId: z.string() }).optional(),
 });
 export type RunSummaryView = z.infer<typeof RunSummaryViewSchema>;
 
@@ -71,6 +131,22 @@ export const RunsListParamsSchema = z.object({
   parentRunId: z.string().optional(),
   /** Only runs with no parent - the top level of the run list. */
   roots: z.boolean().optional(),
+  /** Protocol 2.3: keep only finished runs with one of these outcomes. */
+  outcome: z.array(RunOutcomeSchema).optional(),
+  /** Protocol 2.3: only runs of this workflow, and of this version of it when given. */
+  workflowId: z.string().min(1).optional(),
+  workflowVersion: z.string().min(1).optional(),
+  /** Protocol 2.3: only runs created at or after this instant (ISO 8601). */
+  createdFrom: z.iso.datetime({ offset: true }).optional(),
+  /** Protocol 2.3: only runs created before this instant (ISO 8601). */
+  createdTo: z.iso.datetime({ offset: true }).optional(),
+  /** Protocol 2.3: add `operations` to every returned row (#340). */
+  operations: z.boolean().optional(),
+  /**
+   * Protocol 2.3: only these runs. A page over a known set - the rows a client already decided
+   * to show - rather than a search; ids that match nothing are simply absent.
+   */
+  runIds: z.array(z.string().min(1)).max(500).optional(),
   /** Newest first, from `offset`. */
   limit: z.number().int().positive().max(500).default(100),
   offset: z.number().int().nonnegative().default(0),
@@ -141,6 +217,17 @@ export const StepViewSchema = z.object({
   error: ViewErrorSchema.optional(),
   children: z.array(ChildRunViewSchema),
   skippedBranches: z.array(SkippedBranchViewSchema),
+  /**
+   * Protocol 2.5 (#357): this step was reused by a checkpoint attempt from that attempt of
+   * another run. It did not run here; its result is the one recorded there.
+   */
+  reusedFrom: z.object({ runId: z.string(), stepRunId: z.string() }).optional(),
+  /** The children the reused step had where it ran. History only: this run owns none of them. */
+  reusedChildren: z.array(ChildRunViewSchema).optional(),
+  /** Protocol 2.5 (#357): an operator's review of this attempt's possible effects outside ORCA. */
+  effectReview: z
+    .object({ decision: z.enum(["run-again", "abandon"]), at: z.string(), note: z.string().optional() })
+    .optional(),
 });
 export type StepView = z.infer<typeof StepViewSchema>;
 
@@ -180,7 +267,11 @@ export const RunTraversalViewSchema = z.object({
 });
 export type RunTraversalView = z.infer<typeof RunTraversalViewSchema>;
 
-export const RunsGetParamsSchema = z.object({ runId: z.string().min(1) });
+export const RunsGetParamsSchema = z.object({
+  runId: z.string().min(1),
+  /** Protocol 2.3: add `operations` to `run` (#340). */
+  operations: z.boolean().optional(),
+});
 export type RunsGetParams = z.infer<typeof RunsGetParamsSchema>;
 
 /** Evidence about an admitted first execution, never a promise of current attachment. */
@@ -241,6 +332,11 @@ export const RunsEventsParamsSchema = z
      * as an AND, and an unknown step run matches nothing rather than failing.
      */
     stepRunId: z.string().min(1).optional(),
+    /**
+     * Protocol 2.5: the protocol this client reads events in. Event types added after it are
+     * withheld (`EVENT_TYPES_SINCE`); absent means 2.0. Cursors are unaffected.
+     */
+    protocol: ProtocolVersionSchema.optional(),
     limit: z.number().int().positive().max(500).default(200),
   })
   .refine((p) => p.after === undefined || p.before === undefined, {

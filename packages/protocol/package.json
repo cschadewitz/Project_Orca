@@ -21,6 +21,14 @@
     "./update-handoff": {
       "types": "./dist/update-handoff.d.ts",
       "import": "./dist/update-handoff.js"
+    },
+    "./remote-access": {
+      "types": "./dist/remote-access.d.ts",
+      "import": "./dist/remote-access.js"
+    },
+    "./server-setup": {
+      "types": "./dist/server-setup.d.ts",
+      "import": "./dist/server-setup.js"
     }
   },
   "files": [

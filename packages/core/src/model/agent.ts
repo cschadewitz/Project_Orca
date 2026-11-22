@@ -6,6 +6,13 @@
  * such as `claude-code-acp`, `codex acp`, `gemini --acp`, `opencode acp`.
  */
 import { z } from "zod";
+import { AuthorityCapabilityScopeSchema } from "./capabilities.js";
+import { EnvSchema } from "./secrets.js";
+
+// Scoped capabilities (#335) belong with the agent model they select for.
+export * from "./capabilities.js";
+// Secret references (#336) fill the env maps below.
+export * from "./secrets.js";
 
 export const LOCAL_HOST_ID = "local";
 
@@ -25,6 +32,11 @@ export const SshHostSchema = z.object({
   /** Root directory on the remote machine under which workspaces live. */
   workspaceRoot: z.string().optional(),
   connectTimeoutMs: z.number().int().positive().default(20_000),
+  /**
+   * At most this many agent sessions open on this host at once (#873). Absent means
+   * unlimited, which is the default: nothing is derived from the machine.
+   */
+  maxSessions: z.number().int().positive().optional(),
 });
 export type SshHost = z.infer<typeof SshHostSchema>;
 
@@ -32,11 +44,52 @@ export const LocalHostSchema = z.object({
   id: z.string().min(1),
   type: z.literal("local"),
   workspaceRoot: z.string().optional(),
+  /**
+   * At most this many agent sessions open on this host at once (#873). Absent means
+   * unlimited, which is the default: nothing is derived from the machine.
+   */
+  maxSessions: z.number().int().positive().optional(),
 });
 export type LocalHost = z.infer<typeof LocalHostSchema>;
 
 export const HostSpecSchema = z.discriminatedUnion("type", [LocalHostSchema, SshHostSchema]);
 export type HostSpec = z.infer<typeof HostSpecSchema>;
+
+/**
+ * Another ORCA daemon this one may delegate steps to (#883), as the config's `remotes[]`. The
+ * connection fields are the desktop app's SSH profile fields (#874): typed fields only, no
+ * free-form ssh options and no ssh config file. They are checked against the shared
+ * `ConnectionProfileSchema` (`@orca/protocol/remote-access`) when the daemon loads the config,
+ * which stays their one definition; here they are only typed.
+ */
+const RemoteHopSchema = z
+  .object({
+    /** `user@host` or `host`. */
+    destination: z.string().min(1),
+    sshPort: z.number().int().min(1).max(65535).optional(),
+    /** A private key file, as an absolute path. Absent: the keys the SSH agent offers. */
+    identityFile: z.string().min(1).optional(),
+  })
+  .strict();
+export const RemoteDaemonSpecSchema = RemoteHopSchema.extend({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, "use lowercase letters, digits and dashes"),
+  name: z.string().min(1).optional(),
+  jump: RemoteHopSchema.optional(),
+  /** The daemon's port on the remote loopback. Default 6722. */
+  remotePort: z.number().int().min(1).max(65535).optional(),
+  /** The server's ORCA CLI, a command name or an absolute path. Default `orca`. */
+  serverCommand: z.string().min(1).optional(),
+  /** The remote daemon's workspace config, as an absolute path on the server. */
+  serverConfig: z.string().min(1).optional(),
+  /**
+   * The file holding the bearer credential the remote daemon issued for this daemon
+   * (`orca auth issue … --json` there), relative to the config file. Default
+   * `auth/remotes/<id>.token` beside the config. It is read at each session open, never logged,
+   * and must not be readable by other users.
+   */
+  credentialFile: z.string().min(1).optional(),
+}).strict();
+export type RemoteDaemonSpec = z.infer<typeof RemoteDaemonSpecSchema>;
 
 /** ACP tool kinds, mirrored here so policies do not depend on the SDK types. */
 export const ToolKindSchema = z.enum([
@@ -538,50 +591,123 @@ export const McpServerConfigSchema = z.object({
   name: z.string(),
   command: z.string(),
   args: z.array(z.string()).default([]),
-  env: z.record(z.string(), z.string()).default({}),
+  /** Literal values, or `{ secret: <id> }` references read on the agent's host at session open (#336). */
+  env: EnvSchema.default({}),
 });
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
 
-export const AgentSpecSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().optional(),
-  /** Executable (resolved on the host). */
-  command: z.string().min(1),
-  args: z.array(z.string()).default([]),
-  env: z.record(z.string(), z.string()).default({}),
-  hostId: z.string().default(LOCAL_HOST_ID),
-  /** Roles this agent can fill (e.g. "planner", "builder", "reviewer"). */
-  roles: z.array(z.string()).default([]),
-  /**
-   * Absent means no configured rules and no chosen fallthrough, which is what opts the agent
-   * in to `DEFAULT_PERMISSION_POLICY`: reads, searches and file changes inside the run's own
-   * workspace, and `ask` for everything else. The default is `{ rules: [] }` and *not*
-   * `{ default: "ask", rules: [] }` — those two are different policies now, and the second
-   * one opts out. It is all layered at evaluation time, not here; see
-   * `effectivePermissionPolicy`.
-   */
-  permissions: PermissionPolicySchema.default(() => ({ rules: [] })),
-  /** MCP servers passed in `session/new`. */
-  mcpServers: z.array(McpServerConfigSchema).default([]),
-  /** Reuse one ACP session for a whole run, or open a fresh one per step. */
-  sessionMode: z.enum(["per-step", "per-run"]).default("per-step"),
-  /** Per-turn wall clock limit. */
-  turnTimeoutMs: z
-    .number()
-    .int()
-    .positive()
-    .default(30 * 60_000),
-  /**
-   * How long a turn may keep running after `session/cancel` (turn timeout, run
-   * cancellation, artifact-present completion) before the agent is treated as
-   * wedged and its process killed.
-   */
-  cancelGraceMs: z.number().int().positive().default(10_000),
-  /** Models this agent offers, as declared in config (#186); applied per run in #187. */
-  models: z.array(z.object({ id: z.string().min(1), name: z.string(), description: z.string().optional() })).optional(),
-  /** The model used when a run selects none; one of `models[].id`. */
-  defaultModel: z.string().optional(),
-});
+/**
+ * What runs a step for an agent. `acp` (the default) spawns `command` on the agent's host and
+ * speaks ACP to it. `orca-daemon` (#883) delegates the step to another ORCA daemon instead: it
+ * reaches the daemon named by `profile` (one of the config's `remotes`) over that profile's SSH
+ * tunnel and runs `workflow` there, so the work is the remote daemon's own run, in its own run
+ * list. `command`, `args`, `env` and `mcpServers` do not apply to it.
+ */
+export const AgentTypeSchema = z.enum(["acp", "orca-daemon"]);
+export type AgentType = z.infer<typeof AgentTypeSchema>;
+
+export const AgentSpecSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().optional(),
+    type: AgentTypeSchema.default("acp"),
+    /**
+     * Executable (resolved on the host). Required for an `acp` agent; an `orca-daemon` agent has
+     * no process of its own and leaves it out.
+     */
+    command: z.string().default(""),
+    /** `orca-daemon` only: the `remotes[].id` whose daemon runs this agent's steps. */
+    profile: z.string().min(1).optional(),
+    /** `orca-daemon` only: the workflow the remote daemon runs for each step. */
+    workflow: z.string().min(1).optional(),
+    /**
+     * `orca-daemon` only: the remote workflow variable the step's task text is passed in.
+     * Default `prompt`.
+     */
+    promptVar: z
+      .string()
+      .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
+      .optional(),
+    args: z.array(z.string()).default([]),
+    /** Literal values, or `{ secret: <id> }` references read on the agent's host at spawn (#336). */
+    env: EnvSchema.default({}),
+    hostId: z.string().default(LOCAL_HOST_ID),
+    /** Roles this agent can fill (e.g. "planner", "builder", "reviewer"). */
+    roles: z.array(z.string()).default([]),
+    /**
+     * Absent means no configured rules and no chosen fallthrough, which is what opts the agent
+     * in to `DEFAULT_PERMISSION_POLICY`: reads, searches and file changes inside the run's own
+     * workspace, and `ask` for everything else. The default is `{ rules: [] }` and *not*
+     * `{ default: "ask", rules: [] }` — those two are different policies now, and the second
+     * one opts out. It is all layered at evaluation time, not here; see
+     * `effectivePermissionPolicy`.
+     */
+    permissions: PermissionPolicySchema.default(() => ({ rules: [] })),
+    /**
+     * MCP servers passed in `session/new`. The legacy inline form: each one is on for this
+     * agent, as if it were in the catalog and enabled here. `capabilities` below selects from
+     * the shared catalog instead (#335).
+     */
+    mcpServers: z.array(McpServerConfigSchema).default([]),
+    /**
+     * This agent's scope over the `capabilities` catalog (#335): what it gets by default, and
+     * (`available`) what workflows and nodes may turn on for it. See `capabilities.ts`.
+     */
+    capabilities: AuthorityCapabilityScopeSchema.optional(),
+    /** Reuse one ACP session for a whole run, or open a fresh one per step. */
+    sessionMode: z.enum(["per-step", "per-run"]).default("per-step"),
+    /** Per-turn wall clock limit. */
+    turnTimeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .default(30 * 60_000),
+    /**
+     * How long a turn may keep running after `session/cancel` (turn timeout, run
+     * cancellation, artifact-present completion) before the agent is treated as
+     * wedged and its process killed.
+     */
+    cancelGraceMs: z.number().int().positive().default(10_000),
+    /** Models this agent offers, as declared in config (#186); applied per run in #187. */
+    models: z
+      .array(z.object({ id: z.string().min(1), name: z.string(), description: z.string().optional() }))
+      .optional(),
+    /** The model used when a run selects none; one of `models[].id`. */
+    defaultModel: z.string().optional(),
+    /**
+     * At most this many sessions of this agent open at once, across every run (#873), for a
+     * provider or account that limits concurrent use. Absent means unlimited, the default.
+     */
+    maxSessions: z.number().int().positive().optional(),
+  })
+  .superRefine((agent, ctx) => {
+    if (agent.type === "acp") {
+      if (agent.command.length === 0)
+        ctx.addIssue({ code: "custom", path: ["command"], message: "an ACP agent needs the command that starts it" });
+      for (const key of ["profile", "workflow", "promptVar"] as const)
+        if (agent[key] !== undefined)
+          ctx.addIssue({ code: "custom", path: [key], message: `${key} applies only to type: orca-daemon` });
+      return;
+    }
+    if (agent.profile === undefined)
+      ctx.addIssue({
+        code: "custom",
+        path: ["profile"],
+        message: "an orca-daemon agent needs the remote profile it delegates to",
+      });
+    if (agent.workflow === undefined)
+      ctx.addIssue({
+        code: "custom",
+        path: ["workflow"],
+        message: "an orca-daemon agent needs the remote workflow it runs",
+      });
+    if (agent.mcpServers.length > 0 || agent.capabilities !== undefined)
+      ctx.addIssue({
+        code: "custom",
+        path: [agent.mcpServers.length > 0 ? "mcpServers" : "capabilities"],
+        message: "an orca-daemon agent runs the remote daemon's own agents; give capabilities to those",
+      });
+  });
 export type AgentSpec = z.infer<typeof AgentSpecSchema>;
 
 /** How a workflow node picks an agent: by id, or by role (resolved from config). */

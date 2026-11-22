@@ -2,7 +2,7 @@
   "storeEpoch": "operator-journals-v4",
   "protocol": {
     "major": 2,
-    "minor": 0
+    "minor": 5
   },
   "capabilities": [
     "runs.read",
@@ -15,6 +15,7 @@
   ],
   "notes": [
     "Generation snapshots embed workflowDefinitions without pinning unlaunched workflows. Older binaries that ignore this field cannot restore a generation when any catalog workflow lacks a pin, even if both builds report config-generations-v3. Snapshot compatibility is one-way; epoch equality does not establish rollback compatibility. Retain a complete pre-upgrade store backup and its matching binary.",
-    "Operator journals and revision.recorded establish the operator-journals-v4 store boundary. Upgrade protocol 2.0 clients and daemons together. Managed activation and recovery refuse differing store epochs; direct CLI/daemon startup does not enforce this release marker. Direct downgrade is unsupported: restore a complete consistent pre-upgrade store backup with its matching binary before reopening work."
+    "Operator journals and revision.recorded establish the operator-journals-v4 store boundary. Upgrade protocol 2.0 clients and daemons together. Managed activation and recovery refuse differing store epochs; direct CLI/daemon startup does not enforce this release marker. Direct downgrade is unsupported: restore a complete consistent pre-upgrade store backup with its matching binary before reopening work.",
+    "Protocol 2.1 adds the optional hello fallback (#880): a 2.1 daemon answers a 3.0 client that offers a 2.x fallback in 2.x. No previous major is accepted in 2.x, so 1.10 clients and daemons stay refused. 2.1 clients offer 2.0 in hello, so they still reach 2.0 daemons. The window never covers store epochs."
   ]
 }

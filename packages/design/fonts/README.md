@@ -16,7 +16,7 @@ declares each file with a relative `url()` that resolves over `file://`.
 | `IBMPlexSans-SemiBold.woff2`    | IBM Plex Sans       |    600 | as above                                              |
 | `IBMPlexMono-Regular.woff2`     | IBM Plex Mono       |    400 | as above, plus box drawing (U+2500–257F)              |
 | `IBMPlexMono-Medium.woff2`      | IBM Plex Mono       |    500 | as above, plus box drawing                            |
-| `NotoSansSymbols2-Regular.woff2`| Noto Sans Symbols 2 |    400 | ◐ ◆ ✓ ✕ ▣ ⏸ ◷ ● ◌ ▸ ⌘ ☰ ⬡ ⑂ ◉ ❋ ❝ ◫ ✦                 |
+| `NotoSansSymbols2-Regular.woff2`| Noto Sans Symbols 2 |    400 | ◐ ◆ ✓ ✕ ▣ ⏸ ◷ ● ◌ ▸ ⌘ ☰ ⬡ ⑂ ◉ ❋ ❐ ❝ ◫ ✦               |
 | `NotoSansMath-Regular.woff2`    | Noto Sans Math      |    400 | ⊘ ⊓                                                   |
 
 ## Why there are symbol faces at all

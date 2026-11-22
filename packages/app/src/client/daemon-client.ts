@@ -9,6 +9,7 @@
  * hands back a stream that reconnects and resumes on its own. Both halves are the same
  * daemon on the same port; a client that only reads never opens a socket.
  */
+import { PROTOCOL_VERSION } from "@orca/protocol";
 import { RevisionResultSchema, PendingRevisionViewSchema } from "@orca/protocol";
 import { MaintenanceResultSchema, type MaintenanceParams, type MaintenanceResult } from "@orca/protocol";
 import {
@@ -73,20 +74,26 @@ import {
   INPUTS_LIST_METHOD,
   InputsAnswerResultSchema,
   InputsListResultSchema,
-  PROTOCOL_VERSION,
-  isCompatible,
   RUNS_CANCEL_METHOD,
   RUNS_EVENTS_METHOD,
   RUNS_GET_METHOD,
   RUNS_LIST_METHOD,
+  ADMISSIONS_RECONCILE_METHOD,
+  AdmissionRetryResultSchema,
+  RUNS_RECOVER_METHOD,
+  RUNS_RECOVERY_METHOD,
   RUNS_RESUME_METHOD,
+  RUNS_REVIEW_EFFECT_METHOD,
   RUNS_START_METHOD,
   ResponseMessageSchema,
   RunsCancelResultSchema,
   RunsEventsResultSchema,
   RunsGetResultSchema,
   RunsListResultSchema,
+  RunsRecoverResultSchema,
+  RunsRecoveryResultSchema,
   RunsResumeResultSchema,
+  RunsReviewEffectResultSchema,
   RunsStartResultSchema,
   WORKFLOWS_GET_METHOD,
   WORKFLOWS_LIST_METHOD,
@@ -147,25 +154,41 @@ import {
   type RunsGetResult,
   type RunsListParams,
   type RunsListResult,
+  type RunsRecoverParams,
+  type RunsRecoverResult,
+  type RunsRecoveryParams,
+  type RunsRecoveryResult,
   type RunsResumeParams,
   type RunsResumeResult,
+  type RunsReviewEffectParams,
+  type RunsReviewEffectResult,
   type RunsStartParams,
   type RunsStartResult,
   type WorkflowsGetParams,
   type WorkflowsGetResult,
   type WorkflowsListParams,
   type WorkflowsListResult,
+  SEARCH_METHOD,
+  SearchResultSchema,
+  type SearchParams,
+  type SearchResult,
 } from "@orca/protocol";
+import { appHelloOffer, appSpeaks } from "./protocol-window.js";
 import { type ZodType } from "zod";
-import { assertCredentialDestination, authenticationCode, type DaemonTokenSource } from "./auth.js";
-import { DaemonSubscription, type DaemonSubscriptionOptions } from "./subscription.js";
+import {
+  assertCredentialDestination,
+  authenticationCode,
+  CredentialTransportUnavailable,
+  type DaemonTokenSource,
+} from "./auth.js";
+import { DaemonSubscription, type DaemonSubscriptionOptions, type SocketFactory } from "./subscription.js";
 import { observeOwnedDiagnostic, type OwnedDiagnosticObserver } from "../main/diagnostics/source-producers.js";
 
 /** Where `orca serve` listens unless told otherwise; 6722 spells ORCA on a phone keypad. */
 export const DEFAULT_DAEMON_URL = "http://127.0.0.1:6722";
 
 const admissionMethod = (method: string) =>
-  ["runs.admit", "requests.submit", "operator.admitRun", "operator.submitRequest"].includes(method);
+  ["runs.admit", "runs.recover", "requests.submit", "operator.admitRun", "operator.submitRequest"].includes(method);
 function ownData(value: unknown, key: string): unknown {
   if (!value || typeof value !== "object") return undefined;
   try {
@@ -198,6 +221,8 @@ export interface DaemonClientOptions {
   onAuthFailure?: () => void;
   /** Current subscription verification only; ordinary hello probes never publish. */
   onHello?: (hello: HelloResult) => void;
+  /** How the push stream opens its socket; a saved profile's comes from its tunnel. */
+  socket?: SocketFactory;
 }
 
 export class DaemonClient {
@@ -242,7 +267,9 @@ export class DaemonClient {
       let token: string | undefined;
       try {
         token = this.options.auth?.read();
-      } catch {
+      } catch (error) {
+        // Nothing was sent: the transport is down, not the credential.
+        if (error instanceof CredentialTransportUnavailable) throw error;
         if (publishAuthFailure) this.options.onAuthFailure?.();
         if (publishAuthFailure) this.observeError({ code: "AUTH_INVALID", message: "" });
         throw new DaemonClientError({ code: "AUTH_INVALID", message: "Daemon authentication failed" });
@@ -352,7 +379,7 @@ export class DaemonClient {
     // would let a late reply mutate connection state before that caller checks its epoch.
     return this.call(
       HELLO_METHOD,
-      { client, protocol: PROTOCOL_VERSION },
+      { client, ...appHelloOffer() },
       HelloResultSchema,
       retryAuth,
       AbortSignal.timeout(10_000),
@@ -369,7 +396,8 @@ export class DaemonClient {
   }
 
   runsEvents(params: Params<RunsEventsParams> & { runId: string }): Promise<RunsEventsResult> {
-    return this.call(RUNS_EVENTS_METHOD, params, RunsEventsResultSchema);
+    // This build's event schema reads every type up to its own protocol (#357).
+    return this.call(RUNS_EVENTS_METHOD, { protocol: PROTOCOL_VERSION, ...params }, RunsEventsResultSchema);
   }
 
   inputsRevise(params: import("@orca/protocol").InputsReviseParams) {
@@ -392,6 +420,14 @@ export class DaemonClient {
   /** Artifact metadata only — the docked panel's version list and a step's chips (#159). */
   artifactsList(params: Params<ArtifactsListParams> = {}): Promise<ArtifactsListResult> {
     return this.call(ARTIFACTS_LIST_METHOD, params, ArtifactsListResultSchema);
+  }
+
+  /**
+   * `search` (#255): event text and text artifacts, matched by the daemon within a limit and a
+   * deadline. Ask `hello.methods` first: a daemon before protocol 2.2 does not answer it.
+   */
+  search(params: Params<SearchParams> & { query: string }): Promise<SearchResult> {
+    return this.call(SEARCH_METHOD, params, SearchResultSchema);
   }
 
   /** One artifact's body, or the reason it is not being shown. */
@@ -550,6 +586,49 @@ export class DaemonClient {
     }
   }
 
+  /**
+   * What recovering a stopped run would do (#357): the options, the checkpoints, the steps
+   * whose effect is uncertain, and what has drifted since. A read, served from store facts.
+   */
+  runsRecovery(params: RunsRecoveryParams): Promise<RunsRecoveryResult> {
+    return this.call(RUNS_RECOVERY_METHOD, params, RunsRecoveryResultSchema);
+  }
+
+  /** Record a person's review of a step whose side effect is uncertain: run it again, or abandon it. */
+  runsReviewEffect(params: RunsReviewEffectParams): Promise<RunsReviewEffectResult> {
+    return this.call(RUNS_REVIEW_EFFECT_METHOD, params, RunsReviewEffectResultSchema);
+  }
+
+  /**
+   * Start a checkpoint attempt of a failed run through retry-safe admission. The same
+   * `idempotencyKey` answers with the same attempt, so a caller that lost the answer sends
+   * the call again with the key it already used rather than a new one.
+   */
+  runsRecover(params: RunsRecoverParams): Promise<RunsRecoverResult> {
+    return this.call(RUNS_RECOVER_METHOD, params, RunsRecoverResultSchema);
+  }
+
+  /**
+   * Finish a checkpoint attempt whose receipt was a recoverable failure: `admissions.reconcile`,
+   * for a checkpoint receipt only, creates the attempt it reserved, or keeps failing if that
+   * reservation was retired. The
+   * answer is flattened to `runs.recover`'s own shape so one reader handles both.
+   */
+  async runsRecoverReconcile(params: {
+    operationId: string;
+    expectedScope?: { principalId: string; workspaceId: string };
+  }): Promise<RunsRecoverResult> {
+    // `kind` makes the daemon refuse any other receipt before it reconciles anything (#357).
+    const answer = await this.call(
+      ADMISSIONS_RECONCILE_METHOD,
+      { ...params, kind: "run.recover" },
+      AdmissionRetryResultSchema,
+    );
+    if (answer.state === "in-progress") return answer;
+    const receipt = answer.result && typeof answer.result === "object" ? answer.result : {};
+    return RunsRecoverResultSchema.parse({ ...receipt, operationId: answer.operationId });
+  }
+
   /** Stop a run, with the reason recorded on `run.cancelled`. */
   runsCancel(params: RunsCancelParams): Promise<RunsCancelResult> {
     return this.call(RUNS_CANCEL_METHOD, params, RunsCancelResultSchema);
@@ -596,12 +675,13 @@ export class DaemonClient {
         const hello = await this.hello("orca-app/subscription", false);
         if (!isCurrent()) return undefined;
         this.options.onHello?.(hello);
-        if (!isCompatible(PROTOCOL_VERSION, hello.protocol)) {
+        if (!appSpeaks(hello.protocol)) {
           throw new DaemonClientError({ code: "PROTOCOL_VERSION", message: "Daemon protocol mismatch" });
         }
         return hello.identity;
       },
       ...(this.options.auth ? { auth: { tokens: this.options.auth } } : {}),
+      ...(this.options.socket ? { socket: this.options.socket } : {}),
     });
   }
 }

@@ -19,6 +19,8 @@ import {
   RUNS_EVENTS_METHOD,
   RUNS_GET_METHOD,
   RUNS_LIST_METHOD,
+  SEARCH_METHOD,
+  SearchParamsSchema,
   RUNS_RESUME_METHOD,
   RunsCancelParamsSchema,
   RunsEventsParamsSchema,
@@ -86,6 +88,16 @@ import {
 } from "../renderer/test/fixtures-plan.js";
 import { AI_SDLC, WORKFLOWS } from "../renderer/test/fixtures-workflows.js";
 import { DaemonClient, DaemonClientError, DEFAULT_DAEMON_URL } from "../src/client/daemon-client.js";
+import {
+  ADMISSIONS_RECONCILE_METHOD,
+  AdmissionsReconcileParamsSchema,
+  RUNS_RECOVER_METHOD,
+  RUNS_RECOVERY_METHOD,
+  RUNS_REVIEW_EFFECT_METHOD,
+  RunsRecoverParamsSchema,
+  RunsRecoveryParamsSchema,
+  RunsReviewEffectParamsSchema,
+} from "@orca/protocol";
 
 describe("DaemonClient", () => {
   let d: DaemonHandle;
@@ -185,6 +197,12 @@ describe("the read methods", () => {
     }),
     [INPUTS_LIST_METHOD]: answer(INPUTS_LIST_METHOD, InputsListParamsSchema, { inputs: [], waiting: 0, asOf }),
     [CLAIMS_LIST_METHOD]: answer(CLAIMS_LIST_METHOD, ClaimsListParamsSchema, { claims: [], asOf }),
+    [SEARCH_METHOD]: answer(SEARCH_METHOD, SearchParamsSchema, {
+      hits: [{ kind: "event" as const, runId: "run-1", seq: 4, type: "run.failed", excerpt: "connection reset" }],
+      truncated: "deadline" as const,
+      scannedRuns: 1,
+      asOf,
+    }),
   };
 
   let d: DaemonHandle;
@@ -207,6 +225,9 @@ describe("the read methods", () => {
     expect((await client.runsEvents({ runId: "run-1", after: 3 })).lastSeq).toBe(0);
     expect((await client.inputsList({ kind: ["decision"] })).waiting).toBe(0);
     expect((await client.claimsList()).claims).toEqual([]);
+    const found = await client.search({ query: "  connection " });
+    expect(found.hits.map((h) => h.excerpt)).toEqual(["connection reset"]);
+    expect(found.truncated).toBe("deadline");
 
     expect(seen.map((c) => c.method)).toEqual([
       RUNS_LIST_METHOD,
@@ -214,10 +235,14 @@ describe("the read methods", () => {
       RUNS_EVENTS_METHOD,
       INPUTS_LIST_METHOD,
       CLAIMS_LIST_METHOD,
+      SEARCH_METHOD,
     ]);
+    // The daemon trims the query and fills in the default limit.
+    expect(seen[5]!.params).toEqual({ query: "connection", limit: 20 });
     // Params travel as given, with the schema's paging defaults filled in by the daemon.
     expect(seen[0]!.params).toEqual({ roots: true, limit: 100, offset: 0 });
-    expect(seen[2]!.params).toEqual({ runId: "run-1", after: 3, limit: 200 });
+    // runs.events names the client's protocol so the daemon withholds event types it cannot parse.
+    expect(seen[2]!.params).toEqual({ protocol: PROTOCOL_VERSION, runId: "run-1", after: 3, limit: 200 });
     expect(seen[3]!.params).toEqual({ kind: ["decision"] });
   });
 });
@@ -473,6 +498,101 @@ describe("the control methods", () => {
       { method: RUNS_RESUME_METHOD, params: { runId: "run-gate" } },
       { method: RUNS_CANCEL_METHOD, params: { runId: "run-gate", reason: "no longer needed" } },
     ]);
+  });
+});
+
+/**
+ * Operator recovery (#357): the read, the review and the attempt, plus the reconcile that
+ * finishes a reserved attempt. `admissions.reconcile` answers the retry envelope; the client
+ * flattens it to `runs.recover`'s shape, which is what this checks.
+ */
+describe("the recovery methods", () => {
+  const asOf = "2026-03-01T09:00:00.000Z";
+  const seen: { method: string; params: unknown }[] = [];
+  const run = {
+    id: "run-failed",
+    name: "Deploy",
+    workflowId: "sdlc",
+    workflowVersion: "1",
+    status: "failed" as const,
+    createdAt: asOf,
+  };
+  const operationId = "retry_00000000-0000-4000-8000-000000000003";
+  const record = <P, R>(method: string, params: z.ZodType<P>, result: R) => ({
+    params,
+    handle: (p: P): R => {
+      seen.push({ method, params: p });
+      return result;
+    },
+  });
+  const table: MethodTable = {
+    [HELLO_METHOD]: hello,
+    [RUNS_RECOVERY_METHOD]: record(RUNS_RECOVERY_METHOD, RunsRecoveryParamsSchema, {
+      assessment: {
+        runId: "run-failed",
+        workflowId: "sdlc",
+        workflowVersion: "1",
+        status: "failed",
+        options: [],
+        checkpoints: [],
+        uncertain: [],
+      },
+      asOf,
+    }),
+    [RUNS_REVIEW_EFFECT_METHOD]: record(RUNS_REVIEW_EFFECT_METHOD, RunsReviewEffectParamsSchema, { run, asOf }),
+    [RUNS_RECOVER_METHOD]: record(RUNS_RECOVER_METHOD, RunsRecoverParamsSchema, {
+      state: "in-progress" as const,
+      operationId,
+      recovery: "inspect-or-retry" as const,
+    }),
+    [ADMISSIONS_RECONCILE_METHOD]: record(ADMISSIONS_RECONCILE_METHOD, AdmissionsReconcileParamsSchema, {
+      state: "resolved" as const,
+      operationId,
+      replayed: false,
+      result: { state: "accepted", admissionId: "adm-3", runId: "run-attempt", sourceRunId: "run-failed" },
+    }),
+  };
+
+  let d: DaemonHandle;
+  beforeAll(async () => {
+    d = await startDaemon({
+      orcaVersion: "0.1.0-test",
+      capabilities: ["runs.read", "runs.control"],
+      auth: { mode: "loopback-unauthenticated" },
+      methods: table,
+    });
+  });
+  afterAll(async () => {
+    await d.close();
+  });
+
+  it("reads, reviews, starts and reconciles by name", async () => {
+    const client = new DaemonClient(d.url);
+    expect((await client.runsRecovery({ runId: "run-failed" })).assessment.status).toBe("failed");
+    expect(
+      (await client.runsReviewEffect({ runId: "run-failed", stepRunId: "s-1", decision: "run-again" })).run.id,
+    ).toBe("run-failed");
+    expect(await client.runsRecover({ runId: "run-failed", checkpoint: "s-0", idempotencyKey: "k-1" })).toEqual({
+      state: "in-progress",
+      operationId,
+      recovery: "inspect-or-retry",
+    });
+    expect(await client.runsRecoverReconcile({ operationId })).toEqual({
+      state: "accepted",
+      operationId,
+      admissionId: "adm-3",
+      runId: "run-attempt",
+      sourceRunId: "run-failed",
+    });
+    expect(seen.map((c) => c.method)).toEqual([
+      RUNS_RECOVERY_METHOD,
+      RUNS_REVIEW_EFFECT_METHOD,
+      RUNS_RECOVER_METHOD,
+      ADMISSIONS_RECONCILE_METHOD,
+    ]);
+    expect(seen[2]!.params).toEqual({ runId: "run-failed", checkpoint: "s-0", idempotencyKey: "k-1" });
+    // Finishing names the kind, so the daemon refuses any other receipt before reconciling it.
+    expect(seen[3]!.params).toEqual({ operationId, kind: "run.recover" });
   });
 });
 

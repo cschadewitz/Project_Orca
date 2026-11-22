@@ -29,7 +29,7 @@ export function stageNativeAddons(config, headers, run = execFileSync, verify = 
     run(
       process.execPath,
       ["packages/app/scripts/diagnostics-native-package.js", "--arch", arch, "--headers", resolve(headers)],
-      { cwd: root, stdio: ["ignore", "pipe", "pipe"], timeout: 150_000, maxBuffer: 16 * 1024, windowsHide: true },
+      { cwd: root, stdio: ["ignore", "pipe", "pipe"], timeout: 360_000, maxBuffer: 16 * 1024, windowsHide: true },
     );
     verify(
       resolve(root, "packages/app/dist/diagnostics-native", `win32-${arch}`),
@@ -53,7 +53,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     );
     const architectures = stageNativeAddons(config, values.headers);
     console.log(`Staged Windows native addons: ${architectures.join(", ")}; before-signing resources only`);
-  } catch {
+  } catch (error) {
+    // The cause (a toolchain or build error) is what makes a refusal fixable, e.g. on a new
+    // runner image; bounded so a build log cannot flood the job output.
+    const detail = [error?.message, error?.stdout?.toString(), error?.stderr?.toString()].filter(Boolean).join("\n");
+    console.error(detail.slice(-8000));
     console.error("Windows native staging refused; packaging must not continue");
     process.exitCode = 1;
   }

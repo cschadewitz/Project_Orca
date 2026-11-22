@@ -31,10 +31,13 @@ import { installFirstRunIPC, startFirstRunWorkspace } from "./first-run/ipc.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
 import type { DiagnosticsResult } from "../diagnostics-contract.js";
 import { AdmissionIntents, AdmissionIntentController, protectedStorageBridgeError } from "./admission-intents.js";
+import { RecoveryIntentController, RecoveryIntents, recoveryTarget } from "./recovery-intents.js";
 import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
 import type { LaunchReview, PreflightParams } from "../configuration-launch-contract.js";
-import { RunsAdmitResultSchema } from "@orca/protocol";
-import { ConnectionTarget, connectionFailure, callInConnection } from "./connection-target.js";
+import { RunsAdmitResultSchema, ServerPathSchema } from "@orca/protocol";
+import { ConnectionTarget, ConnectionRefusal, connectionFailure, callInConnection } from "./connection-target.js";
+import { RemoteProfiles } from "./remote-profiles.js";
+import { ServerUpdater } from "./server-update.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates } from "./updates.js";
 import { MacUpdateWindows } from "./mac-update-windows.js";
@@ -45,6 +48,7 @@ import { createManagedMacNativeProviders } from "./mac-native-providers.js";
 import { updateDriver } from "./update-driver.js";
 import { isDebInstall, LinuxReleaseWatch } from "./linux-release-notice.js";
 import { basename, dirname, join } from "node:path";
+import { readFileSync, statSync } from "node:fs";
 import { windowIcon } from "./window-icon.js";
 import { revealWhenReady } from "./window-reveal.js";
 import { fileURLToPath } from "node:url";
@@ -72,7 +76,7 @@ import { callTemplate } from "../client/template-client.js";
 import type { TemplateMethod } from "../template-bridge.js";
 import type { WorkflowDraftMethodName } from "../workflow-draft-bridge.js";
 import { callWorkflowDraft } from "../client/workflow-draft-client.js";
-import { daemonEndpoint } from "../daemon-connection.js";
+import { daemonEndpoint, type DaemonConnectionRequest, type ProfileResult } from "../daemon-connection.js";
 import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
@@ -83,6 +87,8 @@ import { ConnectionMachine } from "./connection-state.js";
 import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./deep-link.js";
 import { findBundledDaemon, startBundledDaemon } from "./daemon-process.js";
 import { storeRoot, Workspace } from "./workspace.js";
+import { Fleet, alertScope, labelAlerts, type FleetTarget, type FocusedMachine } from "./fleet.js";
+import { MAX_WATCHED_PROFILES } from "../preferences/schema.js";
 
 // Mount synchronously before producers. Selected workspace/configuration roots are
 // enrolled before their first producer; replacement activation remains held below.
@@ -116,6 +122,7 @@ const drainCompletionChannels = new Set([
   "orca:claims.list",
   "orca:artifacts.list",
   "orca:artifacts.get",
+  "orca:search",
   "orca:agents.list",
   "orca:workflows.list",
   "orca:workflows.get",
@@ -135,6 +142,9 @@ const drainCompletionChannels = new Set([
   "orca:inputs.answer",
   "orca:runs.cancel",
   "orca:runs.resume",
+  // Recovery reads and side-effect reviews finish existing work; starting an attempt does not.
+  "orca:runs.recovery",
+  "orca:runs.reviewEffect",
 ]);
 function assertDispatchAllowed(channel: string): void {
   if (
@@ -188,6 +198,16 @@ async function offerUpdateProtectionReset(startup: NonNullable<typeof macReplace
 }
 
 const preferences = new PreferencesFile(join(app.getPath("userData"), "preferences.json"));
+/** Saved SSH profiles, their pinned host keys and sealed credentials (#874). Main only. */
+const remoteProfiles = new RemoteProfiles({
+  dir: join(app.getPath("userData"), "remote-daemons"),
+  cipher: safeStorage,
+  // Phase and refusal code only: ssh's own output never reaches the console or the renderer.
+  onTunnelState: (id, state) => {
+    if (state.phase === "reconnecting" || state.phase === "failed")
+      console.error(`ssh tunnel for profile ${id}: ${state.phase} (${state.refusal})`);
+  },
+});
 
 /** The dev server's URL when `scripts/dev.js` started one; undefined in a packaged app. */
 const rendererUrl = process.env.ORCA_RENDERER_URL;
@@ -450,6 +470,65 @@ handle("orca:guidedLaunch.abandon", (id: string) =>
     return result.response === 1;
   }),
 );
+// Checkpoint attempts (#357): the same verified scope as run intents, bound to the captured
+// connection, with `runs.recover` required in the principal's operations.
+const recoveryIntents = new RecoveryIntentController(
+  new RecoveryIntents(join(app.getPath("userData"), "recovery-intents.enc"), safeStorage),
+  async () => {
+    const captured = client();
+    const target = workspace.connectionTarget;
+    const endpoint = workspace.profileEndpoint;
+    const found = await captured.call("operator.discover", {}, intentDiscovery);
+    workspace.assertEpoch(target.epoch);
+    if (
+      !found.operations.includes("runs.recover") ||
+      !target.identity ||
+      found.target.workspaceId !== target.identity.workspaceId ||
+      found.target.instanceId !== target.identity.instanceId
+    )
+      throw new Error("The authenticated daemon target changed or recovery is unavailable. Refresh before retrying.");
+    return {
+      scope: {
+        target: recoveryTarget(target, workspace.snapshot.path, endpoint),
+        principalId: found.principalId,
+        workspaceId: found.target.workspaceId,
+      },
+      assertCurrent: () => workspace.assertEpoch(target.epoch),
+      recover: (params) => captured.runsRecover(params),
+      reconcile: (params) => captured.runsRecoverReconcile(params),
+    };
+  },
+  async (state) => {
+    const result = await dialog.showMessageBox(
+      state === "resolved"
+        ? {
+            type: "question",
+            buttons: ["Keep it", "Start a separate attempt"],
+            defaultId: 0,
+            cancelId: 0,
+            message: "Start a separate checkpoint attempt?",
+            detail:
+              "The attempt this recovery started stays as it is. ORCA forgets the link to it here, and the next start creates a separate attempt with a new key.",
+          }
+        : {
+            type: "warning",
+            buttons: ["Keep recovery", "Abandon recovery"],
+            defaultId: 0,
+            cancelId: 0,
+            message: "Abandon this checkpoint recovery?",
+            detail:
+              "An attempt may already exist or be running. This does not cancel it. The next start creates a separate attempt with a new key.",
+          },
+    );
+    return result.response === 1;
+  },
+);
+handle("orca:recoveryIntents.list", (params: { runId: string }) => recoveryIntents.list(params.runId));
+handle("orca:recoveryIntents.start", (params: { runId: string; checkpoint: string }) =>
+  recoveryIntents.start(params.runId, params.checkpoint),
+);
+handle("orca:recoveryIntents.finish", (params: { id: string }) => recoveryIntents.finish(params.id));
+handle("orca:recoveryIntents.dismiss", (params: { id: string }) => recoveryIntents.dismiss(params.id));
 handle("orca:admissionIntents.start", (workflowId: string) => intents.start(workflowId));
 handle("orca:admissionIntents.list", () => intents.list());
 handle("orca:admissionIntents.abandon", (id: string) =>
@@ -475,6 +554,8 @@ handle("orca:inputs.list", (params: Parameters<DaemonClient["inputsList"]>[0]) =
 handle("orca:claims.list", (params: Parameters<DaemonClient["claimsList"]>[0]) => client().claimsList(params));
 handle("orca:artifacts.list", (params: Parameters<DaemonClient["artifactsList"]>[0]) => client().artifactsList(params));
 handle("orca:artifacts.get", (params: Parameters<DaemonClient["artifactsGet"]>[0]) => client().artifactsGet(params));
+// `search` (#255): a read, bounded by the daemon; the palette asks `hello.methods` first.
+handle("orca:search", (params: Parameters<DaemonClient["search"]>[0]) => client().search(params));
 handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) => client().agentsList(params));
 // The workflow viewer's two reads (#174, for #177). Reads like the ones above: a
 // `--read-only` daemon answers both, because a workflow is a file and not a run.
@@ -530,6 +611,12 @@ handle("orca:inputs.answer", (params: Parameters<DaemonClient["inputsAnswer"]>[0
 handle("orca:runs.cancel", (params: Parameters<DaemonClient["runsCancel"]>[0]) => client().runsCancel(params));
 handle("orca:runs.resume", (params: Parameters<DaemonClient["runsResume"]>[0]) => client().runsResume(params));
 handle("orca:runs.start", (params: Parameters<DaemonClient["runsStart"]>[0]) => client().runsStart(params));
+// Operator recovery (#357): a read and a side-effect review. Checkpoint attempts go through
+// `orca:recoveryIntents.*` below, whose keys live in the encrypted journal.
+handle("orca:runs.recovery", (params: Parameters<DaemonClient["runsRecovery"]>[0]) => client().runsRecovery(params));
+handle("orca:runs.reviewEffect", (params: Parameters<DaemonClient["runsReviewEffect"]>[0]) =>
+  client().runsReviewEffect(params),
+);
 // The fourth (#174, #266). It writes a file rather than a run, so no lease is involved, but
 // it is still absent from a `--read-only` daemon and `useWritability()` still governs it.
 handle("orca:config.set", (params: Parameters<DaemonClient["configSet"]>[0]) => client().configSet(params));
@@ -569,6 +656,160 @@ function broadcast(notification: NotificationMessage): void {
   send("orca:notification", notification);
 }
 
+/* ---------- watched machines (#882) ---------- */
+
+/**
+ * Every daemon on the Machines surface that is not the focused one: saved profiles a person
+ * chose to watch, and the bundled daemon the workspace parked when focus moved elsewhere.
+ * Each has its own client, stream and credential and is only ever read (`./fleet.ts`);
+ * writes go to the focused daemon alone, through the workspace. Declared before the
+ * connection machine and the workspace because both tell it when focus or state changes;
+ * its own dependencies are read at call time.
+ */
+const fleet = new Fleet({
+  open: async (target, hooks) => {
+    if (target.kind === "profile") {
+      // Watching only: never signs in, renews or pins a key (#882). Focusing signs in.
+      const lease = await remoteProfiles.observe(target.id);
+      try {
+        const reader = new DaemonClient(daemonEndpoint(lease.url), lease.transport.fetch, {
+          socket: lease.transport.socket,
+          requireAuthentication: true,
+          auth: lease.auth,
+          onHello: hooks.onHello,
+        });
+        return {
+          client: reader,
+          explainFailure: () =>
+            lease.remoteRefused()
+              ? `SSH to ${lease.profile.destination} works, but no ORCA daemon is listening on its port ${lease.profile.remotePort}.`
+              : undefined,
+          release: () => lease.release(),
+        };
+      } catch (error) {
+        await lease.release();
+        throw error;
+      }
+    }
+    const url = daemonEndpoint(target.url);
+    return {
+      client: new DaemonClient(url, fetch, {
+        requireAuthentication: true,
+        auth: new LocalDaemonToken({
+          url,
+          workspace: target.workspace,
+          ...(target.tokenFile ? { tokenFile: target.tokenFile } : {}),
+          env: {},
+        }),
+        onHello: hooks.onHello,
+      }),
+      // The workspace owns the parked daemon's process; the fleet only lets go of its reads.
+      release: async () => undefined,
+    };
+  },
+  focusedReader: () =>
+    connection.current.state === "live" || connection.current.state === "file"
+      ? { reader: workspace.client, epoch: workspace.connectionTarget.epoch }
+      : undefined,
+  onChange: (snapshot) => send("orca:fleet", snapshot),
+  onAlerts: (update) => {
+    fleetAlerts = update;
+    publishAlerts();
+  },
+  onError: (message) => console.error(message),
+});
+
+/** The focused daemon as the Machines surface names it. Its key matches a watched member's. */
+function focusedMachine(): FocusedMachine | undefined {
+  const target = workspace.connectionTarget;
+  const state = connection.current;
+  if (!target.url && !target.profile) return undefined;
+  const bundled = target.source === "bundled";
+  return {
+    key: target.profile ? `profile:${target.profile.id}` : bundled ? "bundled" : `url:${target.url}`,
+    name: target.profile?.name ?? (bundled ? "This computer" : target.url),
+    detail: target.profile
+      ? `ssh ${target.profile.destination}`
+      : bundled
+        ? "Bundled daemon"
+        : target.source === "env"
+          ? "ORCA_DAEMON_URL"
+          : "Daemon URL",
+    workspaceId: target.identity?.workspaceId,
+    epoch: target.epoch,
+    state: state.state,
+    since: state.since,
+    authority: connection.authority,
+  };
+}
+
+/** What the fleet should watch: the saved choice of profiles, plus a parked bundled daemon. */
+function fleetTargets(): FleetTarget[] {
+  const targets: FleetTarget[] = [];
+  const parked = workspace.parkedBundled;
+  if (parked) targets.push({ kind: "bundled", ...parked });
+  for (const id of preferences.read().watchedProfiles ?? []) {
+    const profile = remoteProfiles.get(id);
+    if (profile)
+      targets.push({
+        kind: "profile",
+        id,
+        name: profile.name,
+        destination: profile.destination,
+        revision: remoteProfiles.revisionOf(id),
+      });
+  }
+  return targets;
+}
+/**
+ * Off until startup has built the workspace, the connection machine and the alerts: both of
+ * the first two report changes while they are still being constructed, and nothing here may
+ * read them before they exist.
+ */
+let fleetStarted = false;
+function refreshFleet(): void {
+  if (!fleetStarted) return;
+  fleet.setFocused(focusedMachine());
+  fleet.setTargets(fleetTargets());
+}
+function syncFocus(): void {
+  if (fleetStarted) fleet.setFocused(focusedMachine());
+}
+
+/**
+ * The renderer states the focused daemon's alerts; the fleet states every other machine's.
+ * Both are labelled with their machine here, so an alert keeps one id when focus moves to or
+ * from its machine and is never posted twice. The badge stays the focused daemon's count, the
+ * same one number the title bar and the sidebar carry (docs/design/20-attention-and-gates.md).
+ */
+let focusedAlerts: AlertsUpdate = { waiting: 0, items: [] };
+/** The grant the focused report was read under; its alerts and their clicks carry it. */
+let focusedAlertsGrant: number | undefined;
+let fleetAlerts: AlertsUpdate = { waiting: 0, items: [] };
+function publishAlerts(): void {
+  if (!fleetStarted) {
+    alerts.update(focusedAlerts);
+    return;
+  }
+  const focused = focusedMachine();
+  const named = fleetAlerts.items.length > 0 || fleet.snapshot.machines.length > 1;
+  const own = focused
+    ? labelAlerts(
+        focusedAlerts.items,
+        {
+          key: focused.key,
+          name: focused.name,
+          focused: true,
+          scope: alertScope(focused.workspaceId, focused.key),
+          workspaceId: focused.workspaceId,
+          grant: focusedAlertsGrant,
+        },
+        named,
+      )
+    : [...focusedAlerts.items];
+  alerts.update({ waiting: focusedAlerts.waiting, items: [...own, ...fleetAlerts.items] });
+}
+
 /* ---------- the connection state ---------- */
 
 /**
@@ -585,7 +826,22 @@ const connection = new ConnectionMachine({
     // identified post-subscribe reply may reveal a boot change, but only after fencing.
     if (hello.identity) workspace.observeHello(workspace.client, hello);
   },
-  onChange: (snapshot) => send("orca:connection", snapshot),
+  onChange: (snapshot) => {
+    send("orca:connection", snapshot);
+    syncFocus();
+  },
+  // A refusal takes the focused daemon's alerts down with it: they were read under an
+  // authority the app no longer has, and the renderer's next report after a fresh hello
+  // states them again (#882).
+  onAuthority: (authority) => {
+    if (authority !== focusedAlertsGrant) {
+      focusedAlerts = { waiting: 0, items: [] };
+      focusedAlertsGrant = undefined;
+    }
+    if (!fleetStarted) return;
+    syncFocus();
+    publishAlerts();
+  },
   onDiagnostic: observeDiagnostic,
 });
 
@@ -666,16 +922,22 @@ const workspace = new Workspace({
       // subscribing or falling back to a different store. Never retain the invalid input.
       return new DaemonClient("");
     }
-    const candidate = new DaemonClient(url, fetch, {
+    // A saved profile's requests and socket travel only on its tunnel's authenticated streams.
+    const candidate = new DaemonClient(url, options.transport?.fetch ?? fetch, {
+      ...(options.transport ? { socket: options.transport.socket } : {}),
       requireAuthentication: options.bundled || !isLoopbackDaemon(url),
-      auth: new LocalDaemonToken({
-        url,
-        workspace: options.workspace,
-        ...(options.tokenFile ? { tokenFile: options.tokenFile } : {}),
-        // A spawned daemon issues its own token. A remote override in the app's environment
-        // belongs to the explicitly connected daemon, never to a newly opened local store.
-        ...(options.bundled ? { env: {} } : {}),
-      }),
+      // A profile's credential comes from its keychain slot and always requires authentication.
+      ...(options.auth ? { requireAuthentication: true } : {}),
+      auth:
+        options.auth ??
+        new LocalDaemonToken({
+          url,
+          workspace: options.workspace,
+          ...(options.tokenFile ? { tokenFile: options.tokenFile } : {}),
+          // A spawned daemon issues its own token. A remote override in the app's environment
+          // belongs to the explicitly connected daemon, never to a newly opened local store.
+          ...(options.bundled ? { env: {} } : {}),
+        }),
       onAuthFailure: () => {
         if (workspace.client === candidate) connection.authenticationFailed();
       },
@@ -698,6 +960,7 @@ const workspace = new Workspace({
         if (workspace.client === daemonClient && n.method === "run.changed" && n.params.event === "run.failed")
           observeDiagnostic("run", "run_failed");
         broadcast({ kind: "notification", method: n.method, params: n.params });
+        if (fleetStarted && workspace.client === daemonClient) fleet.focusedChanged(n);
         // The cursor the stream would resume from. A sequence number is per-run, so this
         // store-wide subscription has none and the status bar shows no event number — see
         // the note on `ConnectionMachine.sawCursor`.
@@ -722,15 +985,23 @@ const workspace = new Workspace({
     console.error(cause instanceof Error ? cause.message : String(cause));
   },
   savedUrl: preferences.read().daemonUrl,
+  savedProfile: (() => {
+    const id = preferences.read().daemonProfile;
+    return id && remoteProfiles.get(id) ? id : undefined;
+  })(),
+  openProfile: (id) => remoteProfiles.open(id),
+  onParked: () => refreshFleet(),
   onTarget: (target) => {
     // The first verified hello enriches the current epoch. It must not erase alerts
     // already supplied by that epoch's renderer while verification was in flight.
     if (target.epoch !== alertsEpoch) {
       diagnostics.revokeExportAuthority();
       alertsEpoch = target.epoch;
-      alerts.update({ waiting: 0, items: [] });
+      focusedAlerts = { waiting: 0, items: [] };
+      publishAlerts();
     }
     send("orca:daemon.target", target);
+    syncFocus();
   },
   explicitUrl: process.env.ORCA_DAEMON_URL,
   defaultUrl: DEFAULT_DAEMON_URL,
@@ -977,9 +1248,10 @@ let connectionDraftRelease: (() => void) | undefined;
 const targets = new ConnectionTarget({
   explicitUrl: process.env.ORCA_DAEMON_URL,
   prepare: (url, source) => workspace.prepareConnection(url, source),
-  save: (url) => {
+  save: (request) => {
     assertOrdinaryStartup();
-    preferences.saveDaemonUrl(url);
+    if (request !== null && typeof request === "object") preferences.saveDaemonProfile(request.profile);
+    else preferences.saveDaemonUrl(request);
   },
   guard: async () => {
     connectionDraftRelease = await guardConnectionDrafts();
@@ -998,8 +1270,9 @@ ipcMain.on("orca:daemon.cancel", () => {
   targets.cancel();
   firstRunConnectionAttempt++;
 });
-ipcMain.handle("orca:daemon.connect", async (event, url: unknown, epoch: number) => {
-  if (url !== null && typeof url !== "string") return { ok: false, message: "Invalid daemon URL" };
+ipcMain.handle("orca:daemon.connect", async (event, target: unknown, epoch: number) => {
+  const url = connectionRequest(target);
+  if (url === undefined) return { ok: false, message: "Invalid daemon URL" };
   try {
     assertOrdinaryStartup();
     if (macUpdateWindows.active || firstRun.isBusy) throw new Error("Setup or update preparation is in progress");
@@ -1015,6 +1288,213 @@ ipcMain.handle("orca:daemon.connect", async (event, url: unknown, epoch: number)
     return { ok: false, message: connectionFailure(error) };
   }
 });
+
+/** `orca:daemon.connect`'s argument: a URL, `null` (bundled), or `{ profile }`. */
+function connectionRequest(value: unknown): DaemonConnectionRequest | undefined {
+  if (value === null || typeof value === "string") return value;
+  const parsed = z
+    .object({ profile: z.string().max(64) })
+    .strict()
+    .safeParse(value);
+  return parsed.success ? { profile: parsed.data.profile } : undefined;
+}
+async function profileResult<T>(run: () => T | Promise<T>): Promise<ProfileResult<T>> {
+  try {
+    return { ok: true, value: await run() };
+  } catch (error) {
+    return { ok: false, message: connectionFailure(error) };
+  }
+}
+const ProfileIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
+/** The profile the current connection runs through: never edited or removed underneath it. */
+function profileInUse(id: string): boolean {
+  return workspace.connectionTarget.profile?.id === id;
+}
+/* Updating the connected server (#879): its own updater, over the profile's own ssh. The
+   daemon only said where the updater is; nothing installs through it. */
+const serverUpdater = new ServerUpdater({
+  version: app.getVersion(),
+  connection: () => workspace.serverConnection,
+  serverVersion: () => connection.current.orcaVersion,
+  declared: () => connection.managedDeployment(),
+  approved: (profile) => remoteProfiles.serverUpdater(profile),
+  approve: (profile, approval) => remoteProfiles.approveServerUpdater(profile, approval),
+  run: (command, onLine) => workspace.runOnServer(command, onLine),
+  hello: async () => {
+    const hello = await workspace.client.hello(`orca-app/${app.getVersion()}`);
+    return { orcaVersion: hello.orcaVersion, ...(hello.identity ? { workspaceId: hello.identity.workspaceId } : {}) };
+  },
+  onProgress: (progress) => send("orca:server.update.progress", progress),
+});
+/* The renderer names a preview main made; ServerUpdater checks the connection still matches
+   it. Anything malformed is refused before it gets there. */
+const PreviewId = z.uuid();
+const ServerUpdateRequestSchema = z.object({ preview: PreviewId }).strict();
+const ServerUpdaterApprovalSchema = z
+  .object({ preview: PreviewId, adapter: ServerPathSchema, manifest: ServerPathSchema })
+  .strict();
+ipcMain.handle("orca:server.read", () => serverUpdater.read());
+ipcMain.handle("orca:server.approve", (_event, approval: unknown) => {
+  const parsed = ServerUpdaterApprovalSchema.safeParse(approval);
+  if (!parsed.success) return { ok: false, message: "Enter the updater's and the manifest's full paths." };
+  try {
+    return serverUpdater.approve(parsed.data);
+  } catch (error) {
+    return { ok: false, message: connectionFailure(error) };
+  }
+});
+ipcMain.handle("orca:server.update", (_event, request: unknown) => {
+  const parsed = ServerUpdateRequestSchema.safeParse(request);
+  if (!parsed.success) return { status: "unavailable", reason: "Invalid update request" };
+  return serverUpdater.update(parsed.data);
+});
+
+ipcMain.handle("orca:profiles.list", () => remoteProfiles.list());
+// Synchronous, like `daemon.read`: the Machines surface draws from it on its first pass.
+ipcMain.on("orca:fleet.read", (event) => {
+  event.returnValue = fleet.snapshot;
+});
+/** Watch or stop watching a saved profile. Reads only; focusing one is `daemon.connect`. */
+ipcMain.handle("orca:fleet.watch", (_event, id: unknown, watched: unknown) =>
+  profileResult(() => {
+    // A preference write: under the same fence as every other app writer, and not while
+    // setup, an update's preparation or native recovery holds the app (#882).
+    if (!ordinaryStartupAllowed() || macUpdateWindows.active || workspace.macUpdateReserved || firstRun.isBusy)
+      throw new ConnectionRefusal("Setup or an update is in progress. Try again when it has finished.");
+    return appWriters.run(() => watch(id, watched));
+  }),
+);
+/** Save the choice of watched profiles. Watching reads only; focusing one is `daemon.connect`. */
+function watch(id: unknown, watched: unknown): null {
+  const valid = ProfileIdSchema.parse(id);
+  if (typeof watched !== "boolean") throw new ConnectionRefusal("Say whether to watch the machine.");
+  const current = preferences.read().watchedProfiles ?? [];
+  if (watched) {
+    if (!remoteProfiles.get(valid)) throw new ConnectionRefusal("That profile no longer exists.");
+    if (!current.includes(valid) && current.length >= MAX_WATCHED_PROFILES)
+      throw new ConnectionRefusal(`The app watches at most ${MAX_WATCHED_PROFILES} machines at once.`);
+    if (!current.includes(valid)) preferences.saveWatchedProfiles([...current, valid]);
+  } else preferences.saveWatchedProfiles(current.filter((other) => other !== valid));
+  refreshFleet();
+  return null;
+}
+ipcMain.handle("orca:profiles.save", (_event, input: unknown) =>
+  profileResult(async () => {
+    const id = typeof input === "object" && input !== null && "id" in input ? input.id : undefined;
+    const save = () => {
+      const saved = remoteProfiles.save(input);
+      // A renamed or re-pointed watched profile reconnects under its new name.
+      refreshFleet();
+      return saved;
+    };
+    // A watched profile lets go of its tunnel while it is edited, then reconnects.
+    return typeof id === "string" ? await fleet.whileReleased(id, save) : save();
+  }),
+);
+ipcMain.handle("orca:profiles.remove", (_event, id: unknown) =>
+  profileResult(async () => {
+    const valid = ProfileIdSchema.parse(id);
+    if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before removing this profile.");
+    // Revokes the credential on the server first, when it can be reached (#875).
+    const revoke = await fleet.whileReleased(valid, async () => {
+      const outcome = await remoteProfiles.remove(valid);
+      const watched = preferences.read().watchedProfiles ?? [];
+      if (watched.includes(valid)) preferences.saveWatchedProfiles(watched.filter((other) => other !== valid));
+      refreshFleet();
+      return outcome;
+    });
+    if (preferences.read().daemonProfile === valid) preferences.saveDaemonProfile(null);
+    return { revoke };
+  }),
+);
+ipcMain.handle("orca:profiles.forgetHostKey", (_event, id: unknown) =>
+  profileResult(() => {
+    const valid = ProfileIdSchema.parse(id);
+    if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before forgetting this key.");
+    return fleet.whileReleased(valid, () => {
+      remoteProfiles.forgetHostKey(valid);
+      refreshFleet();
+      const view = remoteProfiles.describe(valid);
+      if (!view) throw new ConnectionRefusal("That profile no longer exists.");
+      return view;
+    });
+  }),
+);
+ipcMain.handle("orca:profiles.useAutomaticSignIn", (_event, id: unknown) =>
+  profileResult(() => {
+    const valid = ProfileIdSchema.parse(id);
+    if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before changing its sign-in.");
+    return fleet.whileReleased(valid, () => {
+      const view = remoteProfiles.useAutomaticSignIn(valid);
+      refreshFleet();
+      return view;
+    });
+  }),
+);
+/**
+ * Set up the profile's machine as a managed ORCA server (#881), at this app's own version. The
+ * setup and the adapter it installs are this build's own files: shipped beside app.asar, or
+ * read from the checkout in development.
+ */
+function serverSetupScripts(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, "server-setup")
+    : fileURLToPath(new URL("../../../../tools/deploy/", import.meta.url));
+}
+ipcMain.handle("orca:profiles.inspectServer", (_event, id: unknown) =>
+  profileResult(async () => {
+    const valid = ProfileIdSchema.parse(id);
+    if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before setting up this server.");
+    const { inspection, outcome } = await remoteProfiles.inspectServer(valid, {
+      version: app.getVersion(),
+      scripts: serverSetupScripts(),
+    });
+    return inspection ? { inspection } : { setup: outcome as Exclude<typeof outcome, { kind: "inspected" }> };
+  }),
+);
+ipcMain.handle("orca:profiles.setUpServer", (_event, id: unknown, confirmation: unknown) =>
+  profileResult(async () => {
+    const valid = ProfileIdSchema.parse(id);
+    if (typeof confirmation !== "string" || confirmation.length > 64)
+      throw new ConnectionRefusal("Confirm the server first.");
+    if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before setting up this server.");
+    return remoteProfiles.setUpServer(valid, {
+      version: app.getVersion(),
+      scripts: serverSetupScripts(),
+      confirmation,
+    });
+  }),
+);
+/** Main reads the file the person picks; the token goes from disk to the keychain slot only. */
+ipcMain.handle("orca:profiles.importCredential", (event, id: unknown) =>
+  profileResult(async () => {
+    const valid = ProfileIdSchema.parse(id);
+    // The picker can stay open while the profile is edited, removed or reset elsewhere:
+    // the ticket makes the write below refuse unless it is still the same profile.
+    const ticket = remoteProfiles.ticket(valid);
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options: Electron.OpenDialogOptions = {
+      title: "Import daemon credential",
+      buttonLabel: "Import",
+      properties: ["openFile"],
+    };
+    const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
+    const path = picked.canceled ? undefined : picked.filePaths[0];
+    if (!path) return null;
+    let token: string;
+    try {
+      if (statSync(path).size > 8192) throw new Error("too large");
+      token = readFileSync(path, "utf8");
+    } catch {
+      throw new ConnectionRefusal("That file could not be read as a daemon credential.");
+    }
+    return fleet.whileReleased(valid, () => {
+      const view = remoteProfiles.importCredential(valid, token, ticket);
+      refreshFleet();
+      return view;
+    });
+  }),
+);
 
 /* Updates use their own IPC and never wait on daemon readiness to check/download. */
 let windowsDraftRelease: (() => void) | undefined;
@@ -1178,9 +1658,23 @@ function focusedWindow(): BrowserWindow | undefined {
 
 /** Tell every open window a person clicked a notification, or that Attention should come forward. */
 function activate(item: AlertItem | undefined): void {
+  // The item as it is stated now if it is still open, else as it was posted (#882).
+  const current = item && withFocus(alerts.current(item.id) ?? item);
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send("orca:alerts.activate", item ? { item } : {});
+    if (!win.isDestroyed()) win.webContents.send("orca:alerts.activate", current ? { item: current } : {});
   }
+}
+
+/**
+ * Whether the alert's machine is the focused one *now*, not when it was posted, and still on
+ * the store the alert came from (#882). A stale alert routes nowhere: the window still comes
+ * forward, but no card opens on a daemon the alert was never about.
+ */
+function withFocus(item: AlertItem): AlertItem | undefined {
+  if (!fleetStarted) return item;
+  // Read the focused connection's authority now, not as of its last state change.
+  syncFocus();
+  return fleet.routeAlert(item);
 }
 
 const alerts = createAlerts(
@@ -1216,13 +1710,23 @@ const alerts = createAlerts(
     // Inside the focused window only, and never `show()`: a permission ask may take the
     // person's attention where they already are, and may not move a window at them
     // (docs/design/20-attention-and-gates.md).
-    focusAttention: (item) => focusedWindow()?.webContents.send("orca:alerts.activate", { item }),
+    focusAttention: (item) => {
+      const current = withFocus(item);
+      if (current) focusedWindow()?.webContents.send("orca:alerts.activate", { item: current });
+    },
   },
   () => preferences.read().alerts,
 );
 
-ipcMain.on("orca:alerts.update", (_event, update: AlertsUpdate, epoch: number) => {
-  if (epoch === workspace.connectionTarget.epoch) alerts.update(update);
+ipcMain.on("orca:alerts.update", (_event, update: AlertsUpdate, epoch: number, authority: unknown) => {
+  if (epoch !== workspace.connectionTarget.epoch) return;
+  // The renderer stamps a report with the grant its reads ran under. One read before or
+  // during a refusal is not shown, not even after a hello on the same store grants a new
+  // one: only a report read under the current grant is (#882).
+  if (typeof authority !== "number" || authority !== connection.authority) return;
+  focusedAlerts = update;
+  focusedAlertsGrant = authority;
+  publishAlerts();
 });
 
 app.on("browser-window-focus", () => alerts.focusChanged(true));
@@ -1381,6 +1885,9 @@ if (!primary) {
         ),
       ),
     );
+    // Watched machines connect beside the focused one; none of them waits on it.
+    fleetStarted = true;
+    refreshFleet();
     // Not awaited: the shell paints while the daemon starts, and a call that arrives in
     // that second or two waits on `workspace.ready()` rather than going to the wrong URL.
     const startupEpoch = workspace.connectionTarget.epoch;
@@ -1388,7 +1895,10 @@ if (!primary) {
       .run(() =>
         startFirstRunWorkspace(firstRun, {
           explicitTarget: Boolean(
-            process.env.ORCA_DAEMON_URL || process.env.ORCA_WORKSPACE || preferences.read().daemonUrl,
+            process.env.ORCA_DAEMON_URL ||
+            process.env.ORCA_WORKSPACE ||
+            preferences.read().daemonUrl ||
+            workspace.connectionTarget.source === "saved",
           ),
           connectExplicit: () => workspace.connect(),
           assertCurrent: () => workspace.assertEpoch(startupEpoch),
@@ -1416,6 +1926,7 @@ app.on("before-quit", () => {
   stopDiagnosticObservations();
   targets.cancel();
   linuxReleases?.stop();
+  serverUpdater.stop();
   connection.close();
   alerts.close();
 });
@@ -1449,6 +1960,10 @@ app.on("will-quit", (event) => {
   const workspaceClosed = workspace.close().then(
     () => true,
     () => false,
+  );
+  // Tunnels close after the workspace has let go of its client; nothing waits on them.
+  void Promise.allSettled([workspaceClosed, fleet.close()]).finally(() =>
+    remoteProfiles.close().catch(() => undefined),
   );
   void Promise.race([
     appWriters.pause(

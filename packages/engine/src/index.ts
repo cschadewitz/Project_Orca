@@ -1,5 +1,7 @@
 /** @orca/engine - the workflow interpreter, node executors, program service and plugin API. */
 export * from "./orchestrator.js";
+export * from "./session-slots.js";
+export * from "./capabilities.js";
 export * from "./run-context.js";
 export * from "./human-input.js";
 export * from "./plugin.js";
@@ -32,14 +34,19 @@ export * from "./revision-input.js";
 
 export * from "./revision-delivery.js";
 export * from "./continuation-admission.js";
+export * from "./recovery-preview.js";
 export * from "./revision-runtime.js";
 
 export {
+  completeAdmissionExecutionPolicy,
   publishAdmissionExecutionPolicy,
   requireAdmissionExecutionPolicy,
   readAdmissionExecutionStatus,
+  reserveAdmissionExecutionPolicy,
   type AdmissionExecutionBinding,
   type AdmissionExecutionPolicy,
   type AdmissionExecutionRuntime,
   type AdmissionExecutionStatus,
 } from "./admission-execution.js";
+export * from "./checkpoint-attempt.js";
+export * from "./checkpoint-admission.js";

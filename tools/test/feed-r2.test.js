@@ -1,5 +1,6 @@
 /** feed-r2.sh against a fake `aws` CLI: upload order, immutability, conditional ring writes. */
 import { execFileSync, spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   chmodSync,
   existsSync,
@@ -13,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { ringState, watch } from "../deploy/feed-watchdog.js";
 
 // A stand-in for `aws s3api` that keeps objects as files and honours If-Match/If-None-Match.
 const FAKE_AWS = String.raw`#!/usr/bin/env node
@@ -96,7 +98,7 @@ function setup() {
       writeFileSync(join(artifacts, `${channel}-${arch}.yml`), `version: ${version}\n`);
     }
   };
-  return { run, runWith, object, log, release, artifacts, root };
+  return { run, runWith, object, log, release, artifacts, root, env };
 }
 
 describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
@@ -190,12 +192,60 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
       expect(existsSync(f.object(`0.7.1-rc.1/prerelease-${arch}.yml`))).toBe(true);
     }
     expect(JSON.parse(readFileSync(f.object("0.7.1-rc.1/complete.json"), "utf8"))).toEqual({
-      format: 1,
+      format: 2,
       version: "0.7.1-rc.1",
+      arches: ["x64", "arm64"],
     });
     expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8")).rings.internal).toEqual({
       version: "0.7.1-rc.1",
     });
+  });
+
+  // A first publish by the pre-#889 script wrote a format 1 completion record and stopped
+  // before the ring update. The retry runs the current script.
+  const legacySnapshot = (f, version) => {
+    f.release(version, "latest");
+    for (const name of [`ORCA-${version}-win-x64.exe`, `ORCA-${version}-win-x64.exe.blockmap`, "latest-x64.yml"]) {
+      writeFileSync(f.object(`${version}/${name}`), readFileSync(join(f.artifacts, name)));
+    }
+    writeFileSync(f.object(`${version}/complete.json`), `{"format":1,"version":"${version}"}\n`);
+  };
+
+  it("finishes an interrupted legacy x64 publish, keeping its completion record", () => {
+    const f = setup();
+    legacySnapshot(f, "0.7.0");
+    const resumed = f.run("snapshot", f.artifacts, "0.7.0", "x64");
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(resumed.stdout).toContain("legacy x64 record");
+    expect(readFileSync(f.object("0.7.0/complete.json"), "utf8")).toBe('{"format":1,"version":"0.7.0"}\n');
+    const keys = f
+      .log()
+      .filter((a) => a[3] === "put-object")
+      .map((a) => a[a.indexOf("--key") + 1]);
+    expect(keys).not.toContain("0.7.0/complete.json");
+    expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8")).rings.internal).toEqual({ version: "0.7.0" });
+  });
+
+  it("never extends a legacy x64 snapshot to arm64", () => {
+    const f = setup();
+    legacySnapshot(f, "0.7.0");
+    const result = f.run("snapshot", f.artifacts, "0.7.0", "x64 arm64");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("cannot be extended to arm64");
+    expect(existsSync(f.object("0.7.0/ORCA-0.7.0-win-arm64.exe"))).toBe(false);
+    expect(existsSync(f.object("0.7.0/latest-arm64.yml"))).toBe(false);
+    expect(existsSync(f.object("rings.json"))).toBe(false);
+    expect(readFileSync(f.object("0.7.0/complete.json"), "utf8")).toBe('{"format":1,"version":"0.7.0"}\n');
+  });
+
+  it("refuses a completion record that is neither this snapshot's nor the legacy one", () => {
+    const f = setup();
+    legacySnapshot(f, "0.7.0");
+    writeFileSync(f.object("0.7.0/complete.json"), '{"format":1,"version":"0.6.9"}\n');
+    const result = f.run("snapshot", f.artifacts, "0.7.0", "x64");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("already exists with different bytes");
+    expect(existsSync(f.object("rings.json"))).toBe(false);
   });
 
   it("stops on a lookup or write error instead of reading it as absence", () => {
@@ -257,6 +307,27 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
     });
   });
 
+  it("sets and lifts the servers' stop switch conditionally, keeping the rings (#878)", () => {
+    const f = setup();
+    f.release("0.7.0", "latest");
+    expect(f.run("snapshot", f.artifacts, "0.7.0", "x64").status).toBe(0);
+    const stopped = f.run("stop-servers");
+    expect(stopped.status, stopped.stderr).toBe(0);
+    expect(stopped.stdout).toContain("servers stopped");
+    expect(f.log().at(-1)).toContain("--if-match");
+    const rings = JSON.parse(readFileSync(f.object("rings.json"), "utf8"));
+    expect(rings).toEqual({ format: 1, rings: { internal: { version: "0.7.0" } }, serverStop: true });
+    expect(f.run("stop-servers", "now").stderr).toContain("usage: feed-r2.sh stop-servers");
+    expect(f.run("resume-servers").status).toBe(0);
+    expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8"))).toEqual({
+      format: 1,
+      rings: { internal: { version: "0.7.0" } },
+    });
+    const again = f.run("resume-servers");
+    expect(again.status).not.toBe(0);
+    expect(again.stderr).toContain("servers are not stopped");
+  });
+
   it("proves conditional writes on a throwaway key, and stops when they are ignored", () => {
     const f = setup();
     const ok = f.run("probe");
@@ -269,7 +340,168 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
     expect(readdirSync(join(f.root, "store"))).toEqual([]);
   });
 
+  describe("server bundle snapshots (#877)", () => {
+    const VERSION = "0.8.0-rc.1";
+    const STEM = `orca-server-${VERSION}-linux-x64`;
+    const bundle = (f) => {
+      const dir = join(f.root, "server");
+      mkdirSync(dir, { recursive: true });
+      for (const name of [`${STEM}.tar.xz`, `${STEM}.manifest.json`, `${STEM}.manifest.json.sigstore.json`])
+        writeFileSync(join(dir, name), `${name} bytes`);
+      writeFileSync(join(dir, "latest-linux-x64.yml"), `version: ${VERSION}\n`);
+      return dir;
+    };
+
+    it("uploads the bundle, then its channel file, then its completion record, then offers it to internal servers", () => {
+      const f = setup();
+      const result = f.run("server-snapshot", bundle(f), VERSION);
+      expect(result.status, result.stderr).toBe(0);
+      const puts = f
+        .log()
+        .filter((a) => a[3] === "put-object")
+        .map((a) => a[a.indexOf("--key") + 1]);
+      expect(puts).toEqual([
+        `server/${VERSION}/${STEM}.tar.xz`,
+        `server/${VERSION}/${STEM}.manifest.json`,
+        `server/${VERSION}/${STEM}.manifest.json.sigstore.json`,
+        `server/${VERSION}/latest-linux-x64.yml`,
+        `server/${VERSION}/complete.json`,
+        "rings.json",
+      ]);
+      for (const args of f.log().filter((a) => a[3] === "put-object" && a.includes(`server/${VERSION}/complete.json`)))
+        expect(args).toContain("--if-none-match");
+      expect(JSON.parse(readFileSync(f.object(`server/${VERSION}/complete.json`), "utf8"))).toEqual({
+        format: 1,
+        version: VERSION,
+        platform: "linux-x64",
+      });
+      const rings = JSON.parse(readFileSync(f.object("rings.json"), "utf8"));
+      expect(rings).toEqual({ format: 1, rings: {}, server: { internal: { version: VERSION } } });
+      // A rerun of identical bytes is a no-op; different bytes are refused.
+      expect(f.run("server-snapshot", bundle(f), VERSION).status).toBe(0);
+      writeFileSync(join(f.root, "server", `${STEM}.tar.xz`), "other bytes");
+      expect(f.run("server-snapshot", join(f.root, "server"), VERSION).stderr).toContain(
+        "already exists with different bytes",
+      );
+    });
+
+    it("reads the live ring state, and fails rather than inventing one when there is none", () => {
+      const f = setup();
+      const out = join(f.root, "read.json");
+      const missing = f.run("read-rings", out);
+      expect(missing.status).not.toBe(0);
+      expect(missing.stderr).toContain("the feed has no rings.json");
+      expect(existsSync(out)).toBe(false);
+      expect(f.run("server-snapshot", bundle(f), VERSION).status).toBe(0);
+      const before = f.log().length;
+      expect(f.run("read-rings", out).status).toBe(0);
+      // Only reads.
+      expect(
+        f
+          .log()
+          .slice(before)
+          .map((a) => a[3]),
+      ).toEqual(["get-object"]);
+      expect(JSON.parse(readFileSync(out, "utf8"))).toEqual(JSON.parse(readFileSync(f.object("rings.json"), "utf8")));
+      // A store error is not mistaken for an empty feed.
+      const failed = f.runWith({ FAKE_FAIL_OP: "get-object" }, "read-rings", out);
+      expect(failed.status).not.toBe(0);
+      expect(failed.stderr).toContain("could not read rings.json");
+    });
+
+    it("refuses a missing file before writing anything, and a pre-0.8 version before offering it", () => {
+      const f = setup();
+      const dir = bundle(f);
+      rmSync(join(dir, "latest-linux-x64.yml"));
+      expect(f.run("server-snapshot", dir, VERSION).stderr).toContain("missing latest-linux-x64.yml");
+      expect(existsSync(f.object("rings.json"))).toBe(false);
+      expect(existsSync(join(f.root, "log"))).toBe(false);
+    });
+
+    it("promotes servers only from a complete server snapshot, and desktops only behind them", () => {
+      const f = setup();
+      expect(f.run("promote-server", "preview", VERSION, "100").stderr).toContain("no complete server snapshot");
+      expect(f.run("server-snapshot", bundle(f), VERSION).status).toBe(0);
+      const promoted = f.run("promote-server", "preview", VERSION, "100");
+      expect(promoted.status, promoted.stderr).toBe(0);
+      expect(f.log().at(-1)).toContain("--if-match");
+      expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8")).server.preview).toEqual({ version: VERSION });
+      // The desktop snapshot of the same version may now be offered to internal and preview.
+      f.release(VERSION, "prerelease");
+      expect(f.run("snapshot", f.artifacts, VERSION, "x64").status).toBe(0);
+      expect(f.run("promote", "preview", VERSION, "100").status).toBe(0);
+      // The desktop rules still apply on top: rings never move backwards.
+      const again = f.run("promote", "internal", VERSION, "100");
+      expect(again.stderr).toContain("internal already offers 0.8.0-rc.1");
+    });
+
+    it("never offers desktops a server-era version before internal's servers have it", () => {
+      const f = setup();
+      f.release(VERSION, "prerelease");
+      const result = f.run("snapshot", f.artifacts, VERSION, "x64");
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("offer the server bundle 0.8.0-rc.1 to all of internal first");
+      expect(existsSync(f.object("rings.json"))).toBe(false);
+    });
+  });
+
   it("parses as bash", () => {
     expect(() => execFileSync("bash", ["-n", "tools/deploy/feed-r2.sh"])).not.toThrow();
+  });
+});
+
+// The watchdog's `rings` job step, run as the workflow runs it, handing its output to the
+// watchdog the way the `watch` job receives it (an output that was never set arrives empty).
+describe.skipIf(process.platform === "win32")("watchdog ring state handoff (#877)", () => {
+  const { parse } = createRequire(new URL("../../packages/cli/package.json", import.meta.url))("yaml");
+  const workflow = parse(readFileSync(".github/workflows/feed-watchdog.yml", "utf8"));
+  const readStep = workflow.jobs.rings.steps.find((s) => s.id === "read");
+  const check = workflow.jobs.watch.steps.find((s) => s.name === "Check every ring and architecture");
+
+  const handoff = (f) => {
+    const temp = mkdtempSync(join(f.root, "runner-"));
+    const output = join(temp, "output");
+    writeFileSync(output, "");
+    const step = spawnSync("bash", ["-e", "-c", readStep.run], {
+      env: { ...f.env, RUNNER_TEMP: temp, GITHUB_OUTPUT: output },
+      encoding: "utf8",
+    });
+    const rings = /^rings=(.*)$/m.exec(readFileSync(output, "utf8"))?.[1] ?? "";
+    expect(check.env.FEED_RINGS).toBe("${{ needs.rings.outputs.rings }}");
+    // The rings job only runs while ORCA_FEED_BUCKET is set, so the watch job sees "true".
+    return { step, state: ringState({ FEED_RINGS: rings, FEED_COMMISSIONED: "true" }) };
+  };
+  // A feed that refuses anonymous requests and offers nothing to anyone.
+  const quiet = { fetch: async (url, init) => new Response("", { status: init?.headers?.Authorization ? 404 : 401 }) };
+  const watched = (state) =>
+    watch({ url: "https://feed.test", tokens: { internal: "i".repeat(43) }, repo: "o/r", ...quiet, ...state });
+  const unavailable = "the feed is switched on (ORCA_FEED_BUCKET) but its ring state (rings.json) was not available";
+
+  it("fails a switched-on feed whose rings.json is missing", async () => {
+    const f = setup();
+    const { step, state } = handoff(f);
+    expect(step.status).not.toBe(0);
+    expect(step.stderr).toContain("the feed has no rings.json");
+    expect(state).toEqual({ record: undefined, commissioned: true });
+    expect((await watched(state)).problems).toContain(unavailable);
+  });
+
+  it("fails a switched-on feed whose rings.json could not be read", async () => {
+    const f = setup();
+    writeFileSync(f.object("rings.json"), JSON.stringify({ format: 1, rings: {} }));
+    const { step, state } = handoff({ ...f, env: { ...f.env, FAKE_FAIL_OP: "get-object" } });
+    expect(step.status).not.toBe(0);
+    expect((await watched(state)).problems).toContain(unavailable);
+  });
+
+  it("accepts an existing empty ring state as valid", async () => {
+    const f = setup();
+    writeFileSync(f.object("rings.json"), JSON.stringify({ format: 1, rings: {} }));
+    const { step, state } = handoff(f);
+    expect(step.status, step.stderr).toBe(0);
+    expect(state).toEqual({ record: { format: 1, rings: {} }, commissioned: true });
+    const { problems } = await watched(state);
+    expect(problems).not.toContain(unavailable);
+    expect(problems).toEqual([]);
   });
 });

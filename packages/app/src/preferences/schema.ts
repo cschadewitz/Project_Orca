@@ -105,6 +105,9 @@ export const GraphViewSchema = z.object({
 });
 export type GraphViewPreference = z.infer<typeof GraphViewSchema>;
 
+/** How many machines the Machines surface watches at once, besides the focused one. */
+export const MAX_WATCHED_PROFILES = 16;
+
 const DaemonUrlSchema = z.string().refine((value) => {
   try {
     return daemonEndpoint(value) === value;
@@ -115,6 +118,19 @@ const DaemonUrlSchema = z.string().refine((value) => {
 
 export const PreferencesSchema = z.object({
   daemonUrl: DaemonUrlSchema.optional(),
+  /** The saved SSH connection profile's id (#874). Main-only, like `daemonUrl`; never both. */
+  daemonProfile: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
+    .optional(),
+  /**
+   * Saved SSH profiles the Machines surface watches besides the focused daemon (#882), in the
+   * order they were added. Main-only, like `daemonProfile`: a renderer patch cannot set it.
+   */
+  watchedProfiles: z
+    .array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/))
+    .max(MAX_WATCHED_PROFILES)
+    .optional(),
   theme: ThemePreferenceSchema.default("system"),
   /** Density per surface id (`data-surface`), so the run tree can be compact while the config form stays comfortable. */
   density: z.record(z.string(), DensitySchema).default({}),
@@ -190,6 +206,8 @@ export function mergePreferences(current: Preferences, patch: PreferencesPatch):
   const canvases = mergeCanvases(current.canvases, patch.canvases);
   return {
     ...(current.daemonUrl ? { daemonUrl: current.daemonUrl } : {}),
+    ...(current.daemonProfile ? { daemonProfile: current.daemonProfile } : {}),
+    ...(current.watchedProfiles?.length ? { watchedProfiles: current.watchedProfiles } : {}),
     theme: patch.theme ?? current.theme,
     density: { ...current.density, ...(patch.density ?? {}) },
     panes: mergePanes(current.panes, patch.panes),

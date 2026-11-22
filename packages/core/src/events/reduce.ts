@@ -23,6 +23,9 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
       ...(first.payload.parentStepRunId ? { parentStepRunId: first.payload.parentStepRunId } : {}),
       ...(first.payload.overrides ? { overrides: first.payload.overrides } : {}),
       ...(first.payload.provenance ? { provenance: first.payload.provenance } : {}),
+      ...(first.payload.checkpoint
+        ? { checkpoint: { runId: first.payload.checkpoint.runId, stepRunId: first.payload.checkpoint.stepRunId } }
+        : {}),
     },
     steps: {},
     stepOrder: [],
@@ -30,6 +33,35 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
     humanInputs: {},
     lastSeq: first.seq,
   };
+  const checkpoint = first.payload.checkpoint;
+  if (checkpoint) {
+    // A checkpoint attempt (#357) starts from the source's state at its checkpoint: the reused
+    // steps completed, in history order, and the run continues by routing from the last one.
+    Object.assign(state.run.vars, checkpoint.vars);
+    for (const artifact of checkpoint.artifacts) state.artifacts[artifact.id] = artifact;
+    for (const reused of checkpoint.steps) {
+      state.steps[reused.stepRunId] = {
+        id: reused.stepRunId,
+        runId: first.runId,
+        nodeId: reused.nodeId,
+        nodeType: reused.nodeType,
+        attempt: reused.attempt,
+        status: "completed",
+        inputArtifactIds: [],
+        result: structuredClone(reused.result),
+        // The source's children stay the source's: an attempt owns none of them.
+        childRunIds: [],
+        children: [],
+        ...(reused.children.length ? { reusedChildren: structuredClone(reused.children) } : {}),
+        skippedBranches: [],
+        scheduledAt: first.at,
+        completedAt: reused.completedAt,
+        reusedFrom: reused.from,
+        ...(reused.iteration !== undefined ? { iteration: reused.iteration } : {}),
+      };
+      state.stepOrder.push(reused.stepRunId);
+    }
+  }
   for (let i = 1; i < events.length; i++) applyEvent(state, events[i]!);
   return state;
 }
@@ -51,6 +83,12 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       break;
     case "run.paused":
       state.run.status = "paused";
+      // The open attempt paused on purpose; resume re-attempts it by design (#357).
+      for (const id of state.stepOrder) {
+        const open = state.steps[id];
+        if (open && (open.status === "scheduled" || open.status === "running" || open.status === "waiting"))
+          open.parked = true;
+      }
       break;
     case "run.resumed":
       state.run.status = "running";
@@ -99,6 +137,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       s.startedAt = e.at;
       s.inputArtifactIds = e.payload.inputArtifactIds;
       delete s.waitingOn;
+      delete s.waitingDetail;
       break;
     }
     case "step.inputs": {
@@ -110,6 +149,8 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       const s = step(e.payload.stepRunId);
       s.status = "waiting";
       s.waitingOn = e.payload.on;
+      if (e.payload.detail === undefined) delete s.waitingDetail;
+      else s.waitingDetail = e.payload.detail;
       if (state.run.status === "running") state.run.status = "waiting";
       break;
     }
@@ -126,6 +167,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       s.result = { ...e.payload.result, artifactIds };
       s.completedAt = e.at;
       delete s.waitingOn;
+      delete s.waitingDetail;
       if (state.run.status === "waiting") state.run.status = "running";
       break;
     }
@@ -133,8 +175,10 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       const s = step(e.payload.stepRunId);
       s.status = "failed";
       s.error = e.payload.error;
+      if (e.payload.effect === "none") s.noEffect = true;
       s.completedAt = e.at;
       delete s.waitingOn;
+      delete s.waitingDetail;
       if (state.run.status === "waiting") state.run.status = "running";
       break;
     }
@@ -150,10 +194,24 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       s.completedAt = e.at;
       break;
     }
+    case "step.effect.reviewed": {
+      const s = step(e.payload.stepRunId);
+      s.effectReview = {
+        decision: e.payload.decision,
+        at: e.at,
+        ...(e.payload.note !== undefined ? { note: e.payload.note } : {}),
+        ...(e.payload.actor ? { actor: e.payload.actor } : {}),
+      };
+      break;
+    }
     case "agent.session.opened":
       step(e.payload.stepRunId).agentSessionId = e.payload.sessionId;
       break;
     case "agent.turn.started":
+      // Recorded before the prompt is sent, on whichever step the (possibly pooled) session
+      // serves: durable evidence this attempt dispatched work to an agent (#357).
+      step(e.payload.stepRunId).dispatched = true;
+      break;
     case "agent.update":
     case "agent.permission":
     case "agent.turn.completed":
@@ -319,6 +377,7 @@ export function runSummary(state: RunState): RunSummary {
     ...(r.workItemId ? { workItemId: r.workItemId } : {}),
     ...(r.parentRunId ? { parentRunId: r.parentRunId } : {}),
     ...(r.overrides ? { overrides: r.overrides } : {}),
+    ...(r.checkpoint ? { checkpoint: r.checkpoint } : {}),
     ...(r.startedAt ? { startedAt: r.startedAt } : {}),
     ...(r.completedAt ? { completedAt: r.completedAt } : {}),
   };
@@ -345,6 +404,9 @@ export function reduceRunSummary(events: readonly OrcaEvent[]): RunSummary {
     ...(first.payload.parentRunId ? { parentRunId: first.payload.parentRunId } : {}),
     ...(first.payload.overrides ? { overrides: first.payload.overrides } : {}),
     ...(first.payload.provenance ? { provenance: first.payload.provenance } : {}),
+    ...(first.payload.checkpoint
+      ? { checkpoint: { runId: first.payload.checkpoint.runId, stepRunId: first.payload.checkpoint.stepRunId } }
+      : {}),
   };
   for (let i = 1; i < events.length; i++) {
     const e = events[i]!;

@@ -503,6 +503,21 @@ describe("hello", () => {
 });
 
 describe("agents.list and agents.ping", () => {
+  it("reports session slots (#873): no caps by default, real counts, and the daemon-wide part in hello", async () => {
+    const h = harness();
+    const list = AgentsListResultSchema.parse((await call(h.ctx, "agents.list")).result);
+    expect(list.sessionSlots).toEqual({
+      limits: { agents: {}, hosts: {} },
+      inUse: { total: 0, agents: {}, hosts: {} },
+      queued: 0,
+      teardownUnconfirmed: 0,
+    });
+    const hello = HelloResultSchema.parse(
+      (await call(h.ctx, "hello", { client: "t", protocol: PROTOCOL_VERSION })).result,
+    );
+    expect(hello.sessionSlots).toEqual({ inUse: 0, queued: 0 });
+  });
+
   it("reports a configured agent nothing has contacted as unknown, not as a default", async () => {
     const h = harness();
     const list = AgentsListResultSchema.parse((await call(h.ctx, "agents.list")).result);
@@ -570,6 +585,19 @@ describe("agents.list and agents.ping", () => {
     // folds `seq` must test for one rather than assume it.
     expect((changed[0]!.params as { seq?: number }).seq).toBeUndefined();
     sub.stop();
+  });
+
+  it("does not start an agent that uses a secret reference, and leaves its health alone (#336)", async () => {
+    const h = harness();
+    h.agents.addAgent(
+      AgentSpecSchema.parse({ id: "secretive", command: "q", hostId: "local", env: { T: { secret: "token" } } }),
+    );
+    const ping = AgentsPingResultSchema.parse((await call(h.ctx, "agents.ping", { agentId: "secretive" })).result);
+    expect(ping).toMatchObject({
+      ok: false,
+      error: { code: "CONFIG_INVALID", message: expect.stringMatching(/secret references \('token'\).*not started/) },
+      agent: { id: "secretive", state: "unknown" },
+    });
   });
 
   it("does not wake a subscription that asked for other methods", async () => {

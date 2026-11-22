@@ -293,7 +293,7 @@ describe("inactive launch profile", () => {
     });
     expect(env).not.toHaveProperty("OPENCODE_SERVER_PASSWORD");
     // The final native layer must be exactly the reviewed file's permission, key order included.
-    expect(Object.entries(JSON.parse(env.OPENCODE_PERMISSION!) as object)).toEqual(
+    expect(Object.entries(JSON.parse(env.OPENCODE_PERMISSION as string) as object)).toEqual(
       Object.entries(isolated.permission as object),
     );
   });

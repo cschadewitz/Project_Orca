@@ -751,7 +751,12 @@ it.each([false, true])("preserves a refused replacement draft when the run is le
   });
   expect(screen.getByLabelText<HTMLTextAreaElement>("Correction").value).toBe("Keep my refused replacement");
   expect(screen.getByText("Recorded correction text", { selector: "pre" })).toBeTruthy();
-  expect(screen.queryByText("Keep my refused replacement", { selector: "pre" })).toBeNull();
+  // Only the unsent preview (#398) may show the draft; nothing presents it as the recorded correction.
+  expect(
+    screen
+      .queryAllByText("Keep my refused replacement", { selector: "pre" })
+      .filter((pre) => !pre.closest('[aria-label="What the agent will receive"]')),
+  ).toHaveLength(0);
   expect(screen.queryByText(/It applies only to the displayed destination and attempt/)).toBeNull();
   expect(screen.queryByText(/Correction is being recorded/)).toBeNull();
   expect(announce.mock.calls).toEqual([["Correction not confirmed. Draft preserved."]]);

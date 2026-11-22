@@ -23,6 +23,38 @@ export interface SessionUpdateEvent {
 export interface PromptOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
+  /**
+   * The workflow step this turn is for. An ACP session ignores it. A session that delegates the
+   * turn to another daemon (#883) keys its remote admission on it, so a retried call for the
+   * same turn never starts a second remote run, and records it as the remote run's origin.
+   */
+  turn?: TurnContext;
+}
+
+/** What a step tells its session about the turn (see `PromptOptions.turn`). */
+export interface TurnContext {
+  runId: string;
+  stepRunId: string;
+  /**
+   * The step run of this visit's first attempt: the same for every retry of the step, so a
+   * delegating session (#883) can tell a retry from new work.
+   */
+  delegationId: string;
+  nodeId: string;
+  attempt: number;
+  /** 0 for the step's first turn; a follow-up asks again for deliverables that were missing. */
+  followUp: number;
+  /** The step's task as its prompt template rendered it, without ORCA's deliverable instructions. */
+  task: string;
+  /** Where the step collects its outputs once the turn ends: absolute paths on the agent's host. */
+  deliverables: readonly TurnDeliverable[];
+}
+
+export interface TurnDeliverable {
+  kind: string;
+  name?: string;
+  path: string;
+  required: boolean;
 }
 
 export interface AgentSession {
@@ -32,6 +64,15 @@ export interface AgentSession {
   readonly cwd: string;
   readonly acpSessionId: string;
   readonly closed: Promise<void>;
+  /**
+   * Resolves once the agent process this session owns is confirmed gone, which can be later
+   * than `closed` (the connection) and later than a `close()` whose cleanup could not observe
+   * the exit. Session caps (#873) return a slot on this, so a queued open never starts beside
+   * a process that is still alive. Rejects when the exit cannot be observed at all, which is
+   * not evidence it is gone. Optional: a transport without an owned process omits it,
+   * and then `close()` settling stands in for it.
+   */
+  readonly terminated?: Promise<void>;
   prompt(input: string | acp.ContentBlock[], options?: PromptOptions): Promise<TurnResult>;
   onUpdate(listener: (e: SessionUpdateEvent) => void): () => void;
   /**
@@ -44,6 +85,34 @@ export interface AgentSession {
   setConfigOption(configId: string, value: string | boolean): Promise<SessionConfigOption[]>;
   cancel(): Promise<void>;
   close(): Promise<void>;
+}
+
+const STARTUP_TERMINATION = Symbol.for("orca.agents.startupTermination");
+
+/**
+ * Attach the owned process's exit to a session-open failure. A failed open has no session to
+ * carry `terminated`, and its bounded cleanup may have given up before the exit was observed
+ * (`details.cleanup.details.cleanupIncomplete`), so a caller that counts live processes -
+ * session caps (#873) - needs the exit itself. Non-enumerable: it never reaches a log or the
+ * wire, and the error's shape is unchanged.
+ */
+export function withStartupTermination<E extends object>(error: E, terminated: Promise<unknown>): E {
+  // A rejection (the exit cannot be observed) stays a rejection: it is not evidence the
+  // process is gone. Marked handled here so an error nobody inspects raises no warning.
+  const exited = terminated.then(() => undefined);
+  void exited.catch(() => undefined);
+  Object.defineProperty(error, STARTUP_TERMINATION, {
+    value: exited,
+    enumerable: false,
+    configurable: true,
+  });
+  return error;
+}
+
+/** The exit attached by `withStartupTermination`, or undefined when the failure spawned nothing. */
+export function startupTermination(error: unknown): Promise<void> | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  return (error as { [STARTUP_TERMINATION]?: Promise<void> })[STARTUP_TERMINATION];
 }
 
 /** Reduce an ACP update to the compact form stored in the event log. */

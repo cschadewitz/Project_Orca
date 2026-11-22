@@ -1,7 +1,7 @@
 /** Loops, parallel branches, sub-workflows, set/decision nodes, cancellation and resume - no agents involved. */
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
+import { FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry, type OrcaError } from "@orca/core";
 import {
   LocalWorkspaceProvider,
   Orchestrator,
@@ -344,6 +344,10 @@ edges: [{ from: s, to: a }, { from: a, to: b }, { from: b, to: e }]
       runId: runId2,
       payload: { stepRunId: "step_y", inputArtifactIds: [] },
     });
+    // It may have acted, so nothing attempts it again until an operator reviews it (#357).
+    await expect(orchestrator.run(runId2)).rejects.toMatchObject({ code: "EFFECT_REVIEW_REQUIRED" });
+    expect((await orchestrator.getState(runId2)).stepOrder).toEqual(["step_y"]);
+    await orchestrator.reviewEffect(runId2, "step_y", "run-again");
     const s2 = await orchestrator.run(runId2);
     expect(s2.steps.step_y?.status).toBe("cancelled");
     expect(s2.stepOrder.map((id) => `${s2.steps[id]!.nodeId}:${s2.steps[id]!.attempt}`)).toEqual(["b:1", "b:2", "e:1"]);
@@ -390,6 +394,7 @@ edges: [{ from: s, to: loop }, { from: loop, to: e }]
     // has to be taken the way an operator would (a real crash lapses it on its own).
     const second = make(yaml, { stores: first.stores });
     await second.orchestrator.breakLease(runId, { force: true });
+    await reviewInterruptedChild(second, runId, interruptedStep.childRunIds[1]!);
     const state = await second.orchestrator.run(runId);
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(stepSummary(state)).toEqual(["s:1:completed", "loop:1:cancelled", "loop:2:completed", "e:1:completed"]);
@@ -454,6 +459,7 @@ edges: [{ from: s, to: par }, { from: par, to: e }]
     // See the loop case above: the "dead" interpreter is this process, so its lease is broken
     // explicitly rather than lapsing.
     await second.orchestrator.breakLease(runId, { force: true });
+    await reviewInterruptedChild(second, runId, interruptedStep.childRunIds[1]!);
     const state = await second.orchestrator.run(runId);
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(stepSummary(state)).toEqual(["s:1:completed", "par:1:cancelled", "par:2:completed", "e:1:completed"]);
@@ -696,3 +702,22 @@ edges: [{ from: s, to: fan }, { from: fan, to: e }]
     expect((await orchestrator.events(runId)).length).toBe(n);
   });
 });
+
+/**
+ * The child died inside a step that may have acted, so driving the parent is refused, naming
+ * that step, before anything is touched (#357). An operator's review lets it run again.
+ */
+async function reviewInterruptedChild(
+  second: { orchestrator: Orchestrator },
+  runId: string,
+  childRunId: string,
+): Promise<void> {
+  const before = await second.orchestrator.events(runId);
+  const refusal = await second.orchestrator.run(runId).then(
+    () => undefined,
+    (e: unknown) => e as OrcaError,
+  );
+  expect(refusal).toMatchObject({ code: "EFFECT_REVIEW_REQUIRED", details: { runId: childRunId } });
+  expect(await second.orchestrator.events(runId)).toHaveLength(before.length);
+  await second.orchestrator.reviewEffect(childRunId, String(refusal!.details!.stepRunId), "run-again");
+}

@@ -32,6 +32,17 @@ async function fixture() {
 }
 
 describe("fresh retry claim validation", () => {
+  it("finds a claimed key without ever claiming one (#883)", async () => {
+    const { dir, store, options } = await fixture();
+    // No claim yet: nothing is found, and nothing (not even the lookup salt) is created.
+    expect(await store.find(scope, "same-key")).toBeUndefined();
+    expect(await readdir(dir)).toEqual([]);
+    const { record } = await store.claim(scope, "same-key", {}, "same");
+    for (const reader of [store, new FileRetryClaimStore(options)])
+      expect(await reader.find(scope, "same-key")).toMatchObject({ operationId: record.operationId });
+    expect(await store.find(scope, "other-key")).toBeUndefined();
+    expect(await store.find({ ...scope, principalId: "bob" }, "same-key")).toBeUndefined();
+  });
   it.each([undefined, "0\n"])("empty recovery batches do not publish an unchanged cursor (%s)", async (stored) => {
     const { dir, store } = await fixture();
     const journal = join(dir, "admission-retries");

@@ -21,17 +21,12 @@ import {
 import { inspectLocalTool } from "./agent-preflight.js";
 import { FirstRunRefusal, PRESERVED, failureReason } from "./refusal.js";
 import type { DaemonClient } from "../../client/daemon-client.js";
+import { appSpeaks } from "../../client/protocol-window.js";
 import { dirname, join, isAbsolute } from "node:path";
 import { z } from "zod";
 import type { FirstRunReview, FirstRunStatus } from "../../first-run-contract.js";
 import type { ConnectionCandidate } from "../connection-target.js";
-import {
-  isCompatible,
-  PROTOCOL_VERSION,
-  OperatorDiscoverySchema,
-  ConfigGetResultSchema,
-  FirstRunConfigSchema,
-} from "@orca/protocol";
+import { OperatorDiscoverySchema, ConfigGetResultSchema, FirstRunConfigSchema } from "@orca/protocol";
 import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_FILES } from "../../first-run-sample.js";
 import {
   type DirectoryIdentity,
@@ -467,7 +462,7 @@ export class FirstRunSetup {
       for (const agent of config.agents) {
         boundary.check();
         assertCurrent();
-        checks.push(await inspectLocalTool(agent));
+        checks.push(await inspectLocalTool({ ...agent, env: literalEnvOf(agent.env) }));
       }
       await this.verify(receipt, true);
       boundary.check();
@@ -555,7 +550,7 @@ export class FirstRunSetup {
         const hello = await authenticated.hello("orca-app/first-run", false);
         if (
           !hello.identity ||
-          !isCompatible(PROTOCOL_VERSION, hello.protocol) ||
+          !appSpeaks(hello.protocol) ||
           !Number.isSafeInteger(candidate.expectedProcessId) ||
           candidate.expectedProcessId < 1 ||
           hello.processId !== candidate.expectedProcessId ||
@@ -622,4 +617,9 @@ export class FirstRunSetup {
       this.busy = false;
     }
   }
+}
+
+/** The literal half of an agent's env: a secret reference (#336) has no value here. */
+function literalEnvOf(env: Record<string, unknown>): Record<string, string> {
+  return Object.fromEntries(Object.entries(env).filter((e): e is [string, string] => typeof e[1] === "string"));
 }

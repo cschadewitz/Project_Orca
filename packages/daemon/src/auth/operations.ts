@@ -23,6 +23,9 @@ import type { Permission } from "./principal.js";
  * - `input`: a gate decision - the exact pending request and the run it belongs to.
  * - `claim`: the run holding a claim on `params.workItemId`.
  * - `subscription`: the socket's own subscribe/unsubscribe; notifications are gated one by one.
+ * - `search`: a scan across runs (#255). The guard hands the method the caller's read scope,
+ *   so hidden runs are never opened and artifacts are read only with `artifacts.read`; it
+ *   also filters the hits afterwards, and a named run the caller cannot see answers empty.
  */
 export type ResourceKind =
   | "none"
@@ -36,7 +39,8 @@ export type ResourceKind =
   | "input-list"
   | "claim"
   | "claim-list"
-  | "subscription";
+  | "subscription"
+  | "search";
 
 export interface OperationSpec {
   /** The grant the call needs. `null`: any authenticated principal (hello, unsubscribe). */
@@ -102,6 +106,8 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "runs.list": { permission: "runs.read", resource: "run-list" },
   "runs.get": { permission: "runs.read", resource: "run" },
   "runs.events": { permission: "runs.read", resource: "run" },
+  "runs.recovery": { permission: "runs.read", resource: "run" },
+  search: { permission: "runs.read", resource: "search" },
   // Exact target checks live in the authenticated revision service, including after the input closes.
   "inputs.revise": { permission: "inputs.answer", resource: "none", audit: "decision" },
   "inputs.replaceRevision": { permission: "inputs.answer", resource: "none", audit: "mutation" },
@@ -128,10 +134,22 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "continuations.get": { permission: "runs.read", resource: "none" },
   "continuations.reconcile": { permission: "runs.control", resource: "none", audit: "mutation" },
   "admissions.get": { permission: "runs.start", resource: "none" },
+  "admissions.find": { permission: "runs.start", resource: "none" },
+  "admissions.fence": {
+    permission: "runs.start",
+    resource: "workflow",
+    param: "workflowId",
+    audit: "mutation",
+  },
   "admissions.reconcile": { permission: "runs.start", resource: "none", audit: "mutation" },
   "runs.start": { permission: "runs.start", resource: "workflow", param: "workflowId", audit: "mutation" },
   "runs.resume": { permission: "runs.control", resource: "run", audit: "mutation" },
   "runs.cancel": { permission: "runs.control", resource: "run", audit: "mutation" },
+  "runs.reviewEffect": { permission: "runs.control", resource: "run", audit: "mutation" },
+  // A checkpoint attempt is a new run of the source's workflow: the admission authority also
+  // checks that workflow (and request/work item) like runs.admit, and the engine that the
+  // caller started the source.
+  "runs.recover": { permission: "runs.start", resource: "run", audit: "mutation" },
   // `always` additionally needs `permissions.grant`; the guard checks it before anything else.
   "inputs.answer": { permission: "inputs.answer", resource: "input", audit: "decision" },
   "claims.release": { permission: "claims.release", resource: "claim", audit: "mutation" },
