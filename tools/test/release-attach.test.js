@@ -70,6 +70,10 @@ if (method === "POST" && (m = path.match(/^releases\/(\d+)\/assets\?name=(.+)$/)
   if (state.tags[m[1]]) out = { object: { sha: state.tags[m[1]] } };
 } else if ((m = path.match(/^actions\/runs\/(\d+)$/))) {
   out = state.runs[m[1]];
+} else if ((m = path.match(/^actions\/runs\/(\d+)\/jobs/))) {
+  out = { jobs: (state.jobs && state.jobs[m[1]]) || [] };
+} else if ((m = path.match(/^commits\/(.+)$/))) {
+  if (state.tags[m[1]]) out = { sha: state.tags[m[1]] };
 } else if ((m = path.match(/^releases\/tags\/(.+)$/))) {
   out = state.releases.find((r) => r.tag_name === m[1]);
 } else if (/^releases(\?|$)/.test(path)) {
@@ -437,13 +441,28 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
   });
 
   // release-upgrade-check.yml: the target it checks, the record it writes, and the gate.
+  const BASE_SHA = "b".repeat(40);
+  const BASE_EXE = "sha256:" + "7".repeat(64);
   const upgradeRun = { ...goodRun, path: ".github/workflows/release-upgrade-check.yml" };
-  const withLatest = (runs = { 100: goodRun, 500: upgradeRun }) => {
+  const receipt = (f, { exe = f.digest, base = BASE_EXE, from = "0.7.9" } = {}) =>
+    `upgrade check receipt: release 7 v0.8.0 ${SHA} ${exe} from release 5 v${from} ${BASE_SHA} ${base}`;
+  const job = (name, conclusion = "success") => ({ name, status: "completed", conclusion });
+  const withLatest = (runs = { 100: goodRun, 500: upgradeRun }, jobs = (f) => ({ 500: [job(receipt(f))] })) => {
     const f = setup({ runs });
     expect(f.attach().status).toBe(0);
     f.edit((st) => {
-      st.releases.push({ ...draft({ id: 5, tag_name: "v0.7.9", name: "v0.7.9", draft: false }) });
+      st.releases.push({
+        ...draft({
+          id: 5,
+          tag_name: "v0.7.9",
+          name: "v0.7.9",
+          draft: false,
+          assets: [{ id: 50, name: "ORCA-0.7.9-win-x64.exe", digest: BASE_EXE }],
+        }),
+      });
       st.latest = 5;
+      st.tags["v0.7.9"] = BASE_SHA;
+      st.jobs = jobs(f);
     });
     return f;
   };
@@ -463,7 +482,9 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     const f = withLatest();
     const result = f.run(ATTACH, ["upgrade-target", "7"]);
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(`id=7\nversion=0.8.0\nsha=${SHA}\nexe=${f.digest}\nasset=901\nfrom=0.7.9\n`);
+    expect(result.stdout).toBe(
+      `id=7\nversion=0.8.0\nsha=${SHA}\nexe=${f.digest}\nasset=901\nfrom=0.7.9\nfrom_id=5\nfrom_sha=${BASE_SHA}\nfrom_exe=${BASE_EXE}\n`,
+    );
     expect(f.writes()).toHaveLength(2);
   });
 
@@ -521,8 +542,19 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     ],
     ["a check whose run did not pass", (f) => recordUpgrade(f, "600"), "did not pass"],
     ["a check of the signing workflow's run", (f) => recordUpgrade(f, "100"), "did not pass"],
+    // A successful run whose receipt names other evidence than the notes claim.
+    ["a passing run that tested another installer", (f) => recordUpgrade(f, "700"), "no successful receipt"],
+    ["a passing run over another baseline installer", (f) => recordUpgrade(f, "800"), "no successful receipt"],
+    ["a passing run whose receipt job failed", (f) => recordUpgrade(f, "900"), "no successful receipt"],
   ])("refuses to publish over a Latest with %s", (_label, record, message) => {
-    const f = withLatest({ 100: goodRun, 500: upgradeRun, 600: { ...upgradeRun, conclusion: "failure" } });
+    const runs = { 100: goodRun, 500: upgradeRun, 600: { ...upgradeRun, conclusion: "failure" } };
+    for (const id of [700, 800, 900]) runs[id] = upgradeRun;
+    const f = withLatest(runs, (f) => ({
+      500: [job(receipt(f))],
+      700: [job(receipt(f, { exe: "sha256:" + "9".repeat(64) }))],
+      800: [job(receipt(f, { base: "sha256:" + "6".repeat(64) }))],
+      900: [job(receipt(f), "failure")],
+    }));
     const args = record(f);
     if (args) expect(f.run(ATTACH, args).status).toBe(0);
     const writes = f.writes().length;
@@ -531,5 +563,24 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(result.stderr).toContain(message);
     expect(f.writes()).toHaveLength(writes);
     expect(f.state().releases.find((r) => r.id === 7).draft).toBe(true);
+  });
+
+  it("refuses to publish after the Latest's installer changed since the check", () => {
+    const f = withLatest();
+    expect(f.run(ATTACH, recordUpgrade(f)).status).toBe(0);
+    f.edit((st) => (st.releases.find((r) => r.id === 5).assets[0].digest = "sha256:" + "5".repeat(64)));
+    const result = f.run(ATTACH, accepted(f));
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("no successful receipt");
+    expect(f.state().releases.find((r) => r.id === 7).draft).toBe(true);
+  });
+
+  it("refuses to publish over a Latest with no Windows installer to upgrade from", () => {
+    const f = withLatest();
+    expect(f.run(ATTACH, recordUpgrade(f)).status).toBe(0);
+    f.edit((st) => (st.releases.find((r) => r.id === 5).assets = []));
+    const result = f.run(ATTACH, accepted(f));
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("no Windows x64 installer to upgrade from");
   });
 });

@@ -18,10 +18,14 @@
 #           it, and the candidate refuses a newer-format store without changing it.
 #   record  this workflow's own revision only: re-reads the draft and, when it still holds
 #           exactly the checked installer, records `<!-- orca-upgrade-check: RUN sha256:… from
-#           vX.Y.Z -->` in its notes (the newest pass replaces an older one).
+#           vX.Y.Z -->` in its notes (the newest pass replaces an older one). Its job name is
+#           the run's receipt: the candidate's release id, version, source commit and installer
+#           digest, and the same four for the Latest it was installed over.
 #
-# Release (publish final) refuses a draft without exactly one such record for the installer it
-# publishes, from the release it replaces as Latest, whose run succeeded here. Nothing here
+# Both installers' bytes are checked against those digests before either is installed, and the
+# Latest's CLI is built from the commit its tag resolved to. Release (publish final) refuses a
+# draft unless its notes point at a successful run here whose receipt names exactly that draft
+# and installer and exactly the current Latest and its installer. Nothing here
 # publishes, tags or touches the feed, and there is no secret: the publisher name is a variable.
 name: Release (upgrade check)
 
@@ -69,6 +73,9 @@ jobs:
       sha: ${{ steps.target.outputs.sha }}
       exe: ${{ steps.target.outputs.exe }}
       from: ${{ steps.target.outputs.from }}
+      from_id: ${{ steps.target.outputs.from_id }}
+      from_sha: ${{ steps.target.outputs.from_sha }}
+      from_exe: ${{ steps.target.outputs.from_exe }}
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
@@ -93,6 +100,7 @@ jobs:
           ASSET: ${{ steps.target.outputs.asset }}
           EXE: ${{ steps.target.outputs.exe }}
           FROM: ${{ steps.target.outputs.from }}
+          FROM_EXE: ${{ steps.target.outputs.from_exe }}
         run: |
           set -euo pipefail
           mkdir -p installers/to installers/from
@@ -101,6 +109,8 @@ jobs:
           [[ "sha256:$(sha256sum "installers/to/ORCA-$VERSION-win-x64.exe" | cut -d' ' -f1)" == "$EXE" ]] ||
             { echo "::error::the downloaded installer is not the draft's $EXE"; exit 1; }
           gh release download "v$FROM" --repo "$REPO" --pattern "ORCA-$FROM-win-x64.exe" --dir installers/from
+          [[ "sha256:$(sha256sum "installers/from/ORCA-$FROM-win-x64.exe" | cut -d' ' -f1)" == "$FROM_EXE" ]] ||
+            { echo "::error::the downloaded v$FROM installer is not the Latest's $FROM_EXE"; exit 1; }
           ls -l installers/*
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -127,10 +137,11 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      # The release being upgraded from, at its tag: its CLI writes the store under test.
+      # The release being upgraded from, at the commit its tag resolved to when the target was
+      # read (not the tag's name, which could move): its CLI writes the store under test.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: v${{ needs.target.outputs.from }}
+          ref: ${{ needs.target.outputs.from_sha }}
           path: previous
           persist-credentials: false
 
@@ -144,12 +155,14 @@ jobs:
         env:
           EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
           EXE: ${{ needs.target.outputs.exe }}
+          FROM_EXE: ${{ needs.target.outputs.from_exe }}
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:EXPECTED) { throw 'ORCA_FEED_PUBLISHER_CN is not set' }
           $to = "installers/to/ORCA-$($env:TO)-win-x64.exe"
           $from = "installers/from/ORCA-$($env:FROM)-win-x64.exe"
           if ("sha256:$((Get-FileHash -Algorithm SHA256 $to).Hash.ToLower())" -ne $env:EXE) { throw "$to is not $($env:EXE)" }
+          if ("sha256:$((Get-FileHash -Algorithm SHA256 $from).Hash.ToLower())" -ne $env:FROM_EXE) { throw "$from is not $($env:FROM_EXE)" }
           foreach ($file in @($from, $to)) {
             $sig = Get-AuthenticodeSignature -LiteralPath $file
             $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
@@ -239,6 +252,11 @@ jobs:
           $from = $tag.Substring(1)
           gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "ORCA-$from-win-x64.exe" --dir installers/from
           $file = "installers/from/ORCA-$from-win-x64.exe"
+          $digest = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq ".assets[] | select(.name == ""ORCA-$from-win-x64.exe"") | .digest"
+          if ("sha256:$((Get-FileHash -Algorithm SHA256 $file).Hash.ToLower())" -ne $digest) { throw "$file is not the release's $digest" }
+          $commit = gh api "repos/$env:GITHUB_REPOSITORY/commits/$tag" --jq .sha
+          if ($commit -notmatch '^[0-9a-f]{40}$') { throw "$tag does not resolve to a commit" }
+          "FROM_SHA=$commit" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           $sig = Get-AuthenticodeSignature -LiteralPath $file
           $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
           "{0}: {1} stamped={2} cn='{3}'" -f $file, $sig.Status, [bool]$sig.TimeStamperCertificate, $cn
@@ -250,7 +268,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: v${{ env.FROM }}
+          ref: ${{ env.FROM_SHA }}
           path: previous
           persist-credentials: false
 
@@ -354,7 +372,11 @@ jobs:
           if-no-files-found: ignore
 
   record:
-    name: record the pass on the draft
+    # The name is the check's receipt (release-attach.sh receipt_name): Release (publish final)
+    # requires a successful job of exactly this name, naming the draft's release, version,
+    # source commit and installer digest and the Latest's, before it publishes. Keep the two in
+    # step.
+    name: "upgrade check receipt: release ${{ needs.target.outputs.id }} v${{ needs.target.outputs.version }} ${{ needs.target.outputs.sha }} ${{ needs.target.outputs.exe }} from release ${{ needs.target.outputs.from_id }} v${{ needs.target.outputs.from }} ${{ needs.target.outputs.from_sha }} ${{ needs.target.outputs.from_exe }}"
     needs: [target, check]
     runs-on: ubuntu-24.04
     # Shared with the attach and publish: no write to a draft interleaves with another.

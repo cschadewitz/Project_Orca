@@ -61,3 +61,20 @@ it("is dispatched by the attach for the draft it attached to", () => {
   );
   expect(attach.jobs.attach.outputs).toEqual({ id: "${{ steps.attached.outputs.id }}" });
 });
+
+it("names its record job as the receipt release-attach.sh publish requires", () => {
+  const o = (key) => `\${{ needs.target.outputs.${key} }}`;
+  expect(check.jobs.record.name).toBe(
+    `upgrade check receipt: release ${o("id")} v${o("version")} ${o("sha")} ${o("exe")} ` +
+      `from release ${o("from_id")} v${o("from")} ${o("from_sha")} ${o("from_exe")}`,
+  );
+  const script = readFileSync(new URL("../deploy/release-attach.sh", import.meta.url), "utf8");
+  expect(script).toContain('echo "upgrade check receipt: release $1 v$2 $3 $4 from release $5 v$6 $7 $8"');
+});
+
+it("builds the baseline from its resolved commit and checks both installers' bytes before installing", () => {
+  expect(check.jobs.check.steps[1].with.ref).toBe("${{ needs.target.outputs.from_sha }}");
+  const verify = step("check", "Both installers are the expected bytes, validly signed by the publisher").run;
+  expect(verify).toContain("$env:FROM_EXE");
+  expect(verify).toContain("$env:EXE");
+});
