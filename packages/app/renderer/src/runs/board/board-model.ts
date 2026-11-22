@@ -75,6 +75,9 @@ export function boardRuns(visible: readonly RunSummaryView[], following: readonl
 }
 
 /** The run a card draws: the followed view when there is one, else the list's row. */
-export function cardRun(row: RunSummaryView | undefined, followed: FollowedRun | undefined): RunSummaryView | undefined {
+export function cardRun(
+  row: RunSummaryView | undefined,
+  followed: FollowedRun | undefined,
+): RunSummaryView | undefined {
   return followed?.run ?? row;
 }
