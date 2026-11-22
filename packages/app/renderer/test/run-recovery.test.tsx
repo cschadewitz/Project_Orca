@@ -6,13 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type {
-  RecoveryAssessment,
-  RecoveryCheckpoint,
-  RecoveryStep,
-  RunsGetResult,
-  RunsRecoverParams,
-} from "@orca/protocol";
+import type { RecoveryAssessment, RecoveryCheckpoint, RecoveryStep, RunsGetResult } from "@orca/protocol";
 import { StepDetail } from "../src/step/step-detail.js";
 import { AS_OF, HELLO, RUN_DETAILS } from "./fixtures.js";
 import { harness } from "./harness.js";
@@ -169,86 +163,84 @@ describe("the recovery section", () => {
     expect(calls("runs.reviewEffect")[0]!.params).toMatchObject({ decision: "abandon" });
   });
 
-  it("asks again with the same key after a lost answer, then opens the attempt", async () => {
+  it("starts through main's intent journal and opens the attempt", async () => {
     const onOpenRun = vi.fn();
     mount({ onOpenRun });
-    let lost = true;
     fake.script({
       "runs.recovery": () => ({ ok: true, result: { assessment: assessment(), asOf: AS_OF } }),
-      "runs.recover": () => {
-        if (lost) {
-          lost = false;
-          return { ok: false, error: { code: "AGENT_TRANSPORT", message: "socket hang up" } };
-        }
-        return {
-          ok: true,
-          result: {
-            state: "accepted",
-            operationId: "retry_00000000-0000-4000-8000-000000000001",
-            admissionId: "adm-1",
-            runId: "run-attempt",
-            sourceRunId: "run-parent",
-          },
-        };
-      },
+      "recoveryIntents.start": () => ({ ok: true, result: { state: "accepted", runId: "run-attempt" } }),
     });
-    const start = await screen.findByRole("button", { name: "Start an attempt from here" });
-    fireEvent.click(start);
-    await screen.findByText(/socket hang up/);
-    fireEvent.click(screen.getByRole("button", { name: "Start an attempt from here" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start an attempt from here" }));
     await waitFor(() => expect(onOpenRun).toHaveBeenCalledWith("run-attempt"));
-    const [first, second] = calls("runs.recover").map((c) => c.params as RunsRecoverParams);
-    expect(first).toMatchObject({ runId: "run-parent", checkpoint: "s-build-2" });
-    expect(first!.idempotencyKey).toBeTruthy();
-    expect(second!.idempotencyKey).toBe(first!.idempotencyKey);
+    expect(calls("recoveryIntents.start")[0]!.params).toEqual({ runId: "run-parent", checkpoint: "s-build-2" });
   });
 
-  it("starts a new intent after the daemon refuses one", async () => {
+  it("shows an unresolved intent main kept, across a remount, and asks again with it", async () => {
+    const intent = { id: "intent-1", sourceRunId: "run-parent", checkpoint: "s-build-2", reserved: false };
     mount();
     fake.script({
       "runs.recovery": () => ({ ok: true, result: { assessment: assessment(), asOf: AS_OF } }),
-      "runs.recover": () => ({ ok: false, error: { code: "RECOVERY_BLOCKED", message: "a review is missing" } }),
+      "recoveryIntents.list": () => ({ ok: true, result: [intent] }),
+      "recoveryIntents.start": () => ({ ok: true, result: { state: "pending", intent } }),
     });
-    fireEvent.click(await screen.findByRole("button", { name: "Start an attempt from here" }));
-    await screen.findByText(/a review is missing/);
-    fireEvent.click(screen.getByRole("button", { name: "Start an attempt from here" }));
-    await waitFor(() => expect(calls("runs.recover")).toHaveLength(2));
-    const [first, second] = calls("runs.recover").map((c) => c.params as RunsRecoverParams);
-    expect(second!.idempotencyKey).not.toBe(first!.idempotencyKey);
+    await screen.findByRole("list", { name: "Unresolved recovery" });
+    // Leaving and coming back (a step selected, a reload) reads the same intent from main again.
+    cleanup();
+    render(<StepDetail detail={FAILED} connection="live" />, { wrapper: harness().Providers });
+    const unresolved = await screen.findByRole("list", { name: "Unresolved recovery" });
+    expect(calls("recoveryIntents.list").length).toBeGreaterThanOrEqual(2);
+    // No new start while one is unresolved: only its own actions.
+    expect(screen.getByRole("button", { name: "Start an attempt from here" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
+    fireEvent.click(within(unresolved).getByRole("button", { name: "Ask again" }));
+    await screen.findByText(/still admitting the attempt from build/);
+    expect(calls("recoveryIntents.start").map((c) => c.params)).toEqual([
+      { runId: "run-parent", checkpoint: "s-build-2" },
+    ]);
   });
 
-  it("finishes a reserved attempt by reconciling its receipt, not by starting another", async () => {
+  it("finishes a reserved intent, never starting another", async () => {
     const onOpenRun = vi.fn();
+    const intent = { id: "intent-2", sourceRunId: "run-parent", checkpoint: "s-build-2", reserved: true };
     mount({ onOpenRun });
-    const operationId = "retry_00000000-0000-4000-8000-000000000002";
     fake.script({
       "runs.recovery": () => ({ ok: true, result: { assessment: assessment(), asOf: AS_OF } }),
-      "runs.recover": () => ({
-        ok: true,
-        result: {
-          state: "recoverable-failure",
-          operationId,
-          admissionId: "adm-2",
-          runId: "run-reserved",
-          failure: { code: "RUN_STATE", message: "the process stopped", recovery: "reconcile" },
-        },
-      }),
-      "runs.reconcileRecover": () => ({
-        ok: true,
-        result: {
-          state: "accepted",
-          operationId,
-          admissionId: "adm-2",
-          runId: "run-reserved",
-          sourceRunId: "run-parent",
-        },
-      }),
+      "recoveryIntents.list": () => ({ ok: true, result: [intent] }),
+      "recoveryIntents.finish": () => ({ ok: true, result: { state: "accepted", runId: "run-reserved" } }),
     });
-    fireEvent.click(await screen.findByRole("button", { name: "Start an attempt from here" }));
     fireEvent.click(await screen.findByRole("button", { name: "Finish the attempt" }));
     await waitFor(() => expect(onOpenRun).toHaveBeenCalledWith("run-reserved"));
-    expect(calls("runs.recover")).toHaveLength(1);
-    expect(calls("runs.reconcileRecover")[0]!.params).toEqual({ operationId });
+    expect(calls("recoveryIntents.finish")[0]!.params).toEqual({ id: "intent-2" });
+    expect(calls("recoveryIntents.start")).toHaveLength(0);
+  });
+
+  it("abandons an unresolved intent only through main", async () => {
+    const intent = { id: "intent-3", sourceRunId: "run-parent", checkpoint: "s-build-2", reserved: true };
+    mount();
+    fake.script({
+      "runs.recovery": () => ({ ok: true, result: { assessment: assessment(), asOf: AS_OF } }),
+      "recoveryIntents.list": () => ({ ok: true, result: [intent] }),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Abandon this recovery" }));
+    await waitFor(() => expect(calls("recoveryIntents.abandon")[0]!.params).toEqual({ id: "intent-3" }));
+  });
+
+  it("does not show or open a late answer once the run's section is gone", async () => {
+    const onOpenRun = vi.fn();
+    mount({ onOpenRun });
+    fake.script({
+      "runs.recovery": () => ({ ok: true, result: { assessment: assessment(), asOf: AS_OF } }),
+      "recoveryIntents.start": () => ({ ok: true, result: { state: "accepted", runId: "run-late" } }),
+    });
+    const button = await screen.findByRole("button", { name: "Start an attempt from here" });
+    const release = fake.hold("recoveryIntents.start");
+    fireEvent.click(button);
+    await waitFor(() => expect(calls("recoveryIntents.start")).toHaveLength(1));
+    cleanup();
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onOpenRun).not.toHaveBeenCalled();
   });
 
   it("offers no start for a blocked checkpoint, and says why", async () => {

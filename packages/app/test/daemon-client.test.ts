@@ -591,6 +591,8 @@ describe("the recovery methods", () => {
       ADMISSIONS_RECONCILE_METHOD,
     ]);
     expect(seen[2]!.params).toEqual({ runId: "run-failed", checkpoint: "s-0", idempotencyKey: "k-1" });
+    // Finishing names the kind, so the daemon refuses any other receipt before reconciling it.
+    expect(seen[3]!.params).toEqual({ operationId, kind: "run.recover" });
   });
 });
 

@@ -24,7 +24,15 @@ export const AdmissionsGetParamsSchema = z.strictObject({
   /** Protocol 2.4 (#883): refuse unless the daemon is this workspace and principal. */
   expectedScope: AdmissionExpectedScopeSchema.optional(),
 });
-export const AdmissionsReconcileParamsSchema = AdmissionsGetParamsSchema;
+export const AdmissionsReconcileParamsSchema = AdmissionsGetParamsSchema.extend({
+  /**
+   * Protocol 2.5 (#357): reconcile only a receipt of this kind. The daemon reads the receipt's
+   * kind before anything that could create or drive work and refuses another kind, so a client
+   * finishing a checkpoint attempt can never reconcile some other admission by mistake.
+   */
+  kind: z.literal("run.recover").optional(),
+}).strict();
+export type AdmissionsReconcileParams = z.infer<typeof AdmissionsReconcileParamsSchema>;
 /**
  * `admissions.find` (#883): a direct admission's receipt by its idempotency key, without
  * claiming the key. Listed in `hello.methods`, not as a capability. `absent` holds only for

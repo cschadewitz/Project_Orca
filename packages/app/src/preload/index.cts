@@ -190,6 +190,12 @@ const bridge: OrcaBridge = {
       };
     },
   },
+  recoveryIntents: {
+    list: (params) => call("orca:recoveryIntents.list", params),
+    start: (params) => call("orca:recoveryIntents.start", params),
+    finish: (params) => call("orca:recoveryIntents.finish", params),
+    abandon: (params) => call("orca:recoveryIntents.abandon", params),
+  },
   admissionIntents: {
     start: (workflowId) => call("orca:admissionIntents.start", workflowId),
     list: () => call("orca:admissionIntents.list"),
@@ -301,8 +307,6 @@ const bridge: OrcaBridge = {
     start: (params) => call("orca:runs.start", params),
     recovery: (params) => call("orca:runs.recovery", params),
     reviewEffect: (params) => call("orca:runs.reviewEffect", params),
-    recover: (params) => call("orca:runs.recover", params),
-    reconcileRecover: (params) => call("orca:runs.reconcileRecover", params),
   },
   inputs: {
     revise: (params) => call("orca:inputs.revise", params),

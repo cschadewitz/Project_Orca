@@ -165,6 +165,8 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * `protocol` on `runs.events` and `subscribe`), and a daemon withholds later types
  * (`EVENT_TYPES_SINCE`) from any client that does not, keeping cursors. `operator.admission`
  * and `operator.reconcileAdmission` refuse a checkpoint receipt; it stays on `admissions.*`.
+ * `admissions.reconcile` takes an optional `kind` (`run.recover`) and refuses any other kind
+ * before it reconciles; a 2.4 daemon rejects the unknown field, so it fails closed.
  */
 export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 5 };
 

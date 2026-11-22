@@ -12,11 +12,15 @@
  * - **Review an uncertain step.** `Mark to run again` says the person checked what the step did
  *   and it may repeat; `Abandon the run` ends the run there. Abandoning cannot be taken back, so
  *   its button arms first and names the step in its confirmation.
- * - **Start a checkpoint attempt.** One idempotency key per person's intent, per checkpoint,
- *   kept until the daemon gives a definite answer. A lost answer (the transport failed, or the
- *   daemon was still creating the attempt) is asked again with the same key, which can only
- *   return the same attempt. A receipt that says the attempt was reserved and not created is
- *   finished by reconciling that receipt, never by starting another.
+ * - **Start a checkpoint attempt.** The intent (its retry key, and a reserved receipt once the
+ *   daemon answers with one) is kept by the main process in its encrypted journal, bound to the
+ *   verified connection and principal, the source run and the checkpoint: this component only
+ *   lists it. So leaving the run, selecting a step, reloading or restarting never turns an
+ *   unresolved intent into a second attempt. While one is unresolved it is shown above the
+ *   checkpoints with the only actions it allows: ask again with the same key, finish a reserved
+ *   attempt by reconciling its receipt (never by starting another), or abandon it after
+ *   confirmation. A late answer is settled by main against its own record; here it is shown
+ *   only if this run's section is still the one on screen.
  *
  * Every control asks `hello.methods` for its own method, with no coarse fallback: a daemon
  * before protocol 2.5 has none of them, and a `--read-only` one has only the read.
@@ -30,12 +34,11 @@ import {
   RUNS_REVIEW_EFFECT_METHOD,
   type ProtocolError,
   type RecoveryAssessment,
-  type RecoveryCheckpoint,
   type RecoveryOption,
   type RecoveryStep,
   type RunsGetResult,
-  type RunsRecoverResult,
 } from "@orca/protocol";
+import type { BridgeResult, RecoveryIntentOutcome, RecoveryIntentView } from "../../../src/bridge.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { useConnection, useWritability } from "../chrome/use-connection.js";
 import { Button, Text } from "../ui/index.js";
@@ -61,9 +64,6 @@ const READINESS_LABEL: Record<RecoveryOption["readiness"], string> = {
   blocked: "not available",
 };
 
-/** Codes for an answer that may have been lost on the way back: ask again with the same key. */
-const UNCERTAIN_CODES = new Set(["AGENT_TRANSPORT", "PROTOCOL_MESSAGE"]);
-
 type Load =
   { phase: "loading" } | { phase: "error"; error: ProtocolError } | { phase: "ready"; assessment: RecoveryAssessment };
 
@@ -84,10 +84,8 @@ export function RunRecovery({ detail, onOpenRun }: RunRecoveryProps): JSX.Elemen
   const bridge = window.orca.runs;
   const readable = connection.methods.includes(RUNS_RECOVERY_METHOD) && bridge.recovery !== undefined;
   const reviewable = connection.methods.includes(RUNS_REVIEW_EFFECT_METHOD) && bridge.reviewEffect !== undefined;
-  const recoverable =
-    connection.methods.includes(RUNS_RECOVER_METHOD) &&
-    bridge.recover !== undefined &&
-    bridge.reconcileRecover !== undefined;
+  const intentsBridge = window.orca.recoveryIntents;
+  const recoverable = connection.methods.includes(RUNS_RECOVER_METHOD) && intentsBridge !== undefined;
   const shown = readable && !QUIET.has(status);
 
   // What the assessment depends on that the run view can see: refetched when it moves.
@@ -114,15 +112,30 @@ export function RunRecovery({ detail, onOpenRun }: RunRecoveryProps): JSX.Elemen
   const [pending, setPending] = useState<string | undefined>(undefined);
   const [report, setReport] = useState<Report | undefined>(undefined);
   const [armed, setArmed] = useState<string | undefined>(undefined);
-  // Per checkpoint: the key of the intent in flight, and a receipt that still needs reconciling.
-  const keys = useRef(new Map<string, string>());
-  const receipts = useRef(new Map<string, string>());
+  const [intents, setIntents] = useState<readonly RecoveryIntentView[]>([]);
+  // The run whose section is on screen: a late answer for another (or after unmount) is not shown.
+  const current = useRef<string | undefined>(runId);
   useEffect(() => {
-    keys.current.clear();
-    receipts.current.clear();
+    current.current = runId;
     setReport(undefined);
     setArmed(undefined);
+    setIntents([]);
+    return () => {
+      current.current = undefined;
+    };
   }, [runId]);
+
+  // The unresolved intents main holds for this run, read again whenever the assessment is.
+  useEffect(() => {
+    if (!shown || !recoverable || !intentsBridge) return;
+    let live = true;
+    void intentsBridge.list({ runId }).then((result) => {
+      if (live && result.ok) setIntents(result.result);
+    });
+    return () => {
+      live = false;
+    };
+  }, [shown, recoverable, intentsBridge, runId, version]);
 
   const say = useCallback(
     (next: Report) => {
@@ -136,11 +149,13 @@ export function RunRecovery({ detail, onOpenRun }: RunRecoveryProps): JSX.Elemen
     (step: RecoveryStep, decision: "run-again" | "abandon") => {
       if (pending || !bridge.reviewEffect) return;
       const subject = `review:${step.stepRunId}`;
+      const asked = runId;
       setPending(subject);
       setArmed(undefined);
       void bridge
         .reviewEffect({ runId: step.runId, stepRunId: step.stepRunId, decision })
         .then((result) => {
+          if (current.current !== asked) return;
           if (!result.ok) {
             say({ message: `${result.error.code}: ${result.error.message}`, failed: true });
             return;
@@ -156,66 +171,68 @@ export function RunRecovery({ detail, onOpenRun }: RunRecoveryProps): JSX.Elemen
         })
         .finally(() => setPending(undefined));
     },
-    [pending, bridge, say, refresh],
+    [pending, bridge, runId, say, refresh],
   );
 
-  const settle = useCallback(
-    (checkpoint: RecoveryCheckpoint, result: RunsRecoverResult): Report => {
-      const id = checkpoint.stepRunId;
-      if (result.state === "in-progress") {
-        return {
-          message: `The daemon is still creating the attempt from ${checkpoint.nodeId}. Start it again to check; it cannot start a second one.`,
-          failed: true,
-        };
-      }
-      if (result.state === "recoverable-failure") {
-        receipts.current.set(id, result.operationId);
-        return {
-          message: `The attempt from ${checkpoint.nodeId} was reserved but not created (${result.failure.message}). Finish it to create it.`,
-          failed: true,
-        };
-      }
-      keys.current.delete(id);
-      receipts.current.delete(id);
-      onOpenRun?.(result.runId);
-      return { message: `Started a checkpoint attempt from ${checkpoint.nodeId}.`, failed: false };
-    },
-    [onOpenRun],
-  );
-
-  const start = useCallback(
-    (checkpoint: RecoveryCheckpoint) => {
-      if (pending || !bridge.recover || !bridge.reconcileRecover) return;
-      const id = checkpoint.stepRunId;
-      const subject = `recover:${id}`;
+  /** Run one intent call; its answer is shown only while this run's section is still on screen. */
+  const act = useCallback(
+    (subject: string, label: string, call: () => Promise<BridgeResult<RecoveryIntentOutcome>>) => {
+      if (pending) return;
+      const asked = runId;
       setPending(subject);
-      const operationId = receipts.current.get(id);
-      let key = keys.current.get(id);
-      if (key === undefined) {
-        key = globalThis.crypto.randomUUID();
-        keys.current.set(id, key);
-      }
-      const call =
-        operationId !== undefined
-          ? bridge.reconcileRecover({ operationId })
-          : bridge.recover({ runId, checkpoint: id, idempotencyKey: key });
-      void call
+      void call()
         .then((result) => {
-          if (result.ok) {
-            say(settle(checkpoint, result.result));
-            refresh();
-            return;
+          if (current.current !== asked) return;
+          if (!result.ok) {
+            say({ message: `${result.error.code}: ${result.error.message}`, failed: true });
+          } else if (result.result.state === "accepted") {
+            say({ message: `Started a checkpoint attempt from ${label}.`, failed: false });
+            onOpenRun?.(result.result.runId);
+          } else if (result.result.state === "reserved") {
+            say({ message: `${result.result.message} Finish it to create it, or abandon it.`, failed: true });
+          } else {
+            say({
+              message: `The daemon is still admitting the attempt from ${label}. Ask again to check; it cannot start a second one.`,
+              failed: true,
+            });
           }
-          // The daemon answered with a refusal: this intent is over, and the next is a new one.
-          if (!UNCERTAIN_CODES.has(result.error.code)) {
-            keys.current.delete(id);
-            receipts.current.delete(id);
-          }
-          say({ message: `${result.error.code}: ${result.error.message}`, failed: true });
+          refresh();
         })
         .finally(() => setPending(undefined));
     },
-    [pending, bridge, runId, say, settle, refresh],
+    [pending, runId, say, onOpenRun, refresh],
+  );
+
+  const start = useCallback(
+    (checkpoint: { stepRunId: string; nodeId: string }) =>
+      intentsBridge &&
+      act(`start:${checkpoint.stepRunId}`, checkpoint.nodeId, () =>
+        intentsBridge.start({ runId, checkpoint: checkpoint.stepRunId }),
+      ),
+    [intentsBridge, act, runId],
+  );
+  const finish = useCallback(
+    (intent: RecoveryIntentView, label: string) =>
+      intentsBridge && act(`finish:${intent.id}`, label, () => intentsBridge.finish({ id: intent.id })),
+    [intentsBridge, act],
+  );
+  const abandon = useCallback(
+    (intent: RecoveryIntentView) => {
+      if (pending || !intentsBridge) return;
+      const asked = runId;
+      setPending(`abandon:${intent.id}`);
+      void intentsBridge
+        .abandon({ id: intent.id })
+        .then((result) => {
+          if (current.current !== asked) return;
+          if (!result.ok) say({ message: `${result.error.code}: ${result.error.message}`, failed: true });
+          else if (result.result.abandoned)
+            say({ message: "The recovery was abandoned. A new start uses a new request.", failed: false });
+          refresh();
+        })
+        .finally(() => setPending(undefined));
+    },
+    [pending, intentsBridge, runId, say, refresh],
   );
 
   const options = load.phase === "ready" ? load.assessment.options : [];
@@ -311,38 +328,80 @@ export function RunRecovery({ detail, onOpenRun }: RunRecoveryProps): JSX.Elemen
             </>
           )}
 
+          {intents.length > 0 && (
+            <>
+              <Text style="eyebrow" as="div" className="orca-inspector__group">
+                Unresolved recovery
+              </Text>
+              <ul className="orca-recovery__list" aria-label="Unresolved recovery">
+                {intents.map((intent) => {
+                  const point = load.assessment.checkpoints.find((c) => c.stepRunId === intent.checkpoint);
+                  const label = point?.nodeId ?? intent.checkpoint;
+                  return (
+                    <li key={intent.id} className="orca-recovery__item">
+                      <Text style="mono-id" as="div">
+                        {point ? `${point.nodeId} · attempt ${point.attempt}` : label}
+                      </Text>
+                      <Text style="caption" className="orca-faint" as="div">
+                        {intent.reserved
+                          ? "The daemon reserved this attempt and has not confirmed it was created. Finish it; nothing new starts."
+                          : "This start has no definite answer yet. Asking again uses the same request, so it cannot start a second attempt."}
+                      </Text>
+                      <div className="orca-recovery__actions">
+                        <Button
+                          size="sm"
+                          tone="primary"
+                          disabled={!writability.can || pending !== undefined}
+                          {...why}
+                          onClick={() =>
+                            intent.reserved
+                              ? finish(intent, label)
+                              : start({ stepRunId: intent.checkpoint, nodeId: label })
+                          }
+                        >
+                          {intent.reserved ? "Finish the attempt" : "Ask again"}
+                        </Button>
+                        <Button size="sm" tone="ghost" disabled={pending !== undefined} onClick={() => abandon(intent)}>
+                          Abandon this recovery
+                        </Button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+
           {checkpoints.length > 0 && (
             <>
               <Text style="eyebrow" as="div" className="orca-inspector__group">
                 {`Checkpoints (${checkpoints.length})`}
               </Text>
               <ul className="orca-recovery__list" aria-label="Checkpoints">
-                {checkpoints.map((checkpoint) => {
-                  const reserved = receipts.current.has(checkpoint.stepRunId);
-                  const blocked = checkpoint.readiness === "blocked" && !reserved;
-                  return (
-                    <li key={checkpoint.stepRunId} className="orca-recovery__item">
-                      <Text style="mono-id" as="div">{`${checkpoint.nodeId} · attempt ${checkpoint.attempt}`}</Text>
-                      <Text style="caption" className="orca-faint" as="div">
-                        {`${READINESS_LABEL[checkpoint.readiness]} · reuses ${checkpoint.reused.length}, ${checkpoint.ranAfter.length} ran after it last time`}
-                      </Text>
-                      <Reasons blockers={checkpoint.blockers} unverified={checkpoint.unverified} />
-                      {recoverable && !blocked && (
-                        <div className="orca-recovery__actions">
-                          <Button
-                            size="sm"
-                            tone="primary"
-                            disabled={!writability.can || pending !== undefined}
-                            {...why}
-                            onClick={() => start(checkpoint)}
-                          >
-                            {reserved ? "Finish the attempt" : "Start an attempt from here"}
-                          </Button>
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
+                {checkpoints.map((checkpoint) => (
+                  <li key={checkpoint.stepRunId} className="orca-recovery__item">
+                    <Text style="mono-id" as="div">{`${checkpoint.nodeId} · attempt ${checkpoint.attempt}`}</Text>
+                    <Text style="caption" className="orca-faint" as="div">
+                      {`${READINESS_LABEL[checkpoint.readiness]} · reuses ${checkpoint.reused.length}, ${checkpoint.ranAfter.length} ran after it last time`}
+                    </Text>
+                    <Reasons blockers={checkpoint.blockers} unverified={checkpoint.unverified} />
+                    {recoverable && checkpoint.readiness !== "blocked" && (
+                      <div className="orca-recovery__actions">
+                        <Button
+                          size="sm"
+                          tone="primary"
+                          disabled={!writability.can || pending !== undefined || intents.length > 0}
+                          {...(intents.length > 0
+                            ? { disabledReason: "finish or abandon the unresolved recovery above first" }
+                            : why)}
+                          onClick={() => start(checkpoint)}
+                        >
+                          Start an attempt from here
+                        </Button>
+                      </div>
+                    )}
+                  </li>
+                ))}
               </ul>
             </>
           )}

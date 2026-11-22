@@ -1052,8 +1052,8 @@ it("durable admission closure retains completion only for the reserved live drai
   expect(rpc).toHaveBeenCalledTimes(2);
   for (const channel of [
     "orca:runs.start",
-    "orca:runs.recover",
-    "orca:runs.reconcileRecover",
+    "orca:recoveryIntents.start",
+    "orca:recoveryIntents.finish",
     "orca:templates",
     "orca:config.apply",
     "orca:guidedLaunch.submit",

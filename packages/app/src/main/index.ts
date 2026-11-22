@@ -31,6 +31,7 @@ import { installFirstRunIPC, startFirstRunWorkspace } from "./first-run/ipc.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
 import type { DiagnosticsResult } from "../diagnostics-contract.js";
 import { AdmissionIntents, AdmissionIntentController, protectedStorageBridgeError } from "./admission-intents.js";
+import { RecoveryIntentController, RecoveryIntents } from "./recovery-intents.js";
 import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
 import type { LaunchReview, PreflightParams } from "../configuration-launch-contract.js";
 import { RunsAdmitResultSchema, ServerPathSchema } from "@orca/protocol";
@@ -469,6 +470,53 @@ handle("orca:guidedLaunch.abandon", (id: string) =>
     return result.response === 1;
   }),
 );
+// Checkpoint attempts (#357): the same verified scope as run intents, bound to the captured
+// connection, with `runs.recover` required in the principal's operations.
+const recoveryIntents = new RecoveryIntentController(
+  new RecoveryIntents(join(app.getPath("userData"), "recovery-intents.enc"), safeStorage),
+  async () => {
+    const captured = client();
+    const target = workspace.connectionTarget;
+    const found = await captured.call("operator.discover", {}, intentDiscovery);
+    workspace.assertEpoch(target.epoch);
+    if (
+      !found.operations.includes("runs.recover") ||
+      !target.identity ||
+      found.target.workspaceId !== target.identity.workspaceId ||
+      found.target.instanceId !== target.identity.instanceId
+    )
+      throw new Error("The authenticated daemon target changed or recovery is unavailable. Refresh before retrying.");
+    return {
+      scope: {
+        target: target.source === "bundled" ? `bundled:${workspace.snapshot.path}` : daemonEndpoint(target.url),
+        principalId: found.principalId,
+        workspaceId: found.target.workspaceId,
+      },
+      assertCurrent: () => workspace.assertEpoch(target.epoch),
+      recover: (params) => captured.runsRecover(params),
+      reconcile: (params) => captured.runsRecoverReconcile(params),
+      refused: (error) => error instanceof DaemonClientError && error.error.code !== "PROTOCOL_MESSAGE",
+    };
+  },
+  async () => {
+    const result = await dialog.showMessageBox({
+      type: "warning",
+      buttons: ["Keep recovery", "Abandon recovery"],
+      defaultId: 0,
+      cancelId: 0,
+      message: "Abandon this checkpoint recovery?",
+      detail:
+        "An attempt may already exist or be running. This does not cancel it. The next start creates a separate attempt with a new key.",
+    });
+    return result.response === 1;
+  },
+);
+handle("orca:recoveryIntents.list", (params: { runId: string }) => recoveryIntents.list(params.runId));
+handle("orca:recoveryIntents.start", (params: { runId: string; checkpoint: string }) =>
+  recoveryIntents.start(params.runId, params.checkpoint),
+);
+handle("orca:recoveryIntents.finish", (params: { id: string }) => recoveryIntents.finish(params.id));
+handle("orca:recoveryIntents.abandon", (params: { id: string }) => recoveryIntents.abandon(params.id));
 handle("orca:admissionIntents.start", (workflowId: string) => intents.start(workflowId));
 handle("orca:admissionIntents.list", () => intents.list());
 handle("orca:admissionIntents.abandon", (id: string) =>
@@ -551,15 +599,11 @@ handle("orca:inputs.answer", (params: Parameters<DaemonClient["inputsAnswer"]>[0
 handle("orca:runs.cancel", (params: Parameters<DaemonClient["runsCancel"]>[0]) => client().runsCancel(params));
 handle("orca:runs.resume", (params: Parameters<DaemonClient["runsResume"]>[0]) => client().runsResume(params));
 handle("orca:runs.start", (params: Parameters<DaemonClient["runsStart"]>[0]) => client().runsStart(params));
-// Operator recovery (#357): a read, a side-effect review, and a checkpoint attempt. The
-// attempt is a new admission, so maintenance refuses it while the daemon drains.
+// Operator recovery (#357): a read and a side-effect review. Checkpoint attempts go through
+// `orca:recoveryIntents.*` below, whose keys live in the encrypted journal.
 handle("orca:runs.recovery", (params: Parameters<DaemonClient["runsRecovery"]>[0]) => client().runsRecovery(params));
 handle("orca:runs.reviewEffect", (params: Parameters<DaemonClient["runsReviewEffect"]>[0]) =>
   client().runsReviewEffect(params),
-);
-handle("orca:runs.recover", (params: Parameters<DaemonClient["runsRecover"]>[0]) => client().runsRecover(params));
-handle("orca:runs.reconcileRecover", (params: Parameters<DaemonClient["runsRecoverReconcile"]>[0]) =>
-  client().runsRecoverReconcile(params),
 );
 // The fourth (#174, #266). It writes a file rather than a run, so no lease is involved, but
 // it is still absent from a `--read-only` daemon and `useWritability()` still governs it.

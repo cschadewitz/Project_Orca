@@ -155,7 +155,7 @@ async function fixture() {
   const source = await orchestrator.startAndRun({ workflowId: "flow", vars: {}, actor });
   expect(source.run.status).toBe("failed");
   const b = source.stepOrder.map((id) => source.steps[id]!).find((s) => s.nodeId === "b")!;
-  return { orchestrator, stores, ctx, source, b, execute, workflowsAuthorized };
+  return { orchestrator, stores, ctx, source, b, execute, workflowsAuthorized, claims, checkpoints };
 }
 
 async function call(ctx: MethodContext, method: string, params?: unknown) {
@@ -321,6 +321,37 @@ it("keeps a reserved attempt uncreated while new admission is closed, and reconc
   });
   await vi.waitFor(async () => expect((await f.orchestrator.getState(reserved)).run.status).toBe("completed"));
   expect(f.execute).toHaveBeenCalledTimes(1);
+});
+
+it("reconciles only a checkpoint receipt when asked for one, before touching any other kind", async () => {
+  const f = await fixture();
+  await call(f.ctx, "runs.reviewEffect", { runId: f.source.run.id, stepRunId: f.b.id, decision: "run-again" });
+  const crash = vi.spyOn(f.orchestrator, "startRun").mockRejectedValueOnce(new Error("interrupted"));
+  const first = RunsRecoverResultSchema.parse(
+    (await call(f.ctx, "runs.recover", { runId: f.source.run.id, idempotencyKey: "k1" })).result,
+  );
+  crash.mockRestore();
+  if (first.state !== "recoverable-failure" || !first.runId) throw new Error(JSON.stringify(first));
+  const reserved = first.runId;
+
+  // The same call for a receipt of another kind (here a direct admission's) is refused after
+  // reading its kind and before any reconciliation, of either kind, can begin.
+  const kind = vi.spyOn(f.claims, "operationKind").mockResolvedValueOnce("run.admit");
+  const generic = vi.spyOn(f.claims, "reconcile");
+  const checkpoint = vi.spyOn(f.checkpoints, "reconcile");
+  expect(
+    await call(f.ctx, "admissions.reconcile", { operationId: first.operationId, kind: "run.recover" }),
+  ).toMatchObject({ ok: false, error: { code: "NOT_SUPPORTED" } });
+  expect(kind).toHaveBeenCalledTimes(1);
+  expect(generic).not.toHaveBeenCalled();
+  expect(checkpoint).not.toHaveBeenCalled();
+  expect(await f.stores.events.lastSeq(reserved)).toBeUndefined();
+
+  // The checkpoint receipt itself, named as one, reconciles as before.
+  expect(
+    await call(f.ctx, "admissions.reconcile", { operationId: first.operationId, kind: "run.recover" }),
+  ).toMatchObject({ ok: true, result: { state: "resolved", result: { state: "accepted", runId: reserved } } });
+  await vi.waitFor(async () => expect((await f.orchestrator.getState(reserved)).run.status).toBe("completed"));
 });
 
 it("assesses without artifact reads or ids for a run reader who may not read artifacts", async () => {

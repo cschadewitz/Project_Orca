@@ -609,12 +609,21 @@ export class DaemonClient {
   }
 
   /**
-   * Finish a checkpoint attempt whose receipt was a recoverable failure: `admissions.reconcile`
-   * creates the attempt it reserved, or keeps failing if that reservation was retired. The
+   * Finish a checkpoint attempt whose receipt was a recoverable failure: `admissions.reconcile`,
+   * for a checkpoint receipt only, creates the attempt it reserved, or keeps failing if that
+   * reservation was retired. The
    * answer is flattened to `runs.recover`'s own shape so one reader handles both.
    */
-  async runsRecoverReconcile(params: { operationId: string }): Promise<RunsRecoverResult> {
-    const answer = await this.call(ADMISSIONS_RECONCILE_METHOD, params, AdmissionRetryResultSchema);
+  async runsRecoverReconcile(params: {
+    operationId: string;
+    expectedScope?: { principalId: string; workspaceId: string };
+  }): Promise<RunsRecoverResult> {
+    // `kind` makes the daemon refuse any other receipt before it reconciles anything (#357).
+    const answer = await this.call(
+      ADMISSIONS_RECONCILE_METHOD,
+      { ...params, kind: "run.recover" },
+      AdmissionRetryResultSchema,
+    );
     if (answer.state === "in-progress") return answer;
     const receipt = answer.result && typeof answer.result === "object" ? answer.result : {};
     return RunsRecoverResultSchema.parse({ ...receipt, operationId: answer.operationId });

@@ -91,8 +91,6 @@ import type {
   RunsGetResult,
   RunsListParams,
   RunsListResult,
-  RunsRecoverParams,
-  RunsRecoverResult,
   RunsRecoveryParams,
   RunsRecoveryResult,
   RunsResumeParams,
@@ -115,6 +113,23 @@ import type {
 import type { Preferences, PreferencesPatch } from "./preferences/schema.js";
 
 export type BridgeResult<T> = { ok: true; result: T } | { ok: false; error: ProtocolError };
+
+/** A retained checkpoint-attempt intent (#357), as the renderer sees it: never its key. */
+export interface RecoveryIntentView {
+  id: string;
+  sourceRunId: string;
+  checkpoint: string;
+  /** The daemon reserved the attempt and it may not exist yet: Finish reconciles, nothing starts. */
+  reserved: boolean;
+}
+
+/** The answer to Start or Finish, for the renderer. */
+export type RecoveryIntentOutcome =
+  | { state: "accepted"; runId: string }
+  /** The daemon is still admitting this intent; Start again asks with the same key. */
+  | { state: "pending"; intent: RecoveryIntentView }
+  /** The daemon reserved an attempt and did not confirm it was created; Finish reconciles it. */
+  | { state: "reserved"; intent: RecoveryIntentView; message: string };
 
 /**
  * The app-local code for a fail-closed protected-storage refusal (#857): the OS keychain or
@@ -297,6 +312,18 @@ export interface OrcaBridge {
     list(): Promise<BridgeResult<{ id: string; workflowId: string }[]>>;
     abandon(id: string): Promise<BridgeResult<{ abandoned: boolean }>>;
   };
+  /**
+   * Checkpoint attempts (#357). The intent (scope, source run, checkpoint, retry key, reserved
+   * receipt) is kept in main's encrypted journal, never renderer memory, so navigation, reload
+   * and restart reuse it. `start` asks with the retained key, `finish` reconciles a reserved
+   * receipt and never starts another attempt, and `abandon` drops an intent after confirmation.
+   */
+  recoveryIntents?: {
+    list(params: { runId: string }): Promise<BridgeResult<RecoveryIntentView[]>>;
+    start(params: { runId: string; checkpoint: string }): Promise<BridgeResult<RecoveryIntentOutcome>>;
+    finish(params: { id: string }): Promise<BridgeResult<RecoveryIntentOutcome>>;
+    abandon(params: { id: string }): Promise<BridgeResult<{ abandoned: boolean }>>;
+  };
   daemonConnection?: DaemonConnectionBridge;
   /** Update the connected managed server over its profile's SSH connection (#879). */
   serverUpdate?: ServerUpdateBridge;
@@ -339,14 +366,11 @@ export interface OrcaBridge {
     /**
      * Operator recovery (#357), present in an app that knows the methods. Each is still
      * offered only when `hello.methods` lists it: a daemon before protocol 2.5 has none.
-     * `recovery` is a read; `reviewEffect` records a side-effect review; `recover` starts a
-     * checkpoint attempt through retry-safe admission.
+     * `recovery` is a read and `reviewEffect` records a side-effect review. Starting a
+     * checkpoint attempt goes through `recoveryIntents`, whose key lives in main.
      */
     recovery?: (params: RunsRecoveryParams) => Promise<BridgeResult<RunsRecoveryResult>>;
     reviewEffect?: (params: RunsReviewEffectParams) => Promise<BridgeResult<RunsReviewEffectResult>>;
-    recover?: (params: RunsRecoverParams) => Promise<BridgeResult<RunsRecoverResult>>;
-    /** Reconcile a `recover` receipt that was a recoverable failure, by its operation id. */
-    reconcileRecover?: (params: { operationId: string }) => Promise<BridgeResult<RunsRecoverResult>>;
   };
   inputs: {
     revise?: (

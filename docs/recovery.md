@@ -202,7 +202,10 @@ Protocol 2.5 carries the same three actions for the app:
   attempt as `orca recovery start` does: one attempt per idempotency key, authorized as a new
   run of the source's workflow and only for the principal that started the source. The daemon
   then drives it once, under the same first-attachment policy as `runs.admit`, and its receipt
-  reads back and reconciles through `admissions.get` and `admissions.reconcile`. Reconciling it
+  reads back and reconciles through `admissions.get` and `admissions.reconcile`. A caller
+  finishing a checkpoint attempt passes `kind: "run.recover"` to `admissions.reconcile`; the
+  daemon reads the receipt's kind first and refuses any other kind before it reconciles,
+  creates or drives anything. Reconciling it
   can create the reserved attempt, so while new admission is closed (an update drain) it is
   refused like `runs.recover`; `admissions.get` stays open and read-only.
 
@@ -238,13 +241,24 @@ none of it and a `--read-only` daemon shows the assessment without buttons.
 
 - **Mark to run again** and **Abandon the run** record a review (`runs.reviewEffect`).
   Abandoning asks for confirmation first.
-- **Start an attempt from here** sends `runs.recover` for that checkpoint with an idempotency
-  key kept for that intent. When the answer is lost (the connection failed, or the daemon is
-  still creating the attempt), pressing it again sends the same key and can only return the
-  same attempt. A refusal ends the intent; the next press is a new one. A receipt that reserved
-  the attempt without creating it changes the button to **Finish the attempt**, which reconciles
-  that receipt (`admissions.reconcile`) rather than starting another. A started attempt is
-  selected in the run tree.
+- **Start an attempt from here** sends `runs.recover` for that checkpoint. The intent (the
+  verified connection and principal, the source run, the checkpoint, its idempotency key, and
+  a reserved receipt once there is one) is kept by the app's main process in an encrypted
+  journal (`recovery-intents.enc`, OS keychain, never plain text), not in the window. Leaving
+  the run, selecting a step, reloading or restarting the app finds the same intent, shown as
+  **Unresolved recovery** with the only actions it allows, and no other checkpoint of that run
+  can be started meanwhile:
+  - **Ask again** after a lost or in-progress answer sends the same key, which can only return
+    the same attempt.
+  - **Finish the attempt** after a receipt that reserved the attempt without confirming it was
+    created reconciles that receipt (`admissions.reconcile` with `kind: "run.recover"`) and
+    never starts another.
+  - **Abandon this recovery**, after a confirmation, forgets the intent. It cancels nothing on
+    the daemon; the next start is new work with a new key.
+
+  The intent ends on its own only when the daemon accepts the attempt for that source run, or
+  refuses the start. An answer that arrives after the connection changed settles its own
+  intent but is not shown on the new connection. A started attempt is selected in the run tree.
 - A checkpoint attempt's summary names the run and step it started after, and a reused step
   says which run it came from. A step with a recorded review says what was decided.
 
