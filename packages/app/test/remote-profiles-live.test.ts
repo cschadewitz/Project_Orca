@@ -4,9 +4,11 @@
  * token file. Runs when `ORCA_SSH_TUNNEL_TEST` names an sshd (see remote-access.test.ts); the
  * ssh-tunnel workflow sets one up on Linux and Windows runners.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openAuthDirectory, startDaemon, type DaemonHandle } from "@orca/daemon";
@@ -42,6 +44,8 @@ describe.skipIf(!live)("profile connection over a real ssh", () => {
       orcaVersion: "ssh-live",
       capabilities: ["runs.read", "runs.subscribe"],
       source: { subscribe: () => () => {}, eventsRange: async () => [] },
+      // As `orca serve` mounts them: credential-authenticated discovery is the sign-in proof.
+      operatorSources: { events: {} as never },
       auth: {
         mode: "token",
         credentials: auth.credentials,
@@ -158,5 +162,108 @@ describe.skipIf(!live)("profile connection over a real ssh", () => {
     // Leaving the profile closes its tunnel.
     await workspace.close();
     await vi.waitFor(() => expect(states.at(-1)?.phase).toBe("closed"));
+  }, 120_000);
+
+  it("signs in on the first connect with the server's own CLI, renews, re-issues, and revokes on removal (#875)", async () => {
+    // No spaces or `~` in server paths: the long form of the temp directory.
+    const dir = mkdtempSync(join(realpathSync.native(tmpdir()), "orca-ssh-signin-"));
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+    const server = join(dir, "server");
+    mkdirSync(server);
+    const config = join(server, "orca.config.yaml");
+    writeFileSync(config, "{}\n");
+    // The server's managed CLI wrapper: this checkout's CLI under this node.
+    const main = resolve(fileURLToPath(import.meta.url), "../../../cli/dist/main.js");
+    const command = process.platform === "win32" ? join(dir, "orca.cmd") : join(dir, "orca");
+    writeFileSync(
+      command,
+      process.platform === "win32"
+        ? `@"${process.execPath}" "${main}" %*\r\n`
+        : `#!/bin/sh\nexec "${process.execPath}" "${main}" "$@"\n`,
+    );
+    chmodSync(command, 0o755);
+    const auth = openAuthDirectory(join(server, "auth"));
+    const daemon: DaemonHandle = await startDaemon({
+      orcaVersion: "ssh-live",
+      // The daemon names its workspace: what a new credential is confirmed against.
+      workspaceId: randomUUID(),
+      capabilities: ["runs.read", "runs.subscribe"],
+      source: { subscribe: () => () => {}, eventsRange: async () => [] },
+      // As `orca serve` mounts them: credential-authenticated discovery is the sign-in proof.
+      operatorSources: { events: {} as never },
+      auth: {
+        mode: "token",
+        credentials: auth.credentials,
+        ownership: auth.ownership,
+        resolver: {
+          run: async () => undefined,
+          inputRun: async () => undefined,
+          artifactRun: async () => undefined,
+          claimRun: async () => undefined,
+          workflowExists: () => false,
+        },
+      },
+    });
+    cleanup.push(() => daemon.close());
+    const remotePort = Number(new URL(daemon.url).port);
+
+    let now = Date.now();
+    const profiles = new RemoteProfiles({
+      dir: join(dir, "app"),
+      cipher,
+      hostname: "live-desktop",
+      // Long enough to issue, short enough to come due in the test.
+      credentialPolicy: { ttlMs: 60 * 60_000, renewBeforeMs: 30 * 60_000, checkEveryMs: 100 },
+      now: () => now,
+    });
+    cleanup.push(() => profiles.close());
+    const view = profiles.save({
+      name: "Live",
+      destination: live!.destination,
+      ...(live!.sshPort ? { sshPort: live!.sshPort } : {}),
+      identityFile: live!.identity,
+      remotePort,
+      // Server paths are written with `/`, on Windows too: one meaning in every shell.
+      serverCommand: command.replace(/\\/g, "/"),
+      serverConfig: config.replace(/\\/g, "/"),
+    });
+    const liveCredentials = () => auth.credentials.list().filter((c) => !c.revokedAt);
+
+    // First connect: issued on the server, stored in the slot, accepted by the daemon.
+    const lease = await profiles.open(view.id);
+    const issued = liveCredentials();
+    expect(issued).toMatchObject([{ label: `orca-app-${view.id}` }]);
+    expect(issued[0]!.principal).toMatch(/^desktop-live-desktop-[a-z2-7]{16}$/);
+    const client = new DaemonClient(lease.url, lease.transport.fetch, {
+      auth: lease.auth,
+      requireAuthentication: true,
+    });
+    expect((await client.hello("ssh-live")).orcaVersion).toBe("ssh-live");
+    const first = lease.auth.read();
+
+    // Due while connected: a new credential on the server, and the lease moves to it.
+    now += 45 * 60_000;
+    await vi.waitFor(() => expect(lease.auth.read()).not.toBe(first), { timeout: 30_000 });
+    // Switched in once the daemon accepted it; the old one is revoked right after.
+    await vi.waitFor(() => expect(liveCredentials()).toHaveLength(1), { timeout: 30_000 });
+    expect(liveCredentials()[0]!.id).not.toBe(issued[0]!.id);
+    expect((await client.hello("after-renewal")).orcaVersion).toBe("ssh-live");
+    // Back to real time: a credential issued from here on is not due, so no renewal keeps
+    // running in the background behind the steps below.
+    now = Date.now();
+    await lease.release();
+
+    // Revoked on the server: the next connect issues a new one, once.
+    await auth.credentials.revoke(liveCredentials()[0]!.id);
+    const again = await profiles.open(view.id);
+    expect(liveCredentials()).toHaveLength(1);
+    await again.release();
+
+    // Removing the profile revokes it: `orca auth list` shows nothing live.
+    // The nonsecret record, for a failure to say what was left to revoke and where.
+    const before = readFileSync(join(dir, "app", "credentials", `${view.id}.json`), "utf8");
+    const outcome = await profiles.remove(view.id);
+    expect(outcome, `record before removal: ${before}; live: ${JSON.stringify(liveCredentials())}`).toBe("revoked");
+    expect(liveCredentials()).toEqual([]);
   }, 120_000);
 });

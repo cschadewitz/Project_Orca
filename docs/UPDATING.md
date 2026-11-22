@@ -160,6 +160,56 @@ Rings never move backwards, and halting is not a rollback. The client disallows 
 so anyone who already took a bad build keeps it until a newer fixed version ships; halting
 only stops more people from getting it. Keep early rollouts small for that reason.
 
+### Server bundle channel
+
+From the 0.8 line the same feed also serves the signed prebuilt server bundle
+([Prebuilt server bundle](#prebuilt-server-bundle)), with the same rings, rollouts, tokens and
+pause switch (#877). A server asks for `server/latest-linux-x64.yml` with its token and gets
+its ring's server version: flat `key: value` lines naming the bundle, its manifest and the
+manifest's signature with their SHA-256 digests and sizes
+([`tools/deploy/feed-server.js`](../tools/deploy/feed-server.js)). The three files are served as
+`server/orca-server-X.Y.Z-linux-x64.tar.xz` and so on, with Range and HEAD like the
+installers. The feed is transport only: the server still verifies the manifest's keyless
+signature against the pinned workflow identity before it uses anything.
+
+- **Tokens.** A server can use any token, but give it one limited to the server channel:
+  `node tools/deploy/feed-token.js RING --server` mints a `FEED_TOKENS` entry
+  `{"ring": "…", "channel": "server"}`, which the Worker lets read `server/` only.
+- **Publishing.** **Desktop feed (publish signed)** puts a release's server bundle into the
+  feed first, offered to the internal ring's servers, and only then its Windows installers.
+  It downloads the bundle by the release's single `orca-server-run` record and verifies it
+  exactly as a server does (`orca-release.py fetch-bundle`), and checks that the signed
+  manifest names the release tag's commit. A release candidate's bundle is attached shortly
+  after the candidate is published; until then the run fails with "retry later" and its
+  desktop job does not run. Versions before 0.8.0 have no bundle and skip this step.
+- **Servers first.** `rings.json` holds the server rings beside the desktop ones, so one
+  conditional write moves both. From the 0.8 line, a ring's desktops are never offered a
+  version that ring's servers are not all on: publishing or promoting desktops to `VERSION`
+  in a ring is refused ("offer the server bundle VERSION to all of RING first") unless that
+  ring's **full** server version is `VERSION` or newer. A server rollout is not enough, because
+  servers outside it stay on the full version. So promote with **Desktop feed (promote)**,
+  `channel` `server`, first (a rollout, then 100%), then `channel` `desktop`. Servers may run
+  ahead of desktops (the daemon accepts the previous protocol major for one release), and a
+  halt (percent 0) is always allowed on either channel. Server rings never move backwards and
+  `stable` never takes a prerelease, as for desktops.
+- **What "servers first" proves.** It is a rule about the ring pointers: the whole ring's
+  servers are *offered* the version before its desktops are. It does not prove that any server
+  has downloaded, installed or is running it; a server applies an offer on its own schedule,
+  and only the server updater (#878, #879) can establish what a host runs. Do not read a
+  promotion, or a green watchdog, as evidence of installed servers.
+- **Pause.** `ORCA_FEED_PAUSE` stops server publication and server promotions (except a halt)
+  exactly as it does for desktops.
+- **Watchdog.** The feed watchdog also checks each ring's server channel with the same
+  canaries: a request without a token must get 401; the channel file must parse strictly and
+  name a published release (never a prerelease in `stable`); and each of the three files must
+  be served with the listed size and SHA-256, equal to that release's asset. It also holds
+  both channels to the live ring state (below), and fails when a ring's desktops are
+  offered a server-era version its servers are not offered.
+
+The Worker needs no new binding or secret for this. Redeploy it from main (whatever pins its
+source) before the first server publication: an older Worker ignores `rings.json`'s server
+rings and answers 404 for `server/`, and reads a `"channel": "server"` token like any other.
+
 ### Pulling a bad build
 
 Rings never move backwards, so a bad build is never "rolled back": it is contained, then
@@ -215,9 +265,21 @@ a ring is offered a version with no published GitHub release, `stable` a prerele
 ring a prerelease other than `-rc.N`; the channel file's `files[]` entry (what the installed
 updater reads) does not name exactly that architecture's installer or disagrees with the
 legacy `path` and `sha512`; or the installer the feed serves does not have that entry's size
-and sha512, or differs from the published release asset. It holds no bucket credential and
-cannot read `rings.json`, so it checks what each ring is offered, not what it should be
-offered; compare its summary with the last promotion.
+and sha512, or differs from the published release asset.
+
+It also holds every ring to the feed's live `rings.json`. A separate first job, run only from
+main in the `feed-reader` environment, reads that one file with a read-only key
+(`feed-r2.sh read-rings`) and hands it to the canary job as a job output. It never sees a
+canary token or the publishing key, and the canary job never sees any bucket key. Against
+that state, a ring's x64 or server channel answering 404 although the ring has an offer
+fails, as does an offer of anything but the ring's full or rollout version, or any offer to a
+ring with none. Whether the feed is switched on comes from the repository variable
+`ORCA_FEED_BUCKET`, not from what the feed answers. While it is set, a missing `rings.json`
+or a failed read fails the run, because an empty ring could no longer be told from a broken
+one; a `rings.json` that exists with empty rings is valid. Before it is set, nothing is read
+and only servers-first is checked. A promotion that lands between the read and the checks can
+make the watchdog fail once; rerun it.
+Like the rest of the watchdog, this checks what the feed offers, never what hosts run.
 
 To turn it on:
 
@@ -229,7 +291,12 @@ To turn it on:
 3. Store the tokens as the **environment** secret `ORCA_FEED_CANARY_TOKENS` in
    `feed-canary` (not a repository secret), a JSON object such as
    `{"internal": "…", "preview": "…", "stable": "…"}`.
-4. Set the repository variable `ORCA_FEED_URL` to the feed's https origin. Until it is set
+4. Create a GitHub environment named `feed-reader` with deployment branches limited to
+   `main`, and store an R2 API token with **Object Read** only, restricted to the feed bucket,
+   as its environment secrets `ORCA_FEED_READER_ACCESS_KEY_ID` and
+   `ORCA_FEED_READER_SECRET_ACCESS_KEY`. Never reuse the publishing key from `desktop-feed`.
+   Without it, the watchdog fails once `ORCA_FEED_BUCKET` is set.
+5. Set the repository variable `ORCA_FEED_URL` to the feed's https origin. Until it is set
    the workflow is skipped. It runs only from main, so a dispatch from another branch never
    reads the tokens.
 
@@ -320,7 +387,8 @@ One-time setup (Casey):
    set the bucket and your custom domain, and run `npx wrangler deploy` in that directory.
    Deploy the Worker from current main before the first feed run, and again whenever
    `worker.js` changes: an older deployment may serve architectures the feed does not.
-3. Mint a token per person with `node tools/deploy/feed-token.js RING`. Give each person their
+3. Mint a token per person with `node tools/deploy/feed-token.js RING` (add `--server` for a
+   server, so it reads only the server channel). Give each person their
    token; merge the printed entries into one JSON object and store it with
    `npx wrangler secret put FEED_TOKENS`. Revoke a person by removing their entry.
 4. Create the `desktop-feed` environment (Settings → Environments) and under deployment

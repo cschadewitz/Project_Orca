@@ -23,7 +23,12 @@
 import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import type { ManagedDeployment } from "@orca/protocol";
-import { TunnelRefusal, type RemoteCommand, type TunnelRefusalCode } from "@orca/protocol/remote-access";
+import {
+  RemoteCommandRefused,
+  TunnelRefusal,
+  type RemoteCommand,
+  type TunnelRefusalCode,
+} from "@orca/protocol/remote-access";
 import {
   classifyServerUpdate,
   samePaths,
@@ -205,6 +210,12 @@ export class ServerUpdater {
     try {
       started = this.deps.run(serverUpdateCommand(look.approved, look.targetVersion, look.serverVersion!), onLine);
     } catch (error) {
+      // Refused before ssh started: nothing ran on the server.
+      if (error instanceof RemoteCommandRefused)
+        return {
+          status: "unavailable",
+          reason: "The updater's paths have characters the app does not pass to the server's shell.",
+        };
       if (!(error instanceof TunnelRefusal)) throw error;
       return { status: "unreachable", refusal: error.code, message: error.message };
     }

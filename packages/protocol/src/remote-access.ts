@@ -36,6 +36,7 @@ import {
 import { createServer, type Server, type Socket } from "node:net";
 import { Duplex, type Readable, type Writable } from "node:stream";
 import { dirname, join } from "node:path";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
 /** The daemon's default port (`orca serve`). */
@@ -48,6 +49,18 @@ const HOST = "(?:[A-Za-z0-9][A-Za-z0-9._-]{0,252}|\\[[0-9A-Fa-f:.]+\\])";
 const DESTINATION = new RegExp(`^(?:${USER}@)?${HOST}$`);
 /** An absolute key path, as ssh's `-i` takes it. No `~` (ORCA does not expand it), no quotes or newlines. */
 const KEY_PATH = /^(?:\/|[A-Za-z]:[\\/])[^"\r\n\0]{1,1023}$/;
+
+/**
+ * One word of a command ORCA runs on the server. OpenSSH joins the words with spaces into one
+ * command text for the remote shell, so each is restricted to characters that mean the same
+ * literal text to sh, cmd and PowerShell alike: no quoting, escaping or expansion applies, and
+ * nothing can be injected. No backslash (an escape to sh): Windows paths use `/`.
+ */
+const REMOTE_WORD = /^[A-Za-z0-9._:/-]{1,1024}$/;
+/** An absolute path on the server, as one remote word (`C:/…` on Windows). */
+const SERVER_PATH = /^(?:\/|[A-Za-z]:\/)[A-Za-z0-9._/-]{0,1023}$/;
+/** The server's ORCA CLI: a command name on its PATH, or an absolute path such as a managed wrapper. */
+const SERVER_COMMAND = /^(?:[A-Za-z0-9._-]{1,64}|(?:\/|[A-Za-z]:\/)[A-Za-z0-9._/-]{0,1023})$/;
 
 const Port = z.number().int().min(1).max(65535);
 /**
@@ -71,6 +84,16 @@ export const ConnectionProfileSchema = z
     jump: z.object(HopShape).strict().optional(),
     /** The daemon's port on the remote loopback. */
     remotePort: Port.default(DEFAULT_REMOTE_DAEMON_PORT),
+    /**
+     * The server's ORCA CLI, which issues and renews this profile's credential (#875): a
+     * command on the server's PATH or an absolute path, such as a managed install's wrapper.
+     * Default `orca`.
+     */
+    serverCommand: z.string().regex(SERVER_COMMAND, "Enter a command name or a full path without spaces").optional(),
+    /** The daemon's workspace config on the server, passed as `--config`. Absent: the CLI's own default. */
+    serverConfig: z.string().regex(SERVER_PATH, "Enter the config file's full path, without spaces").optional(),
+    /** Observe only: the profile's credential is issued with the read-only `viewer` preset. */
+    readOnly: z.boolean().optional(),
   })
   .strict();
 export type ConnectionProfile = z.infer<typeof ConnectionProfileSchema>;
@@ -198,6 +221,17 @@ export interface SshTunnelOptions {
   /** Restart backoff after the tunnel was open. Default 1 s doubling to 30 s. */
   backoff?: { initialMs: number; maxMs: number };
   onState?: (state: TunnelState) => void;
+  /**
+   * The keys (`tunnelKeyIdentity`) the tunnel must be sealed with. Pins that vouch for any
+   * other keys refuse `host-key-changed` before a stream or command is carried.
+   */
+  expectKeys?: string;
+  /**
+   * Never trust a key on first use: every hop must already be pinned, or the tunnel refuses
+   * `host-key-missing` before that hop's ssh starts. For administrative connections, such as
+   * revoking a credential, that must reach the server the credential came from or nothing.
+   */
+  pinnedOnly?: boolean;
 }
 
 /** A failure that a restart cannot fix: it needs the person. */
@@ -209,6 +243,18 @@ const PERMANENT: ReadonlySet<TunnelRefusalCode> = new Set([
   "auth-failed",
 ]);
 const STDERR_TAIL = 16 * 1024;
+/** The most a remote command may print: ORCA's CLI prints one small JSON record. */
+const REMOTE_OUTPUT_LIMIT = 64 * 1024;
+/** How long a command's output may keep flowing after ssh exited. */
+const REMOTE_DRAIN_MS = 2_000;
+
+/** What a command run on the server returned (see `SshTunnel.run`). */
+export interface RemoteResult {
+  code: number;
+  stdout: string;
+  /** The command's own error lines, without ssh's: to classify, never to show or log. */
+  serverLines: string[];
+}
 
 /**
  * Where a pin file stands. `none`: never enrolled, so the next connect may pin whatever the
@@ -230,6 +276,38 @@ export function pinState(knownHostsFile: string): PinState {
   // A known_hosts line: `<host pattern> <key type> <base64 key>`.
   const keyLine = /^[^#\s]\S*\s+\S+\s+[A-Za-z0-9+/]+=*(\s|$)/m;
   return keyLine.test(text) ? "pinned" : "broken";
+}
+
+/**
+ * The key a pin file vouches for, as `<type> <base64>` (one per line, sorted), or `undefined`
+ * when the file holds none. What a credential is bound to: a reset pin is another server.
+ */
+export function pinnedKeyIdentity(knownHostsFile: string): string | undefined {
+  let text: string;
+  try {
+    text = readFileSync(knownHostsFile, "utf8");
+  } catch {
+    return undefined;
+  }
+  return keyIdentityOf(text);
+}
+
+/**
+ * The keys a profile's pins vouch for, server and jump host, as one string: what a
+ * credential is bound to, and what `SshTunnel.pinnedKeys` reports for the pins it sealed.
+ */
+export function tunnelKeyIdentity(knownHostsFile: string, jump: boolean): string {
+  return JSON.stringify([
+    pinnedKeyIdentity(knownHostsFile) ?? null,
+    jump ? (pinnedKeyIdentity(`${knownHostsFile}.jump`) ?? null) : null,
+  ]);
+}
+
+function keyIdentityOf(text: string): string | undefined {
+  const keys = [...text.matchAll(/^[^#\s]\S*\s+(\S+)\s+([A-Za-z0-9+/]+=*)(?:\s|$)/gm)].map(
+    (match) => `${match[1]} ${match[2]}`,
+  );
+  return keys.length ? [...new Set(keys)].sort().join("\n") : undefined;
 }
 
 /** True only for a usable pin; `broken` is not pinned. */
@@ -268,6 +346,21 @@ export interface HopSpec {
   stdio?: string | undefined;
 }
 
+/** Thrown before ssh starts when a remote command word could be read by a shell. */
+export class RemoteCommandRefused extends Error {
+  override readonly name = "RemoteCommandRefused";
+}
+
+/** The argv for running `command` on the hop's server instead of forwarding (see `hopArgs`). */
+export function commandArgs(hop: HopSpec, command: readonly string[]): string[] {
+  if (!command.length) throw new RemoteCommandRefused("No remote command");
+  for (const word of command)
+    if (!REMOTE_WORD.test(word)) throw new RemoteCommandRefused("A remote command word has unsupported characters");
+  const args = hopArgs({ ...hop, stdio: "-" });
+  const w = args.indexOf("-W");
+  return [...args.slice(0, w), ...args.slice(w + 2), ...command];
+}
+
 /** A profile's ssh processes: the optional persistent jump, and the per-connection daemon hop. */
 export interface TunnelHops {
   jump?: HopSpec | undefined;
@@ -282,7 +375,33 @@ export interface TunnelHops {
  * known-hosts source, so the pin is the only host trust.
  */
 export function hopArgs(hop: HopSpec): string[] {
-  const options = hopOptions(hop, pinnedHostKey(hop.knownHostsFile) ? "yes" : "accept-new", "forward");
+  const pins = sshOptionPath(hop.knownHostsFile);
+  const options = [
+    "BatchMode=yes",
+    "ExitOnForwardFailure=yes",
+    `StrictHostKeyChecking=${pinnedHostKey(hop.knownHostsFile) ? "yes" : "accept-new"}`,
+    `UserKnownHostsFile=${pins}`,
+    `GlobalKnownHostsFile=${pins}`,
+    `HostKeyAlias=${hop.hostKeyAlias}`,
+    "CheckHostIP=no",
+    "UpdateHostKeys=no",
+    "VerifyHostKeyDNS=no",
+    "CanonicalizeHostname=no",
+    "ProxyCommand=none",
+    "ProxyJump=none",
+    "ControlMaster=no",
+    "ControlPath=none",
+    "ForwardAgent=no",
+    "ForwardX11=no",
+    "PermitLocalCommand=no",
+    "ClearAllForwardings=no",
+    "Tunnel=no",
+    "AddKeysToAgent=no",
+    "ConnectTimeout=15",
+    "ServerAliveInterval=15",
+    "ServerAliveCountMax=3",
+    ...(hop.identityFile ? ["IdentitiesOnly=yes"] : []),
+  ];
   return [
     "-F",
     "none",
@@ -298,71 +417,6 @@ export function hopArgs(hop: HopSpec): string[] {
     ...(hop.stdio ? ["-W", hop.stdio] : ["-L", hop.forward ?? ""]),
     "--",
     hop.target,
-  ];
-}
-
-/** POSIX single quotes around one word, for the remote shell ssh hands a command to. */
-export function shellQuote(word: string): string {
-  return `'${word.replace(/'/g, `'\\''`)}'`;
-}
-
-/**
- * The argv for one remote command over a hop (#879): the same isolated options as a tunnel
- * hop, but no forward of any kind, no `-v` (the command's own stderr is what the caller
- * reads), and the host key must already be pinned: a command is never the connection that
- * enrolls a server. ssh joins the command's words into one line for the remote shell, so each
- * is single-quoted here and arrives as exactly that word.
- */
-export function commandArgs(hop: HopSpec, command: readonly string[]): string[] {
-  if (command.length === 0) throw new Error("A remote command needs at least one word");
-  return [
-    "-F",
-    "none",
-    "-T",
-    ...hopOptions(hop, "yes", "none").flatMap((option) => ["-o", option]),
-    ...(hop.identityFile ? ["-i", hop.identityFile.replace(/%/g, "%%")] : []),
-    ...(hop.port ? ["-p", String(hop.port)] : []),
-    "--",
-    hop.target,
-    command.map(shellQuote).join(" "),
-  ];
-}
-
-/**
- * Every option a hop sets. `forward`: the hop's one forward must bind or ssh exits. `none`: a
- * command hop clears every forward, so nothing but the command crosses it.
- */
-function hopOptions(
-  hop: HopSpec,
-  strictHostKeyChecking: "yes" | "accept-new",
-  forwarding: "forward" | "none",
-): string[] {
-  const pins = sshOptionPath(hop.knownHostsFile);
-  return [
-    "BatchMode=yes",
-    forwarding === "forward" ? "ExitOnForwardFailure=yes" : "ClearAllForwardings=yes",
-    `StrictHostKeyChecking=${strictHostKeyChecking}`,
-    `UserKnownHostsFile=${pins}`,
-    `GlobalKnownHostsFile=${pins}`,
-    `HostKeyAlias=${hop.hostKeyAlias}`,
-    "CheckHostIP=no",
-    "UpdateHostKeys=no",
-    "VerifyHostKeyDNS=no",
-    "CanonicalizeHostname=no",
-    "ProxyCommand=none",
-    "ProxyJump=none",
-    "ControlMaster=no",
-    "ControlPath=none",
-    "ForwardAgent=no",
-    "ForwardX11=no",
-    "PermitLocalCommand=no",
-    ...(forwarding === "forward" ? ["ClearAllForwardings=no"] : []),
-    "Tunnel=no",
-    "AddKeysToAgent=no",
-    "ConnectTimeout=15",
-    "ServerAliveInterval=15",
-    "ServerAliveCountMax=3",
-    ...(hop.identityFile ? ["IdentitiesOnly=yes"] : []),
   ];
 }
 
@@ -482,6 +536,10 @@ export class SshTunnel {
   private listener: Server | undefined;
   private readonly accepted = new Set<Socket>();
   private readonly streams = new Set<Stream>();
+  /** Trust no key on first use (`SshTunnelOptions.pinnedOnly`, and every `runOnce`). */
+  private pinnedOnly = false;
+  /** Commands running on the server (`exec`), stopped with the tunnel. */
+  private readonly commands = new Set<ChildProcess>();
   private port: number | undefined;
   private closed = false;
   private restartTimer: NodeJS.Timeout | undefined;
@@ -489,8 +547,14 @@ export class SshTunnel {
   private stateNow: TunnelState = { phase: "starting" };
   private fingerprint: string | undefined;
   private channelRefusedAt = 0;
+  /** The keys of the pins this tunnel sealed (see `pinnedKeys`). */
+  private sealedKeys: string | undefined;
+  /** This tunnel's private copies of its pins, removed when it closes. */
+  private readonly sessionPins: string[] = [];
 
-  constructor(private readonly options: SshTunnelOptions) {}
+  constructor(private readonly options: SshTunnelOptions) {
+    this.pinnedOnly = options.pinnedOnly === true;
+  }
 
   get state(): TunnelState {
     return this.stateNow;
@@ -500,6 +564,15 @@ export class SshTunnel {
   }
   get url(): string | undefined {
     return this.port ? `http://127.0.0.1:${this.port}` : undefined;
+  }
+  /**
+   * The keys (`tunnelKeyIdentity`) every stream and command of this tunnel is verified
+   * against, once its hops are pinned. The tunnel seals its pins then: it copies them into
+   * files of its own and checks every later ssh against those copies, so a pin file changed
+   * while the tunnel lives changes nothing it carries. `undefined` until sealed.
+   */
+  get pinnedKeys(): string | undefined {
+    return this.sealedKeys;
   }
   /** The host key the server presented on the last successful connect, `SHA256:…`. */
   get hostKeyFingerprint(): string | undefined {
@@ -526,12 +599,11 @@ export class SshTunnel {
     if (this.listener) throw new Error("Tunnel already open");
     this.setState({ phase: "starting" });
     try {
-      const { profile, knownHostsFile } = this.options;
-      mkdirSync(dirname(knownHostsFile), { recursive: true });
       this.port = await this.listen();
-      this.hops = tunnelHops(profile, knownHostsFile, profile.jump ? await ephemeralLoopbackPort() : undefined);
-      if (this.hops.jump) await this.launchJump();
+      await this.prepare();
       await this.probe();
+      // Pinned on first use by the probe: sealed now, before anything is carried.
+      if (this.pinsComplete()) this.seal();
       this.attempt = 0;
       this.setState({ phase: "open", localPort: this.port });
     } catch (error) {
@@ -541,6 +613,149 @@ export class SshTunnel {
       throw error instanceof TunnelRefusal ? error : new TunnelRefusal(refusal);
     }
     return this.url!;
+  }
+
+  /**
+   * Run one command on the profile's server (behind its jump host, if any) and collect its
+   * output: ORCA's own CLI there, for credential setup (#875). Opens nothing that outlives
+   * the call. A command never trusts a key on first use: the server (and its jump host) must
+   * already be pinned, from an earlier connect, or it refuses `host-key-missing` before ssh
+   * starts. The command's words must pass `REMOTE_WORD`. ssh's own failures reject with a
+   * `TunnelRefusal`; a command that ran resolves with its exit code, standard output, and
+   * the server's error lines (to classify, never to show or log).
+   */
+  static run(options: SshTunnelOptions, command: readonly string[], timeoutMs = 60_000): Promise<RemoteResult> {
+    return new SshTunnel({ ...options, pinnedOnly: true }).runOnce(command, timeoutMs);
+  }
+
+  /**
+   * `run` on a tunnel that was never opened: it is closed when the command ends. Like `run`,
+   * every hop must already be pinned, the jump host's too.
+   */
+  async runOnce(command: readonly string[], timeoutMs = 60_000): Promise<RemoteResult> {
+    if (this.listener || this.hops) throw new Error("Tunnel already in use");
+    this.pinnedOnly = true;
+    try {
+      await this.prepare();
+      return await this.exec(command, timeoutMs);
+    } finally {
+      await this.close();
+    }
+  }
+
+  /** Run a command on the server of an open tunnel (see `run`). */
+  async exec(command: readonly string[], timeoutMs = 60_000): Promise<RemoteResult> {
+    if (this.closed || !this.hops) throw new TunnelRefusal("closed");
+    if (!this.jumpUp()) throw new TunnelRefusal("unreachable");
+    const hop = this.hops.daemon;
+    // Commands administer the server's credentials: only ever on a server, and behind a jump
+    // host, that is already pinned. The pin is read once, into the arguments ssh gets.
+    // Only through sealed pins: every hop pinned, and checked against the tunnel's own copies.
+    if (this.sealedKeys === undefined) throw new TunnelRefusal("host-key-missing");
+    const args = commandArgs(hop, command);
+    if (!args.includes("StrictHostKeyChecking=yes")) throw new TunnelRefusal("host-key-missing");
+    let child: ChildProcess;
+    try {
+      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args);
+    } catch {
+      throw new TunnelRefusal("ssh-missing");
+    }
+    this.commands.add(child);
+    child.once("exit", () => this.commands.delete(child));
+    return new Promise<RemoteResult>((resolve, reject) => {
+      let authenticated = false;
+      let failed = false;
+      let tail = "";
+      const serverLines: string[] = [];
+      const stdout: Buffer[] = [];
+      let size = 0;
+      const timer = setTimeout(() => {
+        failed = true;
+        reject(new TunnelRefusal("timeout"));
+        child.kill();
+      }, timeoutMs);
+      child.stdout?.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size <= REMOTE_OUTPUT_LIMIT) stdout.push(chunk);
+      });
+      watchLines(child, (line) => {
+        tail = (tail + line + "\n").slice(-STDERR_TAIL);
+        if (authenticated) {
+          // After authentication, what is not ssh's own debug output is the command's.
+          if (!/^debug\d:/.test(line) && serverLines.length < 64) serverLines.push(line.slice(0, 512));
+          return;
+        }
+        if (/^debug1: Entering interactive session/.test(line)) authenticated = true;
+      });
+      child.once("error", (error: NodeJS.ErrnoException) => {
+        if (failed) return;
+        failed = true;
+        clearTimeout(timer);
+        reject(new TunnelRefusal(error.code === "ENOENT" ? "ssh-missing" : "ssh-failed"));
+      });
+      // A result is read only once ssh has exited and its output is drained (`close`), and
+      // drainage is bounded: output that never ends is a failure, not a partial result.
+      let exitCode: number | null = null;
+      let drain: ReturnType<typeof setTimeout> | undefined;
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        exitCode = code;
+        if (failed) return;
+        drain = setTimeout(() => {
+          failed = true;
+          reject(new TunnelRefusal("ssh-failed"));
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+        }, REMOTE_DRAIN_MS);
+      });
+      child.once("close", () => {
+        clearTimeout(timer);
+        if (drain) clearTimeout(drain);
+        if (failed) return;
+        failed = true;
+        if (!authenticated) {
+          reject(new TunnelRefusal(classifySshFailure(tail)));
+          return;
+        }
+        if (size > REMOTE_OUTPUT_LIMIT) {
+          reject(new TunnelRefusal("ssh-failed"));
+          return;
+        }
+        resolve({ code: exitCode ?? 255, stdout: Buffer.concat(stdout).toString("utf8"), serverLines });
+      });
+      child.stdin?.end();
+    });
+  }
+
+  /**
+   * Run one command on the server of an open tunnel and follow it line by line (#879): the
+   * server's updater, whose progress the person watches. Like `exec`, only through the pins
+   * this tunnel sealed, with the same `commandArgs` (no forward, words that mean themselves
+   * to the remote shell), and stopped with the tunnel.
+   *
+   * Lines the command writes go to `onLine`; ssh's own lines never do (see `runRemote`).
+   * Throws a `TunnelRefusal` when the tunnel is not open or not sealed.
+   */
+  execStreaming(
+    command: readonly string[],
+    onLine: (stream: "stdout" | "stderr", line: string) => void,
+  ): RemoteCommand {
+    if (this.closed || !this.hops) throw new TunnelRefusal("closed");
+    if (this.stateNow.phase === "failed") throw new TunnelRefusal(this.stateNow.refusal);
+    if (!this.jumpUp()) throw new TunnelRefusal("unreachable");
+    if (this.sealedKeys === undefined) throw new TunnelRefusal("host-key-missing");
+    const args = commandArgs(this.hops.daemon, command);
+    if (!args.includes("StrictHostKeyChecking=yes")) throw new TunnelRefusal("host-key-missing");
+    let child: ChildProcess;
+    try {
+      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args);
+    } catch {
+      throw new TunnelRefusal("ssh-missing");
+    }
+    this.commands.add(child);
+    child.once("exit", () => this.commands.delete(child));
+    child.stdin?.end();
+    return runRemote(child, onLine);
   }
 
   /**
@@ -568,36 +783,64 @@ export class SshTunnel {
     return socket;
   }
 
-  /**
-   * Run one command on the profile's server over its own ssh, beside the daemon streams
-   * (#879). The same pinned host key and identity as every stream, behind the same jump host,
-   * with no forward of any kind; the server must already be pinned, so a command is never
-   * what enrolls a host. Each word reaches the remote shell single-quoted, as itself.
-   *
-   * Lines of the command's stdout and stderr go to `onLine`; ssh's own failures are not
-   * lines, they end the command with a `refusal`. Throws a `TunnelRefusal` when the tunnel is
-   * not open or its pin is not on file.
-   */
-  exec(command: readonly string[], onLine: (stream: "stdout" | "stderr", line: string) => void): RemoteCommand {
-    if (this.closed || !this.hops) throw new TunnelRefusal("closed");
-    if (this.stateNow.phase === "failed") throw new TunnelRefusal(this.stateNow.refusal);
-    if (!this.jumpUp()) throw new TunnelRefusal("unreachable");
-    const hop = this.hops.daemon;
-    if (pinState(hop.knownHostsFile) !== "pinned") throw new TunnelRefusal("host-key-missing");
-    let child: ChildProcess;
-    try {
-      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", commandArgs(hop, command));
-    } catch {
-      throw new TunnelRefusal("ssh-missing");
-    }
-    return runRemote(child, onLine);
-  }
-
   async close(): Promise<void> {
     if (this.closed && !this.listener && !this.jump && this.streams.size === 0) return;
     this.closed = true;
     await this.shutdown();
     this.setState({ phase: "closed" });
+  }
+
+  /** Work out the hops and start the jump host, if any: what every stream and command needs. */
+  private async prepare(): Promise<void> {
+    if (this.closed) throw new TunnelRefusal("closed");
+    const { profile, knownHostsFile } = this.options;
+    mkdirSync(dirname(knownHostsFile), { recursive: true });
+    this.hops = tunnelHops(profile, knownHostsFile, profile.jump ? await ephemeralLoopbackPort() : undefined);
+    // Already pinned: sealed before any ssh starts, so even the first one checks the copies.
+    if (this.pinsComplete()) this.seal();
+    else if (this.options.expectKeys !== undefined) throw new TunnelRefusal("host-key-missing");
+    if (this.hops.jump) await this.launchJump();
+  }
+
+  private pinsComplete(): boolean {
+    const hops = this.hops!;
+    return (
+      pinState(hops.daemon.knownHostsFile) === "pinned" &&
+      (!hops.jump || pinState(hops.jump.knownHostsFile) === "pinned")
+    );
+  }
+
+  /**
+   * Copy the pins into this tunnel's own files and point every hop at them. Each pin is read
+   * once, and the keys reported are the keys of exactly what was copied.
+   */
+  private seal(): void {
+    if (this.sealedKeys !== undefined) return;
+    const hops = this.hops!;
+    const copy = (hop: HopSpec): [HopSpec, string | undefined] => {
+      let text: string;
+      try {
+        text = readFileSync(hop.knownHostsFile, "utf8");
+      } catch {
+        throw new TunnelRefusal("host-key-missing");
+      }
+      const session = `${hop.knownHostsFile}.session-${randomBytes(8).toString("hex")}`;
+      try {
+        writeFileSync(session, text, { mode: 0o600, flag: "wx" });
+      } catch {
+        throw new TunnelRefusal("pin-write-failed");
+      }
+      this.sessionPins.push(session);
+      return [{ ...hop, knownHostsFile: session }, keyIdentityOf(text)];
+    };
+    const [daemon, daemonKeys] = copy(hops.daemon);
+    const [jump, jumpKeys] = hops.jump ? copy(hops.jump) : [undefined, undefined];
+    const keys = JSON.stringify([daemonKeys ?? null, hops.jump ? (jumpKeys ?? null) : null]);
+    if (!daemonKeys || (hops.jump && !jumpKeys)) throw new TunnelRefusal("host-key-missing");
+    if (this.options.expectKeys !== undefined && keys !== this.options.expectKeys)
+      throw new TunnelRefusal("host-key-changed");
+    this.hops = { daemon, ...(jump ? { jump } : {}) };
+    this.sealedKeys = keys;
   }
 
   private async shutdown(): Promise<void> {
@@ -614,11 +857,15 @@ export class SshTunnel {
     this.accepted.clear();
     const listener = this.listener;
     this.listener = undefined;
+    const commands = [...this.commands];
+    this.commands.clear();
     await Promise.all([
       ...streams.map((stream) => stop(stream.child)),
+      ...commands.map(stop),
       ...(jump ? jump.children.map(stop) : []),
       listener ? new Promise<void>((resolve) => listener.close(() => resolve())) : undefined,
     ]);
+    for (const file of this.sessionPins.splice(0)) rmSync(file, { force: true });
   }
 
   private setState(state: TunnelState): void {
@@ -628,6 +875,8 @@ export class SshTunnel {
 
   /** Record a pin's enrollment; a failure to write it is a refusal, never a throw out of a handler. */
   private enroll(knownHostsFile: string): void {
+    // A sealed tunnel checks its own copies, which are pinned by construction.
+    if (this.sealedKeys !== undefined) return;
     try {
       (this.options.markEnrolled ?? markPinEnrolled)(knownHostsFile);
     } catch {
@@ -788,7 +1037,8 @@ export class SshTunnel {
     const generation: Generation = { children: [], ready: false, lost: false };
     this.jump = generation;
     try {
-      if (pinState(hop.knownHostsFile) === "broken") throw new TunnelRefusal("host-key-missing");
+      const state = pinState(hop.knownHostsFile);
+      if (state === "broken" || (this.pinnedOnly && state !== "pinned")) throw new TunnelRefusal("host-key-missing");
       await this.startJump(generation, hop);
       if (generation.lost || this.jump !== generation) throw new TunnelRefusal("ssh-failed");
       this.enroll(hop.knownHostsFile);
@@ -803,8 +1053,13 @@ export class SshTunnel {
   private startJump(generation: Generation, hop: HopSpec): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let child: ChildProcess;
+      const args = hopArgs(hop);
+      if (this.pinnedOnly && !args.includes("StrictHostKeyChecking=yes")) {
+        reject(new TunnelRefusal("host-key-missing"));
+        return;
+      }
       try {
-        child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", hopArgs(hop));
+        child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args);
       } catch {
         reject(new TunnelRefusal("ssh-missing"));
         return;
@@ -883,14 +1138,11 @@ export class SshTunnel {
   }
 }
 
-/** stderr lines held back before a command shows it runs; more is ssh noise or a flood. */
-const HELD_LINES = 200;
-
 /** How a remote command ended. */
 export type RemoteCommandExit =
   | { kind: "exited"; code: number }
   | { kind: "signalled"; signal: string }
-  /** ssh could not run it (exit 255 or no ssh): the command's own outcome is unknown. */
+  /** ssh failed (no ssh, refused, or lost the session): whether the command ran is not known. */
   | { kind: "refused"; refusal: TunnelRefusalCode };
 
 /** One remote command in flight. */
@@ -900,37 +1152,37 @@ export interface RemoteCommand {
   kill(): void;
 }
 
+/** ssh's own lines once a session is up: its debug output, and its closing transfer summary. */
+const SSH_OWN_LINE = /^(?:debug\d:|Transferred: sent |Bytes per second: sent )/;
+
 /**
- * Exit 255 is ssh's own failure (connect, host key, auth); the remote command's code
- * otherwise. ssh's failure lines are classified, never passed on: they can carry user names,
- * paths and banners. A command that itself exits 255 is read as an ssh failure, which only
- * makes the caller report a connection problem instead of the command's: the safe side.
+ * Follow a command started with `commandArgs` (#879). ssh runs verbose, and until it logs
+ * "Entering interactive session" every stderr line is ssh's own: classified, never passed on,
+ * since it can carry user names, paths and banners. After that, ssh's own lines are still
+ * dropped and the rest are the command's.
  *
- * ssh and the command share one stderr, so stderr lines are held until the command has shown
- * it runs (its first stdout line) or ssh exits with anything but 255, and dropped on 255.
+ * ssh that never got that far refused, and is classified from its lines. Exit 255 after it is
+ * ssh losing the session (or a command that itself exits 255): `ssh-failed`, which a caller
+ * reads as "not known", the safe side. Any other code is the command's.
  */
 export function runRemote(
   child: ChildProcess,
   onLine: (stream: "stdout" | "stderr", line: string) => void,
 ): RemoteCommand {
-  let stderrTail = "";
-  let held: string[] | undefined = [];
-  const release = () => {
-    const lines = held ?? [];
-    held = undefined;
-    for (const line of lines) onLine("stderr", line);
-  };
-  const emit = (stream: "stdout" | "stderr", line: string) => {
-    if (stream === "stdout") {
-      release();
-      onLine(stream, line);
-    } else if (held) {
-      if (held.length < HELD_LINES) held.push(line);
-    } else onLine(stream, line);
-  };
+  let sshTail = "";
+  let authenticated = false;
   const lines = (stream: "stdout" | "stderr") => {
     let buffer = "";
     const source = stream === "stdout" ? child.stdout : child.stderr;
+    const emit = (line: string) => {
+      if (stream === "stdout") return onLine(stream, line);
+      if (!authenticated) {
+        sshTail = (sshTail + line + "\n").slice(-STDERR_TAIL);
+        if (/^debug1: Entering interactive session/.test(line)) authenticated = true;
+        return;
+      }
+      if (!SSH_OWN_LINE.test(line)) onLine(stream, line);
+    };
     source?.setEncoding("utf8");
     source?.on("data", (chunk: string) => {
       buffer += chunk;
@@ -938,42 +1190,36 @@ export function runRemote(
       while ((newline = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, newline).replace(/\r$/, "");
         buffer = buffer.slice(newline + 1);
-        if (stream === "stderr") stderrTail = (stderrTail + line + "\n").slice(-STDERR_TAIL);
-        emit(stream, line);
+        emit(line);
       }
       if (buffer.length > STDERR_TAIL) buffer = buffer.slice(-STDERR_TAIL);
     });
     return new Promise<void>((resolve) => {
       if (!source) return resolve();
       source.once("end", () => {
-        if (buffer) {
-          if (stream === "stderr") stderrTail = (stderrTail + buffer).slice(-STDERR_TAIL);
-          emit(stream, buffer.replace(/\r$/, ""));
-        }
+        if (buffer) emit(buffer.replace(/\r$/, ""));
         resolve();
       });
       source.once("error", () => resolve());
     });
   };
   const drained = Promise.all([lines("stdout"), lines("stderr")]);
-  const exit = new Promise<RemoteCommandExit>((resolve) => {
+  // The raw end of ssh; read once its output is drained, so `authenticated` is final.
+  const ended = new Promise<RemoteCommandExit | { code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once("error", (error: NodeJS.ErrnoException) =>
       resolve({ kind: "refused", refusal: error.code === "ENOENT" ? "ssh-missing" : "ssh-failed" }),
     );
-    child.once("close", (code, signal) => {
-      if (code === 255) resolve({ kind: "refused", refusal: classifySshFailure(stderrTail) });
-      else if (code !== null) resolve({ kind: "exited", code });
-      else resolve({ kind: "signalled", signal: signal ?? "unknown" });
-    });
+    child.once("close", (code, signal) => resolve({ code, signal }));
   });
   return {
-    exit: drained
-      .then(() => exit)
-      .then((ended) => {
-        if (ended.kind === "refused") held = undefined;
-        else release();
-        return ended;
-      }),
+    exit: drained.then(async (): Promise<RemoteCommandExit> => {
+      const end = await ended;
+      if ("kind" in end) return end;
+      if (!authenticated) return { kind: "refused", refusal: classifySshFailure(sshTail) };
+      if (end.code === 255) return { kind: "refused", refusal: "ssh-failed" };
+      if (end.code !== null) return { kind: "exited", code: end.code };
+      return { kind: "signalled", signal: end.signal ?? "unknown" };
+    }),
     kill: () => {
       if (alive(child)) child.kill();
     },

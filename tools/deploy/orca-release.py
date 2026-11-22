@@ -364,7 +364,117 @@ def version_key(version):
     pre = (0, label, int(number)) if label else (1, "", 0)
     return (int(major), int(minor), int(patch), *pre)
 
-class Deployment:
+class BundleSource:
+    """Fetch and verify a signed server bundle (#876). Needs only ROOT, which holds the pinned
+    cosign and its Sigstore trust root under ROOT/tools; Deployment adds staging on top. Used
+    alone by `fetch-bundle`, which the update feed's publication runs (#877)."""
+
+    def __init__(self, root):
+        self.root = Path(root).resolve()
+
+    def typed_dispatch(self, operation, *args, **kwargs):
+        return operation(*args, **kwargs)
+
+    def typed_process(self, operation, *args, **kwargs):
+        return operation(*args, **kwargs)
+
+    def cosign(self):
+        """The pinned cosign, fetched once and re-hashed before every use."""
+        machine = platform.machine()
+        if machine not in COSIGN_SHA256:
+            raise RuntimeError(f"No pinned cosign for {machine}")
+        name, digest = COSIGN_SHA256[machine]
+        tools = self.root / "tools"
+        tools.mkdir(mode=0o700, exist_ok=True)
+        path = tools / f"cosign-{COSIGN_VERSION}-{machine}"
+        if not path.exists():
+            partial = Path(self.typed_dispatch(tempfile.mkdtemp, prefix="cosign-", dir=tools)) / name
+            try:
+                self.typed_dispatch(download, f"https://github.com/sigstore/cosign/releases/download/{COSIGN_VERSION}/{name}",
+                                    partial, 256 << 20)
+                if file_sha256(partial) != digest:
+                    raise RuntimeError("Downloaded cosign does not match its pinned digest")
+                os.chmod(partial, 0o700)
+                os.replace(partial, path)
+            finally:
+                shutil.rmtree(partial.parent, ignore_errors=True)
+        if path.is_symlink() or not path.is_file() or file_sha256(path) != digest:
+            raise RuntimeError(f"{path} does not match the pinned cosign digest; remove it to fetch it again")
+        return path
+
+    def fetch_bundle(self, version, directory):
+        """The three published assets of release vVERSION, by its API record."""
+        _, *files = bundle_names(version)
+        url = f"https://api.github.com/repos/{BUNDLE_REPOSITORY}/releases/tags/v{version}"
+        record_file = directory / "release.json"
+        self.typed_dispatch(download, url, record_file, 4 << 20, accept="application/vnd.github+json")
+        published = json.loads(record_file.read_text())
+        record_file.unlink()
+        if (published.get("draft") or published.get("prerelease") is not ("-" in version)
+                or published.get("tag_name") != f"v{version}"):
+            raise RuntimeError("Target is not a published release of that version")
+        # A release candidate is published first and its bundle attached by a later run, which
+        # records the three digests in the notes last. That record is the "ready" signal: until
+        # it is there (exactly once), the bundle is not complete and is not fetched.
+        records = re.findall(BUNDLE_RECORD_RE, published.get("body") or "")
+        if len(records) != 1 or (published.get("body") or "").count("orca-server-run") != 1:
+            raise RuntimeError(f"Release v{version} has no complete server bundle yet (no single orca-server-run record); retry later")
+        recorded = dict(zip(files, records[0]))
+        assets = {asset.get("name"): asset for asset in published.get("assets", [])}
+        for name in files:
+            asset = assets.get(name) or {}
+            if not asset.get("browser_download_url") or asset.get("digest") != "sha256:" + recorded[name]:
+                raise RuntimeError(f"Release v{version}'s {name} is missing or not the recorded one; retry later")
+            limit = BUNDLE_MAX_BYTES if name.endswith(".tar.xz") else 4 << 20
+            self.typed_dispatch(download, asset["browser_download_url"], directory / name, limit)
+            if file_sha256(directory / name) != recorded[name]:
+                raise RuntimeError(f"Downloaded {name} is not the recorded file")
+
+    def verify_bundle(self, directory, version):
+        """Signature first (pinned signer), then the manifest, then the archive's digest."""
+        _, archive, manifest_name, signature = bundle_names(version)
+        manifest_path, archive_path = directory / manifest_name, directory / archive
+        for path in (manifest_path, archive_path, directory / signature):
+            if path.is_symlink() or not path.is_file():
+                raise RuntimeError(f"Bundle file missing: {path.name}")
+        if manifest_path.stat().st_size > 4 << 20 or archive_path.stat().st_size > BUNDLE_MAX_BYTES:
+            raise RuntimeError("Bundle file exceeds its size limit")
+        cosign = self.cosign()
+        tuf = self.root / "tools" / "sigstore"
+        tuf.mkdir(mode=0o700, parents=True, exist_ok=True)
+        result = self.typed_process(subprocess.run, [
+            str(cosign), "verify-blob", str(manifest_path),
+            "--bundle", str(directory / signature),
+            "--certificate-identity", BUNDLE_SIGNER,
+            "--certificate-oidc-issuer", BUNDLE_ISSUER,
+            "--certificate-github-workflow-repository", BUNDLE_REPOSITORY,
+            "--certificate-github-workflow-ref", "refs/heads/main",
+            "--certificate-github-workflow-trigger", BUNDLE_TRIGGER,
+        ], env={**os.environ, "TUF_ROOT": str(tuf), "HOME": str(tuf)}, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if result.returncode != 0:
+            detail = result.stdout.strip().splitlines()[-1:] or ["no output"]
+            raise RuntimeError(f"Bundle signature refused: {detail[0]}")
+        manifest = json.loads(manifest_path.read_text())
+        stem = bundle_names(version)[0]
+        expected = {"schema": BUNDLE_SCHEMA, "name": "orca-server", "version": version,
+                    "platform": BUNDLE_PLATFORM, "root": stem}
+        for key, value in expected.items():
+            if manifest.get(key) != value:
+                raise RuntimeError(f"Bundle manifest {key} is {manifest.get(key)!r}, expected {value!r}")
+        if manifest.get("entry") != BUNDLE_ENTRY or (manifest.get("node") or {}).get("path") != BUNDLE_NODE:
+            raise RuntimeError("Bundle manifest names an unexpected runtime or entry")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("sourceSha"))):
+            raise RuntimeError("Bundle manifest has no source commit")
+        listed = manifest.get("archive") or {}
+        if listed.get("name") != archive or not re.fullmatch(r"[0-9a-f]{64}", str(listed.get("sha256"))):
+            raise RuntimeError("Bundle manifest does not describe the archive")
+        if listed.get("size") != archive_path.stat().st_size or file_sha256(archive_path) != listed["sha256"]:
+            raise RuntimeError("Bundle archive does not match its signed manifest digest")
+        return manifest
+
+
+class Deployment(BundleSource):
     def __init__(self, manifest, *, typed_inspector=None):
         # Trusted composition only: never selected from manifest, args or environment.
         # No production inspector/build map is installed by this default-off change.
@@ -539,101 +649,6 @@ class Deployment:
         self.typed_dispatch(os.rename, stage, release)
         self.typed_dispatch(sync_dir, release.parent)
         return release.resolve()
-
-    def cosign(self):
-        """The pinned cosign, fetched once and re-hashed before every use."""
-        machine = platform.machine()
-        if machine not in COSIGN_SHA256:
-            raise RuntimeError(f"No pinned cosign for {machine}")
-        name, digest = COSIGN_SHA256[machine]
-        tools = self.root / "tools"
-        tools.mkdir(mode=0o700, exist_ok=True)
-        path = tools / f"cosign-{COSIGN_VERSION}-{machine}"
-        if not path.exists():
-            partial = Path(self.typed_dispatch(tempfile.mkdtemp, prefix="cosign-", dir=tools)) / name
-            try:
-                self.typed_dispatch(download, f"https://github.com/sigstore/cosign/releases/download/{COSIGN_VERSION}/{name}",
-                                    partial, 256 << 20)
-                if file_sha256(partial) != digest:
-                    raise RuntimeError("Downloaded cosign does not match its pinned digest")
-                os.chmod(partial, 0o700)
-                os.replace(partial, path)
-            finally:
-                shutil.rmtree(partial.parent, ignore_errors=True)
-        if path.is_symlink() or not path.is_file() or file_sha256(path) != digest:
-            raise RuntimeError(f"{path} does not match the pinned cosign digest; remove it to fetch it again")
-        return path
-
-    def fetch_bundle(self, version, directory):
-        """The three published assets of release vVERSION, by its API record."""
-        _, *files = bundle_names(version)
-        url = f"https://api.github.com/repos/{BUNDLE_REPOSITORY}/releases/tags/v{version}"
-        record_file = directory / "release.json"
-        self.typed_dispatch(download, url, record_file, 4 << 20, accept="application/vnd.github+json")
-        published = json.loads(record_file.read_text())
-        record_file.unlink()
-        if (published.get("draft") or published.get("prerelease") is not ("-" in version)
-                or published.get("tag_name") != f"v{version}"):
-            raise RuntimeError("Target is not a published release of that version")
-        # A release candidate is published first and its bundle attached by a later run, which
-        # records the three digests in the notes last. That record is the "ready" signal: until
-        # it is there (exactly once), the bundle is not complete and is not fetched.
-        records = re.findall(BUNDLE_RECORD_RE, published.get("body") or "")
-        if len(records) != 1 or (published.get("body") or "").count("orca-server-run") != 1:
-            raise RuntimeError(f"Release v{version} has no complete server bundle yet (no single orca-server-run record); retry later")
-        recorded = dict(zip(files, records[0]))
-        assets = {asset.get("name"): asset for asset in published.get("assets", [])}
-        for name in files:
-            asset = assets.get(name) or {}
-            if not asset.get("browser_download_url") or asset.get("digest") != "sha256:" + recorded[name]:
-                raise RuntimeError(f"Release v{version}'s {name} is missing or not the recorded one; retry later")
-            limit = BUNDLE_MAX_BYTES if name.endswith(".tar.xz") else 4 << 20
-            self.typed_dispatch(download, asset["browser_download_url"], directory / name, limit)
-            if file_sha256(directory / name) != recorded[name]:
-                raise RuntimeError(f"Downloaded {name} is not the recorded file")
-
-    def verify_bundle(self, directory, version):
-        """Signature first (pinned signer), then the manifest, then the archive's digest."""
-        _, archive, manifest_name, signature = bundle_names(version)
-        manifest_path, archive_path = directory / manifest_name, directory / archive
-        for path in (manifest_path, archive_path, directory / signature):
-            if path.is_symlink() or not path.is_file():
-                raise RuntimeError(f"Bundle file missing: {path.name}")
-        if manifest_path.stat().st_size > 4 << 20 or archive_path.stat().st_size > BUNDLE_MAX_BYTES:
-            raise RuntimeError("Bundle file exceeds its size limit")
-        cosign = self.cosign()
-        tuf = self.root / "tools" / "sigstore"
-        tuf.mkdir(mode=0o700, parents=True, exist_ok=True)
-        result = self.typed_process(subprocess.run, [
-            str(cosign), "verify-blob", str(manifest_path),
-            "--bundle", str(directory / signature),
-            "--certificate-identity", BUNDLE_SIGNER,
-            "--certificate-oidc-issuer", BUNDLE_ISSUER,
-            "--certificate-github-workflow-repository", BUNDLE_REPOSITORY,
-            "--certificate-github-workflow-ref", "refs/heads/main",
-            "--certificate-github-workflow-trigger", BUNDLE_TRIGGER,
-        ], env={**os.environ, "TUF_ROOT": str(tuf), "HOME": str(tuf)}, text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        if result.returncode != 0:
-            detail = result.stdout.strip().splitlines()[-1:] or ["no output"]
-            raise RuntimeError(f"Bundle signature refused: {detail[0]}")
-        manifest = json.loads(manifest_path.read_text())
-        stem = bundle_names(version)[0]
-        expected = {"schema": BUNDLE_SCHEMA, "name": "orca-server", "version": version,
-                    "platform": BUNDLE_PLATFORM, "root": stem}
-        for key, value in expected.items():
-            if manifest.get(key) != value:
-                raise RuntimeError(f"Bundle manifest {key} is {manifest.get(key)!r}, expected {value!r}")
-        if manifest.get("entry") != BUNDLE_ENTRY or (manifest.get("node") or {}).get("path") != BUNDLE_NODE:
-            raise RuntimeError("Bundle manifest names an unexpected runtime or entry")
-        if not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("sourceSha"))):
-            raise RuntimeError("Bundle manifest has no source commit")
-        listed = manifest.get("archive") or {}
-        if listed.get("name") != archive or not re.fullmatch(r"[0-9a-f]{64}", str(listed.get("sha256"))):
-            raise RuntimeError("Bundle manifest does not describe the archive")
-        if listed.get("size") != archive_path.stat().st_size or file_sha256(archive_path) != listed["sha256"]:
-            raise RuntimeError("Bundle archive does not match its signed manifest digest")
-        return manifest
 
     @typed_operation("update")
     def stage_bundle(self, source):
@@ -850,7 +865,27 @@ class Deployment:
         os.execve(meta["node"], command, env)
 
 
+def fetch_only(argv):
+    """`fetch-bundle --cache DIR VERSION OUT`: download release vVERSION's recorded server
+    bundle into the new directory OUT and verify it exactly as `stage --bundle` does (pinned
+    signer, manifest, archive digest), without staging anything. Prints the manifest."""
+    parser = argparse.ArgumentParser(prog="orca-release.py fetch-bundle")
+    parser.add_argument("--cache", required=True, type=Path)
+    parser.add_argument("version")
+    parser.add_argument("out", type=Path)
+    options = parser.parse_args(argv)
+    if not re.fullmatch(VERSION_RE, options.version):
+        raise RuntimeError("Supply a version X.Y.Z or X.Y.Z-rc.N")
+    options.out.mkdir(mode=0o700)
+    source = BundleSource(options.cache)
+    source.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    source.fetch_bundle(options.version, options.out)
+    print(json.dumps(source.verify_bundle(options.out, options.version), sort_keys=True))
+
+
 def main():
+    if sys.argv[1:2] == ["fetch-bundle"]:
+        return fetch_only(sys.argv[2:])
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--deployment", required=True)
     parser.add_argument("action", choices=["stage", "update", "recover", "cli", "acp", "daemon"])

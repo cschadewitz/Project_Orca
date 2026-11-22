@@ -1108,12 +1108,13 @@ ipcMain.handle("orca:server.update", (_event, request: unknown) => {
 ipcMain.handle("orca:profiles.list", () => remoteProfiles.list());
 ipcMain.handle("orca:profiles.save", (_event, input: unknown) => profileResult(() => remoteProfiles.save(input)));
 ipcMain.handle("orca:profiles.remove", (_event, id: unknown) =>
-  profileResult(() => {
+  profileResult(async () => {
     const valid = ProfileIdSchema.parse(id);
     if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before removing this profile.");
-    remoteProfiles.remove(valid);
+    // Revokes the credential on the server first, when it can be reached (#875).
+    const revoke = await remoteProfiles.remove(valid);
     if (preferences.read().daemonProfile === valid) preferences.saveDaemonProfile(null);
-    return null;
+    return { revoke };
   }),
 );
 ipcMain.handle("orca:profiles.forgetHostKey", (_event, id: unknown) =>
@@ -1124,6 +1125,13 @@ ipcMain.handle("orca:profiles.forgetHostKey", (_event, id: unknown) =>
     const view = remoteProfiles.describe(valid);
     if (!view) throw new ConnectionRefusal("That profile no longer exists.");
     return view;
+  }),
+);
+ipcMain.handle("orca:profiles.useAutomaticSignIn", (_event, id: unknown) =>
+  profileResult(() => {
+    const valid = ProfileIdSchema.parse(id);
+    if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before changing its sign-in.");
+    return remoteProfiles.useAutomaticSignIn(valid);
   }),
 );
 /** Main reads the file the person picks; the token goes from disk to the keychain slot only. */

@@ -5,7 +5,12 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { ManagedDeployment } from "@orca/protocol";
-import { TunnelRefusal, type RemoteCommand, type RemoteCommandExit } from "@orca/protocol/remote-access";
+import {
+  RemoteCommandRefused,
+  TunnelRefusal,
+  type RemoteCommand,
+  type RemoteCommandExit,
+} from "@orca/protocol/remote-access";
 import {
   classifyServerUpdate,
   SERVER_UPDATE_MAX_LINES,
@@ -382,6 +387,10 @@ describe("ServerUpdater", () => {
       message: new TunnelRefusal("host-key-missing").message,
     });
     r.run.mockImplementationOnce(() => undefined);
+    expect(await r.updater.update({ preview: r.preview() })).toMatchObject({ status: "unavailable" });
+    r.run.mockImplementationOnce(() => {
+      throw new RemoteCommandRefused("A remote command word has unsupported characters");
+    });
     expect(await r.updater.update({ preview: r.preview() })).toMatchObject({ status: "unavailable" });
     r.run.mockImplementationOnce(() => {
       throw new Error("bug");

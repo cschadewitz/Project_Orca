@@ -5,10 +5,19 @@
  * ssh-tunnel workflow sets up on Linux and Windows runners.
  */
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,15 +30,17 @@ import {
   forgetPin,
   markPinEnrolled,
   pinState,
+  pinnedKeyIdentity,
   profileIdFor,
   sshOptionPath,
   SshTunnel,
   TunnelRefusal,
   tunnelHops,
+  tunnelKeyIdentity,
   hopArgs,
   commandArgs,
+  RemoteCommandRefused,
   runRemote,
-  shellQuote,
   type RemoteCommandExit,
   type SecretCipher,
   type TunnelState,
@@ -182,6 +193,8 @@ class FakeSsh extends EventEmitter {
   killed = false;
   /** Every byte a client handed this ssh to carry. */
   received = "";
+  /** Output that keeps flowing after exit: `close` never comes. */
+  holdOutput = false;
   constructor() {
     super();
     this.stdin.on("data", (chunk: Buffer) => (this.received += chunk.toString()));
@@ -200,7 +213,11 @@ class FakeSsh extends EventEmitter {
     this.signalCode = signal;
     this.stdout.end();
     this.stdin.destroy();
-    setImmediate(() => this.emit("exit", code, signal));
+    setImmediate(() => {
+      this.emit("exit", code, signal);
+      // Real children close once stdio has drained; `holdOutput` keeps it open.
+      if (!this.holdOutput) setImmediate(() => this.emit("close", code, signal));
+    });
   }
 }
 
@@ -422,11 +439,16 @@ describe("SshTunnel with a fake ssh", () => {
     tunnel.connect();
     await until(() => spawned.length === 2);
 
-    // Deleted after enrollment: no new stream starts, so no new key can be accepted.
+    // Deleted after enrollment: the open tunnel still checks every stream against the pin it
+    // sealed, never accepting a new key, and a new tunnel starts no ssh at all.
     rmSync(pins);
     expect(pinState(pins)).toBe("broken");
-    expect(() => tunnel.connect()).toThrow(expect.objectContaining({ code: "host-key-missing" }));
-    expect(spawned).toHaveLength(2);
+    tunnel.connect();
+    await until(() => spawned.length === 3);
+    expect(tunnel.pinnedKeys).toBe(JSON.stringify(["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6", null]));
+    const fresh = fakeTunnel(() => {}, { knownHostsFile: pins });
+    await expect(fresh.tunnel.open()).rejects.toMatchObject({ code: "host-key-missing" });
+    expect(fresh.spawned).toHaveLength(0);
     await tunnel.close();
 
     for (const damage of [
@@ -570,33 +592,241 @@ const cipher = (over: Partial<SecretCipher> = {}): SecretCipher => ({
   ...over,
 });
 
-describe("running one command on the server", () => {
-  it("quotes each word for the remote shell, clears every forward and pins strictly", () => {
-    expect(shellQuote("it's $HOME; rm -rf /")).toBe(`'it'\\''s $HOME; rm -rf /'`);
-    const pins = join(dir(), "lab.known_hosts");
-    const args = commandArgs(tunnelHops(profile({ sshPort: 2200, identityFile: "/k/id" }), pins).daemon, [
-      "python3",
-      "/srv/orca release.py",
-      "--bundle",
-      "v0.8.0",
+describe("commands on the server (#875)", () => {
+  /** A pin file holding a key, as an earlier connect left it. */
+  const pinned = (name = "lab.known_hosts") => {
+    const pins = join(dir(), name);
+    writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n");
+    return pins;
+  };
+
+  it("runs a command instead of forwarding, with the same pinned, config-free ssh", () => {
+    const hops = tunnelHops(profile(), join(dir(), "lab.known_hosts"));
+    const args = commandArgs(hops.daemon, [
+      "orca",
+      "auth",
+      "issue",
+      "desktop-pc",
+      "--expires-at",
+      "2027-01-01T00:00:00.000Z",
     ]);
-    expect(args.slice(0, 3)).toEqual(["-F", "none", "-T"]);
-    const options = args.flatMap((arg, i) => (args[i - 1] === "-o" ? [arg] : []));
-    expect(options).toEqual(
-      expect.arrayContaining([
-        "BatchMode=yes",
-        "ClearAllForwardings=yes",
-        "StrictHostKeyChecking=yes",
-        "ForwardAgent=no",
-      ]),
-    );
-    expect(options).not.toContain("ExitOnForwardFailure=yes");
+    expect(args.slice(0, 2)).toEqual(["-F", "none"]);
     expect(args).not.toContain("-W");
-    expect(args).not.toContain("-L");
-    expect(args.slice(-3)).toEqual(["--", "casey@lab.example", "'python3' '/srv/orca release.py' '--bundle' 'v0.8.0'"]);
-    expect(() => commandArgs(tunnelHops(profile(), pins).daemon, [])).toThrow();
+    expect(args).toContain("HostKeyAlias=orca-lab");
+    expect(args.slice(-8)).toEqual([
+      "--",
+      "casey@lab.example",
+      "orca",
+      "auth",
+      "issue",
+      "desktop-pc",
+      "--expires-at",
+      "2027-01-01T00:00:00.000Z",
+    ]);
+    // Windows paths (written with `/`) and credential ids pass as they are.
+    expect(commandArgs(hops.daemon, ["C:/Orca/orca.cmd", "auth", "revoke", "AbC_dEf-1234"]).at(-1)).toBe(
+      "AbC_dEf-1234",
+    );
   });
 
+  it("seals its pins: streams and commands check the tunnel's own copy, and only the keys expected (#875 review 4)", async () => {
+    const pins = pinned();
+    const keys = tunnelKeyIdentity(pins, false);
+    expect(keys).toBe(JSON.stringify(["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6", null]));
+    const { tunnel, spawned } = fakeTunnel(
+      (ssh, _n, args) => {
+        // Never the live pin file: the tunnel's sealed copy, strictly.
+        expect(args).toContain("StrictHostKeyChecking=yes");
+        expect(args.some((arg) => arg.startsWith("UserKnownHostsFile=") && arg.includes(".session-"))).toBe(true);
+        ssh.say(authed);
+        if (args.includes("-W")) return;
+        ssh.exit(0);
+      },
+      { knownHostsFile: pins, expectKeys: keys },
+    );
+    await tunnel.open();
+    expect(tunnel.pinnedKeys).toBe(keys);
+    // The live pin now vouches for another key: what the tunnel carries does not change.
+    writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5\n");
+    tunnel.connect();
+    await until(() => spawned.length === 2);
+    await expect(tunnel.exec(["orca", "auth", "list"])).resolves.toMatchObject({ code: 0 });
+    expect(tunnel.pinnedKeys).toBe(keys);
+    const sessions = () => readdirSync(dirname(pins)).filter((name) => name.includes(".session-"));
+    expect(sessions()).toHaveLength(1);
+    await tunnel.close();
+    expect(sessions()).toEqual([]);
+
+    // A tunnel, or a one-off command, expecting other keys refuses before any ssh starts.
+    const other = fakeTunnel(() => {}, { knownHostsFile: pins, expectKeys: keys });
+    await expect(other.tunnel.open()).rejects.toMatchObject({ code: "host-key-changed" });
+    const once = fakeTunnel(() => {}, { knownHostsFile: pins, expectKeys: keys });
+    await expect(once.tunnel.runOnce(["orca", "auth", "list"])).rejects.toMatchObject({ code: "host-key-changed" });
+    expect([...other.spawned, ...once.spawned]).toEqual([]);
+    expect(sessions()).toEqual([]);
+  });
+
+  it.each([
+    [[]],
+    [["orca", "a b"]],
+    [["orca;id"]],
+    [["$(id)"]],
+    [["orca", "'x'"]],
+    [["orca", "a&b"]],
+    [["orca", "%PATH%"]],
+    // A backslash escapes in sh and is literal in cmd: the same word, two meanings.
+    [["C:\\Orca\\orca.cmd"]],
+    [["orca", "a\\nb"]],
+    [["orca", ""]],
+  ])("refuses %j before ssh starts", (command) => {
+    const hops = tunnelHops(profile(), join(dir(), "lab.known_hosts"));
+    expect(() => commandArgs(hops.daemon, command)).toThrow(RemoteCommandRefused);
+  });
+
+  it("collects the command's output and its own error lines, over a strictly pinned ssh", async () => {
+    const pins = pinned();
+    const { tunnel, spawned } = fakeTunnel(
+      (ssh, _n, args) => {
+        expect(args.at(-1)).toBe("--json");
+        expect(args).toContain("StrictHostKeyChecking=yes");
+        expect(args).not.toContain("StrictHostKeyChecking=accept-new");
+        ssh.say(authed);
+        ssh.say("debug1: client_input_channel_req: channel 0 rtype exit-status reply 0");
+        ssh.say("warning: something from orca");
+        ssh.stdout.write('{"ok":');
+        ssh.stdout.write("true}");
+        ssh.exit(3);
+      },
+      { knownHostsFile: pins },
+    );
+    const result = await tunnel.runOnce(["orca", "auth", "list", "--json"]);
+    expect(result).toEqual({ code: 3, stdout: '{"ok":true}', serverLines: ["warning: something from orca"] });
+    expect(pinState(pins)).toBe("pinned");
+    expect(spawned).toHaveLength(1);
+    expect(tunnel.state.phase).toBe("closed");
+    await expect(tunnel.runOnce(["orca"])).rejects.toThrow();
+  });
+
+  it("names the key a pin vouches for, so a reset pin reads as another server", () => {
+    const pins = pinned();
+    expect(pinnedKeyIdentity(pins)).toBe("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6");
+    writeFileSync(pins, "# none\n");
+    expect(pinnedKeyIdentity(pins)).toBeUndefined();
+    expect(pinnedKeyIdentity(join(dir(), "missing"))).toBeUndefined();
+  });
+
+  it("reads a result only once the output has drained, and output that never ends is a failure", async () => {
+    const late = fakeTunnel(
+      (ssh) => {
+        ssh.say(authed);
+        ssh.stdout.write("{");
+        ssh.exitCode = 0;
+        ssh.emit("exit", 0, null);
+        // Output still arriving after exit: part of the result.
+        setImmediate(() => {
+          ssh.stdout.end("}");
+          ssh.emit("close", 0, null);
+        });
+      },
+      { knownHostsFile: pinned() },
+    );
+    await expect(late.tunnel.runOnce(["orca"])).resolves.toMatchObject({ code: 0, stdout: "{}" });
+
+    const endless = fakeTunnel(
+      (ssh) => {
+        ssh.holdOutput = true;
+        ssh.say(authed);
+        ssh.exit(0);
+      },
+      { knownHostsFile: pinned() },
+    );
+    await expect(endless.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "ssh-failed" });
+  });
+
+  it("never trusts a key on first use: an unpinned server or jump host is refused before ssh starts", async () => {
+    const fresh = fakeTunnel((ssh) => ssh.say(authed));
+    await expect(fresh.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "host-key-missing" });
+    expect(fresh.spawned).toHaveLength(0);
+
+    // Pinned server, unpinned jump host: the jump never starts with accept-new either.
+    const pins = pinned();
+    const jumped = fakeTunnel((ssh) => ssh.say(listening), {
+      knownHostsFile: pins,
+      profile: profile({ jump: { destination: "casey@jump.example" } }),
+    });
+    await expect(jumped.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "host-key-missing" });
+    expect(jumped.spawned).toHaveLength(0);
+    // The static form is the same, whatever options it is given.
+    await expect(
+      SshTunnel.run(
+        {
+          profile: profile(),
+          knownHostsFile: join(dir(), "none.known_hosts"),
+          spawn: () => {
+            throw new Error("ssh must not start");
+          },
+        },
+        ["orca"],
+      ),
+    ).rejects.toMatchObject({ code: "host-key-missing" });
+  });
+
+  it("refuses like a stream when ssh fails, times out, prints too much, or the pin is gone", async () => {
+    const denied = fakeTunnel(
+      (ssh) => {
+        ssh.say("casey@lab: Permission denied (publickey).");
+        ssh.exit(255);
+      },
+      { knownHostsFile: pinned() },
+    );
+    await expect(denied.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "auth-failed" });
+
+    const stuck = fakeTunnel((ssh) => ssh.say(authed), { knownHostsFile: pinned() });
+    await expect(stuck.tunnel.runOnce(["orca"], 30)).rejects.toMatchObject({ code: "timeout" });
+    expect(stuck.spawned[0]!.killed).toBe(true);
+
+    const loud = fakeTunnel(
+      (ssh) => {
+        ssh.say(authed);
+        ssh.stdout.write(Buffer.alloc(70 * 1024, "x"));
+        ssh.exit(0);
+      },
+      { knownHostsFile: pinned() },
+    );
+    await expect(loud.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "ssh-failed" });
+
+    const pins = join(dir(), "gone.known_hosts");
+    writeFileSync(pins, "");
+    const broken = fakeTunnel((ssh) => ssh.say(authed), { knownHostsFile: pins });
+    await expect(broken.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "host-key-missing" });
+    expect(broken.spawned).toHaveLength(0);
+
+    const missing = fakeTunnel(
+      (ssh) => ssh.emit("error", Object.assign(new Error("spawn ssh ENOENT"), { code: "ENOENT" })),
+      { knownHostsFile: pinned() },
+    );
+    await expect(missing.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "ssh-missing" });
+  });
+
+  it("runs on an open tunnel's server, and closing the tunnel stops a running command", async () => {
+    const { tunnel, spawned } = fakeTunnel(
+      (ssh, n) => {
+        ssh.say(authed);
+        if (n === 2) ssh.stdout.write("partial");
+      },
+      { knownHostsFile: pinned() },
+    );
+    await tunnel.open();
+    const running = tunnel.exec(["orca", "auth", "list"]);
+    await until(() => spawned.length === 2);
+    await tunnel.close();
+    expect(spawned[1]!.killed).toBe(true);
+    await expect(running).resolves.toMatchObject({ code: 255 });
+    await expect(tunnel.exec(["orca"])).rejects.toMatchObject({ code: "closed" });
+  });
+});
+
+describe("following one command on the server (#879)", () => {
   /** A child whose stdio and exit the test drives, closing like a real one. */
   function child() {
     const ssh = new FakeSsh();
@@ -611,15 +841,23 @@ describe("running one command on the server", () => {
     const seen: string[] = [];
     return { seen, onLine: (stream: "stdout" | "stderr", line: string) => seen.push(`${stream}:${line}`) };
   };
+  const follow = (ssh: FakeSsh, onLine: (stream: "stdout" | "stderr", line: string) => void) =>
+    runRemote(ssh as unknown as ChildProcess, onLine);
 
-  it("streams the command's lines and returns its exit", async () => {
+  it("streams the command's lines, never ssh's, and returns its exit", async () => {
     const { ssh, end } = child();
     const out = lines();
-    const run = runRemote(ssh as unknown as ChildProcess, out.onLine);
+    const run = follow(ssh, out.onLine);
+    ssh.say(
+      "debug1: Connecting to lab.example port 22.\nAuthenticated to lab.example ([10.0.0.5]:22) using publickey.",
+    );
+    ssh.say("debug1: Entering interactive session.\ndebug1: pledge: filesystem");
     ssh.stdout.write("staging v0.8.0\nhalf");
     await until(() => out.seen.length === 1);
-    ssh.stderr.write("orca-release: Busy: update.lock; another update\n");
+    ssh.say("orca-release: Busy: update.lock; another update");
     ssh.stdout.write(" a line\r\n");
+    ssh.say("debug1: client_input_channel_req: channel 0 rtype exit-status reply 0");
+    ssh.say("Transferred: sent 2612, received 2588 bytes, in 0.1 seconds\nBytes per second: sent 33.9, received 33.6");
     end(1);
     expect(await run.exit).toEqual<RemoteCommandExit>({ kind: "exited", code: 1 });
     expect(out.seen).toEqual([
@@ -629,73 +867,95 @@ describe("running one command on the server", () => {
     ]);
   });
 
-  it("holds stderr until the command shows it runs, and drops ssh's own failure lines", async () => {
+  it("classifies ssh that never started the session, and reads a later 255 as not known", async () => {
     const refused = child();
     const out = lines();
-    const run = runRemote(refused.ssh as unknown as ChildProcess, out.onLine);
+    const run = follow(refused.ssh, out.onLine);
     refused.ssh.say("casey@lab.example: Permission denied (publickey).");
     refused.end(255);
     expect(await run.exit).toEqual({ kind: "refused", refusal: "auth-failed" });
     expect(out.seen).toEqual([]);
 
-    // A command that writes only stderr has it delivered once ssh exits with its own code.
-    const quiet = child();
-    const later = lines();
-    const ran = runRemote(quiet.ssh as unknown as ChildProcess, later.onLine);
-    quiet.ssh.say("orca-release: Daemon busy: 1 run active");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(later.seen).toEqual([]);
-    quiet.end(1);
-    expect(await ran.exit).toEqual({ kind: "exited", code: 1 });
-    expect(later.seen).toEqual(["stderr:orca-release: Daemon busy: 1 run active"]);
+    // Exit 0 without a session is still ssh's failure, not the command's success.
+    const odd = child();
+    const none = follow(odd.ssh, () => {});
+    odd.end(0);
+    expect((await none.exit).kind).toBe("refused");
+
+    const lost = child();
+    const after = follow(lost.ssh, () => {});
+    lost.ssh.say("debug1: Entering interactive session.");
+    lost.ssh.say("Connection to lab.example closed by remote host.");
+    lost.end(255);
+    expect(await after.exit).toEqual({ kind: "refused", refusal: "ssh-failed" });
   });
 
   it("reports a signal, a missing ssh, and a kill", async () => {
     const signalled = child();
-    const run = runRemote(signalled.ssh as unknown as ChildProcess, () => {});
+    const run = follow(signalled.ssh, () => {});
+    signalled.ssh.say("debug1: Entering interactive session.");
     signalled.end(null, "SIGHUP");
     expect(await run.exit).toEqual({ kind: "signalled", signal: "SIGHUP" });
 
     const missing = child();
-    const none = runRemote(missing.ssh as unknown as ChildProcess, () => {});
+    const none = follow(missing.ssh, () => {});
     missing.ssh.emit("error", Object.assign(new Error("spawn ssh ENOENT"), { code: "ENOENT" }));
     missing.end(null);
     expect(await none.exit).toEqual({ kind: "refused", refusal: "ssh-missing" });
 
     const killed = child();
-    const stopped = runRemote(killed.ssh as unknown as ChildProcess, () => {});
+    const stopped = follow(killed.ssh, () => {});
+    killed.ssh.say("debug1: Entering interactive session.");
     stopped.kill();
     expect(killed.ssh.killed).toBe(true);
     killed.end(null, "SIGTERM");
     expect(await stopped.exit).toEqual({ kind: "signalled", signal: "SIGTERM" });
   });
 
-  it("runs only on an open, pinned tunnel, as its own ssh", async () => {
+  it("runs only through the pins an open tunnel sealed, as its own ssh, stopped with the tunnel", async () => {
     const { tunnel, spawned } = fakeTunnel((ssh, n, args) => {
       if (n === 1) {
         writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n");
         ssh.say(authed);
         return;
       }
-      expect(args).toContain("-T");
+      expect(args).toContain("StrictHostKeyChecking=yes");
       expect(args).not.toContain("-W");
+      expect(args.slice(-2)).toEqual(["orca", "version"]);
+      ssh.say("debug1: Entering interactive session.");
       ssh.stdout.write("done\n");
-      ssh.stdout.end();
-      ssh.stderr.end();
-      setImmediate(() => ssh.emit("close", 0, null));
+      if (n === 2) {
+        ssh.stdout.end();
+        ssh.stderr.end();
+        setImmediate(() => ssh.emit("close", 0, null));
+      }
     });
     const pins = (tunnel as unknown as { options: { knownHostsFile: string } }).options.knownHostsFile;
-    expect(() => tunnel.exec(["true"], () => {})).toThrow(expect.objectContaining({ code: "closed" }));
+    expect(() => tunnel.execStreaming(["true"], () => {})).toThrow(expect.objectContaining({ code: "closed" }));
     await tunnel.open();
+    expect(tunnel.pinnedKeys).toBeDefined();
+    // The pin file changing afterwards changes nothing the tunnel carries.
+    rmSync(pins);
     const seen: string[] = [];
-    const run = tunnel.exec(["orca", "version"], (_stream, line) => seen.push(line));
+    const run = tunnel.execStreaming(["orca", "version"], (_stream, line) => seen.push(line));
     expect(await run.exit).toEqual({ kind: "exited", code: 0 });
     expect(seen).toEqual(["done"]);
-    expect(spawned).toHaveLength(2);
-    rmSync(pins);
-    expect(() => tunnel.exec(["true"], () => {})).toThrow(expect.objectContaining({ code: "host-key-missing" }));
+    expect(() => tunnel.execStreaming(["it's"], () => {})).toThrow(RemoteCommandRefused);
+    tunnel.execStreaming(["orca", "version"], () => {});
+    await until(() => spawned.length === 3);
     await tunnel.close();
-    expect(() => tunnel.exec(["true"], () => {})).toThrow(expect.objectContaining({ code: "closed" }));
+    expect(spawned[2]!.killed).toBe(true);
+    expect(() => tunnel.execStreaming(["true"], () => {})).toThrow(expect.objectContaining({ code: "closed" }));
+  });
+
+  it("refuses on a tunnel that is open but never sealed its pins", async () => {
+    const { tunnel } = fakeTunnel((ssh) => ssh.say(authed));
+    await tunnel.open();
+    expect(tunnel.pinnedKeys).toBeUndefined();
+    expect(() => tunnel.execStreaming(["orca", "version"], () => {})).toThrow(
+      expect.objectContaining({ code: "host-key-missing" }),
+    );
+    await tunnel.close();
   });
 });
 

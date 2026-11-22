@@ -205,7 +205,7 @@ export type DaemonCapability = z.infer<typeof DaemonCapabilitySchema>;
 export const ServerPathSchema = z
   .string()
   .max(512)
-  .regex(/^\/[A-Za-z0-9._+/-]+$/, "an absolute path of letters, digits and . _ + / -")
+  .regex(/^\/[A-Za-z0-9._/-]+$/, "an absolute path of letters, digits and . _ / -")
   .refine((path) => !path.split("/").includes(".."), "no '..' segment");
 
 /** A server ring, as the update feed names it (docs/UPDATING.md "Rings and controlled rollouts"). */

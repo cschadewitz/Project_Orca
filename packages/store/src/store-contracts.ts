@@ -137,6 +137,24 @@ export const FILE_STORE_CAPABILITIES: StoreCapabilityMatrix = matrix("file", [
   "artifact.orphanInventory",
 ]);
 
+/**
+ * The SQLite metadata backend (`sqliteStores`, #339). Every metadata collection, the event log,
+ * the plan journal and the artifact index are one database, so a batch is one transaction and
+ * collections can commit together. Artifact bytes stay content-addressed files.
+ */
+export const SQLITE_STORE_CAPABILITIES: StoreCapabilityMatrix = matrix("sqlite", [
+  "durable",
+  "crossProcess",
+  "document.versioned",
+  "document.query",
+  "document.batchAtomic",
+  "metadata.unitOfWork",
+  "event.durableUnique",
+  "event.observation",
+  "artifact.verifiedContent",
+  "artifact.orphanInventory",
+]);
+
 /** Throw `NOT_SUPPORTED` unless the backend offers `capability`. */
 export function requireStoreCapability(matrix: StoreCapabilityMatrix, capability: StoreCapability): void {
   if (matrix.capabilities[capability]) return;

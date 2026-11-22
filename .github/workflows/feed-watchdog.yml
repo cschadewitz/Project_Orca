@@ -6,15 +6,24 @@
 # - a ring is offered something that is not a published GitHub release, `stable` a prerelease,
 #   or any ring a prerelease other than `-rc.N`;
 # - the installer the feed serves does not hash to its channel file's sha512, or differs from
-#   the published release asset.
+#   the published release asset;
+# - a ring's x64 or server channel answers 404 or offers another version than the feed's live
+#   rings.json gives it, or its servers are offered less than its desktops (servers first,
+#   #877). These are offers, not what hosts run.
 #
-# Read-only: it holds no bucket credential and writes nothing. The canary tokens are bearer
-# credentials, so only reviewed code reads them: the job runs from main only, in the
-# `feed-canary` environment, which deploys from main only and holds nothing but
-# ORCA_FEED_CANARY_TOKENS (a JSON object of ring to a token minted with
-# tools/deploy/feed-token.js). Never put the R2 write credential there. The repository
-# variable ORCA_FEED_URL is the feed's https origin; until it is set the job is skipped
-# (docs/UPDATING.md, "Feed watchdog").
+# rings.json is read by the separate `rings` job, in the main-only `feed-reader` environment,
+# with a bucket-scoped read-only R2 key (ORCA_FEED_READER_*; never the publishing key, which
+# stays in `desktop-feed`), and handed to the canary job as a job output. The canary job never
+# sees a bucket key and the `rings` job never sees a canary. While the feed is switched on
+# (ORCA_FEED_BUCKET), a missing rings.json or a failed read fails the check rather than
+# passing an empty-looking feed.
+#
+# Read-only: nothing here can write to the bucket. The canary tokens are bearer credentials,
+# so only reviewed code reads them: the canary job runs from main only, in the `feed-canary`
+# environment, which deploys from main only and holds nothing but ORCA_FEED_CANARY_TOKENS (a
+# JSON object of ring to a token minted with tools/deploy/feed-token.js). Never put an R2 key
+# there. The repository variable ORCA_FEED_URL is the feed's https origin; until it is set the
+# job is skipped (docs/UPDATING.md, "Feed watchdog").
 name: Desktop feed (watchdog)
 
 on:
@@ -30,9 +39,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rings:
+    name: read the live ring state
+    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != '' && vars.ORCA_FEED_BUCKET != ''
+    runs-on: ubuntu-24.04
+    environment: feed-reader
+    timeout-minutes: 5
+    outputs:
+      rings: ${{ steps.read.outputs.rings }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          sparse-checkout: tools/deploy
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Read rings.json
+        id: read
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_READER_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_READER_SECRET_ACCESS_KEY }}
+          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+        run: |
+          set -euo pipefail
+          bash tools/deploy/feed-r2.sh read-rings "$RUNNER_TEMP/rings.json"
+          echo "rings=$(cat "$RUNNER_TEMP/rings.json")" >> "$GITHUB_OUTPUT"
+          { echo "Ring state:"; echo '```json'; cat "$RUNNER_TEMP/rings.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
   watch:
     name: check the live feed
-    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != ''
+    needs: rings
+    # Runs when the ring state was read, or the feed is off (no bucket, nothing to read). A failed
+    # read while the feed is on still runs the check, which then fails for the missing state.
+    if: always() && github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != ''
     runs-on: ubuntu-24.04
     environment: feed-canary
     timeout-minutes: 15
@@ -51,5 +95,7 @@ jobs:
         env:
           FEED_URL: ${{ vars.ORCA_FEED_URL }}
           FEED_CANARY_TOKENS: ${{ secrets.ORCA_FEED_CANARY_TOKENS }}
+          FEED_RINGS: ${{ needs.rings.outputs.rings }}
+          FEED_COMMISSIONED: ${{ vars.ORCA_FEED_BUCKET != '' }}
           GITHUB_TOKEN: ${{ github.token }}
         run: node tools/deploy/feed-watchdog.js

@@ -1,7 +1,7 @@
 /**
  * Self-test for the store workload benchmark (#341): the smoke shape runs end to end on the
- * memory and file backends through the package sources, every workload invariant holds, and an
- * unavailable backend is reported as skipped rather than silently dropped.
+ * memory, file and SQLite (#339) backends through the package sources, every workload invariant
+ * holds, and an unavailable backend is reported as skipped rather than silently dropped.
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -18,11 +18,12 @@ const scratch = await mkdtemp(join(tmpdir(), "orca-store-bench-test-"));
 afterAll(() => rm(scratch, { recursive: true, force: true }));
 
 describe("store workload benchmark", () => {
-  it("runs every workload at the smoke shape on memory and file, with all invariants holding", async () => {
+  it("runs every workload at the smoke shape on memory, file and sqlite, with all invariants holding", async () => {
     const report = await runBenchmark({
       api: { store, core },
       scale: "smoke",
-      backends: ["memory", "file", "sqlite"],
+      backends: ["memory", "file", "sqlite", "absent"],
+      extraBackends: { absent: { name: "absent", durable: true, unavailable: "not built here" } },
       repeat: 1,
       scratch,
     });
@@ -30,7 +31,8 @@ describe("store workload benchmark", () => {
     expect(report.results.map((r) => [r.backend, r.status])).toEqual([
       ["memory", "ran"],
       ["file", "ran"],
-      ["sqlite", "skipped"],
+      ["sqlite", "ran"],
+      ["absent", "skipped"],
     ]);
     for (const result of report.results.filter((r) => r.status === "ran")) {
       expect(result.checksPassed).toBe(true);
@@ -41,9 +43,11 @@ describe("store workload benchmark", () => {
       expect(result.workloads.concurrentMetadataWrites.levels.map((l) => l.writers)).toEqual(SCALES.smoke.concurrency);
       expect(result.workloads.paginatedHistory.warm.forwardPages.n).toBeGreaterThan(0);
     }
-    const file = report.results.find((r) => r.backend === "file");
-    expect(file.storeBytes).toBeGreaterThan(0);
-    expect(file.workloads.dependencyTraversal.cold.n).toBe(SCALES.smoke.traversalSamples);
+    for (const durable of ["file", "sqlite"]) {
+      const result = report.results.find((r) => r.backend === durable);
+      expect(result.storeBytes).toBeGreaterThan(0);
+      expect(result.workloads.dependencyTraversal.cold.n).toBe(SCALES.smoke.traversalSamples);
+    }
   });
 
   it("fails the write workload for a backend that does not commit, and counts only committed throughput", async () => {

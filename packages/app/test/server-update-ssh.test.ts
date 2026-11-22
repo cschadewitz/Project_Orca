@@ -36,7 +36,7 @@ beforeAll(async () => {
       '[ "$SSH_ORIGINAL_COMMAND" = "true" ] && exit 0',
       `printf '%s\\n' "$SSH_ORIGINAL_COMMAND" >> ${join(root, "asked")}`,
       // Where the real updater commits, it checks the release the app confirmed.
-      `case "$SSH_ORIGINAL_COMMAND" in *"'--expect-current' '$(cat ${join(root, "current")})'") ;; *) echo "orca-release: Server moved: it runs $(cat ${join(root, "current")})" >&2; exit 1 ;; esac`,
+      `case "$SSH_ORIGINAL_COMMAND" in *" --expect-current $(cat ${join(root, "current")})") ;; *) echo "orca-release: Server moved: it runs $(cat ${join(root, "current")})" >&2; exit 1 ;; esac`,
       `case "$(cat ${join(root, "mode")})" in`,
       '  ok) echo "/srv/orca/releases/v0.8.0"; exit 0 ;;',
       '  lock) echo "orca-release: Busy: update.lock; another update is running" >&2; exit 1 ;;',
@@ -104,7 +104,7 @@ describe("updating a managed server over its SSH profile", () => {
       approve: (_profile, approval) => (approved = approval),
       run: (command, onLine) => {
         confirming = true;
-        return { command: tunnel!.exec(command, onLine) };
+        return { command: tunnel!.execStreaming(command, onLine) };
       },
       hello: async () => {
         const answer = await hello();
@@ -133,19 +133,21 @@ describe("updating a managed server over its SSH profile", () => {
     await mode("busy");
     progress.length = 0;
     expect(await run.update(request)).toEqual({ status: "work-running", detail: "Daemon busy: 1 run active" });
-    expect(progress.map((entry) => entry.line)).toEqual([
-      "checking the daemon",
-      "orca-release: Daemon busy: 1 run active",
-    ]);
+    // stdout and stderr arrive on their own pipes, so only each stream keeps its order.
+    expect(progress).toHaveLength(2);
+    expect(progress).toEqual(
+      expect.arrayContaining([
+        { stream: "stdout", line: "checking the daemon" },
+        { stream: "stderr", line: "orca-release: Daemon busy: 1 run active" },
+      ]),
+    );
     // Another update landed after the preview: the updater refuses under its lock.
     await mode("ok");
     await writeFile(join(root, "current"), "50.0.0");
     expect(await run.update(request)).toEqual({ status: "moved", detail: "Server moved: it runs 50.0.0" });
 
     // Each time, the server was asked for exactly the operator's command, word for word.
-    const quoted = serverUpdateCommand(approved!, target, first.orcaVersion)
-      .map((word) => `'${word}'`)
-      .join(" ");
-    expect((await readFile(join(root, "asked"), "utf8")).trim().split("\n")).toEqual([quoted, quoted, quoted, quoted]);
+    const asked = serverUpdateCommand(approved!, target, first.orcaVersion).join(" ");
+    expect((await readFile(join(root, "asked"), "utf8")).trim().split("\n")).toEqual([asked, asked, asked, asked]);
   }, 60_000);
 });

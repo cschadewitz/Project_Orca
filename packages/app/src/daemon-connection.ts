@@ -30,7 +30,19 @@ export interface RemoteProfileView extends RemoteProfileHop {
   /** One jump host, with its own pinned host key. */
   jump?: RemoteProfileHop;
   remotePort: number;
+  /** The server's ORCA CLI for automatic sign-in (#875). Absent: `orca` on the server's PATH. */
+  serverCommand?: string;
+  /** The daemon's workspace config on the server. Absent: the CLI's own default. */
+  serverConfig?: string;
+  /** Credentials are issued with the read-only `viewer` preset. */
+  readOnly?: true;
   hasCredential: boolean;
+  /** When the automatically issued credential expires; it is renewed well before. */
+  credentialExpiresAt?: string;
+  /** The credential was imported by hand, so ORCA cannot renew or revoke it. */
+  credentialImported?: true;
+  /** Replaced credentials ORCA issued that are not revoked on the server yet. */
+  pendingRevocations?: number;
   hostKeyPinned: boolean;
   /** A pin was enrolled and is now missing, empty or unreadable: connects fail closed until it is forgotten. */
   hostKeyMissing?: true;
@@ -42,7 +54,16 @@ export interface RemoteProfileInput extends RemoteProfileHop {
   name: string;
   jump?: RemoteProfileHop;
   remotePort?: number;
+  serverCommand?: string;
+  serverConfig?: string;
+  readOnly?: boolean;
 }
+
+/**
+ * What removing a profile did to its credential on the server: revoked there, not reached
+ * (it stays valid there until it expires), or there was none ORCA had issued.
+ */
+export type ProfileRemoval = { revoke: "revoked" | "not-reached" | "none" };
 
 /** A URL, the bundled daemon (`null`), or a saved profile. */
 export type DaemonConnectionRequest = string | null | { profile: string };
@@ -53,10 +74,12 @@ export type ProfileResult<T> = { ok: true; value: T } | { ok: false; message: st
 export interface RemoteProfilesBridge {
   list(this: void): Promise<RemoteProfileView[]>;
   save(this: void, input: RemoteProfileInput): Promise<ProfileResult<RemoteProfileView>>;
-  remove(this: void, id: string): Promise<ProfileResult<null>>;
+  remove(this: void, id: string): Promise<ProfileResult<ProfileRemoval>>;
   /** Main opens a file picker, reads and seals the credential; nothing comes back but the view. */
   importCredential(this: void, id: string): Promise<ProfileResult<RemoteProfileView | null>>;
   forgetHostKey(this: void, id: string): Promise<ProfileResult<RemoteProfileView>>;
+  /** Drop an imported credential, so the next connect signs in automatically. */
+  useAutomaticSignIn(this: void, id: string): Promise<ProfileResult<RemoteProfileView>>;
 }
 export interface DaemonConnectionBridge {
   read(this: void): DaemonTargetSnapshot;
