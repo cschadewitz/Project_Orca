@@ -139,13 +139,20 @@ async function installedVersion(): Promise<string> {
   return stdout.trim();
 }
 
-/** Installer, uninstaller, elevation and app processes, one per line, for the log. */
+/**
+ * Installer, uninstaller, elevation and app processes and everything they started (what an
+ * installer that does not finish is waiting on), as "PID<PARENT NAME COMMAND", for the log.
+ */
 async function installerProcesses(): Promise<string> {
   const { stdout } = await execute("powershell", [
     "-NoProfile",
     "-Command",
-    "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'ORCA|Un_|elevate|nsis' } | " +
-      "ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.Name, $_.CommandLine }",
+    "$all = Get-CimInstance Win32_Process; $ids = @{}; " +
+      "$all | Where-Object { $_.Name -match 'ORCA|Un_|elevate|nsis' } | ForEach-Object { $ids[$_.ProcessId] = 1 }; " +
+      "do { $n = $ids.Count; $all | Where-Object { $ids.ContainsKey($_.ParentProcessId) } | " +
+      "ForEach-Object { $ids[$_.ProcessId] = 1 } } while ($ids.Count -ne $n); " +
+      "$all | Where-Object { $ids.ContainsKey($_.ProcessId) } | " +
+      "ForEach-Object { '{0}<{1} {2} {3}' -f $_.ProcessId, $_.ParentProcessId, $_.Name, $_.CommandLine }",
   ]).catch(() => ({ stdout: "(process list failed)" }));
   return stdout.trim().split(/\r?\n/).join(" | ");
 }
