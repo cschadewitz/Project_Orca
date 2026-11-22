@@ -23,6 +23,7 @@ import {
   evaluateCondition,
   effectAbandoned,
   evaluateExpression,
+  mayHaveActed,
   needsEffectReview,
   newId,
   OrcaError,
@@ -1740,8 +1741,16 @@ export class Orchestrator {
           return rc.state;
         }
         if (outcome.kind === "failed") {
-          const willRetry = outcome.retryable !== false && attempt < retryBudget(node);
-          await rc.emit({ type: "step.failed", payload: { stepRunId, error: outcome.error, willRetry } });
+          // A retry budget repeats an attempt only when the log durably shows it never acted
+          // outside ORCA: no agent turn was sent, and a node that leaves no such evidence said so
+          // itself. One that may have acted fails the run instead, for an operator's review (#357).
+          const step = rc.state.steps[stepRunId]!;
+          const acted = mayHaveActed(outcome.effect === "none" ? { ...step, noEffect: true } : step);
+          const willRetry = outcome.retryable !== false && attempt < retryBudget(node) && !acted;
+          await rc.emit({
+            type: "step.failed",
+            payload: { stepRunId, error: outcome.error, willRetry, ...(outcome.effect ? { effect: outcome.effect } : {}) },
+          });
           if (willRetry) {
             attempt++;
             continue;

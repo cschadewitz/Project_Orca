@@ -306,7 +306,10 @@ export function jevEvalExecutor(options: JevEvalOptions = {}): NodeExecutor {
       } catch (e) {
         if (!(e instanceof EvalFailure)) throw e;
         const { code, message, retryable, details } = e.failure;
-        if (node.onError === "fail" || code === "WORKFLOW_INVALID") return failed(code, message, details, retryable);
+        // An evaluation only reads artifacts and asks a model: nothing outside ORCA changed, so the
+        // retry budget may repeat it (#357).
+        if (node.onError === "fail" || code === "WORKFLOW_INVALID")
+          return failed(code, message, details, retryable, "none");
         ctx.logger.warn("jev evaluation failed; recording the failure as the node asked", { code, message });
         return record(ctx, node, {
           status: "failed",

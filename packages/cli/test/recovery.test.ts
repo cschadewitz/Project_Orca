@@ -179,6 +179,7 @@ const step = (id: string, nodeId: string, status: StepRun["status"]): StepRun =>
   skippedBranches: [],
   scheduledAt: at,
   startedAt: at,
+  dispatched: true,
   ...(status === "completed" ? { result: { artifactIds: [], data: {} } } : {}),
 });
 

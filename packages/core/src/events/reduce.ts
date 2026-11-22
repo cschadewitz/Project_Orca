@@ -143,6 +143,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       const s = step(e.payload.stepRunId);
       s.status = "failed";
       s.error = e.payload.error;
+      if (e.payload.effect === "none") s.noEffect = true;
       s.completedAt = e.at;
       delete s.waitingOn;
       delete s.waitingDetail;
@@ -175,6 +176,10 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       step(e.payload.stepRunId).agentSessionId = e.payload.sessionId;
       break;
     case "agent.turn.started":
+      // Recorded before the prompt is sent, on whichever step the (possibly pooled) session
+      // serves: durable evidence this attempt dispatched work to an agent (#357).
+      step(e.payload.stepRunId).dispatched = true;
+      break;
     case "agent.update":
     case "agent.permission":
     case "agent.turn.completed":

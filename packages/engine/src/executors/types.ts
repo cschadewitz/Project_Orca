@@ -32,7 +32,17 @@ export interface ResolvedArtifact extends Artifact {
 
 export type StepOutcome =
   | { kind: "completed"; result: StepResult }
-  | { kind: "failed"; error: { code: string; message: string; details?: Record<string, unknown> }; retryable?: boolean }
+  | {
+      kind: "failed";
+      error: { code: string; message: string; details?: Record<string, unknown> };
+      retryable?: boolean;
+      /**
+       * The executor's statement that this attempt did nothing outside ORCA (#357). Recorded on
+       * `step.failed`; without it, a node that leaves no other evidence is assumed to have
+       * acted, and its retry budget does not repeat it. Ignored once an agent turn was sent.
+       */
+      effect?: "none";
+    }
   /** The step cannot finish in this process (a human must answer, or a child run parked); the run is paused and re-attempts the node on resume. */
   | { kind: "paused"; reason: string; details?: Record<string, unknown> };
 
@@ -164,7 +174,14 @@ export const failed = (
   message: string,
   details?: Record<string, unknown>,
   retryable = false,
-): StepOutcome => ({ kind: "failed", error: details ? { code, message, details } : { code, message }, retryable });
+  /** "none": this attempt did nothing outside ORCA, so its retry budget may repeat it (#357). */
+  effect?: "none",
+): StepOutcome => ({
+  kind: "failed",
+  error: details ? { code, message, details } : { code, message },
+  retryable,
+  ...(effect ? { effect } : {}),
+});
 export const paused = (reason: string, details?: Record<string, unknown>): StepOutcome => ({
   kind: "paused",
   reason,

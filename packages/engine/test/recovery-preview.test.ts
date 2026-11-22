@@ -8,6 +8,12 @@ const definition = { id: "wf", version: "1", nodes: { start: { type: "start" } }
 const REVISION = workflowRevision(definition);
 
 const ws = { hostId: "local", cwd: "/tmp/w" };
+/** A prompt sent to the agent: durable evidence the step may have acted outside ORCA. */
+const turn = (stepRunId: string) =>
+  ({
+    type: "agent.turn.started",
+    payload: { stepRunId, sessionId: "sess", promptHash: "h", promptPreview: "p", followUp: 0 },
+  }) as const;
 type Step = { id: string; node: string; type: string; attempt?: number };
 
 function artifact(id: string, stepRunId: string): Artifact {
@@ -62,6 +68,7 @@ async function failedRun(
   for (const s of steps) {
     await e({ type: "step.scheduled", payload: { stepRunId: s.id, nodeId: s.node, nodeType: s.type, attempt: 1 } });
     await e({ type: "step.started", payload: { stepRunId: s.id, inputArtifactIds: [] } });
+    if (s.type === "agent") await e(turn(s.id));
   }
   // Completions recorded in order after the starts keep the projection simple and valid.
   await e({
@@ -213,6 +220,7 @@ describe("previewRecovery", () => {
     await e({ type: "run.started", payload: {} } as never);
     await e({ type: "step.scheduled", payload: { stepRunId: "s_a", nodeId: "a", nodeType: "agent", attempt: 1 } });
     await e({ type: "step.started", payload: { stepRunId: "s_a", inputArtifactIds: [] } });
+    await e(turn("s_a"));
     // The process died here: no completion, no run end, and its lease lapsed long ago.
     await stores.leases.acquire({ resource: runLeaseResource("run_2"), holder: "gone", ttlMs: 1 });
     const now = Date.now() + 60_000;
@@ -262,6 +270,7 @@ describe("previewRecovery", () => {
       payload: { stepRunId: "c_a", nodeId: "a", nodeType: "agent", attempt: 1 },
     });
     await append("run_c", { type: "step.started", payload: { stepRunId: "c_a", inputArtifactIds: [] } });
+    await append("run_c", turn("c_a"));
     await append("run_c", { type: "run.paused", payload: {} } as never);
 
     // The parent's pinned definition is unreadable, and another process holds its lease.
@@ -280,6 +289,52 @@ describe("previewRecovery", () => {
     await stores.workflows.put(definition);
     resume = (await previewRecovery(stores, "run_c")).options.find((o) => o.kind === "resume")!;
     expect(resume).toMatchObject({ readiness: "available", blockers: [], targetRunId: "run_p" });
+  });
+
+  it("resume checks the unfinished children of every paused run it drives, not only the top one", async () => {
+    const stores = memoryStores();
+    const append = (runId: string, event: Omit<OrcaEventInput, "runId">) =>
+      stores.events.append({ ...event, runId } as OrcaEventInput);
+    // run_g (paused) -> run_p (paused, two children) -> run_c (asked about) and run_s (a sibling
+    // whose agent sent a prompt and never finished).
+    const run = async (runId: string, parent?: [string, string]) => {
+      await append(runId, {
+        type: "run.created",
+        payload: {
+          workflowId: parent ? "wf::fan" : "wf",
+          workflowVersion: "1",
+          workspace: ws,
+          vars: {},
+          ...(parent ? { parentRunId: parent[0], parentStepRunId: parent[1] } : {}),
+        },
+      });
+      await append(runId, { type: "run.started", payload: {} } as never);
+      if (parent)
+        await append(parent[0], { type: "child.spawned", payload: { stepRunId: parent[1], childRunId: runId } });
+    };
+    const step = async (runId: string, stepRunId: string, nodeType: string) => {
+      await append(runId, { type: "step.scheduled", payload: { stepRunId, nodeId: stepRunId, nodeType, attempt: 1 } });
+      await append(runId, { type: "step.started", payload: { stepRunId, inputArtifactIds: [] } });
+    };
+    await run("run_g");
+    await step("run_g", "g_fan", "parallel");
+    await append("run_g", { type: "run.paused", payload: {} } as never);
+    await run("run_p", ["run_g", "g_fan"]);
+    await step("run_p", "p_fan", "parallel");
+    await append("run_p", { type: "run.paused", payload: {} } as never);
+    await run("run_c", ["run_p", "p_fan"]);
+    await step("run_c", "c_gate", "gate");
+    await append("run_c", { type: "run.paused", payload: {} } as never);
+    await run("run_s", ["run_p", "p_fan"]);
+    await step("run_s", "s_a", "agent");
+    await append("run_s", turn("s_a"));
+    await stores.workflows.put(definition);
+
+    const resume = (await previewRecovery(stores, "run_c")).options.find((o) => o.kind === "resume")!;
+    expect(resume).toMatchObject({ readiness: "blocked", blockers: ["effect-unreviewed"], targetRunId: "run_g" });
+    expect(resume.runsAgain).toContainEqual(
+      expect.objectContaining({ runId: "run_s", nodeId: "s_a", effect: "uncertain" }),
+    );
   });
 
   it("an inline child's pin is checked against the definition built from its root", async () => {

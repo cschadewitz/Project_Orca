@@ -243,8 +243,23 @@ const INTERNAL_NODES: ReadonlySet<string> = new Set([
   "parallel",
   "subworkflow",
 ]);
+/**
+ * Whether this attempt can have acted outside ORCA, from what the log durably shows. An agent
+ * step, or an internal node that asks an agent (a decision), acts only through a turn, and
+ * `dispatched` is recorded before each prompt is sent, on the step a pooled session serves.
+ * Anything else that is not internal - a plugin's custom node - leaves no such evidence, so it
+ * may have acted as soon as it started, unless its executor reported a failure with no effect.
+ */
 const mayActOutside = (step: StepRun): boolean =>
-  !INTERNAL_NODES.has(step.nodeType) || step.agentSessionId !== undefined;
+  step.dispatched === true || (step.nodeType !== "agent" && !INTERNAL_NODES.has(step.nodeType) && !step.noEffect);
+
+/**
+ * The attempt started and may have acted outside ORCA, whatever it reported. The interpreter
+ * repeats a failed attempt automatically (its retry budget) only when this is false (#357).
+ */
+export function mayHaveActed(step: StepRun): boolean {
+  return step.startedAt !== undefined && mayActOutside(step);
+}
 
 /**
  * The attempt began, never reported success, was not paused on purpose and can act outside

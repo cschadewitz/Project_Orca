@@ -175,7 +175,16 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
   base("step.inputs", z.object({ stepRunId: z.string(), artifactIds: z.array(z.string()) })),
   base("step.waiting", z.object({ stepRunId: z.string(), on: z.string(), detail: z.string().optional() })),
   base("step.completed", z.object({ stepRunId: z.string(), result: StepResultSchema })),
-  base("step.failed", z.object({ stepRunId: z.string(), error: ErrorInfoSchema, willRetry: z.boolean() })),
+  base(
+    "step.failed",
+    z.object({
+      stepRunId: z.string(),
+      error: ErrorInfoSchema,
+      willRetry: z.boolean(),
+      /** The executor stated this attempt did nothing outside ORCA (#357); see `StepRun.noEffect`. */
+      effect: z.literal("none").optional(),
+    }),
+  ),
   base("step.cancelled", z.object({ stepRunId: z.string() })),
   base("step.skipped", z.object({ stepRunId: z.string(), reason: z.string() })),
   /**

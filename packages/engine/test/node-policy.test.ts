@@ -18,8 +18,28 @@ function make(yaml: string) {
       execute: async (ctx) => {
         const n = (attempts.get(ctx.nodeId) ?? 0) + 1;
         attempts.set(ctx.nodeId, n);
-        const succeedOn = (ctx.node as unknown as { succeedOn?: number }).succeedOn ?? 1;
-        return n >= succeedOn ? completed() : failed("FLAKY", `attempt ${n} failed`, {}, true);
+        const node = ctx.node as unknown as { succeedOn?: number; mayAct?: boolean };
+        const succeedOn = node.succeedOn ?? 1;
+        // Unless told otherwise, it states that a failed attempt did nothing outside ORCA.
+        return n >= succeedOn
+          ? completed()
+          : failed("FLAKY", `attempt ${n} failed`, {}, true, node.mayAct ? undefined : "none");
+      },
+    })
+    // Stands in for the agent executor: attempt 1 fails before any prompt is sent, attempt 2
+    // fails after sending one (the agent may have acted), attempt 3 would succeed.
+    .register({
+      type: "agent",
+      execute: async (ctx) => {
+        const n = (attempts.get(ctx.nodeId) ?? 0) + 1;
+        attempts.set(ctx.nodeId, n);
+        if (n === 1) return failed("AGENT_SPAWN", "could not start the agent", {}, true);
+        if (n >= 3) return completed();
+        await ctx.run.emit({
+          type: "agent.turn.started",
+          payload: { stepRunId: ctx.step.id, sessionId: "sess", promptHash: "h", promptPreview: "p", followUp: 0 },
+        });
+        return failed("AGENT_FAILED", "lost the session", {}, true);
       },
     })
     // A plugin-provided terminal node: returning an outcome ends the run.
@@ -42,7 +62,7 @@ function make(yaml: string) {
   return { orchestrator, workflows };
 }
 
-const flaky = (opts: { succeedOn: number; maxAttempts?: number }) => `
+const flaky = (opts: { succeedOn: number; maxAttempts?: number; mayAct?: boolean }) => `
 id: flaky
 name: flaky
 start: s
@@ -51,6 +71,7 @@ nodes:
   work:
     type: "custom:flaky"
     succeedOn: ${opts.succeedOn}
+    ${opts.mayAct ? "mayAct: true" : ""}
     ${opts.maxAttempts === undefined ? "" : `maxAttempts: ${opts.maxAttempts}`}
   e: { type: end }
 edges: [{ from: s, to: work }, { from: work, to: e }]
@@ -76,6 +97,38 @@ describe("node-agnostic retry and termination", () => {
     const once = await make(flaky({ succeedOn: 2 })).orchestrator.startAndRun({ workflowId: "flaky" });
     expect(once.run.status).toBe("failed");
     expect(attempts.get("work")).toBe(1);
+  });
+
+  it("never repeats an attempt that may have acted outside ORCA, whatever its budget (#357)", async () => {
+    const { orchestrator } = make(flaky({ succeedOn: 2, maxAttempts: 3, mayAct: true }));
+    const state = await orchestrator.startAndRun({ workflowId: "flaky" });
+    expect(state.run.status).toBe("failed");
+    expect(attempts.get("work")).toBe(1);
+    const failedEvent = (await orchestrator.events(state.run.id)).find((e) => e.type === "step.failed");
+    expect(failedEvent?.payload).toMatchObject({ willRetry: false });
+    expect(failedEvent?.payload).not.toHaveProperty("effect");
+  });
+
+  it("retries an agent step that failed before sending a prompt, but not one that sent it (#357)", async () => {
+    const { orchestrator } = make(`
+id: agentic
+name: agentic
+start: s
+nodes:
+  s: { type: start }
+  work: { type: agent, agent: coder, prompt: go, completion: { maxAttempts: 3 } }
+  e: { type: end }
+edges: [{ from: s, to: work }, { from: work, to: e }]
+`);
+    const state = await orchestrator.startAndRun({ workflowId: "agentic" });
+    expect(state.run.status).toBe("failed");
+    expect(state.run.error?.code).toBe("AGENT_FAILED");
+    expect(attempts.get("work")).toBe(2);
+    const work = state.stepOrder.map((id) => state.steps[id]!).filter((s) => s.nodeId === "work");
+    expect(work.map((s) => [s.attempt, s.dispatched ?? false])).toEqual([
+      [1, false],
+      [2, true],
+    ]);
   });
 
   it("ends the run on any step that returns an outcome, with no end node in the graph", async () => {

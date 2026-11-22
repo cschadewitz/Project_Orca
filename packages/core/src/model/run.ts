@@ -131,6 +131,14 @@ export const StepRunSchema = z.object({
    * resume re-attempts it by design. An attempt that stopped without this was interrupted (#357).
    */
   parked: z.literal(true).optional(),
+  /**
+   * This attempt sent at least one turn to an agent: `agent.turn.started`, appended before the
+   * prompt is sent. A pooled session opens no new session for the step, so this, not
+   * `agentSessionId`, is what shows an agent may have acted for it (#357).
+   */
+  dispatched: z.literal(true).optional(),
+  /** The executor reported this failed attempt did nothing outside ORCA (`step.failed.effect`). */
+  noEffect: z.literal(true).optional(),
   /** An operator's side-effect review of this attempt (#357): `step.effect.reviewed`. */
   effectReview: z
     .object({

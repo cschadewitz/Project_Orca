@@ -102,6 +102,20 @@ acted. ORCA cannot know whether its change happened, so it never runs that step 
   (it completed, was skipped, paused on purpose, or was never started): a stale review cannot
   land on a later attempt.
 
+The retry budget follows the same rule. A failed attempt is retried automatically
+(`maxAttempts`) only on durable evidence that it did nothing outside ORCA:
+
+- An agent step (or a decision or other step an agent answers) records `agent.turn.started`
+  before each prompt is sent, on its own session or the run's pooled one. Once one is recorded
+  the step is `dispatched` and its failure is never retried automatically: it fails the run, and
+  the step is uncertain until reviewed. A failure before the first prompt (the agent did not
+  start, the session did not open) is retried as before.
+- Any other node that can act outside ORCA (a plugin's custom node) is retried only when its
+  executor states the attempt did nothing outside, `failed(code, message, details, true,
+  "none")`; `step.failed` records that as `effect: "none"`. Without it the attempt is assumed to
+  have acted.
+- Steps that act only inside ORCA (gates, `set`, containers) are retried as before.
+
 A step paused on purpose is different: an agent that asked a person, or a container waiting on a
 child, is recorded as `parked` when the run pauses, and resume re-attempts it by design, as
 before. Reconciling the effect itself (proving it happened, or undoing it) is not something

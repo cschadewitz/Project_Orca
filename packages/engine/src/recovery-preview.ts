@@ -55,7 +55,8 @@ export async function previewRecovery(
   const resumeDescendants: RecoveryRunFacts[] = [];
   const seen = new Set([state.run.id, ...resumeAncestors.map((a) => a.state.run.id)]);
   const children = (s: RecoveryRunFacts["state"]) => Object.values(s.steps).flatMap((step) => step.childRunIds);
-  const queue = [...children(target.state), ...children(state)];
+  // Every paused run on the way down is driven, so the unfinished children of each are attached.
+  const queue = [target, ...resumeAncestors, facts].flatMap((f) => children(f.state));
   while (queue.length) {
     const id = queue.shift()!;
     if (seen.has(id)) continue;

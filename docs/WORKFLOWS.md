@@ -329,7 +329,10 @@ the agent is told `cancelled` and the *tool call* fails while the run carries on
 - `maxAttempts`: whole‑step retries (fresh session each time). Any node type can set
   `maxAttempts` directly on the node; for an agent node the node‑level value wins over
   `completion.maxAttempts`. A step is only retried when its executor reports the failure
-  as retryable.
+  as retryable, and only when the failed attempt cannot have acted outside ORCA: an agent step
+  that already sent the agent a prompt is not retried automatically (it waits for a
+  [side-effect review](recovery.md#side-effect-review)), so for an agent node `maxAttempts`
+  covers failures before the first prompt, such as the agent failing to start.
 - `timeoutMs`: per‑turn wall clock (defaults to the agent's `turnTimeoutMs`).
   When it elapses ORCA sends `session/cancel`; an agent that does not end the turn within
   its `cancelGraceMs` (default 10s) is killed and the step fails with `AGENT_TRANSPORT`.
