@@ -18,11 +18,14 @@ import { RINGS, validateRings, versionFor } from "./rings.js";
 const CHANNEL = /^latest-(x64|arm64)\.yml$/;
 const PAYLOAD = /^ORCA-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-win-(x64|arm64)\.exe(?:\.blockmap)?$/;
 /**
- * Architectures the feed serves, matching `FEED_ARCHES` in feed-publish.yml. Only x64 has
- * native acceptance, so arm64 channel files and payloads answer 404 even if the bucket holds
- * them. Adding arm64 is a reviewed change here and there, then a Worker deploy.
+ * Architectures the feed can serve, matching `FEED_ARCHES` in feed-publish.yml; anything else
+ * answers 404 even if the bucket holds it. Which architectures a given version offers is
+ * decided when it is published: feed-publish.yml uploads arm64 only for a release whose arm64
+ * installer passed native acceptance (#889), so a snapshot without `latest-arm64.yml` offers
+ * arm64 clients nothing new. Changing this list is a reviewed change here and there, then a
+ * Worker deploy.
  */
-export const SERVED_ARCHES = Object.freeze(["x64"]);
+export const SERVED_ARCHES = Object.freeze(["x64", "arm64"]);
 const TOKEN = /^Bearer ([A-Za-z0-9_-]{32,256})$/;
 
 function respond(status, extra = {}, body = null) {

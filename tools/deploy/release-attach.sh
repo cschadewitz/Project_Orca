@@ -1,32 +1,47 @@
 #!/usr/bin/env bash
-# Attach a final's signed x64 installer to its staged draft (release-attach-signed.yml).
+# Attach a final's signed Windows installers to its staged draft (release-attach-signed.yml)
+# and record the arm64 installer's native acceptance (release-accept-arm64.yml, #889).
 #
 #   release-attach.sh select RUN_ID     print artifact=, sha=, id=, version= (stdout holds only
 #                                       these) for the one final draft at the commit RUN_ID
 #                                       signed; nothing if none. RUN_ID must be a successful
 #                                       windows-signed.yml run of this repository, dispatched
 #                                       from main, with exactly one unexpired signed artifact
-#   release-attach.sh attach ID SHA VERSION RUN_ID FILE
-#                                       record RUN_ID and FILE's digest in draft ID's notes, then
-#                                       upload FILE; re-validates the draft before every write
+#   release-attach.sh attach ID SHA VERSION RUN_ID FILE [ARM64_FILE]
+#                                       record RUN_ID and each file's digest in draft ID's notes,
+#                                       then upload FILE (x64) and ARM64_FILE; re-validates the
+#                                       draft before every write
 #   release-attach.sh reconcile         dispatch the attach for every final draft still missing
-#                                       its installer or record: the recorded run if there is
+#                                       an installer or record: the recorded run if there is
 #                                       one, else the newest qualifying run for its commit
+#   release-attach.sh accept-select [ID]
+#                                       print id=, sha=, version=, digest=, asset= for one final
+#                                       draft (ID, or the oldest) whose recorded arm64 installer
+#                                       is attached and has no acceptance record yet
+#   release-attach.sh accept ID SHA VERSION RUN_ID DIGEST
+#                                       record that RUN_ID's native acceptance passed on draft
+#                                       ID's arm64 installer, whose digest must be DIGEST
 #   release-attach.sh publish ID VERSION SHA DEB_SHA256 EXE_SHA256
 #                                       publish draft ID as vVERSION only if it targets SHA and
-#                                       holds exactly the accepted .deb and installer (the
-#                                       recorded one), and VERSION is newer than Latest
+#                                       holds exactly the accepted .deb and x64 installer (the
+#                                       recorded one), plus, if attached, the recorded arm64
+#                                       installer with its acceptance record, and VERSION is
+#                                       newer than Latest
 #
 # Every write is preceded by a fresh read of the exact draft: still a draft, the same target
-# and name, only the expected assets, and no other record. The record is written before the
-# upload, so an interrupted attach is resumed with the same run, never a newer one. The attach
-# and publish workflows share one concurrency group, so publication through the workflow
-# never interleaves with an attach. Environment: GH_TOKEN, REPO.
+# and name, only the expected assets, and no other record. The records are written before the
+# uploads, so an interrupted attach is resumed with the same run, never a newer one. The
+# attach, accept and publish workflows share one concurrency group, so they never interleave.
+# Environment: GH_TOKEN, REPO.
 set -euo pipefail
 fail() { echo "::error::$*" >&2; exit 1; }
 # Notes go to stderr and the summary: `select`'s stdout is the step's GITHUB_OUTPUT.
 note() { echo "$*" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}" >&2; }
 MARK_RE='<!-- orca-signed-run: [0-9]+ sha256:[0-9a-f]{64} -->'
+ARM_RE='<!-- orca-signed-run-arm64: [0-9]+ sha256:[0-9a-f]{64} -->'
+ACCEPT_RE='<!-- orca-arm64-accepted: [0-9]+ sha256:[0-9a-f]{64} -->'
+# records RE: the body's records matching RE, one per line (read from stdin).
+records() { grep -oE "$1" || true; }
 
 # Print RUN_ID's single unexpired signed artifact name if it is a successful
 # windows-signed.yml run of this repository, dispatched from main; print nothing otherwise
@@ -72,9 +87,11 @@ lookup() {
 # found STATUS: true for 0, false for 1, and stops the run for anything else.
 found() { case "$1" in 0) return 0 ;; 1) return 1 ;; *) exit 1 ;; esac; }
 
-# Refuse unless draft ID is still exactly what we selected. Prints its body.
+# Refuse unless draft ID is still exactly what we selected: the .deb, then the x64 installer,
+# then the arm64 one, and no record other than MARKER and ARM_MARKER (each checked only when
+# given). Prints its body.
 validate() {
-  local id=$1 sha=$2 version=$3 marker=$4 json names recorded
+  local id=$1 sha=$2 version=$3 marker=$4 arm_marker=${5:-} json names recorded
   json=$(gh api "repos/$REPO/releases/$id") || fail "release $id is gone"
   [[ "$(jq -r '.draft' <<<"$json")" == true ]] || fail "release $id is no longer a draft; nothing written"
   [[ "$(jq -r '.prerelease' <<<"$json")" == false ]] || fail "release $id is a prerelease"
@@ -83,11 +100,30 @@ validate() {
   names=$(jq -r '[.assets[].name] | sort | join(" ")' <<<"$json")
   case "$names" in
     "ORCA-$version-linux-amd64.deb" | "ORCA-$version-linux-amd64.deb ORCA-$version-win-x64.exe") ;;
+    "ORCA-$version-linux-amd64.deb ORCA-$version-win-arm64.exe ORCA-$version-win-x64.exe") ;;
     *) fail "release $id has unexpected assets: $names" ;;
   esac
-  recorded=$(jq -r '.body // ""' <<<"$json" | grep -oE "$MARK_RE" || true)
-  [[ -z "$recorded" || "$recorded" == "$marker" ]] || fail "release $id already records another signing run: $recorded"
+  recorded=$(jq -r '.body // ""' <<<"$json" | records "$MARK_RE")
+  [[ -z "$marker" || -z "$recorded" || "$recorded" == "$marker" ]] ||
+    fail "release $id already records another signing run: $recorded"
+  if [[ -n "$arm_marker" ]]; then
+    recorded=$(jq -r '.body // ""' <<<"$json" | records "$ARM_RE")
+    [[ -z "$recorded" || "$recorded" == "$arm_marker" ]] ||
+      fail "release $id already records another signing run for arm64: $recorded"
+  fi
   jq -r '.body // ""' <<<"$json"
+}
+
+# upload ID NAME FILE WANT: upload FILE as NAME unless the draft already has exactly it.
+upload() {
+  local id=$1 name=$2 file=$3 want=$4 have
+  have=$(gh api "repos/$REPO/releases/$id" --jq ".assets[] | select(.name == \"$name\") | .digest")
+  if [[ -z "$have" ]]; then
+    gh api -X POST -H "Content-Type: application/octet-stream" \
+      "https://uploads.github.com/repos/$REPO/releases/$id/assets?name=$name" --input "$file" >/dev/null
+  elif [[ "$have" != "$want" ]]; then
+    fail "draft $id already has $name with $have, not this run's $want"
+  fi
 }
 
 case "${1:-}" in
@@ -106,52 +142,66 @@ case "${1:-}" in
     printf 'artifact=%s\nsha=%s\nid=%s\nversion=%s\n' "$artifact" "$sha" "$ids" "${name#v}"
     ;;
   attach)
-    [[ $# -eq 6 ]] || fail "usage: release-attach.sh attach ID SHA VERSION RUN_ID FILE"
-    id=$2 sha=$3 version=$4 run=$5 file=$6
-    name="ORCA-$version-win-x64.exe"
+    [[ $# -eq 6 || $# -eq 7 ]] || fail "usage: release-attach.sh attach ID SHA VERSION RUN_ID FILE [ARM64_FILE]"
+    id=$2 sha=$3 version=$4 run=$5 file=$6 arm_file=${7:-}
+    name="ORCA-$version-win-x64.exe" arm_name="ORCA-$version-win-arm64.exe"
     [[ "$(basename "$file")" == "$name" ]] || fail "$file is not $name"
     want="sha256:$(sha256sum "$file" | cut -d' ' -f1)"
     marker="<!-- orca-signed-run: $run $want -->"
-    # The record first: if anything interrupts the upload, the draft already names this run,
+    arm_want="" arm_marker=""
+    if [[ -n "$arm_file" ]]; then
+      [[ "$(basename "$arm_file")" == "$arm_name" ]] || fail "$arm_file is not $arm_name"
+      arm_want="sha256:$(sha256sum "$arm_file" | cut -d' ' -f1)"
+      arm_marker="<!-- orca-signed-run-arm64: $run $arm_want -->"
+    fi
+    # The records first: if anything interrupts an upload, the draft already names this run,
     # so reconcile resumes with it and no other run's bytes can be attached.
-    body=$(validate "$id" "$sha" "$version" "$marker")
-    if ! grep -qF "$marker" <<<"$body"; then
-      jq -n --arg body "$body"$'\n\n'"$marker" '{body: $body}' |
+    body=$(validate "$id" "$sha" "$version" "$marker" "$arm_marker")
+    add=""
+    for m in "$marker" "$arm_marker"; do
+      [[ -z "$m" ]] || grep -qF "$m" <<<"$body" || add+=$'\n\n'"$m"
+    done
+    if [[ -n "$add" ]]; then
+      jq -n --arg body "$body$add" '{body: $body}' |
         gh api -X PATCH "repos/$REPO/releases/$id" --input - >/dev/null
     fi
-    validate "$id" "$sha" "$version" "$marker" >/dev/null
-    have=$(gh api "repos/$REPO/releases/$id" --jq ".assets[] | select(.name == \"$name\") | .digest")
-    if [[ -z "$have" ]]; then
-      gh api -X POST -H "Content-Type: application/octet-stream" \
-        "https://uploads.github.com/repos/$REPO/releases/$id/assets?name=$name" --input "$file" >/dev/null
-    elif [[ "$have" != "$want" ]]; then
-      fail "draft $id already has $name with $have, not this run's $want"
+    validate "$id" "$sha" "$version" "$marker" "$arm_marker" >/dev/null
+    upload "$id" "$name" "$file" "$want"
+    if [[ -n "$arm_file" ]]; then
+      validate "$id" "$sha" "$version" "$marker" "$arm_marker" >/dev/null
+      upload "$id" "$arm_name" "$arm_file" "$arm_want"
     fi
     check=$(gh api "repos/$REPO/releases/$id" --jq \
       "[.draft, .target_commitish == \"$sha\", ([.assets[] | select(.name == \"$name\") | .digest] == [\"$want\"]), ((.body // \"\") | contains(\"$marker\"))] | map(tostring) | join(\" \")")
     [[ "$check" == "true true true true" ]] || fail "draft $id does not read back with $name and its record ($check)"
+    if [[ -n "$arm_file" ]]; then
+      check=$(gh api "repos/$REPO/releases/$id" --jq \
+        "[([.assets[] | select(.name == \"$arm_name\") | .digest] == [\"$arm_want\"]), ((.body // \"\") | contains(\"$arm_marker\"))] | map(tostring) | join(\" \")")
+      [[ "$check" == "true true" ]] || fail "draft $id does not read back with $arm_name and its record ($check)"
+      note "Attached $arm_name (\`$arm_want\`) from signed run $run to draft v$version (release \`$id\`); its native acceptance runs next."
+    fi
     note "Attached $name (\`$want\`) from signed run $run to draft v$version (release \`$id\`, \`$sha\`)."
     ;;
   reconcile)
     drafts=$(gh api --paginate "repos/$REPO/releases" \
-      --jq '.[] | select(.draft and (.prerelease | not)) | [.id, .target_commitish, .name, ([.assets[].name] | any(endswith("-win-x64.exe")))] | @tsv')
+      --jq '.[] | select(.draft and (.prerelease | not)) | [.id, .target_commitish, .name, ([.assets[].name] | any(endswith("-win-x64.exe"))), ([.assets[].name] | any(endswith("-win-arm64.exe")))] | @tsv')
     [[ -n "$drafts" ]] || { note "No final drafts."; exit 0; }
     runs=$(gh api "repos/$REPO/actions/workflows/windows-signed.yml/runs?branch=main&event=workflow_dispatch&status=success&per_page=30" \
       --jq '.workflow_runs[].id')
-    while IFS=$'\t' read -r id sha name attached; do
+    while IFS=$'\t' read -r id sha name attached arm_attached; do
       [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
-      records=$(gh api "repos/$REPO/releases/$id" --jq '.body // ""' | grep -oE "$MARK_RE" || true)
+      records=$(gh api "repos/$REPO/releases/$id" --jq '.body // ""' | records "$MARK_RE")
       count=$(grep -c . <<<"$records" || true)
       if [[ "$count" -gt 1 ]]; then
         note "$name (release $id): more than one signing record; fix by hand."
         continue
       fi
-      if [[ "$count" -eq 1 && "$attached" == true ]]; then continue; fi
+      if [[ "$count" -eq 1 && "$attached" == true && "$arm_attached" == true ]]; then continue; fi
       if [[ "$count" -eq 0 && "$attached" == true ]]; then
         note "$name (release $id): an installer without a signing record (attached by hand); not touched."
         continue
       fi
-      # Recorded but not uploaded: resume with exactly the recorded run, never another.
+      # Recorded but not (fully) uploaded: resume with exactly the recorded run, never another.
       if [[ "$count" -eq 1 ]]; then
         candidates=$(awk '{print $3}' <<<"$records")
       else
@@ -171,6 +221,65 @@ case "${1:-}" in
       gh workflow run release-attach-signed.yml --repo "$REPO" --ref main -f signed_run_id="$found"
       note "$name (release $id): dispatched the attach with signed run $found."
     done <<<"$drafts"
+    ;;
+  accept-select)
+    [[ $# -le 2 && "${2:-0}" =~ ^[0-9]+$ ]] || fail "usage: release-attach.sh accept-select [ID]"
+    want_id=${2:-}
+    drafts=$(gh api --paginate "repos/$REPO/releases" \
+      --jq '.[] | select(.draft and (.prerelease | not)) | [.id, .target_commitish, .name] | @tsv' | sort -n)
+    while IFS=$'\t' read -r id sha name; do
+      [[ -n "$id" ]] || continue
+      [[ -z "$want_id" || "$id" == "$want_id" ]] || continue
+      [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
+      version=${name#v}
+      json=$(gh api "repos/$REPO/releases/$id")
+      body=$(jq -r '.body // ""' <<<"$json")
+      arm=$(records "$ARM_RE" <<<"$body")
+      [[ $(grep -c . <<<"$arm") -eq 1 ]] || { note "$name (release $id): no single arm64 signing record; nothing to accept."; continue; }
+      digest=$(awk '{print $4}' <<<"$arm")
+      asset=$(jq -r --arg n "ORCA-$version-win-arm64.exe" --arg d "$digest" \
+        '[.assets[] | select(.name == $n and .digest == $d) | .id] | if length == 1 then .[0] else "" end' <<<"$json")
+      [[ -n "$asset" ]] || { note "$name (release $id): the recorded arm64 installer is not attached yet."; continue; }
+      if [[ -n "$(records "$ACCEPT_RE" <<<"$body")" ]]; then
+        note "$name (release $id): arm64 acceptance already recorded."
+        continue
+      fi
+      printf 'id=%s\nsha=%s\nversion=%s\ndigest=%s\nasset=%s\n' "$id" "$sha" "$version" "$digest" "$asset"
+      exit 0
+    done <<<"$drafts"
+    note "No final draft is waiting for arm64 acceptance."
+    ;;
+  accept)
+    [[ $# -eq 6 && "$2" =~ ^[0-9]+$ && "$3" =~ ^[0-9a-f]{40}$ && "$5" =~ ^[0-9]+$ && "$6" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+      fail "usage: release-attach.sh accept ID SHA VERSION RUN_ID DIGEST"
+    id=$2 sha=$3 version=$4 run=$5 digest=$6
+    arm_name="ORCA-$version-win-arm64.exe"
+    marker="<!-- orca-arm64-accepted: $run $digest -->"
+    check_accept() {
+      local body arm accepted
+      body=$(validate "$id" "$sha" "$version" "" "") || exit 1
+      arm=$(records "$ARM_RE" <<<"$body")
+      [[ $(grep -c . <<<"$arm") -eq 1 && "$(awk '{print $4}' <<<"$arm")" == "$digest" ]] ||
+        fail "release $id's arm64 signing record is not $digest; nothing written"
+      [[ "$(gh api "repos/$REPO/releases/$id" --jq "[.assets[] | select(.name == \"$arm_name\") | .digest] | join(\",\")")" == "$digest" ]] ||
+        fail "release $id's $arm_name is not $digest; nothing written"
+      accepted=$(records "$ACCEPT_RE" <<<"$body")
+      while read -r line; do
+        [[ -z "$line" || "$(awk '{print $4}' <<<"$line")" == "$digest" ]] ||
+          fail "release $id already records acceptance of other arm64 bytes: $line"
+      done <<<"$accepted"
+      printf '%s' "$body"
+    }
+    body=$(check_accept)
+    if [[ -n "$(records "$ACCEPT_RE" <<<"$body")" ]]; then
+      note "v$version (release \`$id\`): arm64 acceptance of \`$digest\` was already recorded."
+      exit 0
+    fi
+    jq -n --arg body "$body"$'\n\n'"$marker" '{body: $body}' |
+      gh api -X PATCH "repos/$REPO/releases/$id" --input - >/dev/null
+    [[ "$(gh api "repos/$REPO/releases/$id" --jq "[.draft, ((.body // \"\") | contains(\"$marker\"))] | map(tostring) | join(\" \")")" == "true true" ]] ||
+      fail "draft $id does not read back with its arm64 acceptance record"
+    note "Recorded native acceptance of $arm_name (\`$digest\`, run $run) on draft v$version (release \`$id\`)."
     ;;
   publish)
     # The operator states what native acceptance passed on: the source commit and both
@@ -193,21 +302,39 @@ case "${1:-}" in
       [[ "$tagged" == "$sha" ]] || fail "tag v$version already exists at $tagged, not $sha"
     fi
     json=$(gh api "repos/$REPO/releases/$id") || fail "release $id not found"
-    records=$(jq -r '.body // ""' <<<"$json" | grep -oE "$MARK_RE" || true)
+    body=$(jq -r '.body // ""' <<<"$json")
+    records=$(records "$MARK_RE" <<<"$body")
     [[ $(grep -c . <<<"$records") -eq 1 ]] || fail "release $id has no single signing record"
     [[ "$(awk '{print $4}' <<<"$records")" == "$exe" ]] || fail "release $id's signing record is not the accepted installer $exe"
-    json=$(validate "$id" "$sha" "$version" "$records" >/dev/null && gh api "repos/$REPO/releases/$id") || exit 1
-    digests() { jq -r --arg d "$deb_name" --arg e "$exe_name" '[(.assets | length), ([.assets[] | select(.name == $d) | .digest] | .[0] // ""), ([.assets[] | select(.name == $e) | .digest] | .[0] // "")] | map(tostring) | join(" ")'; }
-    [[ "$(digests <<<"$json")" == "2 $deb $exe" ]] ||
-      fail "release $id's assets ($(digests <<<"$json")) are not exactly the accepted $deb_name $deb and $exe_name $exe"
+    # arm64 is optional; when attached it must be the recorded installer of the same signing
+    # run and carry its native acceptance record (Release (accept Windows arm64)).
+    arm_name="ORCA-$version-win-arm64.exe"
+    arm=$(jq -r --arg n "$arm_name" '[.assets[] | select(.name == $n) | .digest] | .[0] // ""' <<<"$json")
+    arm_records=$(records "$ARM_RE" <<<"$body")
+    if [[ -n "$arm" ]]; then
+      [[ $(grep -c . <<<"$arm_records") -eq 1 && "$(awk '{print $4}' <<<"$arm_records")" == "$arm" &&
+        "$(awk '{print $3}' <<<"$arm_records")" == "$(awk '{print $3}' <<<"$records")" ]] ||
+        fail "release $id's $arm_name ($arm) is not the one its signing run recorded"
+      accepted=$(records "$ACCEPT_RE" <<<"$body")
+      [[ $(grep -c . <<<"$accepted") -eq 1 && "$(awk '{print $4}' <<<"$accepted")" == "$arm" ]] ||
+        fail "release $id's $arm_name ($arm) has not passed native acceptance; wait for Release (accept Windows arm64), or delete that asset to publish x64 only"
+      arm_records=$(head -n1 <<<"$arm_records")
+    else
+      arm_records=""
+    fi
+    json=$(validate "$id" "$sha" "$version" "$records" "$arm_records" >/dev/null && gh api "repos/$REPO/releases/$id") || exit 1
+    digests() { jq -r --arg d "$deb_name" --arg e "$exe_name" --arg a "$arm_name" '[(.assets | length), ([.assets[] | select(.name == $d) | .digest] | .[0] // ""), ([.assets[] | select(.name == $e) | .digest] | .[0] // ""), ([.assets[] | select(.name == $a) | .digest] | .[0] // "")] | map(tostring) | join(" ")'; }
+    expected="$([[ -n "$arm" ]] && echo 3 || echo 2) $deb $exe $arm"
+    [[ "$(digests <<<"$json")" == "$expected" ]] ||
+      fail "release $id's assets ($(digests <<<"$json")) are not exactly the accepted $deb_name $deb and $exe_name $exe${arm:+ and $arm_name $arm}"
     gh api -X PATCH "repos/$REPO/releases/$id" -f tag_name="v$version" -f target_commitish="$sha" \
       -F draft=false -f make_latest=true >/dev/null
     after=$(gh api "repos/$REPO/releases/$id")
-    [[ "$(jq -r '.draft' <<<"$after")" == false && "$(digests <<<"$after")" == "2 $deb $exe" ]] ||
+    [[ "$(jq -r '.draft' <<<"$after")" == false && "$(digests <<<"$after")" == "$expected" ]] ||
       fail "release $id does not read back published with the accepted assets"
     [[ "$(gh api "repos/$REPO/git/ref/tags/v$version" --jq .object.sha)" == "$sha" ]] || fail "tag v$version does not point at $sha"
     [[ "$(gh api "repos/$REPO/releases/latest" --jq .id)" == "$id" ]] || fail "release $id is not latest"
-    note "Published v$version (release \`$id\`, \`$sha\`): $deb_name \`$deb\`, $exe_name \`$exe\`."
+    note "Published v$version (release \`$id\`, \`$sha\`): $deb_name \`$deb\`, $exe_name \`$exe\`${arm:+, $arm_name \`$arm\` (natively accepted)}."
     ;;
-  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE | reconcile | publish ID VERSION SHA DEB_SHA256 EXE_SHA256" ;;
+  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE [ARM64_FILE] | reconcile | accept-select [ID] | accept ID SHA VERSION RUN_ID DIGEST | publish ID VERSION SHA DEB_SHA256 EXE_SHA256" ;;
 esac

@@ -231,7 +231,8 @@ describe("snapshot completion", () => {
 });
 
 describe("served architectures", () => {
-  // A completed snapshot that does hold arm64 objects, e.g. left by an earlier publisher.
+  // A completed snapshot holding both architectures, as feed-publish.yml writes one whose
+  // arm64 installer passed native acceptance (#889).
   const ARM = {
     "0.7.0/latest-arm64.yml": "version: 0.7.0\n",
     "0.7.0/ORCA-0.7.0-win-arm64.exe": "armarmarm0",
@@ -240,47 +241,52 @@ describe("served architectures", () => {
     "0.7.1-rc.1/ORCA-0.7.1-rc.1-win-arm64.exe": "armarmarm1",
   };
 
-  it("serves x64 only", async () => {
+  it("serves x64 and arm64", async () => {
     const { SERVED_ARCHES } = await import("../deploy/feed-worker/worker.js");
-    expect(SERVED_ARCHES).toEqual(["x64"]);
+    expect(SERVED_ARCHES).toEqual(["x64", "arm64"]);
+  });
+
+  it("serves arm64 channel files, installers and blockmaps per ring", async () => {
+    const e = env(RINGS, ARM);
+    expect(await (await handle(get("/latest-arm64.yml", { token: TOKENS.stable }), e)).text()).toBe("version: 0.7.0\n");
+    // The rc snapshot only has prerelease-arm64.yml; the internal ring still gets it as latest.
+    expect(await (await handle(get("/latest-arm64.yml", { token: TOKENS.internal }), e)).text()).toBe(
+      "version: 0.7.1-rc.1\n",
+    );
+    expect(await (await handle(get("/ORCA-0.7.0-win-arm64.exe", { token: TOKENS.stable }), e)).text()).toBe(
+      "armarmarm0",
+    );
+    const map = await handle(get("/ORCA-0.7.0-win-arm64.exe.blockmap", { token: TOKENS.internal }), e);
+    expect(map.status).toBe(200);
+    expect(await map.text()).toBe("arm-map");
+    const range = await handle(
+      get("/ORCA-0.7.0-win-arm64.exe", { token: TOKENS.stable, method: "HEAD", headers: { Range: "bytes=0-1" } }),
+      e,
+    );
+    expect(range.status).toBe(206);
+  });
+
+  it("offers arm64 nothing from a snapshot published without it, and keeps x64 unchanged", async () => {
+    // RINGS' snapshots hold x64 only, as every version fed before #889 does.
+    const e = env(RINGS);
+    expect((await handle(get("/latest-arm64.yml", { token: TOKENS.stable }), e)).status).toBe(404);
+    expect((await handle(get("/latest-arm64.yml", { token: TOKENS.internal }), e)).status).toBe(404);
+    expect((await handle(get("/ORCA-0.7.0-win-arm64.exe", { token: TOKENS.stable }), e)).status).toBe(404);
+    expect(await (await handle(get("/latest-x64.yml", { token: TOKENS.stable }), e)).text()).toBe("version: 0.7.0\n");
+    expect(await (await handle(get("/ORCA-0.7.0-win-x64.exe", { token: TOKENS.stable }), e)).text()).toBe("0123456789");
   });
 
   it.each([
     ["GET", {}],
     ["HEAD", {}],
-    ["GET", { Range: "bytes=0-1" }],
-    ["HEAD", { Range: "bytes=0-1" }],
-  ])("answers 404 for arm64 objects that exist, with %s %j, without reading the bucket", async (method, headers) => {
-    for (const [path, token] of [
-      ["/latest-arm64.yml", TOKENS.stable],
-      ["/latest-arm64.yml", TOKENS.internal],
-      ["/ORCA-0.7.0-win-arm64.exe", TOKENS.stable],
-      ["/ORCA-0.7.0-win-arm64.exe.blockmap", TOKENS.stable],
-      ["/ORCA-0.7.1-rc.1-win-arm64.exe", TOKENS.internal],
-    ]) {
+  ])("answers 404 for any other architecture, with %s, without reading the bucket", async (method, headers) => {
+    for (const path of ["/latest-ia32.yml", "/latest-arm.yml", "/ORCA-0.7.0-win-ia32.exe", "/ORCA-0.7.0-win-arm.exe"]) {
       const e = env(RINGS, ARM);
-      const response = await handle(get(path, { token, method, headers }), e);
+      const response = await handle(get(path, { token: TOKENS.stable, method, headers }), e);
       expect(response.status, `${method} ${path}`).toBe(404);
       expect(response.headers.get("Cache-Control")).toBe("no-store");
       expect(e.FEED.calls).toEqual([]);
     }
-  });
-
-  it("keeps x64 channel files, installers and historical blockmaps beside arm64 objects", async () => {
-    const e = env(RINGS, ARM);
-    expect(await (await handle(get("/latest-x64.yml", { token: TOKENS.stable }), e)).text()).toBe("version: 0.7.0\n");
-    expect(await (await handle(get("/latest-x64.yml", { token: TOKENS.internal }), e)).text()).toBe(
-      "version: 0.7.1-rc.1\n",
-    );
-    expect(await (await handle(get("/ORCA-0.7.0-win-x64.exe", { token: TOKENS.stable }), e)).text()).toBe("0123456789");
-    const map = await handle(get("/ORCA-0.7.0-win-x64.exe.blockmap", { token: TOKENS.internal }), e);
-    expect(map.status).toBe(200);
-    expect(await map.text()).toBe("old-map");
-    const range = await handle(
-      get("/ORCA-0.7.0-win-x64.exe", { token: TOKENS.stable, method: "HEAD", headers: { Range: "bytes=0-1" } }),
-      e,
-    );
-    expect(range.status).toBe(206);
   });
 });
 

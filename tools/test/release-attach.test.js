@@ -132,6 +132,9 @@ function setup({
   const exe = join(root, "signed", "ORCA-0.8.0-win-x64.exe");
   writeFileSync(exe, "signed installer bytes");
   const digest = "sha256:" + createHash("sha256").update("signed installer bytes").digest("hex");
+  const armExe = join(root, "signed", "ORCA-0.8.0-win-arm64.exe");
+  writeFileSync(armExe, "signed arm64 installer bytes");
+  const armDigest = "sha256:" + createHash("sha256").update("signed arm64 installer bytes").digest("hex");
   const run = (script, args, env = {}) =>
     spawnSync("bash", [script, ...args], {
       encoding: "utf8",
@@ -145,7 +148,10 @@ function setup({
         ...env,
       },
     });
+  // x64 only, as before #889; attachBoth is what release-attach-signed.yml runs now.
   const attach = (env, runId = "100") => run(ATTACH, ["attach", "7", SHA, "0.8.0", runId, exe], env);
+  const attachBoth = (env, runId = "100") => run(ATTACH, ["attach", "7", SHA, "0.8.0", runId, exe, armExe], env);
+  const accept = (env, digestArg = armDigest) => run(ATTACH, ["accept", "7", SHA, "0.8.0", "900", digestArg], env);
   const state = () => JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
   const edit = (fn) => {
     const st = state();
@@ -159,10 +165,13 @@ function setup({
       .filter(Boolean)
       .map((l) => JSON.parse(l));
   const marker = (runId = 100) => `<!-- orca-signed-run: ${runId} ${digest} -->`;
-  return { run, attach, state, edit, writes, digest, marker };
+  const armMarker = (runId = 100) => `<!-- orca-signed-run-arm64: ${runId} ${armDigest} -->`;
+  const acceptMarker = (runId = 900, d = armDigest) => `<!-- orca-arm64-accepted: ${runId} ${d} -->`;
+  return { run, attach, attachBoth, accept, state, edit, writes, digest, armDigest, marker, armMarker, acceptMarker };
 }
 
 const UPLOAD = ["upload", "7", "ORCA-0.8.0-win-x64.exe"];
+const UPLOAD_ARM = ["upload", "7", "ORCA-0.8.0-win-arm64.exe"];
 const RECORD = ["patch", "7"];
 const dispatchAttach = (runId) => [
   "workflow",
@@ -273,10 +282,10 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
       artifacts: { 300: [artifact(OTHER)], 200: [artifact()], 100: [artifact()] },
       signedRuns: [300, 200, 100],
     });
-    f.edit((st) => (st.releases[0].body = `Notes.\n\n${f.marker(100)}`));
+    f.edit((st) => (st.releases[0].body = `Notes.\n\n${f.marker(100)}\n\n${f.armMarker(100)}`));
 
     // Run 200's own attach (its workflow_run) is refused: the draft names 100.
-    const newer = f.attach({}, "200");
+    const newer = f.attachBoth({}, "200");
     expect(newer.status).not.toBe(0);
     expect(newer.stderr).toContain("another signing run");
 
@@ -284,17 +293,22 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(reconcile.status, reconcile.stderr).toBe(0);
     expect(f.writes()).toEqual([dispatchAttach(100)]);
 
-    expect(f.attach().status).toBe(0);
-    expect(f.writes().slice(1)).toEqual([UPLOAD]);
+    expect(f.attachBoth().status).toBe(0);
+    expect(f.writes().slice(1)).toEqual([UPLOAD, UPLOAD_ARM]);
 
     // Nothing left to reconcile.
     f.run(ATTACH, ["reconcile"]);
-    expect(f.writes()).toHaveLength(2);
+    expect(f.writes()).toHaveLength(3);
 
-    // Publication through the workflow's script, then the feed takes exactly run 100.
+    // arm64's native acceptance is recorded, then publication through the workflow's script,
+    // then the feed takes exactly run 100.
+    const accepted = f.accept();
+    expect(accepted.status, accepted.stderr).toBe(0);
+    expect(f.writes().slice(3)).toEqual([RECORD]);
     const published = f.run(ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest]);
     expect(published.status, published.stderr).toBe(0);
-    expect(f.writes().slice(2)).toEqual([["patch", "7", "tag_name", "target_commitish", "draft", "make_latest"]]);
+    expect(published.stderr).toContain("ORCA-0.8.0-win-arm64.exe");
+    expect(f.writes().slice(4)).toEqual([["patch", "7", "tag_name", "target_commitish", "draft", "make_latest"]]);
     const fed = f.run(FEED_AUTO, [], { EVENT: "release", RELEASE_TAG: "v0.8.0" });
     expect(fed.status, fed.stderr).toBe(0);
     expect(f.writes().at(-1)).toEqual([
@@ -310,6 +324,114 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
       "-f",
       "signed_run_id=100",
     ]);
+  });
+
+  it("attaches both installers after one record write, and a rerun writes nothing", () => {
+    const f = setup();
+    const first = f.attachBoth();
+    expect(first.status, first.stderr).toBe(0);
+    const r = f.state().releases[0];
+    expect(r.assets.map((a) => a.digest)).toEqual([DEB.digest, f.digest, f.armDigest]);
+    expect(r.body).toBe(`Notes.\n\n${f.marker()}\n\n${f.armMarker()}`);
+    expect(f.writes()).toEqual([RECORD, UPLOAD, UPLOAD_ARM]);
+    expect(f.attachBoth().status).toBe(0);
+    expect(f.writes()).toHaveLength(3);
+  });
+
+  it("adds arm64 to a draft attached x64-only before #889, through reconcile", () => {
+    const f = setup();
+    expect(f.attach().status).toBe(0);
+    expect(f.run(ATTACH, ["reconcile"]).status).toBe(0);
+    expect(f.writes().at(-1)).toEqual(dispatchAttach(100));
+    expect(f.attachBoth().status).toBe(0);
+    expect(f.writes().slice(3)).toEqual([RECORD, UPLOAD_ARM]);
+    expect(f.state().releases[0].body).toBe(`Notes.\n\n${f.marker()}\n\n${f.armMarker()}`);
+  });
+
+  it("refuses an arm64 installer with other bytes or another run's arm64 record", () => {
+    const other = setup({
+      releases: [draft({ assets: [DEB, { name: "ORCA-0.8.0-win-arm64.exe", digest: "sha256:0" }] })],
+    });
+    // The x64 installer is not there yet, so arm64 alone is an unexpected set.
+    expect(other.attachBoth().stderr).toContain("unexpected assets");
+    const record = setup({
+      releases: [draft({ body: `<!-- orca-signed-run-arm64: 99 sha256:${"f".repeat(64)} -->` })],
+    });
+    const result = record.attachBoth();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("another signing run for arm64");
+    expect(record.writes()).toEqual([]);
+  });
+
+  it("selects the draft waiting for arm64 acceptance, with the asset to download", () => {
+    const f = setup();
+    expect(f.run(ATTACH, ["accept-select"]).stdout).toBe("");
+    expect(f.attachBoth().status).toBe(0);
+    const asset = f.state().releases[0].assets.findIndex((a) => a.name === "ORCA-0.8.0-win-arm64.exe");
+    f.edit((st) => (st.releases[0].assets[asset].id = 4242));
+    const selected = f.run(ATTACH, ["accept-select"]);
+    expect(selected.status, selected.stderr).toBe(0);
+    expect(selected.stdout).toBe(`id=7\nsha=${SHA}\nversion=0.8.0\ndigest=${f.armDigest}\nasset=4242\n`);
+    expect(f.run(ATTACH, ["accept-select", "8"]).stdout).toBe("");
+    expect(f.accept().status).toBe(0);
+    const after = f.run(ATTACH, ["accept-select"]);
+    expect(after.stdout).toBe("");
+    expect(after.stderr).toContain("already recorded");
+  });
+
+  it("records acceptance once, only for the attached recorded arm64 bytes", () => {
+    const f = setup();
+    expect(f.attachBoth().status).toBe(0);
+    const wrong = f.accept({}, "sha256:" + "9".repeat(64));
+    expect(wrong.status).not.toBe(0);
+    expect(wrong.stderr).toContain("arm64 signing record is not");
+    expect(f.writes()).toHaveLength(3);
+    expect(f.accept().status).toBe(0);
+    expect(f.state().releases[0].body).toContain(f.acceptMarker());
+    expect(f.accept().status).toBe(0);
+    expect(f.writes()).toHaveLength(4);
+  });
+
+  it("refuses to record acceptance on a draft published meanwhile, or beside other bytes' acceptance", () => {
+    const published = setup();
+    expect(published.attachBoth().status).toBe(0);
+    published.edit(() => {}); // count reads from here
+    const result = published.accept({ FAKE_PUBLISH_AT_READ: "1" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("no longer a draft");
+    expect(published.writes()).toHaveLength(3);
+
+    const other = setup();
+    expect(other.attachBoth().status).toBe(0);
+    other.edit((st) => (st.releases[0].body += `\n\n${other.acceptMarker(901, "sha256:" + "8".repeat(64))}`));
+    const refused = other.accept();
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("acceptance of other arm64 bytes");
+  });
+
+  it("refuses to publish an attached arm64 installer without its acceptance record", () => {
+    const f = setup();
+    expect(f.attachBoth().status).toBe(0);
+    const result = f.run(ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("has not passed native acceptance");
+    expect(f.state().releases[0].draft).toBe(true);
+    // Acceptance of other bytes does not count either.
+    f.edit((st) => (st.releases[0].body += `\n\n${f.acceptMarker(900, "sha256:" + "8".repeat(64))}`));
+    expect(f.run(ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest]).stderr).toContain(
+      "has not passed native acceptance",
+    );
+  });
+
+  it("refuses to publish an arm64 installer that is not the recorded one", () => {
+    const f = setup();
+    expect(f.attachBoth().status).toBe(0);
+    expect(f.accept().status).toBe(0);
+    f.edit((st) => (st.releases[0].assets[2].digest = "sha256:" + "7".repeat(64)));
+    const result = f.run(ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("is not the one its signing run recorded");
+    expect(f.state().releases[0].draft).toBe(true);
   });
 
   it("starts a draft with no record from the newest qualifying run", () => {

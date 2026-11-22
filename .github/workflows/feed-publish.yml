@@ -14,10 +14,13 @@
 # can also be dispatched by hand. Keep the R2 write credential in the `desktop-feed`
 # environment (deployments from main only); see docs/UPDATING.md.
 #
-# Architectures: only Windows x64 has native acceptance, so FEED_ARCHES below serves x64
-# alone; the signed artifact's arm64 installer is never uploaded. An architecture with no
-# channel file in a snapshot is offered nothing new by it. Adding arm64 is a reviewed change
-# to FEED_ARCHES after arm64 passes native acceptance (docs/UPDATING.md, architecture gate).
+# Architectures: FEED_ARCHES below is what this workflow may ever serve, and equals the
+# Worker's SERVED_ARCHES. x64 is always fed. arm64 is fed only for a release whose published
+# arm64 installer carries a signing record and a native acceptance record for its exact digest
+# (tools/deploy/feed-arches.js; `Release (accept Windows arm64)` writes the acceptance record,
+# #889). Otherwise the signed artifact's arm64 installer is never uploaded, the snapshot has
+# no latest-arm64.yml, and arm64 clients are offered nothing new by it (docs/UPDATING.md,
+# architecture gate).
 #
 # Rerunning after an interruption resumes: identical objects are skipped and different ones
 # refused. feed-promote.yml moves the version on from internal.
@@ -47,7 +50,7 @@ permissions:
   actions: read
 
 env:
-  FEED_ARCHES: x64
+  FEED_ARCHES: x64 arm64
 
 jobs:
   publish:
@@ -99,6 +102,24 @@ jobs:
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
           echo "Feeding published v$VERSION ($sha) from signed run $RUN_ID" >> "$GITHUB_STEP_SUMMARY"
 
+      # x64 always; arm64 only with a native acceptance record for the published installer.
+      - name: Choose the architectures to serve
+        id: arches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/releases/tags/v$VERSION" > release.json
+          arches=$(node tools/deploy/feed-arches.js "$VERSION" release.json)
+          rm -f release.json
+          for arch in $arches; do
+            [[ " $FEED_ARCHES " == *" $arch "* ]] || { echo "::error::$arch is not in FEED_ARCHES"; exit 1; }
+          done
+          echo "arches=$arches" >> "$GITHUB_OUTPUT"
+          echo "Serving: $arches" >> "$GITHUB_STEP_SUMMARY"
+
       # Only the artifact named for the tagged commit: a run that signed anything else has none.
       - name: Download the signed build of the tagged commit
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -113,12 +134,13 @@ jobs:
         env:
           EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
           VERSION: ${{ inputs.version }}
+          ARCHES: ${{ steps.arches.outputs.arches }}
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:EXPECTED) { throw 'ORCA_FEED_PUBLISHER_CN is not set' }
           $exes = @(Get-ChildItem -Path signed -Recurse -File -Filter *.exe)
           if ($exes.Count -ne 2) { throw "expected 2 installers, found $($exes.Count)" }
-          foreach ($arch in $env:FEED_ARCHES.Split(' ')) {
+          foreach ($arch in $env:ARCHES.Split(' ')) {
             $name = "ORCA-$($env:VERSION)-win-$arch.exe"
             if (@($exes | Where-Object Name -eq $name).Count -ne 1) { throw "missing $name" }
           }
@@ -136,7 +158,8 @@ jobs:
       - name: Verify the update metadata
         env:
           VERSION: ${{ inputs.version }}
-        run: python tools/deploy/release-assets.py signed "$VERSION" "$FEED_ARCHES"
+          ARCHES: ${{ steps.arches.outputs.arches }}
+        run: python tools/deploy/release-assets.py signed "$VERSION" "$ARCHES"
 
       # The feed must serve the bytes that were accepted and published, not just a valid
       # signature: each served installer must equal the published release's asset.
@@ -145,9 +168,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           VERSION: ${{ inputs.version }}
+          ARCHES: ${{ steps.arches.outputs.arches }}
         run: |
           set -euo pipefail
-          for arch in $FEED_ARCHES; do
+          for arch in $ARCHES; do
             name="ORCA-$VERSION-win-$arch.exe"
             published=$(gh api "repos/$REPO/releases/tags/v$VERSION" \
               --jq ".assets[] | select(.name == \"$name\") | .digest")
@@ -164,7 +188,8 @@ jobs:
           FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
           FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
           VERSION: ${{ inputs.version }}
+          ARCHES: ${{ steps.arches.outputs.arches }}
         # Prove R2 still honours conditional writes before relying on them.
         run: |
           bash tools/deploy/feed-r2.sh probe
-          bash tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$FEED_ARCHES"
+          bash tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$ARCHES"
