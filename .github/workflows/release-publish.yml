@@ -446,115 +446,23 @@ jobs:
           gh workflow run windows-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f source_sha="$SHA"
           echo "Dispatched Windows signed (spike) for \`$SHA\`." >> "$GITHUB_STEP_SUMMARY"
 
-  # A patch released from its line branch (`release/X.Y`) never merges into main, so main
-  # would neither list it in CHANGELOG.md nor know its changelog.d/ fragments were released:
-  # the next minor would repeat them. This opens a pull request on main that adds the
-  # release's section and deletes exactly the fragments this release consumed, each only
-  # where main's copy is byte-identical to the one released (a differing copy is kept and
-  # named). The pull request goes through main's normal review and checks; auto-merge is
-  # requested. A rerun finds an open sync pull request for the version and reuses it when it
-  # holds the same change, and stops when it does not. It runs main's tooling only; the
-  # released commit is read as data.
-  sync-main:
-    name: record a line release on main
+  # A line's prerelease (X.Y.Z-rc.N) is published by `publish` itself, so main's record of it
+  # is requested here; a final is only drafted here and Release (publish final) requests it
+  # once the release is really published. Release (sync main) reads the published release back
+  # before it changes anything. This job checks nothing out and can only dispatch.
+  record-line-release:
+    name: record a published line prerelease on main
     needs: [check, publish]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ !inputs.dry_run && contains(needs.check.outputs.version, '-') }}
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
-      pull-requests: write
+      actions: write
     steps:
-      - name: Release bot token (optional)
-        id: app
-        if: ${{ vars.ORCA_RELEASE_APP_ID != '' }}
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
-        with:
-          app-id: ${{ vars.ORCA_RELEASE_APP_ID }}
-          private-key: ${{ secrets.ORCA_RELEASE_APP_PRIVATE_KEY }}
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-
-      - name: Record the release on main
+      - name: Dispatch Release (sync main)
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
-          REPO: ${{ github.repository }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          SHA: ${{ needs.check.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.check.outputs.version }}
-        run: |
-          set -euo pipefail
-          if git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"; then
-            echo "v$VERSION was released from $DEFAULT_BRANCH; nothing to record."
-            exit 0
-          fi
-          git show "$SHA:CHANGELOG.md" > "$RUNNER_TEMP/line-CHANGELOG.md"
-          node tools/release.js sync "$VERSION" "$RUNNER_TEMP/line-CHANGELOG.md"
-          # The fragments this release consumed: deleted by the release commit itself. Each is
-          # removed from main only when main's copy is the exact blob that was released.
-          kept=()
-          while IFS= read -r file; do
-            [ -n "$file" ] || continue
-            [ -f "$file" ] || continue
-            if [ "$(git rev-parse "$SHA^1:$file")" = "$(git hash-object -- "$file")" ]; then
-              git rm -q -- "$file"
-            else
-              kept+=("$file")
-            fi
-          done < <(git diff --diff-filter=D --name-only "$SHA^1" "$SHA" -- changelog.d/)
-          for file in "${kept[@]}"; do
-            echo "::warning::kept $file on $DEFAULT_BRANCH: it differs from the copy v$VERSION released"
-          done
-          git add CHANGELOG.md
-          if git diff --cached --quiet; then
-            echo "main already records v$VERSION; nothing to do."
-            exit 0
-          fi
-          changed=$(git diff --cached --name-status |
-            awk -F'\t' '!(($1 == "M" && $2 == "CHANGELOG.md") || ($1 == "D" && $2 ~ /^changelog\.d\/[^\/]+\.md$/))')
-          if [ -n "$changed" ]; then
-            echo "::error::the sync would change more than CHANGELOG.md and released fragments:"
-            echo "$changed"
-            exit 1
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -qm "changelog: record v$VERSION, released from its line"
-          tree=$(git rev-parse "HEAD^{tree}")
-          title="changelog: record v$VERSION"
-          # A rerun: reuse an open sync pull request with the same change, stop on another.
-          existing=$(gh pr list --repo "$REPO" --state open --base "$DEFAULT_BRANCH" --search "\"$title\" in:title" \
-            --json url,headRefOid,title --jq ".[] | select(.title == \"$title\") | \"\(.url) \(.headRefOid)\"")
-          if [ -n "$existing" ]; then
-            read -r url head <<<"$existing"
-            git fetch -q origin "$head"
-            change() { git diff "$1" "$2" | git patch-id --stable | cut -d' ' -f1; }
-            if [ "$(change "$(git merge-base "refs/remotes/origin/$DEFAULT_BRANCH" "$head")" "$head")" != \
-              "$(change "refs/remotes/origin/$DEFAULT_BRANCH" HEAD)" ]; then
-              echo "::error::$url already records v$VERSION differently; reconcile it by hand"
-              exit 1
-            fi
-            echo "Reusing $url for v$VERSION." >> "$GITHUB_STEP_SUMMARY"
-          else
-            branch="release-sync/v$VERSION-$GITHUB_RUN_ID"
-            git push -q "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" "HEAD:refs/heads/$branch"
-            body="v$VERSION was released from its release line at \`$SHA\`. This adds its CHANGELOG section to $DEFAULT_BRANCH and deletes the changelog.d/ fragments it released (only where $DEFAULT_BRANCH's copy is identical), so the next minor does not repeat them. It changes nothing else."
-            if [ ${#kept[@]} -gt 0 ]; then body+=$'\n\n'"Kept because they differ from the released copy: ${kept[*]}"; fi
-            url=$(gh pr create --repo "$REPO" --base "$DEFAULT_BRANCH" --head "$branch" --label no-changelog \
-              --title "$title" --body "$body")
-            echo "Opened $url (tree $tree)." >> "$GITHUB_STEP_SUMMARY"
-          fi
-          # Through main's normal review and checks: auto-merge, never a direct merge.
-          if ! gh pr merge "$url" --auto --squash; then
-            echo "::warning::could not enable auto-merge on $url; it waits for review"
-          fi
+        run: gh workflow run release-sync-main.yml --repo "$GITHUB_REPOSITORY" --ref main -f version="$VERSION"
 
   # The rehearsal's writer. It runs none of the rehearsed ref's code: it checks out this
   # workflow's own revision (the default branch, checked in `check`), takes the artifacts

@@ -19,13 +19,24 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const LINE_CHECKS = ["check (node 24)", "release line check"];
+// From this line on a release must carry the signed server bundle, which is built and signed
+// only from main (SERVER_FROM in tools/deploy/release-attach.sh). Until that path accepts a
+// line, a patch of such a line has no lane at all and is refused before anything runs.
+export const SERVER_FROM = { major: 0, minor: 8 };
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
 
 /** The branch a version may be cut from. */
 export function laneOf(version) {
   const m = SEMVER.exec(String(version ?? ""));
   if (!m) throw new Error(`not a semver version: ${version}`);
-  return Number(m[3]) === 0 ? "main" : `release/${Number(m[1])}.${Number(m[2])}`;
+  const [major, minor, patch] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (patch === 0) return "main";
+  if (major > SERVER_FROM.major || (major === SERVER_FROM.major && minor >= SERVER_FROM.minor))
+    throw new Error(
+      `v${version} would be cut from release/${major}.${minor}, but from ${SERVER_FROM.major}.${SERVER_FROM.minor} on a ` +
+        "release needs the server bundle, which is built only from main; line releases stop at 0.7 until it is",
+    );
+  return `release/${major}.${minor}`;
 }
 
 /**

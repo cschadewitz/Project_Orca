@@ -395,14 +395,23 @@ source with the head of its protected line instead of `main`; its workflow, sign
 and environment are `main`'s as before. A line that moved past the release commit outside
 notes, docs and tests refuses it, exactly as `main` moving does.
 
-**Back on `main`.** A line's release pull request never merges into `main`, so Release (publish)
-then opens a pull request on `main` (`changelog: record vX.Y.Z`) that adds the release's
-CHANGELOG section (`node tools/release.js sync`) and deletes the fragments the release commit
-consumed, each only where `main`'s copy is byte-identical to the released one; a differing copy
-is kept and named. It refuses to touch anything else, goes through `main`'s normal review and
-checks with auto-merge requested, and a rerun reuses an open sync pull request holding the same
-change and stops on a different one. `main`'s `package.json` keeps the last minor it released,
-so the next minor is still computed from it.
+**Back on `main`.** A line's release pull request never merges into `main`, so once a line
+release is really published, **Release (sync main)** (`release-sync-main.yml`) records it there:
+publish-final dispatches it after publishing a final, and Release (publish) after publishing a
+line candidate. It reads the release back by tag (and id), refuses a draft or anything not
+published, and requires the tag's exact commit to be on the version's protected line, so a
+final that only reached its draft, or whose acceptance failed, leaves `main` alone. It then
+opens one pull request on `main`, `changelog: record vX.Y.Z` from the branch
+`release-sync/vX.Y.Z`, that adds the release's CHANGELOG section (`node tools/release.js sync`)
+and deletes the fragments the release commit consumed, each only where `main`'s copy is
+byte-identical to the released one; a differing copy is kept and named. It refuses to touch
+anything else and goes through `main`'s normal review and checks with auto-merge requested; a
+rerun replaces that branch's single commit and finds the same pull request. `main`'s
+`package.json` keeps the last minor it released, so the next minor is still computed from it.
+
+**Lines stop at 0.7 for now.** From 0.8 on a release must carry the signed server bundle, which
+is built and signed only from `main`, so `release-lane.js` refuses a patch of 0.8 or later
+before anything runs, rather than failing halfway through a release.
 
 **Which workflow copy runs.** Merging a line's release pull request runs the line branch's
 own `release-publish.yml` (a `pull_request` event uses the base branch's files); its lane checks
@@ -424,15 +433,16 @@ required check):
 **Not yet covered.** A minor's candidates are still cut from `main`; cutting `release/X.Y` at
 the first candidate, automatic backport pull requests from a label, and publishing a patch of
 an older line after a newer minor is Latest (publish-final and the upgrade check compare with
-Latest) are later work. The server bundle and its signer still require `main`; they apply from
-the 0.8 line on.
+Latest) are later work, as is building and signing the server bundle from a line, which 0.8
+patches need.
 
 **What the repository needs once.** A ruleset on `release/0.*` (and `release/1.*` when there is
 one), not on the `release/vX.Y.Z` pull request heads: pull requests only, no force pushes or
 deletion, the `check (node 24)` and `release line check` status checks required, and branches
 kept up to date before merging. And a GitHub App with contents and pull-requests write,
 installed on this repository, with its id in the variable `ORCA_RELEASE_APP_ID` and its private
-key in the secret `ORCA_RELEASE_APP_PRIVATE_KEY`: prepare opens release pull requests, and
+key in the secret `ORCA_RELEASE_APP_PRIVATE_KEY`, both in a `release-bot` environment whose
+deployment branches are `main` only (so no other branch's workflow can read the key): prepare opens release pull requests, and
 the sync its notes pull requests, with it, so CI and the guard run on them. Without it those
 pull requests get no checks, and a line that requires them cannot merge a release.
 
