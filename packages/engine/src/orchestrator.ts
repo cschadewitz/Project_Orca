@@ -879,6 +879,13 @@ export class Orchestrator {
               attemptRunId,
             },
           );
+        // Private inputs without run.created: creation may have begun. Ambiguous, not a reservation.
+        if (await this.stores.execution.getInputs(attemptRunId))
+          throw new OrcaError(
+            "RUN_STATE",
+            `checkpoint attempt ${attemptRunId} has execution inputs and no log: its creation may have begun, so it cannot be retired; reconcile its admission`,
+            { runId: sourceRunId, attemptRunId },
+          );
         if (!(await checkpointReservationRetired(this.stores, attemptRunId)))
           await this.stores.execution.putGeneration(checkpointRetiredKey(attemptRunId), { sourceRunId });
       });

@@ -285,3 +285,26 @@ it("finishes a policy publish interrupted after the attempt was created, and onl
     }),
   ).rejects.toMatchObject({ code: "RUN_STATE" });
 });
+
+it("refuses to retire a reservation whose creation may have begun", async () => {
+  const f = await fixture();
+  // Interrupted after the private inputs were written and before run.created.
+  const crash = vi.spyOn(f.stores.events, "append").mockImplementationOnce(async () => {
+    throw new Error("interrupted");
+  });
+  const first = await f.service.startAttempt({ runId: f.source.run.id }, { idempotencyKey: "k1" }, f.authority);
+  crash.mockRestore();
+  if (first.state !== "resolved" || first.result.state !== "recoverable-failure" || !first.result.runId)
+    throw new Error(JSON.stringify(first));
+  const reserved = first.result.runId;
+  expect(await f.stores.events.lastSeq(reserved)).toBeUndefined();
+  expect(await f.stores.execution.getInputs(reserved)).toBeDefined();
+  await expect(f.orc.retireCheckpointReservation(f.source.run.id, reserved)).rejects.toMatchObject({
+    code: "RUN_STATE",
+    details: { attemptRunId: reserved },
+  });
+  // Still exclusive: no second key may take the workspace.
+  await expect(
+    f.service.startAttempt({ runId: f.source.run.id }, { idempotencyKey: "k2" }, f.authority),
+  ).rejects.toMatchObject({ code: "RUN_STATE", details: { attemptRunId: reserved } });
+});

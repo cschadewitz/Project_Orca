@@ -172,7 +172,8 @@ checkpoint as in the preview; without it, the latest one that is not blocked is 
   before the attempt's run, so an attempt that was reserved and never created (the process
   stopped in between) also holds the workspace: only its own admission, reconciled, creates
   it, or `orca recovery retire <runId> <attemptRunId>` retires it, after which its admission can
-  never create it and another attempt may start. The source's log is never changed.
+  never create it and another attempt may start. A reservation whose private inputs were
+  written without a log (creation may have begun) cannot be retired; only reconciling ends it. The source's log is never changed.
 - **Retry-safe.** With a persistent store, the command goes through retry-safe admission
   (`run.recover`, `CheckpointAdmissionService`). It reserves the run id before anything is
   written, and the attempt runs under the same bounded first-attachment policy as a direct run.
