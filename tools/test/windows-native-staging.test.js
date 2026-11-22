@@ -25,7 +25,7 @@ it("stages each explicit target once and verifies Windows source/architecture be
     "--arch",
     "arm64",
   ]);
-  expect(operations[0][3]).toMatchObject({ windowsHide: true, timeout: 150000, maxBuffer: 16384 });
+  expect(operations[0][3]).toMatchObject({ windowsHide: true, timeout: 360000, maxBuffer: 16384 });
   expect(operations[1][2]).toBe("arm64");
   expect(operations[1][4]).toBe("win32");
 });

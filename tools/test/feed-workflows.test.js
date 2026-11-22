@@ -17,10 +17,11 @@ describe("desktop feed workflows", () => {
     expect(feed).toContain("name: ${{ steps.source.outputs.artifact }}");
     const order = [
       "tools/deploy/feed-source.js",
+      "tools/deploy/feed-arches.js",
       "Get-AuthenticodeSignature",
-      'tools/deploy/release-assets.py signed "$VERSION" "$FEED_ARCHES"',
+      'tools/deploy/release-assets.py signed "$VERSION" "$ARCHES"',
       "Match the published release's installers",
-      'tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$FEED_ARCHES"',
+      'tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$ARCHES"',
     ].map((needle) => feed.indexOf(needle));
     expect(order.every((i) => i > 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -48,10 +49,16 @@ describe("desktop feed workflows", () => {
       expect(read(name)).toContain("PAUSE: ${{ vars.ORCA_FEED_PAUSE }}");
   });
 
-  it("serves only the natively accepted x64 installer, matching the published release", () => {
+  it("serves x64, and arm64 only with verified acceptance, matching the published release", () => {
     const feed = read("feed-publish.yml");
-    expect(feed).toMatch(/^env:\n {2}FEED_ARCHES: x64\n/m);
-    expect(feed).not.toMatch(/FEED_ARCHES: .*arm64/);
+    expect(feed).toMatch(/^env:\n {2}FEED_ARCHES: x64 arm64\n/m);
+    expect(feed).toContain('arches=$(node tools/deploy/feed-arches.js serve "$VERSION" "$REPO"');
+    expect(feed).toContain("--name arm64-acceptance-evidence");
+    expect(feed).toContain("gh api --paginate \"repos/$REPO/releases\" --jq '.[]' | jq -s .");
+    // Every step after the choice uses the chosen list, never the upper bound.
+    const after = feed.slice(feed.indexOf("Choose the architectures to serve"));
+    expect(after.match(/ARCHES: \$\{\{ steps\.arches\.outputs\.arches \}\}/g)).toHaveLength(4);
+    expect(after.split("\n").filter((line) => line.includes("$FEED_ARCHES") && !line.includes("[["))).toEqual([]);
     expect(feed).toContain('[[ "$actual" == "$published" ]]');
     expect(feed).toContain(".digest");
   });

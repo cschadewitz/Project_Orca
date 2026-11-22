@@ -184,7 +184,7 @@ it("signs a final's commit right after staging its draft, and only a final", () 
   );
 });
 
-it("attaches only a re-verified signed x64 installer, through the re-validating script", () => {
+it("attaches only re-verified signed x64 and arm64 installers, through the re-validating script", () => {
   const text = readFileSync(".github/workflows/release-attach-signed.yml", "utf8");
   const wf = workflow("release-attach-signed.yml");
   expect(text).toContain('workflows: ["Windows signed (spike)"]');
@@ -202,11 +202,14 @@ it("attaches only a re-verified signed x64 installer, through the re-validating 
   expect(wf.jobs.attach.if).toContain("github.event.workflow_run.head_branch == 'main'");
   expect(wf.jobs.reconcile.if).toContain("github.event_name == 'schedule' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
   const steps = wf.jobs.attach.steps.map((s) => s.name ?? s.uses);
-  const verify = steps.indexOf("Verify the x64 installer's signature, timestamp and publisher");
+  const verify = steps.indexOf("Verify both installers' signatures, timestamps and publisher");
   const attachStep = steps.findIndex((n) => n?.startsWith("Attach it to the draft by id"));
   expect(verify).toBeGreaterThan(0);
   expect(attachStep).toBeGreaterThan(verify);
-  expect(wf.jobs.attach.steps[attachStep].run).toContain("bash tools/deploy/release-attach.sh attach");
+  expect(wf.jobs.attach.steps[verify].run).toContain("foreach ($arch in 'x64', 'arm64')");
+  expect(wf.jobs.attach.steps[attachStep].run).toContain(
+    'bash tools/deploy/release-attach.sh attach "$ID" "$SHA" "$VERSION" "$RUN_ID" "$file" "$arm_file"',
+  );
   expect(wf.jobs.reconcile.steps.at(-1).run).toBe("bash tools/deploy/release-attach.sh reconcile");
   expect(text).not.toMatch(/draft=false|make_latest|feed-r2/);
   const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
@@ -215,6 +218,7 @@ it("attaches only a re-verified signed x64 installer, through the re-validating 
     'if [[ "$facts" != ".github/workflows/windows-signed.yml $REPO $REPO workflow_dispatch main completed success" ]]; then',
   );
   expect(script).toContain('marker="<!-- orca-signed-run: $run $want -->"');
+  expect(script).toContain('arm_marker="<!-- orca-signed-run-arm64: $run $arm_want -->"');
   // Only `publish` (Release (publish final)) publishes; attach and reconcile never do.
   const attachPart = script.slice(script.indexOf("\n  attach)"), script.indexOf("\n  publish)"));
   expect(attachPart).not.toMatch(/draft=false|make_latest|"draft": *false/);
@@ -243,4 +247,51 @@ it("publishes a final only from main, through the checking script, and hands ove
   expect(job.steps[1].run).toBe('bash tools/deploy/release-attach.sh publish "$ID" "$VERSION" "$SHA" "$DEB" "$EXE"');
   expect(job.steps[1].run).not.toContain("${{");
   expect(job.steps[2].run).toBe('gh workflow run feed-auto.yml --repo "$GITHUB_REPOSITORY" --ref main');
+});
+
+it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unattended (#889)", () => {
+  const text = readFileSync(".github/workflows/release-accept-arm64.yml", "utf8");
+  const wf = workflow("release-accept-arm64.yml");
+  expect(wf.on.workflow_run).toEqual({ workflows: ["Release (attach signed installer)"], types: ["completed"] });
+  expect(wf.permissions).toEqual({ contents: "read" });
+  expect(wf.jobs.select.if).toContain("vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
+  expect(wf.jobs.select.if).toContain("github.event.workflow_run.head_branch == 'main'");
+  expect(wf.jobs.select.if).toContain("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'");
+  // Only the jobs that read drafts and write the record may write; the installer runs read-only.
+  expect(wf.jobs.select.permissions).toEqual({ contents: "write" });
+  expect(wf.jobs.accept.permissions).toBeUndefined();
+  expect(wf.jobs.accept["runs-on"]).toBe("windows-11-arm");
+  expect(wf.jobs.record.permissions).toEqual({ contents: "write" });
+  expect(wf.jobs.record.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  expect(wf.jobs.record.needs).toEqual(["select", "accept"]);
+  expect(wf.jobs.record.steps.at(-1).run).toBe(
+    'bash tools/deploy/release-attach.sh accept "$ID" "$SHA" "$VERSION" "$GITHUB_RUN_ID" "$DIGEST"',
+  );
+  const accept = wf.jobs.accept.steps.map((s) => s.run ?? "").join("\n");
+  for (const needle of ["Get-AuthenticodeSignature", "0xAA64", "'/S'", "tools/deploy/windows-launch-check.js"])
+    expect(accept).toContain(needle);
+  // The downloaded bytes are the recorded ones, checked before anything runs them.
+  expect(text).toContain('== "$DIGEST" ]] || { echo "::error::downloaded bytes are not $DIGEST"; exit 1; }');
+  expect(text).not.toMatch(/secrets\.|draft=false|make_latest|feed-r2/);
+  // The baseline is read from the full release list, failing closed; the evidence is kept
+  // before the record that points at it.
+  expect(text).toContain("gh api --paginate \"repos/$REPO/releases\" --jq '.[]' | jq -s . > releases.json");
+  expect(text).toContain('node tools/deploy/feed-arches.js baseline-run "$VERSION" releases.json');
+  expect(text).toContain(
+    'node tools/deploy/feed-arches.js baseline "$VERSION" "$REPO" releases.json baseline-run.json',
+  );
+  expect(text).not.toContain("releases/latest");
+  const record = wf.jobs.record.steps.map((s) => s.name ?? s.uses);
+  expect(record.indexOf("Keep the evidence with this run")).toBeLessThan(
+    record.indexOf("Record it, re-validating the draft first"),
+  );
+  const keep = wf.jobs.record.steps.find((s) => s.name === "Keep the evidence with this run");
+  expect(keep.with).toMatchObject({ name: "arm64-acceptance-evidence", "retention-days": 90, overwrite: true });
+  // The x64-only decision: dispatch only, from main, in the draft-writes queue.
+  expect(wf.jobs["x64-only"].if).toBe(
+    "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.x64_only",
+  );
+  expect(wf.jobs["x64-only"].concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  expect(wf.jobs["x64-only"].steps.at(-1).run).toContain('bash tools/deploy/release-attach.sh x64-only "$ID" "$sha"');
+  expect(wf.jobs.select.if).toContain("!inputs.x64_only");
 });

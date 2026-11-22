@@ -14,8 +14,9 @@ Signing and macOS automatic updates are not activated by this identity change.
 
 ## Windows bootstrap and daily use
 
-Install the signed x64 NSIS `.exe` from a published final release (Windows arm64 is not a
-supported install yet; a release candidate's unsigned installers are never the install). ZIP builds are
+Install the signed NSIS `.exe` for your architecture from a published final release: x64,
+or arm64 from the first final that carries a natively accepted arm64 installer (#889). A
+release candidate's unsigned installers are never the install. ZIP builds are
 archives, not the supported installation/update path. A pre-v0.6.0 desktop has no update
 control; install v0.6.0 manually once. Retain a known-good installer for recovery.
 
@@ -254,19 +255,33 @@ For a final the order is:
 
 1. Staging the draft dispatches **Windows signed (spike)** for the draft's pinned merge
    commit, **before** publication (automatic while `ORCA_RELEASE_AUTO_SIGN` is `true`).
-2. **Release (attach signed installer)** attaches that run's signed x64 installer to the
-   draft and records the run (automatic under the same switch, otherwise dispatched with
-   the run id). Native acceptance runs on the exact draft assets, and only then is the
-   draft published (which creates the tag). RELEASING.md has the steps and checks.
-3. **Architecture gate.** Rings select versions, not architectures, so the feed itself must
-   leave out any architecture without native acceptance. Windows arm64 has none yet, so
-   `feed-publish.yml` serves x64 only (`FEED_ARCHES: x64`): the signed run's arm64 installer
-   is never uploaded, the snapshot has no `latest-arm64.yml`, and an arm64 client is offered
-   nothing new by it. The Worker enforces the same list (`SERVED_ARCHES` in
-   `tools/deploy/feed-worker/worker.js`): it answers 404 for arm64 channel files, installers
-   and blockmaps even if the bucket holds some, while x64 files of every completed snapshot
-   stay reachable. Add arm64 to both, in a reviewed change, only after it passes native
-   acceptance, then deploy the Worker; do not rely on ring assignment to scope architecture.
+2. **Release (attach signed installer)** attaches that run's signed x64 and arm64
+   installers to the draft and records the run (automatic under the same switch, otherwise
+   dispatched with the run id). Native acceptance runs on the exact draft assets (arm64's
+   automatically, in **Release (accept Windows arm64)**), and only then is the draft
+   published (which creates the tag). RELEASING.md has the steps and checks.
+3. **Architecture gate.** Rings select versions, not architectures, so each version's
+   snapshot carries its own architectures. `feed-publish.yml` always serves x64 and serves
+   arm64 only for a final whose published arm64 installer has verified native acceptance:
+   its notes point at a successful **Release (accept Windows arm64)** run on `main` whose
+   evidence artifact names that release, commit, installer digest and upgrade baseline
+   (`tools/deploy/feed-arches.js`, #889). The baseline is the newest earlier published final
+   with an arm64 installer that is not marked x64-only, and it must itself carry a verified
+   acceptance (records for its installer and a successful acceptance run on `main` whose
+   record job, named as the receipt for that release, commit and installer digest, passed); a
+   baseline without that proof fails the check instead of counting as a fresh install. A
+   snapshot first written before #889 keeps its record when a publish is retried, and is
+   never extended to arm64. An attached arm64 installer that is not declined
+   (`<!-- orca-x64-only -->`) and does not verify fails the feed run instead of feeding x64
+   alone. `feed-r2.sh` lists the published architectures in the snapshot's write-once
+   `complete.json`, and the Worker serves a version's channel files, installers and
+   blockmaps only for the architectures listed there; a record without the list (every
+   version fed before #889, v0.7.0 included) serves x64 only. `SERVED_ARCHES` in
+   `tools/deploy/feed-worker/worker.js` equals `FEED_ARCHES` and bounds both: any other
+   architecture answers 404. Changing either list is a reviewed change to both, then a
+   Worker deploy; do not rely on ring assignment to scope architecture. **Desktop feed
+   (update test)** updates an installed N to N+1 through the Worker's own handler on both
+   x64 and a native arm64 runner for every change to the feed or the updater.
 4. **Desktop feed (automatic)** (`feed-auto.yml`, on while `ORCA_FEED_AUTO` is `true`)
    dispatches **Desktop feed (publish signed)** (`feed-publish.yml`) from main when the
    release is published, with the signing run that **Release (attach signed installer)**

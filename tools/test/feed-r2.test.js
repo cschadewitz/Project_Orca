@@ -190,12 +190,60 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
       expect(existsSync(f.object(`0.7.1-rc.1/prerelease-${arch}.yml`))).toBe(true);
     }
     expect(JSON.parse(readFileSync(f.object("0.7.1-rc.1/complete.json"), "utf8"))).toEqual({
-      format: 1,
+      format: 2,
       version: "0.7.1-rc.1",
+      arches: ["x64", "arm64"],
     });
     expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8")).rings.internal).toEqual({
       version: "0.7.1-rc.1",
     });
+  });
+
+  // A first publish by the pre-#889 script wrote a format 1 completion record and stopped
+  // before the ring update. The retry runs the current script.
+  const legacySnapshot = (f, version) => {
+    f.release(version, "latest");
+    for (const name of [`ORCA-${version}-win-x64.exe`, `ORCA-${version}-win-x64.exe.blockmap`, "latest-x64.yml"]) {
+      writeFileSync(f.object(`${version}/${name}`), readFileSync(join(f.artifacts, name)));
+    }
+    writeFileSync(f.object(`${version}/complete.json`), `{"format":1,"version":"${version}"}\n`);
+  };
+
+  it("finishes an interrupted legacy x64 publish, keeping its completion record", () => {
+    const f = setup();
+    legacySnapshot(f, "0.7.0");
+    const resumed = f.run("snapshot", f.artifacts, "0.7.0", "x64");
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(resumed.stdout).toContain("legacy x64 record");
+    expect(readFileSync(f.object("0.7.0/complete.json"), "utf8")).toBe('{"format":1,"version":"0.7.0"}\n');
+    const keys = f
+      .log()
+      .filter((a) => a[3] === "put-object")
+      .map((a) => a[a.indexOf("--key") + 1]);
+    expect(keys).not.toContain("0.7.0/complete.json");
+    expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8")).rings.internal).toEqual({ version: "0.7.0" });
+  });
+
+  it("never extends a legacy x64 snapshot to arm64", () => {
+    const f = setup();
+    legacySnapshot(f, "0.7.0");
+    const result = f.run("snapshot", f.artifacts, "0.7.0", "x64 arm64");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("cannot be extended to arm64");
+    expect(existsSync(f.object("0.7.0/ORCA-0.7.0-win-arm64.exe"))).toBe(false);
+    expect(existsSync(f.object("0.7.0/latest-arm64.yml"))).toBe(false);
+    expect(existsSync(f.object("rings.json"))).toBe(false);
+    expect(readFileSync(f.object("0.7.0/complete.json"), "utf8")).toBe('{"format":1,"version":"0.7.0"}\n');
+  });
+
+  it("refuses a completion record that is neither this snapshot's nor the legacy one", () => {
+    const f = setup();
+    legacySnapshot(f, "0.7.0");
+    writeFileSync(f.object("0.7.0/complete.json"), '{"format":1,"version":"0.6.9"}\n');
+    const result = f.run("snapshot", f.artifacts, "0.7.0", "x64");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("already exists with different bytes");
+    expect(existsSync(f.object("rings.json"))).toBe(false);
   });
 
   it("stops on a lookup or write error instead of reading it as absence", () => {
