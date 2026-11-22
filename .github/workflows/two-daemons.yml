@@ -1,0 +1,50 @@
+# Runs the two-daemon fixture's smoke test (#885 phase 1) with sshd required: two real
+# daemons, each with its own store, port and token, and one reached through an SSH port
+# forward on loopback. The main check runs the same file but skips the SSH case where the
+# runner has no sshd; this job, on a GitHub-hosted Linux runner, installs it and sets
+# ORCA_REQUIRE_SSHD=1 so a missing or broken sshd fails instead of skipping.
+name: Two daemons
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/testing/src/two-daemons.ts
+      - packages/testing/test/two-daemons.test.ts
+      - packages/daemon/src/**
+      - packages/cli/src/**
+      - packages/protocol/src/**
+      - packages/agents/src/hosts/**
+      - .github/workflows/two-daemons.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: two-daemons-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: two daemons over loopback ssh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install sshd
+        run: command -v /usr/sbin/sshd >/dev/null || { sudo apt-get update -q && sudo apt-get install -yq openssh-server; }
+      # The fixture launches the compiled CLI.
+      - run: pnpm run build
+      - name: Two daemons, one behind sshd
+        env:
+          ORCA_REQUIRE_SSHD: "1"
+        run: pnpm exec vitest run packages/testing/test/two-daemons.test.ts
