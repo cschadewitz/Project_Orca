@@ -192,6 +192,16 @@ test.beforeAll(async () => {
   app = await electron.launch({ args: [...osSandboxArgs, `--user-data-dir=${userData}`, appDir], env });
   page = await app.firstWindow();
   await page.waitForLoadState("domcontentloaded");
+  // The window is created hidden and revealed on its first paint (`window-reveal.ts`), and a
+  // screenshot taken while it is being shown fails with "Unable to capture screenshot". On a
+  // cold runner that reveal landed inside the theme test's first screenshot (#892), so no test
+  // starts until the main process reports the window visible and it has painted a frame.
+  await expect
+    .poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((win) => win.isVisible())), {
+      timeout: 10_000,
+    })
+    .toBe(true);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 });
 
 test.afterAll(async () => {
@@ -243,6 +253,9 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     "guidedLaunch",
     "hello",
     "inputs",
+    // #888's Linux `.deb` release notice: read, subscribe, and open/copy of the release page
+    // and `apt` command main built. The renderer cannot pass a URL or a command across it.
+    "linuxUpdates",
     "macUpdates",
     "notifications",
     "operator",

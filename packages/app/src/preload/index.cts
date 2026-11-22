@@ -31,6 +31,7 @@ import type {
 } from "../bridge.js";
 import type { UpdateSnapshot } from "../update-contract.js";
 import type { MacUpdateView } from "../mac-update-contract.js";
+import type { LinuxUpdateNotice } from "../linux-update-contract.js";
 import type { DiagnosticsResult, DiagnosticsStatus } from "../diagnostics-contract.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
@@ -136,6 +137,17 @@ const bridge: OrcaBridge = {
       ipcRenderer.on("orca:macUpdate.changed", forward);
       return () => {
         ipcRenderer.off("orca:macUpdate.changed", forward);
+      };
+    },
+  },
+  linuxUpdates: {
+    read: () => ipcRenderer.sendSync("orca:linuxUpdate.read") as LinuxUpdateNotice | null,
+    act: (action) => call("orca:linuxUpdate.act", action),
+    subscribe: (listener) => {
+      const forward = (_event: unknown, notice: LinuxUpdateNotice | null) => listener(notice);
+      ipcRenderer.on("orca:linuxUpdate", forward);
+      return () => {
+        ipcRenderer.off("orca:linuxUpdate", forward);
       };
     },
   },

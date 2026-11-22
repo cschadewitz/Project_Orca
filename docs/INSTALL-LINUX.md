@@ -19,6 +19,23 @@ that name belongs to the GNOME screen reader, which is installed by default as p
 two install side by side; ORCA's package declares no conflict with the screen reader and
 replaces none of its files.
 
+## Updating
+
+The package does not update itself. Instead, about 15 seconds after it starts and every six
+hours after that, ORCA reads the project's public release list and, when a newer stable
+release has a `.deb` for your machine, shows **X.Y.Z available** in the title bar (#888).
+It offers the release page and the command to run once you have downloaded the package:
+
+```sh
+sudo apt install ./ORCA-X.Y.Z-linux-amd64.deb   # upgrades orca-desktop in place
+```
+
+Nothing is downloaded or installed until you do that. A check that fails or finds you
+offline says nothing and never delays startup. Release candidates are offered only when
+`ORCA_UPDATE_PRERELEASE=1` is set, the same rule as the Windows updater, and
+`ORCA_UPDATE_CHECK=0` turns the check off. Only the installed package checks: the archive
+and the AppImage do not.
+
 ## Why the package, and not the archive
 
 Ubuntu 24.04 turns on `kernel.apparmor_restrict_unprivileged_userns`: a program may create
