@@ -1015,7 +1015,10 @@ store while it does (#897):
    it reports no active work, stops it and observes that exact process exit, as for every
    update. It then writes `update-handoff.json` into the store: the exact store and workspace
    directories, the first-run journal claim of the daemon it stopped, and the version being
-   installed. If the installer never starts, the record is withdrawn.
+   installed. The updater never deletes the record, which holds nothing open by itself: if the
+   installer never starts, the recovered daemon of this version directly follows the stopped
+   claim, cannot carry under a record naming another version, and spends it under its own fence.
+   Any later reservation follows another claim, so an unused record grants it nothing.
 2. On the new app's first start, its bundled daemon enters as the store's first-run writer and
    holds the workspace's kernel-lifetime fence, which no other ORCA app, daemon or command can
    hold at the same time. It may carry the store forward only if its own journal claim directly

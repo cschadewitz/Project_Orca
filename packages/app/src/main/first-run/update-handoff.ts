@@ -8,16 +8,25 @@
  * attempt's claim and the version being installed (`@orca/protocol/update-handoff`). The new
  * app's daemon may carry an older-format store forward only if its own claim directly follows
  * this one and it holds the first-run writer fence; otherwise startup keeps refusing.
+ *
+ * The updater never deletes the record, not even one it just wrote: it holds no fence over the
+ * store, so it cannot prove that no participating writer reads, moves or replaces the record
+ * between its check and an unlink. A record the update did not use is inert instead. Any
+ * reservation made after it (the recovered daemon of a cancelled update, or anything launched
+ * meanwhile) directly follows the stopped claim only if nothing else came first; that writer
+ * holds the fence and spends the record (`spendSameFormatHandoff`), and a version other than
+ * `to` can never carry under it. Every later reservation follows another claim, so the record
+ * grants nothing to it.
  */
 import { join } from "node:path";
 import { z } from "zod";
 import { fenceDirectory } from "@orca/protocol/first-run-fence";
-import { removeIssuedUpdateHandoff, writeUpdateHandoff, type UpdateHandoff } from "@orca/protocol/update-handoff";
+import { writeUpdateHandoff, type UpdateHandoff } from "@orca/protocol/update-handoff";
 import { hash, inspectFirstRunOwnership, refuse } from "./ownership.js";
 
 const directChildTerminal = z.object({ observation: z.literal("direct-child-terminal") }).passthrough();
 
-/** Returns the record written: the receipt that alone may withdraw it later. */
+/** Returns the record written. */
 export function handOffStoreForUpdate(
   path: string,
   from: string,
@@ -55,23 +64,8 @@ export function handOffStoreForUpdate(
   writeUpdateHandoff(storeDir, issued);
   afterWrite?.();
   // The journal must still end on the attempt the record names: nothing launched meanwhile.
-  // Only this exact record is taken back; one written or moved by anything else stays.
+  // If it moved on, the update is refused and the record left inert (see above).
   const after = inspectFirstRunOwnership(path).latest;
-  if (after?.reservationId !== latest.reservationId) {
-    removeIssuedUpdateHandoff(storeDir, issued);
-    refuse();
-  }
+  if (after?.reservationId !== latest.reservationId) refuse();
   return issued;
-}
-
-/**
- * The updater did not install after all: the record it issued must not outlive this attempt.
- * Withdrawn only while the attempt it names is still the journal's latest (nothing launched since
- * could have claimed it) and the record on disk is exactly the one issued; anything else stays.
- */
-export function withdrawUpdateHandoff(path: string, issued: UpdateHandoff): boolean {
-  const latest = inspectFirstRunOwnership(path).latest;
-  if (latest?.reservationId !== issued.reservationId) return false;
-  if (!latest.texts["claim.json"] || hash(latest.texts["claim.json"]) !== issued.claimHash) return false;
-  return removeIssuedUpdateHandoff(join(path, ".orca"), issued);
 }

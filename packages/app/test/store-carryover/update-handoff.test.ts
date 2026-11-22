@@ -11,7 +11,7 @@ import { enterFirstRunWriter } from "@orca/protocol/first-run-fence";
 import { readUpdateHandoff, UPDATE_HANDOFF_FILE, writeUpdateHandoff } from "@orca/protocol/update-handoff";
 import { enterStoreFormat, readStoreFormat, STORE_FORMAT_EPOCH, STORE_UPDATE_HANDOFF_FILE } from "@orca/store";
 import { desktopCarryover, enterDaemonStoreFormat } from "../../../cli/src/desktop-carryover.js";
-import { handOffStoreForUpdate, withdrawUpdateHandoff } from "../../src/main/first-run/update-handoff.js";
+import { handOffStoreForUpdate } from "../../src/main/first-run/update-handoff.js";
 import {
   OWNERSHIP_DIRECTORY,
   inspectFirstRunOwnership,
@@ -188,7 +188,7 @@ it("keeps refusing without the proof: another launch in between, or the version 
   expect(await readStoreFormat(store)).toBeUndefined();
 }, 30000);
 
-it("is written only after an observed exit and withdrawn when nothing was installed", async () => {
+it("is written only after an observed exit; nothing installed leaves it for the recovered daemon to spend", async () => {
   const path = await selected();
   const owner = reserveFirstRunOwnership(path);
   // A reservation with no settled exit is not an updater stop.
@@ -197,46 +197,44 @@ it("is written only after an observed exit and withdrawn when nothing was instal
   void owner;
   const other = await selected();
   launch(other);
+  const store = join(other, ".orca");
+  await mkdir(store, { recursive: true });
+  await enterStoreFormat(store, { appVersion: "0.8.0", mode: "write" });
   const issued = handOffStoreForUpdate(other, "0.8.0", "0.9.0");
-  expect(withdrawUpdateHandoff(other, issued)).toBe(true);
-  expect(readUpdateHandoff(join(other, ".orca"))).toBeUndefined();
+  // The installer never ran: the updater leaves the record; the recovered 0.8.0 daemon follows
+  // the stopped claim, cannot carry under it (other version), and spends it under its fence.
+  const recovered = reserveFirstRunOwnership(other);
+  const hold = await enterFirstRunWriter(other, store, recovered.launchToken!());
+  expect(readUpdateHandoff(store)).toEqual(issued);
+  expect(desktopCarryover(hold, "0.8.0")).toBeUndefined();
+  expect(await enterDaemonStoreFormat(store, hold, "0.8.0", "write")).toMatchObject({ status: "current" });
+  expect(readUpdateHandoff(store)).toBeUndefined();
 }, 30000);
 
-it("withdraws only the exact record it issued, and only while its attempt is still the latest", async () => {
+it("a record the update did not use is inert for every later reservation", async () => {
   const path = await selected();
   launch(path);
   const store = join(path, ".orca");
-  await mkdir(store, { recursive: true });
+  await legacy(store);
   const issued = handOffStoreForUpdate(path, "0.8.0", "0.9.0");
-  // A replacement survives rollback.
-  const replacement = { ...issued, createdAt: "2026-01-01T00:00:00.000Z" };
-  writeUpdateHandoff(store, replacement);
-  expect(withdrawUpdateHandoff(path, issued)).toBe(false);
-  expect(readUpdateHandoff(store)).toEqual(replacement);
-  // The exact record survives too once anything was launched after the attempt it names.
-  writeUpdateHandoff(store, issued);
+  // Something else started after the stop and before the installed version: the chain breaks.
   launch(path);
-  expect(withdrawUpdateHandoff(path, issued)).toBe(false);
+  const owner = reserveFirstRunOwnership(path);
+  const hold = await enterFirstRunWriter(path, store, owner.launchToken!());
+  expect(desktopCarryover(hold, "0.9.0")).toBeUndefined();
+  await expect(enterDaemonStoreFormat(store, hold, "0.9.0", "write")).rejects.toMatchObject({
+    reason: "CARRYOVER_REQUIRED",
+  });
+  // Not this writer's to spend either: it follows another claim.
   expect(readUpdateHandoff(store)).toEqual(issued);
 }, 30000);
 
-it("takes back only its own record when the journal advances while it writes", async () => {
+it("refuses, leaving the record, when the journal advances while it writes", async () => {
   const path = await selected();
   launch(path);
   const store = join(path, ".orca");
   await mkdir(store, { recursive: true });
-  // The journal advances and the record is replaced before the post-write check: refused, and
-  // the replacement survives.
-  let replacement: ReturnType<typeof readUpdateHandoff>;
-  expect(() =>
-    handOffStoreForUpdate(path, "0.8.0", "0.9.0", undefined, () => {
-      launch(path);
-      replacement = { ...readUpdateHandoff(store)!, createdAt: "2026-01-01T00:00:00.000Z" };
-      writeUpdateHandoff(store, replacement);
-    }),
-  ).toThrow();
-  expect(readUpdateHandoff(store)).toEqual(replacement);
-  // The journal advances with its own record still there: that one is taken back.
   expect(() => handOffStoreForUpdate(path, "0.8.0", "0.9.0", undefined, () => launch(path))).toThrow();
-  expect(readUpdateHandoff(store)).toBeUndefined();
+  // The updater removes nothing: the record stays for the fenced writer that follows its claim.
+  expect(readUpdateHandoff(store)).toMatchObject({ from: "0.8.0", to: "0.9.0" });
 }, 30000);
