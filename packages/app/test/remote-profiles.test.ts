@@ -156,6 +156,70 @@ describe("RemoteProfiles", () => {
   });
 });
 
+describe("pending work does not outlive a profile change", () => {
+  it("writes a picked credential only into the profile the picker was opened for", () => {
+    const { profiles } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+
+    // Unchanged while the picker was open: stored.
+    expect(profiles.importCredential("lab", TOKEN, profiles.ticket("lab")).hasCredential).toBe(true);
+
+    for (const change of [
+      () => profiles.save({ id: "lab", name: "Lab", destination: "other" }),
+      () => profiles.save({ id: "lab", name: "Renamed", destination: "lab" }),
+      () => profiles.forgetHostKey("lab"),
+    ]) {
+      profiles.save({ id: "lab", name: "Lab", destination: "lab" });
+      const ticket = profiles.ticket("lab");
+      change();
+      expect(() => profiles.importCredential("lab", TOKEN, ticket)).toThrow("profile changed");
+    }
+
+    // Removed, then recreated under the same id: still not the profile the picker was for.
+    const ticket = profiles.ticket("lab");
+    profiles.remove("lab");
+    expect(() => profiles.importCredential("lab", TOKEN, ticket)).toThrow("no longer exists");
+    profiles.save({ name: "Lab", destination: "lab" });
+    expect(() => profiles.importCredential("lab", TOKEN, ticket)).toThrow("profile changed");
+    expect(profiles.list()[0]?.hasCredential).toBe(false);
+  });
+
+  it("refuses a pin reset while a connect is in flight or open, and allows it after a failure", async () => {
+    let finish!: (url: string) => void;
+    const { profiles, tunnels } = store(() => new Promise<string>((resolve) => (finish = resolve)));
+    profiles.save({ name: "Lab", destination: "lab" });
+    profiles.importCredential("lab", TOKEN);
+    const pending = profiles.open("lab");
+    await vi.waitFor(() => expect(tunnels).toHaveLength(1));
+    expect(() => profiles.forgetHostKey("lab")).toThrow("Connect to another daemon");
+    finish("http://127.0.0.1:41000");
+    const lease = await pending;
+    expect(() => profiles.forgetHostKey("lab")).toThrow("Connect to another daemon");
+    tunnels[0]!.stateNow = { phase: "failed", refusal: "host-key-changed" };
+    profiles.forgetHostKey("lab");
+    // The lease that predates the reset never yields the credential again.
+    tunnels[0]!.stateNow = { phase: "open", localPort: 41000 };
+    expect(() => lease.auth.read()).toThrow(CredentialTransportUnavailable);
+    await lease.release();
+  });
+
+  it("shows an enrolled pin that went missing, and forgetting it is the only reset", () => {
+    const { dir, profiles } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    mkdirSync(join(dir, "known_hosts"), { recursive: true });
+    writeFileSync(join(dir, "known_hosts", "lab"), "orca-lab ssh-ed25519 AAAA\n");
+    writeFileSync(join(dir, "known_hosts", "lab.enrolled"), "enrolled\n");
+    expect(profiles.list()[0]).toMatchObject({ hostKeyPinned: true });
+    expect(profiles.list()[0]).not.toHaveProperty("hostKeyMissing");
+    writeFileSync(join(dir, "known_hosts", "lab"), "");
+    expect(profiles.list()[0]).toMatchObject({ hostKeyPinned: false, hostKeyMissing: true });
+    profiles.forgetHostKey("lab");
+    expect(profiles.list()[0]).toMatchObject({ hostKeyPinned: false });
+    expect(profiles.list()[0]).not.toHaveProperty("hostKeyMissing");
+    expect(existsSync(join(dir, "known_hosts", "lab.enrolled"))).toBe(false);
+  });
+});
+
 describe("credentials follow the verified tunnel, not the loopback URL", () => {
   it("offers no credential over HTTP or the WebSocket while the tunnel cannot be verified", async () => {
     // An impostor on the tunnel's local port: what any local process could do while ssh is down.

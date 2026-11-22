@@ -5,7 +5,7 @@
  * ssh-tunnel workflow sets up on Linux and Windows runners.
  */
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +18,9 @@ import {
   CredentialSlots,
   CredentialStorageUnavailable,
   ephemeralLoopbackPort,
+  forgetPin,
+  markPinEnrolled,
+  pinState,
   profileIdFor,
   sshOptionPath,
   SshTunnel,
@@ -156,6 +159,8 @@ describe("ssh failure classification", () => {
       "bind [127.0.0.1]:41000: Address already in use\nchannel_setup_fwd_listener_tcpip: cannot listen to port: 41000\nCould not request local forwarding.",
       "forward-failed",
     ],
+    // Windows reports a taken local port as a denied bind, which is not an auth failure.
+    ["bind [127.0.0.1]:41000: Permission denied\r\nCould not request local forwarding.\r\n", "forward-failed"],
     ["something else", "ssh-failed"],
     // Debug and dropped-channel lines never decide the class.
     [
@@ -211,8 +216,8 @@ function fakeTunnel(script: (ssh: FakeSsh, n: number, args: readonly string[]) =
 const listening = "debug1: Local forwarding listening on 127.0.0.1 port 41234.\ndebug1: Entering interactive session.";
 const firstChild = (tunnel: SshTunnel) =>
   (tunnel as unknown as { generation: { children: ChildProcess[] } }).generation.children[0]!;
-const until = async (check: () => boolean) => {
-  for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5));
+const until = async (check: () => boolean, timeoutMs = 1_000) => {
+  for (let i = 0; i < timeoutMs / 5 && !check(); i++) await new Promise((r) => setTimeout(r, 5));
   expect(check()).toBe(true);
 };
 
@@ -286,6 +291,59 @@ describe("SshTunnel with a fake ssh", () => {
     expect(tunnel.state).toEqual({ phase: "failed", refusal: "host-key-changed" });
     await new Promise((r) => setTimeout(r, 50));
     expect(spawned).toHaveLength(2);
+  });
+
+  it("enrolls a pin once, then fails closed when it goes missing, empty or unreadable", async () => {
+    const { tunnel, spawned } = fakeTunnel((ssh, n, args) => {
+      if (n === 1) {
+        expect(args).toContain("StrictHostKeyChecking=accept-new");
+        // ssh's accept-new writes the key; the tunnel records the enrollment once open.
+        writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n");
+      } else expect(args).toContain("StrictHostKeyChecking=yes");
+      ssh.say(listening);
+    });
+    const pins = (tunnel as unknown as { options: { knownHostsFile: string } }).options.knownHostsFile;
+    expect(pinState(pins)).toBe("none");
+    await tunnel.open();
+    expect(pinState(pins)).toBe("pinned");
+    expect(existsSync(`${pins}.enrolled`)).toBe(true);
+
+    // Deleted after enrollment: the restart refuses instead of accepting a new key.
+    rmSync(pins);
+    expect(pinState(pins)).toBe("broken");
+    spawned[0]!.exit(255);
+    await until(() => tunnel.state.phase === "failed");
+    expect(tunnel.state).toEqual({ phase: "failed", refusal: "host-key-missing" });
+    expect(spawned).toHaveLength(1);
+    await tunnel.close();
+
+    for (const damage of [
+      () => writeFileSync(pins, ""),
+      () => writeFileSync(pins, "# nothing here\n"),
+      // A directory where the file was: unreadable.
+      () => mkdirSync(pins),
+    ]) {
+      forgetPin(pins);
+      writeFileSync(pins, "orca-lab ssh-ed25519 AAAA\n");
+      markPinEnrolled(pins);
+      rmSync(pins, { recursive: true, force: true });
+      damage();
+      expect(pinState(pins)).toBe("broken");
+      const again = fakeTunnel((ssh) => ssh.say(listening), { knownHostsFile: pins });
+      await expect(again.tunnel.open()).rejects.toMatchObject({ code: "host-key-missing" });
+      expect(again.spawned).toHaveLength(0);
+      rmSync(pins, { recursive: true, force: true });
+    }
+
+    // An existing pin file with no key is broken even without a marker: nothing to trust.
+    forgetPin(pins);
+    writeFileSync(pins, "");
+    expect(pinState(pins)).toBe("broken");
+
+    // Only the explicit reset re-enables first-connect enrollment.
+    forgetPin(pins);
+    expect(pinState(pins)).toBe("none");
+    expect(existsSync(`${pins}.enrolled`)).toBe(false);
   });
 
   it("notices a forward the remote refused", async () => {
@@ -410,6 +468,8 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
     const port = await ephemeralLoopbackPort();
     const server = createServer((socket) => {
       sockets.push(socket);
+      // Windows resets loopback sockets the tunnel tears down; that is not a test failure.
+      socket.on("error", () => {});
       socket.end("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\norca");
     });
     await new Promise<void>((r) => server.listen(port, "127.0.0.1", r));
@@ -450,8 +510,8 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
     (first as unknown as { options: { onState?: (s: TunnelState) => void } }).options.onState = (s) =>
       states.push(s.phase);
     firstChild(first).kill();
-    await until(() => !first.transportVerified());
-    await until(() => states.includes("open"));
+    await until(() => !first.transportVerified(), 15_000);
+    await until(() => states.includes("open"), 15_000);
     expect(first.localPort).toBe(port);
     expect(await (await fetch(url)).text()).toBe("orca");
     await first.close();
@@ -463,6 +523,14 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
       `${pinned[0]} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n`,
     );
     await expect(open(remote, pins).open()).rejects.toMatchObject({ code: "host-key-changed" });
+
+    // An enrolled pin that is emptied or deleted fails closed; only forgetting it re-pins.
+    writeFileSync(pins, "");
+    await expect(open(remote, pins).open()).rejects.toMatchObject({ code: "host-key-missing" });
+    rmSync(pins);
+    await expect(open(remote, pins).open()).rejects.toMatchObject({ code: "host-key-missing" });
+    forgetPin(pins);
+    expect(await (await fetch(await open(remote, pins).open())).text()).toBe("orca");
   }, 60_000);
 
   it("refuses failed auth, a missing ssh, and a forward that cannot bind", async () => {
@@ -554,6 +622,7 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
     const tunnel = open(nothing, join(dir(), "live.known_hosts"));
     const url = await tunnel.open();
     await expect(fetch(url)).rejects.toThrow();
-    await until(() => tunnel.remoteRefused());
+    // Windows retries a refused loopback connect for about two seconds before giving up.
+    await until(() => tunnel.remoteRefused(), 15_000);
   }, 60_000);
 });

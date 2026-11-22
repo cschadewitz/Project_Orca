@@ -32,6 +32,8 @@ export interface RemoteProfileView extends RemoteProfileHop {
   remotePort: number;
   hasCredential: boolean;
   hostKeyPinned: boolean;
+  /** A pin was enrolled and is now missing, empty or unreadable: connects fail closed until it is forgotten. */
+  hostKeyMissing?: true;
 }
 
 /** What the dialog sends to create (`id` absent) or edit a profile. */

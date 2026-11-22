@@ -1085,7 +1085,9 @@ ipcMain.handle("orca:profiles.forgetHostKey", (_event, id: unknown) =>
 ipcMain.handle("orca:profiles.importCredential", (event, id: unknown) =>
   profileResult(async () => {
     const valid = ProfileIdSchema.parse(id);
-    if (!remoteProfiles.get(valid)) throw new ConnectionRefusal("That profile no longer exists.");
+    // The picker can stay open while the profile is edited, removed or reset elsewhere:
+    // the ticket makes the write below refuse unless it is still the same profile.
+    const ticket = remoteProfiles.ticket(valid);
     const window = BrowserWindow.fromWebContents(event.sender);
     const options: Electron.OpenDialogOptions = {
       title: "Import daemon credential",
@@ -1102,7 +1104,7 @@ ipcMain.handle("orca:profiles.importCredential", (event, id: unknown) =>
     } catch {
       throw new ConnectionRefusal("That file could not be read as a daemon credential.");
     }
-    return remoteProfiles.importCredential(valid, token);
+    return remoteProfiles.importCredential(valid, token, ticket);
   }),
 );
 

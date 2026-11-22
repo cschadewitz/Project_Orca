@@ -22,6 +22,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import {
   closeSync,
+  existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -29,6 +30,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
   writeSync,
 } from "node:fs";
 import { createServer } from "node:net";
@@ -97,6 +99,7 @@ export function profileIdFor(name: string, taken: ReadonlySet<string>): string {
 export type TunnelRefusalCode =
   | "ssh-missing"
   | "host-key-changed"
+  | "host-key-missing"
   | "auth-failed"
   | "unreachable"
   | "forward-failed"
@@ -109,6 +112,8 @@ const REFUSAL_MESSAGES: Record<TunnelRefusalCode, string> = {
     "No ssh client was found. Install OpenSSH (on Windows: Settings > Optional features > OpenSSH Client) and try again.",
   "host-key-changed":
     "The server's SSH host key does not match the key pinned for this profile. If the server was reinstalled or its key rotated on purpose, forget the pinned key and connect again; otherwise do not connect.",
+  "host-key-missing":
+    "The SSH host key pinned for this profile is missing, empty or unreadable. ORCA will not trust whatever key the server presents now: if you expect this, forget the pinned key and connect again; otherwise do not connect.",
   "auth-failed":
     "SSH authentication failed. ORCA uses your existing SSH keys and agent without prompting: check that `ssh <destination>` works without a password prompt.",
   unreachable: "The SSH server could not be reached. Check the host name, port and network.",
@@ -138,12 +143,15 @@ export function classifySshFailure(stderr: string): TunnelRefusalCode {
     .join("\n");
   if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed|host key for .* has changed/i.test(stderr))
     return "host-key-changed";
+  // Before auth: Windows reports a taken port as "bind [127.0.0.1]:N: Permission denied".
+  if (/cannot listen to port|Could not request local forwarding|Address already in use|^bind .*:/im.test(stderr))
+    return "forward-failed";
   if (
-    /Permission denied|Too many authentication failures|no matching host key type|Authentication failed/i.test(stderr)
+    /Permission denied \(|Too many authentication failures|no matching host key type|Authentication failed/i.test(
+      stderr,
+    )
   )
     return "auth-failed";
-  if (/cannot listen to port|Could not request local forwarding|Address already in use/i.test(stderr))
-    return "forward-failed";
   if (
     /Could not resolve hostname|Name or service not known|No route to host|Connection refused|Connection timed out|Network is unreachable|Operation timed out|Connection closed by|kex_exchange_identification|Connection reset/i.test(
       stderr,
@@ -187,15 +195,55 @@ export interface SshTunnelOptions {
 }
 
 /** A failure that a restart cannot fix: it needs the person. */
-const PERMANENT: ReadonlySet<TunnelRefusalCode> = new Set(["ssh-missing", "host-key-changed", "auth-failed"]);
+const PERMANENT: ReadonlySet<TunnelRefusalCode> = new Set([
+  "ssh-missing",
+  "host-key-changed",
+  "host-key-missing",
+  "auth-failed",
+]);
 const STDERR_TAIL = 16 * 1024;
 
-export function pinnedHostKey(knownHostsFile: string): boolean {
+/**
+ * Where a pin file stands. `none`: never enrolled, so the next connect may pin whatever the
+ * server presents (accept-new). `pinned`: a readable key is on file. `broken`: the pin was
+ * enrolled before (its marker `<file>.enrolled` exists) or the file exists, but it is now
+ * missing, empty or unreadable. A broken pin fails closed until `forgetPin` resets it:
+ * otherwise deleting or truncating the file would silently re-enroll a new key.
+ */
+export type PinState = "none" | "pinned" | "broken";
+
+export function pinState(knownHostsFile: string): PinState {
+  let text: string;
   try {
-    return statSync(knownHostsFile).size > 0;
-  } catch {
-    return false;
+    text = readFileSync(knownHostsFile, "utf8");
+  } catch (error) {
+    const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+    return missing && !existsSync(enrollmentMarker(knownHostsFile)) ? "none" : "broken";
   }
+  // A known_hosts line: `<host pattern> <key type> <base64 key>`.
+  const keyLine = /^[^#\s]\S*\s+\S+\s+[A-Za-z0-9+/]+=*(\s|$)/m;
+  return keyLine.test(text) ? "pinned" : "broken";
+}
+
+/** True only for a usable pin; `broken` is not pinned. */
+export function pinnedHostKey(knownHostsFile: string): boolean {
+  return pinState(knownHostsFile) === "pinned";
+}
+
+function enrollmentMarker(knownHostsFile: string): string {
+  return `${knownHostsFile}.enrolled`;
+}
+
+/** Record that this pin file was enrolled, so a later loss of it fails closed. */
+export function markPinEnrolled(knownHostsFile: string): void {
+  if (pinState(knownHostsFile) !== "pinned" || existsSync(enrollmentMarker(knownHostsFile))) return;
+  writeFileSync(enrollmentMarker(knownHostsFile), "enrolled\n", { mode: 0o600 });
+}
+
+/** The explicit reset: the next connect enrolls whatever key the server presents. */
+export function forgetPin(knownHostsFile: string): void {
+  rmSync(knownHostsFile, { force: true });
+  rmSync(enrollmentMarker(knownHostsFile), { force: true });
 }
 
 /** One ssh process: who to reach, which pin and alias to check it against, what to forward. */
@@ -441,8 +489,11 @@ export class SshTunnel {
         knownHostsFile,
         jumpPort === this.port ? await ephemeralLoopbackPort() : jumpPort,
       );
+      // A pin that was enrolled and is now gone must not be re-enrolled by accept-new.
+      if (hops.some((hop) => pinState(hop.knownHostsFile) === "broken")) throw new TunnelRefusal("host-key-missing");
       for (const [index, hop] of hops.entries()) await this.startHop(generation, hop, index === hops.length - 1);
       if (generation.lost || this.generation !== generation) throw new TunnelRefusal("ssh-failed");
+      for (const hop of hops) markPinEnrolled(hop.knownHostsFile);
       generation.ready = true;
       this.attempt = 0;
       this.setState({ phase: "open", localPort: this.port! });

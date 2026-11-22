@@ -137,7 +137,13 @@ export function ConnectionProfiles({
           </Text>
           <div className="orca-chips">
             <Chip>{profile.hasCredential ? "Credential stored" : "No credential"}</Chip>
-            <Chip>{profile.hostKeyPinned ? "Host key pinned" : "Host key not pinned yet"}</Chip>
+            <Chip>
+              {profile.hostKeyMissing
+                ? "Pinned host key missing"
+                : profile.hostKeyPinned
+                  ? "Host key pinned"
+                  : "Host key not pinned yet"}
+            </Chip>
           </div>
           {armed === profile.id ? (
             <div ref={armedRow} className="orca-dialog__actions">
@@ -198,7 +204,7 @@ export function ConnectionProfiles({
               >
                 Edit
               </Button>
-              {profile.hostKeyPinned && (
+              {(profile.hostKeyPinned || profile.hostKeyMissing) && (
                 <Button
                   size="sm"
                   disabled={disabled || current === profile.id}

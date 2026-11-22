@@ -10,13 +10,14 @@
  * Tunnels are shared per profile and reference counted, so a reconnect to the profile that
  * is already on screen reuses the open tunnel instead of starting a second ssh.
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import {
   ConnectionProfileSchema,
   CredentialSlots,
-  pinnedHostKey,
+  forgetPin,
+  pinState,
   profileIdFor,
   SshTunnel,
   type ConnectionProfile,
@@ -47,6 +48,17 @@ export interface ProfileLease {
   release(): Promise<void>;
 }
 
+/**
+ * What a pending import was started against. The file picker can stay open for minutes;
+ * the credential is written only if the profile is still that one (same revision, same
+ * destination), never into a profile that was edited, removed or reset meanwhile.
+ */
+export interface ProfileTicket {
+  readonly id: string;
+  readonly revision: number;
+  readonly destination: string;
+}
+
 interface SharedTunnel {
   tunnel: SshTunnel;
   url: Promise<string>;
@@ -66,6 +78,8 @@ export interface RemoteProfilesDeps {
 export class RemoteProfiles {
   private readonly slots: CredentialSlots;
   private readonly tunnels = new Map<string, SharedTunnel>();
+  /** Bumped by every edit, removal and pin reset of a profile (in memory: pending work is too). */
+  private readonly revisions = new Map<string, number>();
   private closed = false;
 
   constructor(private readonly deps: RemoteProfilesDeps) {
@@ -77,6 +91,13 @@ export class RemoteProfiles {
   }
   private pins(id: string): string {
     return join(this.deps.dir, "known_hosts", id);
+  }
+
+  private revision(id: string): number {
+    return this.revisions.get(id) ?? 0;
+  }
+  private bump(id: string): void {
+    this.revisions.set(id, this.revision(id) + 1);
   }
 
   private read(): ConnectionProfile[] {
@@ -121,8 +142,18 @@ export class RemoteProfiles {
         : {}),
       remotePort: profile.remotePort,
       hasCredential: this.slots.has(profile.id),
-      hostKeyPinned:
-        pinnedHostKey(this.pins(profile.id)) && (!profile.jump || pinnedHostKey(`${this.pins(profile.id)}.jump`)),
+      ...this.pinView(profile),
+    };
+  }
+
+  private pinView(profile: ConnectionProfile): { hostKeyPinned: boolean; hostKeyMissing?: true } {
+    const states = [
+      pinState(this.pins(profile.id)),
+      ...(profile.jump ? [pinState(`${this.pins(profile.id)}.jump`)] : []),
+    ];
+    return {
+      hostKeyPinned: states.every((state) => state === "pinned"),
+      ...(states.includes("broken") ? { hostKeyMissing: true as const } : {}),
     };
   }
 
@@ -160,9 +191,10 @@ export class RemoteProfiles {
         existing.jump?.sshPort !== profile.jump?.sshPort)
     ) {
       // Another server, or another daemon on it: the old key and credential belong to that one.
-      this.forgetHostKey(id);
+      this.forgetPins(id);
       this.slots.remove(id);
     }
+    if (existing) this.bump(id);
     this.write(existing ? profiles.map((p) => (p.id === id ? profile : p)) : [...profiles, profile]);
     return this.view(profile);
   }
@@ -172,15 +204,31 @@ export class RemoteProfiles {
     if (this.tunnels.has(id)) throw new ConnectionRefusal("Connect to another daemon before removing this profile.");
     const profiles = this.read();
     if (!profiles.some((p) => p.id === id)) return;
+    this.bump(id);
     this.slots.remove(id);
-    this.forgetHostKey(id);
+    this.forgetPins(id);
     this.write(profiles.filter((p) => p.id !== id));
   }
 
-  /** Store a credential for the profile. The token is validated and sealed; it is never returned. */
-  importCredential(id: string, token: string): RemoteProfileView {
+  /** Pin what an import is about to be for, before anything slow (a file picker) runs. */
+  ticket(id: string): ProfileTicket {
     const profile = this.get(id);
     if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
+    return { id, revision: this.revision(id), destination: profile.destination };
+  }
+
+  /**
+   * Store a credential for the profile. The token is validated and sealed; it is never
+   * returned. With a ticket, refused unless the profile is still the one the ticket names.
+   */
+  importCredential(id: string, token: string, ticket?: ProfileTicket): RemoteProfileView {
+    const profile = this.get(id);
+    if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
+    if (
+      ticket &&
+      (ticket.id !== id || ticket.revision !== this.revision(id) || ticket.destination !== profile.destination)
+    )
+      throw new ConnectionRefusal("The profile changed while the credential was being chosen. Import it again.");
     try {
       this.slots.write(id, token);
     } catch (error) {
@@ -189,11 +237,23 @@ export class RemoteProfiles {
     return this.view(profile);
   }
 
-  /** For a server whose key changed on purpose: the next connect pins whatever it presents. */
+  /**
+   * For a server whose key changed on purpose, or a pin that went missing: the next connect
+   * pins whatever it presents. Refused while a tunnel of the profile is starting or open,
+   * so a connect in flight cannot enroll a key the person did not ask to reset for.
+   */
   forgetHostKey(id: string): void {
     if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(id)) throw new ConnectionRefusal("Invalid profile");
-    rmSync(this.pins(id), { force: true });
-    rmSync(`${this.pins(id)}.jump`, { force: true });
+    const shared = this.tunnels.get(id);
+    if (shared && shared.tunnel.state.phase !== "failed" && shared.tunnel.state.phase !== "closed")
+      throw new ConnectionRefusal("Connect to another daemon before forgetting this profile's host key.");
+    this.bump(id);
+    this.forgetPins(id);
+  }
+
+  private forgetPins(id: string): void {
+    forgetPin(this.pins(id));
+    forgetPin(`${this.pins(id)}.jump`);
   }
 
   /** Open (or share) the profile's tunnel and hand out its credential source. */
@@ -218,12 +278,18 @@ export class RemoteProfiles {
     }
     const current = shared;
     current.users += 1;
+    const revision = this.revision(id);
     let url: string;
     try {
       url = await current.url;
     } catch (error) {
       await this.releaseTunnel(id, current);
       throw error;
+    }
+    // Nothing that started before an edit, removal or pin reset may finish after it.
+    if (this.revision(id) !== revision) {
+      await this.releaseTunnel(id, current);
+      throw new ConnectionRefusal("The profile changed while connecting. Connect again.");
     }
     let released = false;
     const slots = this.slots;
@@ -235,7 +301,8 @@ export class RemoteProfiles {
       // restarting, the local port could belong to anything, so nothing is offered.
       auth: {
         read: () => {
-          if (!current.tunnel.transportVerified()) throw new CredentialTransportUnavailable();
+          if (!current.tunnel.transportVerified() || this.revision(id) !== revision)
+            throw new CredentialTransportUnavailable();
           return (cached ??= slots.read(id));
         },
         refresh: () => {

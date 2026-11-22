@@ -104,6 +104,19 @@ SSH connection that works with no daemon listening on the server. Removing a pro
 deletes its keychain credential and pinned key. Editing a profile to point at a
 different server or daemon port forgets both.
 
+Only a profile that was never pinned trusts the key its server presents on the first
+connect. Once a connect has pinned a key, the app records the enrollment beside the
+pin; if the pin file is later deleted, emptied or unreadable, connects fail closed
+("pinned host key missing") until **Forget host key** resets it, so a lost file never
+silently re-enrolls a different key. Forgetting is refused while a connect to that
+profile is in flight or open.
+
+A credential import is tied to the profile it was started for: if the profile is
+edited, removed or its host key forgotten while the file picker is open, the picked
+file is not stored and the import has to be repeated. A connect that was in flight
+across such a change does not complete, and an existing connection stops offering the
+credential.
+
 Profiles live in `<userData>/remote-daemons/` (`profiles.json`, `known_hosts/`,
 `credentials/`); the saved target is the profile's id in the app preferences, and it
 replaces a saved URL. `ORCA_DAEMON_URL` and `ORCA_DAEMON_TOKEN_FILE` keep their
