@@ -121,11 +121,16 @@ export interface RecoveryIntentView {
   checkpoint: string;
   /** The daemon reserved the attempt and it may not exist yet: Finish reconciles, nothing starts. */
   reserved: boolean;
+  /**
+   * The attempt the daemon accepted for this intent, kept so it can be found after a reload or
+   * a lost answer. A separate new attempt needs this intent dismissed first.
+   */
+  attemptRunId?: string;
 }
 
 /** The answer to Start or Finish, for the renderer. */
 export type RecoveryIntentOutcome =
-  | { state: "accepted"; runId: string }
+  | { state: "accepted"; runId: string; intent: RecoveryIntentView }
   /** The daemon is still admitting this intent; Start again asks with the same key. */
   | { state: "pending"; intent: RecoveryIntentView }
   /** The daemon reserved an attempt and did not confirm it was created; Finish reconciles it. */
@@ -316,13 +321,14 @@ export interface OrcaBridge {
    * Checkpoint attempts (#357). The intent (scope, source run, checkpoint, retry key, reserved
    * receipt) is kept in main's encrypted journal, never renderer memory, so navigation, reload
    * and restart reuse it. `start` asks with the retained key, `finish` reconciles a reserved
-   * receipt and never starts another attempt, and `abandon` drops an intent after confirmation.
+   * receipt and never starts another attempt, and `dismiss` (after a confirmation) abandons an
+   * unresolved intent or forgets a started one so a separate attempt can begin.
    */
   recoveryIntents?: {
     list(params: { runId: string }): Promise<BridgeResult<RecoveryIntentView[]>>;
     start(params: { runId: string; checkpoint: string }): Promise<BridgeResult<RecoveryIntentOutcome>>;
     finish(params: { id: string }): Promise<BridgeResult<RecoveryIntentOutcome>>;
-    abandon(params: { id: string }): Promise<BridgeResult<{ abandoned: boolean }>>;
+    dismiss(params: { id: string }): Promise<BridgeResult<{ abandoned: boolean }>>;
   };
   daemonConnection?: DaemonConnectionBridge;
   /** Update the connected managed server over its profile's SSH connection (#879). */

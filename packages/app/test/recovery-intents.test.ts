@@ -1,8 +1,8 @@
 /**
- * Main-process checkpoint-attempt intents (#357): the key and a reserved receipt survive the
- * renderer and the process, a lost answer is asked again with the same key, a refusal ends the
- * intent, a reserved attempt is only ever reconciled, and an answer that arrives after the
- * connection changed settles its own record without being shown.
+ * Main-process checkpoint-attempt intents (#357): the key, a reserved receipt and the accepted
+ * attempt survive the renderer and the process; every error keeps the key; a reserved attempt is
+ * only ever reconciled; an answer that arrives after the connection changed is recorded but not
+ * shown; and calls for one run, a dismissal's dialog included, never overlap.
  */
 import { afterEach, expect, it, vi } from "vitest";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
@@ -52,11 +52,10 @@ function fixture() {
     },
     recover,
     reconcile,
-    refused: (error) => error instanceof Refusal,
     ...over,
   });
   let connect = async () => connection();
-  const confirm = vi.fn(async () => true);
+  const confirm = vi.fn(async (_state: "retained" | "resolved") => true);
   const controller = (journal = new RecoveryIntents(path, encryption)) =>
     new RecoveryIntentController(journal, () => connect(), confirm);
   return {
@@ -92,22 +91,28 @@ const reserved: RunsRecoverResult = {
   failure: { code: "RUN_STATE", message: "interrupted", recovery: "reconcile" },
 };
 
-it("asks again with the same key after a lost answer, across a new process, then settles", async () => {
+it("keeps the key through a lost reply and a verification error, across a new process", async () => {
   const f = fixture();
   f.recover.mockRejectedValueOnce(new Error("socket hang up"));
   await expect(f.controller().start("run-src", "cp-1")).rejects.toThrow("socket hang up");
+  // The daemon's answer to the retry is an error: it says nothing about the lost request.
+  f.recover.mockRejectedValueOnce(new Refusal("RUN_STATE: ownership unavailable"));
+  await expect(f.controller().start("run-src", "cp-1")).rejects.toThrow("RUN_STATE");
   // A new process (new journal and controller over the same file) still holds the intent.
   expect(await f.controller().list("run-src")).toEqual([
     { id: expect.any(String), sourceRunId: "run-src", checkpoint: "cp-1", reserved: false },
   ]);
   f.recover.mockResolvedValueOnce(accepted("run-attempt"));
-  expect(await f.controller().start("run-src", "cp-1")).toEqual({ state: "accepted", runId: "run-attempt" });
-  const [first, second] = f.recover.mock.calls.map(([params]) => params);
-  expect(second!.idempotencyKey).toBe(first!.idempotencyKey);
-  expect(first).toMatchObject({ runId: "run-src", checkpoint: "cp-1", expectedScope: { principalId: "alice" } });
-  expect(await f.controller().list("run-src")).toEqual([]);
+  expect(await f.controller().start("run-src", "cp-1")).toMatchObject({ state: "accepted", runId: "run-attempt" });
+  const keys = f.recover.mock.calls.map(([params]) => params.idempotencyKey);
+  expect(new Set(keys).size).toBe(1);
+  expect(f.recover.mock.calls[0]![0]).toMatchObject({
+    runId: "run-src",
+    checkpoint: "cp-1",
+    expectedScope: { principalId: "alice" },
+  });
   // The key is never written in plain text.
-  expect(readFileSync(f.path).toString("utf8")).not.toContain(first!.idempotencyKey);
+  expect(readFileSync(f.path).toString("utf8")).not.toContain(keys[0]!);
 });
 
 it("keeps an in-progress answer and refuses a second checkpoint for the same run meanwhile", async () => {
@@ -118,15 +123,24 @@ it("keeps an in-progress answer and refuses a second checkpoint for the same run
   expect(f.recover).toHaveBeenCalledTimes(1);
 });
 
-it("ends the intent when the daemon refuses it, so the next start is new work", async () => {
+it("records the accepted attempt before answering, so a reload finds it and Start does not ask again", async () => {
   const f = fixture();
-  f.recover.mockRejectedValueOnce(new Refusal("RECOVERY_BLOCKED"));
-  await expect(f.controller().start("run-src", "cp-1")).rejects.toThrow("RECOVERY_BLOCKED");
-  expect(await f.controller().list("run-src")).toEqual([]);
   f.recover.mockResolvedValueOnce(accepted("run-attempt"));
   await f.controller().start("run-src", "cp-1");
-  const [first, second] = f.recover.mock.calls.map(([params]) => params);
-  expect(second!.idempotencyKey).not.toBe(first!.idempotencyKey);
+  // Reloaded: the intent is resolved, with its attempt.
+  const [resolved] = await f.controller().list("run-src");
+  expect(resolved).toMatchObject({ checkpoint: "cp-1", reserved: false, attemptRunId: "run-attempt" });
+  expect(await f.controller().start("run-src", "cp-1")).toMatchObject({ state: "accepted", runId: "run-attempt" });
+  await expect(f.controller().start("run-src", "cp-2")).rejects.toThrow(/Dismiss it to start a separate attempt/);
+  expect(f.recover).toHaveBeenCalledTimes(1);
+
+  // A separate attempt is a deliberate dismissal, then a new intent with a new key.
+  expect(await f.controller().dismiss(resolved!.id)).toEqual({ abandoned: true });
+  expect(f.confirm).toHaveBeenLastCalledWith("resolved");
+  f.recover.mockResolvedValueOnce(accepted("run-second"));
+  await f.controller().start("run-src", "cp-1");
+  const [first, second] = f.recover.mock.calls.map(([params]) => params.idempotencyKey);
+  expect(second).not.toBe(first);
 });
 
 it("finishes a reserved attempt only by reconciling its receipt, after navigation and restart", async () => {
@@ -138,16 +152,15 @@ it("finishes a reserved attempt only by reconciling its receipt, after navigatio
   // Pressing Start again (or Finish) from a new process reconciles; nothing new is started.
   f.reconcile.mockRejectedValueOnce(new Refusal("NOT_SUPPORTED"));
   await expect(f.controller().start("run-src", "cp-1")).rejects.toThrow("NOT_SUPPORTED");
-  // A refused reconcile keeps the reservation: only its outcome or an abandon ends it.
   expect((await f.controller().list("run-src"))[0]).toMatchObject({ reserved: true });
   f.reconcile.mockResolvedValueOnce(accepted("run-reserved"));
-  expect(await f.controller().finish(outcome.intent.id)).toEqual({ state: "accepted", runId: "run-reserved" });
+  expect(await f.controller().finish(outcome.intent.id)).toMatchObject({ state: "accepted", runId: "run-reserved" });
   expect(f.recover).toHaveBeenCalledTimes(1);
   expect(f.reconcile.mock.calls.map(([params]) => params.operationId)).toEqual([OPERATION, OPERATION]);
-  expect(await f.controller().list("run-src")).toEqual([]);
+  expect((await f.controller().list("run-src"))[0]).toMatchObject({ attemptRunId: "run-reserved" });
 });
 
-it("settles a late answer against its own record but does not show it on a new connection", async () => {
+it("records a late acceptance against its intent but does not show it on a new connection", async () => {
   const f = fixture();
   let answer!: (result: RunsRecoverResult) => void;
   f.recover.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
@@ -157,17 +170,45 @@ it("settles a late answer against its own record but does not show it on a new c
   answer(accepted("run-attempt"));
   await expect(pending).rejects.toThrow(/connection changed/);
   f.useConnection(async () => f.connection({ assertCurrent: () => {} }));
-  expect(await f.controller().list("run-src")).toEqual([]);
+  expect((await f.controller().list("run-src"))[0]).toMatchObject({ attemptRunId: "run-attempt" });
 });
 
-it("refuses an accepted receipt for another source run and keeps the intent", async () => {
+it("refuses an accepted receipt for another source run and keeps the intent unresolved", async () => {
   const f = fixture();
   f.recover.mockResolvedValueOnce(accepted("run-attempt", "run-other"));
   await expect(f.controller().start("run-src", "cp-1")).rejects.toThrow(/does not match/);
-  expect(await f.controller().list("run-src")).toHaveLength(1);
+  expect((await f.controller().list("run-src"))[0]).not.toHaveProperty("attemptRunId");
 });
 
-it("keeps an intent to its own connection and principal, and abandons only after confirmation", async () => {
+it("never dismisses an intent while a call for its run is in flight, nor starts one during the dialog", async () => {
+  const f = fixture();
+  const controller = f.controller();
+  f.recover.mockRejectedValueOnce(new Error("lost"));
+  await expect(controller.start("run-src", "cp-1")).rejects.toThrow("lost");
+  const [intent] = await controller.list("run-src");
+
+  // A start is out: dismissing (from another window) is refused, so no second key can follow.
+  let answer!: (result: RunsRecoverResult) => void;
+  f.recover.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+  const out = controller.start("run-src", "cp-1");
+  await vi.waitFor(() => expect(f.recover).toHaveBeenCalledTimes(2));
+  await expect(controller.dismiss(intent!.id)).rejects.toThrow(/still in progress/);
+  answer({ state: "in-progress", operationId: OPERATION, recovery: "inspect-or-retry" });
+  await out;
+
+  // A dismissal's dialog is open: a start for that run is refused until it closes.
+  let decide!: (yes: boolean) => void;
+  f.confirm.mockImplementationOnce(() => new Promise((resolve) => (decide = resolve)));
+  const dismissing = controller.dismiss(intent!.id);
+  await vi.waitFor(() => expect(f.confirm).toHaveBeenCalled());
+  await expect(controller.start("run-src", "cp-1")).rejects.toThrow(/still in progress/);
+  decide(true);
+  expect(await dismissing).toEqual({ abandoned: true });
+  expect(f.confirm).toHaveBeenLastCalledWith("retained");
+  expect(await controller.list("run-src")).toEqual([]);
+});
+
+it("keeps an intent to its own connection and principal, and dismisses only after confirmation", async () => {
   const f = fixture();
   f.recover.mockRejectedValueOnce(new Error("lost"));
   await expect(f.controller().start("run-src", "cp-1")).rejects.toThrow("lost");
@@ -175,12 +216,12 @@ it("keeps an intent to its own connection and principal, and abandons only after
   f.useConnection(async () => f.connection({ scope: { ...f.scope, principalId: "bob" } }));
   expect(await f.controller().list("run-src")).toEqual([]);
   await expect(f.controller().start("run-src", "cp-1")).rejects.toThrow(/another connection or principal/);
-  await expect(f.controller().abandon(intent!.id)).rejects.toThrow(/unavailable on this connection/);
+  await expect(f.controller().dismiss(intent!.id)).rejects.toThrow(/unavailable on this connection/);
   f.useConnection(async () => f.connection());
   f.confirm.mockResolvedValueOnce(false);
-  expect(await f.controller().abandon(intent!.id)).toEqual({ abandoned: false });
+  expect(await f.controller().dismiss(intent!.id)).toEqual({ abandoned: false });
   expect(await f.controller().list("run-src")).toHaveLength(1);
-  expect(await f.controller().abandon(intent!.id)).toEqual({ abandoned: true });
+  expect(await f.controller().dismiss(intent!.id)).toEqual({ abandoned: true });
   expect(await f.controller().list("run-src")).toEqual([]);
   expect(f.recover).toHaveBeenCalledTimes(1);
 });

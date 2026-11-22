@@ -495,19 +495,30 @@ const recoveryIntents = new RecoveryIntentController(
       assertCurrent: () => workspace.assertEpoch(target.epoch),
       recover: (params) => captured.runsRecover(params),
       reconcile: (params) => captured.runsRecoverReconcile(params),
-      refused: (error) => error instanceof DaemonClientError && error.error.code !== "PROTOCOL_MESSAGE",
     };
   },
-  async () => {
-    const result = await dialog.showMessageBox({
-      type: "warning",
-      buttons: ["Keep recovery", "Abandon recovery"],
-      defaultId: 0,
-      cancelId: 0,
-      message: "Abandon this checkpoint recovery?",
-      detail:
-        "An attempt may already exist or be running. This does not cancel it. The next start creates a separate attempt with a new key.",
-    });
+  async (state) => {
+    const result = await dialog.showMessageBox(
+      state === "resolved"
+        ? {
+            type: "question",
+            buttons: ["Keep it", "Start a separate attempt"],
+            defaultId: 0,
+            cancelId: 0,
+            message: "Start a separate checkpoint attempt?",
+            detail:
+              "The attempt this recovery started stays as it is. ORCA forgets the link to it here, and the next start creates a separate attempt with a new key.",
+          }
+        : {
+            type: "warning",
+            buttons: ["Keep recovery", "Abandon recovery"],
+            defaultId: 0,
+            cancelId: 0,
+            message: "Abandon this checkpoint recovery?",
+            detail:
+              "An attempt may already exist or be running. This does not cancel it. The next start creates a separate attempt with a new key.",
+          },
+    );
     return result.response === 1;
   },
 );
@@ -516,7 +527,7 @@ handle("orca:recoveryIntents.start", (params: { runId: string; checkpoint: strin
   recoveryIntents.start(params.runId, params.checkpoint),
 );
 handle("orca:recoveryIntents.finish", (params: { id: string }) => recoveryIntents.finish(params.id));
-handle("orca:recoveryIntents.abandon", (params: { id: string }) => recoveryIntents.abandon(params.id));
+handle("orca:recoveryIntents.dismiss", (params: { id: string }) => recoveryIntents.dismiss(params.id));
 handle("orca:admissionIntents.start", (workflowId: string) => intents.start(workflowId));
 handle("orca:admissionIntents.list", () => intents.list());
 handle("orca:admissionIntents.abandon", (id: string) =>

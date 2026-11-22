@@ -194,7 +194,7 @@ const bridge: OrcaBridge = {
     list: (params) => call("orca:recoveryIntents.list", params),
     start: (params) => call("orca:recoveryIntents.start", params),
     finish: (params) => call("orca:recoveryIntents.finish", params),
-    abandon: (params) => call("orca:recoveryIntents.abandon", params),
+    dismiss: (params) => call("orca:recoveryIntents.dismiss", params),
   },
   admissionIntents: {
     start: (workflowId) => call("orca:admissionIntents.start", workflowId),

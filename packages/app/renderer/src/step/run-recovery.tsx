@@ -12,15 +12,15 @@
  * - **Review an uncertain step.** `Mark to run again` says the person checked what the step did
  *   and it may repeat; `Abandon the run` ends the run there. Abandoning cannot be taken back, so
  *   its button arms first and names the step in its confirmation.
- * - **Start a checkpoint attempt.** The intent (its retry key, and a reserved receipt once the
- *   daemon answers with one) is kept by the main process in its encrypted journal, bound to the
+ * - **Start a checkpoint attempt.** The intent (its retry key, a reserved receipt, and the attempt
+ *   the daemon accepted) is kept by the main process in its encrypted journal, bound to the
  *   verified connection and principal, the source run and the checkpoint: this component only
- *   lists it. So leaving the run, selecting a step, reloading or restarting never turns an
- *   unresolved intent into a second attempt. While one is unresolved it is shown above the
- *   checkpoints with the only actions it allows: ask again with the same key, finish a reserved
- *   attempt by reconciling its receipt (never by starting another), or abandon it after
- *   confirmation. A late answer is settled by main against its own record; here it is shown
- *   only if this run's section is still the one on screen.
+ *   lists it. Leaving the run, selecting a step, reloading or restarting finds it again, shown
+ *   above the checkpoints with the actions it allows. Unresolved: ask again with the same key,
+ *   finish a reserved attempt by reconciling its receipt (never by starting another), or abandon
+ *   it after confirmation. Started: open the attempt, or deliberately start a separate one. No
+ *   other checkpoint of the run starts meanwhile. Main serializes these per run; a late answer
+ *   is recorded there, and shown here only while this run's section is still on screen.
  *
  * Every control asks `hello.methods` for its own method, with no coarse fallback: a daemon
  * before protocol 2.5 has none of them, and a `--read-only` one has only the read.
@@ -189,7 +189,7 @@ export function RunRecovery({ detail, onOpenRun }: RunRecoveryProps): JSX.Elemen
             say({ message: `Started a checkpoint attempt from ${label}.`, failed: false });
             onOpenRun?.(result.result.runId);
           } else if (result.result.state === "reserved") {
-            say({ message: `${result.result.message} Finish it to create it, or abandon it.`, failed: true });
+            say({ message: `${result.result.message} Finish it, or abandon it.`, failed: true });
           } else {
             say({
               message: `The daemon is still admitting the attempt from ${label}. Ask again to check; it cannot start a second one.`,
@@ -216,18 +216,24 @@ export function RunRecovery({ detail, onOpenRun }: RunRecoveryProps): JSX.Elemen
       intentsBridge && act(`finish:${intent.id}`, label, () => intentsBridge.finish({ id: intent.id })),
     [intentsBridge, act],
   );
-  const abandon = useCallback(
+  const dismiss = useCallback(
     (intent: RecoveryIntentView) => {
       if (pending || !intentsBridge) return;
       const asked = runId;
-      setPending(`abandon:${intent.id}`);
+      setPending(`dismiss:${intent.id}`);
       void intentsBridge
-        .abandon({ id: intent.id })
+        .dismiss({ id: intent.id })
         .then((result) => {
           if (current.current !== asked) return;
           if (!result.ok) say({ message: `${result.error.code}: ${result.error.message}`, failed: true });
           else if (result.result.abandoned)
-            say({ message: "The recovery was abandoned. A new start uses a new request.", failed: false });
+            say({
+              message:
+                intent.attemptRunId !== undefined
+                  ? "A separate attempt can start now; the earlier one is unchanged."
+                  : "The recovery was abandoned. A new start uses a new request.",
+              failed: false,
+            });
           refresh();
         })
         .finally(() => setPending(undefined));
@@ -331,9 +337,9 @@ export function RunRecovery({ detail, onOpenRun }: RunRecoveryProps): JSX.Elemen
           {intents.length > 0 && (
             <>
               <Text style="eyebrow" as="div" className="orca-inspector__group">
-                Unresolved recovery
+                {intents.some((i) => i.attemptRunId === undefined) ? "Unresolved recovery" : "Started recovery"}
               </Text>
-              <ul className="orca-recovery__list" aria-label="Unresolved recovery">
+              <ul className="orca-recovery__list" aria-label="Recovery in progress">
                 {intents.map((intent) => {
                   const point = load.assessment.checkpoints.find((c) => c.stepRunId === intent.checkpoint);
                   const label = point?.nodeId ?? intent.checkpoint;
@@ -343,27 +349,52 @@ export function RunRecovery({ detail, onOpenRun }: RunRecoveryProps): JSX.Elemen
                         {point ? `${point.nodeId} · attempt ${point.attempt}` : label}
                       </Text>
                       <Text style="caption" className="orca-faint" as="div">
-                        {intent.reserved
-                          ? "The daemon reserved this attempt and has not confirmed it was created. Finish it; nothing new starts."
-                          : "This start has no definite answer yet. Asking again uses the same request, so it cannot start a second attempt."}
+                        {intent.attemptRunId !== undefined
+                          ? "This recovery started an attempt. Open it to see how it is going."
+                          : intent.reserved
+                            ? "The daemon reserved this attempt and has not confirmed it was created. Finish it; nothing new starts."
+                            : "This start has no definite answer yet. Asking again uses the same request, so it cannot start a second attempt."}
                       </Text>
                       <div className="orca-recovery__actions">
-                        <Button
-                          size="sm"
-                          tone="primary"
-                          disabled={!writability.can || pending !== undefined}
-                          {...why}
-                          onClick={() =>
-                            intent.reserved
-                              ? finish(intent, label)
-                              : start({ stepRunId: intent.checkpoint, nodeId: label })
-                          }
-                        >
-                          {intent.reserved ? "Finish the attempt" : "Ask again"}
-                        </Button>
-                        <Button size="sm" tone="ghost" disabled={pending !== undefined} onClick={() => abandon(intent)}>
-                          Abandon this recovery
-                        </Button>
+                        {intent.attemptRunId !== undefined ? (
+                          <>
+                            <Button size="sm" tone="primary" onClick={() => onOpenRun?.(intent.attemptRunId!)}>
+                              Open the attempt
+                            </Button>
+                            <Button
+                              size="sm"
+                              tone="ghost"
+                              disabled={pending !== undefined}
+                              onClick={() => dismiss(intent)}
+                            >
+                              Start a separate attempt
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <Button
+                              size="sm"
+                              tone="primary"
+                              disabled={!writability.can || pending !== undefined}
+                              {...why}
+                              onClick={() =>
+                                intent.reserved
+                                  ? finish(intent, label)
+                                  : start({ stepRunId: intent.checkpoint, nodeId: label })
+                              }
+                            >
+                              {intent.reserved ? "Finish the attempt" : "Ask again"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              tone="ghost"
+                              disabled={pending !== undefined}
+                              onClick={() => dismiss(intent)}
+                            >
+                              Abandon this recovery
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </li>
                   );
@@ -392,7 +423,10 @@ export function RunRecovery({ detail, onOpenRun }: RunRecoveryProps): JSX.Elemen
                           tone="primary"
                           disabled={!writability.can || pending !== undefined || intents.length > 0}
                           {...(intents.length > 0
-                            ? { disabledReason: "finish or abandon the unresolved recovery above first" }
+                            ? {
+                                disabledReason:
+                                  "this run has a recovery above; finish it, or choose to start a separate attempt",
+                              }
                             : why)}
                           onClick={() => start(checkpoint)}
                         >

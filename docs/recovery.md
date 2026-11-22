@@ -242,23 +242,29 @@ none of it and a `--read-only` daemon shows the assessment without buttons.
 - **Mark to run again** and **Abandon the run** record a review (`runs.reviewEffect`).
   Abandoning asks for confirmation first.
 - **Start an attempt from here** sends `runs.recover` for that checkpoint. The intent (the
-  verified connection and principal, the source run, the checkpoint, its idempotency key, and
-  a reserved receipt once there is one) is kept by the app's main process in an encrypted
-  journal (`recovery-intents.enc`, OS keychain, never plain text), not in the window. Leaving
-  the run, selecting a step, reloading or restarting the app finds the same intent, shown as
-  **Unresolved recovery** with the only actions it allows, and no other checkpoint of that run
-  can be started meanwhile:
-  - **Ask again** after a lost or in-progress answer sends the same key, which can only return
-    the same attempt.
+  verified connection and principal, the source run, the checkpoint, its idempotency key, a
+  reserved receipt once there is one, and the attempt the daemon accepted) is kept by the app's
+  main process in an encrypted journal (`recovery-intents.enc`, OS keychain, never plain text),
+  not in the window. Leaving the run, selecting a step, reloading or restarting the app finds the
+  same intent above the checkpoints, and no other checkpoint of that run can be started
+  meanwhile:
+  - **Ask again** sends the same key after any answer that is not an outcome: a lost reply, an
+    in-progress answer, or an error. An error answers that request only and cannot show that an
+    earlier, lost request admitted nothing, so it never ends the intent. A start refused because
+    a step still needs review can be asked again with the same key once it is reviewed.
   - **Finish the attempt** after a receipt that reserved the attempt without confirming it was
     created reconciles that receipt (`admissions.reconcile` with `kind: "run.recover"`) and
     never starts another.
-  - **Abandon this recovery**, after a confirmation, forgets the intent. It cancels nothing on
-    the daemon; the next start is new work with a new key.
+  - **Abandon this recovery**, after a confirmation, forgets an unresolved intent. It cancels
+    nothing on the daemon; the next start is new work with a new key.
+  - Once the daemon accepts an attempt for this source, the attempt is written to the intent
+    before anyone is told, so a lost reply, a reload or a changed connection still finds it:
+    **Open the attempt**, or **Start a separate attempt**, which confirms and then forgets the
+    link so the next start uses a new key.
 
-  The intent ends on its own only when the daemon accepts the attempt for that source run, or
-  refuses the start. An answer that arrives after the connection changed settles its own
-  intent but is not shown on the new connection. A started attempt is selected in the run tree.
+  Main runs one start, finish or dismissal per source run at a time, a dismissal's confirmation
+  included. An answer that arrives after the connection changed is recorded against its own
+  intent and not shown on the new connection. A started attempt is selected in the run tree.
 - A checkpoint attempt's summary names the run and step it started after, and a reused step
   says which run it came from. A step with a recorded review says what was decided.
 

@@ -194,10 +194,11 @@ export class ProtectedJournal<T extends { state: string }> {
     }
   }
   /** Compacts: an abandoned record is settled and nothing reads it again, so it is not kept.
-   * Every retained record is kept, since retry, recovery and reconciliation need it. */
+   * Every other record (retained, or a recovery intent's resolved outcome) is kept, since
+   * retry, recovery, reconciliation and finding what started need it. */
   write(records: T[]): void {
     this.check();
-    const retained = records.filter((r) => r.state === "retained");
+    const retained = records.filter((r) => r.state !== "abandoned");
     let bytes: Buffer;
     try {
       bytes = this.encryption.encryptString(JSON.stringify(retained));
