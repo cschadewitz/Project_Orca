@@ -101,6 +101,7 @@ export type TunnelRefusalCode =
   | "ssh-missing"
   | "host-key-changed"
   | "host-key-missing"
+  | "pin-write-failed"
   | "auth-failed"
   | "unreachable"
   | "forward-failed"
@@ -115,6 +116,8 @@ const REFUSAL_MESSAGES: Record<TunnelRefusalCode, string> = {
     "The server's SSH host key does not match the key pinned for this profile. If the server was reinstalled or its key rotated on purpose, forget the pinned key and connect again; otherwise do not connect.",
   "host-key-missing":
     "The SSH host key pinned for this profile is missing, empty or unreadable. ORCA will not trust whatever key the server presents now: if you expect this, forget the pinned key and connect again; otherwise do not connect.",
+  "pin-write-failed":
+    "ORCA could not record this server's pinned host key on this computer, so it did not use the connection. Check that the app's data folder is writable and has free space, then connect again.",
   "auth-failed":
     "SSH authentication failed. ORCA uses your existing SSH keys and agent without prompting: check that `ssh <destination>` works without a password prompt.",
   unreachable: "The SSH server could not be reached. Check the host name, port and network.",
@@ -186,6 +189,8 @@ export interface SshTunnelOptions {
   sshBinary?: string;
   /** Test seam. */
   spawn?: (command: string, args: readonly string[]) => ChildProcess;
+  /** Test seam over `markPinEnrolled`. */
+  markEnrolled?: (knownHostsFile: string) => void;
   /** Test seam: pick the local port. Default: an ephemeral loopback port from the OS. */
   pickPort?: () => Promise<number>;
   /** How long each ssh may take to authenticate and bind. Default 30 s. */
@@ -200,6 +205,7 @@ const PERMANENT: ReadonlySet<TunnelRefusalCode> = new Set([
   "ssh-missing",
   "host-key-changed",
   "host-key-missing",
+  "pin-write-failed",
   "auth-failed",
 ]);
 const STDERR_TAIL = 16 * 1024;
@@ -383,6 +389,8 @@ interface Stream {
   child: ChildProcess;
   socket?: Duplex;
   authenticated: boolean;
+  /** Refused after ssh authenticated (the pin could not be recorded): already reported. */
+  refused?: boolean;
   /** Settles once ssh has authenticated the server against its pin (or failed to). */
   ready: Promise<void>;
 }
@@ -554,6 +562,15 @@ export class SshTunnel {
     this.options.onState?.(state);
   }
 
+  /** Record a pin's enrollment; a failure to write it is a refusal, never a throw out of a handler. */
+  private enroll(knownHostsFile: string): void {
+    try {
+      (this.options.markEnrolled ?? markPinEnrolled)(knownHostsFile);
+    } catch {
+      throw new TunnelRefusal("pin-write-failed");
+    }
+  }
+
   private jumpUp(): boolean {
     if (!this.hops?.jump) return true;
     const jump = this.jump;
@@ -644,9 +661,21 @@ export class SshTunnel {
       if (key) this.fingerprint = key[1];
       if (/channel \d+: open failed:|^stdio forwarding failed/.test(line)) this.channelRefusedAt = Date.now();
       // Printed once the server is authenticated against its pin and the person's key accepted.
-      if (/^debug1: Entering interactive session/.test(line) && !stream.authenticated) {
+      if (/^debug1: Entering interactive session/.test(line) && !stream.authenticated && !stream.refused) {
+        // The pin is recorded before the connection is used. If it cannot be, the stream
+        // is refused here: never ready, closed, and reported like any other refusal.
+        try {
+          this.enroll(hop.knownHostsFile);
+        } catch (error) {
+          stream.refused = true;
+          const refusal = error instanceof TunnelRefusal ? error.code : "pin-write-failed";
+          settle(new TunnelRefusal(refusal));
+          stream.socket?.destroy(new TunnelRefusal(refusal));
+          child.kill();
+          this.streamFailed(refusal);
+          return;
+        }
         stream.authenticated = true;
-        markPinEnrolled(hop.knownHostsFile);
         settle();
         if (!this.closed && this.stateNow.phase === "reconnecting" && this.jumpUp()) {
           this.attempt = 0;
@@ -662,7 +691,7 @@ export class SshTunnel {
     });
     child.once("exit", () => {
       this.streams.delete(stream);
-      if (stream.authenticated) return;
+      if (stream.authenticated || stream.refused) return;
       const refusal = classifySshFailure(tail);
       settle(new TunnelRefusal(refusal));
       this.streamFailed(refusal);
@@ -698,7 +727,7 @@ export class SshTunnel {
       if (pinState(hop.knownHostsFile) === "broken") throw new TunnelRefusal("host-key-missing");
       await this.startJump(generation, hop);
       if (generation.lost || this.jump !== generation) throw new TunnelRefusal("ssh-failed");
-      markPinEnrolled(hop.knownHostsFile);
+      this.enroll(hop.knownHostsFile);
       generation.ready = true;
     } catch (error) {
       generation.lost = true;

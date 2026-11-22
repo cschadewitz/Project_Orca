@@ -454,6 +454,53 @@ describe("SshTunnel with a fake ssh", () => {
     expect(existsSync(`${pins}.enrolled`)).toBe(false);
   });
 
+  it("refuses a stream whose pin enrollment cannot be written, without throwing out of ssh's handlers", async () => {
+    const unhandled: unknown[] = [];
+    const onUncaught = (error: unknown) => unhandled.push(error);
+    process.on("uncaughtException", onUncaught);
+    try {
+      // At open: the probe is never reported ready, and nothing is left running.
+      const broken = () => {
+        throw Object.assign(new Error("EROFS: read-only file system"), { code: "EROFS" });
+      };
+      const first = fakeTunnel((ssh) => ssh.say(authed), { markEnrolled: broken });
+      await expect(first.tunnel.open()).rejects.toMatchObject({ code: "pin-write-failed" });
+      expect(first.tunnel.state).toEqual({ phase: "failed", refusal: "pin-write-failed" });
+      expect(first.spawned[0]!.killed).toBe(true);
+
+      // After open: that connection is closed with the refusal, and the tunnel stops.
+      let fail = false;
+      const later = fakeTunnel((ssh) => ssh.say(authed), {
+        markEnrolled: () => {
+          if (fail) broken();
+        },
+      });
+      await later.tunnel.open();
+      fail = true;
+      const socket = later.tunnel.connect();
+      const errors: unknown[] = [];
+      socket.on("error", (error) => errors.push(error));
+      await closed(socket);
+      expect(errors).toEqual([expect.objectContaining({ code: "pin-write-failed" })]);
+      expect(later.spawned[1]!.killed).toBe(true);
+      expect(later.tunnel.state).toEqual({ phase: "failed", refusal: "pin-write-failed" });
+      expect(() => later.tunnel.connect()).toThrow(TunnelRefusal);
+      await later.tunnel.close();
+
+      // Behind a jump host, the jump's own enrollment failing refuses the open too.
+      const jump = fakeTunnel((ssh, _n, args) => ssh.say(args.includes("-W") ? authed : listening), {
+        profile: profile({ jump: { destination: "j@bastion" } }),
+        markEnrolled: broken,
+      });
+      await expect(jump.tunnel.open()).rejects.toMatchObject({ code: "pin-write-failed" });
+      expect(jump.spawned[0]!.killed).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("uncaughtException", onUncaught);
+    }
+  });
+
   it("notices a daemon port that refuses the channel", async () => {
     const { tunnel } = fakeTunnel((ssh) => {
       ssh.say(authed);
