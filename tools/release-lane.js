@@ -134,6 +134,14 @@ function verify(sha, version) {
 
 export const GUARD_WORKFLOW = ".github/workflows/release-line-guard.yml";
 
+/** Whether a guard result was recorded for pull request `pr.number` into `pr.base` at `headSha`. */
+export function linkedTo(checkRun, workflowRun, headSha, pr = {}) {
+  const linked = [...(checkRun?.pull_requests ?? []), ...(workflowRun?.pull_requests ?? [])];
+  return linked.some(
+    (p) => p?.number === pr.number && p?.base?.ref === pr.base && (p?.head?.sha ?? headSha) === headSha,
+  );
+}
+
 /**
  * Whether a check run is the release line guard as main runs it: by GitHub Actions, from
  * main's release-line-guard.yml on a pull_request_target event, attached to exactly `headSha`,
@@ -151,8 +159,7 @@ export function guardRunProblems(checkRun, workflowRun, headSha, pr = {}) {
   if (workflowRun?.event !== "pull_request_target") problems.push(`it ran on ${workflowRun?.event ?? "no"} event`);
   // For this pull request into this line, at this head: a pass for another pull request that
   // shares the commit, or for the same commit aimed at another branch, is not this one's.
-  const linked = [...(checkRun?.pull_requests ?? []), ...(workflowRun?.pull_requests ?? [])];
-  if (!linked.some((p) => p?.number === pr.number && p?.base?.ref === pr.base && (p?.head?.sha ?? headSha) === headSha))
+  if (!linkedTo(checkRun, workflowRun, headSha, pr))
     problems.push(`it is not linked to #${pr.number} into ${pr.base} at ${headSha}`);
   return problems;
 }
@@ -205,20 +212,26 @@ function releasePr(eventPath, sha) {
     const runs = ghJson(
       `repos/${repo()}/commits/${pr.head.sha}/check-runs?check_name=${encodeURIComponent("release line check")}&filter=all`,
     ).check_runs;
-    const seen = [];
-    let trusted = false;
-    for (const run of runs ?? []) {
-      const workflow = run.check_suite?.id
-        ? ghJson(`repos/${repo()}/actions/runs?check_suite_id=${run.check_suite.id}`).workflow_runs?.[0]
-        : undefined;
-      const problems = guardRunProblems(run, workflow, pr.head.sha, { number: pr.number, base: lane });
-      if (!problems.length) trusted = true;
-      else seen.push(`check run ${run.id}: ${problems.join(", ")}`);
-    }
-    if (!trusted)
+    // Only the newest guard result for this pull request into this line counts: an older pass
+    // does not outlive a later failure (a relabel, a milestone change, an edited body).
+    const target = { number: pr.number, base: lane };
+    const forThisPr = (runs ?? [])
+      .map((run) => ({
+        run,
+        workflow: run.check_suite?.id
+          ? ghJson(`repos/${repo()}/actions/runs?check_suite_id=${run.check_suite.id}`).workflow_runs?.[0]
+          : undefined,
+      }))
+      .filter(({ run, workflow }) => linkedTo(run, workflow, pr.head.sha, target))
+      .sort((a, b) => Number(b.run.id) - Number(a.run.id));
+    if (!forThisPr.length)
+      die(`no release line check for #${pr.number} into ${lane} ran on the reviewed head ${pr.head.sha}`);
+    const { run: newest, workflow } = forThisPr[0];
+    const problems = guardRunProblems(newest, workflow, pr.head.sha, target);
+    if (problems.length)
       die(
-        `the release line check, as main runs it, did not pass on the reviewed head ${pr.head.sha}` +
-          (seen.length ? ` (${seen.join("; ")})` : ""),
+        `the release line check, as main runs it, did not pass on the reviewed head ${pr.head.sha} ` +
+          `(its newest result for #${pr.number}, check run ${newest.id}: ${problems.join(", ")})`,
       );
   }
   console.log(`release pull request #${pr.number}: v${version} into ${lane}`);

@@ -5,8 +5,8 @@
 # repeat them. This opens one pull request on main, `changelog: record vX.Y.Z` from the branch
 # `release-sync/vX.Y.Z`, that adds the release's section and deletes exactly the fragments the
 # release commit consumed, each only where main's copy is byte-identical to the released one (a
-# differing copy is kept and named). It goes through main's normal review and checks, with
-# auto-merge requested for the exact head it checked; it is never merged directly.
+# differing copy is kept and named). It stops there: the pull request waits for main's normal
+# review and checks, and nothing here merges it or asks for it to be merged.
 #
 # It acts only on a release that is really published: the release is read back by tag (and by
 # id when given), must not be a draft, and its tag must resolve to a commit on the version's
@@ -185,8 +185,5 @@ jobs:
           else
             echo "Found $url, unchanged." >> "$GITHUB_STEP_SUMMARY"
           fi
-          # Through main's normal review and required checks: auto-merge of exactly the head this
-          # run checked, never a direct merge.
-          if ! gh pr merge "$url" --auto --squash --match-head-commit "$head"; then
-            echo "::warning::could not enable auto-merge on $url; it waits for review"
-          fi
+          # It stops here: a person reviews and merges it through main's normal checks.
+          echo "$url waits for review at \`$head\`." >> "$GITHUB_STEP_SUMMARY"

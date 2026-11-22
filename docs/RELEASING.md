@@ -409,8 +409,8 @@ opens one pull request on `main`, `changelog: record vX.Y.Z` from the branch
 `release-sync/vX.Y.Z`, that adds the release's CHANGELOG section (`node tools/release.js sync`)
 and deletes the fragments the release commit consumed, each only where `main`'s copy is
 byte-identical to the released one; a differing copy is kept and named. It refuses to touch
-anything else and goes through `main`'s normal review and checks, with auto-merge requested
-for exactly the head it checked. A rerun never pushes over that branch: the same change (even
+anything else, and stops there: the pull request waits for `main`'s normal review and checks,
+and nothing merges it automatically. A rerun never pushes over that branch: the same change (even
 on a newer `main`) is reused with its pull request, and an edit or a different change stops the
 run with nothing changed. Publish-final hands over to the feed first; the notes handover runs
 whether or not that worked, so neither can suppress the other. `main`'s

@@ -547,6 +547,42 @@ describe("a real release's reviewed-commit check", () => {
     ).toMatch(message);
   });
 
+  const runsOf = (...entries) =>
+    JSON.stringify({
+      check_runs: entries.map(([id, conclusion, number]) => ({
+        ...JSON.parse(guardChecks()).check_runs[0],
+        id,
+        conclusion,
+        pull_requests: [{ number, base: { ref: "release/0.7" }, head: { sha: commits.line } }],
+      })),
+    });
+
+  it("counts only this pull request's newest guard result: a later failure outlives an older pass", () => {
+    const eventFile = merged();
+    expect(
+      refused(() =>
+        run({
+          sha: commits.line,
+          event: "pull_request",
+          eventFile,
+          checks: runsOf([1, "success", 906], [3, "failure", 906]),
+        }),
+      ),
+    ).toMatch(/newest result for #906, check run 3: it did not succeed/);
+    // Another pull request's newer result on the same commit is not this one's.
+    expect(
+      run({
+        sha: commits.line,
+        event: "pull_request",
+        eventFile,
+        checks: runsOf([1, "success", 906], [5, "failure", 907]),
+      }),
+    ).toMatch(/from release\/0\.7/);
+    expect(
+      refused(() => run({ sha: commits.line, event: "pull_request", eventFile, checks: runsOf([5, "success", 907]) })),
+    ).toMatch(/no release line check for #906 into release\/0\.7/);
+  });
+
   it("refuses a release line check that main's guard did not run", () => {
     expect(
       refused(() =>
@@ -626,10 +662,9 @@ describe("the patch path through the workflows", () => {
     // Only the exact fragments the release consumed, only where main's copy is identical.
     expect(script).toContain('git diff --diff-filter=D --name-only "$SHA^1" "$SHA" -- changelog.d/');
     expect(script).toContain('"$(git rev-parse "$SHA^1:$file")" = "$(git hash-object -- "$file")"');
-    // One branch per version, reused; through main's review and checks, never merged directly.
+    // One branch per version, reused; left for review, never merged or auto-merged here.
     expect(script).toContain('branch="release-sync/v$VERSION"');
-    expect(script).toContain('gh pr merge "$url" --auto --squash');
-    expect(script).not.toMatch(/gh pr merge "\$url" --squash/);
+    expect(script).not.toContain("gh pr merge");
   });
 
   it("keeps the release App's key in the main-only environment", () => {
@@ -714,12 +749,13 @@ describe("Release (sync main) on a rerun", () => {
   const branchHead = () => git(origin, "rev-parse", "refs/heads/release-sync/v0.7.1");
   const calls = () => (existsSync(log) ? readFileSync(log, "utf8") : "");
 
-  it("opens one pull request and asks to auto-merge exactly the head it pushed", () => {
+  it("opens one pull request and leaves it for review", () => {
     run();
     const head = branchHead();
     expect(git(origin, "show", `${head}:CHANGELOG.md`)).toContain("## 0.7.1 ");
     expect(calls()).toContain("pr create");
-    expect(calls()).toContain(`pr merge https://x/pull/1 --auto --squash --match-head-commit ${head}`);
+    expect(calls()).not.toContain("pr merge");
+    expect(readFileSync(join(work, "summary"), "utf8")).toContain(`waits for review at \`${head}\``);
   });
 
   it("reuses an identical result on a rerun without pushing over it, even after main moved", () => {
@@ -731,7 +767,7 @@ describe("Release (sync main) on a rerun", () => {
     run(`https://x/pull/1 ${head}`);
     expect(branchHead()).toBe(head);
     expect(calls()).not.toContain("pr create");
-    expect(calls()).toContain(`--match-head-commit ${head}`);
+    expect(calls()).not.toContain("pr merge");
   });
 
   it("stops, changing nothing, when the branch holds an edit", () => {
