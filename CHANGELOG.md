@@ -29,6 +29,68 @@ Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; prep
 release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
 to read them as they stand.
 
+## 0.7.1 - 2026-11-22
+
+### Store format
+
+Stores now record their format and the ORCA version that last wrote them in
+`store-format.json`. A 0.7.0 store (same format, no marker yet) is stamped on first open with
+nothing else changed. Ordinary startup never converts a store: one written in an older format
+is refused (`STORE_FORMAT` / `CARRYOVER_REQUIRED`) until `orca store carry-forward` is run once
+with every other ORCA stopped. That command refuses unless no run lease is live, a whole-store
+copy into `format-backups/` matches byte for byte, the store did not change during the copy,
+and every run log, collection and plan journal reads under the new build; only then is the
+backup published (the newest two verified backups are kept) and the format stamped. A store
+written by a newer format, or older than the previous release's, is refused without being
+changed. The store epoch stays `operator-journals-v4`; builds before 0.7.1 ignore the marker.
+
+### Added
+
+#### app
+
+- The app connects to a daemon one protocol major behind it, reads and writes, and shows a bar saying the daemon is a version behind and that newer features are off until it is updated.
+- the Linux `.deb` says when a newer release is out. About 15 seconds after start
+  and every six hours it reads the public release list and, when a newer stable release has
+  a `.deb` for the machine, shows a notice in the title bar with the release page and the
+  `apt` command. It never downloads or installs anything, an offline or failed check is
+  silent, prereleases are offered only with `ORCA_UPDATE_PRERELEASE=1` as on Windows, and
+  `ORCA_UPDATE_CHECK=0` turns the check off.
+- Windows arm64 installs get updates. Finals now attach the signed arm64 installer
+  beside x64, accept it automatically on a native Windows arm64 machine (signature, install
+  over the previous arm64 release, ARM64 binary, app reaches its bundled daemon), and the
+  desktop feed serves arm64 for any release whose arm64 installer passed that acceptance.
+  x64 feeding is unchanged.
+
+#### cli
+
+- `orca store format` shows a store's recorded format; `orca store carry-forward`
+  converts an older-format store once, offline, after a verified backup and read check (#566).
+
+#### protocol
+
+- Protocol 2.1. `hello` negotiates across a one-release compatibility window: a client may offer a `fallback` version from the previous major, and the daemon answers in the highest protocol both sides share. A daemon accepts the current and previous major once a release opens a window; N-2 is refused with a message naming what the daemon accepts. 2.x opens no window, so 1.10 peers stay refused, but a 2.1 daemon is the first that a future 3.0 app can fall back to. Clients offer the oldest minor they need (2.0), so an updated 2.1 desktop still connects to shipped 2.0 daemons.
+
+#### store
+
+- every store open checks the store format marker and refuses a store from a newer
+  ORCA or an older format, without changing it (#566).
+
+### Changed
+
+#### agents
+
+- ACP client SDK `@agentclientprotocol/sdk` 1.8.0 → 2.8.0, keeping the patch that leaves peer payloads out of SDK stderr diagnostics.
+- SSH hosts read and write files over one persistent SFTP session per host instead of an `ssh` process per call, which makes artifact pickup from remote agents much faster. A session that drops is re-established once; a host without the SFTP subsystem falls back to the per-command path.
+
+### Fixed
+
+#### plan
+
+- the critical path no longer counts overlapping work in full. Along a
+  later-phase dependency (`other#build`) the first half of the dependent overlaps the
+  upstream item, an item already underway counts half its estimate, and a dependency already satisfied
+  (a produced stage) no longer counts toward the path at all (#108).
+
 ## 0.7.0 - 2026-11-21
 
 ### Store format

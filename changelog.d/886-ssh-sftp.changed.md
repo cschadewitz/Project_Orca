@@ -1,1 +1,0 @@
-- **agents:** SSH hosts read and write files over one persistent SFTP session per host instead of an `ssh` process per call, which makes artifact pickup from remote agents much faster. A session that drops is re-established once; a host without the SFTP subsystem falls back to the per-command path.
