@@ -97,6 +97,88 @@ describe("runs.list for the operations view", () => {
     expect(ops.runs.find((r) => r.id === "run-lost")!.operations!.owner).toBeUndefined();
   });
 
+  it("anchors a row and its operations to one watermark when a commit lands between reads", async () => {
+    const clock = new FakeClock(START);
+    const stores = memoryStores(clock);
+    const append = async (e: OrcaEventInput) => {
+      clock.advance(STEP_MS);
+      return (await stores.events.append(e)).seq;
+    };
+    await append({
+      type: "run.created",
+      runId: "r",
+      payload: { workflowId: "wf", workflowVersion: "1", workspace, vars: {} },
+    });
+    await append({ type: "run.started", runId: "r", payload: {} });
+    await append({
+      type: "step.scheduled",
+      runId: "r",
+      payload: { stepRunId: "s", nodeId: "n", nodeType: "agent", attempt: 1 },
+    });
+    const watermark = await append({
+      type: "step.started",
+      runId: "r",
+      payload: { stepRunId: "s", inputArtifactIds: [] },
+    });
+
+    // The next read of the store lets a commit in right after it answers: the step completes.
+    const events = stores.events;
+    let armed = false;
+    const commitAfter = async <T>(answer: T): Promise<T> => {
+      if (armed) {
+        armed = false;
+        await append({
+          type: "step.completed",
+          runId: "r",
+          payload: { stepRunId: "s", result: { artifactIds: [], data: {} } },
+        });
+      }
+      return answer;
+    };
+    const readRange = events.readRange.bind(events);
+    const read = events.read.bind(events);
+    const readTypes = events.readTypes.bind(events);
+    // Only once the listing pass is done, for the second case below.
+    let typesArmed = false;
+    events.readTypes = async (runId, types) => {
+      const answer = await readTypes(runId, types);
+      if (typesArmed) {
+        typesArmed = false;
+        armed = true;
+        return commitAfter(answer);
+      }
+      return answer;
+    };
+    events.readRange = async (runId, range) => commitAfter(await readRange(runId, range));
+    events.read = async (runId) => commitAfter(await read(runId));
+    const reads = new ReadModel({ orchestrator: orchestrator(stores, clock), clock });
+
+    // runs.list, a commit between the listing pass and the row's reads: the row is read again,
+    // whole, at the newer watermark - never old counts under a new `lastSeq`.
+    typesArmed = true;
+    const first = (await reads.runsList({ operations: true, limit: 10, offset: 0 })).runs[0]!;
+    expect(first.operations).toMatchObject({
+      lastSeq: watermark + 1,
+      progress: { attempts: 1, active: 0, completed: 1 },
+    });
+
+    // runs.list, a commit after the newest event is read and before the row's events are:
+    // the row stops at that watermark rather than counting past it.
+    armed = true;
+    const second = (await reads.runsList({ operations: true, limit: 10, offset: 0 })).runs[0]!;
+    expect(armed).toBe(false);
+    expect(second.operations).toMatchObject({ lastSeq: watermark + 1, progress: { completed: 1 } });
+
+    // runs.get: the commit lands after the projection is read, before its operations are.
+    armed = true;
+    const got = await reads.runsGet({ runId: "r", operations: true });
+    expect(armed).toBe(false);
+    expect(got.lastSeq).toBe(watermark + 2);
+    expect(got.run.operations).toMatchObject({ lastSeq: got.lastSeq, progress: { completed: 1, active: 0 } });
+    const late = await reads.runsGet({ runId: "r", operations: true });
+    expect(late.run.operations!.lastSeq).toBe(late.lastSeq);
+  });
+
   it("pages deterministically: pages concatenate to the full list, ties broken by id", async () => {
     const clock = new FakeClock(START);
     const stores = memoryStores(clock);

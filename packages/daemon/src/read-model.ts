@@ -442,13 +442,37 @@ class Pass {
   }
 
   /**
-   * The operations facts of one row (#340): where its log ends and when, its step counts, and
-   * who holds it. Only asked for the rows a page returns, so a filter over a large store still
-   * reads one event per returned run here, not one per run.
+   * One row and its operations facts (#340), both read up to one watermark: the newest event
+   * first, then the listing's events bounded by it. A commit landing between the two reads is
+   * past the watermark, so it is in neither - the row's status and step counts are exactly what
+   * `operations.lastSeq` says they are current as of. Only asked for the rows a page returns.
+   * The page's filter was applied by the listing pass just before; a run that moved since is
+   * shown as it is at the watermark, which is the newer truth, not re-filtered out of the page.
    */
-  async operations(runId: string, progress: RunProgressView): Promise<RunOperationsView | undefined> {
+  async operationsRow(runId: string): Promise<RunSummaryView | undefined> {
     const [last] = await this.orc.stores.events.readRange(runId, { before: Number.MAX_SAFE_INTEGER, limit: 1 });
     if (!last) return undefined;
+    const events = await this.orc.stores.events.readRange(runId, { types: LIST_EVENT_TYPES, before: last.seq + 1 });
+    if (!events.length) return undefined;
+    const facts = runFacts(events);
+    const view = await this.runView(facts);
+    return { ...view, operations: await this.operationsAt(runId, last, facts.progress) };
+  }
+
+  /**
+   * The operations facts of a projection that already knows its watermark (`runs.get`'s
+   * `RunState.lastSeq`): the event at exactly that sequence, never a newer one.
+   */
+  async operationsOf(
+    runId: string,
+    lastSeq: number,
+    progress: RunProgressView,
+  ): Promise<RunOperationsView | undefined> {
+    const [last] = await this.orc.stores.events.readRange(runId, { before: lastSeq + 1, limit: 1 });
+    return last && last.seq === lastSeq ? this.operationsAt(runId, last, progress) : undefined;
+  }
+
+  private async operationsAt(runId: string, last: OrcaEvent, progress: RunProgressView): Promise<RunOperationsView> {
     const lease = await this.lease(runId);
     return {
       lastSeq: last.seq,
@@ -541,7 +565,7 @@ export class ReadModel {
     const ids = await this.orc.listRuns();
     const from = params.createdFrom === undefined ? undefined : Date.parse(params.createdFrom);
     const to = params.createdTo === undefined ? undefined : Date.parse(params.createdTo);
-    const rows: { view: RunSummaryView; facts: RunFacts }[] = [];
+    const rows: RunSummaryView[] = [];
     for (const id of ids) {
       const facts = await pass.runFacts(id);
       if (!facts) continue;
@@ -557,17 +581,14 @@ export class ReadModel {
       if (to !== undefined && !(Date.parse(s.createdAt) < to)) continue;
       const view = await pass.runView(facts);
       if (params.status?.length && !params.status.includes(view.status)) continue;
-      rows.push({ view, facts });
+      rows.push(view);
     }
     // `listRuns` is oldest first and ids are time-ordered, but createdAt is what a client sorts by.
     // The id breaks ties, so a page boundary is the same on every call over the same store.
-    rows.sort((a, b) => b.view.createdAt.localeCompare(a.view.createdAt) || b.view.id.localeCompare(a.view.id));
+    rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
     const page = rows.slice(params.offset, params.offset + params.limit);
     const runs: RunSummaryView[] = [];
-    for (const { view, facts } of page) {
-      const operations = params.operations ? await pass.operations(view.id, facts.progress) : undefined;
-      runs.push(operations ? { ...view, operations } : view);
-    }
+    for (const view of page) runs.push((params.operations && (await pass.operationsRow(view.id))) || view);
     return { runs, total: rows.length, asOf: pass.asOf };
   }
 
@@ -578,7 +599,9 @@ export class ReadModel {
     const agentByStep = await this.agentsByStep(params.runId);
     const facts = factsFromState(state, agentByStep);
     const view = await pass.runView(facts);
-    const operations = params.operations ? await pass.operations(params.runId, facts.progress) : undefined;
+    const operations = params.operations
+      ? await pass.operationsOf(params.runId, state.lastSeq, facts.progress)
+      : undefined;
     const run = operations ? { ...view, operations } : view;
     const steps: StepView[] = [];
     for (const id of state.stepOrder) {

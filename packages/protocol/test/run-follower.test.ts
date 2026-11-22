@@ -162,6 +162,47 @@ describe("RunFollower", () => {
     expect(follower.get("run-a")).toMatchObject({ phase: "live", cursor: 6, resyncs: 0 });
   });
 
+  it("spends the budget on reads that answer but do not close a gap, then stays stale", async () => {
+    const { follower, calls, timers } = setup({ maxResyncs: 3 });
+    follower.follow("run-a");
+    calls[0]!.resolve({ run: row("running"), lastSeq: 2 });
+    await flush();
+    follower.notify(appended(5)); // 3 and 4 never come, and every snapshot stops at 2
+    for (let read = 1; read <= 3; read++) {
+      await timers.advance(1000);
+      expect(calls).toHaveLength(read + 1);
+      calls[read]!.resolve({ run: row("running"), lastSeq: 2 });
+      await flush();
+    }
+    expect(follower.get("run-a")).toMatchObject({ phase: "stale", cursor: 2 });
+    // Stale holds still: frames and lifecycle changes do not start another round of reads.
+    for (const seq of [6, 7, 8]) {
+      follower.notify(appended(seq));
+      follower.notify(changed(seq, "running"));
+    }
+    await timers.advance(60_000);
+    expect(calls).toHaveLength(4);
+    expect(follower.get("run-a")?.phase).toBe("stale");
+  });
+
+  it("restarts the budget once the stream itself covers the gap", async () => {
+    const { follower, calls, timers } = setup({ maxResyncs: 3 });
+    follower.follow("run-a");
+    calls[0]!.resolve({ run: row("running"), lastSeq: 2 });
+    await flush();
+    follower.notify(appended(5));
+    await timers.advance(0);
+    calls[1]!.resolve({ run: row("running"), lastSeq: 2 });
+    await flush();
+    expect(follower.get("run-a")).toMatchObject({ phase: "resyncing", resyncs: 2 });
+    // The late frames arrive: exact coverage reaches the watermark, so no read is needed.
+    follower.notify(appended(3));
+    follower.notify(appended(4));
+    expect(follower.get("run-a")).toMatchObject({ phase: "live", cursor: 5, resyncs: 0 });
+    await timers.advance(60_000);
+    expect(calls).toHaveLength(2);
+  });
+
   it("gives up after maxResyncs failed reads, shows stale, and retries on request", async () => {
     const { follower, calls, timers } = setup({ maxResyncs: 2 });
     follower.follow("run-a");

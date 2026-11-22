@@ -114,7 +114,17 @@ interface Entry {
   timer?: unknown;
   /** Bumped by `connectionLost` and `unfollow`, so an answer to an older read is ignored. */
   generation: number;
+  /**
+   * The sequence number the run's view still owes: the held event a gap left unaccounted
+   * for, or a `run.changed` newer than the snapshot. Until a snapshot or exact frame coverage
+   * reaches it, every read counts against `maxResyncs` and backs off - a read that answers
+   * but does not close the gap is not progress.
+   */
+  unmet?: number | undefined;
 }
+
+/** Frames held above the cursor at most; past it they are dropped and the snapshot heals. */
+export const FOLLOW_MAX_HELD = 1024;
 
 export class RunFollower {
   private readonly entries = new Map<string, Entry>();
@@ -195,13 +205,20 @@ export class RunFollower {
               `b:${n.params.stepRunId}:${n.params.fromSeq}:${seq}`,
               { kind: "batch", fromSeq: n.params.fromSeq, seq, count: n.params.updates.length },
             ];
-      if (entry.held.has(key)) return;
+      if (entry.held.has(key) || entry.view.phase === "stale") return;
+      if (entry.held.size >= FOLLOW_MAX_HELD) {
+        // Bounded: drop what is held and let a snapshot cover it rather than grow without end.
+        entry.held.clear();
+        this.gap(entry, seq);
+        // `gap` may have given up.
+        if ((entry.view.phase as FollowPhase) === "stale") return;
+      }
       entry.held.set(key, held);
       if (at && (!entry.view.lastActivityAt || at > entry.view.lastActivityAt)) entry.view.lastActivityAt = at;
       if (entry.view.snapshotSeq !== undefined) this.settle(entry);
     }
 
-    if (LIFECYCLE.has(n.method) && entry.view.phase !== "terminal") this.refresh(entry);
+    if (LIFECYCLE.has(n.method) && entry.view.phase !== "terminal" && entry.view.phase !== "stale") this.refresh(entry);
     this.changed(entry);
   }
 
@@ -214,6 +231,7 @@ export class RunFollower {
       entry.inFlight = false;
       entry.again = false;
       entry.held.clear();
+      entry.unmet = undefined;
       if (entry.view.phase !== "terminal") entry.view.phase = "reconnecting";
       this.changed(entry);
     }
@@ -237,6 +255,7 @@ export class RunFollower {
     const entry = this.entries.get(runId);
     if (!entry || entry.view.phase !== "stale" || !this.connected) return;
     entry.view.resyncs = 0;
+    entry.unmet = undefined;
     delete entry.view.error;
     entry.view.phase = entry.view.snapshotSeq === undefined ? "loading" : "resyncing";
     this.changed(entry);
@@ -272,7 +291,7 @@ export class RunFollower {
       for (const h of entry.held.values()) if (h.seq < next.seq) below += h.count;
       const expected = next.seq - cursor - 1;
       if (below !== expected) {
-        this.gap(entry);
+        this.gap(entry, next.seq);
         return;
       }
       for (const [key, h] of [...entry.held]) if (h.seq <= next.seq) entry.held.delete(key);
@@ -282,6 +301,7 @@ export class RunFollower {
 
   private advance(entry: Entry, seq: number): void {
     entry.view.cursor = seq;
+    this.met(entry);
     for (const [key, h] of [...entry.held]) if (h.seq <= seq) entry.held.delete(key);
     const ops = entry.view.run?.operations;
     if (entry.view.run && ops && seq > ops.lastSeq)
@@ -291,7 +311,21 @@ export class RunFollower {
       };
   }
 
-  private gap(entry: Entry): void {
+  /** The view has caught up with what it owed: the retry budget starts again. */
+  private met(entry: Entry): void {
+    if (entry.unmet === undefined || entry.view.cursor < entry.unmet) return;
+    entry.unmet = undefined;
+    entry.view.resyncs = 0;
+    delete entry.view.error;
+    // Healed by the stream itself: the re-read it was waiting on is no longer needed.
+    if (entry.view.phase === "resyncing" && entry.view.snapshotSeq !== undefined) {
+      this.cancel(entry);
+      entry.view.phase = "live";
+    }
+  }
+
+  private gap(entry: Entry, at: number): void {
+    entry.unmet = Math.max(entry.unmet ?? -1, at);
     // Already healing (or finished): the snapshot on its way settles what is held.
     if (entry.view.phase !== "live") return;
     entry.view.phase = "resyncing";
@@ -359,7 +393,8 @@ export class RunFollower {
     this.accept(entry, snapshot);
     if (entry.again && entry.view.phase !== "terminal" && entry.view.phase !== "stale") {
       entry.again = false;
-      this.schedule(entry, 0);
+      // A read already due (a gap's backoff) answers this too; never cut its delay short.
+      if (entry.timer === undefined) this.schedule(entry, 0);
     }
     this.changed(entry);
   }
@@ -377,9 +412,11 @@ export class RunFollower {
     view.run = snapshot.run;
     // Older than a status the stream already said: that status stays on top, and a newer
     // snapshot is asked for so the rest of the row catches up with it.
+    let behind = false;
     if (entry.change && entry.change.seq > snapshot.lastSeq) {
       view.run = { ...view.run, ...entry.change.patch };
-      entry.again = true;
+      entry.unmet = Math.max(entry.unmet ?? -1, entry.change.seq);
+      behind = true;
     } else delete entry.change;
     const at = snapshot.run.operations?.lastActivityAt;
     if (at && (!view.lastActivityAt || at > view.lastActivityAt)) view.lastActivityAt = at;
@@ -389,10 +426,24 @@ export class RunFollower {
     for (const [key, h] of [...entry.held])
       if (h.kind === "batch" && h.fromSeq <= view.cursor && h.seq - h.fromSeq + 1 === h.count)
         entry.held.set(key, { ...h, fromSeq: view.cursor + 1, count: h.seq - view.cursor });
-    view.resyncs = 0;
-    delete view.error;
+    // A read that owed nothing, or that reached what was owed, restarts the budget; one that
+    // answered short of it spends it, so a gap no snapshot closes ends `stale`, not in a loop.
+    if (entry.unmet === undefined) {
+      view.resyncs = 0;
+      delete view.error;
+    } else this.met(entry);
     view.phase = view.run.outcome && !entry.change ? "terminal" : "live";
     this.settle(entry);
+    // Behind a status the stream already said, and no gap read already on its way: ask again,
+    // against the same budget.
+    if (behind && view.phase === "live") {
+      view.resyncs++;
+      if (view.resyncs > this.maxResyncs) {
+        this.giveUp(entry, "Snapshots keep arriving older than the stream");
+        return;
+      }
+      this.schedule(entry, view.resyncs > 1 ? this.backoffMs(view.resyncs - 1) : 0);
+    }
     if (view.phase === "terminal") this.cancel(entry);
   }
 
