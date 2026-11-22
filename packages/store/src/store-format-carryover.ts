@@ -154,9 +154,8 @@ async function readsUnderCurrentFormat(copy: string): Promise<void> {
 
 /**
  * The backups directory, made owner-only; refuses one that is not a real directory of ours.
- * On Windows, mode bits mean nothing: the backup inherits the store directory's ACL, which is
- * the same boundary the copied private directories have in place (the store does not verify
- * Windows ACLs for them either; the recovery inventory reports ACL_UNVERIFIED).
+ * POSIX only: carryStoreForward refuses on Windows before any copy, because ACLs there are
+ * not verified (#897).
  */
 async function backupRoot(storeDir: string): Promise<string> {
   const root = join(storeDir, STORE_FORMAT_BACKUP_DIR);

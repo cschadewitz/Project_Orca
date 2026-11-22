@@ -568,9 +568,12 @@ charge if any step fails:
 Retention removes only backups the command made (named as above, with a valid manifest),
 keeping the newest two and always the one the marker names, plus the scratch folders of an
 interrupted run. Anything else in `format-backups/` is left alone. The folder must be a
-private directory owned by the user running ORCA (`BACKUPS_UNSAFE` otherwise). On Windows,
-mode bits do not apply: the backup inherits the store directory's ACL, the same boundary the
-copied private directories already have there.
+private directory owned by the user running ORCA (`BACKUPS_UNSAFE` otherwise).
+
+`carry-forward` is not available on Windows yet (`BACKUPS_UNSAFE`): the copies hold the
+execution key and private records, and ORCA cannot yet verify that a destination's ACL keeps
+them at least as private as the originals. That, with automatic desktop carryover, is #897.
+Marker adoption of 0.7 stores, which copies nothing, works on Windows as everywhere else.
 
 The supported window is this release's format and the one before it, so a store carries
 forward across one format change at a time. Closed update validation (`serve --read-only

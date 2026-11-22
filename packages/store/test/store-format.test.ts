@@ -318,6 +318,17 @@ describe("store format marker (#566)", () => {
     });
   });
 
+  it("refuses to carry forward on Windows, where private copies cannot be verified yet", async () => {
+    const dir = await store();
+    await mkdir(dir, { recursive: true });
+    await legacy(dir);
+    const before = await contents(dir);
+    await expect(carryStoreForward(dir, { appVersion: "0.7.1", platform: "win32" })).rejects.toMatchObject({
+      reason: "BACKUPS_UNSAFE",
+    });
+    expect(await contents(dir)).toEqual(before);
+  });
+
   it("refuses to carry forward a store that holds links", async () => {
     const dir = await store();
     await mkdir(dir, { recursive: true });

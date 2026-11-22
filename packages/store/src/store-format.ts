@@ -246,7 +246,13 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
  */
 export async function carryStoreForward(
   storeDir: string,
-  options: { appVersion: string; now?: () => Date; afterCopy?: () => Promise<void> },
+  options: {
+    appVersion: string;
+    now?: () => Date;
+    afterCopy?: () => Promise<void>;
+    /** Injected for tests; defaults to this process's platform. */
+    platform?: NodeJS.Platform;
+  },
 ): Promise<StoreFormatOutcome> {
   const current = STORE_FORMAT_EPOCH;
   return withFileLock(join(storeDir, LOCK), async () => {
@@ -255,6 +261,14 @@ export async function carryStoreForward(
     if (marker?.epoch === current) return { status: "current", epoch: current };
     if (!marker && !(await holdsData(storeDir)))
       throw new StoreFormatError("UNREADABLE", `${storeDir} holds no ORCA store to carry forward.`, storeDir);
+    // The copies hold the execution key and private records. On Windows nothing here can yet
+    // verify that the destination's ACL keeps them at least as private as the originals (#897).
+    if ((options.platform ?? process.platform) === "win32")
+      throw new StoreFormatError(
+        "BACKUPS_UNSAFE",
+        "carry-forward is not available on Windows yet: ORCA cannot verify that a backup there keeps the store's private records as private as the originals. Nothing was changed.",
+        storeDir,
+      );
     const from = marker?.epoch ?? "unmarked";
     const now = (options.now ?? (() => new Date()))();
     let backup: string;
