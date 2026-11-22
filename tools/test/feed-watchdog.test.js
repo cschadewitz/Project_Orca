@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { channelProblems, parseChannel, watch } from "../deploy/feed-watchdog.js";
+import { canaryMapDigest, channelProblems, parseChannel, watch } from "../deploy/feed-watchdog.js";
 
 const TOKENS = { internal: "i".repeat(43), stable: "s".repeat(43) };
 const sha512 = (text) => createHash("sha512").update(text).digest("base64");
@@ -236,5 +236,38 @@ describe("feed-watchdog.yml", () => {
     expect(text).not.toMatch(/desktop-feed|ORCA_FEED_ACCESS_KEY|ORCA_FEED_SECRET/);
     expect(text).toContain("FEED_CANARY_TOKENS: ${{ secrets.ORCA_FEED_CANARY_TOKENS }}");
     expect(text).toContain("run: node tools/deploy/feed-watchdog.js");
+  });
+});
+
+const VECTOR = "5d3f25569a9aa339f4cd723849053e73975eef8b2ff42a2cf3cc8a2daf8e1a16";
+
+describe("canaryMapDigest", () => {
+  const b64 = (byte) => Buffer.alloc(32, byte).toString("base64url");
+  const FULL = { internal: b64(1), preview: b64(2), stable: b64(255) };
+
+  it("hashes the canonical { sha256(token): { ring } } map with sorted hashes", () => {
+    const hash = (t) => createHash("sha256").update(t).digest("hex");
+    const map = Object.fromEntries(
+      Object.entries(FULL)
+        .map(([ring, token]) => [hash(token), { ring }])
+        .sort(([a], [b]) => (a < b ? -1 : 1)),
+    );
+    expect(canaryMapDigest(FULL)).toBe(createHash("sha256").update(JSON.stringify(map)).digest("hex"));
+    expect(canaryMapDigest({ stable: FULL.stable, internal: FULL.internal, preview: FULL.preview })).toBe(
+      canaryMapDigest(FULL),
+    );
+  });
+
+  it("matches a fixed vector shared with the Worker's registry tooling", () => {
+    expect(canaryMapDigest(FULL)).toBe(VECTOR);
+  });
+
+  it("gives no digest for a missing, extra, duplicate or malformed canary", () => {
+    expect(canaryMapDigest({ internal: FULL.internal, stable: FULL.stable })).toBeUndefined();
+    expect(canaryMapDigest({ ...FULL, beta: b64(3) })).toBeUndefined();
+    expect(canaryMapDigest({ ...FULL, preview: FULL.internal })).toBeUndefined();
+    expect(canaryMapDigest({ ...FULL, stable: "short" })).toBeUndefined();
+    expect(canaryMapDigest({ ...FULL, stable: 42 })).toBeUndefined();
+    expect(canaryMapDigest(undefined)).toBeUndefined();
   });
 });
