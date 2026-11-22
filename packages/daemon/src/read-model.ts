@@ -742,11 +742,7 @@ export class ReadModel {
         },
         asOf,
       };
-    // `content` is the one read that touches a blob, and it raises ARTIFACT_MISSING itself
-    // when the index knows an artifact whose body is gone.
-    const privateInputs = await this.orc.stores.execution.getInputs(artifact.producedBy.runId);
-    const text = await store.content(artifact.id);
-    return { artifact: view, text: privateInputs ? redactExecutionValue(text, privateInputs.secrets) : text, asOf };
+    return { artifact: view, text: await this.protectedArtifactText(artifact), asOf };
   }
 
   /**
@@ -760,6 +756,7 @@ export class ReadModel {
         orc: this.orc,
         isoNow: () => this.clock.isoNow(),
         publicName: async (artifact) => (await this.publicArtifactView(artifact)).name,
+        artifactText: (artifact) => this.protectedArtifactText(artifact),
       },
       params,
       scope,
@@ -802,10 +799,30 @@ export class ReadModel {
     return { workflow: workflowView(def, await this.recordedVersions(def), pinned), asOf };
   }
 
+  /**
+   * Legacy-sensitive withholding for an artifact's run: a protected store refuses this read
+   * with RUN_STATE when the run's sensitive history still needs migration. Every artifact
+   * read goes through it first, even one addressed by artifact ID.
+   */
+  private async requireArtifactReadable(artifact: Artifact): Promise<void> {
+    await this.orc.stores.events.readRange(artifact.producedBy.runId, { limit: 1 });
+  }
+
+  /**
+   * The one protected read of an artifact body, shared by `artifacts.get` and `search`: the
+   * withholding check before the blob is opened, then the run's secrets redacted. `content`
+   * raises ARTIFACT_MISSING itself when the index knows an artifact whose body is gone.
+   */
+  private async protectedArtifactText(artifact: Artifact): Promise<string> {
+    await this.requireArtifactReadable(artifact);
+    const privateInputs = await this.orc.stores.execution.getInputs(artifact.producedBy.runId);
+    const text = await this.orc.stores.artifacts.content(artifact.id);
+    return privateInputs ? redactExecutionValue(text, privateInputs.secrets) : text;
+  }
+
   /** Artifact originals stay authoritative in their store; the wire gets a safe projection. */
   private async publicArtifactView(artifact: Artifact): Promise<ArtifactView> {
-    // Applies legacy-sensitive withholding even when this method is addressed by artifact ID.
-    await this.orc.stores.events.readRange(artifact.producedBy.runId, { limit: 1 });
+    await this.requireArtifactReadable(artifact);
     const view = artifactView(artifact);
     const inputs = await this.orc.stores.execution.getInputs(artifact.producedBy.runId);
     if (!inputs) return view;

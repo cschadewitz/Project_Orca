@@ -4,6 +4,7 @@
  * read model and once over `dispatch`, the way a client reaches it.
  */
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { OrcaError } from "@orca/core";
 import { SearchResultSchema, READ_METHODS, SEARCH_METHOD, type SearchParams, type SearchResult } from "@orca/protocol";
 import { ReadModel, dispatch, methods, type MethodContext } from "@orca/daemon";
 import { eventText, excerpt, searchStore } from "../src/search-model.js";
@@ -135,6 +136,7 @@ describe("search over the store", () => {
         orc: f.orchestrator,
         isoNow: () => f.asOf,
         publicName: async (a) => a.name,
+        artifactText: (a) => f.stores.artifacts.content(a.id),
         // Each look at the clock is a second later: the first run read is past a 1.5 s deadline.
         now: () => (t += 1000),
         deadlineMs: 1500,
@@ -153,6 +155,30 @@ describe("search over the store", () => {
     await expect(reads.search(params("connection"), { runs: "named", artifacts: true })).rejects.toThrow(/named run/);
     // Without artifacts.read, an artifact's body is never read for a match.
     expect((await reads.search(params("spec v2"), { runs: "all", artifacts: false })).hits).toEqual([]);
+  });
+
+  it("never opens an artifact body that artifacts.get would withhold", async () => {
+    // A protected store refuses a legacy-sensitive run's first-event read with RUN_STATE.
+    const readRange = f.stores.events.readRange.bind(f.stores.events);
+    const gate = vi.spyOn(f.stores.events, "readRange").mockImplementation(async (runId, range) => {
+      if (runId === "run-new" && range?.limit === 1 && !range.match)
+        throw new OrcaError("RUN_STATE", "legacy sensitive execution requires explicit migration");
+      return readRange(runId, range);
+    });
+    const body = vi.spyOn(f.stores.artifacts, "content");
+    try {
+      const r = await reads.search(params("pooled", { kinds: ["artifact"] }));
+      expect(r.hits).toEqual([]);
+      await expect(reads.artifactsGet({ artifactId: "art-notes", maxBytes: 256_000 })).rejects.toMatchObject({
+        code: "RUN_STATE",
+      });
+      expect(body.mock.calls.map(([id]) => id)).not.toContain("art-notes");
+    } finally {
+      gate.mockRestore();
+      body.mockRestore();
+    }
+    // Readable again, the same artifact is found: the refusal, not the search, hid it.
+    expect((await reads.search(params("pooled", { kinds: ["artifact"] }))).hits).toHaveLength(1);
   });
 
   it("cuts a long excerpt around the match on one line", () => {

@@ -15,17 +15,17 @@
  *   searches only the one run it names, which the guard has already authorized: walking the
  *   store and asking run by run would spend the caller's deadline on hidden runs and let them
  *   change which visible hits are found and whether the result says it was cut short.
- *   Artifact text is redacted the way `artifacts.get` redacts it before it is matched, so a
- *   search cannot find what a read would hide.
+ *   Artifact bodies are read only through `artifacts.get`'s own protected read
+ *   (`artifactText`): legacy-sensitive withholding before the blob is opened, then redaction,
+ *   so a search cannot open, match or find what that read would withhold or hide.
  * - **The deadline is cooperative.** It is checked before each run, each event and each
  *   artifact. A storage read already in flight is not interrupted, so a slow read can carry a
  *   search past the deadline by that one read.
  */
 import { isTextMediaType, SEARCH_ARTIFACT_MAX_BYTES, SEARCH_DEADLINE_MS } from "@orca/protocol";
 import type { SearchHit, SearchParams, SearchResult } from "@orca/protocol";
-import { OrcaError, type Artifact, type OrcaEvent } from "@orca/core";
+import { OrcaError, isOrcaError, type Artifact, type OrcaEvent } from "@orca/core";
 import type { Orchestrator } from "@orca/engine";
-import { redactExecutionValue } from "@orca/store";
 import { artifactEvent } from "./auth/artifact-projection.js";
 
 /**
@@ -43,6 +43,12 @@ export interface SearchDeps {
   isoNow: () => string;
   /** The artifact's name as `artifacts.get` would show it (redacted where it must be). */
   publicName: (artifact: Artifact) => Promise<string>;
+  /**
+   * The artifact's body through `artifacts.get`'s own protected read: legacy-sensitive
+   * withholding before the blob is opened, then the run's secrets redacted. Never the store's
+   * `content` directly, so search cannot process anything that read would withhold.
+   */
+  artifactText: (artifact: Artifact) => Promise<string>;
   /** Milliseconds now; a test pins it to drive the deadline. */
   now?: () => number;
   deadlineMs?: number;
@@ -140,18 +146,17 @@ async function searchArtifacts(
   const artifacts = (await deps.orc.stores.artifacts.list({ runId }))
     .filter((a) => isTextMediaType(a.mediaType) && a.size <= SEARCH_ARTIFACT_MAX_BYTES)
     .sort((a, b) => a.name.localeCompare(b.name) || a.version - b.version || a.id.localeCompare(b.id));
-  if (artifacts.length === 0) return;
-  const inputs = await deps.orc.stores.execution.getInputs(runId);
   for (const artifact of artifacts) {
     check();
     let text: string;
     try {
-      text = await deps.orc.stores.artifacts.content(artifact.id);
-    } catch {
-      // A body that has gone is a body with nothing to match, the same as `artifacts.list` shows it.
-      continue;
+      text = await deps.artifactText(artifact);
+    } catch (error) {
+      // Withheld (RUN_STATE) or a body that has gone (ARTIFACT_MISSING): nothing to match,
+      // as `artifacts.get` would show nothing. Anything else is a real failure.
+      if (isOrcaError(error) && (error.code === "RUN_STATE" || error.code === "ARTIFACT_MISSING")) continue;
+      throw error;
     }
-    if (inputs) text = redactExecutionValue(text, inputs.secrets);
     const at = text.toLowerCase().indexOf(needle);
     if (at === -1) continue;
     hits.push({
