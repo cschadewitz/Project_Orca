@@ -1,5 +1,6 @@
 /** Probe, guard and commit one authenticated target without disturbing the live connection. */
-import { isCompatible, PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
+import type { HelloResult } from "@orca/protocol";
+import { appSpeaks } from "../client/protocol-window.js";
 import { authenticationCode } from "../client/auth.js";
 import type { DaemonClient } from "../client/daemon-client.js";
 import { daemonEndpoint, type DaemonConnectionRequest } from "../daemon-connection.js";
@@ -98,7 +99,7 @@ export class ConnectionTarget {
         if (explained) throw new ConnectionRefusal(explained);
         throw error;
       }
-      if (!isCompatible(PROTOCOL_VERSION, hello.protocol))
+      if (!appSpeaks(hello.protocol))
         throw new ConnectionRefusal("Daemon protocol mismatch. Install compatible app and daemon versions.");
       if (!hello.capabilities.includes("runs.read") || !hello.capabilities.includes("runs.subscribe")) {
         throw new ConnectionRefusal(

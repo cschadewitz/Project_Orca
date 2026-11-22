@@ -642,8 +642,7 @@ export class SshTunnel {
       tail = (tail + line + "\n").slice(-STDERR_TAIL);
       const key = /Server host key: \S+ (SHA256:[A-Za-z0-9+/=]+)/.exec(line);
       if (key) this.fingerprint = key[1];
-      if (/channel \d+: open failed: (connect failed|administratively prohibited)/.test(line))
-        this.channelRefusedAt = Date.now();
+      if (/channel \d+: open failed:|^stdio forwarding failed/.test(line)) this.channelRefusedAt = Date.now();
       // Printed once the server is authenticated against its pin and the person's key accepted.
       if (/^debug1: Entering interactive session/.test(line) && !stream.authenticated) {
         stream.authenticated = true;

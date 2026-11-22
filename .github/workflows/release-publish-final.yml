@@ -4,7 +4,9 @@
 # passed on: the source commit and the SHA-256 of both the Ubuntu .deb and the x64 installer.
 # tools/deploy/release-attach.sh publish compares all of them with the draft immediately
 # before publishing (still a draft, named vVERSION, targeting that commit, exactly those two
-# assets with those digests, the installer's digest equal to the signing record). It refuses
+# assets with those digests, the installer's digest equal to the signing record, plus an
+# attached arm64 installer only with its signing and automatic native acceptance records,
+# from Release (accept Windows arm64)). It refuses
 # a version not newer than the current Latest and an existing tag at another commit,
 # publishes with the tag and target stated explicitly, and reads back the published assets'
 # digests, the tag and Latest. Native acceptance itself stays a required step before this. It shares its concurrency group with

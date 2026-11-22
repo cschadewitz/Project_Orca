@@ -18,7 +18,7 @@ it("stages native addons exactly as desktop.yml does", () => {
 
 it("is GitHub-hosted, read-only and secret-free", () => {
   expect(e2e.permissions).toEqual({ contents: "read" });
-  expect(e2e.jobs.update["runs-on"]).toBe("windows-latest");
+  expect(e2e.jobs.update["runs-on"]).toBe("${{ matrix.runner }}");
   expect(readFileSync(new URL("../../.github/workflows/feed-update-e2e.yml", import.meta.url), "utf8")).not.toContain(
     "secrets.",
   );
@@ -47,4 +47,20 @@ it("packages into dist/release, which electron-builder.yml keeps out of the app"
     '- "!dist/release"',
   );
   expect(named("Package N and N+1").run).toContain('-c.directories.output="dist/release/update-e2e/$version"');
+});
+
+it("updates every architecture the feed serves, arm64 on a native arm64 runner (#889)", async () => {
+  const { SERVED_ARCHES } = await import("../deploy/feed-worker/worker.js");
+  const { include } = e2e.jobs.update.strategy.matrix;
+  expect(include).toEqual([
+    { arch: "x64", runner: "windows-latest" },
+    { arch: "arm64", runner: "windows-11-arm" },
+  ]);
+  expect(include.map((entry) => entry.arch)).toEqual(SERVED_ARCHES);
+  expect(e2e.jobs.update.strategy["fail-fast"]).toBe(false);
+  expect(e2e.jobs.update.env).toEqual({ ARCH: "${{ matrix.arch }}" });
+  expect(named("Package N and N+1").run).toContain('--"$ARCH"');
+  expect(named("Package N and N+1").run).toContain('-c.publish.channel="latest-$ARCH"');
+  expect(named("Lay out the local feed").run).toContain('"$dir/latest-$ARCH.yml"');
+  expect(steps.map((step) => step.run ?? "").join("\n")).not.toMatch(/win-x64\.exe|latest-x64/);
 });

@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, readdir, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { PROTOCOL_VERSION, isCompatible } from "@orca/protocol";
+import { CLIENT_PROTOCOL, PROTOCOL_VERSION, isCompatible } from "@orca/protocol";
 import { DaemonClient } from "../../packages/app/src/client/daemon-client.js";
 import { LocalDaemonToken } from "../../packages/app/src/client/auth.js";
 import { probeBundledDaemon } from "../probe-bundled-daemon.js";
@@ -37,6 +37,8 @@ import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 const mode = ${JSON.stringify(mode)};
 const protocol = ${JSON.stringify(PROTOCOL_VERSION)};
+// The app's client offers the oldest current-major daemon it works with (#880); the daemon answers in its own.
+const offer = ${JSON.stringify(CLIENT_PROTOCOL)};
 const version = ${JSON.stringify(version)};
 const cwd = process.cwd();
 const args = process.argv.slice(2);
@@ -66,7 +68,7 @@ else {
     req.on('data', (chunk) => body += chunk);
     req.on('end', () => {
       const request = JSON.parse(body);
-      if (request.method !== 'hello' || JSON.stringify(request.params.protocol) !== JSON.stringify(protocol) ||
+      if (request.method !== 'hello' || JSON.stringify(request.params.protocol) !== JSON.stringify(offer) ||
           calls !== 1) process.exit(94);
       if (mode === 'hung-hello') return;
       if (mode === 'malformed') { res.end('synthetic-private-output'); return; }

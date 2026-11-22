@@ -67,8 +67,9 @@ describe("local feed", () => {
 
   it("marks a snapshot complete the way feed-r2.sh does, and validates rings", () => {
     expect(JSON.parse(readFileSync(join(root, "bucket", "99.0.0", "complete.json"), "utf8"))).toEqual({
-      format: 1,
+      format: 2,
       version: "99.0.0",
+      arches: ["x64"],
     });
     expect(() => writeRings(root, { format: 1, rings: { stable: { version: "1.0.0-rc.1" } } })).toThrow(/prerelease/);
     expect(() => snapshot(root, "v1", [])).toThrow(/invalid version/);

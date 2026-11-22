@@ -98,7 +98,6 @@ import {
   JournalListParamsSchema,
   PLANS_LIST_METHOD,
   PLAN_GET_METHOD,
-  PROTOCOL_VERSION,
   PlanGetParamsSchema,
   PlansListParamsSchema,
   RISKS_LIST_METHOD,
@@ -129,9 +128,12 @@ import {
   WORKFLOWS_LIST_METHOD,
   WorkflowsGetParamsSchema,
   WorkflowsListParamsSchema,
-  formatProtocolVersion,
-  isCompatible,
+  PROTOCOL_WINDOW,
+  describeProtocolRefusal,
+  negotiateProtocol,
   type AgentsListParams,
+  type HelloParams,
+  type ProtocolWindow,
   type AgentsListResult,
   type AgentsPingParams,
   type AgentsPingResult,
@@ -205,6 +207,11 @@ import { templateMethods } from "./template-methods.js";
 import { workflowDraftMethods } from "./workflow-draft-methods.js";
 
 export interface MethodContext {
+  /**
+   * The protocols this daemon answers `hello` in (#880). Absent means this build's own
+   * `PROTOCOL_WINDOW`; a test sets it to stand a daemon one major ahead of its clients.
+   */
+  protocolWindow?: ProtocolWindow;
   /** Guard-owned current workspace authority, rechecked after reads and under the config writer lock. */
   configurationAuthority?: (write: boolean, read?: boolean) => Promise<void>;
   /** Internal authenticated mount; never a collector constructed by the method table. */
@@ -363,18 +370,24 @@ function agents(ctx: MethodContext): AgentModel {
 }
 
 /** `hello`: check the client's protocol version and describe this daemon. */
-export const hello: Method<{ client: string; protocol: { major: number; minor: number } }, HelloResult> = {
+export const hello: Method<HelloParams, HelloResult> = {
   params: HelloParamsSchema,
   handle(params, ctx) {
-    if (!isCompatible(params.protocol, PROTOCOL_VERSION)) {
-      throw new OrcaError(
-        "NOT_SUPPORTED",
-        `client speaks protocol ${formatProtocolVersion(params.protocol)}, daemon speaks ${formatProtocolVersion(PROTOCOL_VERSION)}`,
-        { client: params.protocol, daemon: PROTOCOL_VERSION },
-      );
+    /* #880: the client's own version first, then the previous major it can fall back to.
+       The daemon answers in the highest protocol both sides share, inside its window. */
+    const window = ctx.protocolWindow ?? PROTOCOL_WINDOW;
+    const offered = params.fallback ? [params.protocol, params.fallback] : [params.protocol];
+    const negotiated = negotiateProtocol(offered, window);
+    if (!negotiated) {
+      throw new OrcaError("NOT_SUPPORTED", describeProtocolRefusal(offered, window), {
+        client: params.protocol,
+        ...(params.fallback ? { fallback: params.fallback } : {}),
+        daemon: window.current,
+        ...(window.previous ? { previous: window.previous } : {}),
+      });
     }
     return {
-      protocol: PROTOCOL_VERSION,
+      protocol: negotiated.protocol,
       orcaVersion: ctx.orcaVersion,
       ...(ctx.processId === undefined ? {} : { processId: ctx.processId }),
       ...(ctx.identity ? { identity: ctx.identity } : {}),

@@ -34,13 +34,8 @@
  * `DaemonSubscription`.
  */
 import type { ConnectionState } from "@orca/design";
-import {
-  PROTOCOL_VERSION,
-  formatProtocolVersion,
-  isCompatible,
-  type DaemonCapability,
-  type HelloResult,
-} from "@orca/protocol";
+import { formatProtocolVersion, type DaemonCapability, type HelloResult } from "@orca/protocol";
+import { appDaemonRelation, appProtocolLabel } from "../client/protocol-window.js";
 import type { ConnectionSnapshot } from "../bridge.js";
 import { authenticationCode } from "../client/auth.js";
 import type { RetryCount, SubscriptionState } from "../client/subscription.js";
@@ -135,6 +130,8 @@ export class ConnectionMachine {
   /* -- what the handshake said -- */
   private orcaVersion: string | undefined;
   private daemonProtocol: string | undefined;
+  /** True when the daemon answered on the previous major of this app's window (#880). */
+  private olderProtocol = false;
   private capabilities: readonly DaemonCapability[] | undefined;
   /** `hello.methods`: what this daemon answers, which is finer than what it can do. */
   private methods: readonly string[] | undefined;
@@ -233,6 +230,7 @@ export class ConnectionMachine {
     this.failureObserved = false;
     this.orcaVersion = undefined;
     this.daemonProtocol = undefined;
+    this.olderProtocol = false;
     this.capabilities = undefined;
     this.methods = undefined;
     this.cursor = undefined;
@@ -300,7 +298,9 @@ export class ConnectionMachine {
     /* Folded here because this is where the handshake is: the renderer never sees a
        `HelloResult`, so "is `config.set` served" can only be asked of the snapshot. */
     this.methods = result.methods;
-    this.compatible = isCompatible(PROTOCOL_VERSION, result.protocol);
+    const relation = appDaemonRelation(result.protocol);
+    this.compatible = relation !== undefined;
+    this.olderProtocol = relation === "previous";
     if (!this.compatible) observeOwnedDiagnostic(this.opts.onDiagnostic, "connection", "protocol_mismatch");
     this.settle();
   }
@@ -385,8 +385,9 @@ export class ConnectionMachine {
       since: new Date(this.since).toISOString(),
       ...(this.cursor !== undefined ? { eventCursor: this.cursor } : {}),
       ...(this.daemonProtocol !== undefined
-        ? { versions: { app: formatProtocolVersion(PROTOCOL_VERSION), daemon: this.daemonProtocol } }
+        ? { versions: { app: appProtocolLabel(), daemon: this.daemonProtocol } }
         : {}),
+      ...(this.olderProtocol ? { olderProtocol: true as const } : {}),
       ...(this.orcaVersion !== undefined ? { orcaVersion: this.orcaVersion } : {}),
       ...(this.capabilities !== undefined ? { capabilities: this.capabilities } : {}),
       ...(this.methods !== undefined ? { methods: this.methods } : {}),

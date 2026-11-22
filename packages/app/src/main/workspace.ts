@@ -21,13 +21,12 @@ import {
   RuntimeDrainResultSchema,
   type RuntimeDrainResult,
   type RuntimeMaintenanceResult,
-  isCompatible,
-  PROTOCOL_VERSION,
   type HelloResult,
 } from "@orca/protocol";
 import { resolve, join } from "node:path";
 import { DaemonClient as AuthenticatedClient } from "../client/daemon-client.js";
 import { isLoopbackDaemon, LocalDaemonToken, type DaemonTokenSource } from "../client/auth.js";
+import { appSpeaks } from "../client/protocol-window.js";
 import type { MacDrainOwner } from "./mac-update-drain.js";
 import type { MacUpdateTarget } from "./mac-updates.js";
 import type { WorkspaceSnapshot, WorkspaceSource } from "../bridge.js";
@@ -232,7 +231,7 @@ export class Workspace {
       resolve(this.target.path) === directory &&
       daemon?.pid === hello?.processId &&
       hello !== undefined &&
-      isCompatible(PROTOCOL_VERSION, hello.protocol) &&
+      appSpeaks(hello.protocol) &&
       hello?.identity?.workspaceId === expected.workspaceId &&
       hello.identity.instanceId === expected.instanceId &&
       hello.storeDir === join(directory, ".orca");
@@ -401,7 +400,7 @@ export class Workspace {
         hello.processId !== processId ||
         hello.identity?.workspaceId !== target.workspaceId ||
         hello.identity.instanceId !== target.instanceId ||
-        !isCompatible(PROTOCOL_VERSION, hello.protocol) ||
+        !appSpeaks(hello.protocol) ||
         hello.storeDir !== join(resolve(this.target.path), ".orca")
       )
         return undefined;
@@ -620,7 +619,7 @@ export class Workspace {
       owner &&
       this.identity &&
       this.verifiedHello &&
-      isCompatible(PROTOCOL_VERSION, this.verifiedHello.protocol) &&
+      appSpeaks(this.verifiedHello.protocol) &&
       this.verifiedHello.processId === this.daemon?.pid &&
       this.verifiedHello.storeDir === join(path, ".orca") &&
       (["runs.read", "runs.control", "runs.subscribe"] as const).every((capability) =>
@@ -1053,7 +1052,7 @@ export class Workspace {
         (!this.verifiedHello ||
           this.verifiedHello.processId !== attempt.processId ||
           this.verifiedHello?.storeDir !== attempt.storeDir ||
-          !isCompatible(PROTOCOL_VERSION, this.verifiedHello.protocol) ||
+          !appSpeaks(this.verifiedHello.protocol) ||
           !(["runs.read", "runs.control", "runs.subscribe"] as const).every((capability) =>
             this.verifiedHello?.capabilities.includes(capability),
           ))) ||

@@ -153,7 +153,9 @@ export function buildNativePackage({ arch, headers, root = appRoot }) {
         {
           cwd: join(root, "native/diagnostics"),
           stdio: ["ignore", "pipe", "pipe"],
-          timeout: 60_000,
+          // node-gyp's Visual Studio discovery alone takes over a minute on GitHub's Windows
+          // arm64 runners (#889); the build itself is seconds.
+          timeout: 300_000,
           maxBuffer: 64 * 1024,
           windowsHide: true,
         },
@@ -239,7 +241,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     requireValue(values.arch && values.headers);
     const manifest = buildNativePackage(values);
     process.stdout.write(JSON.stringify(manifest) + "\n");
-  } catch {
+  } catch (error) {
+    // The toolchain's own output is what makes a refusal fixable; bounded for the caller.
+    const detail = [error?.message, error?.stdout?.toString(), error?.stderr?.toString()].filter(Boolean).join("\n");
+    process.stderr.write(`${detail.slice(-6000)}\n`);
     process.stderr.write("Diagnostics native build refused; local platform toolchain and verified headers required\n");
     process.exitCode = 1;
   }
