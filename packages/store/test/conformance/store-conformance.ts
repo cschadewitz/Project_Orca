@@ -300,6 +300,30 @@ export function runStoreConformance(backend: ConformanceBackend): void {
           expect((await a.get("x"))?.owner).toBe("b");
         });
 
+        it("put, CAS and delete queued together on one handle resolve in call order", async () => {
+          const { a, other } = await collection();
+          const v = asVersionedDocumentStore(a);
+          await a.putMany([doc("x", "a", 0), doc("y", "a", 0)]);
+          const x0 = (await v.getVersioned("x"))!.version;
+          const y0 = (await v.getVersioned("y"))!.version;
+          const results = await Promise.all([
+            a.put(doc("x", "a", 1)),
+            v.putIfVersion(doc("x", "a", 2), x0),
+            v.deleteIfVersion("y", y0),
+            a.put(doc("y", "b", 5)),
+            v.putIfVersion(doc("y", "c", 6), y0),
+            a.delete("x"),
+          ]);
+          // The CAS on x expected x@0 but follows put(x@1) in call order, so it loses to it.
+          expect(results[1]).toMatchObject({ ok: false, current: { doc: doc("x", "a", 1) } });
+          expect(results[2]).toEqual({ ok: true, version: undefined });
+          // y was deleted then re-put: the stale y0 no longer matches.
+          expect(results[4]).toMatchObject({ ok: false, current: { doc: doc("y", "b", 5) } });
+          const reader = asVersionedDocumentStore(other());
+          expect(await reader.getVersioned("x")).toBeUndefined();
+          expect((await reader.getVersioned("y"))?.doc).toEqual(doc("y", "b", 5));
+        });
+
         it("unconditional writes from several handles are never lost (#196)", async () => {
           const { a, other } = await collection();
           const handles = [a, other(), other()];

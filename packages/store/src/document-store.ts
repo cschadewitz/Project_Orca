@@ -105,6 +105,10 @@ interface Fingerprint {
 type Mutation<T> = ({ kind: "put"; doc: T } | { kind: "delete"; id: string }) & {
   expect?: DocumentVersion | null;
   result?: ConditionalWriteResult<T>;
+  /** Set when the write that carried it did not commit; the caller rethrows it. */
+  failed?: { error: unknown };
+  /** Wakes the caller once the write carrying this mutation has committed or failed. */
+  settle?: () => void;
 };
 
 /**
@@ -131,9 +135,17 @@ type Mutation<T> = ({ kind: "put"; doc: T } | { kind: "delete"; id: string }) & 
  * Compare-and-swap (#338) rides the same queue: a conditional mutation is checked
  * inside the lock, against the freshly re-read file and the batch's earlier
  * mutations, so of two writers holding one version only the first can win - in
- * this process or another. A document's version is the hash of its parsed
- * content, computed on read, so nothing new is written to the file. Reads do not
- * show a conditional mutation until it has been decided and written.
+ * this process or another. A conditional mutation always *ends* its batch: what
+ * it was decided against is exactly what that write commits, so a success's
+ * version and a conflict's `current` both describe committed state, never an
+ * intermediate one a later mutation in the same write overwrote. Mutations after
+ * it go into the next write. A document's version is the hash of its parsed
+ * content, computed on read, so nothing new is written to the file.
+ *
+ * `get`, `list` and `query` keep their read-your-writes view (the file plus this
+ * process's queued unconditional mutations); `getVersioned` reads only the
+ * committed file, because a version is what a caller will compare against on
+ * disk. A conditional mutation is never shown before it has been decided and written.
  */
 export class JsonFileDocumentStore<T extends { id: string }> implements VersionedDocumentStore<T> {
   private cache: Map<string, T> | undefined;
@@ -216,42 +228,31 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Versione
       // Cleared before snapshotting the queue, so mutations made from here on
       // schedule a fresh write rather than silently missing this one.
       this.pending = undefined;
-      const batch = this.queue.slice();
-      if (batch.length === 0) return;
-      try {
-        await mkdir(dirname(this.file), { recursive: true });
-        await withFileLock(`${this.file}.lock`, async () => {
-          // Inside the lock, so nothing can write between this read and the rename.
-          const map = new Map(await this.load());
-          let changed = false;
-          for (const m of batch) changed = apply(map, m, this.versionOf) || changed;
-          // Every mutation was a conditional write that lost: the file is already right.
-          if (!changed) return;
-          const body = JSON.stringify([...map.values()], null, 2);
-          // A random tag, not the pid alone (file-lock.ts uses the same idiom): two writers
-          // in one process - two collections is the ordinary case, and a pid is reused after
-          // a crash - would otherwise share one tmp path and rename each other's bytes into
-          // place. The lock makes that unlikely rather than impossible; the name makes it so.
-          const tmp = `${this.file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-          // Flushed before the rename: the rename is what makes the new file visible, and a
-          // machine that loses power between the two would otherwise publish a name pointing
-          // at bytes that never reached the disk. `writeFile` alone does not promise that.
-          const handle = await open(tmp, "w");
-          try {
-            await handle.writeFile(body, "utf8");
-            await handle.sync();
-          } finally {
-            await handle.close();
-          }
-          await rename(tmp, this.file);
-          this.cache = map;
-          this.fingerprint = await this.fingerprintOf();
-        });
-      } finally {
-        // Retire this batch even when setup or lock acquisition fails before
-        // callback entry. Only appends can happen while this write is running,
-        // so later mutations remain queued for their own serialized write.
-        this.queue.splice(0, batch.length);
+      // Everything queued so far belongs to this call. It is written in as few
+      // batches as conditional boundaries allow: each batch ends at the first
+      // conditional mutation (inclusive), so a conditional's outcome is the
+      // state its own write commits.
+      let remaining = this.queue.length;
+      while (remaining > 0) {
+        const conditional = this.queue.findIndex((m, i) => i < remaining && "expect" in m);
+        const size = conditional === -1 ? remaining : conditional + 1;
+        const batch = this.queue.slice(0, size);
+        try {
+          await this.write(batch);
+        } catch (error) {
+          // Only this batch failed; later batches are still attempted, and each
+          // caller learns its own mutation's fate from `failed`.
+          for (const m of batch) m.failed = { error };
+        } finally {
+          // Retire this batch even when setup or lock acquisition fails before
+          // callback entry, so a rejected mutation never reappears in a later
+          // write. Only appends happen meanwhile, so the head is still this batch.
+          this.queue.splice(0, size);
+          remaining -= size;
+          // Each caller resumes as soon as its own batch is decided, before any
+          // later batch can commit over it.
+          for (const m of batch) m.settle?.();
+        }
       }
     });
     this.pending = p;
@@ -262,35 +263,82 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Versione
     );
     return p;
   }
+
+  /**
+   * Queue `mutations`, wait for the write that carries them, and rethrow if it failed. One
+   * call's mutations are queued together and contain at most one conditional (last), so they
+   * always share one batch.
+   */
+  private async commit(...mutations: Mutation<T>[]): Promise<void> {
+    const settled = new Promise<void>((resolve) => {
+      mutations[mutations.length - 1]!.settle = resolve;
+    });
+    void this.enqueue(...mutations);
+    await settled;
+    const failed = mutations.find((m) => m.failed)?.failed;
+    if (failed) throw failed.error;
+  }
+
+  /** One locked read-modify-write of the whole collection carrying `batch`. */
+  private async write(batch: readonly Mutation<T>[]): Promise<void> {
+    await mkdir(dirname(this.file), { recursive: true });
+    await withFileLock(`${this.file}.lock`, async () => {
+      // Inside the lock, so nothing can write between this read and the rename.
+      const map = new Map(await this.load());
+      let changed = false;
+      for (const m of batch) changed = apply(map, m, this.versionOf) || changed;
+      // Every mutation was a conditional write that lost: the file is already right.
+      if (!changed) return;
+      const body = JSON.stringify([...map.values()], null, 2);
+      // A random tag, not the pid alone (file-lock.ts uses the same idiom): two writers
+      // in one process - two collections is the ordinary case, and a pid is reused after
+      // a crash - would otherwise share one tmp path and rename each other's bytes into
+      // place. The lock makes that unlikely rather than impossible; the name makes it so.
+      const tmp = `${this.file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+      // Flushed before the rename: the rename is what makes the new file visible, and a
+      // machine that loses power between the two would otherwise publish a name pointing
+      // at bytes that never reached the disk. `writeFile` alone does not promise that.
+      const handle = await open(tmp, "w");
+      try {
+        await handle.writeFile(body, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await rename(tmp, this.file);
+      this.cache = map;
+      this.fingerprint = await this.fingerprintOf();
+    });
+  }
   async get(id: string): Promise<T | undefined> {
     return (await this.view()).get(id);
   }
   async put(doc: T): Promise<void> {
-    await this.enqueue({ kind: "put", doc });
+    await this.commit({ kind: "put", doc });
   }
   async putMany(docs: readonly T[]): Promise<void> {
     if (docs.length === 0) return;
-    await this.enqueue(...docs.map((doc) => ({ kind: "put", doc }) as const));
+    await this.commit(...docs.map((doc) => ({ kind: "put", doc }) as const));
   }
   async delete(id: string): Promise<void> {
-    await this.enqueue({ kind: "delete", id });
+    await this.commit({ kind: "delete", id });
   }
   async list(predicate?: (doc: T) => boolean): Promise<T[]> {
     const all = [...(await this.view()).values()];
     return predicate ? all.filter(predicate) : all;
   }
   async getVersioned(id: string): Promise<VersionedDocument<T> | undefined> {
-    const doc = (await this.view()).get(id);
+    const doc = (await this.load()).get(id);
     return doc && { doc, version: this.versionOf(doc) };
   }
   async putIfVersion(doc: T, expected: DocumentVersion | null): Promise<ConditionalWriteResult<T>> {
     const m: Mutation<T> = { kind: "put", doc, expect: expected };
-    await this.enqueue(m);
+    await this.commit(m);
     return m.result!;
   }
   async deleteIfVersion(id: string, expected: DocumentVersion): Promise<ConditionalWriteResult<T>> {
     const m: Mutation<T> = { kind: "delete", id, expect: expected };
-    await this.enqueue(m);
+    await this.commit(m);
     return m.result!;
   }
   async query(query?: DocumentQuery<T>): Promise<DocumentPage<T>> {
