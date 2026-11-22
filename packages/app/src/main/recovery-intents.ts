@@ -27,19 +27,36 @@ import type { RecoveryIntentOutcome, RecoveryIntentView } from "../bridge.js";
 import { daemonEndpoint, type DaemonTargetSnapshot } from "../daemon-connection.js";
 import { type IntentEncryption, type IntentScope, ProtectedJournal } from "./admission-intents.js";
 
+/** A profile connection's verified server (`Workspace.profileEndpoint`). */
+export interface RecoveryEndpoint {
+  id: string;
+  /** The SSH server and jump chain the profile's pins vouch for (`serverKey`). */
+  server: string;
+  remotePort: number;
+  /** The host key this tunnel authenticated. */
+  hostKey: string;
+}
+
 /**
- * The stable half of an intent's scope: where the daemon is, independent of this connection.
- * An SSH profile's tunnel listens on a new loopback port each time, so a profile is named by its
- * id and destination, never its local URL; editing the destination makes it a different target,
- * whose intents stay hidden and block the same run until the original is reached again.
- * Workspace and principal come from the verified discovery beside it, and the connection epoch
- * stays a separate in-flight guard (`assertCurrent`).
+ * The stable half of an intent's scope: which daemon this is, independent of this connection.
+ * An SSH profile's tunnel listens on a new loopback port each time, so a profile is named by
+ * its verified server instead: the profile, the SSH server and jump chain its pins vouch for,
+ * the daemon's remote port and the host key the tunnel authenticated. Pointing the profile
+ * elsewhere, or a different host key, is a different target, whose intents stay hidden and
+ * block the same run until the original is reached again. Workspace and principal come from
+ * verified discovery beside it, and the connection epoch stays a separate in-flight guard
+ * (`assertCurrent`).
  */
 export function recoveryTarget(
   target: Pick<DaemonTargetSnapshot, "source" | "url" | "profile">,
   bundledPath: string,
+  endpoint: RecoveryEndpoint | undefined,
 ): string {
-  if (target.profile) return `ssh:${target.profile.id}@${target.profile.destination}`;
+  if (target.profile) {
+    if (!endpoint || endpoint.id !== target.profile.id)
+      throw new Error("The SSH connection has not verified its server yet. Refresh before recovering.");
+    return `ssh:${JSON.stringify([endpoint.id, endpoint.server, endpoint.remotePort, endpoint.hostKey])}`;
+  }
   return target.source === "bundled" ? `bundled:${bundledPath}` : daemonEndpoint(target.url);
 }
 

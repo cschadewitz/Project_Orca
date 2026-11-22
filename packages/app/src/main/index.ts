@@ -477,6 +477,7 @@ const recoveryIntents = new RecoveryIntentController(
   async () => {
     const captured = client();
     const target = workspace.connectionTarget;
+    const endpoint = workspace.profileEndpoint;
     const found = await captured.call("operator.discover", {}, intentDiscovery);
     workspace.assertEpoch(target.epoch);
     if (
@@ -488,7 +489,7 @@ const recoveryIntents = new RecoveryIntentController(
       throw new Error("The authenticated daemon target changed or recovery is unavailable. Refresh before retrying.");
     return {
       scope: {
-        target: recoveryTarget(target, workspace.snapshot.path),
+        target: recoveryTarget(target, workspace.snapshot.path, endpoint),
         principalId: found.principalId,
         workspaceId: found.target.workspaceId,
       },
