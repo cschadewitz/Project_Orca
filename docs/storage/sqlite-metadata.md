@@ -183,7 +183,8 @@ leaves only an unreferenced blob.
 
 ## Not in this change (follow-ups under #339)
 
-- The `large` scale on the reference machine, for the #341 baseline. The numbers
+- Reference numbers for the #341 baseline come from the store workload workflow on a
+  GitHub-hosted runner (`docs/performance/store-workloads/README.md`); the numbers
   above are from a cloud container.
 - Making SQLite selectable for a workspace, after the format gates above. That
   switch is also when the daemon serves history from it to #255. **Precondition

@@ -6,7 +6,7 @@ and SQLite (#339). The comparison that decides whether a graph projection or a k
 cache improves on SQLite is recorded in an ADR, with its budgets written down **before** any
 comparison is read.
 
-Code: `tools/benchmarks/store-workloads/`. Self-test: `tools/test/store-workloads.test.js`
+Code: `tools/benchmarks/store-workloads/`. Reference runs: `.github/workflows/store-workloads-bench.yml`. Self-test: `tools/test/store-workloads.test.js`
 (runs the smoke shape on every push). No production store code and no new dependency.
 
 ```sh
@@ -98,11 +98,25 @@ comparison will need to look at. These numbers are not a baseline:
   `small`, against well under a millisecond to load the cache, which is the trade a
   disposable cache would buy.
 
+## Reference machine
+
+The baseline's reference machine is a **GitHub-hosted `ubuntu-24.04` runner** with
+Node 24, run by `.github/workflows/store-workloads-bench.yml`. It needs no one: it runs
+`small`, `medium` and `large` on memory, file and SQLite, one scale per runner, every
+time store, core or benchmark code lands on `main`, on a pull request that changes the
+benchmark, and on demand (`workflow_dispatch`,
+optional `repeat`). Each report is kept as an artifact for 90 days
+(`store-workloads-<scale>`) and summarized in the job summary by `summarize.js`.
+
+A hosted runner is not dedicated hardware: its CPU model can change between runs and it
+shares a host, so compare reports by their recorded `machine` and treat small
+differences as noise. Each report records the commit, CPU model and count, memory, and
+Node version, so a comparison across runs is always of known machines.
+
 ## What is next (not in this PR)
 
-1. Run `small`, `medium` and `large` on the reference machine, cold and warm, for all three
-   backends, and keep the raw reports beside the ADR. Container observations for SQLite are
-   in `docs/storage/sqlite-metadata.md`.
+1. Keep the reference reports the ADR is decided on beside it (the workflow above produces
+   them). Container observations for SQLite are in `docs/storage/sqlite-metadata.md`.
 2. The ADR records the target p95 latency, throughput, resource, durability, recovery-time
    and operating-complexity budgets and the test machine **before** the comparison, then
    decides graph and key-value separately, each with a reconsideration trigger.

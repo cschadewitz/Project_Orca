@@ -12,6 +12,7 @@ import * as store from "@orca/store";
 import { backends } from "../benchmarks/store-workloads/backends.js";
 import { allChecks, REPORT_SCHEMA_VERSION, runBenchmark } from "../benchmarks/store-workloads/harness.js";
 import { SCALES } from "../benchmarks/store-workloads/scales.js";
+import { summarize as summarizeReport } from "../benchmarks/store-workloads/summarize.js";
 import { prng, summarize } from "../benchmarks/store-workloads/stats.js";
 
 const scratch = await mkdtemp(join(tmpdir(), "orca-store-bench-test-"));
@@ -57,6 +58,13 @@ describe("store workload benchmark", () => {
     // The store's own idle checkpoint ran after the burst, and reported what it copied.
     expect(wal.idleCheckpoints.length).toBeGreaterThan(0);
     expect(wal.idleCheckpoints.every((c) => c.busy === false && c.checkpointedPages === c.logPages)).toBe(true);
+    // The CI job summary: one column per backend that ran, a row per headline, a line per skip.
+    const md = summarizeReport(report);
+    expect(md).toContain("### Store workloads: smoke");
+    expect(md).toContain("| | memory | file | sqlite |");
+    expect(md).toMatch(/\| Checks \| pass \| pass \| pass \|/);
+    expect(md).toContain("- absent: skipped (not built here)");
+    expect(md).not.toContain("undefined");
     for (const plain of ["memory", "file"])
       expect(report.results.find((r) => r.backend === plain).workloads.walCheckpoint).toMatchObject({
         skipped: "no write-ahead log on this backend",
