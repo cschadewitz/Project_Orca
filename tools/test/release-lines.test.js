@@ -10,6 +10,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkLinePullRequest, inLine, lineOf, referencedIssues } from "../release-line-guard.js";
+import { LINE_CHECKS, laneOf, protectionProblems, releaseDiffProblems } from "../release-lane.js";
 
 const RELEASE = fileURLToPath(new URL("../release.js", import.meta.url));
 // Borrowed from the CLI, which already installs it, rather than added to the root manifest.
@@ -120,8 +121,55 @@ describe("the release line guard", () => {
     expect(checkLinePullRequest(pr({ body }), { 926: issue("0.8.0", [], true), 10: issue("0.7.2") })).toEqual([]);
   });
 
-  it("passes the release pull request for a patch of the line", () => {
-    expect(checkLinePullRequest(pr({ head: "release/v0.7.1", labels: ["release"], body: "" }), {})).toEqual([]);
+  const preparation = {
+    files: [
+      { filename: "package.json", status: "modified" },
+      { filename: "CHANGELOG.md", status: "modified" },
+      { filename: "changelog.d/886-sftp.added.md", status: "removed" },
+    ],
+    basePackage: { name: "orca", version: "0.7.0", private: true },
+    headPackage: { name: "orca", version: "0.7.1", private: true },
+  };
+  const releasePr = (over = {}) =>
+    pr({ head: "release/v0.7.1", labels: ["release"], body: "", sameRepository: true, release: preparation, ...over });
+
+  it("passes the release preparation for a patch of the line", () => {
+    expect(checkLinePullRequest(releasePr(), {})).toEqual([]);
+  });
+
+  it.each([
+    ["without the release label", releasePr({ labels: [] }), /must carry the release label/],
+    ["with the label on another head", releasePr({ head: "fix-crash" }), /head must be release\/vX\.Y\.Z/],
+    ["from a fork", releasePr({ sameRepository: false }), /from this repository/],
+    ["for another line", releasePr({ head: "release/v0.8.1" }), /cut from release\/0\.8, not release\/0\.7/],
+    ["for a minor", releasePr({ head: "release/v0.7.0" }), /cut from main, not release\/0\.7/],
+    [
+      "that changes code",
+      releasePr({
+        release: {
+          ...preparation,
+          files: [...preparation.files, { filename: "packages/app/x.ts", status: "modified" }],
+        },
+      }),
+      /packages\/app\/x\.ts \(modified\) is not part of a release preparation/,
+    ],
+    [
+      "that adds a fragment",
+      releasePr({ release: { ...preparation, files: [{ filename: "changelog.d/1-x.added.md", status: "added" }] } }),
+      /not part of a release preparation/,
+    ],
+    [
+      "that changes package.json beyond its version",
+      releasePr({ release: { ...preparation, headPackage: { ...preparation.headPackage, scripts: { x: "y" } } } }),
+      /more than its version/,
+    ],
+    [
+      "whose head is not at its version",
+      releasePr({ release: { ...preparation, headPackage: { ...preparation.headPackage, version: "0.7.2" } } }),
+      /says 0\.7\.2, not 0\.7\.1/,
+    ],
+  ])("refuses a release pull request %s", (_, request, message) => {
+    expect(checkLinePullRequest(request, {}).join("\n")).toMatch(message);
   });
 
   it.each([
@@ -149,18 +197,6 @@ describe("the release line guard", () => {
       { 10: issue("0.7.1") },
       /pull request's milestone/,
     ],
-    [
-      "a release pull request for another line",
-      pr({ head: "release/v0.8.1", labels: ["release"] }),
-      {},
-      /not a 0\.7\.x patch/,
-    ],
-    [
-      "a release pull request for a minor",
-      pr({ head: "release/v0.7.0", labels: ["release"] }),
-      {},
-      /not a 0\.7\.x patch/,
-    ],
     ["a base that is not a line", pr({ base: "release/v0.7.1" }), { 10: issue("0.7.1") }, /not a release line branch/],
   ])("refuses %s", (_, request, issues, message) => {
     const problems = checkLinePullRequest(request, issues);
@@ -183,9 +219,70 @@ describe("the release line guard", () => {
   });
 });
 
+describe("the lane policy", () => {
+  const protectedRules = [
+    { type: "pull_request" },
+    { type: "non_fast_forward" },
+    { type: "deletion" },
+    {
+      type: "required_status_checks",
+      parameters: { required_status_checks: LINE_CHECKS.map((context) => ({ context })) },
+    },
+  ];
+
+  it.each([
+    ["0.8.0", "main"],
+    ["0.8.0-rc.2", "main"],
+    ["0.7.1", "release/0.7"],
+    ["0.7.1-rc.1", "release/0.7"],
+  ])("puts %s on %s", (version, lane) => {
+    expect(laneOf(version)).toBe(lane);
+  });
+
+  it("accepts a line protected by pull requests, no force push or deletion, and both checks", () => {
+    expect(protectionProblems(protectedRules)).toEqual([]);
+  });
+
+  it.each([
+    ["no rules at all", []],
+    ["no pull request rule", protectedRules.filter((r) => r.type !== "pull_request")],
+    ["force pushes allowed", protectedRules.filter((r) => r.type !== "non_fast_forward")],
+    ["deletion allowed", protectedRules.filter((r) => r.type !== "deletion")],
+    [
+      "the guard not required",
+      protectedRules.map((r) =>
+        r.type === "required_status_checks"
+          ? { ...r, parameters: { required_status_checks: [{ context: "check (node 24)" }] } }
+          : r,
+      ),
+    ],
+  ])("refuses a line with %s", (_, rules) => {
+    expect(protectionProblems(rules).length).toBeGreaterThan(0);
+  });
+
+  it("knows a release preparation from anything else", () => {
+    const files = [
+      { filename: "package.json", status: "modified" },
+      { filename: "CHANGELOG.md", status: "modified" },
+    ];
+    const basePackage = { version: "0.7.0" };
+    expect(releaseDiffProblems({ version: "0.7.1", files, basePackage, headPackage: { version: "0.7.1" } })).toEqual(
+      [],
+    );
+    expect(
+      releaseDiffProblems({
+        version: "0.7.1",
+        files: [...files, { filename: "changelog.d/README.md", status: "removed" }],
+        basePackage,
+        headPackage: { version: "0.7.1" },
+      }).join("\n"),
+    ).toMatch(/README\.md/);
+  });
+});
+
 describe("a real release's reviewed-commit check", () => {
   const step = workflow("release-publish.yml").jobs.check.steps.find(
-    (s) => s.name === "A real release builds a reviewed commit from the default branch or its line",
+    (s) => s.name === "A real release builds a reviewed commit from its lane",
   );
   const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
   const commit = (cwd, file, content) => {
@@ -196,35 +293,72 @@ describe("a real release's reviewed-commit check", () => {
     return git(cwd, "rev-parse", "HEAD");
   };
   const manifest = (version) => `${JSON.stringify({ name: "orca", version })}\n`;
+  const protectedRules = JSON.stringify([
+    { type: "pull_request" },
+    { type: "non_fast_forward" },
+    { type: "deletion" },
+    {
+      type: "required_status_checks",
+      parameters: { required_status_checks: LINE_CHECKS.map((context) => ({ context })) },
+    },
+  ]);
   let clone;
+  let bin;
   const commits = {};
 
   beforeEach(() => {
     const origin = join(work, "origin");
     mkdirSync(origin);
     git(origin, "init", "-q", "-b", "main");
+    commit(origin, "tools/release-lane.js", readFileSync(new URL("../release-lane.js", import.meta.url), "utf8"));
     const fork = commit(origin, "package.json", manifest("0.7.0"));
     commits.main = commit(origin, "packages/app/next.ts", "// 0.8 work\n");
+    commits.patchOnMain = commit(origin, "package.json", manifest("0.7.9"));
     git(origin, "checkout", "-qb", "release/0.7", fork);
     commits.line = commit(origin, "package.json", manifest("0.7.1"));
+    commits.minorOnLine = commit(origin, "package.json", manifest("0.8.0"));
+    git(origin, "reset", "-q", "--hard", commits.line);
     git(origin, "checkout", "-qb", "release/0.8", fork);
     commits.otherLine = commit(origin, "package.json", manifest("0.7.2"));
-    git(origin, "checkout", "-qb", "topic", fork);
-    commits.topic = commit(origin, "package.json", manifest("0.7.3"));
     git(origin, "checkout", "-q", "main");
+    git(origin, "reset", "-q", "--hard", commits.main);
     clone = join(work, "clone");
     git(work, "clone", "-q", "--no-local", origin, clone);
+    // The minor commit is reachable from nowhere on origin but exists in the clone's objects.
+    git(clone, "fetch", "-q", origin, commits.minorOnLine);
+    git(clone, "fetch", "-q", origin, commits.patchOnMain);
+    // gh answers the rules API from RULES and the check-runs API from CHECKS.
+    bin = join(work, "bin");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "gh"),
+      '#!/bin/sh\ncase "$*" in *rules/branches*) printf "%s" "$RULES";; *check-runs*) printf "%s" "$CHECKS";; *) exit 1;; esac\n',
+      { mode: 0o755 },
+    );
   });
 
-  const run = (sha, event = "pull_request", ref = "refs/heads/main") =>
+  const run = ({
+    sha,
+    event = "workflow_dispatch",
+    ref = "refs/heads/main",
+    rules = protectedRules,
+    checks,
+    eventFile,
+  }) =>
     execFileSync("bash", ["-c", step.run], {
       cwd: clone,
       env: {
         ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
         EVENT: event,
         REF: ref,
         DEFAULT_BRANCH: "main",
         SHA: sha,
+        RULES: rules,
+        CHECKS: checks ?? JSON.stringify({ check_runs: [{ conclusion: "success" }] }),
+        GITHUB_EVENT_PATH: eventFile ?? "/dev/null",
+        GITHUB_REPOSITORY: "o/r",
+        RUNNER_TEMP: work,
         GITHUB_STEP_SUMMARY: join(work, "summary"),
       },
       encoding: "utf8",
@@ -238,23 +372,80 @@ describe("a real release's reviewed-commit check", () => {
     }
     return undefined;
   };
+  const merged = (over = {}) => {
+    const file = join(work, "event.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        pull_request: {
+          number: 906,
+          merged: true,
+          head: { ref: "release/v0.7.1", sha: commits.line, repo: { full_name: "o/r" } },
+          base: { ref: "release/0.7" },
+          ...over,
+        },
+      }),
+    );
+    return file;
+  };
 
-  it("accepts a commit on main", () => {
-    expect(run(commits.main)).toMatch(/from main/);
+  it("accepts a new minor's commit on main", () => {
+    expect(run({ sha: commits.main })).toMatch(/v0\.7\.0\) from main/);
   });
 
-  it("accepts a patch on its own line branch", () => {
-    expect(run(commits.line)).toMatch(/v0\.7\.1\) from its line release\/0\.7/);
+  it("accepts a patch on its own protected line", () => {
+    expect(run({ sha: commits.line })).toMatch(/v0\.7\.1\) from release\/0\.7/);
   });
 
-  it("refuses a patch that sits on another line or on no line", () => {
-    expect(refused(() => run(commits.otherLine))).toMatch(/::error::.* is not on main or release\/0\.7/);
-    expect(refused(() => run(commits.topic))).toMatch(/::error::.* is not on main or release\/0\.7/);
+  it.each([
+    ["a patch on main", () => commits.patchOnMain, protectedRules, /is not on release\/0\.7/],
+    ["a patch on another line", () => commits.otherLine, protectedRules, /is not on release\/0\.7/],
+    ["a minor on a line", () => commits.minorOnLine, protectedRules, /is not on main/],
+    ["a patch on an unprotected line", () => commits.line, "[]", /not protected as a release line/],
+  ])("refuses %s", (_, sha, rules, message) => {
+    expect(refused(() => run({ sha: sha(), rules }))).toMatch(message);
   });
 
   it("refuses a dispatch that does not use main's workflow", () => {
-    expect(refused(() => run(commits.line, "workflow_dispatch", "refs/heads/release/0.7"))).toMatch(
+    expect(refused(() => run({ sha: commits.line, ref: "refs/heads/release/0.7" }))).toMatch(
       /dispatch a release with the workflow from main/,
+    );
+  });
+
+  it("accepts a merged release pull request that is the reviewed preparation", () => {
+    expect(run({ sha: commits.line, event: "pull_request", eventFile: merged() })).toMatch(/from release\/0\.7/);
+  });
+
+  it.each([
+    ["into the wrong branch", { base: { ref: "main" } }, undefined, /merged into main/],
+    [
+      "from a fork",
+      { head: { ref: "release/v0.7.1", sha: "x", repo: { full_name: "fork/r" } } },
+      undefined,
+      /from this repository/,
+    ],
+    [
+      "whose head is not a release head",
+      { head: { ref: "fix", sha: "x", repo: { full_name: "o/r" } } },
+      undefined,
+      /not a release pull request head/,
+    ],
+    [
+      "whose guard did not pass",
+      {},
+      JSON.stringify({ check_runs: [{ conclusion: "failure" }] }),
+      /did not pass on the reviewed head/,
+    ],
+  ])("refuses a merged release pull request %s", (_, over, checks, message) => {
+    expect(refused(() => run({ sha: commits.line, event: "pull_request", eventFile: merged(over), checks }))).toMatch(
+      message,
+    );
+  });
+
+  it("refuses a merge commit whose tree is not the reviewed head's", () => {
+    const head = { ref: "release/v0.7.1", sha: commits.otherLine, repo: { full_name: "o/r" } };
+    expect(refused(() => run({ sha: commits.line, event: "pull_request", eventFile: merged({ head }) }))).toMatch(
+      /is not the reviewed head/,
     );
   });
 });
@@ -283,9 +474,16 @@ describe("the patch path through the workflows", () => {
     const sync = workflow("release-publish.yml").jobs["sync-main"];
     expect(sync.needs).toEqual(["check", "publish"]);
     expect(sync.if).toBe("${{ !inputs.dry_run }}");
-    expect(sync.steps[0].with.ref).toBe("${{ github.event.repository.default_branch }}");
+    const checkout = sync.steps.find((step) => String(step.uses).startsWith("actions/checkout@"));
+    expect(checkout.with.ref).toBe("${{ github.event.repository.default_branch }}");
     const script = sync.steps.at(-1).run;
     expect(script).toContain('node tools/release.js sync "$VERSION"');
     expect(script).toContain("::error::the sync would change more than CHANGELOG.md");
+    // Only the exact fragments the release consumed, only where main's copy is identical.
+    expect(script).toContain('git diff --diff-filter=D --name-only "$SHA^1" "$SHA" -- changelog.d/');
+    expect(script).toContain('"$(git rev-parse "$SHA^1:$file")" = "$(git hash-object -- "$file")"');
+    // Through main's review and checks, never merged directly.
+    expect(script).toContain('gh pr merge "$url" --auto --squash');
+    expect(script).not.toMatch(/gh pr merge "\$url" --squash/);
   });
 });

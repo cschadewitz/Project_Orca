@@ -405,9 +405,20 @@ unsigned CI output and its notes must say not to install that output.
 
 A patch ships what was chosen for it, not whatever `main` holds. `main` is where all work
 merges, including the next minor's; each minor then gets a long-lived, protected **line
-branch** `release/X.Y`, and every patch of it (`X.Y.Z`, Z > 0, and its candidates) is cut from
-that branch. A new minor or major (`X.Y.0` and its candidates) is still cut from `main`.
-`node tools/release.js line <version>` prints which branch a version comes from.
+branch** `release/X.Y`, and every patch of it is cut from that branch.
+
+**One lane per version** (`tools/release-lane.js`, used by prepare, publish and signing alike):
+
+| Version | Only lane |
+| --- | --- |
+| `X.Y.0` and its candidates (`X.Y.0-rc.N`) | `main` |
+| `X.Y.Z`, Z > 0, and its candidates | `release/X.Y`, and only while it is protected |
+
+A patch commit on `main`, or a `.0` commit on a line, is refused. A line counts as protected
+when the rules API reports, for that branch, a pull request requirement, no force pushes, no
+deletion, and both `check (node 24)` and `release line check` as required checks; prepare,
+publish and signing all check that before they open, build or sign anything from a line.
+Dry runs are unchanged: they rehearse any ref and never tag, sign or feed.
 
 | Branch | Holds | Who merges into it |
 | --- | --- | --- |
@@ -421,42 +432,60 @@ fix for code that only exists on the line goes straight to the line the same way
 
 **What keeps minor work off a line.** Two gates, both automatic:
 
-- **Release line guard** (`release-line-guard.yml`, `tools/release-line-guard.js`): on every
-  pull request into `release/X.Y` it refuses one that names no issue, names an issue outside a
-  `X.Y.Z` patch milestone, or names, or itself carries, a `release:minor` or `release:major`
-  label. The line's own release pull request (label `release`, head `release/vX.Y.Z`) passes.
-  It runs as `pull_request_target`, so its rules always come from `main`, and it runs none of
-  the pull request's code.
+- **Release line guard** (`release-line-guard.yml`, `tools/release-line-guard.js`), required
+  on every pull request into `release/X.Y`. An ordinary pull request must name at least one
+  issue, every issue in an `X.Y.Z` patch milestone of that line, none labelled
+  `release:minor` or `release:major` (nor the pull request itself). A pull request with the
+  `release` label or a `release/vX.Y.Z` head is instead checked as a release preparation: both
+  label and head, from this repository, a version whose lane is this line, and a diff of only
+  the `package.json` version, `CHANGELOG.md`, and deleted fragments. It runs as
+  `pull_request_target`, so its rules always come from `main`; it reads the pull request
+  through the API and runs none of its code.
 - **Release (prepare)** refuses a patch milestone that holds a `release:minor` or
   `release:major` issue, and one whose title names a version the labels do not produce.
 
 **Cutting a patch.** Close its milestone (title `X.Y.Z`, or a `Release: vX.Y.Z` pin). Prepare
 checks out `release/X.Y` (creating it from the newest `vX.Y.*` final tag if it does not exist
-yet), renders the fragments on that branch only, and opens the release pull request against
-it. Merging that pull request runs **Release (publish)** exactly as for `main`, and a final
-goes through the same draft, signing, acceptance, upgrade check and publish-final chain
-([Publishing a final](#publishing-a-final)). The trust checks accept a commit on the line:
+yet, then requiring it to be protected), renders the fragments on that branch only, and opens
+the release pull request against it. Merging that pull request runs **Release (publish)**,
+which first checks, with `main`'s copy of `release-lane.js`:
 
-- **Release (publish)** releases a commit that is on `main` or on `release/X.Y` for its own
-  version's `X.Y`, still dispatched with `main`'s workflow.
-- **Windows signed (spike)** compares the source tree with the head of `release/X.Y` instead of
-  `main` when the source is on that line. Its workflow, signing identity and environment are
-  `main`'s as before. A line that moved past the release commit outside notes, docs and tests
-  refuses it, exactly as `main` moving does.
+- the commit is on its version's lane (and the line is protected);
+- for a merged release pull request: head `release/vV` from this repository into V's lane,
+  and, on a line, the release line check passed on the exact head that was reviewed and the
+  merge commit's tree equals that head's tree (keep the branch up to date before merging).
+
+A final then goes through the same draft, signing, acceptance, upgrade check and publish-final
+chain ([Publishing a final](#publishing-a-final)). **Windows signed (spike)** compares a patch's
+source with the head of its protected line instead of `main`; its workflow, signing identity
+and environment are `main`'s as before. A line that moved past the release commit outside
+notes, docs and tests refuses it, exactly as `main` moving does.
 
 **Back on `main`.** A line's release pull request never merges into `main`, so Release (publish)
-then opens a pull request on `main` that adds the release's CHANGELOG section and deletes the
-`changelog.d/` fragments the line released (`node tools/release.js sync`), and merges it. It
-refuses to touch anything else. `main`'s `package.json` keeps the last minor it released, so
-the next minor is still computed from it.
+then opens a pull request on `main` (`changelog: record vX.Y.Z`) that adds the release's
+CHANGELOG section (`node tools/release.js sync`) and deletes the fragments the release commit
+consumed, each only where `main`'s copy is byte-identical to the released one; a differing copy
+is kept and named. It refuses to touch anything else, goes through `main`'s normal review and
+checks with auto-merge requested, and a rerun reuses an open sync pull request holding the same
+change and stops on a different one. `main`'s `package.json` keeps the last minor it released,
+so the next minor is still computed from it.
 
 **Which workflow copy runs.** Merging a line's release pull request runs the line branch's
-own `release-publish.yml` (a `pull_request` event uses the base branch's files); everything
-dispatched afterwards (signing, attach, acceptance, upgrade check, publish-final, feed) runs
-`main`'s. A line therefore needs these workflows from when it was cut or later: a line cut
-before release lines existed gets them in one pull request that copies them from `main`, and a
-fix to `release-publish.yml` reaches an existing line the same way, or by dispatching **Release
-(publish)** from `main` with the line commit as `ref`.
+own `release-publish.yml` (a `pull_request` event uses the base branch's files); its lane checks
+read `main`'s `release-lane.js` regardless. Everything dispatched afterwards (signing, attach,
+acceptance, upgrade check, publish-final, feed) runs `main`'s workflows.
+
+**Starting a line that predates this, in order** (0.7 was the first; no step bypasses a
+required check):
+
+1. Merge release-line support to `main`, so the guard and `release-lane.js` exist there.
+2. Create `release/X.Y` at the commit the line should start from, and turn on the ruleset
+   below. From here nothing reaches the line without CI and the guard.
+3. Open a pull request into the line that copies the release-line tooling from `main` (it
+   names a tracking issue in an `X.Y.Z` milestone, so the guard passes it). Its CI runs from
+   the pull request's own `ci.yml`, which includes the line.
+4. Rehearse with a **Release (publish)** dry run of the release pull request's head, then
+   retarget that pull request to the line, update its branch, and merge it.
 
 **Not yet covered.** A minor's candidates are still cut from `main`; cutting `release/X.Y` at
 the first candidate, automatic backport pull requests from a label, and publishing a patch of
@@ -466,12 +495,12 @@ the 0.8 line on.
 
 **What the repository needs once.** A ruleset on `release/0.*` (and `release/1.*` when there is
 one), not on the `release/vX.Y.Z` pull request heads: pull requests only, no force pushes or
-deletion, and the `check (node 24)` and `release line check` status checks required. And a
-GitHub App with contents and pull-requests write, installed on this repository, with its id
-in the variable `ORCA_RELEASE_APP_ID` and its private key in the secret
-`ORCA_RELEASE_APP_PRIVATE_KEY`: prepare then opens release pull requests with it, so CI and
-the guard run on them. Without it a line's release pull request gets no checks, and a line
-that requires them cannot merge it.
+deletion, the `check (node 24)` and `release line check` status checks required, and branches
+kept up to date before merging. And a GitHub App with contents and pull-requests write,
+installed on this repository, with its id in the variable `ORCA_RELEASE_APP_ID` and its private
+key in the secret `ORCA_RELEASE_APP_PRIVATE_KEY`: prepare opens release pull requests, and
+the sync its notes pull requests, with it, so CI and the guard run on them. Without it those
+pull requests get no checks, and a line that requires them cannot merge a release.
 
 ## Changelog fragments
 

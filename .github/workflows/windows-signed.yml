@@ -43,10 +43,10 @@
 # notes (CHANGELOG.md, changelog.d), docs, workflow files, tools/test/*.test.js and the root
 # package.json version, which must be plain semver. That is exactly what a release-prepare
 # commit changes, so the candidate is built and signed from reviewed code and configuration.
-# The reference is the dispatching `main` commit, or, for a commit on the protected release
-# line branch of its own version (`release/X.Y` for X.Y.Z; docs/RELEASING.md "Release
-# lines"), that branch's head: a patch carries only what was merged to its line, never what
-# `main` gained for the next minor. The workflow that runs is always `main`'s, and the job
+# The reference comes from the version's one lane (tools/release-lane.js; docs/RELEASING.md
+# "Release lines"): the dispatching `main` commit for a new minor or major, and for a patch
+# the head of its protected release line `release/X.Y`, which the source must be on. A patch
+# carries only what was merged to its line, never what `main` gained for the next minor. The workflow that runs is always `main`'s, and the job
 # summary shows the protected environment's reviewer which commit and version they are
 # approving.
 #
@@ -101,6 +101,8 @@ jobs:
         shell: bash
         env:
           REQUESTED: ${{ inputs.source_sha }}
+          # Read-only: the rules API, to check a release line's protection.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source="${REQUESTED:-$GITHUB_SHA}"
@@ -118,15 +120,19 @@ jobs:
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
             echo "::error::$source has version '${version//[^0-9A-Za-z.+-]/?}', which is not a plain semver"; exit 1
           fi
-          # The reviewed reference: main, or the head of the version's own release line when
-          # the source is on it. Only `release/X.Y` for this version's X.Y is considered.
+          # The reviewed reference comes from the one lane this version may be signed from
+          # (tools/release-lane.js, main's copy): the dispatching main commit for a new minor
+          # or major, the head of the protected line `release/X.Y` for a patch. A patch's
+          # source must be on that line, and the line must be protected.
           reference="$GITHUB_SHA"
           reference_name="main"
-          line="release/$(cut -d. -f1-2 <<<"${version%%-*}")"
-          if line_head=$(git rev-parse -q --verify "refs/remotes/origin/$line^{commit}") &&
-            git merge-base --is-ancestor "$source" "$line_head"; then
-            reference="$line_head"
-            reference_name="$line"
+          lane=$(node tools/release-lane.js lane "$version")
+          if [ "$lane" != main ]; then
+            if ! node tools/release-lane.js verify "$source" "$version" > "$RUNNER_TEMP/lane"; then
+              cat "$RUNNER_TEMP/lane"
+              exit 1
+            fi
+            read -r reference_name reference < "$RUNNER_TEMP/lane"
           fi
           # The source tree may differ from the reference only where nothing the token-holding
           # sign job reads or runs can be affected: release notes, docs, workflow files (the
