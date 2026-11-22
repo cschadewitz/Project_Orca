@@ -7,12 +7,20 @@
  * Needs `pnpm run build` (it runs the compiled CLI); CI builds before it tests.
  */
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CLIENT_PROTOCOL, HELLO_METHOD, HelloResultSchema, PROTOCOL_VERSION } from "@orca/protocol";
-import { loopbackSshd, rpc, startTwoDaemons, type LoopbackSshd, type TwoDaemons } from "@orca/testing/two-daemons";
+import {
+  loopbackSshd,
+  rpc,
+  startTestDaemon,
+  startTwoDaemons,
+  type LoopbackSshd,
+  type TwoDaemons,
+} from "@orca/testing/two-daemons";
 import { repoRoot } from "@orca/testing/child-bundle";
 
 let pair: TwoDaemons;
@@ -78,7 +86,6 @@ describe("two daemons", () => {
   });
 
   it("stops one daemon without the other noticing", async () => {
-    const { startTestDaemon } = await import("@orca/testing/two-daemons");
     const third = await startTestDaemon({ name: "c" });
     await third.close();
     await expect(third.call(HELLO_METHOD, hello("gone"))).rejects.toThrow();
@@ -143,3 +150,67 @@ describe("a daemon behind a loopback sshd", () => {
     expect(allowed.stderr).not.toContain("forwarding failed");
   });
 });
+
+describe("the fixture's own lifecycle", () => {
+  let scripts: string;
+  beforeAll(async () => {
+    scripts = await mkdtemp(join(tmpdir(), "orca-fixture-scripts-"));
+  });
+  afterAll(async () => {
+    await rm(scripts, { recursive: true, force: true });
+  });
+  const script = async (name: string, body: string) => {
+    const path = join(scripts, name);
+    await writeFile(path, body);
+    return path;
+  };
+  /** Nothing of a daemon called `name` is left in the temp directory. */
+  const leftovers = async (name: string) =>
+    (await readdir(tmpdir())).filter((entry) => entry.startsWith(`orca-daemon-${name}-`));
+
+  it("fails a daemon that cannot spawn, without an unhandled error, and removes its directories", async () => {
+    const name = `nospawn-${randomUUID()}`;
+    await expect(
+      startTestDaemon({ name, executable: join(scripts, "no-such-node"), entry: CLI_ENTRY_OR_SCRIPT() }),
+    ).rejects.toThrow(/did not start: spawn .*ENOENT/);
+    expect(await leftovers(name)).toEqual([]);
+  });
+
+  it("fails a daemon that exits before it is ready, with its output", async () => {
+    const name = `early-${randomUUID()}`;
+    const entry = await script("early.mjs", 'console.error("config is broken"); process.exit(3);\n');
+    await expect(startTestDaemon({ name, entry })).rejects.toThrow(
+      /exited before readiness \(code 3[\s\S]*config is broken/,
+    );
+    expect(await leftovers(name)).toEqual([]);
+  });
+
+  it("stops a daemon that ignores SIGTERM within its bound, and removes its directories", async () => {
+    const name = `stubborn-${randomUUID()}`;
+    const entry = await script(
+      "stubborn.mjs",
+      [
+        'import { writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        'const dir = process.argv[process.argv.indexOf("--cwd") + 1];',
+        'const token = join(dir, "token");',
+        'writeFileSync(token, "orca1.fake\\n");',
+        'process.on("SIGTERM", () => {});',
+        'console.log("orca daemon test listening on http://127.0.0.1:9 (protocol 2.2)");',
+        "console.log(`authentication: token; local token file: ${token}`);",
+        "setInterval(() => {}, 1000);",
+        "",
+      ].join("\n"),
+    );
+    const daemon = await startTestDaemon({ name, entry, stopMs: 200 });
+    expect(daemon.token).toBe("orca1.fake");
+    const started = Date.now();
+    await daemon.close();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(await leftovers(name)).toEqual([]);
+    await daemon.close();
+  });
+});
+
+/** Any existing file will do for a spawn that fails before it reads its script. */
+const CLI_ENTRY_OR_SCRIPT = () => join(repoRoot, "package.json");

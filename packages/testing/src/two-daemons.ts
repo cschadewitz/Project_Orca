@@ -44,6 +44,12 @@ export interface TestDaemonOptions {
   config?: string;
   /** Extra environment for the daemon process, on top of the minimal one. */
   env?: Readonly<Record<string, string>>;
+  /** The script to run instead of the compiled CLI; for testing the fixture's own failure paths. */
+  entry?: string;
+  /** The executable that runs `entry`. Defaults to this Node. */
+  executable?: string;
+  /** How long `close` waits after SIGTERM, and again after SIGKILL. Defaults to 5 s. */
+  stopMs?: number;
 }
 
 /** One JSON-RPC answer, as the daemon sent it. */
@@ -73,7 +79,8 @@ export interface TwoDaemons {
 
 /** Start one daemon and wait until it listens and has written its token. */
 export async function startTestDaemon(options: TestDaemonOptions): Promise<TestDaemon> {
-  if (!existsSync(CLI_ENTRY)) throw new Error(`${CLI_ENTRY} is missing; run \`pnpm run build\` first`);
+  const entry = options.entry ?? CLI_ENTRY;
+  if (!existsSync(entry)) throw new Error(`${entry} is missing; run \`pnpm run build\` first`);
   const root = await mkdtemp(join(tmpdir(), `orca-daemon-${options.name}-`));
   const dir = join(root, "store");
   const home = join(root, "home");
@@ -81,31 +88,28 @@ export async function startTestDaemon(options: TestDaemonOptions): Promise<TestD
   await mkdir(home);
   await writeFile(join(dir, "orca.config.yaml"), options.config ?? "workflows: []\ntemplates: []\n");
 
-  const child = spawn(process.execPath, [CLI_ENTRY, "serve", "--port", "0", "--cwd", dir, ...(options.args ?? [])], {
-    cwd: dir,
-    env: { PATH: process.env.PATH ?? "", LANG: "C.UTF-8", HOME: home, ...options.env },
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  const child = spawn(
+    options.executable ?? process.execPath,
+    [entry, "serve", "--port", "0", "--cwd", dir, ...(options.args ?? [])],
+    {
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? "", LANG: "C.UTF-8", HOME: home, ...options.env },
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+  // A spawn failure (a missing executable) arrives as `error`, never as `exit`; recorded here
+  // so it is never unhandled, and `ready` fails on it at once.
+  const failure = failureOf(child);
   const output: string[] = [];
-  let closed = false;
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  const close = async () => {
-    if (!closed) {
-      closed = true;
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGTERM");
-        const stopped = await Promise.race([exited.then(() => true), delay(5_000).then(() => false)]);
-        if (!stopped) {
-          child.kill("SIGKILL");
-          await exited;
-        }
-      }
-    }
-    await rm(root, { recursive: true, force: true });
-  };
+  let closing: Promise<void> | undefined;
+  const close = () =>
+    (closing ??= (async () => {
+      await stop(child, options.stopMs);
+      await rm(root, { recursive: true, force: true });
+    })());
 
   try {
-    const { url, tokenFile } = await ready(child, output, options.name);
+    const { url, tokenFile } = await ready(child, failure, output, options.name);
     const token = (await readFile(tokenFile, "utf8")).trim();
     const daemon: TestDaemon = {
       name: options.name,
@@ -161,10 +165,12 @@ export async function rpc(url: string, method: string, params: unknown, token: s
 
 async function ready(
   child: ChildProcessWithoutNullStreams,
+  failure: { current: Error | undefined },
   output: string[],
   name: string,
 ): Promise<{ url: string; tokenFile: string }> {
   return new Promise((resolve, reject) => {
+    if (failure.current) return reject(failure.current);
     let url: string | undefined;
     let buffered = "";
     const timer = setTimeout(() => reject(new Error(`not ready within ${READY_MS} ms`)), READY_MS);
@@ -189,6 +195,7 @@ async function ready(
           done(new Error(`daemon ${name} is not in token mode: ${line}`));
       }
     });
+    child.once("error", (error) => done(error));
     child.once("exit", (code, signal) => done(new Error(`exited before readiness (code ${code}, signal ${signal})`)));
   });
 }
@@ -237,7 +244,7 @@ export async function loopbackSshd(): Promise<LoopbackSshd | undefined> {
   const root = await mkdtemp(join(tmpdir(), "orca-sshd-"));
   const processes: ChildProcessWithoutNullStreams[] = [];
   const close = async () => {
-    await Promise.all(processes.map(stop));
+    await Promise.all(processes.map((child) => stop(child)));
     await rm(root, { recursive: true, force: true });
   };
   try {
@@ -397,14 +404,18 @@ function failureOf(child: ChildProcessWithoutNullStreams): { current: Error | un
   return failure;
 }
 
-/** SIGTERM, then SIGKILL if the process has not exited within `SSH_STEP_MS`. */
-async function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
+/**
+ * SIGTERM, then SIGKILL if the process has not exited within `within`, then at most `within`
+ * again: shutdown is bounded even for a process that ignores both. A child that never
+ * spawned (no pid) has nothing to stop.
+ */
+async function stop(child: ChildProcessWithoutNullStreams, within = SSH_STEP_MS): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
   const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
   child.kill("SIGTERM");
-  if (await Promise.race([exited.then(() => true), delay(SSH_STEP_MS).then(() => false)])) return;
+  if (await Promise.race([exited.then(() => true), delay(within).then(() => false)])) return;
   child.kill("SIGKILL");
-  await Promise.race([exited, delay(SSH_STEP_MS)]);
+  await Promise.race([exited, delay(within)]);
 }
 
 /** Run a command to completion, killing it if it outlives `SSH_STEP_MS`. */
