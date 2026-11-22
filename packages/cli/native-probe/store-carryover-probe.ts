@@ -5,9 +5,11 @@
  *
  * Bundled (esbuild, `__ORCA_FIRST_RUN_BUNDLED__`) beside the packaged first-run boundary, as the
  * desktop app's daemon is. It builds a store the way the app does (private directories from the
- * boundary, files inheriting their owner-only DACL), gives one source file an explicit ACE for
- * Everyone, carries the store forward with `windowsPrivateCopy`, and then reads every published
- * entry's security descriptor back with PowerShell:
+ * boundary, files inheriting their owner-only DACL) and gives one source file an explicit ACE for
+ * Everyone. Carrying it forward must be refused on Windows (UNDURABLE: no verified barrier orders
+ * the backup before the marker yet, #910) with nothing written. The private-copy path itself is
+ * then exercised directly: the backup is staged and published with `windowsPrivateCopy` (no
+ * marker), and every published entry's security descriptor is read back with PowerShell:
  *
  * - owner is this user, and every ACE names only this user or SYSTEM;
  * - every copied file carries ONLY inherited ACEs: its DACL was assigned by
@@ -15,14 +17,21 @@
  *   the source (the Everyone ACE must not appear) or set afterwards;
  * - every directory was created by the boundary with a protected owner-only DACL.
  *
- * Then a second store whose existing `format-backups` grants Everyone must be refused
- * (BACKUPS_UNSAFE) with no marker written. Prints one JSON result; exits non-zero on failure.
+ * Then staging into a second store whose existing `format-backups` grants Everyone must be
+ * refused (BACKUPS_UNSAFE). Prints one JSON result; exits non-zero on failure.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, lstatSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { windowsDirectory, windowsPrivateChild } from "@orca/protocol/first-run-fence";
-import { carryStoreForward, readStoreFormat, STORE_FORMAT_BACKUP_DIR, STORE_FORMAT_EPOCH } from "@orca/store";
+import {
+  CarryoverRefused,
+  carryStoreForward,
+  readStoreFormat,
+  stageCarryover,
+  STORE_FORMAT_BACKUP_DIR,
+  STORE_FORMAT_EPOCH,
+} from "@orca/store";
 import { windowsPrivateCopy } from "../src/store-privacy.js";
 
 const SYSTEM = "S-1-5-18";
@@ -164,11 +173,17 @@ const safely = (name: string) => {
 const store = safely("orca-carryover-probe");
 // A source file readable by Everyone: its copy must not carry that ACE.
 grantEveryone(join(store, "runs", "run_old.jsonl"));
-const outcome = await carryStoreForward(store, { appVersion: "0.0.0-probe", privacy: windowsPrivateCopy });
-check(outcome.status === "carried", `carryover outcome ${JSON.stringify(outcome)}`);
-check((await readStoreFormat(store))?.epoch === STORE_FORMAT_EPOCH, "marker not stamped");
-const backup = "backup" in outcome ? outcome.backup : "";
 const root = join(store, STORE_FORMAT_BACKUP_DIR);
+// Fails closed on Windows before anything is copied, whatever privacy backend is offered.
+const undurable = await carryStoreForward(store, { appVersion: "0.0.0-probe", privacy: windowsPrivateCopy }).then(
+  () => undefined,
+  (error: { details?: { reason?: string } }) => error.details?.reason,
+);
+check(undurable === "UNDURABLE", `carry-forward on Windows: ${undurable ?? "carried"}`);
+check((await readStoreFormat(store)) === undefined, "carry-forward on Windows: marker written");
+check(!existsSync(root), "carry-forward on Windows: backups folder created");
+const staged = await stageCarryover(store, "unmarked", STORE_FORMAT_EPOCH, new Date(), { privacy: windowsPrivateCopy });
+const backup = await staged.commit();
 const entries = descriptors([root, backup, ...walk(backup)]);
 for (const entry of entries) {
   const where = entry.path.slice(store.length);
@@ -195,12 +210,17 @@ for (const entry of entries) {
 const shared = safely("orca-carryover-probe-shared");
 mkdirSync(join(shared, STORE_FORMAT_BACKUP_DIR));
 grantEveryone(join(shared, STORE_FORMAT_BACKUP_DIR));
-const refusal = await carryStoreForward(shared, { appVersion: "0.0.0-probe", privacy: windowsPrivateCopy }).then(
+const refusal = await stageCarryover(shared, "unmarked", STORE_FORMAT_EPOCH, new Date(), {
+  privacy: windowsPrivateCopy,
+}).then(
   () => undefined,
-  (error: { details?: { reason?: string } }) => error.details?.reason,
+  (error: unknown) => (error instanceof CarryoverRefused ? error.failure : String(error)),
 );
-check(refusal === "BACKUPS_UNSAFE", `shared backups folder: ${refusal ?? "carried"}`);
-check((await readStoreFormat(shared)) === undefined, "shared backups folder: marker written");
+check(refusal === "BACKUPS_UNSAFE", `shared backups folder: ${refusal ?? "staged"}`);
+check(
+  readdirSync(join(shared, STORE_FORMAT_BACKUP_DIR)).length === 0,
+  "shared backups folder: something was copied into it",
+);
 
 if (elevated) failures.push("probe ran elevated; it must run as a standard user");
 process.stdout.write(JSON.stringify({ user: me, elevated, checked: entries.length, failures }, null, 2) + "\n");

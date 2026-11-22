@@ -1,7 +1,7 @@
 /** Automatic store carryover for the desktop app's bundled daemon after an update (#897). */
 import type { CarryoverAuthority } from "@orca/store";
 import type { FirstRunWriterHold } from "@orca/protocol/first-run-fence";
-import { claimUpdateHandoff, removeUpdateHandoff } from "@orca/protocol/update-handoff";
+import { claimUpdateHandoff, readUpdateHandoff, removeUpdateHandoff } from "@orca/protocol/update-handoff";
 import { storePrivacy } from "./store-privacy.js";
 
 /**
@@ -21,7 +21,14 @@ export function desktopCarryover(
     fence: hold,
     ...(privacy ? { privacy } : {}),
     // Done or refused: the handoff is spent either way. An interrupted carryover keeps it, bound
-    // to this writer's claim, so the next start retries under the same proof.
-    settle: () => removeUpdateHandoff(hold.storeDir),
+    // to this writer's claim, so the next start retries under the same proof. Only while the same
+    // fence still holds and the record is exactly the one this writer claimed: once that proof is
+    // gone, this process changes nothing in the store, the record included.
+    settle: () => {
+      if (!hold.check()) return;
+      const current = readUpdateHandoff(hold.storeDir);
+      if (JSON.stringify(current) !== JSON.stringify(claimed.handoff) || !hold.check()) return;
+      removeUpdateHandoff(hold.storeDir);
+    },
   };
 }

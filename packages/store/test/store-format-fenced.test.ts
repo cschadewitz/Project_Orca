@@ -206,11 +206,11 @@ describe("verified private copies (#897)", () => {
     return { backend, created, verified };
   };
 
-  it("carries forward on Windows through a backend that creates and verifies every copy", async () => {
+  it("carries forward through a backend that creates and verifies every copy", async () => {
     const dir = await store();
     await legacy(dir);
     const rig = recording();
-    const outcome = await carryStoreForward(dir, { appVersion: "0.8.0", platform: "win32", privacy: rig.backend });
+    const outcome = await carryStoreForward(dir, { appVersion: "0.8.0", privacy: rig.backend });
     expect(outcome.status).toBe("carried");
     expect(rig.created[0]).toBe(join(dir, STORE_FORMAT_BACKUP_DIR));
     // Both the backup and the throwaway read copy: each private directory and file verified.
@@ -225,9 +225,9 @@ describe("verified private copies (#897)", () => {
     await legacy(dir);
     const before = await contents(dir);
     const rig = recording((path, kind) => kind === "file" && path.endsWith("payload"));
-    await expect(
-      carryStoreForward(dir, { appVersion: "0.8.0", platform: "win32", privacy: rig.backend }),
-    ).rejects.toMatchObject({ reason: "BACKUPS_UNSAFE" });
+    await expect(carryStoreForward(dir, { appVersion: "0.8.0", privacy: rig.backend })).rejects.toMatchObject({
+      reason: "BACKUPS_UNSAFE",
+    });
     expect(await readStoreFormat(dir)).toBeUndefined();
     expect(await contents(dir)).toEqual(before);
     expect(await backups(dir)).toEqual([]);
@@ -238,9 +238,9 @@ describe("verified private copies (#897)", () => {
     await legacy(dir);
     await mkdir(join(dir, STORE_FORMAT_BACKUP_DIR), { mode: 0o700 });
     const backend: PrivateCopyBackend = { ...posixPrivateCopy, privateRoot: () => Promise.resolve(false) };
-    await expect(
-      carryStoreForward(dir, { appVersion: "0.8.0", platform: "win32", privacy: backend }),
-    ).rejects.toMatchObject({ reason: "BACKUPS_UNSAFE" });
+    await expect(carryStoreForward(dir, { appVersion: "0.8.0", privacy: backend })).rejects.toMatchObject({
+      reason: "BACKUPS_UNSAFE",
+    });
     expect(await readStoreFormat(dir)).toBeUndefined();
   });
 });

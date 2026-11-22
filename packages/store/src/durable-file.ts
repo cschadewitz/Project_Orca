@@ -3,9 +3,9 @@
  * point, but never leave a later step on disk without the earlier ones it depends on.
  *
  * POSIX: file data is fsynced before close, and a directory is fsynced after an entry in it is
- * created or renamed. Windows cannot open a directory for flushing from Node; there a file's
- * data and metadata are flushed (FlushFileBuffers) before and after a rename, and NTFS journals
- * the directory entries themselves.
+ * created or renamed. Windows cannot open a directory for flushing from Node: `syncDirectory` is
+ * a no-op there and orders nothing, so format carryover, whose marker must not outlive its
+ * backup, refuses on Windows (UNDURABLE) until a verified barrier exists (#910).
  */
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";

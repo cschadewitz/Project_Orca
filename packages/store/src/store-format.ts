@@ -40,7 +40,9 @@ import {
 } from "./store-format-carryover.js";
 
 export {
+  CarryoverRefused,
   posixPrivateCopy,
+  stageCarryover,
   STORE_FORMAT_BACKUP_DIR,
   STORE_FORMAT_BACKUP_MANIFEST,
   STORE_FORMAT_BACKUP_RETENTION,
@@ -78,7 +80,8 @@ export type StoreFormatReason =
   | "UNREADABLE"
   | "BACKUPS_UNSAFE"
   | "FENCE_LOST"
-  | "APP_OWNED";
+  | "APP_OWNED"
+  | "UNDURABLE";
 export class StoreFormatError extends OrcaError {
   override readonly name = "StoreFormatError";
   constructor(
@@ -332,10 +335,7 @@ export interface CarryForwardOptions {
    * check and just before the marker; once it no longer holds, nothing is carried (FENCE_LOST).
    */
   fence?: StoreWriteFence;
-  /**
-   * Where private copies may go. Required on Windows, where only a backend that verifies the
-   * copies' ACLs may write them; without one the command refuses there (BACKUPS_UNSAFE).
-   */
+  /** Where private copies may go; defaults to the POSIX owner-only backups directory. */
   privacy?: PrivateCopyBackend;
   /** Injected for tests; defaults to this process's platform. */
   platform?: NodeJS.Platform;
@@ -370,15 +370,17 @@ async function carryLocked(
   if (marker?.epoch === current) return { status: "current", epoch: current };
   if (!marker && !(await holdsData(storeDir)))
     throw new StoreFormatError("UNREADABLE", `${storeDir} holds no ORCA store to carry forward.`, storeDir);
-  // The copies hold the execution key and private records. On Windows only a backend that
-  // verifies each copy's ACL may write them (#897).
-  const privacy = options.privacy ?? posixPrivateCopy;
-  if ((options.platform ?? process.platform) === "win32" && !options.privacy)
+  // The marker may only become durable after the backup it names. POSIX orders the two with a
+  // directory fsync after each rename; Windows has no barrier ORCA has verified for a directory
+  // entry (a rename), so a power loss could keep the marker and lose the backup. Fail closed
+  // there until one is (#910): nothing is copied and the prior format stays in charge.
+  if ((options.platform ?? process.platform) === "win32")
     throw new StoreFormatError(
-      "BACKUPS_UNSAFE",
-      "ORCA cannot verify here that a backup keeps the store's private records as private as the originals, so nothing was copied. Nothing was changed.",
+      "UNDURABLE",
+      "On Windows this ORCA cannot yet guarantee that the backup reaches the disk before the store's format changes, so the store was not carried forward. Nothing was changed. Keep using the ORCA version that last wrote this store.",
       storeDir,
     );
+  const privacy = options.privacy ?? posixPrivateCopy;
   const fence = () => {
     if (options.fence && !options.fence.check()) throw fenceLost(storeDir);
   };

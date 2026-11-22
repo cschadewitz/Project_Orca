@@ -570,23 +570,31 @@ keeping the newest two and always the one the marker names, plus the scratch fol
 interrupted run. Anything else in `format-backups/` is left alone. The folder must be a
 private directory owned by the user running ORCA (`BACKUPS_UNSAFE` otherwise).
 
-The copy, its manifest, the published backup and then the marker are each flushed to disk
-before the next step, so a crash at any point leaves the prior format in charge with at most an
-unpublished scratch copy (removed next time) or an extra complete backup. The desktop app's own
+On Linux and macOS the copy, its manifest, the published backup and then the marker are each
+flushed to disk (files, then the directory holding each new entry) before the next step, so the
+marker never becomes durable before the backup it names. The tests interrupt the sequence at
+each step; that shows a stopped process leaves the prior format in charge with at most an
+unpublished scratch copy (removed next time) or an extra complete backup, not that every disk
+honours the flushes on power loss. The desktop app's own
 workspaces are refused (`APP_OWNED`): only the daemon the app launches may write them, and this
 command cannot hold that daemon's write fence. The app carries those forward itself, below.
 
-On Windows the copies hold the execution key and private records, and anyone with the
-default "bypass traverse checking" right can reach a file by its path whatever its parent's
-ACL. So every directory of the backup and of the throwaway read copy is created with an
-owner-only protected DACL by the packaged first-run boundary, and every directory and file
-copied is verified owner-only and owned by the user running ORCA before anything is published.
-Files are created new in those directories (never with a copy-file call that could carry the
-source's security), so their DACL is assigned from the owner-only parent when they are created;
-a Windows CI job checks this on NTFS as a standard user.
-Where that boundary is not available, or a copy cannot be verified, `carry-forward` refuses
-(`BACKUPS_UNSAFE`) and nothing changes. Marker adoption of 0.7 stores, which copies nothing,
-works on Windows as everywhere else.
+**Windows refuses format carryover for now (`UNDURABLE`), automatic or explicit, and copies
+nothing.** Node cannot flush a directory there, and ORCA has no verified barrier yet that makes
+the backup's rename reach the disk before the marker's, so a power loss could keep the new
+marker and lose the backup (#910). Until that lands, the store format must not change for
+Windows. Marker adoption of 0.7 stores, which copies nothing, works on Windows as everywhere
+else.
+
+The private-copy path for Windows is in place for when it does: the copies hold the execution
+key and private records, and anyone with the default "bypass traverse checking" right can reach
+a file by its path whatever its parent's ACL. So every directory of the backup and of the
+throwaway read copy is created with an owner-only protected DACL by the packaged first-run
+boundary, and every directory and file copied is verified owner-only and owned by the user
+running ORCA before anything is published (`BACKUPS_UNSAFE` otherwise). Files are created new
+in those directories (never with a copy-file call that could carry the source's security), so
+their DACL is assigned from the owner-only parent when they are created; a Windows CI job
+checks this on NTFS as a standard user.
 
 The supported window is this release's format and the one before it, so a store carries
 forward across one format change at a time. Closed update validation (`serve --read-only
@@ -614,13 +622,16 @@ store while it does (#897):
    is written. If it no longer holds, nothing is carried (`FENCE_LOST`) and the prior format
    stays in charge.
 
-A carryover that finishes or is refused spends the record. One interrupted by a crash is retried
+A carryover that finishes or is refused spends the record, but only while the daemon still
+holds the fence and the record is exactly the one it claimed; once that proof is gone it
+changes nothing in the store, the record included. One interrupted by a crash is retried
 by the next start under the same proof (the daemon moves the record onto its own claim before it
 copies), at most three times. Without the record, or with any part of the proof missing, startup
 keeps refusing (`CARRYOVER_REQUIRED`) exactly as before, and `orca store carry-forward` remains
-the way through. This covers app-owned workspaces updated by the Windows in-app updater. The
-Linux `.deb` has no in-app updater and no `orca` command, so the store format must not change
-for it until it has a supported carryover route (#905).
+the way through. This covers app-owned workspaces updated by the Windows in-app updater, where
+the carryover itself is refused (`UNDURABLE`, above) until #910 lands. The Linux `.deb` has no
+in-app updater and no `orca` command, so the store format must not change for it until it has a
+supported carryover route (#905).
 
 The backup covers the store directory only: not the config file, the permission sidecar or
 `auth/` beside the config. Agents cannot read `format-backups/`, which holds copies of the

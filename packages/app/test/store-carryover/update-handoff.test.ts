@@ -8,7 +8,7 @@ import { mkdir, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { enterFirstRunWriter } from "@orca/protocol/first-run-fence";
-import { readUpdateHandoff, UPDATE_HANDOFF_FILE } from "@orca/protocol/update-handoff";
+import { readUpdateHandoff, UPDATE_HANDOFF_FILE, writeUpdateHandoff } from "@orca/protocol/update-handoff";
 import { enterStoreFormat, readStoreFormat, STORE_FORMAT_EPOCH, STORE_UPDATE_HANDOFF_FILE } from "@orca/store";
 import { desktopCarryover } from "../../../cli/src/desktop-carryover.js";
 import { handOffStoreForUpdate, withdrawUpdateHandoff } from "../../src/main/first-run/update-handoff.js";
@@ -94,6 +94,36 @@ it("does not write the marker when the real fence is lost at commit time", async
   expect(checks).toBe(5);
   expect(await readStoreFormat(store)).toBeUndefined();
   expect((await readdir(store)).filter((name) => name.startsWith("store-format.json"))).toEqual([]);
+  // The refusal's cleanup runs after the fence was lost: it must not touch the store either.
+  expect(readUpdateHandoff(store)).toMatchObject({ claimHash: hold!.claimHash, attempts: 1 });
+  await authority.settle("refused");
+  expect(readUpdateHandoff(store)).toMatchObject({ claimHash: hold!.claimHash, attempts: 1 });
+}, 30000);
+
+it("settles only the exact handoff it claimed, and only while its fence holds", async () => {
+  const path = await selected();
+  launch(path);
+  const store = join(path, ".orca");
+  await legacy(store);
+  handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  const owner = reserveFirstRunOwnership(path);
+  const hold = await enterFirstRunWriter(path, store, owner.launchToken!());
+  const authority = desktopCarryover(hold, "0.9.0")!;
+  // A record other than the one this writer claimed (here: rewritten by someone else) stays.
+  const claimed = readUpdateHandoff(store)!;
+  writeUpdateHandoff(store, { ...claimed, createdAt: "2026-01-01T00:00:00.000Z" });
+  await authority.settle("refused");
+  expect(readUpdateHandoff(store)).toMatchObject({ createdAt: "2026-01-01T00:00:00.000Z" });
+  // The exact record, while the fence holds, is spent.
+  writeUpdateHandoff(store, claimed);
+  await authority.settle("refused");
+  expect(readUpdateHandoff(store)).toBeUndefined();
+  // Once the fence is lost (a later reservation), even the exact record is left alone.
+  writeUpdateHandoff(store, claimed);
+  mkdirSync(join(path, OWNERSHIP_DIRECTORY, nextAttempt(path)), { mode: 0o700 });
+  expect(hold!.check()).toBe(false);
+  await authority.settle("carried");
+  expect(readUpdateHandoff(store)).toEqual(claimed);
 }, 30000);
 
 it("keeps refusing without the proof: another launch in between, or the version that was not installed", async () => {
