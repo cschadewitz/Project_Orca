@@ -69,11 +69,12 @@ switches to replace. **Earlier corrections** lists versions this card has read i
 window (at most ten); **Add to draft** copies one after the draft, or for values
 **Use as draft** fills an empty draft. That list lives only in the card's memory: it is
 not persisted, not sent, and never resubmitted on its own, so it is not a second
-revision ledger. Text copied from the current or an earlier version is tracked as copied: when
-the protected read stops supplying content or the connection or target changes, the
-history and every copied segment leave the draft in the same render, the retry intent
-is reset, and the person's own text stays. A copied segment the person has edited can
-no longer be told from their own words, so then the whole draft is cleared. Nothing in composition answers a gate, grants permission or changes a
+revision ledger. Copying records provenance, not positions: the draft as the person left it before
+the first copy, and the draft as the last copy left it. When the protected read stops
+supplying content or the connection or target changes, the history goes in the same
+render and the retry intent is reset. If the draft is untouched since the last copy, it
+goes back to the person's own pre-copy text; after any edit the mix is ambiguous and the
+whole draft is cleared, because a substring match cannot say who wrote identical words. Nothing in composition answers a gate, grants permission or changes a
 delivered correction; only the submit button sends.
 
 ## Workflow declaration

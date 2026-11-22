@@ -110,17 +110,22 @@ export function recordRevisionVersion(
 }
 
 /**
- * Remove text copied from a protected read once that read is no longer authority for it
- * (#398 review). Each copied segment is taken out verbatim, leaving what the person wrote.
- * A segment the person has since edited can no longer be told apart from their own words, so
- * then the whole draft goes: the protected text must not outlive its access.
+ * Provenance for text copied into a draft from a protected read (#398 review). Positions in a
+ * freely edited string cannot say who wrote what, so this records only what is certain: the
+ * draft as the person left it before the first copy (`base`), and the draft as the last copy
+ * left it (`after`). While the draft still equals `after`, `base` is exactly the person's own
+ * text. Any edit after a copy makes the mix ambiguous (`base: null`).
  */
-export function stripImported(text: string, segments: readonly string[]): string {
-  let rest = text;
-  for (const segment of segments) {
-    const at = rest.indexOf(segment);
-    if (at < 0) return "";
-    rest = rest.slice(0, at) + rest.slice(at + segment.length);
-  }
-  return rest.replace(/\n{3,}/g, "\n\n").replace(/^\n+|\s+$/g, "");
+export interface ImportedDraft {
+  base: string | null;
+  after: string;
+}
+export function recordImport(previous: ImportedDraft | undefined, draft: string, next: string): ImportedDraft {
+  const base = !previous ? draft : draft === previous.after ? previous.base : null;
+  return { base, after: next };
+}
+/** What may stay in the draft once the copied text's source is gone: only independently authored text. */
+export function draftAfterSourceLoss(draft: string, imported: ImportedDraft | undefined): string {
+  if (!imported) return draft;
+  return imported.base !== null && draft === imported.after ? imported.base : "";
 }

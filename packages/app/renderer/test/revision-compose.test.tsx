@@ -264,6 +264,43 @@ describe("composing in the card", () => {
       );
     });
 
+    it("repeated text: the person's own copy of identical words survives, the imported copy does not", () => {
+      const p = props();
+      const view = render(<RevisionInputCard {...p} />);
+      type("Keep the retry budget at two.");
+      fireEvent.click(screen.getByRole("button", { name: "Edit a copy of the current correction" }));
+      expect(draft().value).toBe("Keep the retry budget at two.\n\nKeep the retry budget at two.");
+      view.rerender(<RevisionInputCard {...p} pending={denied()} />);
+      expect(draft().value).toBe("Keep the retry budget at two.");
+    });
+
+    it("any edit after a copy makes the mix ambiguous, even with the imported text still intact", () => {
+      const p = props();
+      const view = render(<RevisionInputCard {...p} />);
+      type("Mine.");
+      fireEvent.click(screen.getByRole("button", { name: "Edit a copy of the current correction" }));
+      // The person rewrites their own line to match the imported one; a substring search would
+      // keep the protected words and discard theirs.
+      type("Keep the retry budget at two.\n\nKeep the retry budget at two. Mine.");
+      view.rerender(<RevisionInputCard {...p} pending={denied()} />);
+      expect(draft().value).toBe("");
+    });
+
+    it("a second copy after an edit cannot restore the pre-edit text", () => {
+      const p = props();
+      const view = render(<RevisionInputCard {...p} />);
+      view.rerender(<RevisionInputCard {...p} pending={pendingText("Newer note.", "v2", "revision-2")} />);
+      type("Mine.");
+      fireEvent.click(screen.getByRole("button", { name: "Edit a copy of the current correction" }));
+      type("Mine.\n\nNewer note, edited.");
+      const earlier = screen.getByRole("region", { name: "Earlier corrections" });
+      fireEvent.click(within(earlier).getByRole("button", { name: "Add to draft" }));
+      view.rerender(
+        <RevisionInputCard {...p} pending={{ ...pendingText("", "v2", "revision-2"), payload: undefined }} />,
+      );
+      expect(draft().value).toBe("");
+    });
+
     it("an edited copy cannot be told from the person's words, so the whole draft goes", () => {
       const p = props();
       const view = render(<RevisionInputCard {...p} />);
