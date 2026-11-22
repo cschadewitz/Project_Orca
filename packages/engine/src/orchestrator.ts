@@ -1917,6 +1917,11 @@ export class Orchestrator {
     extra: { path?: string; parents?: string[]; agentSessionId?: string; agentId?: string },
   ): Promise<Artifact> {
     const { extractStructuredData } = await import("@orca/core");
+    // A secret value a session of this run read (#336) is replaced before anything is derived
+    // or written: the stored body, its digest and byte count, its structured data, and what
+    // planning takes from it all describe the redacted text. The agent's own file in the
+    // workspace is the agent's, and is left as it wrote it.
+    content = rc.redactRuntimeSecrets(content);
     const name = spec.name ?? spec.kind;
     const mediaType = spec.mediaType ?? (extra.path?.endsWith(".json") ? "application/json" : "text/markdown");
     const artifact: Artifact = {

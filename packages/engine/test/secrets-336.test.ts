@@ -1,12 +1,29 @@
 /**
  * Secret references in a run (#336): the session factory is given the secrets catalog, and a
- * value a session read never reaches the run's events, its stored inputs or its log.
+ * value a session read never reaches the run's events, its stored inputs, its artifacts or its
+ * log.
  */
-import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentRegistry, type AgentSession, type OpenSessionOptions } from "@orca/agents";
-import { parseOrcaConfig, parseWorkflow, TemplateRegistry, WorkflowRegistry, type Logger } from "@orca/core";
+import {
+  parseDeliverablesBlock,
+  parseOrcaConfig,
+  parseWorkflow,
+  TemplateRegistry,
+  WorkflowRegistry,
+  type Logger,
+} from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator } from "@orca/engine";
-import { memoryStores } from "@orca/store";
+import { fileStores, memoryStores, type Stores } from "@orca/store";
+
+const dirs: string[] = [];
+afterEach(async () => {
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+});
 
 const VALUE = "ghp_value-that-must-not-be-written-0123";
 
@@ -44,14 +61,29 @@ nodes:
 edges: [{ from: s, to: work }, { from: work, to: e }]
 `;
 
-function setup(workflow: string) {
+const producing = `
+id: producing
+name: Producing
+start: s
+nodes:
+  s: { type: start }
+  work:
+    type: agent
+    agent: { role: coder }
+    prompt: "do it"
+    produces: [{ kind: report, name: report, path: report.md }]
+  e: { type: end }
+edges: [{ from: s, to: work }, { from: work, to: e }]
+`;
+
+function setup(workflow: string, opts: { stores?: Stores; cwd?: string; deliver?: string } = {}) {
   const config = parseOrcaConfig({
     secrets: { token: { host: "local", provider: "env", name: "ORCA_TOKEN" } },
     agents: [{ id: "claude", command: "unused", roles: ["coder"], env: { TOKEN: { secret: "token" } } }],
   });
   const workflows = new WorkflowRegistry();
   workflows.register(parseWorkflow(workflow));
-  const stores = memoryStores();
+  const stores = opts.stores ?? memoryStores();
   const lines: string[] = [];
   const record = (m: string, f?: object) => lines.push(`${m} ${JSON.stringify(f ?? {})}`);
   const logger: Logger = {
@@ -69,7 +101,7 @@ function setup(workflow: string) {
     agents: AgentRegistry.fromConfig(config),
     workflows,
     templates: new TemplateRegistry(),
-    workspaceProvider: new LocalWorkspaceProvider(process.cwd()),
+    workspaceProvider: new LocalWorkspaceProvider(opts.cwd ?? process.cwd()),
     sessionFactory: async (o: OpenSessionOptions) => {
       given.push(o);
       // What openAcpSession does once it has read the reference on the host.
@@ -87,8 +119,14 @@ function setup(workflow: string) {
         terminated: closed,
         configOptions: [],
         setConfigOption: async () => [],
-        // An agent that echoes its credential into an error.
-        prompt: async () => {
+        // An agent that writes its credential into a deliverable, or echoes it into an error.
+        prompt: async (input) => {
+          if (opts.deliver !== undefined) {
+            const path = parseDeliverablesBlock(input as string)[0]!.path;
+            await mkdir(dirname(path), { recursive: true });
+            await writeFile(path, opts.deliver);
+            return { stopReason: "end_turn" as const, durationMs: 1 };
+          }
           throw new Error(`upstream rejected token ${VALUE} (401)`);
         },
         onUpdate: () => () => {},
@@ -101,7 +139,7 @@ function setup(workflow: string) {
   return { orchestrator, stores, lines, given };
 }
 
-async function everything(stores: ReturnType<typeof memoryStores>, runIds: string[]) {
+async function everything(stores: Stores, runIds: string[]) {
   const out: unknown[] = [];
   for (const id of runIds) {
     out.push(await stores.events.read(id));
@@ -136,5 +174,41 @@ describe("secret references in a run", () => {
     const written = await everything(stores, [run.id, ...children]);
     expect(written).not.toContain(VALUE);
     expect(lines.join("\n")).not.toContain(VALUE);
+  });
+
+  it("stores an artifact the agent wrote with the value already replaced, digest and size included", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-secrets-art-"));
+    dirs.push(dir);
+    const storeDir = join(dir, "store");
+    const work = join(dir, "work");
+    await mkdir(work);
+    const body = `---\nstatus: done\ntoken: ${VALUE}\n---\nUsed ${VALUE} to call the API – done.\n`;
+    const { orchestrator, stores } = setup(producing, { stores: fileStores(storeDir), cwd: work, deliver: body });
+    const intake = vi.spyOn(orchestrator.plan, "onArtifactRecorded");
+    const { run } = await orchestrator.startAndRun({ workflowId: "producing" });
+    // Planning takes the artifact as stored, so nothing it journals can carry the value.
+    expect(intake).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(intake.mock.calls[0]![1])).not.toContain(VALUE);
+    expect(run.status, JSON.stringify(run.error)).toBe("completed");
+    const expected = body.split(VALUE).join("[REDACTED]");
+
+    const [artifact] = await stores.artifacts.list({ runId: run.id });
+    expect(artifact).toMatchObject({
+      contentHash: expect.any(String),
+      size: Buffer.byteLength(expected, "utf8"),
+      // Structured data is extracted from the stored text, so it never disagrees with it (in
+      // YAML front matter the unquoted placeholder reads as a one-item list).
+      data: { status: "done", token: ["REDACTED"] },
+    });
+    expect(await stores.artifacts.content(artifact!.id)).toBe(expected);
+    expect(artifact!.contentHash).toContain(createHash("sha256").update(expected).digest("hex"));
+
+    // A restarted daemon reads the same redacted bytes: nothing on disk ever held the value.
+    const reopened = fileStores(storeDir);
+    expect(Buffer.from(await reopened.artifacts.bytes(artifact!.id)).toString("utf8")).toBe(expected);
+    const files = await readdir(storeDir, { recursive: true, withFileTypes: true });
+    for (const f of files.filter((e) => e.isFile()))
+      expect(await readFile(join(f.parentPath, f.name), "utf8"), f.name).not.toContain(VALUE);
+    expect(await everything(reopened, [run.id])).not.toContain(VALUE);
   });
 });

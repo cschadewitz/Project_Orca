@@ -137,6 +137,15 @@ export class RunContext {
     for (const value of values) if (value.length) this.runtimeSecrets.add(value);
   }
 
+  /**
+   * `value` with every runtime secret value replaced by `[REDACTED]`, keys left as they are.
+   * For writes that do not go through `emitOwned`: artifact bodies, their metadata, and what
+   * planning derives from them.
+   */
+  redactRuntimeSecrets<T>(value: T): T {
+    return this.runtimeSecrets.size ? redactExecutionValue(value, [...this.runtimeSecrets]) : value;
+  }
+
   private redactionInputs(): ExecutionInputs | undefined {
     if (!this.runtimeSecrets.size) return this.executionInputs;
     const secrets = [...(this.executionInputs?.secrets ?? []), ...this.runtimeSecrets];
@@ -200,8 +209,7 @@ export class RunContext {
   async emitOwned(input: Omit<OrcaEventInput, "runId">): Promise<OrcaEvent> {
     // A secret value never reaches the log, nor the interpreter's own projection (#336).
     // Keys are structure (ids, field names), so only values are rewritten.
-    if (this.runtimeSecrets.size)
-      input = { ...input, payload: redactExecutionValue(input.payload, [...this.runtimeSecrets]) };
+    if (this.runtimeSecrets.size) input = { ...input, payload: this.redactRuntimeSecrets(input.payload) };
     const e = await this.deps.stores.events.append({ ...input, runId: this.id } as OrcaEventInput);
     // The returned event is public; the interpreter keeps its exact authoritative payload.
     applyEvent(this.state, { ...e, payload: input.payload } as OrcaEvent);

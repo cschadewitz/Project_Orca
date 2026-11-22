@@ -529,9 +529,10 @@ agents:
 - **Never written.** Config, drafts, launch records, provenance, events and logs hold the
   reference (`{ secret: github-token }`), never the value. As defense in depth, a value ORCA
   read is replaced with `[REDACTED]` in every event and log line the run writes afterwards,
-  the run's parents included. This catches the value copied verbatim, not encodings,
-  transformations or fragments of it, and it does not rewrite what an agent writes to files
-  or artifacts itself.
+  the run's parents included, and in every artifact body ORCA records from then on, before
+  it is stored, hashed, parsed for structured data or handed to planning. This catches the
+  value copied verbatim, not encodings, transformations or fragments of it, and it does not
+  rewrite the files an agent leaves in its own workspace.
 - **Moving from literal values.** A literal in `env` keeps working, but it is stored in
   `orca.config.yaml` as written, shown to anyone who can read the config, and only redacted
   from run output where ORCA recognises it as a credential. To move one, put the value where
