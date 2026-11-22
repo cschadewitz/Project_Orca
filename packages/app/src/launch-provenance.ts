@@ -23,6 +23,14 @@ export function launchSelectionLines(provenance: LaunchSelectionProvenance): str
             `${selection.nodeId}: instruction ${selection.template.value}${selection.template.revision ? ` / ${selection.template.revision}` : ""} (${selection.template.source}).`,
           ]
         : []),
+      // Scoped capabilities (#335): what the step's session gets, and which scope decided it.
+      ...(selection.capabilities?.mcpServers ?? []).map(
+        (server) => `${selection.nodeId}: MCP server ${server.id} (${server.source}).`,
+      ),
+      ...(selection.capabilities?.skills ?? []).map(
+        (skill) =>
+          `${selection.nodeId}: skill ${skill.id}${skill.version ? ` ${skill.version}` : ""}${skill.digest ? ` / ${skill.digest}` : ""} (${skill.source}).`,
+      ),
     ]),
     ...(provenance.itemWorkflow
       ? [`Item workflow ${provenance.itemWorkflow.value} (${provenance.itemWorkflow.source}).`]

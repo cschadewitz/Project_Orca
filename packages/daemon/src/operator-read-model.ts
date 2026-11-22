@@ -368,22 +368,32 @@ export class OperatorReadModel {
       try {
         await launch.validateStartRun({ vars: supplied, ...(params.overrides ? { overrides: params.overrides } : {}) });
       } catch (error) {
-        const path = isOrcaError(error, "AGENT_NOT_FOUND")
-          ? "overrides.roles"
-          : isOrcaError(error, "AGENT_MODEL_NOT_FOUND")
-            ? "overrides.model"
-            : isOrcaError(error, "TEMPLATE_NOT_FOUND")
-              ? "overrides.templatePack"
-              : isOrcaError(error, "WORKFLOW_NOT_FOUND")
-                ? params.overrides?.itemWorkflow !== undefined
-                  ? "overrides.itemWorkflow"
-                  : Object.hasOwn(params.vars, "itemWorkflow")
-                    ? "vars.itemWorkflow"
-                    : "program.itemWorkflow"
-                : undefined;
-        if (!path) throw error;
-        validation.ok = false;
-        validation.errors.push({ path, message: "selection is unavailable or invalid" });
+        // A step whose MCP servers or skills do not resolve (#335) names its own fields.
+        const capabilityIssues = isOrcaError(error, "CONFIG_INVALID")
+          ? (error.details as { nodeId?: unknown; errors?: unknown } | undefined)
+          : undefined;
+        if (capabilityIssues?.nodeId !== undefined && Array.isArray(capabilityIssues.errors)) {
+          validation.ok = false;
+          for (const issue of capabilityIssues.errors as { path: string; message: string }[])
+            validation.errors.push({ path: issue.path, message: issue.message });
+        } else {
+          const path = isOrcaError(error, "AGENT_NOT_FOUND")
+            ? "overrides.roles"
+            : isOrcaError(error, "AGENT_MODEL_NOT_FOUND")
+              ? "overrides.model"
+              : isOrcaError(error, "TEMPLATE_NOT_FOUND")
+                ? "overrides.templatePack"
+                : isOrcaError(error, "WORKFLOW_NOT_FOUND")
+                  ? params.overrides?.itemWorkflow !== undefined
+                    ? "overrides.itemWorkflow"
+                    : Object.hasOwn(params.vars, "itemWorkflow")
+                      ? "vars.itemWorkflow"
+                      : "program.itemWorkflow"
+                  : undefined;
+          if (!path) throw error;
+          validation.ok = false;
+          validation.errors.push({ path, message: "selection is unavailable or invalid" });
+        }
       }
     }
     const resolved = validation.ok

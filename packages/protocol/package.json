@@ -17,6 +17,10 @@
     "./first-run-fence": {
       "types": "./dist/first-run-fence.d.ts",
       "import": "./dist/first-run-fence.js"
+    },
+    "./remote-access": {
+      "types": "./dist/remote-access.d.ts",
+      "import": "./dist/remote-access.js"
     }
   },
   "files": [

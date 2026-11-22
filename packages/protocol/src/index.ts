@@ -16,6 +16,7 @@ export * from "./inputs.js";
 export * from "./claims.js";
 export * from "./subscriptions.js";
 export * from "./artifacts.js";
+export * from "./search.js";
 export * from "./agents.js";
 export * from "./control.js";
 export * from "./workflows.js";

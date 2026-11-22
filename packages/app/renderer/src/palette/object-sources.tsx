@@ -19,14 +19,25 @@
  * what it holds; a `run.changed` or an `agent.changed` drops the cache so the next query
  * reads again. That is the same rule every list in the app follows.
  *
- * What is deliberately missing: **search over event text and artifact contents.** The
- * protocol has no text-search method — `runs.events` pages, it does not match — so honest
- * options are to scan every log in the store from the renderer, or to say so. Scanning is
- * not an option a palette can take per keystroke, so the Search section covers step names
- * and artifact names, and the rest waits for a daemon-side search method (filed).
+ * **Event text and artifact contents are the daemon's to search (#255).** The renderer never
+ * scans a log: the `contents` source asks the daemon's `search` method, which reads the store
+ * within a limit and a deadline and answers with places — a run and a `seq`, with the step
+ * that event belongs to, or a run, an artifact name and a version — so each row is still a
+ * canonical `orca://` URL. It waits a moment after the last keystroke and drops an answer
+ * for a query that has moved on, and a daemon that does not list `search` in
+ * `hello.methods` gets the names-only search below and nothing else. A scan the daemon cut
+ * short says so in a disabled last row rather than implying it found everything.
  */
 import { useCallback, useEffect, useRef, type JSX } from "react";
-import type { ArtifactView, RunSummaryView, StepView } from "@orca/protocol";
+import {
+  SEARCH_METHOD,
+  SEARCH_MIN_QUERY,
+  type ArtifactView,
+  type RunSummaryView,
+  type SearchHit,
+  type StepView,
+} from "@orca/protocol";
+import { useMethodPresent } from "../chrome/use-connection.js";
 import { useNotifications } from "../notifications-context.js";
 import { artifactUrl, agentUrl, runUrl, stepUrl } from "../route-table.js";
 import { usePaletteSource, type SourceEntry } from "./sources.js";
@@ -38,6 +49,11 @@ import { usePaletteSource, type SourceEntry } from "./sources.js";
  * id, which the jump row already understands.
  */
 export const RECENT_RUNS = 10;
+
+/** How long the contents search waits after a keystroke before it asks the daemon. */
+export const CONTENT_SEARCH_DELAY_MS = 150;
+/** How many content hits the palette asks for: a shortlist, like the recent runs. */
+export const CONTENT_SEARCH_LIMIT = 20;
 
 export interface PaletteObjectSourcesProps {
   /** Open an `orca://` URL — `App`'s `navigate`, which is the route table. */
@@ -54,6 +70,8 @@ export function PaletteObjectSources({ onOpen }: PaletteObjectSourcesProps): JSX
   const runs = useRef<Promise<readonly RunSummaryView[]> | undefined>(undefined);
   const agents = useRef<Promise<readonly { id: string; hostId: string; state: string }[]> | undefined>(undefined);
   const contents = useRef(new Map<string, Promise<RunContents>>());
+  const searchable = useMethodPresent(SEARCH_METHOD);
+  const latest = useRef(0);
 
   useEffect(() => {
     const forget = (): void => {
@@ -160,7 +178,59 @@ export function PaletteObjectSources({ onOpen }: PaletteObjectSourcesProps): JSX
     ),
   );
 
+  usePaletteSource(
+    "contents",
+    "search",
+    useCallback(
+      async (query: string) => {
+        const needle = query.trim();
+        const ask = ++latest.current;
+        if (!searchable || needle.length < SEARCH_MIN_QUERY) return [];
+        // A pause, then only the newest query goes to the daemon: typing is not a stream of scans.
+        await new Promise((resolve) => setTimeout(resolve, CONTENT_SEARCH_DELAY_MS));
+        if (ask !== latest.current) return [];
+        const answer = await window.orca.search.query({ query: needle, limit: CONTENT_SEARCH_LIMIT });
+        if (!answer.ok) return [];
+        const rows: SourceEntry[] = answer.result.hits.map((hit) => hitEntry(hit, onOpen));
+        if (answer.result.truncated)
+          rows.push({
+            id: "more",
+            label: "More matches may exist",
+            unavailable:
+              answer.result.truncated === "limit"
+                ? `showing the first ${answer.result.hits.length}; type more of the text to narrow it`
+                : "the daemon stopped looking to keep the palette quick; type more of the text to narrow it",
+            // Disabled: there is nothing to open, only something to know.
+            run: () => {},
+          });
+        return rows;
+      },
+      [searchable, onOpen],
+    ),
+  );
+
   return null;
+}
+
+/** One daemon search hit as a row: a place, opened through the route table like every other row. */
+function hitEntry(hit: SearchHit, onOpen: (url: string) => void): SourceEntry {
+  if (hit.kind === "artifact")
+    return {
+      id: `${hit.runId}:artifact:${hit.artifactId}`,
+      label: `${hit.name} v${hit.version}`,
+      labelMachine: hit.name,
+      detail: hit.excerpt,
+      detailId: hit.runId,
+      run: () => onOpen(artifactUrl(hit.runId, hit.name, hit.version)),
+    };
+  return {
+    id: `${hit.runId}:event:${hit.seq}`,
+    label: hit.excerpt,
+    // The event's step when it has one: an event has no URL of its own, its step does.
+    detail: hit.step ? `${hit.type} in ${hit.step.nodeId}` : hit.type,
+    detailId: hit.runId,
+    run: () => onOpen(hit.step ? stepUrl(hit.runId, hit.step.nodeId, hit.step.attempt) : runUrl(hit.runId)),
+  };
 }
 
 /** Case-insensitive substring, over whichever of an object's names were handed in. */

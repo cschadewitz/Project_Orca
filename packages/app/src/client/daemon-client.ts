@@ -153,11 +153,20 @@ import {
   type WorkflowsGetResult,
   type WorkflowsListParams,
   type WorkflowsListResult,
+  SEARCH_METHOD,
+  SearchResultSchema,
+  type SearchParams,
+  type SearchResult,
 } from "@orca/protocol";
 import { appHelloOffer, appSpeaks } from "./protocol-window.js";
 import { type ZodType } from "zod";
-import { assertCredentialDestination, authenticationCode, type DaemonTokenSource } from "./auth.js";
-import { DaemonSubscription, type DaemonSubscriptionOptions } from "./subscription.js";
+import {
+  assertCredentialDestination,
+  authenticationCode,
+  CredentialTransportUnavailable,
+  type DaemonTokenSource,
+} from "./auth.js";
+import { DaemonSubscription, type DaemonSubscriptionOptions, type SocketFactory } from "./subscription.js";
 import { observeOwnedDiagnostic, type OwnedDiagnosticObserver } from "../main/diagnostics/source-producers.js";
 
 /** Where `orca serve` listens unless told otherwise; 6722 spells ORCA on a phone keypad. */
@@ -197,6 +206,8 @@ export interface DaemonClientOptions {
   onAuthFailure?: () => void;
   /** Current subscription verification only; ordinary hello probes never publish. */
   onHello?: (hello: HelloResult) => void;
+  /** How the push stream opens its socket; a saved profile's comes from its tunnel. */
+  socket?: SocketFactory;
 }
 
 export class DaemonClient {
@@ -241,7 +252,9 @@ export class DaemonClient {
       let token: string | undefined;
       try {
         token = this.options.auth?.read();
-      } catch {
+      } catch (error) {
+        // Nothing was sent: the transport is down, not the credential.
+        if (error instanceof CredentialTransportUnavailable) throw error;
         if (publishAuthFailure) this.options.onAuthFailure?.();
         if (publishAuthFailure) this.observeError({ code: "AUTH_INVALID", message: "" });
         throw new DaemonClientError({ code: "AUTH_INVALID", message: "Daemon authentication failed" });
@@ -391,6 +404,14 @@ export class DaemonClient {
   /** Artifact metadata only — the docked panel's version list and a step's chips (#159). */
   artifactsList(params: Params<ArtifactsListParams> = {}): Promise<ArtifactsListResult> {
     return this.call(ARTIFACTS_LIST_METHOD, params, ArtifactsListResultSchema);
+  }
+
+  /**
+   * `search` (#255): event text and text artifacts, matched by the daemon within a limit and a
+   * deadline. Ask `hello.methods` first: a daemon before protocol 2.2 does not answer it.
+   */
+  search(params: Params<SearchParams> & { query: string }): Promise<SearchResult> {
+    return this.call(SEARCH_METHOD, params, SearchResultSchema);
   }
 
   /** One artifact's body, or the reason it is not being shown. */
@@ -601,6 +622,7 @@ export class DaemonClient {
         return hello.identity;
       },
       ...(this.options.auth ? { auth: { tokens: this.options.auth } } : {}),
+      ...(this.options.socket ? { socket: this.options.socket } : {}),
     });
   }
 }

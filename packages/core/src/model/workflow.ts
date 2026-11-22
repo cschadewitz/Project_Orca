@@ -12,7 +12,7 @@
  */
 import { z } from "zod";
 import { RevisionCapabilitySchema } from "./revision-input.js";
-import { AgentSelectorSchema } from "./agent.js";
+import { AgentSelectorSchema, CapabilityScopeSchema, type CapabilityScope } from "./agent.js";
 import { ArtifactRefSchema, ArtifactSpecSchema } from "./artifact.js";
 import { GateOptionSchema } from "./run.js";
 import { WorkflowInputSchemaSchema, type WorkflowInputSchema } from "./workflow-inputs.js";
@@ -69,6 +69,11 @@ export type CompletionPolicy = z.infer<typeof CompletionPolicySchema>;
 export const AgentNodeSchema = NodeBaseSchema.extend({
   type: z.literal("agent"),
   agent: AgentSelectorSchema,
+  /**
+   * This step's MCP servers and skills (#335), over the workflow's and the agent's. It can
+   * narrow them, or turn on only what the agent's config permits.
+   */
+  capabilities: CapabilityScopeSchema.optional(),
   /** Prompt template id (from the template registry) ... */
   template: z.string().optional(),
   /** ... or an inline template body. One of the two is required. */
@@ -93,6 +98,8 @@ export const DecisionSourceSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("agent"),
     agent: AgentSelectorSchema,
+    /** As on an agent node (#335). */
+    capabilities: CapabilityScopeSchema.optional(),
     template: z.string().optional(),
     prompt: z.string().optional(),
     inputs: z.array(ArtifactRefSchema).default([]),
@@ -357,6 +364,11 @@ export interface WorkflowDefinition extends WorkflowGraph {
    * legacy behaviour: `inputs` documents, nothing is checked. See docs/workflow-inputs.md.
    */
   inputSchema?: WorkflowInputSchema | undefined;
+  /**
+   * The workflow scope (#335) for every agent step in this file, nested graphs included.
+   * A subworkflow reference runs under its own workflow's scope.
+   */
+  capabilities?: CapabilityScope | undefined;
   meta?: Record<string, unknown>;
 }
 
@@ -369,6 +381,7 @@ export const WorkflowDefinitionSchema: z.ZodType<WorkflowDefinition> = z.lazy(()
     vars: z.record(z.string(), z.unknown()).default({}),
     inputs: z.record(z.string(), z.string()).default({}),
     inputSchema: WorkflowInputSchemaSchema.optional(),
+    capabilities: CapabilityScopeSchema.optional(),
     meta: z.record(z.string(), z.unknown()).optional(),
     start: z.string().min(1),
     nodes: z.record(z.string().regex(/^[A-Za-z0-9_-]+$/), NodeDefSchema),

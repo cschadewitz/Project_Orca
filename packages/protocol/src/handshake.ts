@@ -33,6 +33,7 @@ import {
 import { RUNS_EVENTS_METHOD, RUNS_GET_METHOD, RUNS_LIST_METHOD } from "./runs.js";
 import { SUBSCRIBE_METHOD, UNSUBSCRIBE_METHOD } from "./subscriptions.js";
 import { WORKFLOWS_GET_METHOD, WORKFLOWS_LIST_METHOD } from "./workflows.js";
+import { SEARCH_METHOD } from "./search.js";
 
 export const HELLO_METHOD = "hello";
 
@@ -62,6 +63,11 @@ export const READ_METHODS = [
    * with" is not a different class from reading what it has run.
    */
   CONFIG_GET_METHOD,
+  /**
+   * `search` (protocol 2.2, #255): a bounded substring scan over the same events and
+   * artifacts the reads above return, answered under `runs.read` like them.
+   */
+  SEARCH_METHOD,
 ] as const;
 
 /**

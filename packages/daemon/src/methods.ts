@@ -8,6 +8,7 @@ import {
   ContinuationsGetParamsSchema,
   ContinuationsReconcileParamsSchema,
 } from "@orca/protocol";
+import type { SearchScope } from "./search-model.js";
 import {
   OPERATOR_METHODS,
   OperatorTargetSchema,
@@ -133,6 +134,10 @@ import {
   negotiateProtocol,
   type AgentsListParams,
   type HelloParams,
+  SEARCH_METHOD,
+  SearchParamsSchema,
+  type SearchParams,
+  type SearchResult,
   type ProtocolWindow,
   type AgentsListResult,
   type AgentsPingParams,
@@ -207,6 +212,13 @@ import { templateMethods } from "./template-methods.js";
 import { workflowDraftMethods } from "./workflow-draft-methods.js";
 
 export interface MethodContext {
+  /**
+   * What an authenticated caller may read, installed by the guard on every invocation:
+   * whether it may walk every run or only one it named and the guard authorized, and whether
+   * it holds `artifacts.read`. Methods that scan across runs (`search`) narrow their scan
+   * with it rather than filtering afterwards.
+   */
+  readScope?: SearchScope;
   /**
    * The protocols this daemon answers `hello` in (#880). Absent means this build's own
    * `PROTOCOL_WINDOW`; a test sets it to stand a daemon one major ahead of its clients.
@@ -537,6 +549,16 @@ export const artifactsGet: Method<Parameters<ReadModel["artifactsGet"]>[0], Arti
   handle: (params, ctx) => reads(ctx).artifactsGet(params),
 };
 
+/**
+ * `search` (#255): event text and text artifacts, newest run first, within a limit and a
+ * deadline. The guard supplies `readScope` for an authenticated caller, so the scan never
+ * opens a run or an artifact that caller could not read.
+ */
+export const search: Method<SearchParams, SearchResult> = {
+  params: SearchParamsSchema,
+  handle: (params, ctx) => reads(ctx).search(params, ctx.readScope),
+};
+
 /** `workflows.list`: every workflow this daemon has registered, as rows. */
 export const workflowsList: Method<Parameters<ReadModel["workflowsList"]>[0], WorkflowsListResult> = {
   params: WorkflowsListParamsSchema,
@@ -781,6 +803,7 @@ export const methods: MethodTable = {
   [ARTIFACTS_GET_METHOD]: artifactsGet,
   [WORKFLOWS_LIST_METHOD]: workflowsList,
   [WORKFLOWS_GET_METHOD]: workflowsGet,
+  [SEARCH_METHOD]: search,
 };
 
 /**

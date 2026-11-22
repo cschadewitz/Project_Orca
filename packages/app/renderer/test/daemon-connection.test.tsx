@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type { DaemonConnectionBridge, DaemonTargetSnapshot } from "../../src/daemon-connection.js";
 import { ConnectionBoundary } from "../src/daemon-connection/boundary.js";
 import { ConnectionDialog } from "../src/daemon-connection/dialog.js";
+import { ConnectionSource } from "../src/daemon-connection/source.js";
 import { useUpdateDraft } from "../src/update-drafts.js";
 import { harness, stubMatchMedia } from "./harness.js";
 afterEach(cleanup);
@@ -134,3 +135,50 @@ it.each(["bundled", "store", "development", "saved", "env"] as const)(
     h.dispose();
   },
 );
+
+it("connects through a saved SSH profile and confirms removal on its row (#874)", async () => {
+  stubMatchMedia(1200);
+  const h = harness();
+  const r = rig();
+  const view = {
+    id: "lab",
+    name: "Lab",
+    destination: "casey@lab",
+    remotePort: 6722,
+    hasCredential: true,
+    hostKeyPinned: true,
+  };
+  const profiles = {
+    list: vi.fn(async () => [view]),
+    save: vi.fn(),
+    remove: vi.fn(async () => ({ ok: true as const, value: null })),
+    importCredential: vi.fn(),
+    forgetHostKey: vi.fn(),
+  };
+  r.bridge.connect = vi.fn(async () => ({ ok: false as const, message: "SSH authentication failed." }));
+  render(
+    <h.Providers>
+      <ConnectionDialog bridge={{ ...r.bridge, profiles }} target={r.target} close={() => {}} />
+    </h.Providers>,
+  );
+  await screen.findByText("casey@lab");
+  fireEvent.click(screen.getAllByText("Connect")[0]!);
+  await screen.findByText("SSH authentication failed.");
+  expect(r.bridge.connect).toHaveBeenCalledWith({ profile: "lab" });
+  fireEvent.click(screen.getByText("Remove"));
+  expect(profiles.remove).not.toHaveBeenCalled();
+  expect(document.activeElement?.textContent).toBe("Keep");
+  fireEvent.click(screen.getByText("✕ Remove profile"));
+  await waitFor(() => expect(profiles.remove).toHaveBeenCalledWith("lab"));
+  h.dispose();
+});
+
+it("shows a profile connection by name in the Config header (#874)", () => {
+  const r = rig();
+  const bridge = {
+    ...r.bridge,
+    read: () => ({ ...r.target, profile: { id: "lab", name: "Lab", destination: "casey@lab" } }),
+  };
+  render(<ConnectionSource bridge={bridge} />);
+  expect(screen.getByText(/Lab \(ssh casey@lab\)/)).toBeTruthy();
+});

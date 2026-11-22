@@ -38,8 +38,18 @@ export class PreferencesFile {
   /** Main-process only: the renderer's generic preference patch cannot change targets. */
   saveDaemonUrl(url: string | null): void {
     const next = { ...this.read() };
+    delete next.daemonProfile;
     if (url === null) delete next.daemonUrl;
     else next.daemonUrl = daemonEndpoint(url);
+    this.persist(next);
+  }
+
+  /** Main-process only: a saved SSH profile replaces a saved URL (#874). */
+  saveDaemonProfile(id: string | null): void {
+    const next = { ...this.read() };
+    delete next.daemonUrl;
+    if (id === null) delete next.daemonProfile;
+    else next.daemonProfile = id;
     this.persist(next);
   }
 

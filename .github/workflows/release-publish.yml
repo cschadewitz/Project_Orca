@@ -11,7 +11,8 @@
 # three platforms and the daemon beside it, from the same merge commit, so the daemon inside
 # the desktop artifact and the daemon on the release page are one build; `publish` tags and
 # attaches (a final only drafts, with the Ubuntu .deb, until a maintainer attaches the signed
-# Windows installer and publishes it: docs/RELEASING.md "Publishing a final"). A platform runner failing therefore means no tag, which is the right way round —
+# Windows installer and publishes it: docs/RELEASING.md "Publishing a final"); `server-bundle`
+# then dispatches the signed headless server bundle for the same commit (#876). A platform runner failing therefore means no tag, which is the right way round —
 # a published release with two of three artifacts is not a thing that can be fixed forward.
 #
 # `workflow_dispatch` is the fix-forward path. When this workflow fails after the release
@@ -423,6 +424,37 @@ jobs:
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::invalid release commit"; exit 1; }
           gh workflow run windows-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f source_sha="$SHA"
           echo "Dispatched Windows signed (spike) for \`$SHA\`." >> "$GITHUB_STEP_SUMMARY"
+
+  # From the 0.8 line, every real release, final or rc, gets the signed headless server bundle (#876).
+  # release-server-bundle.yml builds it from the same commit, signs it keylessly with its own
+  # identity on main, checks it on a clean host and attaches it; a final cannot be published
+  # without it (release-attach.sh publish). This job checks nothing out and can only dispatch.
+  server-bundle:
+    name: dispatch the signed server bundle
+    needs: [check, publish]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch Release (server bundle) for the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.check.outputs.sha }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::invalid release commit"; exit 1; }
+          # The bundle starts with the 0.8 line (SERVER_FROM in tools/deploy/release-attach.sh);
+          # an earlier release keeps its approved desktop asset set.
+          SERVER_FROM=0.8.0
+          if [ "$(printf '%s\n%s\n' "$SERVER_FROM" "${VERSION%%-*}" | sort -V | head -n1)" != "$SERVER_FROM" ]; then
+            echo "v$VERSION is before the server bundle's $SERVER_FROM line; nothing dispatched." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh workflow run release-server-bundle.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f version="$VERSION" -f source_sha="$SHA"
+          echo "Dispatched Release (server bundle) for v$VERSION at \`$SHA\`." >> "$GITHUB_STEP_SUMMARY"
 
   # The rehearsal's writer. It runs none of the rehearsed ref's code: it checks out this
   # workflow's own revision (the default branch, checked in `check`), takes the artifacts

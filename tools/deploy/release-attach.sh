@@ -43,12 +43,35 @@
 #                                       recorded one), plus either the recorded arm64 installer
 #                                       with verified native acceptance (tools/deploy/
 #                                       feed-arches.js verify) or the x64-only decision,
-#                                       VERSION is newer than Latest, and (when there is a
+#                                       VERSION is newer than Latest, (when there is a
 #                                       Latest) a successful x64 upgrade check whose receipt
-#                                       names exactly this draft and the current Latest
+#                                       names exactly this draft and the current Latest, and,
+#                                       from the 0.8 line, the server bundle with its receipt
 #   release-attach.sh run-with-jobs RUN_ID
 #                                       print run RUN_ID with its latest attempt's jobs under
 #                                       "jobs", for feed-arches.js's upgrade baseline receipt
+#
+# From the 0.8 release line (SERVER_FROM), a final is published only with its signed server
+# bundle (#876), checked by its receipt (see server_receipt). Release (server bundle), release-server-bundle.yml, uses:
+#
+#   release-attach.sh server-target VERSION SHA
+#                                       print id= and kind= (final|prerelease) for the one
+#                                       release vVERSION the bundle belongs to: SHA on main, a
+#                                       final still a draft or a prerelease already published,
+#                                       targeting SHA; fail otherwise
+#   release-attach.sh server-attach ID SHA VERSION RUN_ID DIR
+#                                       upload DIR's three bundle files to release ID, then record
+#                                       RUN_ID and their digests in its notes; re-validates the
+#                                       release before every write. Only an interrupted attach
+#                                       (server files, no record at all) is replaced; a recorded,
+#                                       duplicated or malformed record is never touched
+#   release-attach.sh server-receipt ID SHA VERSION DIR
+#                                       print digests= (DIR's three files, record order) and
+#                                       receipt= (sha256 of the canonical receipt line committing
+#                                       to ID, VERSION, SHA and those digests)
+#   release-attach.sh server-reconcile  dispatch release-server-bundle.yml for every release on a
+#                                       version line newer than Latest (final drafts, published
+#                                       prereleases) that has no server record
 #
 # Every write is preceded by a fresh read of the exact draft: still a draft, the same target
 # and name, only the expected assets, and no other record. The records are written before the
@@ -63,6 +86,19 @@ MARK_RE='<!-- orca-signed-run: [0-9]+ sha256:[0-9a-f]{64} -->'
 ARM_RE='<!-- orca-signed-run-arm64: [0-9]+ sha256:[0-9a-f]{64} -->'
 ACCEPT_RE='<!-- orca-arm64-accepted: [0-9]+ sha256:[0-9a-f]{64} -->'
 X64_ONLY='<!-- orca-x64-only -->'
+SERVER_RE='<!-- orca-server-run: [0-9]+ sha256:[0-9a-f]{64} sha256:[0-9a-f]{64} sha256:[0-9a-f]{64} -->'
+# The server bundle starts with the 0.8 release line (#876 is in the 0.8.0 milestone): every
+# 0.8.0 release candidate and every final from 0.8.0 on. Releases before it (0.7.x) keep
+# their approved desktop asset set and are never dispatched, reconciled or gated for it.
+# release-publish.yml's server-bundle job applies the same boundary (a test keeps them equal).
+SERVER_FROM=0.8.0
+# server_applies VERSION: true from SERVER_FROM's line on, release candidates included.
+server_applies() {
+  local base=${1%%-*}
+  [[ "$(printf '%s\n%s\n' "$SERVER_FROM" "$base" | sort -V | head -n1)" == "$SERVER_FROM" ]]
+}
+# The three server bundle files, in record order: archive, manifest, signature.
+server_names() { local s="orca-server-$1-linux-x64"; echo "$s.tar.xz $s.manifest.json $s.manifest.json.sigstore.json"; }
 # release-upgrade-check.yml's pass: its run, the x64 installer it checked and the release it
 # upgraded from.
 UPGRADE_RE='<!-- orca-upgrade-check: [0-9]+ sha256:[0-9a-f]{64} from v[0-9]+\.[0-9]+\.[0-9]+ -->'
@@ -158,7 +194,11 @@ validate() {
   [[ "$(jq -r '.prerelease' <<<"$json")" == false ]] || fail "release $id is a prerelease"
   [[ "$(jq -r '.target_commitish' <<<"$json")" == "$sha" ]] || fail "release $id no longer targets $sha"
   [[ "$(jq -r '.name' <<<"$json")" == "v$version" ]] || fail "release $id is no longer named v$version"
-  names=$(jq -r '[.assets[].name] | sort | join(" ")' <<<"$json")
+  # From the 0.8 line the server bundle's files may be there too (any of them, mid-attach).
+  local server=""
+  if server_applies "$version"; then server=$(server_names "$version"); fi
+  names=$(jq -r --arg s "$server" '($s | split(" ")) as $server
+    | [.assets[].name | select(. as $n | $server | index($n) | not)] | sort | join(" ")' <<<"$json")
   case "$names" in
     "ORCA-$version-linux-amd64.deb" | "ORCA-$version-linux-amd64.deb ORCA-$version-win-x64.exe") ;;
     "ORCA-$version-linux-amd64.deb ORCA-$version-win-arm64.exe ORCA-$version-win-x64.exe") ;;
@@ -198,7 +238,191 @@ run_with_jobs() {
   jq --argjson jobs "$jobs" '. + {jobs: $jobs}' <<<"$run"
 }
 
+# server_state BODY: "none", "one" (exactly one well-formed record) or "bad" (more than one,
+# or anything that looks like a record but is not one). Only "none" may be written over.
+server_state() {
+  local strict loose
+  strict=$(records "$SERVER_RE" <<<"$1" | grep -c . || true)
+  loose=$(grep -o 'orca-server-run' <<<"$1" | grep -c . || true)
+  if [[ "$loose" -eq 0 ]]; then echo none
+  elif [[ "$strict" -eq 1 && "$loose" -eq 1 ]]; then echo one
+  else echo bad; fi
+}
+# receipt_hash ID VERSION SHA "ARCHIVE MANIFEST SIGNATURE": the canonical receipt's digest.
+receipt_hash() {
+  printf 'orca-server-receipt/1 release=%s version=%s sha=%s files=%s' "$1" "$2" "$3" "$4" |
+    sha256sum | awk '{print "sha256:" $1}'
+}
+# server_record BODY: the one record's "RUN archive manifest signature".
+server_record() { records "$SERVER_RE" <<<"$1" | awk '{print $3, $4, $5, $6}'; }
+# server_digests VERSION < JSON: the three server files' digests in record order ("" if absent).
+server_digests() {
+  jq -r --arg s "$(server_names "$1")" '. as $r | [($s | split(" "))[] as $n
+    | ([$r.assets[] | select(.name == $n) | .digest] | .[0] // "")] | join(" ")'
+}
+# release_for_server ID SHA VERSION KIND: refuse unless release ID is still what server-target
+# selected. Prints its JSON.
+release_for_server() {
+  local id=$1 sha=$2 version=$3 kind=$4 json
+  json=$(gh api "repos/$REPO/releases/$id") || fail "release $id is gone"
+  [[ "$(jq -r '.target_commitish' <<<"$json")" == "$sha" ]] || fail "release $id no longer targets $sha"
+  [[ "$(jq -r '.name' <<<"$json")" == "v$version" ]] || fail "release $id is no longer named v$version"
+  if [[ "$kind" == final ]]; then
+    [[ "$(jq -r '[.draft, .prerelease] | map(tostring) | join(" ")' <<<"$json")" == "true false" ]] ||
+      fail "release $id is no longer a final draft; nothing written"
+  else
+    [[ "$(jq -r '[.draft, .prerelease] | map(tostring) | join(" ")' <<<"$json")" == "false true" ]] ||
+      fail "release $id is no longer a published prerelease; nothing written"
+    [[ "$(gh api "repos/$REPO/git/ref/tags/v$version" --jq .object.sha)" == "$sha" ]] ||
+      fail "tag v$version does not point at $sha"
+  fi
+  echo "$json"
+}
+# server_receipt ID VERSION SHA JSON: refuse unless release ID carries the signed server bundle
+# for exactly this version and commit, proven by its receipt: one well-formed record; the three
+# files with exactly its digests; the signed manifest (its bytes match the record) naming this
+# version, commit and archive digest; and the recorded run a successful Release (server
+# bundle) dispatch from main of this repository for this version and commit, whose signing,
+# clean-host staging and attach jobs passed. Signature and clean host were checked in that run
+# by those jobs against the same files.
+server_receipt() {
+  local id=$1 version=$2 sha=$3 json=$4 body record run want names tmp manifest_id facts jobs
+  body=$(jq -r '.body // ""' <<<"$json")
+  case "$(server_state "$body")" in
+    none) fail "release $id has no server bundle record; let Release (server bundle) finish for $sha (it is dispatched with the release and reconciled every 6 hours)" ;;
+    bad) fail "release $id has more than one or a malformed server bundle record; fix it by hand" ;;
+  esac
+  record=$(server_record "$body")
+  run=${record%% *} want=${record#* }
+  [[ "$(server_digests "$version" <<<"$json")" == "$want" ]] ||
+    fail "release $id's server bundle files do not match their record"
+  read -r -a names <<<"$(server_names "$version")"
+  tmp=$(mktemp -d)
+  manifest_id=$(jq -r --arg n "${names[1]}" '[.assets[] | select(.name == $n) | .id] | .[0] // ""' <<<"$json")
+  gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/$manifest_id" >"$tmp/manifest.json" ||
+    fail "could not read release $id's server manifest; nothing written"
+  [[ "sha256:$(sha256sum "$tmp/manifest.json" | cut -d' ' -f1)" == "$(awk '{print $2}' <<<"$want")" ]] ||
+    fail "release $id's server manifest bytes are not the recorded ones"
+  jq -e --arg v "$version" --arg s "$sha" --arg a "${names[0]}" --arg d "$(awk '{print $1}' <<<"$want")"     '.schema == "orca-server-bundle/1" and .version == $v and .sourceSha == $s and .platform == "linux-x64"
+     and .archive.name == $a and ("sha256:" + .archive.sha256) == $d' "$tmp/manifest.json" >/dev/null ||
+    fail "release $id's server manifest is not for v$version at $sha with the attached archive"
+  rm -rf "$tmp"
+  facts=$(run_with_jobs "$run" 2>/dev/null) || fail "release $id's server bundle run $run cannot be read; nothing written"
+  [[ "$(jq -r '[.path, .repository.full_name, .head_repository.full_name, .event, .head_branch, .status, .conclusion, .display_title] | join("|")' <<<"$facts")" == \
+    ".github/workflows/release-server-bundle.yml|$REPO|$REPO|workflow_dispatch|main|completed|success|Release (server bundle) v$version at $sha" ]] ||
+    fail "release $id's server bundle run $run is not a successful Release (server bundle) dispatch from main for v$version at $sha"
+  jobs=$(jq -r '[.jobs[] | select(.conclusion == "success") | .name] | sort | join("|")' <<<"$facts")
+  receipt="server bundle receipt: release $id v$version $sha $(receipt_hash "$id" "$version" "$sha" "$want")"
+  for job in "sign the manifest (keyless, GitHub OIDC)" "stage --bundle on a clean host" "$receipt"; do
+    [[ "|$jobs|" == *"|$job|"* ]] || fail "release $id's server bundle run $run has no successful '$job' job"
+  done
+}
+
 case "${1:-}" in
+  server-receipt)
+    [[ $# -eq 5 && "$2" =~ ^[0-9]+$ && "$3" =~ ^[0-9a-f]{40}$ ]] || fail "usage: release-attach.sh server-receipt ID SHA VERSION DIR"
+    read -r -a names <<<"$(server_names "$4")"
+    digests=""
+    for name in "${names[@]}"; do
+      [[ -f "$5/$name" && ! -L "$5/$name" ]] || fail "$5/$name is missing"
+      digests="$digests sha256:$(sha256sum "$5/$name" | cut -d' ' -f1)"
+    done
+    digests=${digests# }
+    printf 'digests=%s\nreceipt=%s\n' "$digests" "$(receipt_hash "$2" "$4" "$3" "$digests")"
+    ;;
+  server-target)
+    [[ $# -eq 3 && "$2" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ && "$3" =~ ^[0-9a-f]{40}$ ]] ||
+      fail "usage: release-attach.sh server-target VERSION SHA"
+    version=$2 sha=$3
+    server_applies "$version" || fail "v$version is before the server bundle's $SERVER_FROM line; nothing built"
+    status=$(gh api "repos/$REPO/compare/$sha...main" --jq .status) || fail "cannot compare $sha with main"
+    [[ "$status" == ahead || "$status" == identical ]] || fail "$sha is not on main ($status); nothing built"
+    ids=$(gh api --paginate "repos/$REPO/releases" --jq ".[] | select(.name == \"v$version\") | .id")
+    count=$(grep -c . <<<"$ids" || true)
+    [[ "$count" -eq 1 ]] || fail "$count releases are named v$version, not one; nothing built"
+    kind=final
+    case "$version" in *-*) kind=prerelease ;; esac
+    release_for_server "$ids" "$sha" "$version" "$kind" >/dev/null
+    printf 'id=%s\nkind=%s\n' "$ids" "$kind"
+    ;;
+  server-attach)
+    [[ $# -eq 6 && "$2" =~ ^[0-9]+$ && "$3" =~ ^[0-9a-f]{40}$ && "$5" =~ ^[0-9]+$ ]] ||
+      fail "usage: release-attach.sh server-attach ID SHA VERSION RUN_ID DIR"
+    id=$2 sha=$3 version=$4 run=$5 dir=$6
+    server_applies "$version" || fail "v$version is before the server bundle's $SERVER_FROM line; nothing written"
+    kind=final
+    case "$version" in *-*) kind=prerelease ;; esac
+    read -r -a names <<<"$(server_names "$version")"
+    want=""
+    for name in "${names[@]}"; do
+      [[ -f "$dir/$name" && ! -L "$dir/$name" ]] || fail "$dir/$name is missing"
+      want="$want sha256:$(sha256sum "$dir/$name" | cut -d' ' -f1)"
+    done
+    want=${want# }
+    marker="<!-- orca-server-run: $run $want -->"
+    json=$(release_for_server "$id" "$sha" "$version" "$kind")
+    body=$(jq -r '.body // ""' <<<"$json")
+    case "$(server_state "$body")" in
+      one)
+        [[ "$(server_record "$body")" == "$run $want" && "$(server_digests "$version" <<<"$json")" == "$want" ]] ||
+          fail "release $id already records another server bundle; not replaced"
+        note "Release $id already carries this server bundle."
+        exit 0
+        ;;
+      bad) fail "release $id has more than one or a malformed server bundle record; nothing written, fix it by hand" ;;
+    esac
+    # No record at all: any server files there are an interrupted attach's, and nothing has
+    # vouched for them. Replace them with this run's.
+    for name in "${names[@]}"; do
+      stale=$(jq -r --arg n "$name" '.assets[] | select(.name == $n) | .id' <<<"$json")
+      if [[ -n "$stale" ]]; then
+        [[ "$(server_state "$(release_for_server "$id" "$sha" "$version" "$kind" | jq -r '.body // ""')")" == none ]] ||
+          fail "release $id gained a server record; nothing replaced"
+        gh api -X DELETE "repos/$REPO/releases/assets/$stale" >/dev/null
+      fi
+    done
+    for name in "${names[@]}"; do
+      [[ "$(server_state "$(release_for_server "$id" "$sha" "$version" "$kind" | jq -r '.body // ""')")" == none ]] ||
+        fail "release $id gained a server record; nothing uploaded"
+      gh api -X POST -H "Content-Type: application/octet-stream" \
+        "https://uploads.github.com/repos/$REPO/releases/$id/assets?name=$name" --input "$dir/$name" >/dev/null
+    done
+    json=$(release_for_server "$id" "$sha" "$version" "$kind")
+    [[ "$(server_digests "$version" <<<"$json")" == "$want" ]] || fail "release $id does not read back with this run's server files"
+    [[ "$(server_state "$(jq -r '.body // ""' <<<"$json")")" == none ]] || fail "release $id gained a server record; not recorded"
+    # The record last: it is what says the set is complete.
+    jq -n --arg body "$(jq -r '.body // ""' <<<"$json")"$'\n\n'"$marker" '{body: $body}' |
+      gh api -X PATCH "repos/$REPO/releases/$id" --input - >/dev/null
+    json=$(release_for_server "$id" "$sha" "$version" "$kind")
+    body=$(jq -r '.body // ""' <<<"$json")
+    [[ "$(server_state "$body")" == one && "$(server_record "$body")" == "$run $want" &&
+      "$(server_digests "$version" <<<"$json")" == "$want" ]] ||
+      fail "release $id does not read back with the server bundle and its record"
+    note "Attached the signed server bundle from run $run to v$version (release \`$id\`, \`$sha\`)."
+    ;;
+  server-reconcile)
+    rc=0
+    latest=$(lookup "repos/$REPO/releases/latest" .tag_name) || rc=$?
+    if ! found "$rc"; then latest=v0.0.0; fi
+    candidates=$(gh api --paginate "repos/$REPO/releases" \
+      --jq '.[] | select((.draft and (.prerelease | not)) or ((.draft | not) and .prerelease)) | [.id, .target_commitish, .name] | @tsv')
+    while IFS=$'\t' read -r id sha name; do
+      [[ -n "$id" ]] || continue
+      [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ && "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
+      version=${name#v} base=${name#v}
+      base=${base%%-*}
+      # Only a version line newer than Latest: older releases (and the release candidates of
+      # Latest itself) predate the bundle or are done.
+      [[ "$(printf '%s\n%s\n' "${latest#v}" "$base" | sort -V | tail -n1)" == "$base" && "$base" != "${latest#v}" ]] || continue
+      server_applies "$version" || continue
+      case "$(server_state "$(gh api "repos/$REPO/releases/$id" --jq '.body // ""')")" in
+        one) continue ;;
+        bad) note "$name (release $id): more than one or a malformed server bundle record; fix by hand."; continue ;;
+      esac
+      gh workflow run release-server-bundle.yml --repo "$REPO" --ref main -f version="$version" -f source_sha="$sha"
+      note "$name (release $id): dispatched the server bundle for $sha."
+    done <<<"$candidates"
+    ;;
   run-with-jobs)
     [[ $# -eq 2 ]] || fail "usage: release-attach.sh run-with-jobs RUN_ID"
     run_with_jobs "$2"
@@ -549,17 +773,27 @@ case "${1:-}" in
     fi
     json=$(validate "$id" "$sha" "$version" "$records" "$arm_records" >/dev/null && gh api "repos/$REPO/releases/$id") || exit 1
     digests() { jq -r --arg d "$deb_name" --arg e "$exe_name" --arg a "$arm_name" '[(.assets | length), ([.assets[] | select(.name == $d) | .digest] | .[0] // ""), ([.assets[] | select(.name == $e) | .digest] | .[0] // ""), ([.assets[] | select(.name == $a) | .digest] | .[0] // "")] | map(tostring) | join(" ")'; }
-    expected="$([[ -n "$arm" ]] && echo 3 || echo 2) $deb $exe $arm"
+    # The installers, plus from the 0.8 line the server bundle's three files and its receipt.
+    count=$([[ -n "$arm" ]] && echo 3 || echo 2) server="" with=""
+    if server_applies "$version"; then
+      count=$((count + 3)) with=" and the server bundle"
+    fi
+    expected="$count $deb $exe $arm"
     [[ "$(digests <<<"$json")" == "$expected" ]] ||
-      fail "release $id's assets ($(digests <<<"$json")) are not exactly the accepted $deb_name $deb and $exe_name $exe${arm:+ and $arm_name $arm}"
+      fail "release $id's assets ($(digests <<<"$json")) are not exactly the accepted $deb_name $deb and $exe_name $exe${arm:+ and $arm_name $arm}$with"
+    if server_applies "$version"; then
+      server_receipt "$id" "$version" "$sha" "$json"
+      server=$(server_digests "$version" <<<"$json")
+    fi
     gh api -X PATCH "repos/$REPO/releases/$id" -f tag_name="v$version" -f target_commitish="$sha" \
       -F draft=false -f make_latest=true >/dev/null
     after=$(gh api "repos/$REPO/releases/$id")
-    [[ "$(jq -r '.draft' <<<"$after")" == false && "$(digests <<<"$after")" == "$expected" ]] ||
+    [[ "$(jq -r '.draft' <<<"$after")" == false && "$(digests <<<"$after")" == "$expected" &&
+      ( -z "$server" || "$(server_digests "$version" <<<"$after")" == "$server" ) ]] ||
       fail "release $id does not read back published with the accepted assets"
     [[ "$(gh api "repos/$REPO/git/ref/tags/v$version" --jq .object.sha)" == "$sha" ]] || fail "tag v$version does not point at $sha"
     [[ "$(gh api "repos/$REPO/releases/latest" --jq .id)" == "$id" ]] || fail "release $id is not latest"
     note "Published v$version (release \`$id\`, \`$sha\`): $deb_name \`$deb\`, $exe_name \`$exe\`${arm:+, $arm_name \`$arm\` (natively accepted)}."
     ;;
-  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE [ARM64_FILE] | reconcile | accept-select [ID] | accept ID SHA VERSION RUN_ID DIGEST | x64-only ID SHA VERSION | upgrade-target ID | upgrade-reconcile | record-upgrade ID SHA VERSION RUN_ID EXE_SHA256 FROM | publish ID VERSION SHA DEB_SHA256 EXE_SHA256" ;;
+  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE [ARM64_FILE] | reconcile | accept-select [ID] | accept ID SHA VERSION RUN_ID DIGEST | x64-only ID SHA VERSION | upgrade-target ID | upgrade-reconcile | record-upgrade ID SHA VERSION RUN_ID EXE_SHA256 FROM | publish ID VERSION SHA DEB_SHA256 EXE_SHA256 | run-with-jobs RUN_ID | server-receipt ID SHA VERSION DIR | server-target VERSION SHA | server-attach ID SHA VERSION RUN_ID DIR | server-reconcile" ;;
 esac

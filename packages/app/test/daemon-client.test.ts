@@ -19,6 +19,8 @@ import {
   RUNS_EVENTS_METHOD,
   RUNS_GET_METHOD,
   RUNS_LIST_METHOD,
+  SEARCH_METHOD,
+  SearchParamsSchema,
   RUNS_RESUME_METHOD,
   RunsCancelParamsSchema,
   RunsEventsParamsSchema,
@@ -185,6 +187,12 @@ describe("the read methods", () => {
     }),
     [INPUTS_LIST_METHOD]: answer(INPUTS_LIST_METHOD, InputsListParamsSchema, { inputs: [], waiting: 0, asOf }),
     [CLAIMS_LIST_METHOD]: answer(CLAIMS_LIST_METHOD, ClaimsListParamsSchema, { claims: [], asOf }),
+    [SEARCH_METHOD]: answer(SEARCH_METHOD, SearchParamsSchema, {
+      hits: [{ kind: "event" as const, runId: "run-1", seq: 4, type: "run.failed", excerpt: "connection reset" }],
+      truncated: "deadline" as const,
+      scannedRuns: 1,
+      asOf,
+    }),
   };
 
   let d: DaemonHandle;
@@ -207,6 +215,9 @@ describe("the read methods", () => {
     expect((await client.runsEvents({ runId: "run-1", after: 3 })).lastSeq).toBe(0);
     expect((await client.inputsList({ kind: ["decision"] })).waiting).toBe(0);
     expect((await client.claimsList()).claims).toEqual([]);
+    const found = await client.search({ query: "  connection " });
+    expect(found.hits.map((h) => h.excerpt)).toEqual(["connection reset"]);
+    expect(found.truncated).toBe("deadline");
 
     expect(seen.map((c) => c.method)).toEqual([
       RUNS_LIST_METHOD,
@@ -214,7 +225,10 @@ describe("the read methods", () => {
       RUNS_EVENTS_METHOD,
       INPUTS_LIST_METHOD,
       CLAIMS_LIST_METHOD,
+      SEARCH_METHOD,
     ]);
+    // The daemon trims the query and fills in the default limit.
+    expect(seen[5]!.params).toEqual({ query: "connection", limit: 20 });
     // Params travel as given, with the schema's paging defaults filled in by the daemon.
     expect(seen[0]!.params).toEqual({ roots: true, limit: 100, offset: 0 });
     expect(seen[2]!.params).toEqual({ runId: "run-1", after: 3, limit: 200 });

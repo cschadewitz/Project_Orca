@@ -11,7 +11,8 @@
  * nonsecret target snapshot. Electron-free so the transitions can be tested directly.
  */
 import { UpdatePreflightRefusal } from "./updates.js";
-import { daemonEndpoint, type DaemonTargetSnapshot } from "../daemon-connection.js";
+import { daemonEndpoint, type DaemonConnectionRequest, type DaemonTargetSnapshot } from "../daemon-connection.js";
+import type { ProfileLease } from "./remote-profiles.js";
 import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
 import {
@@ -24,13 +25,14 @@ import {
 } from "@orca/protocol";
 import { resolve, join } from "node:path";
 import { DaemonClient as AuthenticatedClient } from "../client/daemon-client.js";
-import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
+import { isLoopbackDaemon, LocalDaemonToken, type DaemonTokenSource } from "../client/auth.js";
 import { appSpeaks } from "../client/protocol-window.js";
 import type { MacDrainOwner } from "./mac-update-drain.js";
 import type { MacUpdateTarget } from "./mac-updates.js";
 import type { WorkspaceSnapshot, WorkspaceSource } from "../bridge.js";
 import type { DaemonClient } from "../client/daemon-client.js";
 import type { DaemonSubscription } from "../client/subscription.js";
+import type { StreamTransport } from "../client/stream-transport.js";
 import type { BundledDaemon, DaemonExit } from "./daemon-process.js";
 import type { MacOwnedStopResult } from "./mac-update-restart.js";
 import {
@@ -83,7 +85,17 @@ export interface WorkspaceDeps {
     onExit: (exit: DaemonExit) => void;
   }) => Promise<BundledDaemon>;
   /** Build the read client for a daemon URL. */
-  client: (url: string, options: { workspace: string; bundled: boolean; tokenFile?: string }) => DaemonClient;
+  client: (
+    url: string,
+    options: {
+      workspace: string;
+      bundled: boolean;
+      tokenFile?: string;
+      auth?: DaemonTokenSource;
+      /** A saved profile's connections: every request and the socket go over these streams. */
+      transport?: StreamTransport;
+    },
+  ) => DaemonClient;
   /** Open the push stream on a client, wired to the broadcast and the connection machine. */
   subscribe: (client: DaemonClient) => DaemonSubscription;
   /**
@@ -111,6 +123,10 @@ export interface WorkspaceDeps {
   explicitUrl?: string | undefined;
   /** A development endpoint used only with an explicitly supplied workspace. */
   savedUrl?: string | undefined;
+  /** The saved SSH profile (#874); used when there is no environment override or saved URL. */
+  savedProfile?: string | undefined;
+  /** Open a profile's tunnel and credential. Absent: profiles are refused. */
+  openProfile?: (id: string) => Promise<ProfileLease>;
   onTarget?: (target: DaemonTargetSnapshot) => void;
   defaultUrl: string;
   /** Explicit environment workspace only. No home-directory bootstrap. */
@@ -165,6 +181,9 @@ export class Workspace {
   private observedHello = false;
   private source: DaemonTargetSnapshot["source"] = "development";
   private savedUrl: string | undefined;
+  private savedProfile: string | undefined;
+  /** The profile tunnel the current client goes through, if any. Released when it stops being current. */
+  private lease: ProfileLease | undefined;
   /** Keep a live bundled daemon running when the UI leaves it; switching is not cancellation. */
   private parkedDefault: BundledDaemon | undefined;
   private candidates = new Set<BundledDaemon>();
@@ -519,7 +538,29 @@ export class Workspace {
       source: this.source,
       environmentOverride: Boolean(this.deps.explicitUrl),
       ...(this.identity ? { identity: this.identity } : {}),
+      ...(this.lease
+        ? {
+            profile: {
+              id: this.lease.profile.id,
+              name: this.lease.profile.name,
+              destination: this.lease.profile.destination,
+            },
+          }
+        : {}),
     };
+  }
+
+  /** A saved target (URL or profile) replaces the bundled default. */
+  private hasSavedTarget(): boolean {
+    return Boolean(this.savedUrl || this.savedProfile);
+  }
+
+  /** Make `next` the current profile lease and let go of the previous one. */
+  private adoptLease(next: ProfileLease | undefined): void {
+    const previous = this.lease;
+    this.lease = next;
+    if (previous && previous !== next)
+      void previous.release().catch(() => this.deps.onError?.("The previous SSH tunnel did not close", undefined));
   }
 
   private endpoint(): string {
@@ -754,6 +795,8 @@ export class Workspace {
           this.target = { path, readOnly: false, source: "default" };
           this.source = "bundled";
           this.savedUrl = undefined;
+          this.savedProfile = undefined;
+          this.adoptLease(undefined);
           this.identity = hello.identity;
           this.verifiedHello = hello;
           this.observedHello = true;
@@ -804,7 +847,10 @@ export class Workspace {
   }
 
   /** Prepare without stopping the current daemon or opening a replacement stream. */
-  async prepareConnection(url: string | null, source: "saved" | "env" = "saved"): Promise<ConnectionCandidate> {
+  async prepareConnection(
+    url: DaemonConnectionRequest,
+    source: "saved" | "env" = "saved",
+  ): Promise<ConnectionCandidate> {
     if (this.deps.updateBootstrap?.ordinaryAllowed === false) throw new Error("Update replacement bootstrap is closed");
     if (this.macUpdateHold || this.firstRunHold) throw new Error("Workspace is busy");
     const ticket = Symbol("connection-preparation");
@@ -832,8 +878,16 @@ export class Workspace {
     }
   }
 
-  private async makeConnection(url: string | null, source: "saved" | "env"): Promise<ConnectionCandidate> {
+  private async makeConnection(
+    request: DaemonConnectionRequest,
+    source: "saved" | "env",
+  ): Promise<ConnectionCandidate> {
     if (this.updating || this.macUpdateHold || this.closed || this.pending) throw new Error("Workspace is busy");
+    if (request !== null && typeof request === "object") {
+      if (source !== "saved") throw new Error("The environment return must use the launch-pinned daemon");
+      return this.makeProfileConnection(request.profile);
+    }
+    const url = request;
     if (source === "env" && (!this.deps.explicitUrl || url !== daemonEndpoint(this.deps.explicitUrl)))
       throw new Error("The environment return must use the launch-pinned daemon");
     if (
@@ -905,7 +959,11 @@ export class Workspace {
         this.stream = undefined;
         this.clientNow = client;
         this.daemon = daemon;
-        if (source === "saved") this.savedUrl = url ?? undefined;
+        this.adoptLease(undefined);
+        if (source === "saved") {
+          this.savedUrl = url ?? undefined;
+          this.savedProfile = undefined;
+        }
         this.source = source === "env" ? "env" : url ? "saved" : daemon ? "bundled" : "development";
         this.target = { path, readOnly: false, source: source === "env" ? "env" : "default" };
         this.identity = hello.identity;
@@ -916,6 +974,67 @@ export class Workspace {
         this.stream = this.deps.subscribe(client);
         this.deps.onSnapshot(this.snapshot);
         if (old && old !== daemon && oldSource !== "bundled")
+          void old.stop().catch(() => this.deps.onError?.("Previous bundled daemon did not stop", undefined));
+      },
+    };
+  }
+
+  /**
+   * A saved SSH profile (#874): the tunnel opens here, before the probe, and closes again if
+   * the probe or the draft guard refuses; the current connection is untouched until then.
+   */
+  private async makeProfileConnection(id: string): Promise<ConnectionCandidate> {
+    if (!this.deps.openProfile) throw new ConnectionRefusal("This build cannot connect through SSH profiles.");
+    const epoch = this.epoch;
+    const path = this.deps.defaultPath() ?? "";
+    const lease = await this.deps.openProfile(id);
+    let adopted = false;
+    let client: DaemonClient;
+    try {
+      if (this.closed) throw new Error("Workspace closed");
+      client = this.deps.client(lease.url, {
+        workspace: path,
+        bundled: false,
+        auth: lease.auth,
+        transport: lease.transport,
+      });
+    } catch (error) {
+      await lease.release();
+      throw error;
+    }
+    return {
+      client,
+      explainFailure: () => (lease.remoteRefused() ? remoteDaemonMissing(lease) : undefined),
+      check: () => {
+        this.assertEpoch(epoch);
+        if (this.closed || this.updating || this.macUpdateHold || this.pending)
+          throw new Error("Workspace changed while connecting");
+      },
+      dispose: async () => {
+        if (!adopted) await lease.release();
+      },
+      activate: (hello) => {
+        adopted = true;
+        const old = this.daemon;
+        const oldSource = this.source;
+        if (old && oldSource === "bundled") this.parkedDefault = old;
+        this.stream?.close();
+        this.stream = undefined;
+        this.clientNow = client;
+        this.daemon = undefined;
+        this.adoptLease(lease);
+        this.savedUrl = undefined;
+        this.savedProfile = id;
+        this.source = "saved";
+        this.target = { path, readOnly: false, source: "default" };
+        this.identity = hello.identity;
+        this.observedHello = hello.identity !== undefined;
+        this.epoch += 1;
+        this.deps.onSwitch(false);
+        this.deps.onTarget?.(this.connectionTarget);
+        this.stream = this.deps.subscribe(client);
+        this.deps.onSnapshot(this.snapshot);
+        if (old && oldSource !== "bundled")
           void old.stop().catch(() => this.deps.onError?.("Previous bundled daemon did not stop", undefined));
       },
     };
@@ -1084,9 +1203,13 @@ export class Workspace {
   constructor(deps: WorkspaceDeps) {
     this.deps = deps;
     this.savedUrl = deps.savedUrl;
-    this.source = deps.explicitUrl ? "env" : deps.savedUrl ? "saved" : "development";
+    this.savedProfile = deps.savedUrl ? undefined : deps.savedProfile;
+    this.source = deps.explicitUrl ? "env" : this.hasSavedTarget() ? "saved" : "development";
     this.target = { path: deps.defaultPath() ?? "", readOnly: false, source: deps.explicitUrl ? "env" : "default" };
-    this.clientNow = deps.client(deps.explicitUrl ?? deps.savedUrl ?? (this.target.path ? deps.defaultUrl : ""), {
+    // A saved profile has no URL until its tunnel opens in the first switch: inert until then.
+    const initial =
+      deps.explicitUrl ?? deps.savedUrl ?? (this.savedProfile || !this.target.path ? "" : deps.defaultUrl);
+    this.clientNow = deps.client(initial, {
       workspace: this.target.path,
       bundled: false,
     });
@@ -1131,7 +1254,7 @@ export class Workspace {
       return Promise.reject(new Error("Update replacement bootstrap is closed"));
     if (this.closed || this.updating || this.macUpdateHold || this.firstRunHold || this.connectionPreparations.size)
       return Promise.reject(new Error("Workspace is busy"));
-    if (!this.deps.explicitUrl && !this.savedUrl && !this.target.path) {
+    if (!this.deps.explicitUrl && !this.hasSavedTarget() && !this.target.path) {
       this.deps.onDaemonGone("Choose a project and empty app workspace in Config.");
       this.deps.onSnapshot(this.snapshot);
       return Promise.resolve();
@@ -1163,7 +1286,7 @@ export class Workspace {
       throw new Error("Update restart or connection preparation is in progress");
     const { explicitUrl, defaultPath } = this.deps;
     const path = defaultPath() ?? "";
-    if (!explicitUrl && !this.savedUrl && !path)
+    if (!explicitUrl && !this.hasSavedTarget() && !path)
       throw new Error("Prepare and connect a selected first-run workspace first.");
     await this.switchTo({ path, readOnly: false, source: explicitUrl ? "env" : "default" });
     return this.snapshot;
@@ -1175,6 +1298,9 @@ export class Workspace {
     await this.pending;
     this.stream?.close();
     this.stream = undefined;
+    const lease = this.lease;
+    this.lease = undefined;
+    await lease?.release().catch(() => undefined);
     const daemon = this.daemon;
     this.daemon = undefined;
     if (!this.windowsUpdate && !this.macUpdateStopping && !this.macUpdateHold && daemon)
@@ -1215,7 +1341,7 @@ export class Workspace {
   private switchTo(target: WorkspaceTarget): Promise<void> {
     // Check before detaching the current target, and again immediately before spawn.
     try {
-      if (target.readOnly || (!this.deps.explicitUrl && !this.savedUrl))
+      if (target.readOnly || (!this.deps.explicitUrl && !this.hasSavedTarget()))
         assertNoFirstRunOwnership(storeRoot(target.path));
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new FirstRunOwnershipRefusal(error));
@@ -1238,8 +1364,37 @@ export class Workspace {
     await stopping;
 
     const override = this.deps.explicitUrl ?? this.savedUrl;
-    const entry = override && !target.readOnly ? undefined : this.deps.findEntry();
+    const profileId = override || target.readOnly ? undefined : this.savedProfile;
+    const entry = (override || profileId) && !target.readOnly ? undefined : this.deps.findEntry();
     let url = override ?? this.deps.defaultUrl;
+    let lease: ProfileLease | undefined;
+    if (profileId) {
+      try {
+        if (!this.deps.openProfile) throw new ConnectionRefusal("This build cannot connect through SSH profiles.");
+        lease = await this.deps.openProfile(profileId);
+        url = lease.url;
+      } catch (e) {
+        const reason = `the saved SSH profile could not connect: ${e instanceof Error ? e.message : "unknown failure"}`;
+        this.deps.onError?.(reason, e);
+        if (this.closed) return;
+        // Nothing to fall back to: the person chose that remote daemon. Inert client, new
+        // epoch, disconnected with the reason; the connection dialog retries it.
+        this.adoptLease(undefined);
+        this.clientNow = this.deps.client("", { workspace: target.path, bundled: false });
+        this.source = "saved";
+        this.identity = undefined;
+        this.observedHello = false;
+        this.epoch += 1;
+        this.deps.onTarget?.(this.connectionTarget);
+        this.deps.onDaemonGone(reason);
+        this.deps.onSnapshot(this.snapshot);
+        return;
+      }
+      if (this.closed) {
+        await lease.release();
+        return;
+      }
+    }
     if (entry) {
       try {
         assertNoFirstRunOwnership(storeRoot(target.path));
@@ -1278,12 +1433,14 @@ export class Workspace {
       workspace: target.path,
       bundled: this.daemon !== undefined,
       ...(this.daemon?.tokenFile ? { tokenFile: this.daemon.tokenFile } : {}),
+      ...(lease ? { auth: lease.auth, transport: lease.transport } : {}),
     });
+    this.adoptLease(lease);
     this.source = target.readOnly
       ? "store"
       : this.deps.explicitUrl
         ? "env"
-        : this.savedUrl
+        : this.hasSavedTarget()
           ? "saved"
           : this.daemon
             ? "bundled"
@@ -1317,4 +1474,9 @@ export class Workspace {
     this.daemon = undefined;
     this.deps.onDaemonGone("The bundled daemon exited");
   }
+}
+
+/** A failed probe through a working tunnel: ssh is fine, the daemon is not there. */
+function remoteDaemonMissing(lease: ProfileLease): string {
+  return `SSH to ${lease.profile.destination} works, but no ORCA daemon is listening on its port ${lease.profile.remotePort}. Start it there with \`orca serve\` and try again.`;
 }
