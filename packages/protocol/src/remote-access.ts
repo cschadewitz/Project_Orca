@@ -220,6 +220,12 @@ export interface SshTunnelOptions {
   /** Restart backoff after the tunnel was open. Default 1 s doubling to 30 s. */
   backoff?: { initialMs: number; maxMs: number };
   onState?: (state: TunnelState) => void;
+  /**
+   * Never trust a key on first use: every hop must already be pinned, or the tunnel refuses
+   * `host-key-missing` before that hop's ssh starts. For administrative connections, such as
+   * revoking a credential, that must reach the server the credential came from or nothing.
+   */
+  pinnedOnly?: boolean;
 }
 
 /** A failure that a restart cannot fix: it needs the person. */
@@ -490,6 +496,8 @@ export class SshTunnel {
   private listener: Server | undefined;
   private readonly accepted = new Set<Socket>();
   private readonly streams = new Set<Stream>();
+  /** Trust no key on first use (`SshTunnelOptions.pinnedOnly`, and every `runOnce`). */
+  private pinnedOnly = false;
   /** Commands running on the server (`exec`), stopped with the tunnel. */
   private readonly commands = new Set<ChildProcess>();
   private port: number | undefined;
@@ -500,7 +508,9 @@ export class SshTunnel {
   private fingerprint: string | undefined;
   private channelRefusedAt = 0;
 
-  constructor(private readonly options: SshTunnelOptions) {}
+  constructor(private readonly options: SshTunnelOptions) {
+    this.pinnedOnly = options.pinnedOnly === true;
+  }
 
   get state(): TunnelState {
     return this.stateNow;
@@ -553,18 +563,23 @@ export class SshTunnel {
   /**
    * Run one command on the profile's server (behind its jump host, if any) and collect its
    * output: ORCA's own CLI there, for credential setup (#875). Opens nothing that outlives
-   * the call; the server is authenticated against its pin exactly as for a connection, and
-   * the command's words must pass `REMOTE_WORD`. ssh's own failures reject with a
+   * the call. A command never trusts a key on first use: the server (and its jump host) must
+   * already be pinned, from an earlier connect, or it refuses `host-key-missing` before ssh
+   * starts. The command's words must pass `REMOTE_WORD`. ssh's own failures reject with a
    * `TunnelRefusal`; a command that ran resolves with its exit code, standard output, and
    * the server's error lines (to classify, never to show or log).
    */
   static run(options: SshTunnelOptions, command: readonly string[], timeoutMs = 60_000): Promise<RemoteResult> {
-    return new SshTunnel(options).runOnce(command, timeoutMs);
+    return new SshTunnel({ ...options, pinnedOnly: true }).runOnce(command, timeoutMs);
   }
 
-  /** `run` on a tunnel that was never opened: it is closed when the command ends. */
+  /**
+   * `run` on a tunnel that was never opened: it is closed when the command ends. Like `run`,
+   * every hop must already be pinned, the jump host's too.
+   */
   async runOnce(command: readonly string[], timeoutMs = 60_000): Promise<RemoteResult> {
     if (this.listener || this.hops) throw new Error("Tunnel already in use");
+    this.pinnedOnly = true;
     try {
       await this.prepare();
       return await this.exec(command, timeoutMs);
@@ -578,8 +593,12 @@ export class SshTunnel {
     if (this.closed || !this.hops) throw new TunnelRefusal("closed");
     if (!this.jumpUp()) throw new TunnelRefusal("unreachable");
     const hop = this.hops.daemon;
-    if (pinState(hop.knownHostsFile) === "broken") throw new TunnelRefusal("host-key-missing");
+    // Commands administer the server's credentials: only ever on a server, and behind a jump
+    // host, that is already pinned. The pin is read once, into the arguments ssh gets.
     const args = commandArgs(hop, command);
+    if (!args.includes("StrictHostKeyChecking=yes")) throw new TunnelRefusal("host-key-missing");
+    if (this.hops.jump && pinState(this.hops.jump.knownHostsFile) !== "pinned")
+      throw new TunnelRefusal("host-key-missing");
     let child: ChildProcess;
     try {
       child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args);
@@ -611,20 +630,7 @@ export class SshTunnel {
           if (!/^debug\d:/.test(line) && serverLines.length < 64) serverLines.push(line.slice(0, 512));
           return;
         }
-        const key = /Server host key: \S+ (SHA256:[A-Za-z0-9+/=]+)/.exec(line);
-        if (key) this.fingerprint = key[1];
-        if (/^debug1: Entering interactive session/.test(line)) {
-          try {
-            this.enroll(hop.knownHostsFile);
-          } catch (error) {
-            failed = true;
-            clearTimeout(timer);
-            reject(error instanceof Error ? error : new TunnelRefusal("pin-write-failed"));
-            child.kill();
-            return;
-          }
-          authenticated = true;
-        }
+        if (/^debug1: Entering interactive session/.test(line)) authenticated = true;
       });
       child.once("error", (error: NodeJS.ErrnoException) => {
         if (failed) return;
@@ -881,7 +887,8 @@ export class SshTunnel {
     const generation: Generation = { children: [], ready: false, lost: false };
     this.jump = generation;
     try {
-      if (pinState(hop.knownHostsFile) === "broken") throw new TunnelRefusal("host-key-missing");
+      const state = pinState(hop.knownHostsFile);
+      if (state === "broken" || (this.pinnedOnly && state !== "pinned")) throw new TunnelRefusal("host-key-missing");
       await this.startJump(generation, hop);
       if (generation.lost || this.jump !== generation) throw new TunnelRefusal("ssh-failed");
       this.enroll(hop.knownHostsFile);
@@ -896,8 +903,13 @@ export class SshTunnel {
   private startJump(generation: Generation, hop: HopSpec): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let child: ChildProcess;
+      const args = hopArgs(hop);
+      if (this.pinnedOnly && !args.includes("StrictHostKeyChecking=yes")) {
+        reject(new TunnelRefusal("host-key-missing"));
+        return;
+      }
       try {
-        child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", hopArgs(hop));
+        child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args);
       } catch {
         reject(new TunnelRefusal("ssh-missing"));
         return;

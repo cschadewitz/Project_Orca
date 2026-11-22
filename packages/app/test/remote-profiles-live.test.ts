@@ -232,10 +232,11 @@ describe.skipIf(!live)("profile connection over a real ssh", () => {
     expect((await client.hello("ssh-live")).orcaVersion).toBe("ssh-live");
     const first = lease.auth.read();
 
-    // Due while connected: rotated on the server, and the lease moves to the new credential.
+    // Due while connected: a new credential on the server, and the lease moves to it.
     now += 45 * 60_000;
     await vi.waitFor(() => expect(lease.auth.read()).not.toBe(first), { timeout: 30_000 });
-    expect(liveCredentials()).toHaveLength(1);
+    // Switched in once the daemon accepted it; the old one is revoked right after.
+    await vi.waitFor(() => expect(liveCredentials()).toHaveLength(1), { timeout: 30_000 });
     expect(liveCredentials()[0]!.id).not.toBe(issued[0]!.id);
     expect((await client.hello("after-renewal")).orcaVersion).toBe("ssh-live");
     await lease.release();

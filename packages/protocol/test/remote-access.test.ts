@@ -569,6 +569,13 @@ const cipher = (over: Partial<SecretCipher> = {}): SecretCipher => ({
 });
 
 describe("commands on the server (#875)", () => {
+  /** A pin file holding a key, as an earlier connect left it. */
+  const pinned = (name = "lab.known_hosts") => {
+    const pins = join(dir(), name);
+    writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n");
+    return pins;
+  };
+
   it("runs a command instead of forwarding, with the same pinned, config-free ssh", () => {
     const hops = tunnelHops(profile(), join(dir(), "lab.known_hosts"));
     const args = commandArgs(hops.daemon, [
@@ -612,12 +619,13 @@ describe("commands on the server (#875)", () => {
     expect(() => commandArgs(hops.daemon, command)).toThrow(RemoteCommandRefused);
   });
 
-  it("collects the command's output and its own error lines, and enrolls the pin like a stream", async () => {
-    const pins = join(dir(), "lab.known_hosts");
+  it("collects the command's output and its own error lines, over a strictly pinned ssh", async () => {
+    const pins = pinned();
     const { tunnel, spawned } = fakeTunnel(
       (ssh, _n, args) => {
         expect(args.at(-1)).toBe("--json");
-        writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n");
+        expect(args).toContain("StrictHostKeyChecking=yes");
+        expect(args).not.toContain("StrictHostKeyChecking=accept-new");
         ssh.say(authed);
         ssh.say("debug1: client_input_channel_req: channel 0 rtype exit-status reply 0");
         ssh.say("warning: something from orca");
@@ -635,22 +643,56 @@ describe("commands on the server (#875)", () => {
     await expect(tunnel.runOnce(["orca"])).rejects.toThrow();
   });
 
-  it("refuses like a stream when ssh fails, times out, prints too much, or the pin is gone", async () => {
-    const denied = fakeTunnel((ssh) => {
-      ssh.say("casey@lab: Permission denied (publickey).");
-      ssh.exit(255);
+  it("never trusts a key on first use: an unpinned server or jump host is refused before ssh starts", async () => {
+    const fresh = fakeTunnel((ssh) => ssh.say(authed));
+    await expect(fresh.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "host-key-missing" });
+    expect(fresh.spawned).toHaveLength(0);
+
+    // Pinned server, unpinned jump host: the jump never starts with accept-new either.
+    const pins = pinned();
+    const jumped = fakeTunnel((ssh) => ssh.say(listening), {
+      knownHostsFile: pins,
+      profile: profile({ jump: { destination: "casey@jump.example" } }),
     });
+    await expect(jumped.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "host-key-missing" });
+    expect(jumped.spawned).toHaveLength(0);
+    // The static form is the same, whatever options it is given.
+    await expect(
+      SshTunnel.run(
+        {
+          profile: profile(),
+          knownHostsFile: join(dir(), "none.known_hosts"),
+          spawn: () => {
+            throw new Error("ssh must not start");
+          },
+        },
+        ["orca"],
+      ),
+    ).rejects.toMatchObject({ code: "host-key-missing" });
+  });
+
+  it("refuses like a stream when ssh fails, times out, prints too much, or the pin is gone", async () => {
+    const denied = fakeTunnel(
+      (ssh) => {
+        ssh.say("casey@lab: Permission denied (publickey).");
+        ssh.exit(255);
+      },
+      { knownHostsFile: pinned() },
+    );
     await expect(denied.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "auth-failed" });
 
-    const stuck = fakeTunnel((ssh) => ssh.say(authed));
+    const stuck = fakeTunnel((ssh) => ssh.say(authed), { knownHostsFile: pinned() });
     await expect(stuck.tunnel.runOnce(["orca"], 30)).rejects.toMatchObject({ code: "timeout" });
     expect(stuck.spawned[0]!.killed).toBe(true);
 
-    const loud = fakeTunnel((ssh) => {
-      ssh.say(authed);
-      ssh.stdout.write(Buffer.alloc(70 * 1024, "x"));
-      ssh.exit(0);
-    });
+    const loud = fakeTunnel(
+      (ssh) => {
+        ssh.say(authed);
+        ssh.stdout.write(Buffer.alloc(70 * 1024, "x"));
+        ssh.exit(0);
+      },
+      { knownHostsFile: pinned() },
+    );
     await expect(loud.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "ssh-failed" });
 
     const pins = join(dir(), "gone.known_hosts");
@@ -659,17 +701,21 @@ describe("commands on the server (#875)", () => {
     await expect(broken.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "host-key-missing" });
     expect(broken.spawned).toHaveLength(0);
 
-    const missing = fakeTunnel((ssh) =>
-      ssh.emit("error", Object.assign(new Error("spawn ssh ENOENT"), { code: "ENOENT" })),
+    const missing = fakeTunnel(
+      (ssh) => ssh.emit("error", Object.assign(new Error("spawn ssh ENOENT"), { code: "ENOENT" })),
+      { knownHostsFile: pinned() },
     );
     await expect(missing.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "ssh-missing" });
   });
 
   it("runs on an open tunnel's server, and closing the tunnel stops a running command", async () => {
-    const { tunnel, spawned } = fakeTunnel((ssh, n) => {
-      ssh.say(authed);
-      if (n === 2) ssh.stdout.write("partial");
-    });
+    const { tunnel, spawned } = fakeTunnel(
+      (ssh, n) => {
+        ssh.say(authed);
+        if (n === 2) ssh.stdout.write("partial");
+      },
+      { knownHostsFile: pinned() },
+    );
     await tunnel.open();
     const running = tunnel.exec(["orca", "auth", "list"]);
     await until(() => spawned.length === 2);

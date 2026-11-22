@@ -154,6 +154,7 @@ it("connects through a saved SSH profile and confirms removal on its row (#874)"
     remove: vi.fn(async () => ({ ok: true as const, value: { revoke: "not-reached" as const } })),
     importCredential: vi.fn(),
     forgetHostKey: vi.fn(),
+    useAutomaticSignIn: vi.fn(),
   };
   r.bridge.connect = vi.fn(async () => ({ ok: false as const, message: "SSH authentication failed." }));
   render(
@@ -199,6 +200,7 @@ it("saves a profile's sign-in settings and says when it signs in (#875)", async 
     remove: vi.fn(),
     importCredential: vi.fn(),
     forgetHostKey: vi.fn(),
+    useAutomaticSignIn: vi.fn(),
   };
   render(
     <h.Providers>

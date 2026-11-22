@@ -139,18 +139,17 @@ for delegation (#883). Windows uses the built-in OpenSSH client (`ssh.exe`).
 
 A profile with no credential gets one on its first connect, with no token to copy.
 Once the tunnel's ssh has authenticated the server against its pin, the app runs
-ORCA's own command line there over the same kind of pinned, config-free ssh:
+ORCA's own command line there over the same kind of config-free ssh:
 
 ```
 <server command> auth issue desktop-<this computer> --preset client|viewer \
   --expires-at <now + 90 days> --label orca-app-<profile> [--config <workspace config>] --json
 ```
 
-The token goes from that command's output straight into the profile's keychain slot. It
-is never printed, logged or written anywhere else; beside the slot, a small nonsecret
-record (`credentials/<profile>.json`) keeps the credential's id and expiry. Each
-command word is limited to letters, digits and `. _ : / \ -`, so no shell on the
-server (sh, cmd or PowerShell) reads anything into it.
+Commands on the server never trust a host key on first use: they run only once the
+server (and its jump host) is pinned, with `StrictHostKeyChecking=yes`, and are refused
+before ssh starts otherwise. Each command word is limited to letters, digits and
+`. _ : / \ -`, so no shell on the server (sh, cmd or PowerShell) reads anything into it.
 
 - **Server command** is ORCA's CLI on the server: `orca` on the SSH user's `PATH` by
   default, or a full path such as a managed install's wrapper.
@@ -160,28 +159,50 @@ server (sh, cmd or PowerShell) reads anything into it.
 - **Read only** issues the credential with the `viewer` preset, for profiles that only
   watch runs and plans.
 
-Before the credential is used, the app checks it with an authenticated `hello` over
-the tunnel. A credential the daemon refuses gets one replacement (an expired or revoked
-one, say); if the daemon refuses a credential that was just issued, the CLI issued it
-for another workspace than the daemon's on that port, so the app revokes it again and
-asks for the profile's workspace config. Concurrent connects of one profile share a
-single setup, so the server issues one credential.
+A new credential is never used until the daemon has accepted it. The token goes from
+the command's output into a staging slot in the keychain, and its id, expiry and where
+it was issued (server, CLI and workspace config) go into a small nonsecret record
+(`credentials/<profile>.json`) before anything else happens; a credential the
+keychain cannot keep is revoked on the server at once. The app then asks the daemon
+for an authenticated `hello` with it over the tunnel. Accepted, it becomes the
+profile's credential, the daemon's workspace id is remembered, and the credential it
+replaces is revoked. If the daemon cannot be asked (no daemon running, say), nothing
+switches: the staged credential waits for the next connect, and the one in use stays.
+If the daemon refuses a credential that was just issued, or answers from another
+workspace than before, the CLI issued it for another workspace than the daemon's on
+that port, so the app revokes it again and asks for the profile's workspace config.
+Concurrent connects of one profile share a single setup, so the server issues one
+credential. Tokens are never printed, logged or written anywhere but the keychain.
 
-While connected, the app checks every 12 hours and renews a credential with
-`auth rotate` once less than 30 days are left; a profile that is not connected renews
-on its next connect. Rotation keeps the grants, and the server revokes the old secret.
-Removing a profile first revokes its credential on the server (`auth revoke`) through
-its pinned host key; if the server cannot be reached, the profile is still removed and
-the dialog says the credential stays valid there until it expires. Changing the server
-command, workspace config or read-only setting replaces the credential on the next
-connect and revokes the old one. An imported credential is kept as it is and never
-renewed or revoked by the app.
+While connected, the app checks every 12 hours and renews a credential once less than
+30 days are left, the same way: a new credential, accepted by the daemon, then the old
+one revoked. A profile that is not connected renews on its next connect, and a renewal
+that fails leaves the current credential in use while it is valid. A credential the
+daemon refuses (expired or revoked on the server) gets one replacement, then a clear
+refusal.
+
+Every replaced credential is revoked where it was issued, with the CLI and workspace
+config it was issued under, and only through the server it was issued on. One that
+cannot be revoked yet stays on the profile's list ("old credentials not revoked yet")
+and is tried again on later connects. Changing the server command, workspace config or
+read-only setting replaces the credential on the next connect; pointing the profile at
+another server keeps the old server's credentials on the list, since the new server
+cannot revoke them. Removing a profile revokes everything on its list through its
+pinned host key first; if any of it cannot be revoked, the profile is still removed and
+the dialog says those credentials stay valid until they expire. While a removal is
+revoking, the profile cannot be edited, connected, imported into or reset.
+
+An imported credential is the person's: the app never renews, replaces or revokes it.
+If the daemon refuses it, the connect says so; **Use automatic sign-in** drops the import
+so the next connect issues one. Importing over a credential the app had issued puts
+that one on the list to revoke.
 
 Failures name what to do: ORCA not found on the server under the server command, not
 allowed to run it, no workspace there (or a workspace config path with no file), another
 CLI failure (run `orca auth list` on the server), the daemon on the port belonging to
-another workspace, and a refused credential that could not be replaced. Server output is
-never shown or logged.
+another workspace, a refused credential that could not be replaced, a refused import,
+and a keychain that could not keep the new credential. Server output is never shown or
+logged.
 
 ### Choosing a remote access path
 

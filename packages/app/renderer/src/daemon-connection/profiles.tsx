@@ -158,6 +158,13 @@ export function ConnectionProfiles({
           </Text>
           <div className="orca-chips">
             <Chip>{credentialChip(profile)}</Chip>
+            {profile.pendingRevocations ? (
+              <Chip>
+                {profile.pendingRevocations === 1
+                  ? "1 old credential not revoked yet"
+                  : `${profile.pendingRevocations} old credentials not revoked yet`}
+              </Chip>
+            ) : null}
             <Chip>
               {profile.hostKeyMissing
                 ? "Pinned host key missing"
@@ -213,6 +220,16 @@ export function ConnectionProfiles({
               >
                 Import credential…
               </Button>
+              {profile.credentialImported && (
+                <Button
+                  size="sm"
+                  disabled={disabled || current === profile.id}
+                  disabledReason="Connect to another daemon first"
+                  onClick={() => void run(() => profiles.useAutomaticSignIn(profile.id))}
+                >
+                  Use automatic sign-in
+                </Button>
+              )}
               <Button
                 size="sm"
                 disabled={disabled || current === profile.id}

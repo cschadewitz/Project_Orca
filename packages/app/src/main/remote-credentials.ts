@@ -2,11 +2,14 @@
  * Automatic sign-in for SSH profiles (#875), main process only.
  *
  * A profile's daemon credential is issued, renewed and revoked by ORCA's own command line on
- * the server, run over the profile's pinned SSH connection: `orca auth issue|rotate|revoke
- * --json`. The token goes from that command's output straight into the profile's keychain
- * slot; it is never printed, logged or kept anywhere else. Beside the slot, a small nonsecret
- * record (`credentials/<id>.json`) remembers which server credential it is and when it expires,
- * so it can be renewed before then and revoked when the profile is deleted.
+ * the server, run over the profile's already pinned SSH connection: `orca auth issue|revoke
+ * --json`. A new credential goes from that command's output into a staging keychain slot,
+ * and becomes the profile's credential only once the daemon has accepted it; the one it
+ * replaces is revoked after that. Tokens are never printed, logged or kept anywhere else.
+ * Beside the slots, a small nonsecret record (`credentials/<id>.json`) remembers which server
+ * credentials they are, when they expire, and where each was issued (server, CLI and
+ * workspace config), so every one of them is revoked where it came from, or kept on the list
+ * until it can be.
  */
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { join } from "node:path";
@@ -32,7 +35,14 @@ export const DEFAULT_CREDENTIAL_POLICY: CredentialPolicy = {
 };
 
 export type CredentialSetupCode =
-  "cli-missing" | "cli-permission" | "server-not-set-up" | "cli-failed" | "wrong-workspace" | "credential-refused";
+  | "cli-missing"
+  | "cli-permission"
+  | "server-not-set-up"
+  | "cli-failed"
+  | "wrong-workspace"
+  | "credential-refused"
+  | "imported-refused"
+  | "store-failed";
 
 /** Automatic sign-in could not finish. The message says what to do; it never carries server output. */
 export class CredentialSetupRefusal extends ConnectionRefusal {
@@ -64,6 +74,10 @@ function refusalMessage(code: CredentialSetupCode, profile: ConnectionProfile): 
       return `The daemon on ${profile.destination} port ${profile.remotePort} does not accept credentials from the workspace "${command}" uses. Set the profile's workspace config to the config file of the daemon on that port.`;
     case "credential-refused":
       return `The daemon on ${profile.destination} refused this profile's credential, and a new one could not be issued. Connect again, or import a credential.`;
+    case "imported-refused":
+      return `The daemon on ${profile.destination} refused the credential imported for ${profile.name}. Import a new one, or choose "Use automatic sign-in" to have ORCA issue one.`;
+    case "store-failed":
+      return `ORCA could not keep a new credential for ${profile.name} in the system keychain, so it was not used. Check that the keychain is unlocked and available, then connect again.`;
   }
 }
 
@@ -86,8 +100,36 @@ export function principalFor(hostname: string): string {
   return `desktop-${host}`;
 }
 
-function configArgs(profile: ConnectionProfile): string[] {
-  return profile.serverConfig ? ["--config", profile.serverConfig] : [];
+/** Where a credential was issued: which server, through which CLI, for which workspace config. */
+const TargetSchema = z
+  .object({
+    server: z.string().max(1024),
+    serverCommand: z.string().max(1024).optional(),
+    serverConfig: z.string().max(1024).optional(),
+  })
+  .strict();
+export type CredentialTarget = z.infer<typeof TargetSchema>;
+
+/** The SSH server a profile reaches (and through which jump host): what its pins vouch for. */
+export function serverKey(profile: ConnectionProfile): string {
+  return JSON.stringify([
+    profile.destination,
+    profile.sshPort ?? 22,
+    profile.jump?.destination ?? null,
+    profile.jump ? (profile.jump.sshPort ?? 22) : null,
+  ]);
+}
+
+export function targetOf(profile: ConnectionProfile): CredentialTarget {
+  return {
+    server: serverKey(profile),
+    ...(profile.serverCommand ? { serverCommand: profile.serverCommand } : {}),
+    ...(profile.serverConfig ? { serverConfig: profile.serverConfig } : {}),
+  };
+}
+
+function configArgs(target: { serverConfig?: string | undefined }): string[] {
+  return target.serverConfig ? ["--config", target.serverConfig] : [];
 }
 
 export function issueCommand(profile: ConnectionProfile, principal: string, expiresAt: Date): string[] {
@@ -107,21 +149,9 @@ export function issueCommand(profile: ConnectionProfile, principal: string, expi
   ];
 }
 
-export function rotateCommand(profile: ConnectionProfile, credentialId: string, expiresAt: Date): string[] {
-  return [
-    serverCommand(profile),
-    "auth",
-    "rotate",
-    credentialId,
-    "--expires-at",
-    expiresAt.toISOString(),
-    ...configArgs(profile),
-    "--json",
-  ];
-}
-
-export function revokeCommand(profile: ConnectionProfile, credentialId: string): string[] {
-  return [serverCommand(profile), "auth", "revoke", credentialId, ...configArgs(profile), "--json"];
+/** Revoke where it was issued: that CLI, that workspace config. */
+export function revokeCommand(target: CredentialTarget, credentialId: string): string[] {
+  return [target.serverCommand ?? "orca", "auth", "revoke", credentialId, ...configArgs(target), "--json"];
 }
 
 const CREDENTIAL_ID = /^[A-Za-z0-9_-]{12}$/;
@@ -146,7 +176,7 @@ export interface Issued {
  * code and the server's error lines; neither is ever shown or logged, since a confused shell
  * could print anything.
  */
-export function issuedFrom(result: RemoteResult, profile: ConnectionProfile): Issued {
+export function issuedFrom(result: RemoteResult, profile: ConnectionProfile, principal: string): Issued {
   if (result.code !== 0) throw credentialRefusal(classifyFailure(result), profile);
   let parsed: z.infer<typeof IssuedSchema>;
   try {
@@ -154,7 +184,18 @@ export function issuedFrom(result: RemoteResult, profile: ConnectionProfile): Is
   } catch {
     throw credentialRefusal("cli-failed", profile);
   }
-  return { token: parsed.token, credentialId: parsed.credential.id, expiresAt: parsed.credential.expiresAt };
+  const issued = { token: parsed.token, credentialId: parsed.credential.id, expiresAt: parsed.credential.expiresAt };
+  // Not the credential that was asked for: never stored, and the caller takes it back.
+  if (parsed.credential.principal !== principal) throw new StrayCredential(issued.credentialId);
+  return issued;
+}
+
+/** The server issued a credential that is not the one asked for. Revoke it; never store it. */
+export class StrayCredential extends Error {
+  override readonly name = "StrayCredential";
+  constructor(readonly credentialId: string) {
+    super("The server issued a credential for another principal");
+  }
 }
 
 export function classifyFailure(result: RemoteResult): CredentialSetupCode {
@@ -170,16 +211,31 @@ export function classifyFailure(result: RemoteResult): CredentialSetupCode {
   return "cli-failed";
 }
 
-/** The nonsecret record of a credential ORCA issued for a profile. */
+const CredentialEntrySchema = z
+  .object({ credentialId: z.string().regex(CREDENTIAL_ID), target: TargetSchema })
+  .strict();
+export type CredentialEntry = z.infer<typeof CredentialEntrySchema>;
+
+const IssuedEntrySchema = CredentialEntrySchema.extend({
+  principal: z.string().max(64),
+  expiresAt: z.string().datetime({ offset: true }).optional(),
+  issuedAt: z.string().datetime({ offset: true }),
+  /** The workspace whose daemon accepted it: later answers must come from the same one. */
+  workspaceId: z.string().uuid().optional(),
+}).strict();
+export type IssuedEntry = z.infer<typeof IssuedEntrySchema>;
+
+/**
+ * The nonsecret record of the credentials ORCA issued for a profile. `current` is the one in
+ * the keychain slot; `next` is staged in its own slot until the daemon accepts it; `retired`
+ * are replaced ones still to revoke where they were issued.
+ */
 const RecordSchema = z
   .object({
     version: z.literal(1),
-    credentialId: z.string().regex(CREDENTIAL_ID),
-    principal: z.string().max(64),
-    expiresAt: z.string().datetime({ offset: true }).optional(),
-    issuedAt: z.string().datetime({ offset: true }),
-    /** Issued under settings since replaced: revoke it on the server at the next chance. */
-    retired: z.array(z.string().regex(CREDENTIAL_ID)).max(16).optional(),
+    current: IssuedEntrySchema.optional(),
+    next: IssuedEntrySchema.optional(),
+    retired: z.array(CredentialEntrySchema).max(64).optional(),
   })
   .strict();
 export type CredentialRecord = z.infer<typeof RecordSchema>;
@@ -232,7 +288,7 @@ export class CredentialRecords {
 }
 
 /** Due for renewal under the policy, at `now`. A credential with no expiry never is. */
-export function dueForRenewal(record: CredentialRecord, policy: CredentialPolicy, now: number): boolean {
-  if (!record.expiresAt) return false;
-  return Date.parse(record.expiresAt) - now <= policy.renewBeforeMs;
+export function dueForRenewal(entry: IssuedEntry, policy: CredentialPolicy, now: number): boolean {
+  if (!entry.expiresAt) return false;
+  return Date.parse(entry.expiresAt) - now <= policy.renewBeforeMs;
 }

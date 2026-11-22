@@ -41,6 +41,8 @@ export interface RemoteProfileView extends RemoteProfileHop {
   credentialExpiresAt?: string;
   /** The credential was imported by hand, so ORCA cannot renew or revoke it. */
   credentialImported?: true;
+  /** Replaced credentials ORCA issued that are not revoked on the server yet. */
+  pendingRevocations?: number;
   hostKeyPinned: boolean;
   /** A pin was enrolled and is now missing, empty or unreadable: connects fail closed until it is forgotten. */
   hostKeyMissing?: true;
@@ -76,6 +78,8 @@ export interface RemoteProfilesBridge {
   /** Main opens a file picker, reads and seals the credential; nothing comes back but the view. */
   importCredential(this: void, id: string): Promise<ProfileResult<RemoteProfileView | null>>;
   forgetHostKey(this: void, id: string): Promise<ProfileResult<RemoteProfileView>>;
+  /** Drop an imported credential, so the next connect signs in automatically. */
+  useAutomaticSignIn(this: void, id: string): Promise<ProfileResult<RemoteProfileView>>;
 }
 export interface DaemonConnectionBridge {
   read(this: void): DaemonTargetSnapshot;

@@ -220,6 +220,8 @@ const bridge: OrcaBridge = {
         ipcRenderer.invoke("orca:profiles.importCredential", id) as Promise<ProfileResult<RemoteProfileView | null>>,
       forgetHostKey: (id) =>
         ipcRenderer.invoke("orca:profiles.forgetHostKey", id) as Promise<ProfileResult<RemoteProfileView>>,
+      useAutomaticSignIn: (id) =>
+        ipcRenderer.invoke("orca:profiles.useAutomaticSignIn", id) as Promise<ProfileResult<RemoteProfileView>>,
     },
   },
   updates: {

@@ -1087,6 +1087,13 @@ ipcMain.handle("orca:profiles.forgetHostKey", (_event, id: unknown) =>
     return view;
   }),
 );
+ipcMain.handle("orca:profiles.useAutomaticSignIn", (_event, id: unknown) =>
+  profileResult(() => {
+    const valid = ProfileIdSchema.parse(id);
+    if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before changing its sign-in.");
+    return remoteProfiles.useAutomaticSignIn(valid);
+  }),
+);
 /** Main reads the file the person picks; the token goes from disk to the keychain slot only. */
 ipcMain.handle("orca:profiles.importCredential", (event, id: unknown) =>
   profileResult(async () => {
