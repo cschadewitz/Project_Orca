@@ -23,15 +23,8 @@
       },
       "orcaVersion": "0.7.0",
       "processId": 468,
-      "capabilities": [
-        "runs.read",
-        "runs.control",
-        "runs.subscribe"
-      ],
-      "methods": [
-        "hello",
-        "maintenance"
-      ]
+      "capabilities": ["runs.read", "runs.control", "runs.subscribe"],
+      "methods": ["hello", "maintenance"]
     }
   }
 }
