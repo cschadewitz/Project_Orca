@@ -78,14 +78,22 @@ import {
   RUNS_EVENTS_METHOD,
   RUNS_GET_METHOD,
   RUNS_LIST_METHOD,
+  ADMISSIONS_RECONCILE_METHOD,
+  AdmissionRetryResultSchema,
+  RUNS_RECOVER_METHOD,
+  RUNS_RECOVERY_METHOD,
   RUNS_RESUME_METHOD,
+  RUNS_REVIEW_EFFECT_METHOD,
   RUNS_START_METHOD,
   ResponseMessageSchema,
   RunsCancelResultSchema,
   RunsEventsResultSchema,
   RunsGetResultSchema,
   RunsListResultSchema,
+  RunsRecoverResultSchema,
+  RunsRecoveryResultSchema,
   RunsResumeResultSchema,
+  RunsReviewEffectResultSchema,
   RunsStartResultSchema,
   WORKFLOWS_GET_METHOD,
   WORKFLOWS_LIST_METHOD,
@@ -146,8 +154,14 @@ import {
   type RunsGetResult,
   type RunsListParams,
   type RunsListResult,
+  type RunsRecoverParams,
+  type RunsRecoverResult,
+  type RunsRecoveryParams,
+  type RunsRecoveryResult,
   type RunsResumeParams,
   type RunsResumeResult,
+  type RunsReviewEffectParams,
+  type RunsReviewEffectResult,
   type RunsStartParams,
   type RunsStartResult,
   type WorkflowsGetParams,
@@ -174,7 +188,7 @@ import { observeOwnedDiagnostic, type OwnedDiagnosticObserver } from "../main/di
 export const DEFAULT_DAEMON_URL = "http://127.0.0.1:6722";
 
 const admissionMethod = (method: string) =>
-  ["runs.admit", "requests.submit", "operator.admitRun", "operator.submitRequest"].includes(method);
+  ["runs.admit", "runs.recover", "requests.submit", "operator.admitRun", "operator.submitRequest"].includes(method);
 function ownData(value: unknown, key: string): unknown {
   if (!value || typeof value !== "object") return undefined;
   try {
@@ -570,6 +584,40 @@ export class DaemonClient {
       observeOwnedDiagnostic(this.options.onDiagnostic, "resume", "resume_failed");
       throw error;
     }
+  }
+
+  /**
+   * What recovering a stopped run would do (#357): the options, the checkpoints, the steps
+   * whose effect is uncertain, and what has drifted since. A read, served from store facts.
+   */
+  runsRecovery(params: RunsRecoveryParams): Promise<RunsRecoveryResult> {
+    return this.call(RUNS_RECOVERY_METHOD, params, RunsRecoveryResultSchema);
+  }
+
+  /** Record a person's review of a step whose side effect is uncertain: run it again, or abandon it. */
+  runsReviewEffect(params: RunsReviewEffectParams): Promise<RunsReviewEffectResult> {
+    return this.call(RUNS_REVIEW_EFFECT_METHOD, params, RunsReviewEffectResultSchema);
+  }
+
+  /**
+   * Start a checkpoint attempt of a failed run through retry-safe admission. The same
+   * `idempotencyKey` answers with the same attempt, so a caller that lost the answer sends
+   * the call again with the key it already used rather than a new one.
+   */
+  runsRecover(params: RunsRecoverParams): Promise<RunsRecoverResult> {
+    return this.call(RUNS_RECOVER_METHOD, params, RunsRecoverResultSchema);
+  }
+
+  /**
+   * Finish a checkpoint attempt whose receipt was a recoverable failure: `admissions.reconcile`
+   * creates the attempt it reserved, or keeps failing if that reservation was retired. The
+   * answer is flattened to `runs.recover`'s own shape so one reader handles both.
+   */
+  async runsRecoverReconcile(params: { operationId: string }): Promise<RunsRecoverResult> {
+    const answer = await this.call(ADMISSIONS_RECONCILE_METHOD, params, AdmissionRetryResultSchema);
+    if (answer.state === "in-progress") return answer;
+    const receipt = answer.result && typeof answer.result === "object" ? answer.result : {};
+    return RunsRecoverResultSchema.parse({ ...receipt, operationId: answer.operationId });
   }
 
   /** Stop a run, with the reason recorded on `run.cancelled`. */

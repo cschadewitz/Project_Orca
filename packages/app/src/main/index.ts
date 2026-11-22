@@ -141,6 +141,9 @@ const drainCompletionChannels = new Set([
   "orca:inputs.answer",
   "orca:runs.cancel",
   "orca:runs.resume",
+  // Recovery reads and side-effect reviews finish existing work; starting an attempt does not.
+  "orca:runs.recovery",
+  "orca:runs.reviewEffect",
 ]);
 function assertDispatchAllowed(channel: string): void {
   if (
@@ -548,6 +551,16 @@ handle("orca:inputs.answer", (params: Parameters<DaemonClient["inputsAnswer"]>[0
 handle("orca:runs.cancel", (params: Parameters<DaemonClient["runsCancel"]>[0]) => client().runsCancel(params));
 handle("orca:runs.resume", (params: Parameters<DaemonClient["runsResume"]>[0]) => client().runsResume(params));
 handle("orca:runs.start", (params: Parameters<DaemonClient["runsStart"]>[0]) => client().runsStart(params));
+// Operator recovery (#357): a read, a side-effect review, and a checkpoint attempt. The
+// attempt is a new admission, so maintenance refuses it while the daemon drains.
+handle("orca:runs.recovery", (params: Parameters<DaemonClient["runsRecovery"]>[0]) => client().runsRecovery(params));
+handle("orca:runs.reviewEffect", (params: Parameters<DaemonClient["runsReviewEffect"]>[0]) =>
+  client().runsReviewEffect(params),
+);
+handle("orca:runs.recover", (params: Parameters<DaemonClient["runsRecover"]>[0]) => client().runsRecover(params));
+handle("orca:runs.reconcileRecover", (params: Parameters<DaemonClient["runsRecoverReconcile"]>[0]) =>
+  client().runsRecoverReconcile(params),
+);
 // The fourth (#174, #266). It writes a file rather than a run, so no lease is involved, but
 // it is still absent from a `--read-only` daemon and `useWritability()` still governs it.
 handle("orca:config.set", (params: Parameters<DaemonClient["configSet"]>[0]) => client().configSet(params));

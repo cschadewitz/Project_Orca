@@ -299,6 +299,10 @@ const bridge: OrcaBridge = {
     cancel: (params) => call("orca:runs.cancel", params),
     resume: (params) => call("orca:runs.resume", params),
     start: (params) => call("orca:runs.start", params),
+    recovery: (params) => call("orca:runs.recovery", params),
+    reviewEffect: (params) => call("orca:runs.reviewEffect", params),
+    recover: (params) => call("orca:runs.recover", params),
+    reconcileRecover: (params) => call("orca:runs.reconcileRecover", params),
   },
   inputs: {
     revise: (params) => call("orca:inputs.revise", params),

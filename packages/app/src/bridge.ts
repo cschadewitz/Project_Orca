@@ -91,8 +91,14 @@ import type {
   RunsGetResult,
   RunsListParams,
   RunsListResult,
+  RunsRecoverParams,
+  RunsRecoverResult,
+  RunsRecoveryParams,
+  RunsRecoveryResult,
   RunsResumeParams,
   RunsResumeResult,
+  RunsReviewEffectParams,
+  RunsReviewEffectResult,
   RunsStartParams,
   RunsStartResult,
   ScheduleExplainParams,
@@ -330,6 +336,17 @@ export interface OrcaBridge {
      * watches the notification stream while the call is open. A write.
      */
     resume: (params: RunsResumeParams) => Promise<BridgeResult<RunsResumeResult>>;
+    /**
+     * Operator recovery (#357), present in an app that knows the methods. Each is still
+     * offered only when `hello.methods` lists it: a daemon before protocol 2.5 has none.
+     * `recovery` is a read; `reviewEffect` records a side-effect review; `recover` starts a
+     * checkpoint attempt through retry-safe admission.
+     */
+    recovery?: (params: RunsRecoveryParams) => Promise<BridgeResult<RunsRecoveryResult>>;
+    reviewEffect?: (params: RunsReviewEffectParams) => Promise<BridgeResult<RunsReviewEffectResult>>;
+    recover?: (params: RunsRecoverParams) => Promise<BridgeResult<RunsRecoverResult>>;
+    /** Reconcile a `recover` receipt that was a recoverable failure, by its operation id. */
+    reconcileRecover?: (params: { operationId: string }) => Promise<BridgeResult<RunsRecoverResult>>;
   };
   inputs: {
     revise?: (

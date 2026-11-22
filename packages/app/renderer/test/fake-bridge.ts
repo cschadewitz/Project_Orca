@@ -146,6 +146,10 @@ export type MethodName =
   | "runs.cancel"
   | "runs.resume"
   | "runs.start"
+  | "runs.recovery"
+  | "runs.reviewEffect"
+  | "runs.recover"
+  | "runs.reconcileRecover"
   | "config.get"
   | "config.set"
   | "plans.list"
@@ -185,6 +189,16 @@ export interface Handlers {
   "runs.cancel": (params: RunsCancelParams) => Answer<RunsCancelResult>;
   "runs.resume": (params: RunsResumeParams) => Answer<RunsResumeResult>;
   "runs.start": (params: Params<RunsStartParams> & { workflowId: string }) => Answer<RunsStartResult>;
+  "runs.recovery": (
+    params: import("@orca/protocol").RunsRecoveryParams,
+  ) => Answer<import("@orca/protocol").RunsRecoveryResult>;
+  "runs.reviewEffect": (
+    params: import("@orca/protocol").RunsReviewEffectParams,
+  ) => Answer<import("@orca/protocol").RunsReviewEffectResult>;
+  "runs.recover": (
+    params: import("@orca/protocol").RunsRecoverParams,
+  ) => Answer<import("@orca/protocol").RunsRecoverResult>;
+  "runs.reconcileRecover": (params: { operationId: string }) => Answer<import("@orca/protocol").RunsRecoverResult>;
   "config.get": (params: Params<ConfigGetParams>) => Answer<ConfigGetResult>;
   "config.set": (params: ConfigSetParams) => Answer<ConfigSetResult>;
   "plans.list": (params: Params<PlansListParams>) => Answer<PlansListResult>;
@@ -467,6 +481,13 @@ const defaults: Handlers = {
   /* Answers as the daemon does: the moment the run exists, with its id and a summary that
      is `running` and has no outcome yet. The id is derived from the workflow so a test can
      assert where the palette navigated without scripting a handler. */
+  /* Recovery (#357) is not in the fixture daemon's `hello.methods`, so nothing calls these
+     unless a test lists the methods and scripts the answers. */
+  "runs.recovery": () => err("NOT_SUPPORTED", "no recovery in the fixture daemon"),
+  "runs.reviewEffect": () => err("NOT_SUPPORTED", "no recovery in the fixture daemon"),
+  "runs.recover": () => err("NOT_SUPPORTED", "no recovery in the fixture daemon"),
+  "runs.reconcileRecover": () => err("NOT_SUPPORTED", "no recovery in the fixture daemon"),
+
   "runs.start": ({ workflowId }) => {
     const workflow = WORKFLOWS.find((w) => w.id === workflowId);
     if (!workflow) return err("WORKFLOW_NOT_FOUND", `no workflow ${workflowId}`);
@@ -771,6 +792,14 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
       cancel: (params) => call("runs.cancel", params) as Promise<BridgeResult<RunsCancelResult>>,
       resume: (params) => call("runs.resume", params) as Promise<BridgeResult<RunsResumeResult>>,
       start: (params) => call("runs.start", params) as Promise<BridgeResult<RunsStartResult>>,
+      recovery: (params) =>
+        call("runs.recovery", params) as Promise<BridgeResult<import("@orca/protocol").RunsRecoveryResult>>,
+      reviewEffect: (params) =>
+        call("runs.reviewEffect", params) as Promise<BridgeResult<import("@orca/protocol").RunsReviewEffectResult>>,
+      recover: (params) =>
+        call("runs.recover", params) as Promise<BridgeResult<import("@orca/protocol").RunsRecoverResult>>,
+      reconcileRecover: (params) =>
+        call("runs.reconcileRecover", params) as Promise<BridgeResult<import("@orca/protocol").RunsRecoverResult>>,
     },
     inputs: {
       list: (params = {}) => call("inputs.list", params) as Promise<BridgeResult<InputsListResult>>,

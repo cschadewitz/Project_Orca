@@ -6,8 +6,8 @@ event, starts nothing and carries no approval or permission forward.
 
 Phase 2 adds **side-effect review** (below): a step that may have acted and never finished is
 never run again on its own, and `orca recovery review` records an operator's decision about it.
-It also adds **starting a checkpoint attempt** (`orca recovery start`, below). The app's recovery
-panel follows; host reconnection and reassignment stay with #344.
+It also adds **starting a checkpoint attempt** (`orca recovery start`, below), and the app's
+recovery section (below). Host reconnection and reassignment stay with #344.
 
 ```sh
 orca recovery <runId>                       # options, reasons, uncertain effects, checkpoints
@@ -227,3 +227,24 @@ The app's recovery panel (phase 2, next), reconciling an
 uncertain effect automatically, the operations console (#340), host-specific orphan handling
 (#344), and agent-context recovery for approvals (the Approved, then Continue contract recorded
 on #357).
+
+## In the app
+
+Selecting a run that stopped (failed, cancelled or held, not running or succeeded) shows a
+**Recovery** section in its summary, read from `runs.recovery`: each option with the same
+reasons the CLI prints, the steps that need review, and the checkpoints, newest first. Each
+control is drawn only when the daemon lists its method, so a daemon before protocol 2.5 shows
+none of it and a `--read-only` daemon shows the assessment without buttons.
+
+- **Mark to run again** and **Abandon the run** record a review (`runs.reviewEffect`).
+  Abandoning asks for confirmation first.
+- **Start an attempt from here** sends `runs.recover` for that checkpoint with an idempotency
+  key kept for that intent. When the answer is lost (the connection failed, or the daemon is
+  still creating the attempt), pressing it again sends the same key and can only return the
+  same attempt. A refusal ends the intent; the next press is a new one. A receipt that reserved
+  the attempt without creating it changes the button to **Finish the attempt**, which reconciles
+  that receipt (`admissions.reconcile`) rather than starting another. A started attempt is
+  selected in the run tree.
+- A checkpoint attempt's summary names the run and step it started after, and a reused step
+  says which run it came from. A step with a recorded review says what was decided.
+
