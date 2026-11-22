@@ -7,7 +7,7 @@ import { mkdir, open, readFile, stat, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ZodType } from "zod";
 import type { Clock, Logger, Request, WorkItem } from "@orca/core";
-import { RequestSchema, WorkItemSchema } from "@orca/core";
+import { OrcaError, RequestSchema, WorkItemSchema } from "@orca/core";
 import { FileClaimStore, InMemoryClaimStore, type ClaimStore } from "./claim-store.js";
 import { withFileLock } from "./file-lock.js";
 import { FileLeaseStore, InMemoryLeaseStore, type LeaseStore } from "./lease-store.js";
@@ -299,8 +299,42 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Versione
     if (failed) throw failed.error;
   }
 
-  /** One locked read-modify-write of the whole collection carrying `batch`. */
+  /**
+   * One locked read-modify-write of the whole collection carrying `batch`. The rename is the
+   * commit point, and the outcome a caller sees follows it (#338):
+   *
+   * - a failure *before* the rename rejects with the underlying error: nothing was
+   *   committed, so retrying is safe;
+   * - a failure *of* the rename rejects with `STORE_WRITE` and `details.outcome: "uncertain"`:
+   *   the new file may or may not be in place, so the caller must re-read before retrying;
+   * - a failure *after* the rename (refreshing the cache fingerprint, releasing the lock) does
+   *   not reject: the batch is committed and its results stand. The cache is dropped so the
+   *   next read goes to disk; a lock that could not be released surfaces on the next write.
+   */
   private async write(batch: readonly Mutation<T>[]): Promise<void> {
+    let stage: "prepare" | "rename" | "committed" = "prepare";
+    try {
+      await this.writeLocked(batch, (next) => {
+        stage = next;
+      });
+    } catch (error) {
+      if (stage === "prepare") throw error;
+      this.cache = undefined;
+      this.fingerprint = undefined;
+      if (stage === "committed") return;
+      throw new OrcaError(
+        "STORE_WRITE",
+        `the outcome of a write to ${this.file} is unknown: re-read before retrying`,
+        { file: this.file, outcome: "uncertain" },
+        { cause: error },
+      );
+    }
+  }
+
+  private async writeLocked(
+    batch: readonly Mutation<T>[],
+    reached: (stage: "rename" | "committed") => void,
+  ): Promise<void> {
     await mkdir(dirname(this.file), { recursive: true });
     await withFileLock(`${this.file}.lock`, async () => {
       // Inside the lock, so nothing can write between this read and the rename.
@@ -325,7 +359,9 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Versione
       } finally {
         await handle.close();
       }
+      reached("rename");
       await rename(tmp, this.file);
+      reached("committed");
       this.cache = map;
       this.fingerprint = await this.fingerprintOf();
     });

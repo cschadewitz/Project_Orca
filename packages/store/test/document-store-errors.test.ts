@@ -211,7 +211,12 @@ describe("JsonFileDocumentStore failed batches", () => {
           vi.spyOn(handle, "sync").mockRejectedValueOnce(error);
           return handle;
         });
-      await expect(store.delete("shared")).rejects.toBe(error);
+      const rejected = await store.delete("shared").catch((e: unknown) => e);
+      // Before the rename nothing was committed: the plain error. A failed rename is the commit
+      // point itself, so it is reported as an uncertain outcome carrying the cause (#338).
+      if (stage === "rename")
+        expect(rejected).toMatchObject({ code: "STORE_WRITE", details: { outcome: "uncertain" }, cause: error });
+      else expect(rejected).toBe(error);
       expect(await store.get("shared")).toEqual({ id: "shared", n: 1 });
       expect(await onDisk()).toEqual([{ id: "shared", n: 1 }]);
       await store.put({ id: "later", n: 2 });
