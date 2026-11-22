@@ -1,0 +1,1 @@
+- **agents:** ACP client SDK `@agentclientprotocol/sdk` 1.8.0 → 2.8.0, keeping the patch that leaves peer payloads out of SDK stderr diagnostics.

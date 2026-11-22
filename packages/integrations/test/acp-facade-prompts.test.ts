@@ -125,11 +125,11 @@ async function withClient<T>(
         ? new Promise<never>(() => {})
         : Promise.resolve({ outcome: { outcome: "selected" as const, optionId: "ship" } });
     })
-    .connectWith(agentApp, (ctx) => body(ctx as never, updates));
+    .connectWith(agentApp, (ctx) => body(ctx, updates));
   return { result, updates, orchestrator };
 }
 
-type ClientCtx = { request: acp.ClientSideConnection["request"]; notify: acp.ClientSideConnection["notify"] };
+type ClientCtx = Pick<acp.ClientContext, "request" | "notify">;
 
 const newSession = async (ctx: ClientCtx): Promise<string> => {
   await ctx.request(acp.methods.agent.initialize, { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
@@ -270,7 +270,16 @@ describe("the facade's prompt grammar", () => {
   });
 
   it("rejects a prompt for a session it never opened", async () => {
-    await expect(withClient({}, async (ctx) => prompt(ctx, "sess_nope", "/run mini"))).rejects.toMatchObject({
+    // SDK 2.x refuses any session method before `initialize` (-32600), so initialize first
+    // to reach ORCA's own unknown-session check.
+    const unopened = async (ctx: ClientCtx) => {
+      await ctx.request(acp.methods.agent.initialize, {
+        protocolVersion: acp.PROTOCOL_VERSION,
+        clientCapabilities: {},
+      });
+      return prompt(ctx, "sess_nope", "/run mini");
+    };
+    await expect(withClient({}, unopened)).rejects.toMatchObject({
       data: { sessionId: "sess_nope", reason: "unknown session" },
     });
   });

@@ -21,7 +21,7 @@ allowBuilds:
   electron-winstaller: false
 
 patchedDependencies:
-  "@agentclientprotocol/sdk@1.8.0": patches/@agentclientprotocol__sdk@1.8.0.patch
+  "@agentclientprotocol/sdk@2.8.0": patches/@agentclientprotocol__sdk@2.8.0.patch
 
 # Security overrides. Remove each one once every parent in the lockfile already resolves a
 # patched version on its own.
