@@ -16,6 +16,7 @@ import {
   type AgentHost,
   type AgentSession,
   type OpenSessionOptions,
+  type SecretUse,
 } from "@orca/agents";
 import { applyModel, currentModel, selectedModel } from "./session-model.js";
 import {
@@ -109,6 +110,7 @@ import {
   deliveryIssues,
   nodeCapabilityScope,
   preflightCapabilities,
+  preflightSecretReferences,
   resolveNodeCapabilities,
 } from "./capabilities.js";
 import { SessionSlots, type ConfiguredSessionLimits, type SessionSlot, type SessionSlotCaps } from "./session-slots.js";
@@ -144,6 +146,13 @@ export interface OrchestratorOptions {
   };
   workspaceProvider?: WorkspaceProvider;
   sessionFactory?: SessionFactory;
+  /**
+   * The server-verified use check for secret references (#336): resolves when the run may use
+   * every one of `uses` now, throws when not. Asked at every session open, immediately before
+   * the host reads anything. Without it, a launch whose agent steps use a secret reference is
+   * refused, and so is any session that would deliver one.
+   */
+  secretUse?: (request: { runId: string; uses: SecretUse[] }) => Promise<void>;
   /**
    * Daemon-wide session ceiling (#873) for an orchestrator built without configuration
    * generations. With generations, the current generation's `limits.maxAgentSessions` wins.
@@ -363,6 +372,7 @@ export class Orchestrator {
   liveInput: OrchestratorOptions["liveInput"];
   workspaceProvider: WorkspaceProvider;
   sessionFactory: SessionFactory;
+  private readonly secretUse: OrchestratorOptions["secretUse"];
   readonly plan: PlanService;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -427,6 +437,7 @@ export class Orchestrator {
     this.humanInput = o.humanInput ?? o.liveInput?.port ?? autoHumanInput();
     this.workspaceProvider = o.workspaceProvider ?? new LocalWorkspaceProvider(process.cwd());
     this.sessionFactory = o.sessionFactory ?? openAcpSession;
+    this.secretUse = o.secretUse;
     this.maxAgentSessions = o.maxAgentSessions;
     this.agentSlotWaitMs = o.agentSlotWaitMs;
     this.clock = o.clock ?? systemClock;
@@ -470,6 +481,9 @@ export class Orchestrator {
     // Every agent step's MCP servers and skills resolve and can be delivered, under this run's
     // role overrides, before anything is written (#335).
     preflightCapabilities((generation?.agents ?? this.agents).withOverrides(opts.overrides), def);
+    // A step whose agent uses a secret reference needs a use check to run (#336).
+    if (!this.secretUse)
+      preflightSecretReferences((generation?.agents ?? this.agents).withOverrides(opts.overrides), def);
     const inputs = validateWorkflowInputs(def, opts.vars ?? {});
     if (!inputs.validation.ok) {
       const { errors, warnings } = inputs.validation;
@@ -2088,6 +2102,9 @@ export class Orchestrator {
         clock: this.clock,
         // Secret references are read on the session's own host, at this open, every time (#336).
         secrets: registry.secrets(),
+        ...(this.secretUse
+          ? { authorizeSecretUse: (uses: SecretUse[]) => this.secretUse!({ runId: rc.id, uses }) }
+          : {}),
         onSecretValues: (values) => this.rememberSecrets(rc, values),
         onSessionContinuity: (state) => {
           continuity = state;

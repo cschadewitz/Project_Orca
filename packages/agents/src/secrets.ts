@@ -29,7 +29,48 @@ import {
 import type { AgentHost, SecretDelivery } from "./host.js";
 
 /** Why a secret could not be read. Never the value, never the provider's own error text. */
-export type SecretFailure = "undefined" | "wrong-host" | "missing" | "unsupported";
+export type SecretFailure = "undefined" | "wrong-host" | "missing" | "unsupported" | "unauthorized";
+
+/** One use of a secret a session is about to make: what a use check decides on (#336). */
+export interface SecretUse {
+  secret: string;
+  provider: SecretSource["provider"];
+  hostId: string;
+  agentId: string;
+}
+
+/**
+ * The server-verified use check (#336): resolves when whoever this session is for may use
+ * every one of `uses` now, and throws (an `OrcaError`, which the session passes on) when not.
+ * It is asked at every open, immediately before the host reads anything, so a revoked grant
+ * stops the next session. A session given none delivers no secret at all.
+ */
+export type AuthorizeSecretUse = (uses: SecretUse[]) => Promise<void>;
+
+/** Ask `authorize` about every planned delivery, or refuse them all when there is no check. */
+export async function checkSecretUse(
+  plan: SessionSecretPlan,
+  hostId: string,
+  agentId: string,
+  authorize: AuthorizeSecretUse | undefined,
+): Promise<void> {
+  if (!plan.deliveries.length) return;
+  if (!authorize) {
+    const first = plan.deliveries[0]!.id;
+    throw secretUnavailable(
+      first,
+      "unauthorized",
+      "this caller has no server-verified authority to use secret references, and ORCA does not deliver one without it",
+      hostId,
+    );
+  }
+  try {
+    await authorize(plan.deliveries.map((d) => ({ secret: d.id, provider: d.source.provider, hostId, agentId })));
+  } catch (error) {
+    if (error instanceof OrcaError) throw error;
+    throw secretUnavailable(plan.deliveries[0]!.id, "unauthorized", "the use check failed", hostId);
+  }
+}
 
 export function secretUnavailable(secret: string, reason: SecretFailure, detail: string, hostId: string): OrcaError {
   return new OrcaError("CONFIG_INVALID", `secret '${secret}' is unavailable: ${detail}`, {

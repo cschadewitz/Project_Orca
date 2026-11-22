@@ -505,6 +505,14 @@ agents:
         env: { GITHUB_PERSONAL_ACCESS_TOKEN: { secret: github-token } }
 ```
 
+- **Not delivered yet in this version.** Using a secret needs a server-verified check that
+  whoever the session is for may use that secret, its provider and its host, asked at every
+  session open so a revoked grant stops the next one. That check, and the permissions for
+  listing and validating secrets it rests on, land with the rest of #336. Until then the
+  daemon has none, so a launch whose agent steps use a reference is refused before the run
+  starts (naming the step, the agent and the secrets), and `agents.ping` does not start an
+  agent that uses one. Everything below describes how delivery works once the check is in
+  place; config validation, host binding and the withholding of secret sources apply now.
 - **Only where it lives is configured, never the value.** `provider: env` reads a variable
   from the host's environment: the daemon's own on a local host, the remote login shell's on
   an SSH host. `provider: file` reads a file on the host whole, dropping one trailing newline;

@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentRegistry, type AgentSession, type OpenSessionOptions } from "@orca/agents";
 import {
   parseDeliverablesBlock,
+  OrcaError,
   parseOrcaConfig,
   parseWorkflow,
   TemplateRegistry,
@@ -76,7 +77,12 @@ nodes:
 edges: [{ from: s, to: work }, { from: work, to: e }]
 `;
 
-function setup(workflow: string, opts: { stores?: Stores; cwd?: string; deliver?: string } = {}) {
+type SecretUseCheck = NonNullable<ConstructorParameters<typeof Orchestrator>[0]["secretUse"]>;
+
+function setup(
+  workflow: string,
+  opts: { stores?: Stores; cwd?: string; deliver?: string; secretUse?: SecretUseCheck | "none" } = {},
+) {
   const config = parseOrcaConfig({
     secrets: { token: { host: "local", provider: "env", name: "ORCA_TOKEN" } },
     agents: [{ id: "claude", command: "unused", roles: ["coder"], env: { TOKEN: { secret: "token" } } }],
@@ -102,9 +108,12 @@ function setup(workflow: string, opts: { stores?: Stores; cwd?: string; deliver?
     workflows,
     templates: new TemplateRegistry(),
     workspaceProvider: new LocalWorkspaceProvider(opts.cwd ?? process.cwd()),
+    ...(opts.secretUse === "none" ? {} : { secretUse: opts.secretUse ?? (async () => {}) }),
     sessionFactory: async (o: OpenSessionOptions) => {
       given.push(o);
-      // What openAcpSession does once it has read the reference on the host.
+      // What openAcpSession does: ask the use check, then read the reference on the host.
+      if (!o.authorizeSecretUse) throw new Error("no use check was passed");
+      await o.authorizeSecretUse([{ secret: "token", provider: "env", hostId: o.host.id, agentId: o.agent.id }]);
       o.onSecretValues?.([VALUE]);
       o.logger?.info(`agent started with ${VALUE}`);
       let close!: () => void;
@@ -210,5 +219,33 @@ describe("secret references in a run", () => {
     for (const f of files.filter((e) => e.isFile()))
       expect(await readFile(join(f.parentPath, f.name), "utf8"), f.name).not.toContain(VALUE);
     expect(await everything(reopened, [run.id])).not.toContain(VALUE);
+  });
+
+  it("refuses a launch that would use a secret when the daemon has no use check", async () => {
+    const { orchestrator, stores, given } = setup(single, { secretUse: "none" });
+    await expect(orchestrator.startAndRun({ workflowId: "single" })).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      details: { nodeId: "work", agentId: "claude", secrets: ["token"], reason: "unauthorized" },
+    });
+    expect(given).toEqual([]);
+    expect(await stores.events.listRuns()).toEqual([]);
+  });
+
+  it("asks the use check for the run at every open, and a denial fails the step before anything is read", async () => {
+    const asked: { runId: string; uses: unknown[] }[] = [];
+    const { orchestrator, stores } = setup(single, {
+      secretUse: async (request) => {
+        asked.push(request);
+        throw new OrcaError("CONFIG_INVALID", "use of secret 'token' is not granted to this run");
+      },
+    });
+    const { run } = await orchestrator.startAndRun({ workflowId: "single" });
+    expect(run.status).toBe("failed");
+    expect(asked).toEqual([
+      { runId: run.id, uses: [{ secret: "token", provider: "env", hostId: "local", agentId: "claude" }] },
+    ]);
+    const written = await everything(stores, [run.id]);
+    expect(written).toContain("is not granted to this run");
+    expect(written).not.toContain(VALUE);
   });
 });

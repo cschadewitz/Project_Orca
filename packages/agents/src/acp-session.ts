@@ -24,7 +24,14 @@ import {
   type SecretsConfig,
   type SessionConfigOption,
 } from "@orca/core";
-import { fillMcpSecrets, planSessionSecrets, redactError, redactingLogger } from "./secrets.js";
+import {
+  checkSecretUse,
+  fillMcpSecrets,
+  planSessionSecrets,
+  redactError,
+  redactingLogger,
+  type AuthorizeSecretUse,
+} from "./secrets.js";
 import { processCleanup } from "./process-cleanup.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
@@ -50,6 +57,11 @@ export interface OpenSessionOptions {
    * or other-host reference fails the open with nothing started.
    */
   secrets?: SecretsConfig | undefined;
+  /**
+   * The use check for this session's secret references (#336), asked at every open before
+   * anything is read. Without one, a session whose agent uses a reference is refused.
+   */
+  authorizeSecretUse?: AuthorizeSecretUse | undefined;
   /** Handed every resolved secret value, before anything else happens, so the caller can redact it. */
   onSecretValues?: (values: readonly string[]) => void;
   host: AgentHost;
@@ -145,6 +157,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   // and each later call's, has the values redacted, stderr tails included, so a caller can
   // return or write it as it is.
   const secretPlan = planSessionSecrets(opts.host, opts.agent, opts.secrets);
+  await checkSecretUse(secretPlan, opts.host.id, opts.agent.id, opts.authorizeSecretUse);
   const values: string[] = [];
   const redacted = <T>(work: () => Promise<T>) =>
     work().catch((error: unknown) => {

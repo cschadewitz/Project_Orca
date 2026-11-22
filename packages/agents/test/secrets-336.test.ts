@@ -318,6 +318,8 @@ rl.on("line", (line) => {
 setInterval(() => {}, 1000);
 `;
 
+const allow = async () => {};
+
 /** An agent that prints its credential to stderr and fails the handshake. */
 const leakingAgent = `
 process.stderr.write("auth failed for " + process.env.TOKEN + "\\n");
@@ -356,6 +358,7 @@ describe("openAcpSession with secret references", () => {
         cwd: dir,
         secrets,
         logger,
+        authorizeSecretUse: allow,
         onSecretValues: (v) => handed.push([...v]),
       });
       sessions.push(session);
@@ -385,6 +388,7 @@ describe("openAcpSession with secret references", () => {
       }),
       cwd: dir,
       secrets: { token: { host: "local", provider: "file", path: join(dir, "token") } },
+      authorizeSecretUse: allow,
     }).then(
       () => undefined,
       (e: unknown) => e as OrcaError,
@@ -418,6 +422,54 @@ describe("openAcpSession with secret references", () => {
     );
   });
 
+  it("delivers nothing without a use check, asks the check at every open, and stops when it is revoked", async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, "token"), "authorized-value-555\n");
+    const out = join(dir, "seen");
+    const spec = AgentSpecSchema.parse({
+      id: "r",
+      command: process.execPath,
+      args: ["-e", reportingAgent(out)],
+      env: { TOKEN: { secret: "token" } },
+      mcpServers: [{ name: "gh", command: "gh-mcp", env: { GH: { secret: "token" } } }],
+    });
+    const secrets: SecretsConfig = { token: { host: "local", provider: "file", path: join(dir, "token") } };
+    const open = (authorizeSecretUse?: (uses: unknown[]) => Promise<void>) =>
+      openAcpSession({
+        host: local(),
+        agent: spec,
+        cwd: dir,
+        secrets,
+        ...(authorizeSecretUse ? { authorizeSecretUse } : {}),
+      });
+
+    await expect(open()).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      details: { secret: "token", reason: "unauthorized", hostId: "local" },
+    });
+    expect(await exists(out)).toBe(false);
+
+    let granted = true;
+    const asked: unknown[] = [];
+    const check = async (uses: unknown[]) => {
+      asked.push(uses);
+      if (!granted) throw new OrcaError("CONFIG_INVALID", "use of secret 'token' was revoked");
+    };
+    sessions.push(await open(check));
+    expect(asked).toEqual([[{ secret: "token", provider: "file", hostId: "local", agentId: "r" }]]);
+    expect(JSON.parse(await readFile(out, "utf8"))).toMatchObject({ token: "authorized-value-555" });
+    await rm(out);
+
+    granted = false;
+    await expect(open(check)).rejects.toMatchObject({ message: "use of secret 'token' was revoked" });
+    expect(asked).toHaveLength(2);
+    expect(await exists(out)).toBe(false);
+    // A check that fails for another reason refuses too, without its own words.
+    await expect(open(() => Promise.reject(new Error("backend down")))).rejects.toMatchObject({
+      details: { reason: "unauthorized" },
+    });
+  });
+
   it("refuses before anything is spawned when a value cannot be read", async () => {
     await expect(
       openAcpSession({
@@ -425,6 +477,7 @@ describe("openAcpSession with secret references", () => {
         agent: AgentSpecSchema.parse({ id: "r", command: "never", env: { TOKEN: { secret: "token" } } }),
         cwd: process.cwd(),
         secrets: { token: { host: "local", provider: "file", path: "/nonexistent/orca/token" } },
+        authorizeSecretUse: allow,
       }),
     ).rejects.toMatchObject({ code: "CONFIG_INVALID", details: { secret: "token", reason: "missing" } });
   });
