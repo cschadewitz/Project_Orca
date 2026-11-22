@@ -506,4 +506,21 @@ describe("server bundle channel (#877)", () => {
     const e = serverEnv({ ...RINGS, server: { nightly: { version: "0.8.0" } } });
     expect((await handle(get("/server/latest-linux-x64.yml", { token: TOKENS.internal }), e)).status).toBe(503);
   });
+  it("answers every server's channel file 503 with the stop header while serverStop is set (#878)", async () => {
+    const e = serverEnv({ ...SERVER_RINGS, serverStop: true });
+    for (const token of [TOKENS.internal, TOKENS.preview, TOKENS.stable, SERVER_TOKEN]) {
+      const response = await handle(get("/server/latest-linux-x64.yml", { token }), e);
+      expect(response.status).toBe(503);
+      expect(response.headers.get("X-Orca-Feed-Stop")).toBe("servers");
+      expect(response.headers.get("Retry-After")).toBe("3600");
+    }
+    // Still only for authenticated callers, and the desktop channel is untouched.
+    expect((await handle(get("/server/latest-linux-x64.yml"), e)).status).toBe(401);
+    const desktop = await handle(get("/latest-x64.yml", { token: TOKENS.preview }), e);
+    expect(desktop.status).toBe(200);
+    expect(desktop.headers.get("X-Orca-Feed-Stop")).toBeNull();
+    // Without the switch, nothing carries the header.
+    const served = await handle(get("/server/latest-linux-x64.yml", { token: TOKENS.internal }), serverEnv());
+    expect(served.headers.get("X-Orca-Feed-Stop")).toBeNull();
+  });
 });

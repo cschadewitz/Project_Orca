@@ -199,6 +199,15 @@ signature against the pinned workflow identity before it uses anything.
   promotion, or a green watchdog, as evidence of installed servers.
 - **Pause.** `ORCA_FEED_PAUSE` stops server publication and server promotions (except a halt)
   exactly as it does for desktops.
+- **Stop.** The servers' stop switch is separate from the pause: **Server feed (stop or
+  resume)** (`feed-server-stop.yml`, main only, `action` `stop` or `resume`) sets or clears
+  `serverStop: true` in `rings.json`. While it is set, the Worker answers every server's
+  channel file with 503 and `X-Orca-Feed-Stop: servers`, and the server updater activates
+  nothing, not even a version it was offered and staged before
+  ([Automatic server updates](#automatic-server-updates)). Stopping is always allowed;
+  resuming is refused while the feed is paused. Publication and promotion leave the switch as
+  it is. The watchdog expects the stop answer on every server channel exactly while
+  `rings.json` sets it.
 - **Watchdog.** The feed watchdog also checks each ring's server channel with the same
   canaries: a request without a token must get 401; the channel file must parse strictly and
   name a published release (never a prerelease in `stable`); and each of the three files must
@@ -209,6 +218,7 @@ signature against the pinned workflow identity before it uses anything.
 The Worker needs no new binding or secret for this. Redeploy it from main (whatever pins its
 source) before the first server publication: an older Worker ignores `rings.json`'s server
 rings and answers 404 for `server/`, and reads a `"channel": "server"` token like any other.
+The stop switch also needs a Worker from main that knows `serverStop`; an older one ignores it.
 
 ### Pulling a bad build
 
@@ -220,7 +230,10 @@ containing it can do depends on how far it got, so find out first.
    Secrets and variables → Actions → Variables). From then on **Desktop feed (publish
    signed)** refuses to start and **Desktop feed (promote)** refuses everything except a
    halt. The pause is checked when a job starts: it does **not** stop a job that already
-   passed that check.
+   passed that check. If the bad build is a **server** bundle, also dispatch **Server feed
+   (stop or resume)** with `stop`: the pause only stops new offers, while the stop keeps
+   every server with automatic updates from activating anything, including a bad version it
+   already staged. Resume once the fixed version is offered.
 2. **Check for jobs already running.** In the Actions tab, look for in-progress or queued
    runs of both feed workflows (they share one concurrency group, so at most one runs and
    the rest queue). Cancel any you did not mean to happen, and let a running one finish or
@@ -669,17 +682,28 @@ A run does the following:
 1. Takes the deployment update lock without waiting. If a manual update (or another check)
    holds it, the run defers and exits successfully. Manual and timer updates never overlap.
 2. Refuses while an interrupted activation journal exists (`blocked`, nonzero exit). Inspect
-   it and run `recover` first.
+   it and run `recover` first. While a file named `auto-update.stop` exists in the
+   deployment root, it activates nothing (`stopped`, exit 0); this is the local stop.
 3. Reads `server/latest-linux-x64.yml` with the token. It parses the file exactly as
    `feed-server.js` writes it. If nothing is offered (404) or the offer is not newer than
-   `current`, nothing changes. A server never moves backwards.
-4. Stages the offer while work continues. It reuses an already staged `releases/vX.Y.Z` of the
-   same commit. Otherwise it downloads the three files from the feed, checks their sizes and
-   SHA-256 against the channel file, then stages them exactly as `stage --bundle DIR`: the
-   pinned keyless signature, manifest, archive digest, demo, config validation and a
-   temporary daemon's hello. The channel file is only a pointer and is never trusted on its
-   own.
-5. Activates through the [normal update](#normal-update) path, with closed admission, the
+   `current`, nothing changes. A server never moves backwards. If the feed answers with the
+   servers' stop (503 and `X-Orca-Feed-Stop: servers`, see
+   [Server bundle channel](#server-bundle-channel)), the run activates nothing, not even an
+   already staged release (`stopped`, exit 0).
+4. Stages the offer while work continues. It reuses an already staged `releases/vX.Y.Z` only
+   if that release was staged from the exact signed files offered now: staging from a bundle
+   records a receipt with the SHA-256 and size of the archive, manifest and signature, and
+   all six must equal the channel file's (the commit alone is not enough). A release of the
+   same version without a matching receipt is refused (`failed`); inspect it. Otherwise it
+   downloads the three files from the feed, checks their sizes and SHA-256 against the
+   channel file, then stages them exactly as `stage --bundle DIR`: the pinned keyless
+   signature, manifest, archive digest, demo, config validation and a temporary daemon's
+   hello. The channel file is only a pointer and is never trusted on its own.
+5. Checks again just before activating, because staging can take long: the local stop file,
+   quiet hours against the clock read **now**, and the channel file, read again. A stop
+   gives `stopped`, quiet hours defer, and an offer that is gone or differs in any byte gives
+   `withdrawn` (exit 0); the staged release is kept, and nothing is activated.
+6. Activates through the [normal update](#normal-update) path, with closed admission, the
    exact version/protocol/capability hello, and a second hello after `settleSeconds` from
    the same service process, all before admission reopens.
    - **Work is never cancelled.** Active daemon work, open CLI/ACP processes or quiet hours
@@ -696,17 +720,18 @@ A run does the following:
      `failed-not-rolled-back`. Inspect it, then run `recover`.
    - **A release with another store epoch is never activated unattended** (`refused`). Use
      the [documented migration](#recovery-and-store-compatibility).
-6. After a successful update, keeps exactly two complete releases (the new `current` and
+7. After a successful update, keeps exactly two complete releases (the new `current` and
    the one it replaced) and removes older `releases/vX.Y.Z`. Staging leftovers are kept for
    inspection.
 
 Every run writes its outcome to `auto-update.json` in the deployment root and to the
 journal (`journalctl --user -u orca-auto-update`). The file records the time, `current`,
 the offered version, the outcome (`none`, `current`, `updated`, `deferred`, `overdue`,
-`rolled-back`, `failed-not-rolled-back`, `refused`, `blocked` or `failed`) and a detail line.
-The feed's pause switch (`ORCA_FEED_PAUSE`) stops new versions from being offered, so paused
-servers stay where they are. To stop a server's own updates, run
-`systemctl --user disable --now orca-auto-update.timer`.
+`stopped`, `withdrawn`, `rolled-back`, `failed-not-rolled-back`, `refused`, `blocked` or
+`failed`) and a detail line. The feed's pause switch (`ORCA_FEED_PAUSE`) stops new versions
+from being offered; the servers' stop switch also stops servers acting on what they were
+offered before. To stop one server's updates, create `auto-update.stop` in its deployment
+root (remove it to resume), or run `systemctl --user disable --now orca-auto-update.timer`.
 
 ### Recovery and store compatibility
 

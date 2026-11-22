@@ -140,7 +140,7 @@ class AutoUpdateTests(unittest.TestCase):
         self.deployment.stage_bundle = self.stage_bundle
         self.now = 1_800_000_000
 
-    def make_release(self, version, epoch="v1", sha=SHA, bundle=False):
+    def make_release(self, version, epoch="v1", sha=SHA, bundle=False, files=None):
         path = self.root / "releases" / ("v" + version)
         path.mkdir(parents=True)
         record = {"version": version, "node": sys.executable, "sha": sha,
@@ -151,6 +151,12 @@ class AutoUpdateTests(unittest.TestCase):
             (path / release.BUNDLE_NODE).write_text("node")
             (path / release.BUNDLE_ENTRY).write_text("entry")
             record.update(source="bundle", node=release.BUNDLE_NODE, entry=release.BUNDLE_ENTRY)
+            # The receipt stage_bundle keeps: the exact signed files the release was verified from.
+            names = dict(zip(("archive", "manifest", "signature"), release.bundle_names(version)[1:]))
+            files = self.files if files is None else files
+            record["bundle"] = {key: value for kind, name in names.items()
+                                for key, value in ((kind + "Sha256", hashlib.sha256(files[name]).hexdigest()),
+                                                   (kind + "Size", len(files[name])))}
         release.write_json(path / ".orca-release.json", record)
         return path
 
@@ -159,7 +165,10 @@ class AutoUpdateTests(unittest.TestCase):
         self.requests.append(url)
         name = url.removeprefix("https://feed.test/server/")
         if name == "latest-linux-x64.yml":
-            return None if self.offer is None else self.offer.encode()
+            if getattr(self, "feed_stopped", False):
+                raise release.FeedStopped("the feed's servers' stop switch is set")
+            offer = self.offers.pop(0) if getattr(self, "offers", None) else self.offer
+            return None if offer is None else offer.encode()
         body = self.files[name]
         Path(target).write_bytes(body)
         return True
@@ -291,8 +300,77 @@ class AutoUpdateTests(unittest.TestCase):
     def test_an_existing_release_of_another_commit_is_not_reused(self):
         self.make_release("0.8.1", sha="b" * 40, bundle=True)
         self.assertEqual(self.run_check(), (False, "failed"))
-        self.assertIn("not the bundle the feed offers", self.status()["detail"])
+        self.assertIn("not verified from the exact bundle the feed offers", self.status()["detail"])
         self.assertEqual(self.current(), "v0.8.0")
+
+    def test_a_staged_release_of_other_bytes_is_not_reused_even_for_the_same_commit(self):
+        # Same version and commit, but staged from different signed files than the feed now offers.
+        self.make_release("0.8.1", bundle=True, files={**self.files, "orca-server-0.8.1-linux-x64.tar.xz": b"older build"})
+        self.assertEqual(self.run_check(), (False, "failed"))
+        self.assertIn("its receipt differs", self.status()["detail"])
+        self.assertEqual(self.current(), "v0.8.0")
+        self.assertFalse(any(c[0] in ("prepare", "stop") for c in self.calls))
+
+    def test_the_feed_stop_switch_wins_even_over_a_staged_release(self):
+        self.deployment.barrier = lambda action, token: (_ for _ in ()).throw(RuntimeError("Daemon busy: runs.start"))
+        self.assertEqual(self.run_check(), (True, "deferred"))
+        self.assertEqual(self.staged, 1)
+        self.deployment.barrier = lambda action, token: self.calls.append((action,))
+        self.feed_stopped = True
+        self.assertEqual(self.run_check(self.now + 60), (True, "stopped"))
+        self.assertIn("stop switch", self.status()["detail"])
+        self.assertEqual(self.current(), "v0.8.0")
+        self.assertFalse(any(c[0] in ("prepare", "stop") for c in self.calls))
+        self.feed_stopped = False
+        self.assertEqual(self.run_check(self.now + 120), (True, "updated"))
+        self.assertEqual(self.staged, 1)
+
+    def test_a_stop_switch_set_while_staging_stops_before_activation(self):
+        stage = self.stage_bundle
+        def stage_then_stop(source):
+            self.feed_stopped = True
+            return stage(source)
+        self.deployment.stage_bundle = stage_then_stop
+        self.assertEqual(self.run_check(), (True, "stopped"))
+        self.assertEqual(self.current(), "v0.8.0")
+        self.assertFalse(any(c[0] in ("prepare", "stop") for c in self.calls))
+
+    def test_a_local_stop_file_activates_nothing(self):
+        (self.root / release.AUTO_UPDATE_STOP).write_text("")
+        self.assertEqual(self.run_check(), (True, "stopped"))
+        self.assertEqual(self.requests, [])
+        (self.root / release.AUTO_UPDATE_STOP).unlink()
+        # Created while staging: the staged release stays, nothing is activated.
+        stage = self.stage_bundle
+        def stage_then_stop(source):
+            (self.root / release.AUTO_UPDATE_STOP).write_text("")
+            return stage(source)
+        self.deployment.stage_bundle = stage_then_stop
+        self.assertEqual(self.run_check(), (True, "stopped"))
+        self.assertIn("stays staged", self.status()["detail"])
+        self.assertEqual(self.current(), "v0.8.0")
+        self.assertFalse(any(c[0] in ("prepare", "stop") for c in self.calls))
+
+    def test_an_offer_withdrawn_or_changed_while_staging_is_not_activated(self):
+        for later in (None, channel_text("0.8.2", bundle_files("0.8.2"))):
+            self.offers = [self.offer, later]
+            self.assertEqual(self.run_check(), (True, "withdrawn"))
+            self.assertEqual(self.current(), "v0.8.0")
+            self.assertFalse(any(c[0] in ("prepare", "stop") for c in self.calls))
+
+    def test_quiet_hours_reached_while_staging_defer_activation(self):
+        # The check starts a minute before quiet hours; staging takes two minutes.
+        start = time.localtime(self.now + 60)
+        end = time.localtime(self.now + 3600)
+        self.config["autoUpdate"]["quietHours"] = f"{start.tm_hour:02d}:{start.tm_min:02d}-{end.tm_hour:02d}:{end.tm_min:02d}"
+        self.deployment.config = self.config
+        times = iter([self.now, self.now + 120, self.now + 120])
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            result = self.deployment.auto_update(clock=lambda: next(times))
+        self.assertEqual(result, (True, "deferred"))
+        self.assertIn("quiet hours", self.status()["detail"])
+        self.assertEqual(self.staged, 1)
+        self.assertFalse(any(c[0] in ("prepare", "stop") for c in self.calls))
 
     def test_a_manual_update_holding_the_lock_defers_the_timer(self):
         args = ["orca-release.py", "--deployment", str(self.manifest), "auto-update"]
@@ -337,6 +415,7 @@ class LiveFeedTests(unittest.TestCase):
             server = subprocess.Popen(["node", "tools/deploy/feed-local.js", "serve", str(bucket), str(port),
                                        str(base / "cert.pem"), str(base / "key.pem"), json.dumps(tokens)],
                                       cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            self.addCleanup(server.stdout.close)
             self.addCleanup(server.wait)
             self.addCleanup(server.terminate)
             server.stdout.readline()  # serving
@@ -357,6 +436,11 @@ class LiveFeedTests(unittest.TestCase):
                 self.assertIsNone(release.feed_get(f"{feed}/latest-x64.yml", TOKEN, 4096))
                 with self.assertRaisesRegex(RuntimeError, "refused this server's token"):
                     release.feed_get(f"{feed}/server/latest-linux-x64.yml", "u" * 43, 4096)
+                # The servers' stop switch: the Worker's 503 and header are read as a stop, not a failure.
+                (bucket / "rings.json").write_text(json.dumps({"format": 1, "rings": {}, "serverStop": True,
+                                                               "server": {"preview": {"version": "0.8.1"}}}))
+                with self.assertRaises(release.FeedStopped):
+                    release.feed_get(f"{feed}/server/latest-linux-x64.yml", TOKEN, release.SERVER_CHANNEL_MAX)
 
 
 if __name__ == "__main__":

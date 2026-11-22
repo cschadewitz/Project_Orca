@@ -1,0 +1,65 @@
+# The servers' stop switch (#878). `stop` sets rings.json's `serverStop`: from then on the feed
+# Worker answers every server's channel file with 503 and `X-Orca-Feed-Stop: servers`, and the
+# server updater (orca-release.py auto-update) activates nothing, not even a version it was
+# offered and staged before: it only ever activates what a fresh channel file names. `resume`
+# lifts it. Use it with the pause switch while a bad server build is dealt with
+# (docs/UPDATING.md, "Pulling a bad build"): ORCA_FEED_PAUSE stops new offers, this stops
+# servers acting on old ones.
+#
+# Stopping is always allowed, also while the feed is paused; resuming is refused while it is.
+# Dispatch from main only, in the same protected environment and concurrency group as every
+# other rings.json write.
+name: Server feed (stop or resume)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "stop = no server activates anything; resume = servers follow their rings again"
+        required: true
+        type: choice
+        options: [stop, resume]
+
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  switch:
+    name: ${{ inputs.action }} servers
+    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
+    runs-on: ubuntu-24.04
+    environment: desktop-feed
+    steps:
+      - name: Refuse to resume while the feed is paused
+        env:
+          PAUSE: ${{ vars.ORCA_FEED_PAUSE }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          if [ "$PAUSE" = "true" ] && [ "$ACTION" = "resume" ]; then
+            echo "::error::the feed is paused (ORCA_FEED_PAUSE); servers stay stopped until it is lifted."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Update the rings
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
+          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          bash tools/deploy/feed-r2.sh probe
+          bash tools/deploy/feed-r2.sh "$ACTION-servers"

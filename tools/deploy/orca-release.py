@@ -79,6 +79,8 @@ SERVER_CHANNEL_MAX = 4096
 FEED_TOKEN_RE = r"[A-Za-z0-9_-]{43}"
 AUTO_UPDATE_KEYS = {"feed", "tokenFile", "interval", "maxDeferralHours", "quietHours", "settleSeconds"}
 AUTO_UPDATE_STATUS = "auto-update.json"
+AUTO_UPDATE_STOP = "auto-update.stop"     # a local stop: while it exists, nothing is activated
+FEED_STOP_HEADER = "x-orca-feed-stop"     # the feed's servers' stop switch (#878)
 AUTO_UPDATE_UNIT = "orca-auto-update"
 
 def run(args, **kwargs):
@@ -484,6 +486,8 @@ def feed_get(url, token, limit, target=None):
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return None
+        if error.code == 503 and (error.headers.get(FEED_STOP_HEADER) or "").strip() == "servers":
+            raise FeedStopped("the feed's servers' stop switch is set") from None
         if error.code == 401:
             raise RuntimeError("The feed refused this server's token (401); check autoUpdate.tokenFile") from None
         raise RuntimeError(f"The feed answered {error.code} for {url}") from None
@@ -503,6 +507,10 @@ def feed_get(url, token, limit, target=None):
                     raise RuntimeError(f"Feed object exceeds {limit} bytes: {url}")
                 stream.write(block)
         return True
+
+
+class FeedStopped(RuntimeError):
+    """The feed's servers' stop switch (rings.json serverStop): nothing may be activated."""
 
 
 class AutoRollbackRefused(RuntimeError):
@@ -824,6 +832,14 @@ class Deployment(BundleSource):
                         raise RuntimeError(f"Bundle file missing: {name}")
                     shutil.copyfile(local / name, downloads / name)
             manifest = self.verify_bundle(downloads, version)
+            # The exact signed bytes this release was verified from, kept as its durable receipt:
+            # a later reuse (auto-update) must match all three digests, not just the commit.
+            receipt = {}
+            for kind, name in zip(("archive", "manifest", "signature"), bundle_names(version)[1:]):
+                receipt[kind + "Sha256"] = file_sha256(downloads / name)
+                receipt[kind + "Size"] = (downloads / name).stat().st_size
+            if receipt["archiveSha256"] != manifest["archive"]["sha256"]:
+                raise RuntimeError("Verified archive changed before unpacking")
             self.typed_dispatch(unpack_bundle, downloads / manifest["archive"]["name"], manifest["root"], stage)
         finally:
             shutil.rmtree(downloads, ignore_errors=True)
@@ -839,7 +855,7 @@ class Deployment(BundleSource):
             raise RuntimeError("Unpacked bundle disagrees with its signed manifest")
         record = {"version": version, "sha": manifest["sourceSha"], "node": BUNDLE_NODE,
                   "entry": BUNDLE_ENTRY, "source": "bundle", "compatibility": contract,
-                  "bundle": {"archiveSha256": manifest["archive"]["sha256"]}}
+                  "bundle": receipt}
         # The release's own shipped workflows and templates, also for the demo.
         env = {key: value for key, value in os.environ.items() if key != "ORCA_RELEASE"}
         return self.validate_stage(stage, release, record, env, demo_env={**env, "ORCA_RELEASE": str(stage)})
@@ -1015,8 +1031,12 @@ class Deployment(BundleSource):
         release = self.root / "releases" / tag
         if release.exists():
             meta = metadata(release)
-            if meta.get("source") != "bundle" or meta.get("sha") != channel["sourceSha"]:
-                raise RuntimeError(f"{release} exists but is not the bundle the feed offers; inspect it")
+            receipt = meta.get("bundle") if isinstance(meta.get("bundle"), dict) else {}
+            offered = {key: channel[key] for key in channel if key.endswith(("Sha256", "Size"))}
+            if (meta.get("source") != "bundle" or meta.get("sha") != channel["sourceSha"]
+                    or {key: receipt.get(key) for key in offered} != offered):
+                raise RuntimeError(f"{release} exists but was not verified from the exact bundle the feed offers"
+                                   " (its receipt differs); inspect it")
             return release.resolve()
         downloads = Path(self.typed_dispatch(tempfile.mkdtemp, prefix=tag + ".feed-", dir=self.root / "releases"))
         try:
@@ -1070,13 +1090,17 @@ class Deployment(BundleSource):
 
         if self.pending.exists():
             return finish("blocked", "an interrupted activation is pending; inspect it, then run recover", False)
+        if (self.root / AUTO_UPDATE_STOP).exists():
+            return finish("stopped", f"{AUTO_UPDATE_STOP} exists in the deployment root; nothing is activated")
         try:
-            return self._auto_update(auto, status, now, previous, current, report, finish)
+            return self._auto_update(auto, status, now, previous, current, report, finish, clock)
+        except FeedStopped as error:
+            return finish("stopped", f"{error}; nothing is activated, not even a staged release")
         except RuntimeError as error:
             # Reading the feed or staging failed: nothing was activated.
             return finish("failed", str(error), False)
 
-    def _auto_update(self, auto, status, now, previous, current, report, finish):
+    def _auto_update(self, auto, status, now, previous, current, report, finish, clock):
         token = read_feed_token(auto["tokenFile"])
         body = feed_get(f"{auto['feed']}/server/{SERVER_CHANNEL_FILE}", token, SERVER_CHANNEL_MAX)
         if body is None:
@@ -1100,8 +1124,15 @@ class Deployment(BundleSource):
                               f" {auto['maxDeferralHours']} h; no work is cancelled: {reason}", False)
             return finish("deferred", f"{offered} is staged; activation waits: {reason}")
 
-        if in_quiet_hours(auto["quietHours"], time.localtime(now)):
+        # Staging can take long: the clock and the local stop are read again just before activating.
+        if (self.root / AUTO_UPDATE_STOP).exists():
+            return finish("stopped", f"{AUTO_UPDATE_STOP} exists in the deployment root; {offered} stays staged")
+        if in_quiet_hours(auto["quietHours"], time.localtime(clock())):
             return defer(f"quiet hours {auto['quietHours']}")
+        # And the feed is asked again: a stop or a withdrawn offer during staging wins.
+        again = feed_get(f"{auto['feed']}/server/{SERVER_CHANNEL_FILE}", token, SERVER_CHANNEL_MAX)
+        if again is None or again != body:
+            return finish("withdrawn", f"the feed no longer offers exactly {offered}; {offered} stays staged, nothing is activated")
         try:
             self.activate(candidate, auto=True)
         except AutoRollbackRefused as error:

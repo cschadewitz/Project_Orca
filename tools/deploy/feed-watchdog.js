@@ -21,6 +21,8 @@
  * `server/latest-linux-x64.yml` must parse strictly (feed-server.js), name a published release
  * the ring may hold, and its three files must be served with the listed sizes and SHA-256
  * digests, equal to that release's recorded assets. A broken server channel fails the run.
+ * While rings.json sets the servers' stop switch (#878), every server channel must answer 503
+ * with `X-Orca-Feed-Stop: servers`, and nothing else may.
  *
  * What each ring should be offered comes from the feed's live rings.json, which a separate job
  * of feed-watchdog.yml reads with a read-only bucket key (in the feed-reader environment, main
@@ -336,6 +338,16 @@ async function watchServers({ tokens, rings, feed, github, releases, problems, r
     // Servers first: desktops offered a server-era version imply servers on it or newer.
     const desktop = desktopOffers.get(ring);
     const needed = desktop && hasServer(desktop) ? desktop : undefined;
+    // The servers' stop switch (#878): every server channel answers 503 with the stop header
+    // while rings.json sets it, and never otherwise.
+    const stopped = response.status === 503 && response.headers.get("x-orca-feed-stop") === "servers";
+    if (record?.serverStop === true || stopped) {
+      if (record?.serverStop !== true)
+        problems.push(`${where}: answers the servers' stop, but rings.json does not set it`);
+      else if (!stopped) problems.push(`${where}: rings.json stops servers, but the feed answered ${response.status}`);
+      else report.push(`${ring} server: stopped (serverStop); no server activates anything`);
+      continue;
+    }
     if (response.status === 404) {
       const problem = offerProblem(where, record, offers, 404);
       if (problem) problems.push(problem);
