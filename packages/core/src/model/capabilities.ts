@@ -125,6 +125,8 @@ export interface ResolvedMcpServer {
   /** The scope that decided this entry is in the set, e.g. `workflow.nodes.review.capabilities`. */
   source: string;
   server: ResolvedMcpServerConfig;
+  /** From the shared catalog, rather than the agent's own legacy inline `mcpServers`. */
+  catalog: boolean;
 }
 export interface ResolvedSkill {
   id: string;
@@ -349,6 +351,7 @@ export function resolveCapabilities(input: ResolveCapabilitiesInput): ResolveCap
       id,
       source,
       server: { name: id, command: def.command, args: [...def.args], env: { ...def.env } },
+      catalog: inline === undefined,
     });
   }
   for (const [id, source] of state.skills.active) {

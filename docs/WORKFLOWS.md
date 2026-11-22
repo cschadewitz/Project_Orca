@@ -445,15 +445,30 @@ nodes:
   agent, as if it were in the catalog and enabled at the agent scope, so a config with no
   `capabilities` behaves exactly as before. Workflows and nodes can `disable` one by its `name`.
 - One resolver decides what a step gets, and validation, the launch preview, the run's launch
-  record and the session open all call it, so they agree. A run records, per step, each
-  server's and skill's id and the scope that decided it (`source`), plus a skill's version
-  and content digest - never a command, argument or environment value. The launch preview
-  lists them.
+  record and the session open all call it, so they agree. The preview lists every agent step,
+  nested loop and parallel bodies included (a nested step under its qualified id, such as
+  `review-loop::review`), with each server's and skill's id and the scope that decided it
+  (`source`), plus a skill's version and content digest - never a command, argument or
+  environment value. A nested graph runs under its workflow's scope; a `subworkflow` that
+  names another workflow runs under that workflow's own.
+- **What reaches an agent session today is the agent's own inline `mcpServers`, narrowed by
+  any scope.** Catalog servers and skills resolve and appear in validation and the preview,
+  but a step that selects one is refused at launch (and warned about at validation) rather
+  than started with or without it. Passing them to sessions waits for delivery that checks
+  the caller, the host and the agent can take each one (#337).
+- **Who decides.** The workspace and agent scopes live in `orca.config.yaml`, which only
+  config authority can change. A workflow or node can only narrow that, or turn on what the
+  agent permits. A caller's role override picks a different configured agent, and then that
+  agent's ceiling applies (an override cannot name an unconfigured agent). The host is the
+  agent's configured `hostId`: a run cannot move an agent to another host.
 - A `per-run` session is reused only by steps that resolve to the same set; a step with a
   different set gets its own session.
-- **Availability is not permission.** A server's tool calls still go through the agent's
-  [permission policy](#permissions) like any other tool call, and nothing in a skill grants
-  anything.
+- **Availability is not permission, and ORCA does not see every MCP call.** ORCA decides
+  which servers an agent session is given and evaluates the
+  [permission requests](#permissions) the agent sends over ACP. Calls an agent makes to an
+  MCP server without asking are between the agent and that server: whether a given agent
+  asks before each MCP tool call is its own behaviour, not something ORCA enforces. Nothing
+  in a skill grants anything.
 
 ### Skills
 
@@ -466,10 +481,7 @@ the digest it found so you can review the change and update the pin. A run is pi
 configuration, so only a skill's files could change under it: a step whose skill no longer
 hashes to what its launch recorded is refused rather than given the edited skill.
 
-**This version of ORCA resolves skills but cannot deliver them to an agent session yet.** A
-step that selects a skill is refused at launch, with a warning when the workflow is
-validated, rather than started without it. Delivery to each kind of agent and host comes
-with #337.
+As with catalog servers, this version resolves skills but does not deliver them yet (#337).
 
 ## Templates
 

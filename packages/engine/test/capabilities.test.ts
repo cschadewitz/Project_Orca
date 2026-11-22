@@ -63,10 +63,12 @@ describe("skillDigest", () => {
   });
 });
 
+// The agent's own inline servers are what reaches a session today; catalog servers resolve and
+// show in the preview, but are refused at launch until delivery checks them (#337).
 const flow = `
 id: flow
 name: Flow
-capabilities: { mcpServers: { disable: [docs] } }
+capabilities: { mcpServers: { disable: [files] } }
 start: s
 nodes:
   s: { type: start }
@@ -75,10 +77,23 @@ nodes:
     type: agent
     agent: { role: planner }
     prompt: build
-    capabilities: { mcpServers: { enable: [db] } }
+    capabilities: { mcpServers: { enable: [files] } }
   e: { type: end }
 edges: [{ from: s, to: plan }, { from: plan, to: build }, { from: build, to: e }]
 `;
+
+const catalog = {
+  mcpServers: {
+    github: { command: "gh-mcp", env: { GITHUB_TOKEN: "ghp_secretsecretsecretsecret" } },
+    db: { command: "db-mcp" },
+  },
+  skills: {},
+};
+const inlineServers = [
+  { name: "notes", command: "notes-mcp", env: { NOTES_TOKEN: "notes-credential" } },
+  { name: "files", command: "files-mcp" },
+  { name: "shell", command: "shell-mcp" },
+];
 
 function setup(
   configRaw: object,
@@ -90,23 +105,15 @@ function setup(
   } = {},
 ) {
   const config: OrcaConfig = parseOrcaConfig({
-    capabilities: {
-      mcpServers: {
-        github: { command: "gh-mcp", env: { GITHUB_TOKEN: "ghp_secretsecretsecretsecret" } },
-        docs: { command: "docs-mcp" },
-        db: { command: "db-mcp" },
-      },
-      skills: {},
-      workspace: { mcpServers: { enable: ["github", "docs"] } },
-    },
+    capabilities: catalog,
     agents: [
       {
         id: "claude",
         command: "unused",
         roles: ["planner"],
         sessionMode: opts.sessionMode ?? "per-step",
-        mcpServers: [{ name: "inline", command: "inline-mcp" }],
-        capabilities: { mcpServers: { available: ["db"] } },
+        mcpServers: inlineServers,
+        capabilities: { mcpServers: { available: ["github", "db"] } },
       },
     ],
     ...configRaw,
@@ -173,24 +180,32 @@ async function withGenerations(
   return { ...made, generations };
 }
 
+const materialOf = (made: ReturnType<typeof setup>) =>
+  ({
+    snapshot: { id: "gen", config: made.config },
+    agents: made.registry,
+    workflows: made.workflows,
+    templates: new TemplateRegistry(),
+  }) as unknown as GenerationMaterial;
+
 describe("scoped capabilities at session open", () => {
-  it("passes each step exactly its resolved MCP servers, in session/new shape", async () => {
+  it("passes each step exactly its resolved servers, in session/new shape", async () => {
     const { orchestrator, opened } = setup({});
     const { run } = await orchestrator.startAndRun({ workflowId: "flow" });
     expect(run.status).toBe("completed");
-    // Workspace github+docs, legacy inline; the workflow drops docs; `build` opts in to db.
+    // The workflow drops `files`; `build` turns it back on, which its agent permits.
     expect(opened.map((o) => o.mcp)).toEqual([
-      ["github", "inline"],
-      ["github", "inline", "db"],
+      ["notes", "shell"],
+      ["notes", "shell", "files"],
     ]);
-    expect(opened[0]!.envKeys).toEqual([["GITHUB_TOKEN"], []]);
+    expect(opened[0]!.envKeys).toEqual([["NOTES_TOKEN"], []]);
   });
 
   it("keeps a legacy-only agent's servers exactly as before", async () => {
     const { orchestrator, opened } = setup(
       {
         capabilities: undefined,
-        agents: [{ id: "claude", command: "x", roles: ["planner"], mcpServers: [{ name: "inline", command: "i" }] }],
+        agents: [{ id: "claude", command: "x", roles: ["planner"], mcpServers: inlineServers }],
       },
       {
         workflow: `
@@ -203,15 +218,17 @@ edges: [{ from: s, to: a }, { from: a, to: e }]
       },
     );
     await orchestrator.startAndRun({ workflowId: "flow" });
-    expect(opened.map((o) => o.mcp)).toEqual([["inline"]]);
+    expect(opened.map((o) => o.mcp)).toEqual([["notes", "files", "shell"]]);
   });
 
   it("does not reuse a per-run session for a step with a different scope", async () => {
     const { orchestrator, opened } = setup({}, { sessionMode: "per-run" });
     const { run } = await orchestrator.startAndRun({ workflowId: "flow" });
     expect(run.status).toBe("completed");
-    expect(opened).toHaveLength(2);
-    expect(opened[1]!.mcp).toContain("db");
+    expect(opened.map((o) => o.mcp)).toEqual([
+      ["notes", "shell"],
+      ["notes", "shell", "files"],
+    ]);
   });
 
   it("reuses a per-run session when consecutive steps resolve the same", async () => {
@@ -219,7 +236,7 @@ edges: [{ from: s, to: a }, { from: a, to: e }]
       {},
       {
         sessionMode: "per-run",
-        workflow: flow.replace("    capabilities: { mcpServers: { enable: [db] } }\n", ""),
+        workflow: flow.replace("    capabilities: { mcpServers: { enable: [files] } }\n", ""),
       },
     );
     await orchestrator.startAndRun({ workflowId: "flow" });
@@ -231,7 +248,7 @@ edges: [{ from: s, to: a }, { from: a, to: e }]
 const nested = `
 id: nested
 name: Nested
-capabilities: { mcpServers: { disable: [docs] } }
+capabilities: { mcpServers: { disable: [files] } }
 start: s
 nodes:
   s: { type: start }
@@ -247,7 +264,7 @@ nodes:
           s: { type: start }
           a: { type: agent, agent: claude, prompt: a }
           g: { type: gate, question: go on? }
-          b: { type: agent, agent: claude, prompt: b, capabilities: { mcpServers: { enable: [db] } } }
+          b: { type: agent, agent: claude, prompt: b, capabilities: { mcpServers: { disable: [shell] } } }
           e: { type: end }
         edges: [{ from: s, to: a }, { from: a, to: g }, { from: g, to: b }, { from: b, to: e }]
   sub: { type: subworkflow, workflow: plain }
@@ -268,8 +285,8 @@ describe("scoped capabilities in child runs", () => {
     const first = setup({}, { workflow: [nested, plain], stores, pause: true });
     const parked = await first.orchestrator.startAndRun({ workflowId: "nested" });
     expect(parked.run.status).toBe("paused");
-    // Fresh inline child admission: the workflow's `disable: [docs]` holds.
-    expect(first.opened.map((o) => o.mcp)).toEqual([["github", "inline"]]);
+    // Fresh inline child admission: the workflow's `disable: [files]` holds.
+    expect(first.opened.map((o) => o.mcp)).toEqual([["notes", "shell"]]);
 
     // A new process over the same store reconstructs the child from the stored definition.
     const second = setup({}, { workflow: [nested, plain], stores });
@@ -278,100 +295,116 @@ describe("scoped capabilities in child runs", () => {
     const done = await second.orchestrator.resume(request!.runId);
     expect(done.run.status).toBe("completed");
     expect(second.opened.map((o) => o.mcp)).toEqual([
-      // `b` in the nested graph: the workflow scope still applies, plus the node's opt-in.
-      ["github", "inline", "db"],
-      // The registered `plain` child: its own (empty) scope, so docs is back.
-      ["github", "docs", "inline"],
+      // `b` in the nested graph: the workflow scope still applies, and its own narrowing.
+      ["notes"],
+      // The registered `plain` child: its own (empty) scope, so `files` is back.
+      ["notes", "files", "shell"],
     ]);
   });
-});
 
-describe("scoped capabilities in child runs with recorded provenance", () => {
-  it("admits a nested child under the enclosing scope, records it, and resumes it in another process", async () => {
+  it("previews nested steps under qualified ids, and each matches what its child run prepares and records", async () => {
     const stores = memoryStores();
     const first = await withGenerations({}, { workflow: [nested, plain], stores, pause: true });
     const launch = await first.generations.captureLaunch({ purpose: "workflow", workflowId: "nested" });
     const id = await launch.startRun({});
+    const root = await first.orchestrator.getState(id);
+    const preview = Object.fromEntries(
+      (root.run.provenance?.selections ?? []).map((s) => [s.nodeId, s.capabilities?.mcpServers.map((m) => m.id)]),
+    );
+    expect(preview).toEqual({ "loop::a": ["notes", "shell"], "loop::b": ["notes"] });
+
     expect((await first.orchestrator.run(id)).run.status).toBe("paused");
-    expect(first.opened.map((o) => o.mcp)).toEqual([["github", "inline"]]);
+    expect(first.opened.map((o) => o.mcp)).toEqual([preview["loop::a"]]);
     const [request] = await first.orchestrator.pendingInputs();
     const child = await first.orchestrator.getState(request!.runId);
     expect(child.run.parentRunId).toBe(id);
-    // The child's own launch record carries the enclosing workflow's scope.
-    expect(child.run.provenance?.selections.find((s) => s.nodeId === "b")?.capabilities?.mcpServers).toEqual([
-      { id: "github", source: "config.capabilities.workspace" },
-      { id: "inline", source: "agents.claude.mcpServers" },
-      { id: "db", source: "workflow.nodes.b.capabilities" },
-    ]);
+    // The child's own launch record agrees with the root's preview of the same step.
+    expect(child.run.provenance?.selections.find((s) => s.nodeId === "b")?.capabilities).toEqual(
+      root.run.provenance?.selections.find((s) => s.nodeId === "loop::b")?.capabilities,
+    );
 
     const second = await withGenerations({}, { workflow: [nested, plain], stores });
     await second.orchestrator.answer(request!.id, "approve", request!.runId);
     expect((await second.orchestrator.resume(request!.runId)).run.status).toBe("completed");
-    expect(second.opened.map((o) => o.mcp)).toEqual([
-      ["github", "inline", "db"],
-      ["github", "docs", "inline"],
-    ]);
+    expect(second.opened.map((o) => o.mcp)).toEqual([preview["loop::b"], ["notes", "files", "shell"]]);
   });
 });
 
 describe("scoped capabilities before agent work", () => {
-  it("refuses a launch whose step reaches outside the agent's permitted set, writing nothing", async () => {
-    const escalate = setup({ agents: [{ id: "claude", command: "x", roles: ["planner"] }] }, { workflow: flow });
-    await expect(escalate.orchestrator.startRun({ workflowId: "flow" })).rejects.toMatchObject({
+  it("refuses a step that reaches outside the agent's permitted set, writing nothing", async () => {
+    const made = setup(
+      { agents: [{ id: "claude", command: "x", roles: ["planner"], mcpServers: inlineServers }] },
+      { workflow: flow.replace("enable: [files]", "enable: [github]") },
+    );
+    await expect(made.orchestrator.startRun({ workflowId: "flow" })).rejects.toMatchObject({
       code: "CONFIG_INVALID",
       message: expect.stringMatching(
         /step 'build'.*workflow\.nodes\.build\.capabilities\.mcpServers\.enable\[0\].*not permitted/,
       ),
     });
-    expect(await escalate.orchestrator.listRuns()).toEqual([]);
-    expect(escalate.opened).toEqual([]);
+    expect(await made.orchestrator.listRuns()).toEqual([]);
+    expect(made.opened).toEqual([]);
+  });
+
+  it("refuses a permitted catalog server until delivery can check it, and names it", async () => {
+    const made = setup({}, { workflow: flow.replace("enable: [files]", "enable: [github]") });
+    await expect(made.orchestrator.startRun({ workflowId: "flow" })).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringMatching(
+        /workflow\.nodes\.build\.capabilities\.mcpServers: selects catalog MCP server 'github'.*does not pass catalog servers/,
+      ),
+    });
+    expect(await made.orchestrator.listRuns()).toEqual([]);
+    expect(made.opened).toEqual([]);
+    // The preview still shows what it would be, with the scope that chose it.
+    const preview = launchProvenance(materialOf(made), made.workflows.get("flow"), {}, {});
+    expect(preview.selections.find((s) => s.nodeId === "build")?.capabilities?.mcpServers).toContainEqual({
+      id: "github",
+      source: "workflow.nodes.build.capabilities",
+    });
   });
 
   it("refuses a step that selects a skill, which cannot be delivered yet, and names it", async () => {
     const dir = await tempDir();
     await writeFile(join(dir, "review.md"), "review carefully");
-    const { orchestrator } = setup(
-      {
-        capabilities: {
-          mcpServers: { db: { command: "db-mcp" } },
-          skills: { review: { path: join(dir, "review.md"), version: "1" } },
-        },
-        agents: [
-          {
-            id: "claude",
-            command: "x",
-            roles: ["planner"],
-            capabilities: { skills: { enable: ["review"] }, mcpServers: { available: ["db"] } },
-          },
-        ],
-      },
-      { workflow: flow.replace("capabilities: { mcpServers: { disable: [docs] } }", "") },
-    );
+    const { orchestrator } = setup({
+      capabilities: { ...catalog, skills: { review: { path: join(dir, "review.md"), version: "1" } } },
+      agents: [{ id: "claude", command: "x", roles: ["planner"], capabilities: { skills: { enable: ["review"] } } }],
+    });
     await expect(orchestrator.startRun({ workflowId: "flow" })).rejects.toMatchObject({
       code: "CONFIG_INVALID",
       message: expect.stringMatching(/cannot deliver skills/),
     });
   });
 
-  it("checks role overrides: the overriding agent's permissions decide", async () => {
-    const { orchestrator } = setup({
-      agents: [
-        {
-          id: "claude",
-          command: "x",
-          roles: ["planner"],
-          capabilities: { mcpServers: { available: ["db"] } },
-        },
-        { id: "codex", command: "y" },
-      ],
+  it("decides permission by the agent a role override selects", async () => {
+    const workflow = flow.replace("enable: [files]", "enable: [github]");
+    const { orchestrator } = setup(
+      {
+        agents: [
+          {
+            id: "claude",
+            command: "x",
+            roles: ["planner"],
+            mcpServers: inlineServers,
+            capabilities: { mcpServers: { available: ["github"] } },
+          },
+          { id: "codex", command: "y", mcpServers: inlineServers },
+        ],
+      },
+      { workflow },
+    );
+    // claude permits github (refused only because catalog servers are not delivered yet)...
+    await expect(orchestrator.validateStartRun({ workflowId: "flow" })).rejects.toMatchObject({
+      message: expect.stringMatching(/does not pass catalog servers/),
     });
-    await expect(orchestrator.validateStartRun({ workflowId: "flow" })).resolves.toBeDefined();
+    // ...while a caller who overrides the role to codex gets codex's ceiling, which does not.
     await expect(
       orchestrator.validateStartRun({ workflowId: "flow", overrides: { roles: { planner: "codex" } } }),
-    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    ).rejects.toMatchObject({ message: expect.stringMatching(/agent 'codex' is not permitted/) });
   });
 
-  it("validates a workflow against the registry: errors under the node, undeliverable skills as warnings", async () => {
+  it("validates a workflow against the registry: errors under the node, undeliverable entries as warnings", async () => {
     const dir = await tempDir();
     await writeFile(join(dir, "review.md"), "review carefully");
     const config = parseOrcaConfig({
@@ -404,21 +437,16 @@ edges: [{ from: s, to: a }, { from: a, to: e }]
 
 describe("scoped capabilities in launch provenance", () => {
   it("records ids and sources per step, and never a command, argument or environment value", () => {
-    const { registry, config, workflows } = setup({});
-    const material = {
-      snapshot: { id: "gen", config },
-      agents: registry,
-      workflows,
-      templates: new TemplateRegistry(),
-    } as unknown as GenerationMaterial;
-    const provenance = launchProvenance(material, workflows.get("flow"), {}, {});
+    const made = setup({ capabilities: { ...catalog, workspace: { mcpServers: { enable: ["github"] } } } });
+    const provenance = launchProvenance(materialOf(made), made.workflows.get("flow"), {}, {});
     expect(provenance.selections.map((s) => [s.nodeId, s.capabilities])).toEqual([
       [
         "plan",
         {
           mcpServers: [
             { id: "github", source: "config.capabilities.workspace" },
-            { id: "inline", source: "agents.claude.mcpServers" },
+            { id: "notes", source: "agents.claude.mcpServers" },
+            { id: "shell", source: "agents.claude.mcpServers" },
           ],
           skills: [],
         },
@@ -428,22 +456,22 @@ describe("scoped capabilities in launch provenance", () => {
         {
           mcpServers: [
             { id: "github", source: "config.capabilities.workspace" },
-            { id: "inline", source: "agents.claude.mcpServers" },
-            { id: "db", source: "workflow.nodes.build.capabilities" },
+            { id: "notes", source: "agents.claude.mcpServers" },
+            { id: "shell", source: "agents.claude.mcpServers" },
+            { id: "files", source: "workflow.nodes.build.capabilities" },
           ],
           skills: [],
         },
       ],
     ]);
     const text = JSON.stringify(provenance);
-    for (const leak of ["gh-mcp", "ghp_secret", "GITHUB_TOKEN", "inline-mcp"]) expect(text).not.toContain(leak);
+    for (const leak of ["gh-mcp", "ghp_secret", "GITHUB_TOKEN", "notes-mcp", "notes-credential"])
+      expect(text).not.toContain(leak);
   });
 
   it("treats catalog server credentials as configured secrets to redact", async () => {
     const { configuredGenerationSecrets } = await import("@orca/engine");
-    const { registry, config, workflows } = setup({});
-    const material = { snapshot: { id: "gen", config }, agents: registry, workflows } as unknown as GenerationMaterial;
-    expect(configuredGenerationSecrets(material)).toContain("ghp_secretsecretsecretsecret");
+    expect(configuredGenerationSecrets(materialOf(setup({})))).toContain("ghp_secretsecretsecretsecret");
   });
 
   it("keeps the agents' registry catalog on a role-override view", () => {

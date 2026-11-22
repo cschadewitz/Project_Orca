@@ -8,7 +8,7 @@ import {
   redactCapabilityManifest,
 } from "@orca/core";
 import { workflowRevision } from "./orchestrator.js";
-import { nodeCapabilityScope, resolveNodeCapabilities } from "./capabilities.js";
+import { agentInstructions, resolveNodeCapabilities } from "./capabilities.js";
 import type { GenerationMaterial } from "./configuration-generation.js";
 
 export function launchProvenance(
@@ -21,10 +21,10 @@ export function launchProvenance(
 ) {
   const config = material.snapshot.config;
   const agents = material.agents.withOverrides(overrides);
-  const selections = Object.entries(definition.nodes).flatMap(([nodeId, node]) => {
-    const instruction =
-      node.type === "agent" ? node : node.type === "decision" && node.source.kind === "agent" ? node.source : undefined;
-    if (!instruction) return [];
+  // Every agent instruction, nested inline graphs included (#335): a nested step is reported
+  // under its qualified id (`loop::build`), which is how the child run that executes it is named.
+  const selections = agentInstructions(definition).flatMap((instruction) => {
+    const nodeId = instruction.qualifiedId;
     const { agent, host } = agents.resolve(instruction.agent);
     const role =
       typeof instruction.agent === "object" && "role" in instruction.agent ? instruction.agent.role : undefined;
@@ -52,8 +52,8 @@ export function launchProvenance(
         registry: agents,
         agent,
         workflow: definition.capabilities,
-        nodeId,
-        node: nodeCapabilityScope(node).scope,
+        nodeId: instruction.nodeId,
+        node: instruction.scope,
         digests: true,
       }).manifest,
     );

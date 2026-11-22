@@ -5,5 +5,6 @@
   ambiguous references, and attempts to widen access, fail before the run starts and name
   the field. The launch preview and the run's launch record list each step's servers and
   skills with the scope that chose them, without commands or secrets. Legacy
-  `agents[].mcpServers` keep working unchanged. Skills resolve with a content digest but
-  cannot be delivered to agents yet, so a step that selects one is refused.
+  `agents[].mcpServers` keep working unchanged and can now be narrowed per workflow or
+  step. Catalog servers and skills (with a content digest) resolve and preview, but are not
+  passed to agent sessions yet, so a step that selects one is refused.

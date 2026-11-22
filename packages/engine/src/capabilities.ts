@@ -119,23 +119,32 @@ export function resolveNodeCapabilities(input: NodeCapabilityInput): ResolveCapa
 }
 
 /**
- * What ORCA can hand an agent today. MCP servers go in `session/new`. Skills resolve, with an
- * identity and a content digest, but no agent session can receive one yet, so a step that
- * selects any is refused rather than started without them.
+ * What ORCA hands an agent session today: the agent's own legacy inline MCP servers, narrowed
+ * by any scope. Catalog servers and skills resolve, with identities, sources and (for skills)
+ * content digests that validation and the launch preview show, but nothing new reaches a
+ * session until delivery checks the caller, the host and the agent can actually take each
+ * one (#337). A step that selects one is refused rather than started without it.
  */
 export function deliveryIssues(result: ResolveCapabilitiesResult, nodePath: string): CapabilityIssue[] {
-  return result.manifest.skills.length
-    ? [
-        {
-          path: `${nodePath}.capabilities.skills`,
-          message: `selects skill${result.manifest.skills.length > 1 ? "s" : ""} ${result.manifest.skills
-            .map((s) => `'${s.id}'`)
-            .join(", ")}, but this version of ORCA cannot deliver skills to an agent session yet. Remove ${
-            result.manifest.skills.length > 1 ? "them" : "it"
-          } from the agent's or workflow's selection to run this step`,
-        },
-      ]
-    : [];
+  const issues: CapabilityIssue[] = [];
+  const list = (ids: string[]) => ids.map((id) => `'${id}'`).join(", ");
+  const servers = result.manifest.mcpServers.filter((m) => m.catalog).map((m) => m.id);
+  if (servers.length)
+    issues.push({
+      path: `${nodePath}.capabilities.mcpServers`,
+      message: `selects catalog MCP server${servers.length > 1 ? "s" : ""} ${list(servers)}, but this version of ORCA does not pass catalog servers to an agent session yet. Remove ${
+        servers.length > 1 ? "them" : "it"
+      } from the selection, or define the server inline on the agent, to run this step`,
+    });
+  const skills = result.manifest.skills.map((s) => s.id);
+  if (skills.length)
+    issues.push({
+      path: `${nodePath}.capabilities.skills`,
+      message: `selects skill${skills.length > 1 ? "s" : ""} ${list(skills)}, but this version of ORCA cannot deliver skills to an agent session yet. Remove ${
+        skills.length > 1 ? "them" : "it"
+      } from the selection to run this step`,
+    });
+  return issues;
 }
 
 /** The refusal a launch or a session open throws for a step whose capabilities do not resolve. */
@@ -169,28 +178,66 @@ export function capabilityChecker(registry: AgentRegistry) {
   };
 }
 
+/** One agent instruction (an agent node, or an agent decision's source) anywhere in a definition. */
+export interface AgentInstruction {
+  /** The node's id inside its own graph: what the step runs as. */
+  nodeId: string;
+  /**
+   * Unique across the definition: the node id, prefixed for a nested graph by the inline path a
+   * child run's workflow id carries (`loop::build`, `fan::branch::review`).
+   */
+  qualifiedId: string;
+  nodePath: string;
+  agent: AgentSelector;
+  template?: string | undefined;
+  scope: CapabilityScope | undefined;
+}
+
 /** Every agent instruction in a definition, nested inline graphs included (not subworkflow refs). */
-export function agentInstructions(
-  graph: WorkflowGraph,
-  prefix = "workflow",
-): { nodeId: string; nodePath: string; agent: AgentSelector; scope: CapabilityScope | undefined }[] {
-  const out: { nodeId: string; nodePath: string; agent: AgentSelector; scope: CapabilityScope | undefined }[] = [];
+export function agentInstructions(graph: WorkflowGraph, prefix = "workflow", inline = ""): AgentInstruction[] {
+  const out: AgentInstruction[] = [];
   for (const [nodeId, node] of Object.entries(graph.nodes)) {
     const path = `${prefix}.nodes.${nodeId}`;
-    if (node.type === "agent") out.push({ nodeId, nodePath: path, agent: node.agent, scope: node.capabilities });
+    const qualify = (id: string) => (inline ? `${inline}${INLINE_PATH_SEP}${id}` : id);
+    if (node.type === "agent")
+      out.push({
+        nodeId,
+        qualifiedId: qualify(nodeId),
+        nodePath: path,
+        agent: node.agent,
+        template: node.template,
+        scope: node.capabilities,
+      });
     else if (node.type === "decision" && node.source.kind === "agent")
-      out.push({ nodeId, nodePath: `${path}.source`, agent: node.source.agent, scope: node.source.capabilities });
+      out.push({
+        nodeId,
+        qualifiedId: qualify(nodeId),
+        nodePath: `${path}.source`,
+        agent: node.source.agent,
+        template: node.source.template,
+        scope: node.source.capabilities,
+      });
     else if (node.type === "loop" && "graph" in node.body)
-      out.push(...agentInstructions(node.body.graph, `${path}.body`));
+      out.push(...agentInstructions(node.body.graph, `${path}.body`, qualify(nodeId)));
     else if (node.type === "parallel") {
       if (node.forEach?.body && "graph" in node.forEach.body)
-        out.push(...agentInstructions(node.forEach.body.graph, `${path}.forEach.body`));
+        out.push(...agentInstructions(node.forEach.body.graph, `${path}.forEach.body`, qualify(nodeId)));
       for (const [branch, ref] of Object.entries(node.branches ?? {}))
-        if ("graph" in ref) out.push(...agentInstructions(ref.graph, `${path}.branches.${branch}`));
+        if ("graph" in ref)
+          out.push(
+            ...agentInstructions(
+              ref.graph,
+              `${path}.branches.${branch}`,
+              qualify(`${nodeId}${INLINE_PATH_SEP}${branch}`),
+            ),
+          );
     }
   }
   return out;
 }
+
+/** The orchestrator's `INLINE_SEP`, repeated here to keep this module free of an import cycle. */
+const INLINE_PATH_SEP = "::";
 
 /**
  * Launch preflight: every agent step in the definition, under the run's role overrides, must
