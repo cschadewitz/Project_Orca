@@ -191,7 +191,11 @@ it("attaches only re-verified signed x64 and arm64 installers, through the re-va
   expect(text).toContain('workflows: ["Windows signed (spike)"]');
   // Attachment and publication share one queue, so they never interleave; reconcile, which
   // only dispatches, queues on its own.
-  expect(wf.jobs.attach.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
+  expect(wf.jobs.attach.concurrency).toEqual({
+    group: "release-draft-writes",
+    "cancel-in-progress": false,
+    queue: "max",
+  });
   expect(workflow("release-publish-final.yml").concurrency).toEqual({
     group: "release-draft-writes",
     "cancel-in-progress": false,
@@ -326,7 +330,11 @@ it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unatten
   expect(wf.jobs.accept.permissions).toBeUndefined();
   expect(wf.jobs.accept["runs-on"]).toBe("windows-11-arm");
   expect(wf.jobs.record.permissions).toEqual({ contents: "write" });
-  expect(wf.jobs.record.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
+  expect(wf.jobs.record.concurrency).toEqual({
+    group: "release-draft-writes",
+    "cancel-in-progress": false,
+    queue: "max",
+  });
   expect(wf.jobs.record.needs).toEqual(["select", "accept"]);
   expect(wf.jobs.record.steps.at(-1).run).toBe(
     'bash tools/deploy/release-attach.sh accept "$ID" "$SHA" "$VERSION" "$GITHUB_RUN_ID" "$DIGEST"',
@@ -355,7 +363,11 @@ it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unatten
   expect(wf.jobs["x64-only"].if).toBe(
     "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.x64_only",
   );
-  expect(wf.jobs["x64-only"].concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
+  expect(wf.jobs["x64-only"].concurrency).toEqual({
+    group: "release-draft-writes",
+    "cancel-in-progress": false,
+    queue: "max",
+  });
   expect(wf.jobs["x64-only"].steps.at(-1).run).toContain('bash tools/deploy/release-attach.sh x64-only "$ID" "$sha"');
   expect(wf.jobs.select.if).toContain("!inputs.x64_only");
 });
@@ -395,7 +407,9 @@ it("puts every job that rewrites release notes in one draft-writes queue that ke
   // later PATCH drop the earlier one's record, and a member replacing a pending one would drop
   // its write entirely, so every member shares the group with `queue: max`.
   const members = [];
-  for (const name of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((n) => n.endsWith(".yml"))) {
+  for (const name of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((n) =>
+    n.endsWith(".yml"),
+  )) {
     const w = workflow(name);
     for (const c of [w.concurrency, ...Object.values(w.jobs).map((j) => j.concurrency)])
       if (c?.group === "release-draft-writes") members.push([name, c]);
@@ -403,5 +417,6 @@ it("puts every job that rewrites release notes in one draft-writes queue that ke
   expect(members.map(([name]) => name)).toEqual(
     expect.arrayContaining(["release-attach-signed.yml", "release-publish-final.yml", "release-server-bundle.yml"]),
   );
-  for (const [, c] of members) expect(c).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
+  for (const [, c] of members)
+    expect(c).toEqual({ group: "release-draft-writes", "cancel-in-progress": false, queue: "max" });
 });
