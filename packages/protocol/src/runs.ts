@@ -139,6 +139,11 @@ export const RunsListParamsSchema = z.object({
   createdTo: z.iso.datetime({ offset: true }).optional(),
   /** Protocol 2.3: add `operations` to every returned row (#340). */
   operations: z.boolean().optional(),
+  /**
+   * Protocol 2.3: only these runs. A page over a known set - the rows a client already decided
+   * to show - rather than a search; ids that match nothing are simply absent.
+   */
+  runIds: z.array(z.string().min(1)).max(500).optional(),
   /** Newest first, from `offset`. */
   limit: z.number().int().positive().max(500).default(100),
   offset: z.number().int().nonnegative().default(0),

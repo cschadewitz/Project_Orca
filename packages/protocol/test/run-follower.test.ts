@@ -147,6 +147,48 @@ describe("RunFollower", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("settles agent output alone when it covers exactly, and repairs an ambiguous gap after a delay", async () => {
+    const { follower, calls, timers } = setup();
+    follower.follow("run-a");
+    calls[0]!.resolve({ run: row("running"), lastSeq: 2 });
+    await flush();
+    // Two steps' batches, the one with holes first: together they cover 3..5 exactly.
+    follower.notify(batch(3, 5, 2, "s1"));
+    expect(follower.get("run-a")).toMatchObject({ phase: "live", cursor: 2 });
+    follower.notify(batch(4, 4, 1, "s2"));
+    expect(follower.get("run-a")).toMatchObject({ phase: "live", cursor: 5 });
+    // Then output from 8 with 6 and 7 never seen, and no event after it to anchor on.
+    follower.notify(batch(8, 9, 2));
+    expect(follower.get("run-a")).toMatchObject({ phase: "resyncing", cursor: 5, resyncs: 1 });
+    await timers.advance(99);
+    expect(calls).toHaveLength(1);
+    await timers.advance(1);
+    expect(calls).toHaveLength(2);
+    calls[1]!.resolve({ run: row("running"), lastSeq: 9 });
+    await flush();
+    expect(follower.get("run-a")).toMatchObject({ phase: "live", cursor: 9, resyncs: 0 });
+  });
+
+  it("keeps the streamed cursor apart from the snapshot's progress watermark", async () => {
+    const { follower, calls } = setup();
+    follower.follow("run-a");
+    const operations = {
+      lastSeq: 2,
+      lastActivityAt: at(2),
+      progress: { attempts: 1, completed: 0, failed: 0, active: 1, waiting: 0, skipped: 0 },
+      facets: {
+        host: { state: "unavailable" as const, reason: "not-collected" as const },
+        usage: { state: "unavailable" as const, reason: "not-collected" as const },
+      },
+    };
+    calls[0]!.resolve({ run: row("running", { operations }), lastSeq: 2 });
+    await flush();
+    follower.notify(appended(3));
+    follower.notify(batch(4, 4, 1));
+    expect(follower.get("run-a")).toMatchObject({ cursor: 4, lastActivityAt: at(4), snapshotSeq: 2 });
+    expect(follower.get("run-a")?.run?.operations).toEqual(operations);
+  });
+
   it("re-reads on a gap, once, and goes live from the snapshot that heals it", async () => {
     const { follower, calls, timers } = setup();
     follower.follow("run-a");

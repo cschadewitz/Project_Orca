@@ -562,7 +562,8 @@ export class ReadModel {
   /** Newest first, filtered, paged. A run whose log has gone missing is skipped, not faked. */
   async runsList(params: RunsListParams): Promise<RunsListResult> {
     const pass = this.pass();
-    const ids = await this.orc.listRuns();
+    const only = params.runIds ? new Set(params.runIds) : undefined;
+    const ids = (await this.orc.listRuns()).filter((id) => !only || only.has(id));
     const from = params.createdFrom === undefined ? undefined : Date.parse(params.createdFrom);
     const to = params.createdTo === undefined ? undefined : Date.parse(params.createdTo);
     const rows: RunSummaryView[] = [];

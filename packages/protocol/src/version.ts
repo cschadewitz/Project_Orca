@@ -135,7 +135,7 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * `runs.read`. A 2.1 client never calls it; a 2.2 client asks `hello.methods` before it does.
  *
  * 2.3 adds the operations view's reads (#340): optional `outcome`, `workflowId`,
- * `workflowVersion`, `createdFrom`, `createdTo` and `operations` on `runs.list`, optional
+ * `workflowVersion`, `createdFrom`, `createdTo`, `runIds` and `operations` on `runs.list`, optional
  * `operations` on `runs.get`, and the optional `operations` field they fill on
  * `RunSummaryView` (last sequence and activity, step counts, lease owner, and host and usage
  * facets that say `unavailable` rather than zero). Every one is optional and asked for: a

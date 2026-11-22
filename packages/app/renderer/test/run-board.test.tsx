@@ -13,7 +13,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import type { NotificationMessage, RunsGetResult, RunOperationsView } from "@orca/protocol";
 import { RunsSurface } from "../src/runs/runs-surface.js";
 import { boardRuns, ownerText, progressText, waitText } from "../src/runs/board/board-model.js";
-import { RUN_DETAILS, RUNS } from "./fixtures.js";
+import { AS_OF, RUN_DETAILS, RUNS } from "./fixtures.js";
 import { installBridge, harness, type Harness } from "./harness.js";
 import type { FakeBridge } from "./fake-bridge.js";
 
@@ -154,6 +154,66 @@ describe("the run board", () => {
     await waitFor(() => expect(within(screen.getByRole("tree")).getAllByRole("treeitem")).toHaveLength(1));
     const lists = fake.calls.filter((c) => c.method === "runs.list");
     expect(lists.at(-1)!.params).toEqual({ workflowId: "nightly" });
+  });
+});
+
+describe("run filters and the daemon's protocol", () => {
+  beforeEach(() => {
+    fake = installBridge();
+  });
+  afterEach(() => {
+    cleanup();
+    while (teardown.length) teardown.pop()?.();
+  });
+
+  it("finds a match beyond the first page, because the daemon filters the whole store", async () => {
+    // A store of 150 runs, the one `nightly` run the oldest: past any first page.
+    const many = Array.from({ length: 150 }, (_, i) => ({
+      ...RUNS[1]!,
+      id: `run-${String(i).padStart(3, "0")}`,
+      workflowId: i === 149 ? "nightly" : "sdlc",
+    }));
+    fake.script({
+      "workflows.list": () =>
+        Promise.resolve({
+          ok: true as const,
+          result: {
+            workflows: [{ id: "nightly", name: "nightly", version: "1", nodeCount: 2, edgeCount: 1, start: "start" }],
+            asOf: AS_OF,
+          },
+        }),
+      "runs.list": (params) => {
+        const matches = many.filter((r) => params.workflowId === undefined || r.workflowId === params.workflowId);
+        const limit = params.limit ?? 100;
+        return Promise.resolve({
+          ok: true as const,
+          result: { runs: matches.slice(0, limit), total: matches.length, asOf: AS_OF },
+        });
+      },
+    });
+    renderRuns();
+    await screen.findByRole("tree", { name: "Run tree" });
+    fireEvent.click(screen.getByRole("button", { name: /Filter by workflow/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "nightly" }));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("tree"))
+          .getAllByRole("treeitem")
+          .map((r) => r.id),
+      ).toEqual(["tree-row-run-149"]),
+    );
+    expect(screen.getByText("1 run")).toBeTruthy();
+  });
+
+  it("does not offer the filters a 2.2 daemon would ignore, rather than filter one page", async () => {
+    fake.connect({ ...fake.connection, versions: { app: "2.3", daemon: "2.2" } });
+    renderRuns();
+    await screen.findByRole("tree", { name: "Run tree" });
+    expect(screen.queryByRole("button", { name: /Filter by workflow/ })).toBeNull();
+    const workflow = screen.getByRole("button", { name: "All workflows" });
+    expect(workflow.getAttribute("aria-disabled")).toBe("true");
+    expect(workflow.getAttribute("title")).toContain("protocol 2.3");
+    expect(fake.calls.filter((c) => c.method === "runs.list").map((c) => c.params)).toEqual([{}]);
   });
 });
 

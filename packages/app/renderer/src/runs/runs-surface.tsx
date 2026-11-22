@@ -42,7 +42,8 @@ import type { VirtualListHandle } from "../list/index.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { useControls } from "../attention/use-controls.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
-import { Menu, StateView, Text, countedOf, idText, textClass, type Crumb, type MenuItem } from "../ui/index.js";
+import { Button, Menu, StateView, Text, countedOf, idText, textClass, type Crumb, type MenuItem } from "../ui/index.js";
+import { useConnection } from "../chrome/use-connection.js";
 import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { StepDetail } from "../step/index.js";
 import { matchesText } from "./run-rows.js";
@@ -53,7 +54,7 @@ import { ALL_KINDS, Timeline } from "./timeline/timeline.js";
 import { useRunEvents } from "./timeline/use-run-events.js";
 import type { TimelineEntry } from "./timeline/timeline-entries.js";
 import { buildSelectionIndex, useRunSelection, EMPTY_INDEX, type SelectionIndex } from "./use-run-selection.js";
-import { useRuns, type StatusFilter } from "./use-runs.js";
+import { runFiltersSupported, useRuns, type StatusFilter } from "./use-runs.js";
 import { RunBoard } from "./board/run-board.js";
 import { useRunBoard } from "./board/use-run-board.js";
 import { boardRuns } from "./board/board-model.js";
@@ -126,7 +127,14 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
   /* A run opens with its timeline following: the last thing that happened is what a person
      clicked the run for. Scrolling away holds it, and picking another run starts again. */
   const [follow, setFollow] = useState(true);
-  const { state, reload } = useRuns(status, { workflowId, createdFrom: since.from });
+  /* A daemon older than protocol 2.3 ignores the workflow and time filters and answers one
+     unfiltered page; filtering that page here would show a partial answer as the whole one.
+     Against such a daemon the two filters are off, and say why. */
+  const daemonProtocol = useConnection().versions?.daemon;
+  const filtersSupported = runFiltersSupported(daemonProtocol);
+  const effectiveWorkflowId = filtersSupported ? workflowId : undefined;
+  const effectiveFrom = filtersSupported ? since.from : undefined;
+  const { state, reload } = useRuns(status, { workflowId: effectiveWorkflowId, createdFrom: effectiveFrom });
 
   const runs = state.phase === "ready" ? state.runs : EMPTY;
   const visible = useMemo(() => runs.filter((run) => matchesText(run, text)), [runs, text]);
@@ -259,21 +267,34 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
   );
 
   const live = connection === "live";
-  const filtered = status !== "all" || workflowId !== undefined || since.from !== undefined || text.trim() !== "";
+  const filtered =
+    status !== "all" || effectiveWorkflowId !== undefined || effectiveFrom !== undefined || text.trim() !== "";
 
-  /* The workflows to choose from: those of the runs held, plus the one chosen, so the menu
-     can always name the current filter even when nothing matches it. */
+  /* The workflows to choose from: every one the daemon has registered, those of the runs held
+     (a run outlives its workflow's registration), and the one chosen, so the menu can always
+     name the current filter. Registered ones come from `workflows.list`, because the runs
+     held are one page and the workflow a person is after may only have runs past it. */
+  const [registered, setRegistered] = useState<readonly string[]>([]);
+  useEffect(() => {
+    let live = true;
+    void window.orca.workflows.list({}).then((result) => {
+      if (live && result.ok) setRegistered(result.result.workflows.map((w) => w.id));
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
   const workflowItems = useMemo((): readonly MenuItem[] => {
-    const ids = new Set(runs.map((run) => run.workflowId));
+    const ids = new Set([...registered, ...runs.map((run) => run.workflowId)]);
     if (workflowId !== undefined) ids.add(workflowId);
     return [{ id: ALL_WORKFLOWS, label: "All workflows" }, ...[...ids].sort().map((id) => ({ id, label: id }))];
-  }, [runs, workflowId]);
+  }, [registered, runs, workflowId]);
   const sinceLabel = SINCE_ITEMS.find((item) => item.id === since.id)?.label ?? "Any time";
 
   /* The board follows the active roots of what the filter shows, and keeps a run it was
      following once that run finishes; a new filter starts the set again. */
   const [following, setFollowing] = useState<readonly string[]>([]);
-  const filterKey = `${status}\n${workflowId ?? ""}\n${since.from ?? ""}\n${text}`;
+  const filterKey = `${status}\n${effectiveWorkflowId ?? ""}\n${effectiveFrom ?? ""}\n${text}`;
   useEffect(() => setFollowing([]), [filterKey]);
   const boardIds = useMemo(() => boardRuns(visible, following), [visible, following]);
   useEffect(() => {
@@ -328,31 +349,51 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
             {CHROME_GLYPHS.crumbSeparator}
           </span>
         </Menu>
-        <Menu
-          label={`Filter by workflow, currently ${workflowId ?? "all workflows"}`}
-          items={workflowItems}
-          triggerClassName={`orca-btn ${textClass("caption")} orca-btn--ghost orca-btn--sm`}
-          onChoose={(item) => setWorkflowId(item.id === ALL_WORKFLOWS ? undefined : item.id)}
-        >
-          {workflowId ?? "All workflows"}
-          <span className="orca-runs__caret" aria-hidden="true">
-            {CHROME_GLYPHS.crumbSeparator}
-          </span>
-        </Menu>
-        <Menu
-          label={`Filter by start time, currently ${sinceLabel}`}
-          items={SINCE_ITEMS}
-          triggerClassName={`orca-btn ${textClass("caption")} orca-btn--ghost orca-btn--sm`}
-          onChoose={(item) => {
-            const ms = SINCE_ITEMS.find((candidate) => candidate.id === item.id)?.ms;
-            setSince(ms === undefined ? { id: "any" } : { id: item.id, from: new Date(Date.now() - ms).toISOString() });
-          }}
-        >
-          {sinceLabel}
-          <span className="orca-runs__caret" aria-hidden="true">
-            {CHROME_GLYPHS.crumbSeparator}
-          </span>
-        </Menu>
+        {filtersSupported ? (
+          <>
+            <Menu
+              label={`Filter by workflow, currently ${workflowId ?? "all workflows"}`}
+              items={workflowItems}
+              triggerClassName={`orca-btn ${textClass("caption")} orca-btn--ghost orca-btn--sm`}
+              onChoose={(item) => setWorkflowId(item.id === ALL_WORKFLOWS ? undefined : item.id)}
+            >
+              {workflowId ?? "All workflows"}
+              <span className="orca-runs__caret" aria-hidden="true">
+                {CHROME_GLYPHS.crumbSeparator}
+              </span>
+            </Menu>
+            <Menu
+              label={`Filter by start time, currently ${sinceLabel}`}
+              items={SINCE_ITEMS}
+              triggerClassName={`orca-btn ${textClass("caption")} orca-btn--ghost orca-btn--sm`}
+              onChoose={(item) => {
+                const ms = SINCE_ITEMS.find((candidate) => candidate.id === item.id)?.ms;
+                setSince(
+                  ms === undefined ? { id: "any" } : { id: item.id, from: new Date(Date.now() - ms).toISOString() },
+                );
+              }}
+            >
+              {sinceLabel}
+              <span className="orca-runs__caret" aria-hidden="true">
+                {CHROME_GLYPHS.crumbSeparator}
+              </span>
+            </Menu>
+          </>
+        ) : (
+          <>
+            <Button
+              size="sm"
+              tone="ghost"
+              disabled
+              disabledReason={`Filtering by workflow and start time needs daemon protocol 2.3; this daemon speaks ${daemonProtocol ?? "an older one"}`}
+            >
+              All workflows
+            </Button>
+            <Button size="sm" tone="ghost" disabled disabledReason="Filtering by start time needs daemon protocol 2.3">
+              Any time
+            </Button>
+          </>
+        )}
         <div className="orca-runs__views" role="group" aria-label="View">
           {(["tree", "board"] as const).map((v) => (
             <button

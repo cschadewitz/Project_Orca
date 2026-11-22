@@ -28,13 +28,25 @@ export type StatusFilter = DisplayStatus | "all";
 
 /**
  * The rest of the daemon-side filter (protocol 2.3, #340): one workflow, and runs created at
- * or after an instant. Both are `runs.list` parameters, and both are applied again to what
- * comes back - a 2.2 daemon ignores parameters it does not know and answers unfiltered, and
- * a run resolved from a notification never went through the daemon's filter at all.
+ * or after an instant. Both are `runs.list` parameters the daemon applies across the whole
+ * store; they are applied here only to runs resolved from a notification, which never went
+ * through the daemon's filter. A daemon older than 2.3 would ignore them and answer one
+ * unfiltered page, so the surface does not offer them there (`runFiltersSupported`).
  */
 export interface RunsQuery {
   workflowId?: string | undefined;
   createdFrom?: string | undefined;
+}
+
+/**
+ * Whether the daemon applies `workflowId` and `createdFrom` itself: protocol 2.3 on. Unknown
+ * (no handshake yet) is taken as yes, because the app and its daemon normally ship together.
+ */
+export function runFiltersSupported(daemon: string | undefined): boolean {
+  if (daemon === undefined) return true;
+  const [major, minor] = daemon.split(".").map(Number);
+  if (major === undefined || minor === undefined || Number.isNaN(major) || Number.isNaN(minor)) return false;
+  return major > 2 || (major === 2 && minor >= 3);
 }
 
 function inQuery(run: RunSummaryView, query: RunsQuery): boolean {

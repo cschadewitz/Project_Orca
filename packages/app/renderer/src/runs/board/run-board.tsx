@@ -62,7 +62,8 @@ function BoardCard({ followed, run, live, onOpen, onRetry }: BoardCardProps): JS
   const progress = run ? progressText(run) : undefined;
   const wait = run ? waitText(run) : undefined;
   const owner = run ? ownerText(run) : undefined;
-  const activity = run?.operations?.lastActivityAt ?? followed.lastActivityAt;
+  // The stream's newest event time, which can be past the snapshot's own watermark.
+  const activity = followed.lastActivityAt ?? run?.operations?.lastActivityAt;
   const name = run?.name ?? followed.runId;
   return (
     <article className={`orca-board__card orca-board__card--${phase}`} aria-label={`${name}, ${PHASE_WORDS[phase]}`}>

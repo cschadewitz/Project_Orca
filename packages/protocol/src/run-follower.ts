@@ -286,7 +286,10 @@ export class RunFollower {
       }
       const events = [...entry.held.values()].filter((h) => h.kind === "event").sort((a, b) => a.seq - b.seq);
       const next = events[0];
-      if (!next) return;
+      if (!next) {
+        this.settleBatches(entry);
+        return;
+      }
       let below = 0;
       for (const h of entry.held.values()) if (h.seq < next.seq) below += h.count;
       const expected = next.seq - cursor - 1;
@@ -299,16 +302,44 @@ export class RunFollower {
     }
   }
 
+  /**
+   * Only agent output held, no event to anchor on. Batches of one run reach the client in the
+   * order their windows opened, so held batches that together account for every number up to
+   * the highest are exact coverage; held batches none of which starts at the cursor are an
+   * *ambiguous* gap. Ambiguous because a frame may be late, lost, or withheld from a scoped
+   * stream on purpose - none of which this can tell apart - so it is repaired the same bounded
+   * way, but after the refresh delay rather than at once, and the snapshot that answers is
+   * what the view trusts.
+   */
+  private settleBatches(entry: Entry): void {
+    if (entry.held.size === 0) return;
+    const cursor = entry.view.cursor;
+    let top = cursor;
+    let count = 0;
+    let first = Number.POSITIVE_INFINITY;
+    for (const h of entry.held.values()) {
+      top = Math.max(top, h.seq);
+      count += h.count;
+      first = Math.min(first, h.fromSeq);
+    }
+    if (count === top - cursor && first === cursor + 1) {
+      entry.held.clear();
+      this.advance(entry, top);
+      return;
+    }
+    if (first > cursor + 1) this.gap(entry, top, this.refreshDelayMs);
+  }
+
+  /**
+   * The streamed cursor moves; the row does not. `operations.lastSeq` and the counts beside
+   * it stay the snapshot's own watermark, so a card never claims progress current as of a
+   * sequence its counts were not read at. What the stream adds is `cursor` and `lastActivityAt`
+   * on the followed view, said separately.
+   */
   private advance(entry: Entry, seq: number): void {
     entry.view.cursor = seq;
     this.met(entry);
     for (const [key, h] of [...entry.held]) if (h.seq <= seq) entry.held.delete(key);
-    const ops = entry.view.run?.operations;
-    if (entry.view.run && ops && seq > ops.lastSeq)
-      entry.view.run = {
-        ...entry.view.run,
-        operations: { ...ops, lastSeq: seq, lastActivityAt: entry.view.lastActivityAt ?? ops.lastActivityAt },
-      };
   }
 
   /** The view has caught up with what it owed: the retry budget starts again. */
@@ -324,7 +355,7 @@ export class RunFollower {
     }
   }
 
-  private gap(entry: Entry, at: number): void {
+  private gap(entry: Entry, at: number, firstDelayMs = 0): void {
     entry.unmet = Math.max(entry.unmet ?? -1, at);
     // Already healing (or finished): the snapshot on its way settles what is held.
     if (entry.view.phase !== "live") return;
@@ -334,7 +365,7 @@ export class RunFollower {
       this.giveUp(entry, "Too many gaps in the run's stream");
       return;
     }
-    this.schedule(entry, entry.view.resyncs > 1 ? this.backoffMs(entry.view.resyncs - 1) : 0);
+    this.schedule(entry, entry.view.resyncs > 1 ? this.backoffMs(entry.view.resyncs - 1) : firstDelayMs);
   }
 
   private refresh(entry: Entry): void {
