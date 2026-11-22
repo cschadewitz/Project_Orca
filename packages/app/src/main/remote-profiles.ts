@@ -14,7 +14,7 @@
  * Tunnels are shared per profile and reference counted, so a reconnect to the profile that
  * is already on screen reuses the open tunnel instead of starting a second ssh.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { Duplex } from "node:stream";
 import { hostname as osHostname } from "node:os";
 import { join } from "node:path";
@@ -53,7 +53,9 @@ import {
   StrayCredential,
   tokenCredentialId,
   targetOf,
+  newSlotId,
   type CredentialEntry,
+  type CredentialRecord,
   type CredentialPolicy,
   type IssuedEntry,
   type Issued,
@@ -127,6 +129,8 @@ export interface RemoteProfilesDeps {
   onTunnelState?: (profileId: string, state: TunnelState) => void;
   /** Names this computer in the principal of issued credentials. Default: the OS host name. */
   hostname?: string;
+  /** Test seam: runs before each credential record write, and may throw to interrupt it. */
+  beforeRecordWrite?: (id: string, record: CredentialRecord) => void;
   /** Test seam: this installation's id. Default: made once and kept in `<dir>/installation.json`. */
   installationId?: string;
   credentialPolicy?: CredentialPolicy;
@@ -156,9 +160,10 @@ export async function helloVerdict(connect: () => Duplex, url: string, token: st
 }
 
 export class RemoteProfiles {
-  private readonly slots: CredentialSlots;
-  /** A new credential waits here until the daemon has accepted it. */
-  private readonly nextSlots: CredentialSlots;
+  /** Immutable token slots; the record says which one is current, staged or imported. */
+  private readonly vault: CredentialSlots;
+  /** Before #875 an imported token sat in `credentials/<id>.credential`: moved into the vault on first use. */
+  private readonly legacy: CredentialSlots;
   private readonly records: CredentialRecords;
   private readonly tunnels = new Map<string, SharedTunnel>();
   /** One credential setup at a time per profile: concurrent connects share it. */
@@ -172,9 +177,10 @@ export class RemoteProfiles {
   private closed = false;
 
   constructor(private readonly deps: RemoteProfilesDeps) {
-    this.slots = new CredentialSlots(join(deps.dir, "credentials"), deps.cipher);
-    this.nextSlots = new CredentialSlots(join(deps.dir, "credentials", "next"), deps.cipher);
-    this.records = new CredentialRecords(join(deps.dir, "credentials"));
+    this.vault = new CredentialSlots(join(deps.dir, "credentials", "vault"), deps.cipher);
+    this.legacy = new CredentialSlots(join(deps.dir, "credentials"), deps.cipher);
+    this.records = new CredentialRecords(join(deps.dir, "credentials"), deps.beforeRecordWrite);
+    this.sweep();
   }
 
   private installationNow: string | undefined;
@@ -191,6 +197,75 @@ export class RemoteProfiles {
   }
   private generation(id: string): number {
     return this.generations.get(id) ?? 0;
+  }
+  private changed(id: string): void {
+    this.generations.set(id, this.generation(id) + 1);
+  }
+
+  /**
+   * The profile's record, after moving a token imported before #875 (a bare slot named for
+   * the profile) into the vault as an import. The token is copied into its own slot, the
+   * record that names it is committed, and only then is the old file deleted.
+   */
+  private record(id: string): CredentialRecord | undefined {
+    const record = this.records.read(id);
+    if (record?.current || record?.imported || !this.legacy.has(id)) return record;
+    const token = this.legacy.read(id);
+    if (!token) return record;
+    const slot = this.put(token);
+    try {
+      this.records.write(id, { ...(record ?? { version: 1 as const }), imported: { slot } });
+    } catch (error) {
+      this.vault.remove(slot);
+      throw error;
+    }
+    this.legacy.remove(id);
+    return this.records.read(id);
+  }
+
+  /** The token the profile uses now: ORCA's current one, or the person's import. */
+  private activeSlot(record: CredentialRecord | undefined): string | undefined {
+    const slot = record?.current?.slot ?? record?.imported?.slot;
+    return slot && this.vault.has(slot) ? slot : undefined;
+  }
+
+  /** Seal a token into a new slot of its own. */
+  private put(token: string): string {
+    const slot = newSlotId();
+    this.vault.write(slot, token);
+    return slot;
+  }
+
+  /**
+   * Commit a record, then delete the slots it no longer names; if the commit fails, delete
+   * the new slots instead, so the previous record and its slots stay exactly as they were.
+   */
+  private commit(id: string, next: CredentialRecord | undefined, created: string[] = []): void {
+    const before = this.records.read(id);
+    try {
+      if (next) this.records.write(id, next);
+      else this.records.remove(id);
+    } catch (error) {
+      for (const slot of created) this.vault.remove(slot);
+      throw error;
+    }
+    const kept = new Set([next?.current?.slot, next?.next?.slot, next?.imported?.slot]);
+    for (const slot of [before?.current?.slot, before?.next?.slot, before?.imported?.slot])
+      if (slot && !kept.has(slot)) this.vault.remove(slot);
+    this.changed(id);
+  }
+
+  /** Delete vault slots no record names: what an interrupted write left behind. */
+  private sweep(): void {
+    try {
+      const referenced = this.records.referencedSlots();
+      for (const name of readdirSync(join(this.deps.dir, "credentials", "vault"))) {
+        const slot = /^([a-z0-9]{20})\.credential$/.exec(name)?.[1];
+        if (slot && !referenced.has(slot)) this.vault.remove(slot);
+      }
+    } catch {
+      // No vault yet.
+    }
   }
   private tunnelOptions(profile: ConnectionProfile): SshTunnelOptions {
     return {
@@ -266,7 +341,7 @@ export class RemoteProfiles {
       ...(profile.serverCommand ? { serverCommand: profile.serverCommand } : {}),
       ...(profile.serverConfig ? { serverConfig: profile.serverConfig } : {}),
       ...(profile.readOnly ? { readOnly: true as const } : {}),
-      hasCredential: this.slots.has(profile.id),
+      hasCredential: this.activeSlot(this.record(profile.id)) !== undefined,
       ...this.credentialView(profile.id),
       ...this.pinView(profile),
     };
@@ -277,11 +352,12 @@ export class RemoteProfiles {
     credentialImported?: true;
     pendingRevocations?: number;
   } {
-    const record = this.records.read(id);
+    const record = this.record(id);
     const pending = record?.retired?.length ?? 0;
+    const active = this.activeSlot(record) !== undefined;
     return {
-      ...(this.slots.has(id) && !record?.current ? { credentialImported: true as const } : {}),
-      ...(this.slots.has(id) && record?.current?.expiresAt ? { credentialExpiresAt: record.current.expiresAt } : {}),
+      ...(active && record?.imported ? { credentialImported: true as const } : {}),
+      ...(active && record?.current?.expiresAt ? { credentialExpiresAt: record.current.expiresAt } : {}),
       ...(pending ? { pendingRevocations: pending } : {}),
     };
   }
@@ -363,23 +439,29 @@ export class RemoteProfiles {
    * the person's: dropped from the slot only when it no longer fits the profile.
    */
   private retireCredentials(id: string, imported: "drop" | "keep" | "reauthorize"): void {
-    const record = this.records.read(id);
-    const issued = [record?.current, record?.next].filter((entry): entry is IssuedEntry => entry !== undefined);
-    const retired = [
-      ...(record?.retired ?? []),
-      ...issued.map(({ credentialId, target }) => ({ credentialId, target })),
-    ].slice(-64);
-    const hasImport = this.slots.has(id) && !record?.current;
-    const keep = hasImport && imported !== "drop";
-    if (!keep) this.slots.remove(id);
-    this.nextSlots.remove(id);
+    const record = this.record(id);
+    const retired = this.retiredWith(record, record?.current, record?.next);
+    const keep = record?.imported && imported !== "drop" ? record.imported : undefined;
     const importState = keep
-      ? { imported: { ...record?.imported, ...(imported === "reauthorize" ? { reauthorize: true as const } : {}) } }
+      ? { imported: { ...keep, ...(imported === "reauthorize" ? { reauthorize: true as const } : {}) } }
       : {};
-    if (retired.length || keep)
-      this.records.write(id, { version: 1, ...(retired.length ? { retired } : {}), ...importState });
-    else this.records.remove(id);
-    this.generations.set(id, this.generation(id) + 1);
+    this.commit(
+      id,
+      retired.length || keep ? { version: 1, ...(retired.length ? { retired } : {}), ...importState } : undefined,
+    );
+  }
+
+  /** The record's list to revoke, plus these entries, each with where it was issued. */
+  private retiredWith(
+    record: CredentialRecord | undefined,
+    ...entries: (IssuedEntry | undefined)[]
+  ): CredentialEntry[] {
+    return [
+      ...(record?.retired ?? []),
+      ...entries
+        .filter((entry): entry is IssuedEntry => entry !== undefined)
+        .map(({ credentialId, target }) => ({ credentialId, target })),
+    ].slice(-64);
   }
 
   /**
@@ -398,9 +480,8 @@ export class RemoteProfiles {
       const left = await this.revokeRetired(profile, (command) => this.newTunnel(profile, true).runOnce(command));
       const outcome: RevokeOutcome = left === undefined ? "none" : left.length ? "not-reached" : "revoked";
       const profiles = this.read();
-      this.slots.remove(id);
-      this.nextSlots.remove(id);
-      this.records.remove(id);
+      this.commit(id, undefined);
+      this.legacy.remove(id);
       this.forgetPins(id);
       this.write(profiles.filter((p) => p.id !== id));
       return outcome;
@@ -431,23 +512,22 @@ export class RemoteProfiles {
     )
       throw new ConnectionRefusal("The profile changed while the credential was being chosen. Import it again.");
     this.assertIdle(id, "importing");
+    // The import gets a slot of its own, and becomes the profile's credential in one record
+    // commit, which also moves what ORCA had issued to the list still to revoke. Interrupted
+    // before that commit, the previous credential and record stand as they were.
+    let slot: string;
     try {
-      this.slots.write(id, token);
+      slot = this.put(token);
     } catch (error) {
       throw new ConnectionRefusal(error instanceof Error ? error.message : "The credential could not be stored.");
     }
-    // The slot holds the import now; what ORCA issued before is only still to revoke. The
-    // import is bound to the host keys it is first accepted through.
-    const record = this.records.read(id);
-    const retired = [
-      ...(record?.retired ?? []),
-      ...[record?.current, record?.next]
-        .filter((entry): entry is IssuedEntry => entry !== undefined)
-        .map(({ credentialId, target }) => ({ credentialId, target })),
-    ].slice(-64);
-    this.nextSlots.remove(id);
-    this.records.write(id, { version: 1, ...(retired.length ? { retired } : {}), imported: {} });
-    this.generations.set(id, this.generation(id) + 1);
+    const record = this.record(id);
+    const retired = this.retiredWith(record, record?.current, record?.next);
+    try {
+      this.commit(id, { version: 1, ...(retired.length ? { retired } : {}), imported: { slot } }, [slot]);
+    } catch {
+      throw new ConnectionRefusal("The credential could not be stored.");
+    }
     return this.view(profile);
   }
 
@@ -456,15 +536,10 @@ export class RemoteProfiles {
     const profile = this.get(id);
     if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
     this.assertIdle(id, "resetting");
-    const record = this.records.read(id);
-    if (!record?.current) {
-      this.slots.remove(id);
-      if (record) {
-        const { imported: _dropped, ...rest } = record;
-        if (rest.retired?.length || rest.next) this.records.write(id, rest);
-        else this.records.remove(id);
-      }
-      this.generations.set(id, this.generation(id) + 1);
+    const record = this.record(id);
+    if (record?.imported) {
+      const { imported: _dropped, ...rest } = record;
+      this.commit(id, rest.retired?.length || rest.next ? rest : undefined);
     }
     return this.view(profile);
   }
@@ -536,7 +611,6 @@ export class RemoteProfiles {
     }
     this.watchRenewal(id, current, url);
     let released = false;
-    const slots = this.slots;
     let cached: string | undefined;
     let cachedGeneration = -1;
     // Nothing of this lease outlives its release or a change to the profile.
@@ -557,7 +631,9 @@ export class RemoteProfiles {
           if (!usable() || phase === "failed" || phase === "closed") throw new CredentialTransportUnavailable();
           // A renewal replaces the credential: read the new one, never the revoked one.
           if (cachedGeneration !== this.generation(id)) {
-            cached = slots.read(id);
+            // Whatever the record names as the profile's credential now, from its own slot.
+            const slot = this.activeSlot(this.record(id));
+            cached = slot ? this.vault.read(slot) : undefined;
             cachedGeneration = this.generation(id);
           }
           return cached;
@@ -599,8 +675,8 @@ export class RemoteProfiles {
   private watchRenewal(id: string, shared: SharedTunnel, url: string): void {
     if (shared.renewal) return;
     shared.renewal = setInterval(() => {
-      const current = this.records.read(id)?.current;
-      if (!current || !this.slots.has(id) || !dueForRenewal(current, this.policy, this.now())) return;
+      const current = this.record(id)?.current;
+      if (!current || !dueForRenewal(current, this.policy, this.now())) return;
       if (shared.tunnel.state.phase !== "open") return;
       this.ensureCredential(id, shared, url).catch(() => {
         // Never the server's output: the next check, or the next connect, tries again.
@@ -641,7 +717,7 @@ export class RemoteProfiles {
     // Credentials are bound to the host keys they were issued through. Any issued through
     // keys the pins no longer hold are quarantined: never sent here, revoked only there.
     const keys = this.hostKeys(profile);
-    const bound = this.records.read(id);
+    const bound = this.record(id);
     if (
       (bound?.current && bound.current.target.hostKeys !== keys) ||
       (bound?.next && bound.next.target.hostKeys !== keys)
@@ -649,61 +725,63 @@ export class RemoteProfiles {
       this.retireCredentials(id, "keep");
 
     // A replacement staged by an earlier connect: switch to it, or take it back.
-    if (this.records.read(id)?.next) {
+    if (this.record(id)?.next) {
       const outcome = await this.settleNext(profile, run, ask);
       if (outcome === "promoted") return;
     }
-    let record = this.records.read(id);
-    if (!this.slots.has(id)) {
+    let record = this.record(id);
+    const active = this.activeSlot(record);
+    if (!active) {
       if (!record?.next) {
         await this.stage(profile, run);
         await this.settleNext(profile, run, ask);
       }
       return;
     }
-    if (!record?.current) {
+    if (record?.imported) {
       // Imported: kept as it is, and sent only through the host keys it was first accepted
       // through. Refused, or its server's key reset, it is the person's to act on, never ORCA's.
-      const imported = record?.imported;
-      if (imported?.reauthorize || (imported?.hostKeys !== undefined && imported.hostKeys !== keys))
+      const imported = record.imported;
+      if (imported.reauthorize || (imported.hostKeys !== undefined && imported.hostKeys !== keys))
         throw credentialRefusal("imported-reauthorize", profile);
-      const token = this.slots.read(id);
+      const token = this.vault.read(active);
       const answer = token ? await ask(token) : { verdict: "unknown" as const };
       if (answer.verdict === "refused") throw credentialRefusal("imported-refused", profile);
       if (answer.verdict === "accepted") {
-        const latest = this.records.read(id);
-        if (!latest?.imported?.hostKeys)
-          this.records.write(id, { ...(latest ?? { version: 1 as const }), imported: { hostKeys: keys } });
+        const latest = this.record(id);
+        if (latest?.imported?.slot === imported.slot && !latest.imported.hostKeys)
+          this.records.write(id, { ...latest, imported: { ...latest.imported, hostKeys: keys } });
         // What ORCA had issued before the import is still revoked where it came from.
         await this.revokeRetired(profile, run);
       }
       return;
     }
-    if (dueForRenewal(record.current, this.policy, this.now()) && !record.next) {
+    const current = record!.current!;
+    if (dueForRenewal(current, this.policy, this.now()) && !record!.next) {
       try {
         await this.stage(profile, run);
         if ((await this.settleNext(profile, run, ask)) === "promoted") return;
       } catch (error) {
         // A renewal that fails leaves the current credential in place while it is still valid.
-        const expiresAt = record.current.expiresAt;
-        if (!expiresAt || Date.parse(expiresAt) <= this.now()) throw error;
+        if (!current.expiresAt || Date.parse(current.expiresAt) <= this.now()) throw error;
         if (error instanceof CredentialSetupRefusal && error.code === "wrong-workspace") throw error;
       }
     }
-    record = this.records.read(id)!;
-    const token = this.slots.read(id);
+    record = this.record(id);
+    const slot = this.activeSlot(record);
+    const token = slot ? this.vault.read(slot) : undefined;
     const answer = token ? await ask(token) : { verdict: "refused" as const };
     if (answer.verdict === "accepted") {
       // The daemon must say which workspace it is, and be the one this credential is bound to.
       if (!answer.workspaceId) throw credentialRefusal("unverified", profile);
-      if (record.current && record.current.workspaceId !== answer.workspaceId)
+      if (record?.current && record.current.workspaceId !== answer.workspaceId)
         throw credentialRefusal("wrong-workspace", profile);
       await this.revokeRetired(profile, run);
       return;
     }
     if (answer.verdict === "unknown") return;
     // Refused (expired or revoked on the server): one replacement, then a clear refusal.
-    if (!record.next) {
+    if (!record?.next) {
       try {
         await this.stage(profile, run);
       } catch (error) {
@@ -717,8 +795,9 @@ export class RemoteProfiles {
   }
 
   /**
-   * Issue a credential into the staging slot. It is durable (token sealed, id and target on
-   * record) before anything uses it; if it cannot be kept, it is taken back on the server.
+   * Issue a credential and stage it: its token in a new slot of its own, then one record
+   * commit that names the slot as staged. Until the daemon accepts it, nothing uses it; if it
+   * cannot be kept, it is taken back on the server.
    */
   private async stage(profile: ConnectionProfile, run: (command: string[]) => Promise<RemoteResult>): Promise<void> {
     const keys = this.hostKeys(profile);
@@ -734,7 +813,7 @@ export class RemoteProfiles {
       }
       throw error;
     }
-    const entry: IssuedEntry = {
+    const entry = {
       credentialId: issued.credentialId,
       target: targetOf(profile, keys),
       principal,
@@ -742,11 +821,10 @@ export class RemoteProfiles {
       issuedAt: new Date(this.now()).toISOString(),
     };
     try {
-      this.nextSlots.write(profile.id, issued.token);
-      const record = this.records.read(profile.id) ?? { version: 1 as const };
-      this.records.write(profile.id, { ...record, next: entry });
+      const slot = this.put(issued.token);
+      const record = this.record(profile.id) ?? { version: 1 as const };
+      this.commit(profile.id, { ...record, next: { ...entry, slot } }, [slot]);
     } catch {
-      this.nextSlots.remove(profile.id);
       // Not kept: take it back now, or remember to.
       const revoked = await run(revokeCommand(entry.target, entry.credentialId)).then(
         (r) => r.code === 0 || alreadyGone(r),
@@ -757,13 +835,15 @@ export class RemoteProfiles {
     }
   }
 
-  /** Add an entry to the list still to revoke, best effort: the record may be what failed. */
+  /** Move a credential (and the staged one, if it is that) to the list still to revoke. Best effort. */
   private remember(id: string, entry: CredentialEntry): void {
     try {
-      const record = this.records.read(id) ?? { version: 1 as const };
-      const { next: _staged, ...rest } = record;
-      this.records.write(id, {
+      const record = this.record(id) ?? { version: 1 as const };
+      const staged = record.next?.credentialId === entry.credentialId;
+      const { next, ...rest } = record;
+      this.commit(id, {
         ...rest,
+        ...(next && !staged ? { next } : {}),
         retired: [...(record.retired ?? []), { credentialId: entry.credentialId, target: entry.target }].slice(-64),
       });
     } catch {
@@ -772,10 +852,10 @@ export class RemoteProfiles {
   }
 
   /**
-   * Ask the daemon about the staged credential. Accepted (by the same workspace as before):
-   * it becomes the profile's, and the one it replaces goes to the list still to revoke.
-   * Refused: it was issued for a workspace the daemon on this port does not serve, so it is
-   * taken back and the connect refused. Unknown: nothing changes.
+   * Ask the daemon about the staged credential. Proven: it becomes the profile's in one
+   * record commit, which also moves the one it replaces to the list still to revoke; the
+   * replaced slot is deleted only after that commit. Refused, or accepted without proof: it
+   * is taken back and the connect refused. Unknown: nothing changes.
    */
   private async settleNext(
     profile: ConnectionProfile,
@@ -783,12 +863,12 @@ export class RemoteProfiles {
     ask: (token: string) => Promise<HelloAnswer>,
   ): Promise<"promoted" | "unknown"> {
     const id = profile.id;
-    const record = this.records.read(id);
+    const record = this.record(id);
     const next = record?.next;
     if (!record || !next) return "unknown";
-    const token = this.nextSlots.read(id);
+    const token = this.vault.has(next.slot) ? this.vault.read(next.slot) : undefined;
     if (!token) {
-      // Staged on record, but its token was never kept: only still to revoke.
+      // Staged on record, but its token is gone: only still to revoke.
       this.remember(id, next);
       return "unknown";
     }
@@ -804,30 +884,19 @@ export class RemoteProfiles {
       tokenCredentialId(token) === next.credentialId &&
       (!record.current?.workspaceId || record.current.workspaceId === workspaceId);
     if (proven) {
-      // Durable in this order: the slot, then the record that says it is current. A crash
-      // between them leaves the staged one on record, which the next connect settles again.
+      const latest = this.record(id);
+      if (latest?.next?.slot !== next.slot) return "unknown";
+      const retired = this.retiredWith(latest, latest.current);
       try {
-        this.slots.write(id, token);
+        this.commit(id, { version: 1, current: { ...next, workspaceId }, ...(retired.length ? { retired } : {}) });
       } catch {
-        // Still staged: the next connect tries again; the current one stays as it was.
+        // Still staged, the current one untouched: the next connect settles it again.
         throw credentialRefusal("store-failed", profile);
       }
-      const retired = [
-        ...(record.retired ?? []),
-        ...(record.current ? [{ credentialId: record.current.credentialId, target: record.current.target }] : []),
-      ].slice(-64);
-      this.records.write(id, {
-        version: 1,
-        current: { ...next, workspaceId },
-        ...(retired.length ? { retired } : {}),
-      });
-      this.nextSlots.remove(id);
-      this.generations.set(id, this.generation(id) + 1);
       await this.revokeRetired(profile, run);
       return "promoted";
     }
     // Not proven for this daemon's workspace: take it back.
-    this.nextSlots.remove(id);
     this.remember(id, next);
     await this.revokeRetired(profile, run).catch(() => undefined);
     throw credentialRefusal(answer.verdict === "accepted" && !workspaceId ? "unverified" : "wrong-workspace", profile);
@@ -842,7 +911,7 @@ export class RemoteProfiles {
     profile: ConnectionProfile,
     run: (command: string[]) => Promise<RemoteResult>,
   ): Promise<CredentialEntry[] | undefined> {
-    const record = this.records.read(profile.id);
+    const record = this.record(profile.id);
     if (!record?.retired?.length) return undefined;
     const here = serverKey(profile);
     const keys = this.hostKeys(profile);
@@ -860,13 +929,16 @@ export class RemoteProfiles {
         left.push(entry);
       }
     }
-    const latest = this.records.read(profile.id) ?? record;
+    const latest = this.record(profile.id) ?? record;
     const done = new Set(record.retired.filter((entry) => !left.includes(entry)).map((entry) => entry.credentialId));
     const retired = (latest.retired ?? []).filter((entry) => !done.has(entry.credentialId));
     const { retired: _old, ...rest } = latest;
-    if (retired.length || rest.current || rest.next)
-      this.records.write(profile.id, { ...rest, ...(retired.length ? { retired } : {}) });
-    else this.records.remove(profile.id);
+    this.commit(
+      profile.id,
+      retired.length || rest.current || rest.next || rest.imported
+        ? { ...rest, ...(retired.length ? { retired } : {}) }
+        : undefined,
+    );
     return left;
   }
 }

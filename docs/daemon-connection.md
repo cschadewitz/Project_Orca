@@ -168,11 +168,17 @@ a bound; output that does not end is a failure.
 - **Read only** issues the credential with the `viewer` preset, for profiles that only
   watch runs and plans.
 
-A new credential is never used until the daemon has accepted it. The token goes from
-the command's output into a staging slot in the keychain, and its id, expiry and where
-it was issued (server, CLI and workspace config) go into a small nonsecret record
-(`credentials/<profile>.json`) before anything else happens; a credential the
-keychain cannot keep is revoked on the server at once. The app then asks the daemon
+A new credential is never used until the daemon has accepted it. Every secret the app
+keeps goes into a fresh keychain slot of its own (`credentials/vault/<slot>.credential`)
+that is never overwritten; the profile's small nonsecret record
+(`credentials/<profile>.json`) says which slot is in use, which is staged and whether
+it was imported, with each credential's id, expiry and where it was issued (server, CLI
+and workspace config). A credential changes role (staged, in use, imported, retired)
+only in one write of that record, and the slot it replaces is deleted after the write,
+so an interrupted write or a restart leaves the previous record and its slot as they
+were. Slots no record names are removed at startup, and a credential file from an older
+build is taken over as an import. A credential the keychain cannot keep is revoked on
+the server at once. The app then asks the daemon
 for an authenticated `hello` with it over the tunnel. It switches in only on positive
 proof: the token is the credential the CLI reported for this installation's principal,
 the daemon accepts it, and the daemon names its workspace (the same one as before, if

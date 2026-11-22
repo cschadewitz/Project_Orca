@@ -5,6 +5,7 @@
  */
 import { PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
 import {
+  CredentialSlots,
   pinState,
   TunnelRefusal,
   type SecretCipher,
@@ -17,7 +18,7 @@ import { connect as netConnect, type Socket } from "node:net";
 import { WebSocketServer } from "ws";
 import { z } from "zod";
 import { streamTransport } from "../src/client/stream-transport.js";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -26,7 +27,7 @@ import { DaemonClient } from "../src/client/daemon-client.js";
 import { CredentialTransportUnavailable, type DaemonTokenSource } from "../src/client/auth.js";
 import { DaemonSubscription } from "../src/client/subscription.js";
 import { ConnectionTarget, connectionFailure } from "../src/main/connection-target.js";
-import { installationId, principalFor } from "../src/main/remote-credentials.js";
+import { installationId, principalFor, type CredentialRecord } from "../src/main/remote-credentials.js";
 import {
   helloVerdict,
   RemoteProfiles,
@@ -214,7 +215,9 @@ describe("RemoteProfiles", () => {
     expect(imported.hasCredential).toBe(true);
     expect(JSON.stringify(profiles.list())).not.toContain(TOKEN);
     expect(readFileSync(join(dir, "profiles.json"), "utf8")).not.toContain(TOKEN);
-    expect(readFileSync(join(dir, "credentials", "build-box.credential"), "utf8")).not.toContain(TOKEN);
+    const vault = join(dir, "credentials", "vault");
+    expect(readdirSync(vault)).toHaveLength(1);
+    expect(readFileSync(join(vault, readdirSync(vault)[0]!), "utf8")).not.toContain(TOKEN);
     expect(() => profiles.importCredential("build-box", "not a token")).toThrow("not an ORCA daemon credential");
   });
 
@@ -738,8 +741,13 @@ describe("automatic sign-in (#875)", () => {
     const token = server.credentials.get(id!)!.token;
     expect(lease.auth.read()).toBe(token);
     // The token is in the sealed slot only: not in the profile, the record or the view.
-    for (const file of ["profiles.json", join("credentials", "lab.json"), join("credentials", "lab.credential")])
-      expect(readFileSync(join(dir, file), "utf8")).not.toContain(token);
+    const vault = join(dir, "credentials", "vault");
+    for (const file of [
+      "profiles.json",
+      join("credentials", "lab.json"),
+      ...readdirSync(vault).map((f) => join(vault, f)),
+    ])
+      expect(readFileSync(join(file.startsWith(dir) ? "" : dir, file), "utf8")).not.toContain(token);
     expect(JSON.parse(readFileSync(join(dir, "credentials", "lab.json"), "utf8"))).toMatchObject({
       current: { credentialId: id, workspaceId: server.workspaceId },
     });
@@ -1160,5 +1168,120 @@ describe("credentials are bound to the server's keys and this installation (#875
     expect(long).toMatch(/^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$/);
     expect(principalFor("---", installationId(a.dir))).toMatch(/^desktop-computer-/);
     expect(() => principalFor("pc", "short")).toThrow();
+  });
+});
+
+describe("a credential changes role only in one record commit (#875 review 3)", () => {
+  /** A store whose record writes can be interrupted, and a restart of it on the same files. */
+  function interruptible() {
+    let interrupt: ((record: CredentialRecord) => boolean) | undefined;
+    const made = store(undefined, undefined, {
+      beforeRecordWrite: (_id, record) => {
+        if (interrupt?.(record)) throw new Error("interrupted");
+      },
+    });
+    const restart = () =>
+      new RemoteProfiles({
+        dir: made.dir,
+        cipher,
+        hostname: "Casey's PC",
+        tunnel: (options) =>
+          new FakeTunnel(
+            options,
+            Promise.resolve("http://127.0.0.1:41000"),
+            undefined,
+            made.server,
+          ) as unknown as SshTunnel,
+        verify: async (_connect, _url, token) => made.server.answer(token),
+      });
+    return { ...made, restart, interruptWhen: (when?: (record: CredentialRecord) => boolean) => (interrupt = when) };
+  }
+  const vaultFiles = (dir: string) => readdirSync(join(dir, "credentials", "vault")).sort();
+
+  it("an interrupted import leaves the managed credential as it was, and a manual one is never managed", async () => {
+    const { dir, profiles, server, restart, interruptWhen } = interruptible();
+    profiles.save({ name: "Lab", destination: "lab" });
+    const lease = await profiles.open("lab");
+    const managed = lease.auth.read();
+    await lease.release();
+    const before = vaultFiles(dir);
+
+    interruptWhen((record) => record.imported !== undefined);
+    expect(() => profiles.importCredential("lab", TOKEN)).toThrow("could not be stored");
+    interruptWhen(undefined);
+    // After a restart: the same managed credential, its record, and no stray slot.
+    const again = restart();
+    expect(again.list()[0]).toMatchObject({ hasCredential: true });
+    expect(again.list()[0]).not.toHaveProperty("credentialImported");
+    expect(vaultFiles(dir)).toEqual(before);
+    const kept = await again.open("lab");
+    expect(kept.auth.read()).toBe(managed);
+    await kept.release();
+
+    // Committed: the import is the person's, after any restart, and ORCA never manages it.
+    again.importCredential("lab", TOKEN);
+    const third = restart();
+    expect(third.list()[0]).toMatchObject({ credentialImported: true, pendingRevocations: 1 });
+    const imported = await third.open("lab");
+    expect(imported.auth.read()).toBe(TOKEN);
+    await imported.release();
+    expect(server.commands.filter((c) => c[2] === "issue")).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(dir, "credentials", "lab.json"), "utf8"))).not.toHaveProperty("current");
+  });
+
+  it("an interrupted promotion keeps the previous credential current and the new one only staged", async () => {
+    let now = Date.now();
+    const { dir, profiles, server, restart, interruptWhen } = interruptible();
+    profiles.save({ name: "Lab", destination: "lab" });
+    const opened = await profiles.open("lab");
+    const first = opened.auth.read();
+    await opened.release();
+    const firstId = server.live()[0]!;
+
+    // Renewal due; the commit that would make the new one current is interrupted.
+    (profiles as unknown as { deps: { now: () => number } }).deps.now = () => now;
+    now += 80 * 24 * 3600_000;
+    interruptWhen((record) => record.current !== undefined && record.current.credentialId !== firstId);
+    const during = await profiles.open("lab");
+    expect(during.auth.read()).toBe(first);
+    await during.release();
+    interruptWhen(undefined);
+    // The old one is still live on the server and current; the new one staged, never used.
+    expect(server.live()).toContain(firstId);
+    const record = JSON.parse(readFileSync(join(dir, "credentials", "lab.json"), "utf8")) as CredentialRecord;
+    expect(record.current?.credentialId).toBe(firstId);
+    expect(record.next).toBeDefined();
+    expect(vaultFiles(dir)).toHaveLength(2);
+
+    // After a restart the staged one is settled: switched in, then the old one revoked.
+    const again = restart();
+    const settled = await again.open("lab");
+    expect(settled.auth.read()).not.toBe(first);
+    await settled.release();
+    expect(server.live()).not.toContain(firstId);
+    expect(server.commands.filter((c) => c[2] === "issue")).toHaveLength(2);
+    expect(vaultFiles(dir)).toHaveLength(1);
+  });
+
+  it("an interrupted first sign-in leaves nothing current, and the next connect finishes it", async () => {
+    const { profiles, server, restart, interruptWhen } = interruptible();
+    profiles.save({ name: "Lab", destination: "lab" });
+    interruptWhen((record) => record.current !== undefined);
+    await expect(profiles.open("lab")).rejects.toMatchObject({ code: "store-failed" });
+    interruptWhen(undefined);
+    const again = restart();
+    expect(again.list()[0]!.hasCredential).toBe(false);
+    await (await again.open("lab")).release();
+    expect(server.commands.map((c) => c[2])).toEqual(["issue"]);
+    expect(again.list()[0]!.hasCredential).toBe(true);
+  });
+
+  it("moves a credential imported before automatic sign-in into its own slot, as an import", () => {
+    const { dir, profiles } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    new CredentialSlots(join(dir, "credentials"), cipher).write("lab", TOKEN);
+    expect(profiles.list()[0]).toMatchObject({ hasCredential: true, credentialImported: true });
+    expect(existsSync(join(dir, "credentials", "lab.credential"))).toBe(false);
+    expect(readdirSync(join(dir, "credentials", "vault"))).toHaveLength(1);
   });
 });

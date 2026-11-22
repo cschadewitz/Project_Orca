@@ -17,6 +17,7 @@ import {
   fsyncSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -271,7 +272,19 @@ const CredentialEntrySchema = z
   .strict();
 export type CredentialEntry = z.infer<typeof CredentialEntrySchema>;
 
+/**
+ * A keychain slot holding one token. Slots are immutable: a new token always gets a new slot,
+ * and the record says which slot is which. A token changes role (staged, current, imported)
+ * only in one atomic record write; the slot it replaces is deleted after that write.
+ */
+const SLOT = /^[a-z0-9]{20}$/;
+export function newSlotId(): string {
+  return [...randomBytes(20)].map((byte) => "abcdefghijklmnopqrstuvwxyz0123456789"[byte % 36]).join("");
+}
+
 const IssuedEntrySchema = CredentialEntrySchema.extend({
+  /** The keychain slot holding its token. */
+  slot: z.string().regex(SLOT),
   principal: z.string().max(64),
   expiresAt: z.string().datetime({ offset: true }).optional(),
   issuedAt: z.string().datetime({ offset: true }),
@@ -296,18 +309,28 @@ const RecordSchema = z
      * reset since means the person must authorize it again before it is sent anywhere.
      */
     imported: z
-      .object({ hostKeys: z.string().max(16384).optional(), reauthorize: z.literal(true).optional() })
+      .object({
+        slot: z.string().regex(SLOT),
+        hostKeys: z.string().max(16384).optional(),
+        reauthorize: z.literal(true).optional(),
+      })
       .strict()
       .optional(),
   })
-  .strict();
+  .strict()
+  // One credential is the profile's: ORCA's own, or the person's import, never both.
+  .refine((record) => !(record.current && record.imported), "A record holds one active credential");
 export type CredentialRecord = z.infer<typeof RecordSchema>;
 
 const PROFILE_ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 /** `credentials/<id>.json`: which server credential sits in a profile's keychain slot. */
 export class CredentialRecords {
-  constructor(private readonly dir: string) {}
+  constructor(
+    private readonly dir: string,
+    /** Test seam: runs before each write, and may throw to interrupt it. */
+    private readonly beforeWrite?: (id: string, record: CredentialRecord) => void,
+  ) {}
 
   private file(id: string): string {
     if (!PROFILE_ID.test(id)) throw new Error("Invalid profile id");
@@ -332,6 +355,7 @@ export class CredentialRecords {
 
   write(id: string, record: CredentialRecord): void {
     const value = RecordSchema.parse(record);
+    this.beforeWrite?.(id, value);
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     const target = this.file(id);
     const tmp = `${target}.${process.pid}.tmp`;
@@ -347,6 +371,24 @@ export class CredentialRecords {
 
   remove(id: string): void {
     rmSync(this.file(id), { force: true });
+  }
+
+  /** Every slot any record refers to. */
+  referencedSlots(): Set<string> {
+    const slots = new Set<string>();
+    let names: string[];
+    try {
+      names = readdirSync(this.dir);
+    } catch {
+      return slots;
+    }
+    for (const name of names) {
+      const id = /^([a-z0-9][a-z0-9-]{0,62})\.json$/.exec(name)?.[1];
+      const record = id && this.read(id);
+      if (!record) continue;
+      for (const slot of [record.current?.slot, record.next?.slot, record.imported?.slot]) if (slot) slots.add(slot);
+    }
+    return slots;
   }
 }
 
