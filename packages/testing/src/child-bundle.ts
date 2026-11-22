@@ -65,6 +65,12 @@ export function childBundle(name: string, options: ChildBundleOptions): Record<s
   return files;
 }
 
+/** zod's ESM root entry, found through `@orca/core`, which declares zod. */
+function zodEntry(): string {
+  const manifest = createRequire(join(repoRoot, "packages", "core", "package.json")).resolve("zod/package.json");
+  return join(dirname(manifest), "index.js");
+}
+
 function build(outdir: string, options: ChildBundleOptions): void {
   // Resolve esbuild through the already-declared tsx tool, as the compiled retry worker does,
   // rather than through a phantom root dependency.
@@ -94,6 +100,13 @@ function build(outdir: string, options: ChildBundleOptions): void {
         js: "import { createRequire as __orcaCreateRequire } from 'node:module'; const require = __orcaCreateRequire(import.meta.url);",
       },
       external: ["bufferutil", "utf-8-validate", ...(options.external ?? [])],
+      // zod 4's root export and `zod/v4` are the same API, but the ACP SDK imports the
+      // subpath. When a bundle's graph makes esbuild wrap zod for lazy initialisation (as
+      // `@orca/core` does through the repo's own `zod` imports), the eager SDK modules that
+      // reach zod through `zod/v4` run before zod has initialised ("Class is not a
+      // constructor"). Pointing the subpath at the root entry gives both one module and one
+      // init call.
+      alias: { "zod/v4": zodEntry() },
       logLevel: "silent",
     });
     try {

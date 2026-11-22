@@ -130,7 +130,7 @@ it.each(unstableUpdates)(
   },
 );
 
-it("parses supported request fields and metadata without advertising or honoring unstable instructions", async () => {
+it("parses supported request fields and metadata without advertising systemPrompt support", async () => {
   const initialize = vi.fn<(params: acp.InitializeRequest) => acp.InitializeResponse>(() => ({
     protocolVersion: acp.PROTOCOL_VERSION,
     agentCapabilities: { loadSession: false },
@@ -155,8 +155,9 @@ it("parses supported request fields and metadata without advertising or honoring
     };
     const response = await ctx.request(acp.methods.agent.initialize, init);
     expect(response).toEqual({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { loadSession: false } });
-    // Stable peers do not advertise systemPrompt. Sending it anyway must not be
-    // confused with support: SDK parsing discards it before the session handler.
+    // SDK 2.x stabilised systemPrompt behind `sessionCapabilities.systemPrompt`, which this
+    // agent (like ORCA) does not advertise. The SDK now hands the field to the handler, so
+    // support is the handler's choice; ORCA's handlers never read it.
     const request = { cwd, additionalDirectories: ["/synthetic/extra"], mcpServers: [], systemPrompt, _meta: meta };
     await ctx.request(acp.methods.agent.session.new, request);
   });
@@ -174,6 +175,7 @@ it("parses supported request fields and metadata without advertising or honoring
     cwd,
     additionalDirectories: ["/synthetic/extra"],
     mcpServers: [],
+    systemPrompt,
     _meta: meta,
   });
 });

@@ -16,6 +16,6 @@
   ],
   "dependencies": {
     "@orca/core": "workspace:*",
-    "@agentclientprotocol/sdk": "^1.8.0"
+    "@agentclientprotocol/sdk": "^2.8.0"
   }
 }

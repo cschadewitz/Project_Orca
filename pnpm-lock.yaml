@@ -166,7 +166,7 @@ overrides:
   minimatch@>=7.0.0 <11.0.1: ^11.0.9
 
 patchedDependencies:
-  '@agentclientprotocol/sdk@1.8.0': f3364b5c43195735c61bf9911b0fad8ed1883cf38ad0caf4a355c1c5c6d7beec
+  '@agentclientprotocol/sdk@2.8.0': e885d8121a90acf5486a359abb277cbf4142449331ecad1dce7bb60210abc537
 
 importers:
 
@@ -215,8 +215,8 @@ importers:
   packages/agents:
     dependencies:
       '@agentclientprotocol/sdk':
-        specifier: ^1.8.0
-        version: 1.8.0(patch_hash=f3364b5c43195735c61bf9911b0fad8ed1883cf38ad0caf4a355c1c5c6d7beec)(zod@4.6.7)
+        specifier: ^2.8.0
+        version: 2.8.0(patch_hash=e885d8121a90acf5486a359abb277cbf4142449331ecad1dce7bb60210abc537)(@modelcontextprotocol/server@2.4.0)(zod@4.6.7)
       '@orca/core':
         specifier: workspace:*
         version: link:../core
@@ -361,14 +361,14 @@ importers:
         version: 4.6.7
     devDependencies:
       '@agentclientprotocol/sdk':
-        specifier: ^1.8.0
-        version: 1.8.0(patch_hash=f3364b5c43195735c61bf9911b0fad8ed1883cf38ad0caf4a355c1c5c6d7beec)(zod@4.6.7)
+        specifier: ^2.8.0
+        version: 2.8.0(patch_hash=e885d8121a90acf5486a359abb277cbf4142449331ecad1dce7bb60210abc537)(@modelcontextprotocol/server@2.4.0)(zod@4.6.7)
 
   packages/integrations:
     dependencies:
       '@agentclientprotocol/sdk':
-        specifier: ^1.8.0
-        version: 1.8.0(patch_hash=f3364b5c43195735c61bf9911b0fad8ed1883cf38ad0caf4a355c1c5c6d7beec)(zod@4.6.7)
+        specifier: ^2.8.0
+        version: 2.8.0(patch_hash=e885d8121a90acf5486a359abb277cbf4142449331ecad1dce7bb60210abc537)(@modelcontextprotocol/server@2.4.0)(zod@4.6.7)
       '@modelcontextprotocol/server':
         specifier: 2.4.0
         version: 2.4.0
@@ -421,8 +421,8 @@ importers:
   packages/testing:
     dependencies:
       '@agentclientprotocol/sdk':
-        specifier: ^1.8.0
-        version: 1.8.0(patch_hash=f3364b5c43195735c61bf9911b0fad8ed1883cf38ad0caf4a355c1c5c6d7beec)(zod@4.6.7)
+        specifier: ^2.8.0
+        version: 2.8.0(patch_hash=e885d8121a90acf5486a359abb277cbf4142449331ecad1dce7bb60210abc537)(@modelcontextprotocol/server@2.4.0)(zod@4.6.7)
       '@orca/agents':
         specifier: workspace:*
         version: link:../agents
@@ -484,10 +484,14 @@ importers:
 
 packages:
 
-  '@agentclientprotocol/sdk@1.8.0':
-    resolution: {integrity: sha512-fbP7qHZsFyTJVT0/RPrcWJ8An26qLXHEuGCHHEKDyxD1xpXV+Ejyh2LAE6vBAFePkpVjZeeohnbgvuEhZ7wLMg==}
+  '@agentclientprotocol/sdk@2.8.0':
+    resolution: {integrity: sha512-EjsvoRX8nEH2z3PAVI2ILsVXAefVcSlLPeXGjlQoFgkJE71F2J0Fj7N6oL/k7SnP0vY+9hmONPFz/K2zalnTiw==}
     peerDependencies:
-      zod: ^3.25.0 || ^4.0.0
+      '@modelcontextprotocol/server': ^2.4.0
+      zod: ^3.25.76 || ^4.0.0
+    peerDependenciesMeta:
+      '@modelcontextprotocol/server':
+        optional: true
 
   '@axe-core/playwright@4.14.0':
     resolution: {integrity: sha512-SGUhG5PIHd2eMdpgBF2PyQLOhX+qyDR2PT4cmoS4Qk2ak+jX/rrSvst9l0PGv5WTHolKpUMvVmoHpr4cZgf1RQ==}
@@ -2857,9 +2861,11 @@ packages:
 
 snapshots:
 
-  '@agentclientprotocol/sdk@1.8.0(patch_hash=f3364b5c43195735c61bf9911b0fad8ed1883cf38ad0caf4a355c1c5c6d7beec)(zod@4.6.7)':
+  '@agentclientprotocol/sdk@2.8.0(patch_hash=e885d8121a90acf5486a359abb277cbf4142449331ecad1dce7bb60210abc537)(@modelcontextprotocol/server@2.4.0)(zod@4.6.7)':
     dependencies:
       zod: 4.6.7
+    optionalDependencies:
+      '@modelcontextprotocol/server': 2.4.0
 
   '@axe-core/playwright@4.14.0(playwright-core@1.65.1)':
     dependencies:

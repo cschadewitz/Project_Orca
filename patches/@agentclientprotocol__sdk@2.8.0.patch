@@ -1,0 +1,28 @@
+diff --git a/dist/core/jsonrpc.js b/dist/core/jsonrpc.js
+index 066ad9842648a3218a333b3f0512a2ff3617b50b..d50bc7b97f5a671ad7ee369949fd95c60e039f1d 100644
+--- a/dist/core/jsonrpc.js
++++ b/dist/core/jsonrpc.js
+@@ -704,13 +704,7 @@ export class Connection {
+             else {
+                 const response = errorToResult(error);
+                 if ("error" in response) {
+-                    // Params and error data can carry credentials (such as MCP server
+-                    // `env` and `headers` values), so log only identifying metadata.
+-                    console.error("Error handling notification", {
+-                        method: message.method,
+-                        code: response.error.code,
+-                        message: response.error.message,
+-                    });
++                    console.error("Error handling notification");
+                 }
+             }
+         }
+@@ -768,7 +762,7 @@ export class Connection {
+             }
+         }
+         else {
+-            console.error("Got response to unknown request", response.id);
++            console.error("Got response to unknown request");
+         }
+     }
+     handleProtocolNotification(message) {
