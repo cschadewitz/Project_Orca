@@ -34,7 +34,7 @@
  * `DaemonSubscription`.
  */
 import type { ConnectionState } from "@orca/design";
-import { formatProtocolVersion, type DaemonCapability, type HelloResult } from "@orca/protocol";
+import { formatProtocolVersion, type DaemonCapability, type HelloResult, type ManagedDeployment } from "@orca/protocol";
 import { appDaemonRelation, appProtocolLabel } from "../client/protocol-window.js";
 import type { ConnectionSnapshot } from "../bridge.js";
 import { authenticationCode } from "../client/auth.js";
@@ -135,6 +135,8 @@ export class ConnectionMachine {
   private capabilities: readonly DaemonCapability[] | undefined;
   /** `hello.methods`: what this daemon answers, which is finer than what it can do. */
   private methods: readonly string[] | undefined;
+  /** `hello.deployment`: the managed server updater launched this daemon (#879). */
+  private deployment: ManagedDeployment | undefined;
   private cursor: number | undefined;
   /** Guards a slow `hello` answering after a newer one was asked for. */
   private handshake = 0;
@@ -233,6 +235,7 @@ export class ConnectionMachine {
     this.olderProtocol = false;
     this.capabilities = undefined;
     this.methods = undefined;
+    this.deployment = undefined;
     this.cursor = undefined;
     /* No quiet window: leaving `live` is held back because a blip is not news, and a
        person who just asked for another store is not reading a blip. */
@@ -298,6 +301,7 @@ export class ConnectionMachine {
     /* Folded here because this is where the handshake is: the renderer never sees a
        `HelloResult`, so "is `config.set` served" can only be asked of the snapshot. */
     this.methods = result.methods;
+    this.deployment = result.deployment;
     const relation = appDaemonRelation(result.protocol);
     this.compatible = relation !== undefined;
     this.olderProtocol = relation === "previous";
@@ -391,6 +395,17 @@ export class ConnectionMachine {
       ...(this.orcaVersion !== undefined ? { orcaVersion: this.orcaVersion } : {}),
       ...(this.capabilities !== undefined ? { capabilities: this.capabilities } : {}),
       ...(this.methods !== undefined ? { methods: this.methods } : {}),
+      ...(this.deployment !== undefined
+        ? { managedServer: this.deployment.ring !== undefined ? { ring: this.deployment.ring } : {} }
+        : {}),
     };
+  }
+
+  /**
+   * Where the connected server's updater is, when the managed updater launched it (#879).
+   * Main reads it to run the update; the renderer only learns that the server is managed.
+   */
+  managedDeployment(): ManagedDeployment | undefined {
+    return this.deployment;
   }
 }

@@ -40,6 +40,8 @@ import {
   hopArgs,
   commandArgs,
   RemoteCommandRefused,
+  runRemote,
+  type RemoteCommandExit,
   type SecretCipher,
   type TunnelState,
 } from "@orca/protocol/remote-access";
@@ -821,6 +823,139 @@ describe("commands on the server (#875)", () => {
     expect(spawned[1]!.killed).toBe(true);
     await expect(running).resolves.toMatchObject({ code: 255 });
     await expect(tunnel.exec(["orca"])).rejects.toMatchObject({ code: "closed" });
+  });
+});
+
+describe("following one command on the server (#879)", () => {
+  /** A child whose stdio and exit the test drives, closing like a real one. */
+  function child() {
+    const ssh = new FakeSsh();
+    const end = (code: number | null, signal: string | null = null) => {
+      ssh.stdout.end();
+      ssh.stderr.end();
+      setImmediate(() => ssh.emit("close", code, signal));
+    };
+    return { ssh, end };
+  }
+  const lines = () => {
+    const seen: string[] = [];
+    return { seen, onLine: (stream: "stdout" | "stderr", line: string) => seen.push(`${stream}:${line}`) };
+  };
+  const follow = (ssh: FakeSsh, onLine: (stream: "stdout" | "stderr", line: string) => void) =>
+    runRemote(ssh as unknown as ChildProcess, onLine);
+
+  it("streams the command's lines, never ssh's, and returns its exit", async () => {
+    const { ssh, end } = child();
+    const out = lines();
+    const run = follow(ssh, out.onLine);
+    ssh.say(
+      "debug1: Connecting to lab.example port 22.\nAuthenticated to lab.example ([10.0.0.5]:22) using publickey.",
+    );
+    ssh.say("debug1: Entering interactive session.\ndebug1: pledge: filesystem");
+    ssh.stdout.write("staging v0.8.0\nhalf");
+    await until(() => out.seen.length === 1);
+    ssh.say("orca-release: Busy: update.lock; another update");
+    ssh.stdout.write(" a line\r\n");
+    ssh.say("debug1: client_input_channel_req: channel 0 rtype exit-status reply 0");
+    ssh.say("Transferred: sent 2612, received 2588 bytes, in 0.1 seconds\nBytes per second: sent 33.9, received 33.6");
+    end(1);
+    expect(await run.exit).toEqual<RemoteCommandExit>({ kind: "exited", code: 1 });
+    expect(out.seen).toEqual([
+      "stdout:staging v0.8.0",
+      "stderr:orca-release: Busy: update.lock; another update",
+      "stdout:half a line",
+    ]);
+  });
+
+  it("classifies ssh that never started the session, and reads a later 255 as not known", async () => {
+    const refused = child();
+    const out = lines();
+    const run = follow(refused.ssh, out.onLine);
+    refused.ssh.say("casey@lab.example: Permission denied (publickey).");
+    refused.end(255);
+    expect(await run.exit).toEqual({ kind: "refused", refusal: "auth-failed" });
+    expect(out.seen).toEqual([]);
+
+    // Exit 0 without a session is still ssh's failure, not the command's success.
+    const odd = child();
+    const none = follow(odd.ssh, () => {});
+    odd.end(0);
+    expect((await none.exit).kind).toBe("refused");
+
+    const lost = child();
+    const after = follow(lost.ssh, () => {});
+    lost.ssh.say("debug1: Entering interactive session.");
+    lost.ssh.say("Connection to lab.example closed by remote host.");
+    lost.end(255);
+    expect(await after.exit).toEqual({ kind: "refused", refusal: "ssh-failed" });
+  });
+
+  it("reports a signal, a missing ssh, and a kill", async () => {
+    const signalled = child();
+    const run = follow(signalled.ssh, () => {});
+    signalled.ssh.say("debug1: Entering interactive session.");
+    signalled.end(null, "SIGHUP");
+    expect(await run.exit).toEqual({ kind: "signalled", signal: "SIGHUP" });
+
+    const missing = child();
+    const none = follow(missing.ssh, () => {});
+    missing.ssh.emit("error", Object.assign(new Error("spawn ssh ENOENT"), { code: "ENOENT" }));
+    missing.end(null);
+    expect(await none.exit).toEqual({ kind: "refused", refusal: "ssh-missing" });
+
+    const killed = child();
+    const stopped = follow(killed.ssh, () => {});
+    killed.ssh.say("debug1: Entering interactive session.");
+    stopped.kill();
+    expect(killed.ssh.killed).toBe(true);
+    killed.end(null, "SIGTERM");
+    expect(await stopped.exit).toEqual({ kind: "signalled", signal: "SIGTERM" });
+  });
+
+  it("runs only through the pins an open tunnel sealed, as its own ssh, stopped with the tunnel", async () => {
+    const { tunnel, spawned } = fakeTunnel((ssh, n, args) => {
+      if (n === 1) {
+        writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n");
+        ssh.say(authed);
+        return;
+      }
+      expect(args).toContain("StrictHostKeyChecking=yes");
+      expect(args).not.toContain("-W");
+      expect(args.slice(-2)).toEqual(["orca", "version"]);
+      ssh.say("debug1: Entering interactive session.");
+      ssh.stdout.write("done\n");
+      if (n === 2) {
+        ssh.stdout.end();
+        ssh.stderr.end();
+        setImmediate(() => ssh.emit("close", 0, null));
+      }
+    });
+    const pins = (tunnel as unknown as { options: { knownHostsFile: string } }).options.knownHostsFile;
+    expect(() => tunnel.execStreaming(["true"], () => {})).toThrow(expect.objectContaining({ code: "closed" }));
+    await tunnel.open();
+    expect(tunnel.pinnedKeys).toBeDefined();
+    // The pin file changing afterwards changes nothing the tunnel carries.
+    rmSync(pins);
+    const seen: string[] = [];
+    const run = tunnel.execStreaming(["orca", "version"], (_stream, line) => seen.push(line));
+    expect(await run.exit).toEqual({ kind: "exited", code: 0 });
+    expect(seen).toEqual(["done"]);
+    expect(() => tunnel.execStreaming(["it's"], () => {})).toThrow(RemoteCommandRefused);
+    tunnel.execStreaming(["orca", "version"], () => {});
+    await until(() => spawned.length === 3);
+    await tunnel.close();
+    expect(spawned[2]!.killed).toBe(true);
+    expect(() => tunnel.execStreaming(["true"], () => {})).toThrow(expect.objectContaining({ code: "closed" }));
+  });
+
+  it("refuses on a tunnel that is open but never sealed its pins", async () => {
+    const { tunnel } = fakeTunnel((ssh) => ssh.say(authed));
+    await tunnel.open();
+    expect(tunnel.pinnedKeys).toBeUndefined();
+    expect(() => tunnel.execStreaming(["orca", "version"], () => {})).toThrow(
+      expect.objectContaining({ code: "host-key-missing" }),
+    );
+    await tunnel.close();
   });
 });
 

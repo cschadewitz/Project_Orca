@@ -728,6 +728,37 @@ export class SshTunnel {
   }
 
   /**
+   * Run one command on the server of an open tunnel and follow it line by line (#879): the
+   * server's updater, whose progress the person watches. Like `exec`, only through the pins
+   * this tunnel sealed, with the same `commandArgs` (no forward, words that mean themselves
+   * to the remote shell), and stopped with the tunnel.
+   *
+   * Lines the command writes go to `onLine`; ssh's own lines never do (see `runRemote`).
+   * Throws a `TunnelRefusal` when the tunnel is not open or not sealed.
+   */
+  execStreaming(
+    command: readonly string[],
+    onLine: (stream: "stdout" | "stderr", line: string) => void,
+  ): RemoteCommand {
+    if (this.closed || !this.hops) throw new TunnelRefusal("closed");
+    if (this.stateNow.phase === "failed") throw new TunnelRefusal(this.stateNow.refusal);
+    if (!this.jumpUp()) throw new TunnelRefusal("unreachable");
+    if (this.sealedKeys === undefined) throw new TunnelRefusal("host-key-missing");
+    const args = commandArgs(this.hops.daemon, command);
+    if (!args.includes("StrictHostKeyChecking=yes")) throw new TunnelRefusal("host-key-missing");
+    let child: ChildProcess;
+    try {
+      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args);
+    } catch {
+      throw new TunnelRefusal("ssh-missing");
+    }
+    this.commands.add(child);
+    child.once("exit", () => this.commands.delete(child));
+    child.stdin?.end();
+    return runRemote(child, onLine);
+  }
+
+  /**
    * A new connection to the daemon over its own authenticated ssh stream. Bytes written
    * before ssh has authenticated wait in ssh, and are discarded if it fails. Throws a
    * `TunnelRefusal` when the tunnel is closed, failed, or its jump host is down.
@@ -1105,6 +1136,94 @@ export class SshTunnel {
     }, delay);
     this.restartTimer.unref?.();
   }
+}
+
+/** How a remote command ended. */
+export type RemoteCommandExit =
+  | { kind: "exited"; code: number }
+  | { kind: "signalled"; signal: string }
+  /** ssh failed (no ssh, refused, or lost the session): whether the command ran is not known. */
+  | { kind: "refused"; refusal: TunnelRefusalCode };
+
+/** One remote command in flight. */
+export interface RemoteCommand {
+  readonly exit: Promise<RemoteCommandExit>;
+  /** Stop waiting: ends the local ssh, which hangs up the remote session. */
+  kill(): void;
+}
+
+/** ssh's own lines once a session is up: its debug output, and its closing transfer summary. */
+const SSH_OWN_LINE = /^(?:debug\d:|Transferred: sent |Bytes per second: sent )/;
+
+/**
+ * Follow a command started with `commandArgs` (#879). ssh runs verbose, and until it logs
+ * "Entering interactive session" every stderr line is ssh's own: classified, never passed on,
+ * since it can carry user names, paths and banners. After that, ssh's own lines are still
+ * dropped and the rest are the command's.
+ *
+ * ssh that never got that far refused, and is classified from its lines. Exit 255 after it is
+ * ssh losing the session (or a command that itself exits 255): `ssh-failed`, which a caller
+ * reads as "not known", the safe side. Any other code is the command's.
+ */
+export function runRemote(
+  child: ChildProcess,
+  onLine: (stream: "stdout" | "stderr", line: string) => void,
+): RemoteCommand {
+  let sshTail = "";
+  let authenticated = false;
+  const lines = (stream: "stdout" | "stderr") => {
+    let buffer = "";
+    const source = stream === "stdout" ? child.stdout : child.stderr;
+    const emit = (line: string) => {
+      if (stream === "stdout") return onLine(stream, line);
+      if (!authenticated) {
+        sshTail = (sshTail + line + "\n").slice(-STDERR_TAIL);
+        if (/^debug1: Entering interactive session/.test(line)) authenticated = true;
+        return;
+      }
+      if (!SSH_OWN_LINE.test(line)) onLine(stream, line);
+    };
+    source?.setEncoding("utf8");
+    source?.on("data", (chunk: string) => {
+      buffer += chunk;
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline).replace(/\r$/, "");
+        buffer = buffer.slice(newline + 1);
+        emit(line);
+      }
+      if (buffer.length > STDERR_TAIL) buffer = buffer.slice(-STDERR_TAIL);
+    });
+    return new Promise<void>((resolve) => {
+      if (!source) return resolve();
+      source.once("end", () => {
+        if (buffer) emit(buffer.replace(/\r$/, ""));
+        resolve();
+      });
+      source.once("error", () => resolve());
+    });
+  };
+  const drained = Promise.all([lines("stdout"), lines("stderr")]);
+  // The raw end of ssh; read once its output is drained, so `authenticated` is final.
+  const ended = new Promise<RemoteCommandExit | { code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("error", (error: NodeJS.ErrnoException) =>
+      resolve({ kind: "refused", refusal: error.code === "ENOENT" ? "ssh-missing" : "ssh-failed" }),
+    );
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
+  return {
+    exit: drained.then(async (): Promise<RemoteCommandExit> => {
+      const end = await ended;
+      if ("kind" in end) return end;
+      if (!authenticated) return { kind: "refused", refusal: classifySshFailure(sshTail) };
+      if (end.code === 255) return { kind: "refused", refusal: "ssh-failed" };
+      if (end.code !== null) return { kind: "exited", code: end.code };
+      return { kind: "signalled", signal: end.signal ?? "unknown" };
+    }),
+    kill: () => {
+      if (alive(child)) child.kill();
+    },
+  };
 }
 
 /** One connection over a child's stdin/stdout. Destroying it ends the child's stdio. */
