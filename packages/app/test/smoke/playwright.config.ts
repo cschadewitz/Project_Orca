@@ -38,6 +38,10 @@
  *   build from N to N+1 through a local copy of the feed Worker (#863), in
  *   `feed-update-e2e.yml` on a GitHub-hosted Windows runner.
  *
+ * - **`windows-store-upgrade`** (`pnpm run app:windows-store-upgrade`) installs the previous
+ *   release's signed installer, then a release candidate's over it, on a store the previous
+ *   release wrote (#566), in `release-upgrade-check.yml` on a GitHub-hosted Windows runner.
+ *
  * Separate projects in one config let the workflow say `--project=<name>`
  * and lets `toHaveScreenshot` put the project's name in a baseline's filename, beside the
  * platform it already puts there.
@@ -132,6 +136,14 @@ export default defineConfig({
       testMatch: "*.spec.ts",
       outputDir: here("../../../../test-results/windows-update"),
       // The feed tokens are files the spec only names; never record requests or a profile.
+      use: { trace: "off", video: "off", screenshot: "off" },
+    },
+    {
+      name: "windows-store-upgrade",
+      testDir: here("../windows-upgrade"),
+      testMatch: "*.spec.ts",
+      outputDir: here("../../../../test-results/windows-store-upgrade"),
+      // Nothing to record: the store is the demo's, and the app runs on a throwaway profile.
       use: { trace: "off", video: "off", screenshot: "off" },
     },
     {

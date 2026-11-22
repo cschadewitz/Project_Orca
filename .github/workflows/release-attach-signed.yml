@@ -57,6 +57,8 @@ jobs:
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.event == 'workflow_dispatch')
     runs-on: windows-latest
+    outputs:
+      id: ${{ steps.attached.outputs.id }}
     defaults:
       run:
         shell: bash
@@ -106,6 +108,7 @@ jobs:
           }
 
       - name: Attach it to the draft by id, re-validating the draft before each write
+        id: attached
         if: steps.find.outputs.id != ''
         env:
           ID: ${{ steps.find.outputs.id }}
@@ -115,7 +118,28 @@ jobs:
           set -euo pipefail
           file=$(find signed -type f -name "ORCA-$VERSION-win-x64.exe")
           bash tools/deploy/release-attach.sh attach "$ID" "$SHA" "$VERSION" "$RUN_ID" "$file"
-          echo "Next: native acceptance on the draft's exact assets, then publish (docs/RELEASING.md)." >> "$GITHUB_STEP_SUMMARY"
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+          echo "Next: the upgrade check runs on its own; native acceptance of the .deb, then publish (docs/RELEASING.md)." >> "$GITHUB_STEP_SUMMARY"
+
+  # The attached installer's native upgrade check from the current Latest (#566). This job
+  # checks nothing out and can only dispatch.
+  upgrade-check:
+    name: dispatch the upgrade check for the draft
+    needs: attach
+    if: needs.attach.outputs.id != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch Release (upgrade check)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ID: ${{ needs.attach.outputs.id }}
+        run: |
+          set -euo pipefail
+          [[ "$ID" =~ ^[0-9]+$ ]] || { echo "::error::invalid release id"; exit 1; }
+          gh workflow run release-upgrade-check.yml --repo "$GITHUB_REPOSITORY" --ref main -f release_id="$ID"
+          echo "Dispatched Release (upgrade check) for release \`$ID\`." >> "$GITHUB_STEP_SUMMARY"
 
   reconcile:
     name: re-dispatch attachments still missing

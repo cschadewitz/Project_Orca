@@ -116,13 +116,28 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    shows on the draft (signature, install, first launch, a built-in sample, reopen). The
    signing run's checks in step 2 are not that acceptance. If either fails, stop: the draft
    stays a draft and nothing is public.
+
+   The Windows upgrade part runs by itself. Once the installer is attached, step 3's
+   workflow dispatches **Release (upgrade check)** (`release-upgrade-check.yml`) for the
+   draft. On a GitHub-hosted Windows runner it verifies the signatures of the current
+   Latest's installer and the draft's, writes a store with the Latest release's own
+   `orca demo` (built from its tag), installs the Latest, opens the store in its app, then
+   installs the draft's installer over it. The candidate's app must open the same store in
+   place: stamped with the store format and its version, no format backup, every run still
+   listed. The Latest's daemon must still read the stamped store, and the candidate must
+   refuse a store stamped by a newer format without changing it
+   (`packages/app/test/windows-upgrade/store-upgrade.spec.ts`). A pass is recorded in the
+   draft's notes as `<!-- orca-upgrade-check: RUN sha256:… from vX.Y.Z -->`. To run it by
+   hand, dispatch it from `main` with `release_id=$ID`. A candidate that changes the store
+   format fails it on purpose until the automatic desktop carryover (#897) lands.
 6. Publish by dispatching **Release (publish final)** (`release-publish-final.yml`) from
    `main` with `release_id=$ID`, `version=$V`, and what step 5 accepted: `source_sha=$SHA`,
    `deb_sha256` and `exe_sha256` (the digests of the exact files that passed). Immediately
    before publishing it compares all of them with the draft: still a draft, named `v$V`,
    targeting `SHA`, exactly those two assets with those digests, and the installer's digest
    equal to the signing record. It refuses a version that is not newer than the current
-   Latest and an existing tag at another commit, publishes with the tag and target stated
+   Latest, a draft without exactly one upgrade check record for that installer from the
+   current Latest whose run succeeded (step 5), and an existing tag at another commit, publishes with the tag and target stated
    explicitly, and reads back the published digests, the tag and Latest. It shares one queue
    with the attach, so the two never interleave; publish only through it, not by editing the
    draft by hand.

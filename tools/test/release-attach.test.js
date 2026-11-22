@@ -37,7 +37,7 @@ let m;
 if (method === "POST" && (m = path.match(/^releases\/(\d+)\/assets\?name=(.+)$/))) {
   const r = byId(m[1]);
   const digest = "sha256:" + crypto.createHash("sha256").update(input()).digest("hex");
-  r.assets.push({ name: m[2], digest });
+  r.assets.push({ id: 900 + r.assets.length, name: m[2], digest });
   log(["upload", m[1], m[2]]);
   out = {};
 } else if ((m = path.match(/^releases\/(\d+)$/))) {
@@ -427,16 +427,109 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(f.writes()).toHaveLength(2);
   });
 
-  it("publishes over an older Latest and reads the accepted digests back", () => {
-    const f = setup();
+  it("publishes over an older Latest after its upgrade check, and reads the accepted digests back", () => {
+    const f = withLatest();
+    expect(f.run(ATTACH, recordUpgrade(f)).status).toBe(0);
+    const result = f.run(ATTACH, accepted(f));
+    expect(result.status, result.stderr).toBe(0);
+    expect(f.state().latest).toBe(7);
+    expect(f.state().tags["v0.8.0"]).toBe(SHA);
+  });
+
+  // release-upgrade-check.yml: the target it checks, the record it writes, and the gate.
+  const upgradeRun = { ...goodRun, path: ".github/workflows/release-upgrade-check.yml" };
+  const withLatest = (runs = { 100: goodRun, 500: upgradeRun }) => {
+    const f = setup({ runs });
     expect(f.attach().status).toBe(0);
     f.edit((st) => {
       st.releases.push({ ...draft({ id: 5, tag_name: "v0.7.9", name: "v0.7.9", draft: false }) });
       st.latest = 5;
     });
-    const result = f.run(ATTACH, accepted(f));
+    return f;
+  };
+  const recordUpgrade = (f, run = "500", exe = f.digest, from = "0.7.9") => [
+    "record-upgrade",
+    "7",
+    SHA,
+    "0.8.0",
+    run,
+    exe,
+    from,
+  ];
+  const upgradeMarker = (f, run = 500, from = "0.7.9") =>
+    `<!-- orca-upgrade-check: ${run} ${f.digest} from v${from} -->`;
+
+  it("names the attached installer and the Latest it upgrades from, printing only output assignments", () => {
+    const f = withLatest();
+    const result = f.run(ATTACH, ["upgrade-target", "7"]);
     expect(result.status, result.stderr).toBe(0);
-    expect(f.state().latest).toBe(7);
-    expect(f.state().tags["v0.8.0"]).toBe(SHA);
+    expect(result.stdout).toBe(`id=7\nversion=0.8.0\nsha=${SHA}\nexe=${f.digest}\nasset=901\nfrom=0.7.9\n`);
+    expect(f.writes()).toHaveLength(2);
+  });
+
+  it.each([
+    ["before its installer is attached", (f) => f, "no single signing record"],
+    [
+      "without a Latest release",
+      (f) => {
+        expect(f.attach().status).toBe(0);
+        return f;
+      },
+      "no Latest release",
+    ],
+  ])("names no upgrade target %s", (_label, prepare, message) => {
+    const f = prepare(setup());
+    const result = f.run(ATTACH, ["upgrade-target", "7"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
+    expect(result.stdout).toBe("");
+  });
+
+  it("records a pass once, and a newer pass replaces it", () => {
+    const f = withLatest();
+    expect(f.run(ATTACH, recordUpgrade(f)).status).toBe(0);
+    expect(f.state().releases[0].body).toBe(`Notes.\n\n${f.marker()}\n\n${upgradeMarker(f)}`);
+    expect(f.run(ATTACH, recordUpgrade(f, "501")).status).toBe(0);
+    expect(f.state().releases[0].body).toBe(`Notes.\n\n${f.marker()}\n\n${upgradeMarker(f, 501)}`);
+    expect(f.writes().slice(2)).toEqual([RECORD, RECORD]);
+  });
+
+  it.each([
+    ["another installer", (f) => recordUpgrade(f, "500", "sha256:" + "9".repeat(64)), "not the checked installer"],
+    [
+      "a draft published meanwhile",
+      (f) => {
+        f.edit((st) => (st.releases[0].draft = false));
+        return recordUpgrade(f);
+      },
+      "no longer a draft",
+    ],
+  ])("records nothing for %s", (_label, args, message) => {
+    const f = withLatest();
+    const result = f.run(ATTACH, args(f));
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
+    expect(f.writes()).toHaveLength(2);
+  });
+
+  it.each([
+    ["no upgrade check", () => undefined, "no single upgrade check record"],
+    [
+      "a check from another release",
+      (f) => recordUpgrade(f, "500", f.digest, "0.7.8"),
+      "not the current latest v0.7.9",
+    ],
+    ["a check whose run did not pass", (f) => recordUpgrade(f, "600"), "did not pass"],
+    ["a check of the signing workflow's run", (f) => recordUpgrade(f, "100"), "did not pass"],
+  ])("refuses to publish over a Latest with %s", (_label, record, message) => {
+    const f = withLatest({ 100: goodRun, 500: upgradeRun, 600: { ...upgradeRun, conclusion: "failure" } });
+    const args = record(f);
+    if (args) expect(f.run(ATTACH, args).status).toBe(0);
+    const writes = f.writes().length;
+    const result = f.run(ATTACH, accepted(f));
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
+    expect(f.writes()).toHaveLength(writes);
+    expect(f.state().releases.find((r) => r.id === 7).draft).toBe(true);
   });
 });

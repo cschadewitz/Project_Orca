@@ -7,7 +7,9 @@
 # assets with those digests, the installer's digest equal to the signing record). It refuses
 # a version not newer than the current Latest and an existing tag at another commit,
 # publishes with the tag and target stated explicitly, and reads back the published assets'
-# digests, the tag and Latest. Native acceptance itself stays a required step before this. It shares its concurrency group with
+# digests, the tag and Latest. When there is a Latest, it also refuses a draft without a passing
+# Release (upgrade check) record for that installer from that Latest (release-upgrade-check.yml).
+# Native acceptance itself stays a required step before this. It shares its concurrency group with
 # Release (attach signed installer), so publication through this workflow never interleaves
 # with an attachment. A release published with the workflow token does not raise the `release`
 # event for other workflows, so this dispatches Desktop feed (automatic) itself.
