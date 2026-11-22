@@ -67,7 +67,7 @@ $sid = [System.Security.Principal.SecurityIdentifier]
 $out = foreach ($p in (Get-Content -LiteralPath $env:PROBE_PATHS)) {
   $acl = Get-Acl -LiteralPath $p
   [pscustomobject]@{
-    path = $p
+    path = [string]$p
     owner = $acl.GetOwner($sid).Value
     protected = $acl.AreAccessRulesProtected
     rules = @($acl.GetAccessRules($true, $true, $sid) | ForEach-Object {
