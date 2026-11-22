@@ -151,6 +151,20 @@ describe("LinuxPackageRestart", () => {
     expect(tampered.relaunch).not.toHaveBeenCalled();
   });
 
+  it("a package change after the launch is scheduled cannot be stopped here; the handoff still names only the offered version", async () => {
+    const f = rig();
+    f.restart.check();
+    await f.restart.restart();
+    expect(f.relaunch).toHaveBeenCalledOnce();
+    // apt replaces the package between scheduling and Electron opening the executable: whatever
+    // version opens, the record it finds names 0.9.0, so only a 0.9.0 daemon can carry under it
+    // (claimUpdateHandoff refuses "other-version"; covered in packages/protocol and store-carryover).
+    f.install("1.0.0");
+    f.restart.check();
+    expect(f.guards.handOff).toHaveBeenCalledExactlyOnceWith(expect.any(String), "0.8.0", "0.9.0");
+    expect(f.restart.state).toMatchObject({ phase: "restarting", installed: "0.9.0" });
+  });
+
   it("reopens admission on the running daemon when it cannot be prepared, and offers the restart again", async () => {
     for (const step of ["prepareDaemon"] as const) {
       const f = rig({ guards: { [step]: vi.fn(() => Promise.reject(new Error("busy"))) } });

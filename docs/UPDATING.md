@@ -1008,9 +1008,14 @@ exactly the Windows sequence above (drafts prepared, admission closed and draine
 daemon stopped and its exit observed, `update-handoff.json.<claim>` published naming the installed
 version) and then starts the installed binary, whose bundled daemon carries the store forward
 under the same proof. A failure before the stop resumes the running version's daemon and offers
-the restart again. The target is bound at the click, after the stop and just before the launch:
-dpkg must still report the offered version fully installed, and `/opt/ORCA/orca-desktop` must
-match the package's recorded checksum. After the stop the running version is never restarted
+the restart again. The target is checked at the click, after the stop and just before the
+launch is scheduled: dpkg must still report the offered version fully installed, and
+`/opt/ORCA/orca-desktop` must match the package's recorded checksum. That does not bind the
+executable that opens, which Electron starts only after the old app exits: if `apt` changes the
+package in that moment, another version may start. The guarantee is about the store, not the
+executable: the record names the offered version, and any other version's daemon cannot carry the
+store under it, so it refuses an older-format store (`CARRYOVER_REQUIRED`) as it would after a
+plain quit and reopen. After the stop the running version is never restarted
 (apt may already have removed its files): a moved target, a refused handoff or an uncertain stop
 starts nothing, keeps admission closed and tells the person to quit and reopen, and, if the
 workspace then refuses (`CARRYOVER_REQUIRED`), to reinstall the previous package

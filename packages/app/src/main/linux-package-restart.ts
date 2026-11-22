@@ -11,9 +11,14 @@
  * as on Windows: it holds the first-run writer fence, its journal claim directly follows the
  * stopped daemon's, and it is the version the handoff names.
  *
- * The target is bound three times: dpkg must still report the offered version fully installed,
+ * The target is checked three times: dpkg must still report the offered version fully installed,
  * and the executable must be that package's own file (dpkg's checksum), at the click, after the
- * stop and immediately before the launch. A failure before the stop reopens admission on the
+ * stop and immediately before the launch is scheduled. That last check does not bind what opens:
+ * Electron starts `process.execPath` only after this process exits, and apt may replace the
+ * package in that interval, so another version may be what starts. What is guaranteed is the
+ * conversion, not the executable: the handoff names `installed`, and a daemon of any other version
+ * cannot carry the store under it (`claimUpdateHandoff`, "other-version"), so it keeps refusing
+ * an older-format store exactly as without the restart. A failure before the stop reopens admission on the
  * running daemon, as on Windows. After the stop nothing restarts the running version, whose
  * files apt may already have removed: a moved target, a refused handoff or an uncertain stop
  * leaves admission closed and says how to recover (quit and reopen; if the workspace then
@@ -178,7 +183,9 @@ export class LinuxPackageRestart {
       } catch {
         return this.stranded("handoff");
       }
-      // Bound again at the launch: the record names `installed`, and only that binary may start.
+      // Checked again just before scheduling the launch. This narrows, but cannot close, the window
+      // in which apt may replace the package before Electron opens it: the record names
+      // `installed`, so whatever version starts can carry the store only if it is that one.
       if (!this.options.verifyTarget(installed)) return this.stranded("changed");
       this.set({ phase: "restarting", current, installed, message: `Starting ORCA ${installed}` });
       this.options.relaunch();
