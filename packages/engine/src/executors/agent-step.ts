@@ -9,7 +9,7 @@
  *  5. if something is missing, send a follow-up prompt (bounded)
  */
 import { isAbsolute } from "node:path";
-import type { AgentSession, HostFileSystem, SessionUpdateEvent } from "@orca/agents";
+import type { AgentSession, HostFileSystem, SessionUpdateEvent, TurnContext } from "@orca/agents";
 import {
   coerceWorkflowString,
   describeError,
@@ -313,8 +313,10 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
   // The run's template pack (#191), when it chose one: `<pack>/<id>` wins over `<id>`.
   const pack = ctx.run.state.run.overrides?.templatePack;
   const body = spec.template ? ctx.templates.get(spec.template, pack ? { pack } : {}).body : (spec.prompt ?? "");
+  const renderTask = async (revision?: import("../revision-delivery.js").RevisionSlot) =>
+    (await ctx.render(body, { ...extra, deliverables, ...(revision ? { revision } : {}) })).trim();
   const renderPrompt = async (revision?: import("../revision-delivery.js").RevisionSlot) =>
-    (await ctx.render(body, { ...extra, deliverables, ...(revision ? { revision } : {}) })).trim() +
+    (await renderTask(revision)) +
     "\n\nUse only the explicitly supplied input artifacts as prior workflow context. Files in .orca/work, " +
     ".orca/program or .orca-attempts from other runs or attempts are not inputs; do not explore or copy them. " +
     "Write this attempt's outputs only to the exact deliverable paths below.\n\n" +
@@ -360,10 +362,28 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
       let stopReason: string;
       try {
         if (followUp === 0 && revisionHandoff) await ctx.revisionInput!.beforeSend(revisionHandoff);
-        const turn = await session.prompt(prompt, { signal: ctx.signal, timeoutMs }).catch(async (error: unknown) => {
-          if (followUp === 0 && revisionHandoff) await ctx.revisionInput!.uncertain(revisionHandoff);
-          throw error;
-        });
+        const turnContext: TurnContext = {
+          runId: ctx.run.id,
+          stepRunId: ctx.step.id,
+          nodeId: ctx.nodeId,
+          attempt: ctx.step.attempt,
+          followUp,
+          // A revision handoff's prompt is its own (and may be redacted): a delegating session
+          // gets the whole prompt then, never a task rendered without the revision.
+          task: revisionHandoff ? prompt : await renderTask(),
+          deliverables: deliverables.map((d) => ({
+            kind: d.kind,
+            ...(d.name ? { name: d.name } : {}),
+            path: d.path,
+            required: d.required,
+          })),
+        };
+        const turn = await session
+          .prompt(prompt, { signal: ctx.signal, timeoutMs, turn: turnContext })
+          .catch(async (error: unknown) => {
+            if (followUp === 0 && revisionHandoff) await ctx.revisionInput!.uncertain(revisionHandoff);
+            throw error;
+          });
         if (followUp === 0 && revisionHandoff) await ctx.revisionInput!.confirm(revisionHandoff);
         stopReason = turn.stopReason;
         await recorder.flush();

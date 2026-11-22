@@ -389,6 +389,68 @@ agents:
 - `hello` reports the daemon-wide cap, sessions open and queue depth; `agents.list` adds the
   per-agent and per-host caps and use (optional fields; older clients ignore them).
 
+## Delegating steps to another daemon
+
+An agent of `type: orca-daemon` does not start a process: it hands each of its steps to
+another ORCA daemon, which runs a named workflow there as one of its own runs (#883). The
+remote is reached over SSH with the same tunnel the desktop app's SSH profiles use (#874):
+typed fields only, no ssh config file read, the server's host key pinned on the first connect.
+
+```yaml
+remotes:
+  - id: build-box
+    name: Build box
+    destination: ci@build-box.example     # user@host
+    identityFile: /home/me/.ssh/id_ed25519
+    # sshPort, jump: {destination, sshPort, identityFile}, remotePort (default 6722)
+agents:
+  - id: remote-builder
+    type: orca-daemon
+    profile: build-box                    # a remotes[].id
+    workflow: build                       # the workflow the remote daemon runs per step
+    # promptVar: prompt                   # the remote workflow variable the task arrives in
+    roles: [builder]
+```
+
+One-time setup on the remote: issue this daemon a credential and save it beside this
+daemon's config, readable only by its user:
+
+```sh
+# on build-box, in the remote daemon's workspace
+orca auth issue parent-daemon --preset client --json > build-box.token
+# on this machine
+install -m 600 build-box.token auth/remotes/build-box.token   # or set remotes[].credentialFile
+```
+
+- **The step's task becomes a remote run.** The step's rendered prompt (without ORCA's
+  deliverable instructions) is passed as the remote workflow's `prompt` variable, and the
+  run is admitted with `runs.admit` under a key derived from this run and step attempt: a
+  repeated call after a lost connection gets the same remote run, never a second one.
+- **The work is the remote daemon's.** It appears in that daemon's run list, owned by the
+  credential's principal, and its audit log names that principal on the admission.
+- **Progress shows on the step.** Remote step milestones and the remote agents' updates
+  appear as the step's agent output.
+- **Remote gates are asked here.** A question the remote run opens is forwarded as a
+  question on this step; the answer is sent back to the remote. Free-text remote questions
+  are left to be answered on the remote daemon.
+- **Cancelling cancels the remote run.** So does the step's turn timeout
+  (`turnTimeoutMs`, 30 minutes by default; raise it for long remote work).
+- **A dropped connection reattaches.** The session keeps the remote run id and its place in
+  the run's log and keeps trying until the turn's deadline.
+- **Artifacts come back.** When the remote run succeeds, each of the step's `produces`
+  entries is matched to the remote run's artifact of the same `name` (or, without a name,
+  the same `kind`), and its text is written where the step collects it.
+- **Failures are typed.** `DELEGATION_REFUSED` (not retried) means the remote or the way to
+  it refused for a reason a retry cannot fix: a refused credential, an incompatible
+  protocol, a daemon that admits no runs (read-only, or an older ORCA), an unknown workflow,
+  a changed or missing host key, failed SSH sign-in. `AGENT_TRANSPORT` means the remote could
+  not be reached. `DELEGATED_RUN_FAILED` means the remote run ended without success; its
+  error is in the step's error details.
+
+Not yet: recording the parent run as the remote run's origin, fetching a named git ref on
+the remote side, reattaching after this daemon restarts mid-step (the step is retried as a
+new remote run), issuing the credential automatically over SSH, and binary artifacts.
+
 ## MCP servers and skills for agent steps
 
 ORCA can pass an agent session **outbound** MCP servers (servers the *agent* talks to, given

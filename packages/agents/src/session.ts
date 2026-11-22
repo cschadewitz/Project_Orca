@@ -23,6 +23,33 @@ export interface SessionUpdateEvent {
 export interface PromptOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
+  /**
+   * The workflow step this turn is for. An ACP session ignores it. A session that delegates the
+   * turn to another daemon (#883) keys its remote admission on it, so a retried call for the
+   * same turn never starts a second remote run, and records it as the remote run's origin.
+   */
+  turn?: TurnContext;
+}
+
+/** What a step tells its session about the turn (see `PromptOptions.turn`). */
+export interface TurnContext {
+  runId: string;
+  stepRunId: string;
+  nodeId: string;
+  attempt: number;
+  /** 0 for the step's first turn; a follow-up asks again for deliverables that were missing. */
+  followUp: number;
+  /** The step's task as its prompt template rendered it, without ORCA's deliverable instructions. */
+  task: string;
+  /** Where the step collects its outputs once the turn ends: absolute paths on the agent's host. */
+  deliverables: readonly TurnDeliverable[];
+}
+
+export interface TurnDeliverable {
+  kind: string;
+  name?: string;
+  path: string;
+  required: boolean;
 }
 
 export interface AgentSession {

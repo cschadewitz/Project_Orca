@@ -880,6 +880,7 @@ export const commands: Record<string, Command> = {
             promptLog: join(dir, ".orca-demo", "prompts.jsonl"),
           }),
         ],
+        remotes: [],
         roles: {},
         workflows: [join(repoRoot, "workflows", "*.yaml").replaceAll("\\", "/")],
         templates: [join(repoRoot, "templates", "**", "*.md").replaceAll("\\", "/")],
