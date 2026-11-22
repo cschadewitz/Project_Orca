@@ -79,7 +79,12 @@ ConvertTo-Json -InputObject @($out) -Depth 5 -Compress`;
   writeFileSync(list, paths.join("\r\n"));
   const text = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
     encoding: "utf8",
-    env: { ...process.env, PROBE_PATHS: list },
+    // Windows PowerShell cannot load its own modules with PowerShell 7's PSModulePath, which the
+    // runner's pwsh step passes down.
+    env: {
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath")),
+      PROBE_PATHS: list,
+    },
     maxBuffer: 16 * 1024 * 1024,
   });
   return JSON.parse(text) as Descriptor[];
