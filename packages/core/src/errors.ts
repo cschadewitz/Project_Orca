@@ -40,6 +40,11 @@ export type OrcaErrorCode =
    * `details` has `runId`, `stepRunId` and `nodeId`.
    */
   | "EFFECT_REVIEW_REQUIRED"
+  /**
+   * An operator abandoned that step after reviewing it (#357): nothing may run it again, even
+   * while the run's cancellation is still to finish. `details` as for EFFECT_REVIEW_REQUIRED.
+   */
+  | "EFFECT_ABANDONED"
   /** Another interpreter holds the run's single-writer lease; see store/lease-store.ts. */
   | "RUN_LEASED"
   | "CLAIM_NOT_FOUND"

@@ -40,6 +40,7 @@ export const RecoveryBlockerSchema = z.enum([
   "missing-artifact",
   "no-checkpoint",
   "effect-unreviewed",
+  "effect-abandoned",
 ]);
 export type RecoveryBlocker = z.infer<typeof RecoveryBlockerSchema>;
 
@@ -66,6 +67,8 @@ export const RECOVERY_BLOCKER_TEXT: Record<RecoveryBlocker, string> = {
   "no-checkpoint": "No completed step of this run can be reused. Start a new run instead.",
   "effect-unreviewed":
     "A step that may have changed the workspace or external systems did not finish. Check what it did, then mark it to run again or abandon the run.",
+  "effect-abandoned":
+    "An operator abandoned a step this would run again, so it must not run. Record the same review again to finish ending the run, or start a new run.",
 };
 
 /** What the read path could not confirm. An option with any of these is unverified, not available. */
@@ -260,6 +263,14 @@ export function needsEffectReview(step: StepRun): boolean {
   return uncertainEffect(step) && step.effectReview === undefined;
 }
 
+/**
+ * An operator reviewed this attempt and abandoned it: nothing may run it again, whether or not
+ * the run's cancellation has landed yet. Only `run-again` clears the review fence.
+ */
+export function effectAbandoned(step: StepRun): boolean {
+  return uncertainEffect(step) && step.effectReview?.decision === "abandon";
+}
+
 /** What continuing this run's recorded history requires and cannot be confirmed here. */
 function pinChecks(member: RecoveryRunFacts): { blockers: RecoveryBlocker[]; unverified: RecoveryUnverified[] } {
   const blockers: RecoveryBlocker[] = [];
@@ -346,6 +357,7 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
     if (last && last.status !== "completed") {
       resumeRunsAgain.push(viewIn(member.state, "continue")(last, effectOf(last)));
       if (needsEffectReview(last)) resumeBlockers.push("effect-unreviewed");
+      if (effectAbandoned(last)) resumeBlockers.push("effect-abandoned");
     }
   }
 
@@ -380,6 +392,7 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
     // The attempt runs again what ran after this point; anything there that may have acted
     // needs its review first.
     if (steps.slice(index + 1).some(needsEffectReview)) blockers.push("effect-unreviewed");
+    if (steps.slice(index + 1).some(effectAbandoned)) blockers.push("effect-abandoned");
     checkpoints.push({
       stepRunId: step.id,
       nodeId: step.nodeId,

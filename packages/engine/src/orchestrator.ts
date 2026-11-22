@@ -21,6 +21,7 @@ import { applyModel, currentModel, selectedModel } from "./session-model.js";
 import {
   describeError,
   evaluateCondition,
+  effectAbandoned,
   evaluateExpression,
   needsEffectReview,
   newId,
@@ -310,9 +311,20 @@ function inlineDefinition(
   };
 }
 
-/** Refuse to re-attempt a run's last step when it may have acted and nobody has reviewed it (#357). */
+/**
+ * Refuse to re-attempt a run's last step when it may have acted and nobody has reviewed it, or an
+ * operator abandoned it (#357). An abandon decision is a denial on its own: it holds even when
+ * the cancellation that should follow it never landed.
+ */
 function assertLastStepReviewed(state: RunState): void {
   const last = state.steps[state.stepOrder.at(-1) ?? ""];
+  if (last && effectAbandoned(last))
+    throw new OrcaError(
+      "EFFECT_ABANDONED",
+      `step '${last.nodeId}' (${last.id}) of run ${state.run.id} was abandoned after side-effect review and must not run again. ` +
+        `Record the same review again to finish ending the run ('orca recovery review ${state.run.id} ${last.id} --abandon'), or start a new run.`,
+      { runId: state.run.id, stepRunId: last.id, nodeId: last.nodeId },
+    );
   if (last && needsEffectReview(last))
     throw new OrcaError(
       "EFFECT_REVIEW_REQUIRED",
@@ -944,49 +956,62 @@ export class Orchestrator {
         `run ${runId} is being interpreted by pid ${lease.pid} on ${lease.host}: review it once that stops`,
         { runId, ...describeLease(lease) },
       );
-    let abandon = false;
+    const reason = "abandoned after side-effect review";
+    let children: string[] = [];
     try {
       await this.stores.leases.withOwnership(lease, async () => {
         const state = reduceRun(await this.stores.events.read(runId));
         const step = state.steps[stepRunId];
         if (!step) throw new OrcaError("RUN_STATE", `run ${runId} has no step run ${stepRunId}`, { runId, stepRunId });
         const recorded = step.effectReview?.decision;
-        if (recorded !== undefined) {
-          if (recorded !== decision)
-            throw new OrcaError("RUN_STATE", `step run ${stepRunId} was already reviewed: ${recorded}`, {
-              runId,
-              stepRunId,
-              decision: recorded,
-            });
-          abandon = decision === "abandon" && !isTerminal(state);
-          return; // The same review again: nothing new to record.
-        }
-        if (!needsEffectReview(step))
-          throw new OrcaError(
-            "RUN_STATE",
-            `step run ${stepRunId} needs no effect review: it ${step.parked ? "paused on purpose" : `is ${step.status}`}`,
-            { runId, stepRunId, status: step.status },
-          );
-        if (decision === "abandon" && isTerminal(state))
-          throw new OrcaError("RUN_STATE", `run ${runId} has already ended; there is nothing to abandon`, { runId });
-        await this.stores.events.append({
-          type: "step.effect.reviewed",
-          runId,
-          payload: {
+        if (recorded !== undefined && recorded !== decision)
+          throw new OrcaError("RUN_STATE", `step run ${stepRunId} was already reviewed: ${recorded}`, {
+            runId,
             stepRunId,
-            decision,
-            ...(options.note ? { note: options.note } : {}),
-            ...(options.actor ? { actor: options.actor } : {}),
-          },
+            decision: recorded,
+          });
+        if (recorded === undefined) {
+          if (!needsEffectReview(step))
+            throw new OrcaError(
+              "RUN_STATE",
+              `step run ${stepRunId} needs no effect review: it ${step.parked ? "paused on purpose" : `is ${step.status}`}`,
+              { runId, stepRunId, status: step.status },
+            );
+          if (decision === "abandon" && isTerminal(state))
+            throw new OrcaError("RUN_STATE", `run ${runId} has already ended; there is nothing to abandon`, { runId });
+          // From this append on, the abandon decision alone refuses every execution entry
+          // (assertLastStepReviewed), even if the cancellation below never lands.
+          await this.stores.events.append({
+            type: "step.effect.reviewed",
+            runId,
+            payload: {
+              stepRunId,
+              decision,
+              ...(options.note ? { note: options.note } : {}),
+              ...(options.actor ? { actor: options.actor } : {}),
+            },
+          });
+        }
+        // The same review again records nothing new; an abandon that did not finish ending the
+        // run (a crash after the decision) finishes it here.
+        if (decision !== "abandon" || isTerminal(state)) return;
+        // End the run under the same ownership that recorded the decision, so no other
+        // interpreter can attach in between.
+        for (const open of openSteps(state))
+          await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: open.id } });
+        await this.stores.events.append({
+          type: "run.cancelled",
+          runId,
+          payload: { reason, ...(options.actor ? { actor: options.actor } : {}) },
         });
-        abandon = decision === "abandon";
+        children = Object.values(state.steps).flatMap((s) => s.childRunIds);
       });
     } finally {
       await this.stores.leases.release(lease);
     }
-    // Abandoning ends the run through the ordinary cancel, under its own lease. A crash between
-    // the two leaves the review recorded; the same review again finishes the cancel.
-    if (abandon) await this.cancel(runId, "abandoned after side-effect review", options.actor);
+    // The children it was waiting on, each under its own lease, as cancel does. A crash here
+    // leaves them for the same review again, or an ordinary cancel, to close.
+    for (const child of children) await this.cancel(child, reason, options.actor);
     return this.getState(runId);
   }
 
@@ -1068,6 +1093,8 @@ export class Orchestrator {
         rc.leaseLost = true;
         throw new OrcaError("RUN_LEASED", "continuation execution lease was lost");
       }
+      // Every execution entry enforces the review fence, this one included (#357).
+      assertLastStepReviewed(rc.state);
       const context = rc;
       await context.withOwnership(async () => {
         const first = (await this.stores.events.readRange(runId, { limit: 1 }))[0];

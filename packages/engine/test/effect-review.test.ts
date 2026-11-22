@@ -13,6 +13,7 @@ import {
   PausingHumanInput,
   builtinExecutors,
   completed,
+  previewRecovery,
   runLeaseResource,
 } from "@orca/engine";
 import { memoryStores, type Stores } from "@orca/store";
@@ -141,6 +142,65 @@ describe("side-effect review", () => {
     await app.orchestrator.reviewEffect(runId, "s_dep", "abandon");
     expect(await app.orchestrator.events(runId)).toEqual(events);
     expect(app.deploys).toEqual([]);
+  });
+
+  it("an abandon decision forbids replay on its own, even when the cancellation never landed", async () => {
+    const app = make();
+    const runId = await interrupted(app);
+    // The process recorded the decision and died before ending the run.
+    await app.stores.events.append({
+      type: "step.effect.reviewed",
+      runId,
+      payload: { stepRunId: "s_dep", decision: "abandon" },
+    });
+    const before = await app.orchestrator.events(runId);
+    expect((await app.orchestrator.getState(runId)).run.status).toBe("running");
+    for (const drive of [() => app.orchestrator.resume(runId), () => app.orchestrator.run(runId)])
+      await expect(drive()).rejects.toMatchObject({
+        code: "EFFECT_ABANDONED",
+        details: { runId, stepRunId: "s_dep" },
+      });
+    expect(await app.orchestrator.events(runId)).toEqual(before);
+    expect(app.deploys).toEqual([]);
+    const preview = await previewRecovery(app.stores, runId);
+    expect(preview.options.find((o) => o.kind === "resume")).toMatchObject({
+      readiness: "blocked",
+      blockers: ["effect-abandoned"],
+    });
+    // A "run again" cannot overturn it; the same abandon again finishes ending the run.
+    await expect(app.orchestrator.reviewEffect(runId, "s_dep", "run-again")).rejects.toMatchObject({
+      code: "RUN_STATE",
+    });
+    const ended = await app.orchestrator.reviewEffect(runId, "s_dep", "abandon");
+    expect(ended.run.status).toBe("cancelled");
+    expect((await app.orchestrator.events(runId)).filter((e) => e.type === "step.effect.reviewed")).toHaveLength(1);
+    expect(app.deploys).toEqual([]);
+  });
+
+  it("a resume competing with an abandon cannot slip in: the decision and the cancel share one lease", async () => {
+    const stores = memoryStores();
+    const runId = await interrupted(make(stores));
+    const competitor = make(stores);
+    const competing: Promise<unknown>[] = [];
+    // Right after the decision is appended, before the run is ended, another interpreter
+    // tries to drive the run. It cannot take the lease until the abandon has ended the run.
+    const append = stores.events.append.bind(stores.events);
+    stores.events.append = async (input) => {
+      const event = await append(input);
+      if (input.type === "step.effect.reviewed")
+        for (const drive of [() => competitor.orchestrator.resume(runId), () => competitor.orchestrator.run(runId)])
+          competing.push(drive().catch((e: unknown) => e));
+      return event;
+    };
+    const app = make(stores);
+    const state = await app.orchestrator.reviewEffect(runId, "s_dep", "abandon");
+    expect(state.run.status).toBe("cancelled");
+    for (const outcome of await Promise.all(competing)) expect(outcome).toMatchObject({ run: { status: "cancelled" } });
+    expect(competing).toHaveLength(2);
+    expect(competitor.deploys).toEqual([]);
+    expect(app.deploys).toEqual([]);
+    const events = await stores.events.read(runId);
+    expect(events.map((e) => e.type).slice(-3)).toEqual(["step.effect.reviewed", "step.cancelled", "run.cancelled"]);
   });
 
   it("a review is refused while another interpreter holds the run", async () => {

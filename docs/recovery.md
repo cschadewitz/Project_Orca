@@ -89,8 +89,12 @@ acted. ORCA cannot know whether its change happened, so it never runs that step 
   `orca recovery review <runId> <stepRunId>`:
   - `--run-again`: it may run again. Resume (or a checkpoint attempt) runs it as a new attempt;
     its earlier changes stay.
-  - `--abandon`: it must not run again. The run is cancelled ("abandoned after side-effect
-    review") and nothing runs the step again.
+  - `--abandon`: it must not run again. The decision alone is a denial: from the moment it is
+    recorded every execution entry refuses that step (`EFFECT_ABANDONED`), even if the
+    cancellation that follows never lands. The run is then cancelled ("abandoned after
+    side-effect review") under the same lease that recorded the decision, so no other
+    interpreter can attach in between; the children it was waiting on are cancelled after.
+    Recording the same abandon again finishes an interrupted cancellation.
   `--note` records why. The review is taken under the run's lease, so it is refused while
   another process drives the run.
 - The same review again is a no-op, so a retried or reconnected request is safe. A different
