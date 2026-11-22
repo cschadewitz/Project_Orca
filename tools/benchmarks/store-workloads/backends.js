@@ -11,6 +11,7 @@
  * `api` is `{ store, core }`: the @orca/store and @orca/core modules. run.js passes the compiled
  * `dist` builds; the self-test passes the sources.
  */
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /** Collection documents are this benchmark's own shape; nothing to validate beyond JSON. */
@@ -52,18 +53,36 @@ export function backends(api) {
       async create(dir) {
         // Every handle is its own connection, closed when the backend is disposed.
         const open = [];
+        // Every checkpoint a connection runs by itself, as the store reports it.
+        const checkpoints = [];
+        const options = { checkpoint: { observe: (event) => checkpoints.push(event) } };
         const track = (handle, close) => {
           open.push(close);
           return handle;
         };
         return {
           stores: () => {
-            const stores = store.sqliteStores(dir);
+            const stores = store.sqliteStores(dir, options);
             return track(stores, () => stores.close());
           },
           collection: (name) => {
-            const collection = store.sqliteCollection(dir, name, passthrough);
+            const collection = store.sqliteCollection(dir, name, passthrough, options);
             return track(collection, () => collection.collection.db.close());
+          },
+          // The write-ahead log, for the checkpoint workload: its settings, its size on disk, the
+          // checkpoints the store's connections ran by themselves, and a connection of the
+          // benchmark's own to checkpoint it with.
+          wal: {
+            settings: store.SQLITE_CHECKPOINT,
+            checkpoints,
+            bytes: () => {
+              const file = join(dir, `${store.SQLITE_METADATA_FILE}-wal`);
+              return existsSync(file) ? statSync(file).size : 0;
+            },
+            connect: () => {
+              const db = new store.SqliteDatabase(join(dir, store.SQLITE_METADATA_FILE));
+              return track(db, () => db.close());
+            },
           },
           dispose: async () => {
             for (const close of open.splice(0)) close();

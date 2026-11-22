@@ -7,6 +7,7 @@ import {
   RunsContinueParamsSchema,
   ContinuationsGetParamsSchema,
   ContinuationsReconcileParamsSchema,
+  type ManagedDeployment,
 } from "@orca/protocol";
 import type { SearchScope } from "./search-model.js";
 import {
@@ -286,6 +287,8 @@ export interface MethodContext {
   maintenance?: Maintenance | undefined;
   processId?: number | undefined;
   storeDir?: string | undefined;
+  /** The managed server updater that launched this daemon (#879), reported in `hello`. */
+  deployment?: ManagedDeployment | undefined;
   capabilities: readonly DaemonCapability[];
   /** The projection the read methods answer from. Without it they refuse; `hello` does not need it. */
   reads?: ReadModel | undefined;
@@ -410,6 +413,7 @@ export const hello: Method<HelloParams, HelloResult> = {
       ...(ctx.processId === undefined ? {} : { processId: ctx.processId }),
       ...(ctx.identity ? { identity: ctx.identity } : {}),
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
+      ...(ctx.deployment ? { deployment: ctx.deployment } : {}),
       ...(ctx.agents ? { sessionSlots: ctx.agents.sessionSlotsSummary() } : {}),
       capabilities: [
         ...(Object.keys(createOperatorMutationMethods(ctx)) as DaemonCapability[]),

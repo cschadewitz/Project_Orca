@@ -19,6 +19,7 @@ import type { Duplex } from "node:stream";
 import { hostname as osHostname } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { ServerPathSchema } from "@orca/protocol";
 import {
   ConnectionProfileSchema,
   CredentialSlots,
@@ -27,7 +28,9 @@ import {
   pinState,
   profileIdFor,
   SshTunnel,
+  TunnelRefusal,
   type ConnectionProfile,
+  type RemoteCommand,
   type RemoteResult,
   type SecretCipher,
   type SshTunnelOptions,
@@ -64,6 +67,25 @@ import {
 
 const ProfilesFileSchema = z.object({ version: z.literal(1), profiles: z.array(ConnectionProfileSchema) }).strict();
 
+/**
+ * The server updater a person entered and approved for a profile (#879): where it is, and the
+ * server it was approved on, by the host key its tunnel authenticated and the daemon's
+ * workspace. It applies to that server only; a daemon's `hello.deployment` is a hint that must
+ * match it.
+ */
+export const SavedServerUpdaterSchema = z
+  .object({
+    adapter: ServerPathSchema,
+    manifest: ServerPathSchema,
+    hostKey: z.string().regex(/^SHA256:[A-Za-z0-9+/=]+$/),
+    workspaceId: z.uuid(),
+  })
+  .strict();
+export type SavedServerUpdater = z.infer<typeof SavedServerUpdaterSchema>;
+const ApprovalsFileSchema = z
+  .object({ version: z.literal(1), approvals: z.record(z.string(), SavedServerUpdaterSchema) })
+  .strict();
+
 /** What the connect dialog sends to create or edit a profile. `id` absent creates. */
 export const RemoteProfileInputSchema = ConnectionProfileSchema.omit({ id: true })
   .extend({ id: ConnectionProfileSchema.shape.id.optional() })
@@ -81,6 +103,14 @@ export interface ProfileLease {
   readonly transport: StreamTransport;
   /** The remote refused the forwarded connection just now: ssh works, no daemon listens. */
   remoteRefused(): boolean;
+  /**
+   * Run one command on the server over this profile's own ssh and follow its lines (#879):
+   * through the pins this lease's tunnel sealed, the person's key, no forwards. Refused like
+   * `transport` once the lease is released or the profile changed.
+   */
+  exec(command: readonly string[], onLine: (stream: "stdout" | "stderr", line: string) => void): RemoteCommand;
+  /** The server's host key as this tunnel authenticated it (`SHA256:…`), once it has. */
+  hostKey(): string | undefined;
   release(): Promise<void>;
 }
 
@@ -323,6 +353,44 @@ export class RemoteProfiles {
   private get file(): string {
     return join(this.deps.dir, "profiles.json");
   }
+  private get approvalsFile(): string {
+    return join(this.deps.dir, "server-updaters.json");
+  }
+  private approvals(): Record<string, SavedServerUpdater> {
+    try {
+      const parsed = ApprovalsFileSchema.safeParse(JSON.parse(readFileSync(this.approvalsFile, "utf8")));
+      if (parsed.success) return parsed.data.approvals;
+    } catch {
+      // Missing or unreadable: nothing is approved, which only means the app asks again.
+    }
+    return {};
+  }
+  private writeApprovals(approvals: Record<string, SavedServerUpdater>): void {
+    mkdirSync(this.deps.dir, { recursive: true });
+    const tmp = `${this.approvalsFile}.${process.pid}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify({ version: 1, approvals }, null, 2)}\n`);
+    renameSync(tmp, this.approvalsFile);
+  }
+
+  /** The server updater approved for this profile, if any, with the server it was approved on (#879). */
+  serverUpdater(id: string): SavedServerUpdater | undefined {
+    return this.get(id) ? this.approvals()[id] : undefined;
+  }
+
+  /** Record what the person approved. It lasts until the profile points elsewhere or its key is reset. */
+  approveServerUpdater(id: string, approval: SavedServerUpdater): void {
+    if (!this.get(id)) throw new ConnectionRefusal("That profile no longer exists.");
+    const parsed = SavedServerUpdaterSchema.parse(approval);
+    this.writeApprovals({ ...this.approvals(), [id]: parsed });
+  }
+
+  private forgetServerUpdater(id: string): void {
+    const approvals = this.approvals();
+    if (!(id in approvals)) return;
+    delete approvals[id];
+    this.writeApprovals(approvals);
+  }
+
   private pins(id: string): string {
     return join(this.deps.dir, "known_hosts", id);
   }
@@ -446,7 +514,11 @@ export class RemoteProfiles {
         Boolean(existing.readOnly) !== Boolean(profile.readOnly);
       // The old credentials keep where they were issued, so they are revoked there, not here.
       if (otherServer || otherIssue) this.retireCredentials(id, otherServer ? "drop" : "keep");
-      if (otherServer) this.forgetPins(id);
+      if (otherServer) {
+        this.forgetPins(id);
+        // Another server: what was approved on the old one is not carried over (#879).
+        this.forgetServerUpdater(id);
+      }
       this.bump(id);
     }
     this.write(existing ? profiles.map((p) => (p.id === id ? profile : p)) : [...profiles, profile]);
@@ -526,6 +598,7 @@ export class RemoteProfiles {
       this.commit(id, undefined);
       this.legacy.remove(id);
       this.forgetPins(id);
+      this.forgetServerUpdater(id);
       this.write(profiles.filter((p) => p.id !== id));
       return outcome;
     } finally {
@@ -608,6 +681,8 @@ export class RemoteProfiles {
     // an import waits for the person to authorize it again.
     this.retireCredentials(id, "reauthorize");
     this.forgetPins(id);
+    // Another key may be another server: what was approved on the old one is not carried over.
+    this.forgetServerUpdater(id);
   }
 
   /** The host keys the profile's pins vouch for now (server, and jump host). */
@@ -696,6 +771,12 @@ export class RemoteProfiles {
       },
       transport,
       remoteRefused: () => current.tunnel.remoteRefused(),
+      exec: (command, onLine) => {
+        // Through the pins this lease's tunnel sealed, like every stream of it.
+        if (!usable() || current.tunnel.pinnedKeys !== sealed) throw new TunnelRefusal("closed");
+        return current.tunnel.execStreaming(command, onLine);
+      },
+      hostKey: () => current.tunnel.hostKeyFingerprint,
       release: async () => {
         if (released) return;
         released = true;

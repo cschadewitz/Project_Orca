@@ -175,11 +175,20 @@ describe("operation authorization", () => {
     expect(alice.methods).not.toContain("config.get");
     expect(alice.capabilities).toEqual(["runs.read", "runs.subscribe", "runs.control"]);
     expect(alice.storeDir).toBeUndefined();
+    // Where the server's updater is (#879) is the operator's, like the store's path.
+    expect(alice.deployment).toBeUndefined();
     const viewer = (await h.rpc(h.tokens.viewer, "hello", hello)).body.result as Record<string, unknown>;
     expect(viewer.capabilities).toEqual(["runs.read", "runs.subscribe"]);
     expect(viewer.methods).not.toContain("runs.cancel");
     const owner = (await h.rpc(h.tokens.owner, "hello", hello)).body.result as Record<string, unknown>;
     expect(owner.storeDir).toBe("/srv/store");
+    expect(owner.deployment).toEqual({
+      kind: "managed",
+      adapter: "/opt/orca/orca-release.py",
+      manifest: "/etc/orca/deployment.json",
+      ring: "preview",
+    });
+    expect(viewer.deployment).toBeUndefined();
   });
 });
 

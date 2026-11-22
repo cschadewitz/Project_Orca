@@ -8,6 +8,7 @@ import type {
 import { useTransientLayer } from "../layers-context.js";
 import { Button, ConfigField, Text, textClass } from "../ui/index.js";
 import { ConnectionProfiles } from "./profiles.js";
+import { ConnectedServer } from "./server-update.js";
 
 export function ConnectionDialog({
   bridge,
@@ -82,6 +83,7 @@ export function ConnectionDialog({
             connect={(id) => void connect({ profile: id })}
           />
         )}
+        {target.profile && window.orca?.serverUpdate && <ConnectedServer bridge={window.orca.serverUpdate} />}
         {error && errorAt === "profile" && (
           <Text style="caption" as="p" role="alert">
             {error}
