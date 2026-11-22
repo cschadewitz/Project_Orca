@@ -99,6 +99,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       s.startedAt = e.at;
       s.inputArtifactIds = e.payload.inputArtifactIds;
       delete s.waitingOn;
+      delete s.waitingDetail;
       break;
     }
     case "step.inputs": {
@@ -110,6 +111,8 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       const s = step(e.payload.stepRunId);
       s.status = "waiting";
       s.waitingOn = e.payload.on;
+      if (e.payload.detail === undefined) delete s.waitingDetail;
+      else s.waitingDetail = e.payload.detail;
       if (state.run.status === "running") state.run.status = "waiting";
       break;
     }
@@ -126,6 +129,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       s.result = { ...e.payload.result, artifactIds };
       s.completedAt = e.at;
       delete s.waitingOn;
+      delete s.waitingDetail;
       if (state.run.status === "waiting") state.run.status = "running";
       break;
     }
@@ -135,6 +139,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       s.error = e.payload.error;
       s.completedAt = e.at;
       delete s.waitingOn;
+      delete s.waitingDetail;
       if (state.run.status === "waiting") state.run.status = "running";
       break;
     }

@@ -2,7 +2,7 @@
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { AgentSpecSchema, type Logger, silentLogger } from "@orca/core";
-import { LocalHost, openAcpSession, stdioAcpStream, type AgentProcessHandle } from "@orca/agents";
+import { LocalHost, openAcpSession, startupTermination, stdioAcpStream, type AgentProcessHandle } from "@orca/agents";
 
 afterEach(() => vi.useRealTimers());
 
@@ -200,3 +200,99 @@ it.each(["initialize", "session/new"])(
     }
   },
 );
+
+it("carries the process exit on a failed open whose cleanup could not observe it (#873)", async () => {
+  vi.useFakeTimers();
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let reached!: () => void;
+  const requestSeen = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  output.on("data", () => reached());
+  let exit!: () => void;
+  const exited = new Promise<{ code: number; signal: null }>((resolve) => {
+    exit = () => resolve({ code: 0, signal: null });
+  });
+  const host = new LocalHost({ id: "local", type: "local" });
+  vi.spyOn(host, "spawnAgent").mockResolvedValue({
+    stream: stdioAcpStream(input, output),
+    pid: undefined,
+    exited,
+    stderrTail: () => "",
+    kill: vi.fn(),
+  });
+  const pending = openAcpSession({
+    host,
+    agent: AgentSpecSchema.parse({ id: "silent", command: "unused" }),
+    cwd: process.cwd(),
+    handshakeTimeoutMs: 20,
+    exitGraceMs: 10,
+  });
+  const failure = pending.catch((e: unknown) => e);
+  await requestSeen;
+  await vi.advanceTimersByTimeAsync(20 + 10 + 10);
+  const error = await failure;
+  expect(error).toMatchObject({ details: { cleanup: { details: { cleanupIncomplete: true } } } });
+  const terminated = startupTermination(error);
+  expect(terminated).toBeDefined();
+  // Not enumerable: the error's serialized shape is what it was.
+  expect(Object.keys(error as object)).not.toContain("terminated");
+  let settled = false;
+  void terminated!.then(() => (settled = true));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(settled).toBe(false);
+  exit();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(settled).toBe(true);
+  input.destroy();
+  output.destroy();
+});
+
+it("an exit that cannot be observed rejects terminated and raises no unhandled rejection (#873)", async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    output.on("data", (bytes: Buffer) => {
+      for (const line of bytes.toString().split("\n").filter(Boolean)) {
+        const m = JSON.parse(line) as { id?: number; method?: string };
+        if (m.method === "initialize")
+          input.write(
+            JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } }) + "\n",
+          );
+        else if (m.method === "session/new")
+          input.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { sessionId: "s1" } }) + "\n");
+      }
+    });
+    let unobservable!: (e: Error) => void;
+    const exited = new Promise<never>((_, reject) => {
+      unobservable = reject;
+    });
+    const host = new LocalHost({ id: "local", type: "local" });
+    vi.spyOn(host, "spawnAgent").mockResolvedValue({
+      stream: stdioAcpStream(input, output),
+      pid: undefined,
+      exited,
+      stderrTail: () => "",
+      kill: vi.fn(),
+    });
+    const session = await openAcpSession({
+      host,
+      agent: AgentSpecSchema.parse({ id: "agent", command: "unused" }),
+      cwd: process.cwd(),
+      handshakeTimeoutMs: 1000,
+    });
+    unobservable(new Error("exit unobservable"));
+    await expect(session.terminated).rejects.toThrow("exit unobservable");
+    // Give every derived observer of `proc.exited` a chance to report itself.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(unhandled).toEqual([]);
+    input.destroy();
+    output.destroy();
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});

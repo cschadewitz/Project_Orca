@@ -51,6 +51,32 @@ gate closes and refreshes its authoritative pending read from push/reconnect eve
 The Attention root (or step-detail parent) owns scrolling; the card adds no nested
 scroll region. Long correction text wraps inside the card.
 
+### Composing with the pending correction (#398)
+
+When a text correction is pending, the card offers two explicit ways for the draft to
+meet it: **Replace pending** (the default, and the v1 behavior) sends the draft alone;
+**Add after pending** keeps the pending text and adds the draft after one blank line.
+Either way the result is one payload for the one revision slot, shown whole under
+"What the agent will receive" with a line diff against the pending correction (each
+changed line says "Added" or "Removed" to a screen reader, not only by gutter and
+tint). Submission is the same `inputs.replaceRevision` call with the same expected
+version, so a newer version from another client still blocks it until reviewed, and the
+preview is recomposed against the newer text the moment it lands. Values corrections
+are replaced whole; merging objects would be a semantic merge, which is a non-goal.
+
+**Edit a copy of the current correction** puts the pending text into the draft and
+switches to replace. **Earlier corrections** lists versions this card has read in this
+window (at most ten); **Add to draft** copies one after the draft, or for values
+**Use as draft** fills an empty draft. That list lives only in the card's memory: it is
+not persisted, not sent, and never resubmitted on its own, so it is not a second
+revision ledger. Copying records provenance, not positions: the draft as the person left it before
+the first copy, and the draft as the last copy left it. When the protected read stops
+supplying content or the connection or target changes, the history goes in the same
+render and the retry intent is reset. If the draft is untouched since the last copy, it
+goes back to the person's own pre-copy text; after any edit the mix is ambiguous and the
+whole draft is cleared, because a substring match cannot say who wrote identical words. Nothing in composition answers a gate, grants permission or changes a
+delivered correction; only the submit button sends.
+
 ## Workflow declaration
 
 The reserved schema patch adds `revision` to gates and human-sourced decisions:

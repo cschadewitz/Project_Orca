@@ -740,9 +740,13 @@ export const commands: Record<string, Command> = {
       const keep = Boolean(ctx.flags.dir) || Boolean(ctx.flags.keep);
       assertNoUnownedFirstRunMutation(resolvePath(dir));
       await mkdir(dir, { recursive: true });
-      // commands/ -> (src|dist) -> cli -> packages -> repo root
+      // commands/ -> (src|dist) -> cli -> packages -> repo root. A managed release names its
+      // own directory in ORCA_RELEASE instead: the prebuilt server bundle is one file at the
+      // release root, so no path relative to the module reaches its shipped workflows (#876).
       const here = fileURLToPath(new URL(".", import.meta.url));
-      const repoRoot = join(here, "..", "..", "..", "..");
+      const repoRoot = process.env.ORCA_RELEASE
+        ? resolvePath(process.env.ORCA_RELEASE)
+        : join(here, "..", "..", "..", "..");
       const playbook = {
         greeting: "Scripted demo agent reporting for duty.",
         kinds: {

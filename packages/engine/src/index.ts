@@ -1,5 +1,6 @@
 /** @orca/engine - the workflow interpreter, node executors, program service and plugin API. */
 export * from "./orchestrator.js";
+export * from "./session-slots.js";
 export * from "./run-context.js";
 export * from "./human-input.js";
 export * from "./plugin.js";

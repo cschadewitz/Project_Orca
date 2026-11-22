@@ -33,6 +33,7 @@ import {
 } from "./permissions.js";
 import {
   summarizeUpdate,
+  withStartupTermination,
   type AgentSession,
   type PromptOptions,
   type SessionUpdateEvent,
@@ -286,8 +287,17 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   const conn = app.connect(proc.stream);
   const closed = conn.closed.then(() => undefined);
   void closed.then(() => activeTurn?.abort.abort("agent connection closed"));
-  void proc.exited.then(() => activeTurn?.abort.abort("agent process exited"));
+  // A handle whose exit cannot be observed rejects; that ends no turn, and must not surface as
+  // an unhandled rejection either.
+  void proc.exited.then(
+    () => activeTurn?.abort.abort("agent process exited"),
+    () => undefined,
+  );
   const cleanupProcess = processCleanup(proc, opts.exitGraceMs);
+  // Settles when the owned process's exit is observed. A rejection means the exit cannot be
+  // observed at all, which is not evidence it is gone, so it stays a rejection for callers.
+  const terminated: Promise<void> = proc.exited.then(() => undefined);
+  void terminated.catch(() => undefined);
   /** Startup failure, close and cancellation all share one bounded cleanup. */
   let terminating: Promise<void> | undefined;
   const terminate = (reason?: unknown): Promise<void> => {
@@ -410,18 +420,22 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     try {
       await terminate(e);
     } catch (cleanupError) {
-      // Keep the handshake as the primary failure and retain it as the cause.
-      throw new OrcaError(
-        failure.code,
-        failure.message,
-        {
-          ...failure.details,
-          cleanup: describeError(cleanupError),
-        },
-        { cause: failure },
+      // Keep the handshake as the primary failure and retain it as the cause. The process may
+      // still be alive: carry its exit so a caller counting live processes can wait for it.
+      throw withStartupTermination(
+        new OrcaError(
+          failure.code,
+          failure.message,
+          {
+            ...failure.details,
+            cleanup: describeError(cleanupError),
+          },
+          { cause: failure },
+        ),
+        proc.exited,
       );
     }
-    throw failure;
+    throw withStartupTermination(failure, proc.exited);
   }
 
   const cancelGraceMs = opts.cancelGraceMs ?? opts.agent.cancelGraceMs;
@@ -473,6 +487,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     cwd: opts.cwd,
     acpSessionId,
     closed,
+    terminated,
 
     async prompt(input, options: PromptOptions = {}): Promise<TurnResult> {
       if (activeTurn) throw new OrcaError("RUN_STATE", "a prompt turn is already active on this session");

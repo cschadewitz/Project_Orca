@@ -23,6 +23,9 @@ import type { Permission } from "./principal.js";
  * - `input`: a gate decision - the exact pending request and the run it belongs to.
  * - `claim`: the run holding a claim on `params.workItemId`.
  * - `subscription`: the socket's own subscribe/unsubscribe; notifications are gated one by one.
+ * - `search`: a scan across runs (#255). The guard hands the method the caller's read scope,
+ *   so hidden runs are never opened and artifacts are read only with `artifacts.read`; it
+ *   also filters the hits afterwards, and a named run the caller cannot see answers empty.
  */
 export type ResourceKind =
   | "none"
@@ -36,7 +39,8 @@ export type ResourceKind =
   | "input-list"
   | "claim"
   | "claim-list"
-  | "subscription";
+  | "subscription"
+  | "search";
 
 export interface OperationSpec {
   /** The grant the call needs. `null`: any authenticated principal (hello, unsubscribe). */
@@ -102,6 +106,7 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "runs.list": { permission: "runs.read", resource: "run-list" },
   "runs.get": { permission: "runs.read", resource: "run" },
   "runs.events": { permission: "runs.read", resource: "run" },
+  search: { permission: "runs.read", resource: "search" },
   // Exact target checks live in the authenticated revision service, including after the input closes.
   "inputs.revise": { permission: "inputs.answer", resource: "none", audit: "decision" },
   "inputs.replaceRevision": { permission: "inputs.answer", resource: "none", audit: "mutation" },
