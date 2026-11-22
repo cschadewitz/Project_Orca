@@ -260,6 +260,18 @@ export function runStoreConformance(backend: ConformanceBackend): void {
           for (const r of results) if (!r.ok) expect(r.current?.doc).toEqual(stored);
         });
 
+        it("one-winner applies to state-changing writes: a no-op write does not consume the version", async () => {
+          const { a } = await collection();
+          const v = asVersionedDocumentStore(a);
+          const base = (await v.putIfVersion(doc("x", "a", 1), null)) as { ok: true; version: string };
+          // Writing back exactly what is stored changes nothing, so the version holds and both succeed.
+          expect(await v.putIfVersion(doc("x", "a", 1), base.version)).toEqual({ ok: true, version: base.version });
+          expect(await v.putIfVersion(doc("x", "a", 1), base.version)).toEqual({ ok: true, version: base.version });
+          // The first state-changing write consumes it.
+          expect((await v.putIfVersion(doc("x", "a", 2), base.version)).ok).toBe(true);
+          expect((await v.putIfVersion(doc("x", "a", 3), base.version)).ok).toBe(false);
+        });
+
         it("a stale version cannot update or delete; the current one can", async () => {
           const { a } = await collection();
           const v = asVersionedDocumentStore(a);

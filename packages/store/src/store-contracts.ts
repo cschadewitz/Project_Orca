@@ -196,7 +196,9 @@ export interface VersionedDocumentStore<T extends { id: string }> extends Docume
   /**
    * Write `doc` only while the stored version is `expected`; `null` means "only if absent". The
    * check and the write are one atomic step, across processes when the backend is
-   * `crossProcess`, so two writers holding the same version cannot both succeed.
+   * `crossProcess`, so two writers holding the same version cannot both succeed when each
+   * changes the document. A write of content equal to what is stored leaves a content version
+   * unchanged, so it does not consume the version (see the contract doc).
    */
   putIfVersion(doc: T, expected: DocumentVersion | null): Promise<ConditionalWriteResult<T>>;
   /** Delete `id` only while the stored version is `expected`. */

@@ -149,7 +149,7 @@ type Mutation<T> = ({ kind: "put"; doc: T } | { kind: "delete"; id: string }) & 
  *
  * Compare-and-swap (#338) rides the same queue: a conditional mutation is checked
  * inside the lock, against the freshly re-read file and the batch's earlier
- * mutations, so of two writers holding one version only the first can win - in
+ * mutations, so of two state-changing writers holding one version only the first can win - in
  * this process or another. A conditional mutation always *ends* its batch: what
  * it was decided against is exactly what that write commits, so a success's
  * version and a conflict's `current` both describe committed state, never an
