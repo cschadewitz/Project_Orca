@@ -5,11 +5,13 @@
  * Why a slot: Windows offers no documented way for an unelevated process to make a new
  * directory entry (a created or renamed file) durable before a later one. What it does document
  * is that FlushFileBuffers writes a file's buffered data to the device before returning, and
- * Node's `FileHandle.sync()` is FlushFileBuffers there. A file that existed before the current
- * boot has a directory entry that is on disk already: it survived a restart. So the backup goes
- * into such a file, rewritten in place and flushed; the marker that changes the store's format
- * is not even created until that flush has returned, so it cannot reach the disk first, in any
- * order the file system may choose.
+ * Node's `FileHandle.sync()` is FlushFileBuffers there. A file that survived a restart has a
+ * directory entry that is on disk already; each slot records its own file ID and the Windows
+ * BootId it was created in, so that is checked, not assumed. The backup goes into such a file,
+ * rewritten in place and flushed, and its manifest names the conversion and the slot. The marker
+ * that changes the store's format is not even created until that flush has returned. The marker
+ * itself is a new directory entry and may still be lost to a power cut; the archive is then the
+ * durable record of the conversion (store-format-carryover.ts).
  *
  * ZIP, so that restoring needs nothing but Windows itself: Explorer's "Extract all" or
  * PowerShell's `Expand-Archive` turn a slot back into the store directory. ZIP64 fields are
@@ -224,10 +226,21 @@ export async function writeArchiveSlot(
 export interface ArchiveListing {
   /** path → sha256 of the stored bytes ("" for directories, named with a trailing `/`). */
   entries: Map<string, string>;
+  /** The bytes of the entries named in `keep` (each at most 64 KiB). */
+  texts: Map<string, Buffer>;
 }
 
-/** Read an archive this module wrote and hash every entry's bytes; throws if it is malformed. */
-export async function readArchive(path: string): Promise<ArchiveListing> {
+const KEPT_LIMIT = 1 << 16;
+
+/**
+ * Read an archive this module wrote and hash every entry's bytes, checking each CRC; throws if
+ * it is malformed. With `only`, just those entries are read and listed, so a small record can be
+ * found without reading a whole store's backup.
+ */
+export async function readArchive(
+  path: string,
+  options: { keep?: readonly string[]; only?: readonly string[] } = {},
+): Promise<ArchiveListing> {
   const handle = await open(path, "r");
   try {
     const { size } = await handle.stat();
@@ -254,6 +267,9 @@ export async function readArchive(path: string): Promise<ArchiveListing> {
     }
     const central = await read(centralStart, Number(centralSize));
     const entries = new Map<string, string>();
+    const texts = new Map<string, Buffer>();
+    const keep = new Set(options.keep ?? []);
+    const only = options.only ? new Set(options.only) : undefined;
     let at = 0;
     for (let i = 0n; i < count; i++) {
       if (central.readUInt32LE(at) !== 0x02014b50) throw new Error("archive central directory is damaged");
@@ -274,6 +290,8 @@ export async function readArchive(path: string): Promise<ArchiveListing> {
         if (offset === MAX32) offset = extraField.readBigUInt64LE(p);
       }
       at += 46 + nameLength + extraLength + commentLength;
+      if (only && !only.has(name)) continue;
+      const kept: Buffer[] | undefined = keep.has(name) && size <= BigInt(KEPT_LIMIT) ? [] : undefined;
       const local = await read(offset, 30);
       if (local.readUInt32LE(0) !== 0x04034b50) throw new Error(`archive entry ${name} is damaged`);
       if (local.readUInt16LE(8) !== 0) throw new Error(`archive entry ${name} is compressed`);
@@ -287,14 +305,16 @@ export async function readArchive(path: string): Promise<ArchiveListing> {
         if (bytesRead !== length) throw new Error(`archive entry ${name} is truncated`);
         const chunk = buffer.subarray(0, length);
         hash.update(chunk);
+        kept?.push(Buffer.from(chunk));
         check = crc32(chunk, check);
         position += BigInt(length);
         left -= BigInt(length);
       }
       if (check >>> 0 !== crc >>> 0) throw new Error(`archive entry ${name} fails its checksum`);
       entries.set(name, name.endsWith("/") ? "" : hash.digest("hex"));
+      if (kept) texts.set(name, Buffer.concat(kept));
     }
-    return { entries };
+    return { entries, texts };
   } finally {
     await handle.close();
   }

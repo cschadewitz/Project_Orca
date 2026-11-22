@@ -1,15 +1,17 @@
 /**
- * Windows store format carryover (#910): the backup goes into a slot file that existed before
- * Windows last started, rewritten in place and flushed before the marker is created. Runs on any
- * platform with `platform: "win32"` injected and the boot time chosen by the test.
+ * Windows store format carryover (#910): the backup goes into a slot file that survived a Windows
+ * restart (bound by file ID and BootId), rewritten in place and flushed before the marker is
+ * created; the archive is the durable record of the conversion across a lost marker. Runs on any
+ * platform with `platform: "win32"`, the switch on, and Windows' BootId chosen by the test.
  */
 import { execFileSync } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { readArchive, writeArchiveSlot } from "../src/backup-archive.js";
+import { chooseBackupSlot } from "../src/store-format-carryover.js";
 import {
   carryStoreForward,
   enterStoreFormat,
@@ -21,6 +23,7 @@ import {
   STORE_FORMAT_EPOCH,
   STORE_FORMAT_FILE,
   STORE_FORMAT_HISTORY,
+  WINDOWS_STORE_CARRYOVER,
 } from "../src/index.js";
 
 const store = async () => join(await mkdtemp(join(tmpdir(), "orca-store-slots-")), ".orca");
@@ -58,11 +61,16 @@ const contents = async (dir: string): Promise<Record<string, string>> => {
   return out;
 };
 const slot = (dir: string, n: 0 | 1) => join(dir, STORE_FORMAT_BACKUP_DIR, STORE_FORMAT_BACKUP_SLOTS[n]);
-/** A boot time after the slots were created: they predate it by more than the margin. */
-const later = () => Date.now() + 60 * 60_000;
-/** A boot time before the slots were created. */
-const earlier = () => Date.now() - 60 * 60_000;
-const windows = { appVersion: "0.8.0", platform: "win32" as const, privacy: posixPrivateCopy };
+/** Windows' BootId in the session that created the slots, and after a restart. */
+const first = () => 41;
+const restarted = () => 42;
+const windows = { appVersion: "0.8.0", platform: "win32" as const, privacy: posixPrivateCopy, windowsCarryover: true };
+const identityOf = async (path: string) => JSON.parse(await readFile(path, "utf8")) as { createdBoot: number };
+/** Slots created in boot 41, then a carryover after Windows restarted. */
+const carriedOnce = async (dir: string) => {
+  await expect(carryStoreForward(dir, { ...windows, bootId: first })).rejects.toMatchObject({ reason: "UNDURABLE" });
+  return carryStoreForward(dir, { ...windows, bootId: restarted });
+};
 
 /** An independent ZIP reader: Python's zipfile, which also checks every CRC. */
 function pythonUnzip(archive: string): Record<string, string> {
@@ -87,34 +95,56 @@ const hasPython = (() => {
 })();
 
 describe("Windows format carryover into a pre-boot backup slot (#910)", () => {
-  it("creates the slots and refuses (UNDURABLE) until they predate the current boot, copying nothing", async () => {
+  it("stays refused on Windows unless switched on, touching nothing", async () => {
+    expect(WINDOWS_STORE_CARRYOVER).toBe(false);
+    const dir = await store();
+    await legacy(dir);
+    const before = await contents(dir);
+    await expect(
+      carryStoreForward(dir, { appVersion: "0.8.0", platform: "win32", privacy: posixPrivateCopy, bootId: restarted }),
+    ).rejects.toMatchObject({ reason: "UNDURABLE", message: expect.stringContaining("does not yet change") });
+    expect(await contents(dir)).toEqual(before);
+    await expect(readdir(join(dir, STORE_FORMAT_BACKUP_DIR))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("creates the slots, each recording its file and boot, and refuses (UNDURABLE) until Windows restarts", async () => {
     const dir = await store();
     await legacy(dir);
     const before = await contents(dir);
     for (let i = 0; i < 2; i++)
-      await expect(carryStoreForward(dir, { ...windows, bootTime: earlier })).rejects.toMatchObject({
+      await expect(carryStoreForward(dir, { ...windows, bootId: first })).rejects.toMatchObject({
         reason: "UNDURABLE",
       });
     expect(await contents(dir)).toEqual(before);
     expect(await readStoreFormat(dir)).toBeUndefined();
-    // Only the two empty slots: no staged copy, no backup.
     expect((await readdir(join(dir, STORE_FORMAT_BACKUP_DIR))).sort()).toEqual([...STORE_FORMAT_BACKUP_SLOTS]);
-    for (const n of [0, 1] as const) expect((await lstat(slot(dir, n))).size).toBe(0);
+    for (const n of [0, 1] as const) {
+      const info = await lstat(slot(dir, n), { bigint: true });
+      expect(await identityOf(slot(dir, n))).toEqual({
+        format: 1,
+        tool: "orca-backup-slot",
+        slot: STORE_FORMAT_BACKUP_SLOTS[n],
+        volume: info.dev.toString(),
+        file: info.ino.toString(),
+        createdBoot: 41,
+      });
+    }
+    // An unreadable BootId never makes a slot usable.
+    await expect(carryStoreForward(dir, { ...windows, bootId: () => undefined })).rejects.toMatchObject({
+      reason: "UNDURABLE",
+    });
   });
 
   it("archives the whole store into a slot, flushed, before the marker names it", async () => {
     const dir = await store();
     await legacy(dir);
     const before = await contents(dir);
-    await expect(carryStoreForward(dir, { ...windows, bootTime: earlier })).rejects.toMatchObject({
-      reason: "UNDURABLE",
-    });
-    const outcome = await carryStoreForward(dir, { ...windows, bootTime: later });
+    const outcome = await carriedOnce(dir);
     expect(outcome).toMatchObject({ status: "carried", from: "unmarked", backup: slot(dir, 0) });
     expect(await readStoreFormat(dir)).toMatchObject({ epoch: STORE_FORMAT_EPOCH, backup: slot(dir, 0) });
     // No published backup directory and no scratch left: just the slots.
     expect((await readdir(join(dir, STORE_FORMAT_BACKUP_DIR))).sort()).toEqual([...STORE_FORMAT_BACKUP_SLOTS]);
-    expect((await lstat(slot(dir, 1))).size).toBe(0);
+    expect(await identityOf(slot(dir, 1))).toMatchObject({ createdBoot: 41 });
 
     const listing = await readArchive(slot(dir, 0));
     expect([...listing.entries.keys()].sort()).toEqual(
@@ -131,56 +161,145 @@ describe("Windows format carryover into a pre-boot backup slot (#910)", () => {
     if (hasPython) {
       const unzipped = pythonUnzip(slot(dir, 0));
       const manifest = JSON.parse(Buffer.from(unzipped[STORE_FORMAT_BACKUP_MANIFEST]!, "base64").toString("utf8"));
-      expect(manifest).toMatchObject({ format: 1, tool: "orca-store-format", from: "unmarked", files: 3 });
+      // The archive names its conversion and the very slot it was written into.
+      expect(manifest).toMatchObject({
+        format: 1,
+        tool: "orca-store-format",
+        from: "unmarked",
+        to: STORE_FORMAT_EPOCH,
+        files: 3,
+        slot: { slot: STORE_FORMAT_BACKUP_SLOTS[0], createdBoot: 41 },
+      });
       delete unzipped[STORE_FORMAT_BACKUP_MANIFEST];
       expect(unzipped).toEqual(before);
     }
   });
 
-  it("never overwrites the slot the marker names: the next carryover takes the other one", async () => {
+  it("a copied or replaced slot is not the file that survived the restart: stamped anew, usable after the next one", async () => {
     const dir = await store();
     await legacy(dir);
-    await expect(carryStoreForward(dir, { ...windows, bootTime: earlier })).rejects.toMatchObject({
+    await expect(carryStoreForward(dir, { ...windows, bootId: first })).rejects.toMatchObject({ reason: "UNDURABLE" });
+    // Both slots replaced by copies carrying the old identity (a new file ID each).
+    for (const n of [0, 1] as const) {
+      const text = await readFile(slot(dir, n));
+      await rm(slot(dir, n));
+      await writeFile(slot(dir, n), text);
+    }
+    await expect(carryStoreForward(dir, { ...windows, bootId: restarted })).rejects.toMatchObject({
       reason: "UNDURABLE",
     });
-    await carryStoreForward(dir, { ...windows, bootTime: later });
-    const first = await readFile(slot(dir, 0));
-    // The store is now on the previous format again, its marker naming the first backup.
-    const previous = STORE_FORMAT_HISTORY.at(-2)!.epoch;
-    const marker = JSON.parse(await readFile(join(dir, STORE_FORMAT_FILE), "utf8"));
-    await writeFile(join(dir, STORE_FORMAT_FILE), JSON.stringify({ ...marker, epoch: previous }));
-    await writeFile(join(dir, "runs", "run_new.jsonl"), LOG.replaceAll("run_old", "run_new"));
-    const outcome = await carryStoreForward(dir, { ...windows, bootTime: later });
-    expect(outcome).toMatchObject({ status: "carried", from: previous, backup: slot(dir, 1) });
-    expect(await readFile(slot(dir, 0))).toEqual(first);
-    expect([...(await readArchive(slot(dir, 1))).entries.keys()]).toContain("runs/run_new.jsonl");
-    // A third: the marker names slot 2, so slot 1 (the oldest) is reused.
-    await writeFile(join(dir, STORE_FORMAT_FILE), JSON.stringify({ ...(await readStoreFormat(dir)), epoch: previous }));
-    const second = await readFile(slot(dir, 1));
-    expect(await carryStoreForward(dir, { ...windows, bootTime: later })).toMatchObject({ backup: slot(dir, 0) });
-    expect(await readFile(slot(dir, 1))).toEqual(second);
+    expect(await identityOf(slot(dir, 0))).toMatchObject({ createdBoot: 42 });
+    expect(await carryStoreForward(dir, { ...windows, bootId: () => 43 })).toMatchObject({ backup: slot(dir, 0) });
   });
 
-  it("an interrupted archive leaves the prior format in charge, and the retry uses the empty slot", async () => {
+  it("a lost marker over an unchanged store: the slot archive finishes the conversion, overwriting nothing", async () => {
     const dir = await store();
     await legacy(dir);
-    await expect(carryStoreForward(dir, { ...windows, bootTime: earlier })).rejects.toMatchObject({
-      reason: "UNDURABLE",
+    await carriedOnce(dir);
+    const archived = await readFile(slot(dir, 0));
+    const spare = await readFile(slot(dir, 1));
+    // Power cut: the marker's rename did not reach the disk.
+    await rm(join(dir, STORE_FORMAT_FILE));
+    const outcome = await carryStoreForward(dir, { ...windows, bootId: () => 43 });
+    expect(outcome).toMatchObject({ status: "carried", from: "unmarked", backup: slot(dir, 0) });
+    expect(await readStoreFormat(dir)).toMatchObject({ epoch: STORE_FORMAT_EPOCH, backup: slot(dir, 0) });
+    expect(await readFile(slot(dir, 0))).toEqual(archived);
+    expect(await readFile(slot(dir, 1))).toEqual(spare);
+  });
+
+  it("a lost marker after new-format writes: refused (INTERRUPTED), and the only pre-upgrade backup is never reused", async () => {
+    const dir = await store();
+    await legacy(dir);
+    await carriedOnce(dir);
+    const archived = await readFile(slot(dir, 0));
+    await rm(join(dir, STORE_FORMAT_FILE));
+    await writeFile(join(dir, "runs", "run_new.jsonl"), LOG.replaceAll("run_old", "run_new"));
+    const settle = vi.fn();
+    const carryover = () => Promise.resolve({ fence: { check: () => true }, settle });
+    for (let i = 0; i < 2; i++)
+      await expect(
+        enterStoreFormat(dir, { ...windows, mode: "write", carryover, bootId: () => 43 }),
+      ).rejects.toMatchObject({ reason: "INTERRUPTED", message: expect.stringContaining(slot(dir, 0)) });
+    expect(settle).toHaveBeenCalledWith("refused");
+    expect(await readStoreFormat(dir)).toBeUndefined();
+    expect(await readFile(slot(dir, 0))).toEqual(archived);
+    // Restoring that archive returns the store as it was before the conversion.
+    if (hasPython) expect(Object.keys(pythonUnzip(slot(dir, 0)))).not.toContain("runs/run_new.jsonl");
+  });
+
+  it("a slot archive recording a newer format than this ORCA's is refused (NEWER) even with the marker gone", async () => {
+    const dir = await store();
+    await legacy(dir);
+    await carriedOnce(dir);
+    const { texts } = await readArchive(slot(dir, 0), { keep: [STORE_FORMAT_BACKUP_MANIFEST] });
+    const manifest = JSON.parse(texts.get(STORE_FORMAT_BACKUP_MANIFEST)!.toString("utf8"));
+    await writeArchiveSlot(
+      slot(dir, 0),
+      dir,
+      [],
+      [{ path: STORE_FORMAT_BACKUP_MANIFEST, text: JSON.stringify({ ...manifest, to: "future-format-v9" }) }],
+    );
+    await expect(enterStoreFormat(dir, { ...windows, mode: "write", bootId: () => 43 })).rejects.toMatchObject({
+      reason: "NEWER",
     });
-    // A slot left half-written by a crash: not a valid archive.
-    await writeFile(slot(dir, 1), "PK\x03\x04 torn");
-    const outcome = await carryStoreForward(dir, { ...windows, bootTime: later });
-    expect(outcome).toMatchObject({ backup: slot(dir, 0) });
+    await rm(join(dir, STORE_FORMAT_FILE));
+    await expect(carryStoreForward(dir, { ...windows, bootId: () => 43 })).rejects.toMatchObject({ reason: "NEWER" });
+  });
+
+  it("chooses an identity-only slot first, then a settled archive, never the marker's own backup", async () => {
+    const dir = await store();
+    await legacy(dir);
+    await carriedOnce(dir);
+    const history = [...STORE_FORMAT_HISTORY.map((f) => f.epoch), "next-format"];
+    const choose = (keep: string | undefined, markerEpoch: string | undefined) =>
+      chooseBackupSlot(dir, posixPrivateCopy, { keep, boot: 43, markerEpoch, history });
+    expect(await choose(slot(dir, 0), STORE_FORMAT_EPOCH)).toMatchObject({ path: slot(dir, 1) });
+    // Slot 2 used too: slot 1's archive converted to the marker's own format, so it is settled.
+    await writeArchiveSlot(
+      slot(dir, 1),
+      dir,
+      [],
+      [
+        {
+          path: STORE_FORMAT_BACKUP_MANIFEST,
+          text: JSON.stringify({
+            format: 1,
+            tool: "orca-store-format",
+            from: STORE_FORMAT_EPOCH,
+            to: "next-format",
+            createdAt: new Date().toISOString(),
+            files: 0,
+            signature: "0".repeat(64),
+            slot: await identityOf(slot(dir, 1)),
+          }),
+        },
+      ],
+    );
+    expect(await choose(slot(dir, 1), "next-format")).toMatchObject({ path: slot(dir, 0) });
+    // While the marker is still on the earlier format, neither archive is settled.
+    expect(await choose(undefined, STORE_FORMAT_HISTORY.at(-2)!.epoch)).toBeUndefined();
+    // In the boot that created them, nothing is usable.
+    expect(
+      await chooseBackupSlot(dir, posixPrivateCopy, { keep: undefined, boot: 41, markerEpoch: "next-format", history }),
+    ).toBeUndefined();
+  });
+
+  it("a half-written slot is kept, never stamped over, and the retry uses the other slot", async () => {
+    const dir = await store();
+    await legacy(dir);
+    await expect(carryStoreForward(dir, { ...windows, bootId: first })).rejects.toMatchObject({ reason: "UNDURABLE" });
+    const torn = Buffer.concat([Buffer.from("PK\x03\x04 torn"), Buffer.alloc(8192)]);
+    await writeFile(slot(dir, 1), torn);
+    expect(await carryStoreForward(dir, { ...windows, bootId: restarted })).toMatchObject({ backup: slot(dir, 0) });
+    expect(await readFile(slot(dir, 1))).toEqual(torn);
   });
 
   it("a slot that is not private, or not a file, is never used", async () => {
     const dir = await store();
     await legacy(dir);
-    await expect(carryStoreForward(dir, { ...windows, bootTime: earlier })).rejects.toMatchObject({
-      reason: "UNDURABLE",
-    });
+    await expect(carryStoreForward(dir, { ...windows, bootId: first })).rejects.toMatchObject({ reason: "UNDURABLE" });
     const refusing = { ...posixPrivateCopy, privateEntry: (path: string) => Promise.resolve(!path.endsWith(".zip")) };
-    await expect(carryStoreForward(dir, { ...windows, privacy: refusing, bootTime: later })).rejects.toMatchObject({
+    await expect(carryStoreForward(dir, { ...windows, privacy: refusing, bootId: restarted })).rejects.toMatchObject({
       reason: "BACKUPS_UNSAFE",
     });
     expect(await readStoreFormat(dir)).toBeUndefined();
@@ -188,11 +307,11 @@ describe("Windows format carryover into a pre-boot backup slot (#910)", () => {
 
   it("an ordinary Windows open creates the slots, so a later carryover need not wait", async () => {
     const dir = await store();
-    await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write", platform: "win32", privacy: posixPrivateCopy });
-    for (const n of [0, 1] as const) expect((await lstat(slot(dir, n))).isFile()).toBe(true);
-    // Without a privacy backend, or off Windows, nothing is created.
+    await enterStoreFormat(dir, { ...windows, mode: "write", bootId: first });
+    for (const n of [0, 1] as const) expect(await identityOf(slot(dir, n))).toMatchObject({ createdBoot: 41 });
+    // Without a privacy backend, nothing is created.
     const other = await store();
-    await enterStoreFormat(other, { appVersion: "0.8.0", mode: "write", platform: "win32" });
+    await enterStoreFormat(other, { appVersion: "0.8.0", mode: "write", platform: "win32", bootId: first });
     await expect(readdir(join(other, STORE_FORMAT_BACKUP_DIR))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -201,11 +320,11 @@ describe("Windows format carryover into a pre-boot backup slot (#910)", () => {
     await legacy(dir);
     const settle = vi.fn();
     const carryover = () => Promise.resolve({ fence: { check: () => true }, settle });
-    await expect(
-      enterStoreFormat(dir, { ...windows, mode: "write", carryover, bootTime: earlier }),
-    ).rejects.toMatchObject({ reason: "UNDURABLE" });
+    await expect(enterStoreFormat(dir, { ...windows, mode: "write", carryover, bootId: first })).rejects.toMatchObject({
+      reason: "UNDURABLE",
+    });
     expect(settle).not.toHaveBeenCalled();
-    expect(await enterStoreFormat(dir, { ...windows, mode: "write", carryover, bootTime: later })).toMatchObject({
+    expect(await enterStoreFormat(dir, { ...windows, mode: "write", carryover, bootId: restarted })).toMatchObject({
       status: "carried",
       backup: slot(dir, 0),
     });
@@ -216,7 +335,7 @@ describe("Windows format carryover into a pre-boot backup slot (#910)", () => {
     const dir = await store();
     await legacy(dir);
     await expect(
-      carryStoreForward(dir, { ...windows, bootTime: later, fence: { check: () => false } }),
+      carryStoreForward(dir, { ...windows, bootId: restarted, fence: { check: () => false } }),
     ).rejects.toMatchObject({ reason: "FENCE_LOST" });
     await expect(readdir(join(dir, STORE_FORMAT_BACKUP_DIR))).rejects.toMatchObject({ code: "ENOENT" });
   });

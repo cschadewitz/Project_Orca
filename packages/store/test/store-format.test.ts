@@ -7,7 +7,6 @@ import {
   carryStoreForward,
   enterStoreFormat,
   FileExecutionStore,
-  posixPrivateCopy,
   readStoreFormat,
   STORE_FORMAT_BACKUP_DIR,
   STORE_FORMAT_BACKUP_MANIFEST,

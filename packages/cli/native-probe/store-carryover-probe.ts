@@ -6,10 +6,13 @@
  * Bundled (esbuild, `__ORCA_FIRST_RUN_BUNDLED__`) beside the packaged first-run boundary, as the
  * desktop app's daemon is. It builds a store the way the app does (private directories from the
  * boundary, files inheriting their owner-only DACL) and gives one source file an explicit ACE for
- * Everyone. Carrying it forward must first be refused (UNDURABLE) with only the two empty backup
- * slots created, because they do not yet predate the current boot (#910). With the slots' creation
- * time set a day back, as after a restart, it must carry: the backup archived into slot 1, the
- * marker naming it, and Windows' own `Expand-Archive` restoring the store's files byte for byte.
+ * Everyone. Carrying it forward is refused (UNDURABLE) while Windows carryover is switched off,
+ * touching nothing (#910). Switched on, it is first refused with only the two backup slots
+ * created, each recording its NTFS file ID and Windows' real BootId, which must be readable here.
+ * Told the BootId has moved on, as after a restart (a real restart is the power-cut test's), it
+ * must carry: the backup archived into slot 1, the marker naming it, and Windows' own
+ * `Expand-Archive` restoring the store's files byte for byte. With the marker then deleted, as
+ * after a power cut, the archive finishes the conversion without being rewritten.
  * The private-copy path itself is then exercised directly: the backup is staged and published with `windowsPrivateCopy` (no
  * marker), and every published entry's security descriptor is read back with PowerShell:
  *
@@ -35,6 +38,8 @@ import {
   STORE_FORMAT_BACKUP_MANIFEST,
   STORE_FORMAT_BACKUP_SLOTS,
   STORE_FORMAT_EPOCH,
+  STORE_FORMAT_FILE,
+  windowsBootId,
 } from "@orca/store";
 import { windowsPrivateCopy } from "../src/store-privacy.js";
 
@@ -182,14 +187,21 @@ const store = safely("orca-carryover-probe");
 // A source file readable by Everyone: its copy must not carry that ACE.
 grantEveryone(join(store, "runs", "run_old.jsonl"));
 const root = join(store, STORE_FORMAT_BACKUP_DIR);
-// Before its backup slots predate the current boot, carryover fails closed (UNDURABLE) having
-// created only the two empty slots (#910): nothing is copied and no marker is written.
-const carry = () =>
-  carryStoreForward(store, { appVersion: "0.0.0-probe", privacy: windowsPrivateCopy }).then(
-    (outcome) => outcome,
+// Switched off (the shipped default), carryover is refused and nothing is created.
+const outcome = (options: Parameters<typeof carryStoreForward>[1]) =>
+  carryStoreForward(store, options).then(
+    (result) => result,
     (error: { details?: { reason?: string }; message?: string }) => error.details?.reason ?? error.message ?? "failed",
   );
-const undurable = await carry();
+const off = await outcome({ appVersion: "0.0.0-probe", privacy: windowsPrivateCopy });
+check(off === "UNDURABLE", `carry-forward switched off: ${JSON.stringify(off)}`);
+check(!existsSync(root), "carry-forward switched off: backups folder created");
+// Switched on, in the boot that creates the slots: refused, with only the two slots created.
+const boot = windowsBootId();
+check(typeof boot === "number", "Windows BootId could not be read");
+const carry = (bootId: number | undefined) =>
+  outcome({ appVersion: "0.0.0-probe", privacy: windowsPrivateCopy, windowsCarryover: true, bootId: () => bootId });
+const undurable = await carry(boot);
 check(undurable === "UNDURABLE", `carry-forward with new slots: ${JSON.stringify(undurable)}`);
 check((await readStoreFormat(store)) === undefined, "carry-forward with new slots: marker written");
 const slots = STORE_FORMAT_BACKUP_SLOTS.map((name) => join(root, name));
@@ -197,20 +209,30 @@ check(
   JSON.stringify(readdirSync(root).sort()) === JSON.stringify([...STORE_FORMAT_BACKUP_SLOTS].sort()),
   `carry-forward with new slots: backups folder holds ${readdirSync(root).join(", ")}`,
 );
-// Stand in for a restart: date the slots' creation a day back, as a slot made before this boot.
-powershell(
-  `foreach ($p in (Get-Content -LiteralPath $env:PROBE_PATHS)) { (Get-Item -LiteralPath $p).CreationTime = (Get-Date).AddDays(-1) }`,
-  slots,
-);
-const carried = await carry();
+for (const path of slots) {
+  const identity = JSON.parse(readFileSync(path, "utf8")) as { createdBoot?: number; file?: string };
+  check(identity.createdBoot === boot, `${path}: created in boot ${identity.createdBoot}, expected ${boot}`);
+  check(identity.file === lstatSync(path, { bigint: true }).ino.toString(), `${path}: file ID not recorded`);
+}
+// As after a restart: the next BootId.
+const carried = await carry((boot ?? 0) + 1);
 check(
   typeof carried === "object" && carried.status === "carried" && carried.backup === slots[0],
-  `carry-forward with aged slots: ${JSON.stringify(carried)}`,
+  `carry-forward after a restart: ${JSON.stringify(carried)}`,
 );
 check(
   (await readStoreFormat(store))?.backup === slots[0],
-  "carry-forward with aged slots: marker does not name slot 1",
+  "carry-forward after a restart: marker does not name slot 1",
 );
+// As after a power cut that lost the marker: the archive finishes the conversion, unrewritten.
+const archived = readFileSync(slots[0]!);
+rmSync(join(store, STORE_FORMAT_FILE));
+const recovered = await carry((boot ?? 0) + 2);
+check(
+  typeof recovered === "object" && recovered.status === "carried" && recovered.backup === slots[0],
+  `carry-forward after a lost marker: ${JSON.stringify(recovered)}`,
+);
+check(readFileSync(slots[0]!).equals(archived), "carry-forward after a lost marker: slot 1 rewritten");
 // Windows' own Expand-Archive restores the backup, byte for byte.
 const restored = join(profile, "orca-carryover-probe-restored");
 rmSync(restored, { recursive: true, force: true });

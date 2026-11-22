@@ -942,34 +942,53 @@ honours the flushes on power loss. The desktop app's own
 workspaces are refused (`APP_OWNED`): only the daemon the app launches may write them, and this
 command cannot hold that daemon's write fence. The app carries those forward itself, below.
 
-**On Windows the backup is one ZIP archive in a backup slot that already existed before
-Windows last started (#910).** Windows documents no way for an unelevated program to make a
-new or renamed directory entry reach the disk before a later one, so the POSIX order above (a
-published backup folder, then the marker) cannot be shown to survive a power loss there. What
-Windows does document is that flushing a file (`FlushFileBuffers`) writes its data to the device
-before returning, and a file that existed before the current boot has its directory entry on
-disk already: it survived a restart. So on Windows:
+**Windows does not change a store's format yet (#910).** Every Windows carryover is refused
+(`UNDURABLE`) with nothing touched, and the store stays on the format the previous ORCA wrote,
+until an automated power-cut test on NTFS proves the design below. The design is built and
+tested with the switch (`WINDOWS_STORE_CARRYOVER` in `packages/store/src/store-format.ts`) on;
+turning it on is a one-line change made together with that proof.
+
+Windows documents no way for an unelevated program to make a new or renamed directory entry
+reach the disk before a later one, so the POSIX order above (a published backup folder, then the
+marker) cannot be shown to survive a power loss there. What Windows does document is that
+flushing a file (`FlushFileBuffers`) writes its data to the device before returning, and a file
+that survived a restart has its directory entry on disk already. So on Windows the backup is one
+ZIP archive written into a backup slot that survived a restart:
 
 1. Every write-mode start of a store this ORCA may write creates `format-backups/` (owner-only)
-   and two empty slot files in it, `store-backup-1.zip` and `store-backup-2.zip`, if missing.
-2. Carryover uses only a slot that is a private regular file created at least ten minutes before
-   Windows last started, and never the slot the current marker names (an empty slot first, then
-   the one written longest ago). With no such slot it refuses (`UNDURABLE`) having copied
-   nothing: restart Windows and start ORCA again. The automatic carryover keeps the update's
-   handoff for that retry.
+   and two slot files in it, `store-backup-1.zip` and `store-backup-2.zip`, if missing. Each new
+   slot holds its own identity: its NTFS volume serial and file ID and the Windows `BootId` it
+   was created in. Windows increases `BootId` on every start, and no clock or timestamp can move
+   it. A slot whose identity names another file (copied or replaced) is stamped anew.
+2. Carryover uses only a slot that is a private regular file whose identity is that very file and
+   whose `BootId` is not the current one, so it survived a restart. It never uses the slot the
+   current marker names, nor any archive whose conversion the marker does not yet reflect (an
+   identity-only slot first, then the archive written longest ago). With no such slot, or no
+   readable `BootId`, it refuses (`UNDURABLE`) having copied nothing: restart Windows and start
+   ORCA again. The automatic carryover keeps the update's handoff for that retry.
 3. Steps 1 to 4 above run as on Linux and macOS. Then the verified copy and its
-   `format-backup.json` manifest are written over the slot in place as a stored (uncompressed)
-   ZIP archive, the file is truncated to its new length and flushed, and the archive is read
-   back and compared entry by entry with the copy. Only after that flush has returned is the
-   marker created, so it cannot reach the disk before the backup, whatever order the file
-   system writes in.
+   `format-backup.json` manifest, which names the conversion (`from`, `to`) and the slot's
+   identity, are written over the slot in place as a stored (uncompressed) ZIP archive, the file
+   is truncated to its new length and flushed, and the archive is read back and compared entry
+   by entry with the copy. Only after that flush has returned is the marker created.
+4. The marker is itself a new directory entry, which a power cut may still lose while later
+   writes survive. The slot archive is therefore the durable record of the conversion: whenever
+   a Windows ORCA carries a store forward, an archive whose `from` matches the marker (or
+   `unmarked`) but whose conversion the marker does not show is found first. If the store is
+   still byte for byte what it archived, the conversion is finished by writing the marker naming
+   that archive, which is not rewritten. Otherwise the store is refused (`INTERRUPTED`) and the
+   archive is kept: restore it, or open the store with the version that last wrote it. Any
+   archive recording a newer format than this ORCA's refuses the store (`NEWER`) whatever the
+   marker says.
 
 The two slots are the retention on Windows: the marker's backup and the one before it. To go
 back to the older release, stop ORCA, move the store aside, and extract the slot the marker
 names (`backup` in `store-format.json`) with Explorer's "Extract all" or
 `Expand-Archive -LiteralPath <slot> -DestinationPath <store>`. A Windows CI job runs this as a
-standard user on NTFS: refusal with fresh slots, carryover once the slots' creation time is set
-before the boot, and `Expand-Archive` restoring the store's files byte for byte.
+standard user on NTFS with the switch on for the probe only: refusal with the switch off,
+refusal with fresh slots recording the real `BootId`, carryover with the next `BootId`, the
+archive finishing the conversion after the marker is deleted, and `Expand-Archive` restoring the
+store's files byte for byte. It stands in for a restart; it does not cut power.
 
 The private-copy path for Windows: the copies hold the execution
 key and private records, and anyone with the default "bypass traverse checking" right can reach
