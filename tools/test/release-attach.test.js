@@ -534,6 +534,7 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     // windows-signed.yml's hand-off job has continue-on-error, so the run still succeeds.
     const f = setup();
     f.edit((st) => {
+      st.jobs = st.jobs || {};
       st.jobs["100"] = [
         { name: "windows-signed (sign)", status: "completed", conclusion: "success" },
         { name: "dispatch the attach for this signed run", status: "completed", conclusion: "failure" },
