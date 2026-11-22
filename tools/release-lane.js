@@ -136,8 +136,9 @@ export const GUARD_WORKFLOW = ".github/workflows/release-line-guard.yml";
 
 /**
  * Whether a check run is the release line guard as main runs it: by GitHub Actions, from
- * main's release-line-guard.yml on a pull_request_target event, on exactly `headSha`. A check
- * name alone is not provenance: anything with checks: write could post one.
+ * main's release-line-guard.yml on a pull_request_target event, attached to exactly `headSha`.
+ * The check run binds the commit: a pull_request_target run itself runs main's revision. A
+ * check name alone is not provenance: anything with checks: write could post one.
  */
 export function guardRunProblems(checkRun, workflowRun, headSha) {
   const problems = [];
@@ -147,7 +148,6 @@ export function guardRunProblems(checkRun, workflowRun, headSha) {
     problems.push(`it was posted by ${checkRun?.app?.slug ?? "an unknown app"}`);
   if (workflowRun?.path !== GUARD_WORKFLOW) problems.push(`it came from ${workflowRun?.path ?? "no workflow"}`);
   if (workflowRun?.event !== "pull_request_target") problems.push(`it ran on ${workflowRun?.event ?? "no"} event`);
-  if (workflowRun?.head_sha !== headSha) problems.push(`its workflow ran for ${workflowRun?.head_sha}`);
   return problems;
 }
 
