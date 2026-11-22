@@ -62,6 +62,7 @@ import {
   formatProtocolVersion,
   isProtocolFault,
 } from "@orca/protocol";
+import { managedDeployment } from "../managed-deployment.js";
 import {
   succeeded,
   toMermaid,
@@ -430,6 +431,7 @@ export const commands: Record<string, Command> = {
           (ctx.flags.cwd as string | undefined) ??
           host.spec.workspaceRoot ??
           (host.spec.type === "local" ? ctx.cwd : "/tmp"),
+        secrets: app.agents.secrets(),
         logger: app.logger,
       });
       ctx.out(`OK ${agent.id} on ${host.id}: ACP session ${session.acpSessionId} in ${Date.now() - started}ms`);
@@ -1189,6 +1191,7 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
     port,
     orcaVersion: ORCA_VERSION,
     storeDir,
+    deployment: managedDeployment(process.env),
     // With control on - the default - this process is one of the store's writers. It
     // takes each run's single-writer lease before it appends, exactly as a CLI does, and
     // refuses a run another live process holds (ADR 0008, #101). `--read-only` gives

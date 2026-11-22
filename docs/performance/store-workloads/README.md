@@ -1,6 +1,6 @@
 # Store workload benchmark (#341)
 
-A reproducible benchmark of the four storage workloads #341 names, at three dataset scales,
+A reproducible benchmark of the four storage workloads #341 names, plus a checkpoint workload for backends with a write-ahead log (#339), at three dataset scales,
 run through the #338 store contracts so the same code measures every backend: memory, file
 and SQLite (#339). The comparison that decides whether a graph projection or a key-value
 cache improves on SQLite is recorded in an ADR, with its budgets written down **before** any
@@ -32,6 +32,7 @@ Each is a function in `workloads.js` that touches the store only through `Stores
 | `paginatedHistory` | The run timeline over a long agent log: open at the tail, scroll back, scroll forward through everything, a type-filtered page (`step.started`), and `lastSeq`. | Latency of each read, cold and warm; per-page latency of a full forward walk and a 20-page backward walk. | The forward walk sees every event exactly once. |
 | `concurrentMetadataWrites` | Several writers on one metadata collection: compare-and-swap increments of a few hot documents (retrying on conflict, up to 64 attempts) beside unconditional writes of their own documents, at 1, 4 and 16 writers. Each level gets its own identically seeded collection, and every writer's operations (which hot key each CAS targets) are fixed from the seed before timing starts. | Wall time, attempted and **succeeded** ops/s separately (only committed operations count as throughput), per-op latency, CAS conflicts, exhausted retries, errors by code. | Every intended operation committed (no error, no exhausted retry); hot counters rose by exactly the *intended* number of increments; every intended unconditional write is present. A backend that acknowledges writes without keeping them, or fails them, fails the workload (self-tested by injection). |
 | `projectionRebuild` | A derived read model (per-run event summaries from the logs, the plan's blocked-by index from the dependency collection) kept in a disposable on-disk cache that is then lost. | Initial build, cache write, cache load, and rebuild-after-loss time. | The rebuilt projection is byte-identical (canonical JSON) to the one that was lost: the cache is never the authority. |
+| `walCheckpoint` | An agent streaming output into one run on a backend with a write-ahead log (SQLite): a sustained burst of appends, then quiet. Backends without a log report `skipped` rather than zeros. | Append rate and latency, and latency outliers (appends over 5 ms; not attributed to checkpoints, which the workload cannot observe inside a commit); the log file's size before the burst, at its sampled peak (every 100 appends), at the end and after a truncating checkpoint; and every checkpoint the store's connections ran by themselves once writes stopped, as the store's `observe` hook reported it. The log's size is a measurement for a budget to judge, not an invariant: nothing in SQLite bounds it. | Every append committed; a truncating checkpoint emptied the log. |
 
 Writers in `concurrentMetadataWrites` are separate handles in one process. Cross-process
 exclusion is proven by the store's own tests (`document-store-multiprocess`, the conformance
@@ -42,12 +43,12 @@ suite); this workload measures throughput and contention, not that proof.
 `scales.js` fixes each shape; the dataset is seeded deterministically (`--seed`), so two
 backends see identical data.
 
-| Scale | Work items / dependency edges | Runs x events per run | Metadata collection | Writers |
-|---|---|---|---|---|
-| small | 250 / ~540 | 4 x 1,000 | 200 + 4 hot | 1, 4, 16 x 40 ops |
-| medium | 2,500 / ~5,400 | 4 x 10,000 | 2,000 + 8 hot | 1, 4, 16 x 40 ops |
-| large | 25,000 / ~54,000 | 2 x 100,000 | 20,000 + 16 hot | 1, 4, 16 x 20 ops |
-| smoke | 20 / ~30 | 2 x 60 | 20 + 2 hot | 1, 2 x 8 ops (self-test only) |
+| Scale | Work items / dependency edges | Runs x events per run | Metadata collection | Writers | Checkpoint burst |
+|---|---|---|---|---|---|
+| small | 250 / ~540 | 4 x 1,000 | 200 + 4 hot | 1, 4, 16 x 40 ops | 5,000 appends |
+| medium | 2,500 / ~5,400 | 4 x 10,000 | 2,000 + 8 hot | 1, 4, 16 x 40 ops | 20,000 appends |
+| large | 25,000 / ~54,000 | 2 x 100,000 | 20,000 + 16 hot | 1, 4, 16 x 20 ops | 50,000 appends |
+| smoke | 20 / ~30 | 2 x 60 | 20 + 2 hot | 1, 2 x 8 ops (self-test only) | 200 appends |
 
 Why these sizes: an agent step streams `agent.update` events, so a run's log is dominated by
 them and a long multi-step run reaches tens of thousands of events; 100,000 is a run that

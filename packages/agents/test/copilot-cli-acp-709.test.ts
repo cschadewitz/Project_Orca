@@ -43,7 +43,7 @@ function filled(spec: AgentSpec): AgentSpec {
   return AgentSpecSchema.parse({
     ...spec,
     command: fill(spec.command),
-    env: Object.fromEntries(Object.entries(spec.env).map(([k, v]) => [k, fill(v)])),
+    env: Object.fromEntries(Object.entries(spec.env).map(([k, v]) => [k, typeof v === "string" ? fill(v) : v])),
   });
 }
 

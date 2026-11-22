@@ -9,7 +9,9 @@ import {
   hasServer,
   promote,
   publish,
+  resumeServers,
   rolloutBucket,
+  stopServers,
   validateRings,
   versionFor,
 } from "../deploy/feed-worker/rings.js";
@@ -326,6 +328,41 @@ describe("server bundle channel (#877)", () => {
       expect(() => run([file, "promote", "stable", "0.8.0", "100"])).toThrow(/stable servers are offered nothing/);
       expect(() => run([file, "promote-desktop", "stable", "0.8.0", "100"])).toThrow(/usage/);
       expect(readFileSync(file, "utf8")).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("servers' stop switch (#878)", () => {
+  const rings = { format: 1, rings: { internal: { version: "0.8.0" } }, server: { internal: { version: "0.8.0" } } };
+
+  it("is true or absent, and only resume-servers lifts it", () => {
+    for (const serverStop of [false, "true", 1, null])
+      expect(() => validateRings({ ...rings, serverStop })).toThrow(/serverStop/);
+    const stopped = stopServers(rings).rings;
+    expect(stopped.serverStop).toBe(true);
+    expect(rings.serverStop).toBeUndefined();
+    expect(stopServers(stopped).rings.serverStop).toBe(true);
+    // Publication and promotion leave the switch as it is.
+    expect(publish(stopped, "0.8.1", "server").rings.serverStop).toBe(true);
+    expect(resumeServers(stopped).rings).toEqual(rings);
+    expect(() => resumeServers(rings)).toThrow(/servers are not stopped/);
+  });
+
+  it("runs through the CLI and leaves the file untouched on a refusal", () => {
+    const dir = mkdtempSync(join(tmpdir(), "orca-rings-stop-"));
+    try {
+      const file = join(dir, "rings.json");
+      writeFileSync(file, JSON.stringify(rings));
+      const before = readFileSync(file, "utf8");
+      expect(() => run([file, "resume-servers"])).toThrow(/not stopped/);
+      expect(() => run([file, "stop-servers", "now"])).toThrow(/usage/);
+      expect(readFileSync(file, "utf8")).toBe(before);
+      expect(run([file, "stop-servers"])).toMatch(/^servers stopped/);
+      expect(JSON.parse(readFileSync(file, "utf8")).serverStop).toBe(true);
+      expect(run([file, "resume-servers"])).toMatch(/^servers resumed/);
+      expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(rings);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

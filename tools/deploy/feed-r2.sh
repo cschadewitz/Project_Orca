@@ -14,6 +14,9 @@
 #                                          offer it to the internal ring's servers
 #   feed-r2.sh promote-server RING VERSION PERCENT
 #                                          the same as promote, for the server channel
+#   feed-r2.sh stop-servers | resume-servers
+#                                          set or lift the servers' stop switch (#878): while
+#                                          set, no server activates anything
 #   feed-r2.sh read-rings OUT              write the live rings.json, validated, to OUT, for
 #                                          the feed watchdog; fails when the feed has none;
 #                                          only reads (a read-only key is enough)
@@ -175,6 +178,10 @@ case "${1:-}" in
     exists "server/$3/complete.json" || fail "no complete server snapshot for $3"
     update_rings promote-server "$2" "$3" "$4"
     ;;
+  stop-servers | resume-servers)
+    [[ $# -eq 1 ]] || fail "usage: feed-r2.sh $1"
+    update_rings "$1"
+    ;;
   read-rings)
     [[ $# -eq 2 ]] || fail "usage: feed-r2.sh read-rings OUT"
     # No fallback to an empty state: the watchdog runs this only once the feed is switched on,
@@ -215,6 +222,6 @@ case "${1:-}" in
     echo "R2 honours If-None-Match and If-Match." | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
     ;;
   *)
-    fail "usage: feed-r2.sh snapshot DIR VERSION ARCHES | promote RING VERSION PERCENT | server-snapshot DIR VERSION | promote-server RING VERSION PERCENT | read-rings OUT | probe"
+    fail "usage: feed-r2.sh snapshot DIR VERSION ARCHES | promote RING VERSION PERCENT | server-snapshot DIR VERSION | promote-server RING VERSION PERCENT | stop-servers | resume-servers | read-rings OUT | probe"
     ;;
 esac

@@ -37,12 +37,30 @@ describe("store workload benchmark", () => {
     for (const result of report.results.filter((r) => r.status === "ran")) {
       expect(result.checksPassed).toBe(true);
       expect(Object.keys(result.workloads).sort()).toEqual(
-        ["concurrentMetadataWrites", "dependencyTraversal", "paginatedHistory", "projectionRebuild"].sort(),
+        [
+          "concurrentMetadataWrites",
+          "dependencyTraversal",
+          "paginatedHistory",
+          "projectionRebuild",
+          "walCheckpoint",
+        ].sort(),
       );
       expect(result.seeding.history.events).toBe(SCALES.smoke.runs * SCALES.smoke.eventsPerRun);
       expect(result.workloads.concurrentMetadataWrites.levels.map((l) => l.writers)).toEqual(SCALES.smoke.concurrency);
       expect(result.workloads.paginatedHistory.warm.forwardPages.n).toBeGreaterThan(0);
     }
+    // Only SQLite has a write-ahead log; the others say so instead of reporting zeros.
+    const wal = report.results.find((r) => r.backend === "sqlite").workloads.walCheckpoint;
+    expect(wal.appends).toBe(SCALES.smoke.checkpointBurst - 1);
+    expect(Object.keys(wal.checks).sort()).toEqual(["everyAppendCommitted", "truncateEmptiedLog"].sort());
+    expect(wal.walBytes.afterTruncate).toBe(0);
+    // The store's own idle checkpoint ran after the burst, and reported what it copied.
+    expect(wal.idleCheckpoints.length).toBeGreaterThan(0);
+    expect(wal.idleCheckpoints.every((c) => c.busy === false && c.checkpointedPages === c.logPages)).toBe(true);
+    for (const plain of ["memory", "file"])
+      expect(report.results.find((r) => r.backend === plain).workloads.walCheckpoint).toMatchObject({
+        skipped: "no write-ahead log on this backend",
+      });
     for (const durable of ["file", "sqlite"]) {
       const result = report.results.find((r) => r.backend === durable);
       expect(result.storeBytes).toBeGreaterThan(0);

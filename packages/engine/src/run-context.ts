@@ -23,7 +23,14 @@ import {
   type WorkflowDefinition,
   type Workspace,
 } from "@orca/core";
-import { executionEvents, unavailable, type ExecutionInputs, type Lease, type Stores } from "@orca/store";
+import {
+  executionEvents,
+  redactExecutionValue,
+  unavailable,
+  type ExecutionInputs,
+  type Lease,
+  type Stores,
+} from "@orca/store";
 import { executionLogger } from "./execution-inputs.js";
 import type { ResolvedArtifact } from "./executors/types.js";
 import { projectWorkItems, type ProjectedWorkItem } from "./program/work-items.js";
@@ -80,6 +87,12 @@ export class RunContext {
    * each of those re-read every visible artifact from disk.
    */
   private readonly contentByHash = new Map<string, Promise<string>>();
+  /**
+   * Secret values (#336) read for sessions this interpreter opened, its child runs' included.
+   * Memory only: they redact events and logs as they are written and are never stored, so a
+   * resumed interpreter knows only the values its own sessions read again.
+   */
+  private readonly runtimeSecrets = new Set<string>();
   private constructor(
     readonly id: string,
     readonly definition: WorkflowDefinition,
@@ -116,7 +129,27 @@ export class RunContext {
     return this.state.run.workspace;
   }
   get logger(): Logger {
-    return executionLogger(this.deps.logger, () => this.executionInputs);
+    return executionLogger(this.deps.logger, () => this.redactionInputs());
+  }
+
+  /** Remember secret values a session of this run read, so nothing written later carries them. */
+  addRuntimeSecrets(values: readonly string[]): void {
+    for (const value of values) if (value.length) this.runtimeSecrets.add(value);
+  }
+
+  /**
+   * `value` with every runtime secret value replaced by `[REDACTED]`, keys left as they are.
+   * For writes that do not go through `emitOwned`: artifact bodies, their metadata, and what
+   * planning derives from them.
+   */
+  redactRuntimeSecrets<T>(value: T): T {
+    return this.runtimeSecrets.size ? redactExecutionValue(value, [...this.runtimeSecrets]) : value;
+  }
+
+  private redactionInputs(): ExecutionInputs | undefined {
+    if (!this.runtimeSecrets.size) return this.executionInputs;
+    const secrets = [...(this.executionInputs?.secrets ?? []), ...this.runtimeSecrets];
+    return { ...(this.executionInputs ?? ({} as ExecutionInputs)), secrets };
   }
 
   /** Promote before any exact child result returns; immutable admission vars are never rewritten. */
@@ -174,6 +207,9 @@ export class RunContext {
 
   /** Only within withOwnership: live answers and their standing write share one mutex. */
   async emitOwned(input: Omit<OrcaEventInput, "runId">): Promise<OrcaEvent> {
+    // A secret value never reaches the log, nor the interpreter's own projection (#336).
+    // Keys are structure (ids, field names), so only values are rewritten.
+    if (this.runtimeSecrets.size) input = { ...input, payload: this.redactRuntimeSecrets(input.payload) };
     const e = await this.deps.stores.events.append({ ...input, runId: this.id } as OrcaEventInput);
     // The returned event is public; the interpreter keeps its exact authoritative payload.
     applyEvent(this.state, { ...e, payload: input.payload } as OrcaEvent);

@@ -20,6 +20,7 @@ import type { WorkflowDraftBridge } from "./workflow-draft-bridge.js";
 import type { DiagnosticsBridge } from "./diagnostics-contract.js";
 import type { FirstRunBridge } from "./first-run-contract.js";
 import type { DaemonConnectionBridge } from "./daemon-connection.js";
+import type { ManagedServerView, ServerUpdateBridge } from "./server-update.js";
 import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
 import type { MacUpdateCommand, MacUpdateView } from "./mac-update-contract.js";
 import type { LinuxUpdateAction, LinuxUpdateNotice } from "./linux-update-contract.js";
@@ -172,6 +173,11 @@ export interface ConnectionSnapshot {
    * the capability is then the coarse fallback (`renderer/src/connection.ts`).
    */
   methods?: readonly string[];
+  /**
+   * The connected server was launched by the managed server updater (#879), so the app may
+   * offer to update it over the profile's SSH connection. Absent for any other daemon.
+   */
+  managedServer?: ManagedServerView;
 }
 
 /** How the app arrived at the store it is showing. */
@@ -277,6 +283,8 @@ export interface OrcaBridge {
     abandon(id: string): Promise<BridgeResult<{ abandoned: boolean }>>;
   };
   daemonConnection?: DaemonConnectionBridge;
+  /** Update the connected managed server over its profile's SSH connection (#879). */
+  serverUpdate?: ServerUpdateBridge;
   updates: {
     read(): UpdateSnapshot;
     act(action: UpdateAction): Promise<BridgeResult<UpdateSnapshot>>;

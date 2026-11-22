@@ -462,7 +462,7 @@ export class FirstRunSetup {
       for (const agent of config.agents) {
         boundary.check();
         assertCurrent();
-        checks.push(await inspectLocalTool(agent));
+        checks.push(await inspectLocalTool({ ...agent, env: literalEnvOf(agent.env) }));
       }
       await this.verify(receipt, true);
       boundary.check();
@@ -617,4 +617,9 @@ export class FirstRunSetup {
       this.busy = false;
     }
   }
+}
+
+/** The literal half of an agent's env: a secret reference (#336) has no value here. */
+function literalEnvOf(env: Record<string, unknown>): Record<string, string> {
+  return Object.fromEntries(Object.entries(env).filter((e): e is [string, string] => typeof e[1] === "string"));
 }

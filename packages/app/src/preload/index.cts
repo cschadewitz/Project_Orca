@@ -36,6 +36,7 @@ import type {
   WorkspaceSnapshot,
 } from "../bridge.js";
 import type { UpdateSnapshot } from "../update-contract.js";
+import type { ServerUpdateOutcome, ServerUpdateProgress, ServerUpdatePreview } from "../server-update.js";
 import type { MacUpdateView } from "../mac-update-contract.js";
 import type { LinuxUpdateNotice } from "../linux-update-contract.js";
 import type { DiagnosticsResult, DiagnosticsStatus } from "../diagnostics-contract.js";
@@ -239,6 +240,19 @@ const bridge: OrcaBridge = {
         };
       },
       watch: (id, watched) => ipcRenderer.invoke("orca:fleet.watch", id, watched) as Promise<ProfileResult<null>>,
+    },
+  },
+  serverUpdate: {
+    read: () => ipcRenderer.invoke("orca:server.read") as Promise<ServerUpdatePreview | undefined>,
+    approve: (approval) =>
+      ipcRenderer.invoke("orca:server.approve", approval) as Promise<{ ok: true } | { ok: false; message: string }>,
+    update: (request) => ipcRenderer.invoke("orca:server.update", request) as Promise<ServerUpdateOutcome>,
+    onProgress: (listener) => {
+      const forward = (_event: unknown, progress: ServerUpdateProgress) => listener(progress);
+      ipcRenderer.on("orca:server.update.progress", forward);
+      return () => {
+        ipcRenderer.off("orca:server.update.progress", forward);
+      };
     },
   },
   updates: {

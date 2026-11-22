@@ -33,9 +33,10 @@ import type { DiagnosticsResult } from "../diagnostics-contract.js";
 import { AdmissionIntents, AdmissionIntentController, protectedStorageBridgeError } from "./admission-intents.js";
 import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
 import type { LaunchReview, PreflightParams } from "../configuration-launch-contract.js";
-import { RunsAdmitResultSchema } from "@orca/protocol";
+import { RunsAdmitResultSchema, ServerPathSchema } from "@orca/protocol";
 import { ConnectionTarget, ConnectionRefusal, connectionFailure, callInConnection } from "./connection-target.js";
 import { RemoteProfiles } from "./remote-profiles.js";
+import { ServerUpdater } from "./server-update.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates } from "./updates.js";
 import { MacUpdateWindows } from "./mac-update-windows.js";
@@ -1224,6 +1225,45 @@ const ProfileIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
 function profileInUse(id: string): boolean {
   return workspace.connectionTarget.profile?.id === id;
 }
+/* Updating the connected server (#879): its own updater, over the profile's own ssh. The
+   daemon only said where the updater is; nothing installs through it. */
+const serverUpdater = new ServerUpdater({
+  version: app.getVersion(),
+  connection: () => workspace.serverConnection,
+  serverVersion: () => connection.current.orcaVersion,
+  declared: () => connection.managedDeployment(),
+  approved: (profile) => remoteProfiles.serverUpdater(profile),
+  approve: (profile, approval) => remoteProfiles.approveServerUpdater(profile, approval),
+  run: (command, onLine) => workspace.runOnServer(command, onLine),
+  hello: async () => {
+    const hello = await workspace.client.hello(`orca-app/${app.getVersion()}`);
+    return { orcaVersion: hello.orcaVersion, ...(hello.identity ? { workspaceId: hello.identity.workspaceId } : {}) };
+  },
+  onProgress: (progress) => send("orca:server.update.progress", progress),
+});
+/* The renderer names a preview main made; ServerUpdater checks the connection still matches
+   it. Anything malformed is refused before it gets there. */
+const PreviewId = z.uuid();
+const ServerUpdateRequestSchema = z.object({ preview: PreviewId }).strict();
+const ServerUpdaterApprovalSchema = z
+  .object({ preview: PreviewId, adapter: ServerPathSchema, manifest: ServerPathSchema })
+  .strict();
+ipcMain.handle("orca:server.read", () => serverUpdater.read());
+ipcMain.handle("orca:server.approve", (_event, approval: unknown) => {
+  const parsed = ServerUpdaterApprovalSchema.safeParse(approval);
+  if (!parsed.success) return { ok: false, message: "Enter the updater's and the manifest's full paths." };
+  try {
+    return serverUpdater.approve(parsed.data);
+  } catch (error) {
+    return { ok: false, message: connectionFailure(error) };
+  }
+});
+ipcMain.handle("orca:server.update", (_event, request: unknown) => {
+  const parsed = ServerUpdateRequestSchema.safeParse(request);
+  if (!parsed.success) return { status: "unavailable", reason: "Invalid update request" };
+  return serverUpdater.update(parsed.data);
+});
+
 ipcMain.handle("orca:profiles.list", () => remoteProfiles.list());
 // Synchronous, like `daemon.read`: the Machines surface draws from it on its first pass.
 ipcMain.on("orca:fleet.read", (event) => {
@@ -1752,6 +1792,7 @@ app.on("before-quit", () => {
   stopDiagnosticObservations();
   targets.cancel();
   linuxReleases?.stop();
+  serverUpdater.stop();
   connection.close();
   alerts.close();
 });

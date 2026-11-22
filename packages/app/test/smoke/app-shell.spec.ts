@@ -271,7 +271,8 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     // #702/#706's opaque review commands (3f72ee46), validated by the closed main-process
     // dispatcher. This bridge does not register the family on the production daemon.
     "scopedPermissions",
-    // The daemon's `search` method behind the palette (#255), recorded late here (#882).
+    // #255's daemon search (#911): a query within the daemon's limit and deadline, answered
+    // with places, never a file path or a raw log.
     "search",
     "templates",
     // `updates` is v0.6.0's desktop updater (#306): read, act, subscribe and the unsaved-

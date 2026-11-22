@@ -199,6 +199,15 @@ signature against the pinned workflow identity before it uses anything.
   promotion, or a green watchdog, as evidence of installed servers.
 - **Pause.** `ORCA_FEED_PAUSE` stops server publication and server promotions (except a halt)
   exactly as it does for desktops.
+- **Stop.** The servers' stop switch is separate from the pause: **Server feed (stop or
+  resume)** (`feed-server-stop.yml`, main only, `action` `stop` or `resume`) sets or clears
+  `serverStop: true` in `rings.json`. While it is set, the Worker answers every server's
+  channel file with 503 and `X-Orca-Feed-Stop: servers`, and the server updater activates
+  nothing, not even a version it was offered and staged before
+  ([Automatic server updates](#automatic-server-updates)). Stopping is always allowed;
+  resuming is refused while the feed is paused. Publication and promotion leave the switch as
+  it is. The watchdog expects the stop answer on every server channel exactly while
+  `rings.json` sets it.
 - **Watchdog.** The feed watchdog also checks each ring's server channel with the same
   canaries: a request without a token must get 401; the channel file must parse strictly and
   name a published release (never a prerelease in `stable`); and each of the three files must
@@ -209,6 +218,7 @@ signature against the pinned workflow identity before it uses anything.
 The Worker needs no new binding or secret for this. Redeploy it from main (whatever pins its
 source) before the first server publication: an older Worker ignores `rings.json`'s server
 rings and answers 404 for `server/`, and reads a `"channel": "server"` token like any other.
+The stop switch also needs a Worker from main that knows `serverStop`; an older one ignores it.
 
 ### Pulling a bad build
 
@@ -220,7 +230,10 @@ containing it can do depends on how far it got, so find out first.
    Secrets and variables → Actions → Variables). From then on **Desktop feed (publish
    signed)** refuses to start and **Desktop feed (promote)** refuses everything except a
    halt. The pause is checked when a job starts: it does **not** stop a job that already
-   passed that check.
+   passed that check. If the bad build is a **server** bundle, also dispatch **Server feed
+   (stop or resume)** with `stop`: the pause only stops new offers, while the stop keeps
+   every server with automatic updates from activating anything, including a bad version it
+   already staged. Resume once the fixed version is offered.
 2. **Check for jobs already running.** In the Actions tab, look for in-progress or queued
    runs of both feed workflows (they share one concurrency group, so at most one runs and
    the rest queue). Cancel any you did not mean to happen, and let a running one finish or
@@ -563,7 +576,8 @@ reach the registry and has sufficient staging disk space.
 python3 /srv/dev/orca-live/orca-release.py --deployment /srv/dev/orca-live/deployment.json update v0.6.1
 ```
 
-The tag is explicit; no background apply is installed. Staging permits current work to
+The tag is explicit. Nothing is applied in the background unless you opt in to
+[automatic server updates](#automatic-server-updates). Staging permits current work to
 continue. Activation acquires the deployment update lock and exclusive launch lock,
 verifies the service identity and old hello, then closes daemon admission. Active CLI/ACP
 processes (including idle but still open Kepler sessions), concurrent updates and daemon
@@ -586,7 +600,9 @@ python3 /srv/dev/orca-live/orca-release.py --deployment /srv/dev/orca-live/deplo
 ```
 
 `update --bundle` stages (or reuses an already validated `releases/v0.8.0`) and then activates
-through exactly the path above. `--bundle` also takes a directory holding the three files, for a
+through exactly the path above. `update --expect-current X.Y.Z` additionally refuses
+(`Server moved:`), under the update and admission locks, unless the active release is exactly
+`X.Y.Z`; the app always passes it. `--bundle` also takes a directory holding the three files, for a
 server without direct access to github.com. A release candidate (`v0.8.0-rc.1`) is accepted by
 its full version and sorts before its release; dry runs are never signed and never accepted.
 
@@ -624,6 +640,178 @@ A bundle release's daemon command line is `runtime/bin/node …/orca-daemon.mjs`
 activation check that the service runs the selected release follows the recorded entry rather
 than `packages/cli/dist/main.js`. Install the updated adapter (step 2 of the bootstrap) before
 the first bundle update.
+
+### Automatic server updates
+
+From the 0.8 line a server can follow its ring on the update feed's
+[server channel](#server-bundle-channel) unattended (#878). It is opt-in: add an `autoUpdate`
+object to `deployment.json`.
+
+```json
+"autoUpdate": {
+  "feed": "https://feed.example.org",
+  "tokenFile": "/srv/dev/orca-live/feed-token",
+  "interval": "1h",
+  "maxDeferralHours": 72,
+  "quietHours": "08:00-18:00",
+  "settleSeconds": 10
+}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `feed` | Required. The feed's https origin. |
+| `tokenFile` | Required. An absolute path to a **server** token (`feed-token.js RING --server`). The file must be a regular file owned by the service user, mode 600. The token decides the ring. |
+| `interval` | Optional, default `1h`. How often the timer checks (`30min`, `1h`, `1d` and so on). |
+| `maxDeferralHours` | Optional, default `72`. How long a staged update may wait for idle before the check reports it overdue. |
+| `quietHours` | Optional. A local-time window (`HH:MM-HH:MM`, which may wrap past midnight) in which nothing is activated. Staging still happens. |
+| `settleSeconds` | Optional, default `10`. The delay between the new daemon's first good hello and a second one. |
+
+Then install the timer once, as the service user:
+
+```sh
+python3 /srv/dev/orca-live/orca-release.py --deployment /srv/dev/orca-live/deployment.json install-timer
+loginctl enable-linger "$USER"   # once, so user timers run without a login session
+```
+
+`install-timer` writes and enables `orca-auto-update.service` and `orca-auto-update.timer` in
+`~/.config/systemd/user`. The timer runs 5 minutes after boot, then every `interval` with a
+randomized delay of up to 5 minutes, and catches up a missed run. Each run is one
+`orca-release.py … auto-update`. You can also run that command by hand to check now.
+
+A run does the following:
+
+1. Takes the deployment update lock without waiting. If a manual update (or another check)
+   holds it, the run defers and exits successfully. Manual and timer updates never overlap.
+2. Refuses while an interrupted activation journal exists (`blocked`, nonzero exit). Inspect
+   it and run `recover` first. While a file named `auto-update.stop` exists in the
+   deployment root, it activates nothing (`stopped`, exit 0); this is the local stop.
+3. Reads `server/latest-linux-x64.yml` with the token. It parses the file exactly as
+   `feed-server.js` writes it. If nothing is offered (404) or the offer is not newer than
+   `current`, nothing changes. A server never moves backwards. If the feed answers with the
+   servers' stop (503 and `X-Orca-Feed-Stop: servers`, see
+   [Server bundle channel](#server-bundle-channel)), the run activates nothing, not even an
+   already staged release (`stopped`, exit 0).
+4. Stages the offer while work continues. It reuses an already staged `releases/vX.Y.Z` only
+   if that release was staged from the exact signed files offered now: staging from a bundle
+   records a receipt with the SHA-256 and size of the archive, manifest and signature, and
+   all six must equal the channel file's (the commit alone is not enough). A release of the
+   same version without a matching receipt is refused (`failed`); inspect it. Otherwise it
+   downloads the three files from the feed, checks their sizes and SHA-256 against the
+   channel file, then stages them exactly as `stage --bundle DIR`: the pinned keyless
+   signature, manifest, archive digest, demo, config validation and a temporary daemon's
+   hello. The channel file is only a pointer and is never trusted on its own.
+5. Checks again just before activating, because staging can take long: the local stop file,
+   quiet hours against the clock read **now**, and the channel file, read again. A stop
+   gives `stopped`, quiet hours defer, and an offer that is gone or differs in any byte gives
+   `withdrawn` (exit 0); the staged release is kept, and nothing is activated.
+6. Activates through the [normal update](#normal-update) path, with closed admission, the
+   exact version/protocol/capability hello, and a second hello after `settleSeconds`, all
+   before admission reopens. Both settled hellos must come from the very same service
+   process: its PID, the unit's invocation ID (new on every start, including a supervisor
+   restart), the process's start time and the boot are recorded before the first and must
+   be unchanged after the second. A restart while settling is a failure even if the
+   restarted daemon answers healthy hellos, so it is rolled back.
+   - **Work is never cancelled.** Active daemon work, open CLI/ACP processes or quiet hours
+     **defer** the activation (exit 0, retried next run). Past `maxDeferralHours` the run
+     reports `overdue` with a nonzero exit, so the failed unit shows in `systemctl --user
+     status`, but it still cancels nothing.
+   - **Rollback is automatic only while admission has stayed closed.** If the new daemon
+     fails its hello or the settled re-check, `current` goes back to the previous release,
+     which must pass its own hello before admission reopens (`rolled-back`, nonzero exit).
+   - **Once admission has reopened, nothing is rolled back.** That includes an uncertain
+     resume: the new release may already hold work the old one would discard (#566's
+     baseline). The run closes admission again if the daemon allows it, keeps the
+     activation journal (which blocks launches and further updates), and reports
+     `failed-not-rolled-back`. Inspect it, then run `recover`.
+   - **Removing the activation journal can fail on its own** (`finalize-failed`, nonzero
+     exit): the new release is active and admission is open. The journal is then written
+     again durably, so launches and updates stay blocked until you inspect it and run
+     `recover`. Only if even that write fails does the report say so: whether the journal
+     survives a restart is then unknown, so check it.
+   - **A release with another store epoch is never activated unattended** (`refused`). Use
+     the [documented migration](#recovery-and-store-compatibility).
+7. After a successful update, keeps exactly two complete releases (the new `current` and
+   the one it replaced) and removes older `releases/vX.Y.Z`. Staging leftovers are kept for
+   inspection.
+
+Every run writes its outcome to `auto-update.json` in the deployment root and to the
+journal (`journalctl --user -u orca-auto-update`). The file records the time, `current`,
+the offered version, the outcome (`none`, `current`, `updated`, `deferred`, `overdue`,
+`stopped`, `withdrawn`, `rolled-back`, `failed-not-rolled-back`, `finalize-failed`,
+`refused`, `blocked` or `failed`) and a detail line. The feed's pause switch (`ORCA_FEED_PAUSE`) stops new versions
+from being offered; the servers' stop switch also stops servers acting on what they were
+offered before. To stop one server's updates, create `auto-update.stop` in its deployment
+root (remove it to resume), or run `systemctl --user disable --now orca-auto-update.timer`.
+
+### Updating a server from the app
+
+A server the adapter launched can also be updated from the desktop app, over the same SSH
+profile the app connects with ([daemon connections](daemon-connection.md#ssh-connection-profiles-874)).
+When the adapter starts the daemon it passes its own path, the deployment manifest and the
+manifest's ring (`ORCA_DEPLOYMENT_ADAPTER`, `ORCA_DEPLOYMENT_MANIFEST`, `ORCA_DEPLOYMENT_RING`,
+set for the daemon only), and the daemon reports them in `hello.deployment` to a caller holding
+`config.read`. A daemon started any other way reports nothing and the app offers no update.
+
+What the daemon reports is a hint, never what the app runs:
+
+- **You enter the updater's paths.** The first time, the connection dialog shows what the
+  server reports and asks you to type the updater's path (it must be an `orca-release.py`)
+  and the manifest's path (a `.json` file), shows the exact command, and runs nothing until
+  you approve. The app accepts the approval only when what you typed matches what the server
+  reports.
+- **The approval is for that server.** It is saved beside the profile
+  (`server-updaters.json`) with the host key the profile's tunnel authenticated and the
+  daemon's workspace identity, and applies only while both are the same. Pointing the profile
+  at another server or daemon port, forgetting its host key or removing it drops the approval.
+- **A mismatch is refused.** The app runs only the approved paths, and only while the daemon
+  still reports exactly those. If it reports another location, the dialog asks again.
+- **One preview, checked again.** Everything the dialog shows and you confirm (profile,
+  connection, host key, workspace, the server's version and the target version) comes from
+  one look the app took. Approving and updating name that look, and the app refuses if the
+  connection no longer matches it.
+- **Only forward, only the app's release, from the release you saw.** The target is the
+  app's own version, it must be a release, and the server must be running an older one; the
+  app checks this itself, not only the dialog. The command also names the release you saw the
+  server running (`--expect-current`), and the updater checks that again under its update
+  and admission locks, where the update commits: if the scheduled updater or another operator
+  moved the server in between, it refuses with `Server moved:` and nothing changes.
+
+The connection dialog shows the server's version, protocol, ring and host key, and whether it
+is older than the app. **Update now** runs, over the profile's own ssh (the pins its tunnel sealed, the
+profile's key, no forwards, no ssh config):
+
+```sh
+python3 <adapter> --deployment <manifest> update --bundle v<app version> --expect-current <server version>
+```
+
+That is the command above plus `--expect-current`, so the server's rules decide: the bundle's
+signer and digests, forward-only versions, the update lock and the admission barrier. Nothing
+installs through the daemon's RPC. The app streams what the updater prints and then says how it ended:
+
+- **Updated**: the updater succeeded *and* a fresh authenticated hello from the same server
+  (same profile, host key and workspace, checked again once the hello answers) reports the
+  new version.
+- **Unknown**: the SSH session was lost after the updater could have started, or it reported
+  success and the server has not confirmed the new version within about a minute. The app
+  says what the server last reported, if anything; check the server before trying again.
+- **Work is running**: the barrier refused (`Daemon busy`, `Busy: admission.lock`, or an
+  unmanaged ORCA process); nothing was cancelled and the old release keeps serving.
+- **Another update is running**: `Busy: update.lock`, held by an
+  [automatic update](#automatic-server-updates) run or another operator; this one did not
+  start. A timer run that finds the app's update holding the lock defers in turn.
+- **The server moved**: `Server moved:`, another update finished between your check and this
+  one; nothing changed, check again.
+- **Failed**: the updater's own `orca-release:` message, and whether the previous release was
+  restored and healthy.
+- **SSH refused before it started**: a missing ssh client, a changed or missing host key, or a
+  refused key, so nothing ran; the app's own message, never ssh's output.
+
+An update from the app is a manual update: `auto-update.stop` and the feed's stop switches
+stop only the timer. An activation journal left by an interrupted or `finalize-failed` run
+blocks it like any other update (`Recovery pending; run recover first`) until you `recover`.
+
+A development build of the app (a version that is not a release tag) offers no update.
 
 ### Recovery and store compatibility
 
