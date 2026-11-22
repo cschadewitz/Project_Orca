@@ -23,12 +23,13 @@
  * digests, equal to that release's recorded assets. A broken server channel fails the run.
  *
  * What each ring should be offered comes from the feed's live rings.json, which a separate job
- * of feed-watchdog.yml reads with the bucket credential (in the desktop-feed environment, main
+ * of feed-watchdog.yml reads with a read-only bucket key (in the feed-reader environment, main
  * only, never in the canary job) and hands over as FEED_RINGS. Against it, an x64 or server
  * channel answering 404 for a ring that rings.json gives an offer is a failure, as is an offer
  * of anything but that ring's full or rollout version, or an offer to a ring with none. When
  * the feed is switched on (FEED_COMMISSIONED, from the ORCA_FEED_BUCKET variable) and no ring
- * state was handed over, the run fails: an empty ring could not be told from a broken one.
+ * state was handed over (the read failed, or rings.json is missing), the run fails: an empty
+ * ring could not be told from a broken one. An empty ring state that exists is valid.
  * Independently, a ring whose x64 desktops are offered a version from the server bundle's line
  * must offer its servers that version or newer (servers first, rings.js). These are checks of
  * what the feed offers, never of what any host has installed or is running.
@@ -168,6 +169,20 @@ export function offerProblem(where, record, offers, status, version) {
   if (!offers.length) return `${where}: offers ${version}, but rings.json offers nothing`;
   if (!offers.includes(version)) return `${where}: offers ${version}, but rings.json offers ${offers.join(" or ")}`;
   return null;
+}
+
+/**
+ * The ring state the workflow hands over: FEED_RINGS is the `rings` job's output, which is
+ * empty when that job failed or was skipped (never an empty ring state, which is `{...}`).
+ */
+export function ringState(env) {
+  const commissioned = env.FEED_COMMISSIONED === "true";
+  if (!env.FEED_RINGS) return { record: undefined, commissioned };
+  try {
+    return { record: validateRings(JSON.parse(env.FEED_RINGS)), commissioned };
+  } catch (error) {
+    throw new Error(`the feed's ring state is unreadable: ${error.message}`, { cause: error });
+  }
 }
 
 export async function watch({
@@ -419,22 +434,19 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     console.error("::error::FEED_URL must be the feed's https origin");
     process.exit(1);
   }
-  let record;
-  if (process.env.FEED_RINGS) {
-    try {
-      record = validateRings(JSON.parse(process.env.FEED_RINGS));
-    } catch (error) {
-      console.error(`::error::the feed's ring state is unreadable: ${error.message}`);
-      process.exit(1);
-    }
+  let state;
+  try {
+    state = ringState(process.env);
+  } catch (error) {
+    console.error(`::error::${error.message}`);
+    process.exit(1);
   }
   const { problems, report } = await watch({
     url,
     tokens,
     repo: process.env.GITHUB_REPOSITORY,
     githubToken: process.env.GITHUB_TOKEN,
-    record,
-    commissioned: process.env.FEED_COMMISSIONED === "true",
+    ...state,
   });
   for (const line of report) console.log(line);
   for (const problem of problems) console.error(`::error::${problem}`);

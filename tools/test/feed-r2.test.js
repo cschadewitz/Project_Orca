@@ -1,5 +1,6 @@
 /** feed-r2.sh against a fake `aws` CLI: upload order, immutability, conditional ring writes. */
 import { execFileSync, spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   chmodSync,
   existsSync,
@@ -13,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { ringState, watch } from "../deploy/feed-watchdog.js";
 
 // A stand-in for `aws s3api` that keeps objects as files and honours If-Match/If-None-Match.
 const FAKE_AWS = String.raw`#!/usr/bin/env node
@@ -96,7 +98,7 @@ function setup() {
       writeFileSync(join(artifacts, `${channel}-${arch}.yml`), `version: ${version}\n`);
     }
   };
-  return { run, runWith, object, log, release, artifacts, root };
+  return { run, runWith, object, log, release, artifacts, root, env };
 }
 
 describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
@@ -362,11 +364,13 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
       );
     });
 
-    it("reads the live ring state, or the empty state before any write", () => {
+    it("reads the live ring state, and fails rather than inventing one when there is none", () => {
       const f = setup();
       const out = join(f.root, "read.json");
-      expect(f.run("read-rings", out).status).toBe(0);
-      expect(JSON.parse(readFileSync(out, "utf8"))).toEqual({ format: 1, rings: {} });
+      const missing = f.run("read-rings", out);
+      expect(missing.status).not.toBe(0);
+      expect(missing.stderr).toContain("the feed has no rings.json");
+      expect(existsSync(out)).toBe(false);
       expect(f.run("server-snapshot", bundle(f), VERSION).status).toBe(0);
       const before = f.log().length;
       expect(f.run("read-rings", out).status).toBe(0);
@@ -422,5 +426,61 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
 
   it("parses as bash", () => {
     expect(() => execFileSync("bash", ["-n", "tools/deploy/feed-r2.sh"])).not.toThrow();
+  });
+});
+
+// The watchdog's `rings` job step, run as the workflow runs it, handing its output to the
+// watchdog the way the `watch` job receives it (an output that was never set arrives empty).
+describe.skipIf(process.platform === "win32")("watchdog ring state handoff (#877)", () => {
+  const { parse } = createRequire(new URL("../../packages/cli/package.json", import.meta.url))("yaml");
+  const workflow = parse(readFileSync(".github/workflows/feed-watchdog.yml", "utf8"));
+  const readStep = workflow.jobs.rings.steps.find((s) => s.id === "read");
+  const check = workflow.jobs.watch.steps.find((s) => s.name === "Check every ring and architecture");
+
+  const handoff = (f) => {
+    const temp = mkdtempSync(join(f.root, "runner-"));
+    const output = join(temp, "output");
+    writeFileSync(output, "");
+    const step = spawnSync("bash", ["-e", "-c", readStep.run], {
+      env: { ...f.env, RUNNER_TEMP: temp, GITHUB_OUTPUT: output },
+      encoding: "utf8",
+    });
+    const rings = /^rings=(.*)$/m.exec(readFileSync(output, "utf8"))?.[1] ?? "";
+    expect(check.env.FEED_RINGS).toBe("${{ needs.rings.outputs.rings }}");
+    // The rings job only runs while ORCA_FEED_BUCKET is set, so the watch job sees "true".
+    return { step, state: ringState({ FEED_RINGS: rings, FEED_COMMISSIONED: "true" }) };
+  };
+  // A feed that refuses anonymous requests and offers nothing to anyone.
+  const quiet = { fetch: async (url, init) => new Response("", { status: init?.headers?.Authorization ? 404 : 401 }) };
+  const watched = (state) =>
+    watch({ url: "https://feed.test", tokens: { internal: "i".repeat(43) }, repo: "o/r", ...quiet, ...state });
+  const unavailable = "the feed is switched on (ORCA_FEED_BUCKET) but its ring state (rings.json) was not available";
+
+  it("fails a switched-on feed whose rings.json is missing", async () => {
+    const f = setup();
+    const { step, state } = handoff(f);
+    expect(step.status).not.toBe(0);
+    expect(step.stderr).toContain("the feed has no rings.json");
+    expect(state).toEqual({ record: undefined, commissioned: true });
+    expect((await watched(state)).problems).toContain(unavailable);
+  });
+
+  it("fails a switched-on feed whose rings.json could not be read", async () => {
+    const f = setup();
+    writeFileSync(f.object("rings.json"), JSON.stringify({ format: 1, rings: {} }));
+    const { step, state } = handoff({ ...f, env: { ...f.env, FAKE_FAIL_OP: "get-object" } });
+    expect(step.status).not.toBe(0);
+    expect((await watched(state)).problems).toContain(unavailable);
+  });
+
+  it("accepts an existing empty ring state as valid", async () => {
+    const f = setup();
+    writeFileSync(f.object("rings.json"), JSON.stringify({ format: 1, rings: {} }));
+    const { step, state } = handoff(f);
+    expect(step.status, step.stderr).toBe(0);
+    expect(state).toEqual({ record: { format: 1, rings: {} }, commissioned: true });
+    const { problems } = await watched(state);
+    expect(problems).not.toContain(unavailable);
+    expect(problems).toEqual([]);
   });
 });

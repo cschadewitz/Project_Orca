@@ -147,7 +147,7 @@ describe("server bundle channel workflows (#877)", () => {
     const watchdog = workflow("feed-watchdog.yml");
     expect(watchdog.permissions).toEqual({ contents: "read" });
     const { rings, watch } = watchdog.jobs;
-    expect(rings.environment).toBe("desktop-feed");
+    expect(rings.environment).toBe("feed-reader");
     expect(rings.outputs).toEqual({ rings: "${{ steps.read.outputs.rings }}" });
     expect(rings.steps.find((s) => s.id === "read").run).toContain("feed-r2.sh read-rings");
     expect(watch.needs).toBe("rings");
@@ -157,6 +157,6 @@ describe("server bundle channel workflows (#877)", () => {
       FEED_RINGS: "${{ needs.rings.outputs.rings }}",
       FEED_COMMISSIONED: "${{ vars.ORCA_FEED_BUCKET != '' }}",
     });
-    expect(JSON.stringify(watch)).not.toMatch(/ORCA_FEED_ACCESS_KEY|ORCA_FEED_SECRET/);
+    expect(JSON.stringify(watch)).not.toMatch(/ORCA_FEED_(READER_)?(ACCESS_KEY|SECRET)/);
   });
 });

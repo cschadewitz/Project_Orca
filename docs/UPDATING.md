@@ -268,16 +268,17 @@ legacy `path` and `sha512`; or the installer the feed serves does not have that 
 and sha512, or differs from the published release asset.
 
 It also holds every ring to the feed's live `rings.json`. A separate first job, run only from
-main in `desktop-feed` (the environment that holds the bucket credential), reads that one file
-with `feed-r2.sh read-rings` and hands it to the canary job as a job output; it never sees a
-canary token, and the canary job never sees the bucket credential. Against that state, a
-ring's x64 or server channel answering 404 although the ring has an offer fails, as does an
-offer of anything but the ring's full or rollout version, or any offer to a ring with none.
-Whether the feed is switched on comes from the repository variable `ORCA_FEED_BUCKET`, not
-from what the feed answers: while it is set, a ring state that could not be read fails the
-run, because an empty ring could no longer be told from a broken one. Before it is set,
-nothing is read and only servers-first is checked. A promotion that lands between the read
-and the checks can make the watchdog fail once; rerun it.
+main in the `feed-reader` environment, reads that one file with a read-only key
+(`feed-r2.sh read-rings`) and hands it to the canary job as a job output. It never sees a
+canary token or the publishing key, and the canary job never sees any bucket key. Against
+that state, a ring's x64 or server channel answering 404 although the ring has an offer
+fails, as does an offer of anything but the ring's full or rollout version, or any offer to a
+ring with none. Whether the feed is switched on comes from the repository variable
+`ORCA_FEED_BUCKET`, not from what the feed answers. While it is set, a missing `rings.json`
+or a failed read fails the run, because an empty ring could no longer be told from a broken
+one; a `rings.json` that exists with empty rings is valid. Before it is set, nothing is read
+and only servers-first is checked. A promotion that lands between the read and the checks can
+make the watchdog fail once; rerun it.
 Like the rest of the watchdog, this checks what the feed offers, never what hosts run.
 
 To turn it on:
@@ -290,7 +291,12 @@ To turn it on:
 3. Store the tokens as the **environment** secret `ORCA_FEED_CANARY_TOKENS` in
    `feed-canary` (not a repository secret), a JSON object such as
    `{"internal": "…", "preview": "…", "stable": "…"}`.
-4. Set the repository variable `ORCA_FEED_URL` to the feed's https origin. Until it is set
+4. Create a GitHub environment named `feed-reader` with deployment branches limited to
+   `main`, and store an R2 API token with **Object Read** only, restricted to the feed bucket,
+   as its environment secrets `ORCA_FEED_READER_ACCESS_KEY_ID` and
+   `ORCA_FEED_READER_SECRET_ACCESS_KEY`. Never reuse the publishing key from `desktop-feed`.
+   Without it, the watchdog fails once `ORCA_FEED_BUCKET` is set.
+5. Set the repository variable `ORCA_FEED_URL` to the feed's https origin. Until it is set
    the workflow is skipped. It runs only from main, so a dispatch from another branch never
    reads the tokens.
 

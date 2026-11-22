@@ -11,20 +11,19 @@
 #   rings.json gives it, or its servers are offered less than its desktops (servers first,
 #   #877). These are offers, not what hosts run.
 #
-# rings.json is read by the separate `rings` job, in the `desktop-feed` environment that holds
-# the bucket credential (main only, read-only use: feed-r2.sh read-rings), and handed to the
-# canary job as a job output; the canary job never sees the bucket credential and the `rings`
-# job never sees a canary. While the feed is switched on (ORCA_FEED_BUCKET), a missing ring
-# state fails the check rather than passing an empty-looking feed.
+# rings.json is read by the separate `rings` job, in the main-only `feed-reader` environment,
+# with a bucket-scoped read-only R2 key (ORCA_FEED_READER_*; never the publishing key, which
+# stays in `desktop-feed`), and handed to the canary job as a job output. The canary job never
+# sees a bucket key and the `rings` job never sees a canary. While the feed is switched on
+# (ORCA_FEED_BUCKET), a missing rings.json or a failed read fails the check rather than
+# passing an empty-looking feed.
 #
-# Read-only: nothing writes to the bucket, and the `rings` job uses its credential only for
-# that one read. The canary tokens are bearer credentials, so only reviewed code reads them:
-# the canary job runs from main only, in the
-# `feed-canary` environment, which deploys from main only and holds nothing but
-# ORCA_FEED_CANARY_TOKENS (a JSON object of ring to a token minted with
-# tools/deploy/feed-token.js). Never put the R2 write credential there. The repository
-# variable ORCA_FEED_URL is the feed's https origin; until it is set the job is skipped
-# (docs/UPDATING.md, "Feed watchdog").
+# Read-only: nothing here can write to the bucket. The canary tokens are bearer credentials,
+# so only reviewed code reads them: the canary job runs from main only, in the `feed-canary`
+# environment, which deploys from main only and holds nothing but ORCA_FEED_CANARY_TOKENS (a
+# JSON object of ring to a token minted with tools/deploy/feed-token.js). Never put an R2 key
+# there. The repository variable ORCA_FEED_URL is the feed's https origin; until it is set the
+# job is skipped (docs/UPDATING.md, "Feed watchdog").
 name: Desktop feed (watchdog)
 
 on:
@@ -44,7 +43,7 @@ jobs:
     name: read the live ring state
     if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != '' && vars.ORCA_FEED_BUCKET != ''
     runs-on: ubuntu-24.04
-    environment: desktop-feed
+    environment: feed-reader
     timeout-minutes: 5
     outputs:
       rings: ${{ steps.read.outputs.rings }}
@@ -62,8 +61,8 @@ jobs:
       - name: Read rings.json
         id: read
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_READER_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_READER_SECRET_ACCESS_KEY }}
           FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
           FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
         run: |

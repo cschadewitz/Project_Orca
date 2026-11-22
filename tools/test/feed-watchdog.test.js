@@ -255,7 +255,7 @@ describe("feed-watchdog.yml", () => {
     expect(watch).toContain("if: always() && github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != ''");
     expect(watch).toContain("environment: feed-canary");
     expect(watch).toContain("needs: rings");
-    expect(watch).not.toMatch(/desktop-feed|ORCA_FEED_ACCESS_KEY|ORCA_FEED_SECRET/);
+    expect(watch).not.toMatch(/desktop-feed|feed-reader|ORCA_FEED_(READER_)?(ACCESS_KEY|SECRET)/);
     expect(watch).toContain("FEED_CANARY_TOKENS: ${{ secrets.ORCA_FEED_CANARY_TOKENS }}");
     expect(watch).toContain("FEED_RINGS: ${{ needs.rings.outputs.rings }}");
     expect(watch).toContain("FEED_COMMISSIONED: ${{ vars.ORCA_FEED_BUCKET != '' }}");
@@ -265,7 +265,11 @@ describe("feed-watchdog.yml", () => {
     expect(rings).toContain(
       "if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != '' && vars.ORCA_FEED_BUCKET != ''",
     );
-    expect(rings).toContain("environment: desktop-feed");
+    // A read-only key of its own, never the publishing key in desktop-feed.
+    expect(rings).toContain("environment: feed-reader");
+    expect(rings).toContain("AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_READER_ACCESS_KEY_ID }}");
+    expect(rings).toContain("AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_READER_SECRET_ACCESS_KEY }}");
+    expect(rings).not.toMatch(/desktop-feed|ORCA_FEED_ACCESS_KEY|ORCA_FEED_SECRET/);
     expect(rings).not.toMatch(/CANARY/);
     expect(rings).toContain('bash tools/deploy/feed-r2.sh read-rings "$RUNNER_TEMP/rings.json"');
     expect(rings).not.toMatch(/feed-r2\.sh (?!read-rings)/);

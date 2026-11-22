@@ -14,9 +14,9 @@
 #                                          offer it to the internal ring's servers
 #   feed-r2.sh promote-server RING VERSION PERCENT
 #                                          the same as promote, for the server channel
-#   feed-r2.sh read-rings OUT              write the live rings.json, validated, to OUT (an
-#                                          empty ring state when the feed has none yet), for
-#                                          the feed watchdog; writes nothing to the bucket
+#   feed-r2.sh read-rings OUT              write the live rings.json, validated, to OUT, for
+#                                          the feed watchdog; fails when the feed has none;
+#                                          only reads (a read-only key is enough)
 #   feed-r2.sh probe                       prove the bucket honours If-None-Match and If-Match
 #                                          on a throwaway key (run before every write job)
 #
@@ -177,15 +177,15 @@ case "${1:-}" in
     ;;
   read-rings)
     [[ $# -eq 2 ]] || fail "usage: feed-r2.sh read-rings OUT"
-    if s3 get-object --bucket "$FEED_BUCKET" --key rings.json "$work/rings.json" >/dev/null 2>"$work/error"; then
-      :
-    elif grep -q NoSuchKey "$work/error"; then
-      rm -f "$work/rings.json"
-    else
+    # No fallback to an empty state: the watchdog runs this only once the feed is switched on,
+    # when a missing rings.json is a broken feed, not an empty one.
+    if ! s3 get-object --bucket "$FEED_BUCKET" --key rings.json "$work/rings.json" >/dev/null 2>"$work/error"; then
       cat "$work/error" >&2
+      if grep -q NoSuchKey "$work/error"; then fail "the feed has no rings.json"; fi
       fail "could not read rings.json"
     fi
-    # feed-rings.js validates and canonicalises; a missing file is the empty ring state.
+    [[ -s "$work/rings.json" ]] || fail "the feed's rings.json is empty"
+    # feed-rings.js validates it and prints it on one line.
     node "$here/feed-rings.js" "$work/rings.json" show >"$2"
     ;;
   probe)
