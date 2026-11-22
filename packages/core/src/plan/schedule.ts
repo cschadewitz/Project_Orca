@@ -98,6 +98,20 @@ const TERMINAL_FAILURE: readonly WorkItem["status"][] = ["failed", "cancelled"];
  * the upstream weight instead of all of it; a plain edge waits for the whole item.
  */
 export const STAGE_EDGE_LAG = 0.5;
+/**
+ * Share of a dependent's own estimate that runs before a later required phase
+ * (`other#build`). The dependent starts alongside the upstream item and only that phase
+ * waits for it, so the critical path overlaps this much of the dependent with the upstream.
+ * The schedule does not know where the phase sits in the dependent's workflow, so this is
+ * a heuristic like `STAGE_EDGE_LAG`.
+ */
+export const LATER_PHASE_LEAD = 0.5;
+/**
+ * Share of an estimate the critical path still charges for an item that is already
+ * underway (in progress, or dispatched per `ScheduleInput.running`). The schedule has no
+ * per-item measure of elapsed work, so a started item counts as half done.
+ */
+export const IN_PROGRESS_REMAINING = 0.5;
 
 export function evaluateDependency(d: Dependency, ctx: EvaluationContext): DependencyEvaluation {
   if (d.status === "waived") return { state: "waived", detail: `waived${d.resolution ? `: ${d.resolution}` : ""}` };
@@ -233,7 +247,8 @@ export function computeSchedule(input: ScheduleInput): Schedule {
 
   // The graph spans the *remaining* work: settled items are neither nodes nor edges, so an
   // edge to a done item simply disappears, waves show what is left and the critical path
-  // length is the remaining estimate (an in-progress item still counts in full).
+  // length is the remaining estimate (an item already underway counts `IN_PROGRESS_REMAINING`
+  // of its estimate).
   const candidates = items.filter((i) => !SETTLED.includes(i.status));
   const itemIds = candidates.map((i) => i.id);
   // Only `blocks` edges can make work impossible, so cycle detection runs on them alone:
@@ -252,8 +267,13 @@ export function computeSchedule(input: ScheduleInput): Schedule {
   const ignoredSoftDependencies = dropped.map((e) => ({ dependencyId: e.dependencyId, from: e.from, to: e.to }));
   const paths = longestDownstreamPaths(
     graph,
-    (id) => estimateWeight(itemsById.get(id)?.estimate),
-    (e) => (e.stage ? STAGE_EDGE_LAG : 1),
+    (id) => estimateWeight(itemsById.get(id)?.estimate) * (running.has(id) ? IN_PROGRESS_REMAINING : 1),
+    (e) => {
+      if (!e.stage) return 1;
+      // Already produced: the dependent need not wait for any more of the upstream.
+      return itemsById.get(e.to)?.produced[e.stage] ? 0 : STAGE_EDGE_LAG;
+    },
+    (e) => (e.requiredBy ? LATER_PHASE_LEAD : 0),
   );
   const cp = criticalPath(paths);
   const { waves } = topologicalWaves(graph);
