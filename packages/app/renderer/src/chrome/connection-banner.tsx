@@ -97,6 +97,22 @@ export function ConnectionBanner({ connection }: ConnectionBannerProps): JSX.Ele
     );
   }
 
+  /* #880: a daemon one protocol major behind, inside the app's window. Everything it serves
+     works, reads and writes alike; what the newer major added is absent because the daemon
+     never advertised it. A calm bar rather than a dialog: nothing is broken, but a missing
+     screen should never be a mystery. */
+  if (state === "live" && connection.olderProtocol) {
+    return (
+      <div className={`orca-banner ${textClass("caption")} orca-banner--stale`} role="status">
+        <Text style="caption">
+          {versions
+            ? `This daemon speaks protocol ${versions.daemon}, one major version behind this app's ${versions.app}. Features added since are off until the daemon is updated.`
+            : "This daemon speaks the previous protocol major version. Features added since are off until the daemon is updated."}
+        </Text>
+      </div>
+    );
+  }
+
   if (!isStale(state)) return null;
 
   /* No text and no live region: the status bar has already announced the word, and the

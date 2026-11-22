@@ -27,6 +27,8 @@ export interface Connection {
   since: Date;
   eventCursor?: number;
   versions?: { app: string; daemon: string };
+  /** The daemon is one protocol major behind this app, inside its window (#880). */
+  olderProtocol?: boolean;
   orcaVersion?: string;
   /** What the daemon said it can do; empty until it has said, which is not an error. */
   capabilities: readonly DaemonCapability[];
@@ -45,6 +47,7 @@ export function toConnection(snapshot: ConnectionSnapshot): Connection {
     methods: snapshot.methods ?? [],
     ...(snapshot.eventCursor !== undefined ? { eventCursor: snapshot.eventCursor } : {}),
     ...(snapshot.versions !== undefined ? { versions: snapshot.versions } : {}),
+    ...(snapshot.olderProtocol ? { olderProtocol: true } : {}),
     ...(snapshot.orcaVersion !== undefined ? { orcaVersion: snapshot.orcaVersion } : {}),
   };
 }

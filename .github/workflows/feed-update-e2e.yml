@@ -7,10 +7,12 @@
 #
 # What it shows: an unsigned build, installed per-user, takes N+1 from the feed Worker's own
 # handler when its token's ring offers N+1 and stays put when its ring offers N, and after
-# the restart Windows reports N+1 installed. What it does not show: that the updated app
-# relaunches, that the Worker's Range answers were used (electron-updater may fall back to a
-# full download and still pass), signed-feed acceptance (feed-publish.yml checks that), or
-# the prerelease opt-in. Runs on pull requests that touch any of these parts, and by hand.
+# the restart Windows reports N+1 installed. It runs once per architecture the feed serves:
+# x64 on windows-latest and arm64 natively on windows-11-arm (#889). What it does not show:
+# that the updated app relaunches, that the Worker's Range answers were used
+# (electron-updater may fall back to a full download and still pass), signed-feed
+# acceptance (feed-publish.yml and release-accept-arm64.yml check that), or the prerelease
+# opt-in. Runs on pull requests that touch any of these parts, and by hand.
 # GitHub-hosted only; no secret, no bucket, no signing.
 name: Desktop feed (update test)
 
@@ -43,9 +45,19 @@ env:
 
 jobs:
   update:
-    name: update N to N+1 through a local feed
-    runs-on: windows-latest
+    name: update N to N+1 through a local feed (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    env:
+      ARCH: ${{ matrix.arch }}
     defaults:
       run:
         shell: bash
@@ -105,16 +117,16 @@ jobs:
           done
           node tools/packaged-windows/stage-native-addons.js --headers "$headers_scratch/node-v${node_version}"
 
-      # x64 only, NSIS only, as the feed serves. The same build, stamped twice. The output stays
+      # This job's architecture, NSIS only, as the feed serves. The same build, stamped twice. The output stays
       # under dist/release, which electron-builder.yml excludes from `files`, so N+1 cannot
       # package N's installer.
       - name: Package N and N+1
         run: |
           set -euo pipefail
           for version in "$FROM_VERSION" "$TO_VERSION"; do
-            pnpm --filter @orca/app exec electron-builder --win nsis --x64 --publish never \
+            pnpm --filter @orca/app exec electron-builder --win nsis --"$ARCH" --publish never \
               -c.extraMetadata.version="$version" -c.directories.output="dist/release/update-e2e/$version" \
-              -c.publish.channel=latest-x64
+              -c.publish.channel="latest-$ARCH"
           done
           ls -l packages/app/dist/release/update-e2e/*
 
@@ -122,7 +134,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = "packages/app/dist/release/update-e2e/$env:FROM_VERSION/ORCA-$env:FROM_VERSION-win-x64.exe"
+          $installer = "packages/app/dist/release/update-e2e/$env:FROM_VERSION/ORCA-$env:FROM_VERSION-win-$env:ARCH.exe"
           $process = Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "installer exited $($process.ExitCode)" }
           $entry = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
@@ -156,7 +168,7 @@ jobs:
           for version in "$FROM_VERSION" "$TO_VERSION"; do
             dir="packages/app/dist/release/update-e2e/$version"
             node tools/deploy/feed-local.js snapshot "$feed/bucket" "$version" \
-              "$dir/ORCA-$version-win-x64.exe" "$dir/ORCA-$version-win-x64.exe.blockmap" "$dir/latest-x64.yml"
+              "$dir/ORCA-$version-win-$ARCH.exe" "$dir/ORCA-$version-win-$ARCH.exe.blockmap" "$dir/latest-$ARCH.yml"
           done
           node tools/deploy/feed-local.js rings "$feed/bucket" \
             "{\"format\":1,\"rings\":{\"internal\":{\"version\":\"$TO_VERSION\"},\"preview\":{\"version\":\"$FROM_VERSION\"}}}"
@@ -186,7 +198,7 @@ jobs:
           server=$!
           trap 'kill $server 2>/dev/null || true' EXIT
           for _ in $(seq 1 50); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$feed/cert.pem" https://localhost:8443/latest-x64.yml || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$feed/cert.pem" "https://localhost:8443/latest-$ARCH.yml" || true)
             [ "$code" = 401 ] && break
             sleep 0.2
           done
@@ -204,6 +216,16 @@ jobs:
             Format-Table ProcessId, Name, CommandLine -AutoSize -Wrap
           Get-ChildItem "$env:LOCALAPPDATA" -Directory -Filter '*updater*' -ErrorAction SilentlyContinue |
             Get-ChildItem -Recurse -ErrorAction SilentlyContinue | Format-Table FullName, Length -AutoSize
+          # Whether the downloaded installer itself installs, run as the updater runs it: tells an
+          # installer failure apart from one that never started.
+          $pending = Get-ChildItem "$env:LOCALAPPDATA\*updater*\pending\*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($pending) {
+            $run = Start-Process -FilePath $pending.FullName -ArgumentList '--updated', '/S' -PassThru
+            if (-not $run.WaitForExit(300000)) { "the pending installer is still running after 300s"; $run | Stop-Process -Force }
+            else { "the pending installer exited $($run.ExitCode)" }
+            (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+              Where-Object DisplayName -like 'ORCA*').DisplayVersion | ForEach-Object { "Windows now reports $_" }
+          }
 
       - name: Stop anything the update left running
         if: always()
@@ -214,7 +236,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: feed-update-e2e
+          name: feed-update-e2e-${{ matrix.arch }}
           path: |
             test-results/windows-update/
             playwright-report/

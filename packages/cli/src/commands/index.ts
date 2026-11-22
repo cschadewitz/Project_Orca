@@ -55,6 +55,7 @@ import {
   HELLO_METHOD,
   PLAN_READ_METHODS,
   PROTOCOL_VERSION,
+  helloOffer,
   READ_METHODS,
   SUBSCRIPTION_METHODS,
   AgentsPingResultSchema,
@@ -152,7 +153,9 @@ async function pingViaDaemon(
   try {
     hello = await daemonCall(ctx, url, HELLO_METHOD, {
       client: `orca-cli/${ORCA_VERSION}`,
-      protocol: PROTOCOL_VERSION,
+      // The client offer (#880), not this build's daemon version: a shipped daemon on an
+      // earlier minor of the same major refuses a newer-minor offer.
+      ...helloOffer(),
     });
   } catch (e) {
     if (
@@ -193,7 +196,9 @@ async function discoveredModels(ctx: CommandContext, url: string): Promise<Map<s
   try {
     hello = await daemonCall(ctx, url, HELLO_METHOD, {
       client: `orca-cli/${ORCA_VERSION}`,
-      protocol: PROTOCOL_VERSION,
+      // The client offer (#880), not this build's daemon version: a shipped daemon on an
+      // earlier minor of the same major refuses a newer-minor offer.
+      ...helloOffer(),
     });
   } catch (e) {
     if (
