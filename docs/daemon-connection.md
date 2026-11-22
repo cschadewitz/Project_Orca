@@ -357,6 +357,14 @@ each other:
   identity, a refused credential (`auth-failed` or an authentication error on a read)
   or any change to the profile (edit, host key reset or credential import, all of
   which raise its revision) drops it and its alerts at once.
+- **Watching changes nothing.** A watched profile is opened with
+  `RemoteProfiles.observe`, never `open`: it uses the credential the profile already
+  has, over host keys already pinned, and never issues, renews, replaces or revokes a
+  credential, pins a key on first use or moves a legacy token. A profile that has never
+  signed in says so and waits; focusing it once signs in. A tunnel shared with the
+  focused connection stops renewing once only watchers hold it. Saving the choice of
+  watched profiles is an app write: it runs under the app writer fence and is refused
+  while setup, an update's preparation or native recovery holds the app.
 - **Read-only.** A watched connection only calls `hello`, `runs.list`, `inputs.list`
   and `subscribe`. Its rows name the work and do not open it. **Focus** goes through
   the same path as the connection dialog (authenticated probe, then the all-window

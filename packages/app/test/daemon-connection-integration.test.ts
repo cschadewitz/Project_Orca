@@ -1174,3 +1174,23 @@ it("late diagnostic initialization cannot publish app_started after quit", async
   expect(record).not.toHaveBeenCalledWith("lifecycle", "app_started");
   expect(shell.powerEvents!.listenerCount("resume")).toBe(0);
 });
+
+it("writes no watched-machine choice while an update holds the app (#882)", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-fleet-watch-ipc-"));
+  shell.userData = directory;
+  const { PreferencesFile } = await import("../src/preferences/preferences-file.js");
+  const { RemoteProfiles } = await import("../src/main/remote-profiles.js");
+  const saved = vi.spyOn(PreferencesFile.prototype, "saveWatchedProfiles");
+  vi.spyOn(RemoteProfiles.prototype, "get").mockReturnValue({ id: "lab", name: "Lab", destination: "lab" } as never);
+  const observe = vi.spyOn(RemoteProfiles.prototype, "observe").mockRejectedValue(new Error("offline"));
+  await import("../src/main/index.js");
+  const workspace = shell.workspace!;
+  const watch = shell.handlers.get("orca:fleet.watch")!;
+  const reserved = vi.spyOn(workspace, "macUpdateReserved", "get").mockReturnValue(true);
+  expect(await watch({}, "lab", true)).toMatchObject({ ok: false });
+  expect(saved).not.toHaveBeenCalled();
+  expect(observe).not.toHaveBeenCalled();
+  reserved.mockReturnValue(false);
+  expect(await watch({}, "lab", true)).toMatchObject({ ok: true });
+  expect(saved).toHaveBeenCalledExactlyOnceWith(["lab"]);
+});

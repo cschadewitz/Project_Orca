@@ -600,7 +600,8 @@ function broadcast(notification: NotificationMessage): void {
 const fleet = new Fleet({
   open: async (target, hooks) => {
     if (target.kind === "profile") {
-      const lease = await remoteProfiles.open(target.id);
+      // Watching only: never signs in, renews or pins a key (#882). Focusing signs in.
+      const lease = await remoteProfiles.observe(target.id);
       try {
         const reader = new DaemonClient(daemonEndpoint(lease.url), lease.transport.fetch, {
           socket: lease.transport.socket,
@@ -1281,19 +1282,27 @@ ipcMain.on("orca:fleet.read", (event) => {
 /** Watch or stop watching a saved profile. Reads only; focusing one is `daemon.connect`. */
 ipcMain.handle("orca:fleet.watch", (_event, id: unknown, watched: unknown) =>
   profileResult(() => {
-    const valid = ProfileIdSchema.parse(id);
-    if (typeof watched !== "boolean") throw new ConnectionRefusal("Say whether to watch the machine.");
-    const current = preferences.read().watchedProfiles ?? [];
-    if (watched) {
-      if (!remoteProfiles.get(valid)) throw new ConnectionRefusal("That profile no longer exists.");
-      if (!current.includes(valid) && current.length >= MAX_WATCHED_PROFILES)
-        throw new ConnectionRefusal(`The app watches at most ${MAX_WATCHED_PROFILES} machines at once.`);
-      if (!current.includes(valid)) preferences.saveWatchedProfiles([...current, valid]);
-    } else preferences.saveWatchedProfiles(current.filter((other) => other !== valid));
-    refreshFleet();
-    return null;
+    // A preference write: under the same fence as every other app writer, and not while
+    // setup, an update's preparation or native recovery holds the app (#882).
+    if (!ordinaryStartupAllowed() || macUpdateWindows.active || workspace.macUpdateReserved || firstRun.isBusy)
+      throw new ConnectionRefusal("Setup or an update is in progress. Try again when it has finished.");
+    return appWriters.run(() => watch(id, watched));
   }),
 );
+/** Save the choice of watched profiles. Watching reads only; focusing one is `daemon.connect`. */
+function watch(id: unknown, watched: unknown): null {
+  const valid = ProfileIdSchema.parse(id);
+  if (typeof watched !== "boolean") throw new ConnectionRefusal("Say whether to watch the machine.");
+  const current = preferences.read().watchedProfiles ?? [];
+  if (watched) {
+    if (!remoteProfiles.get(valid)) throw new ConnectionRefusal("That profile no longer exists.");
+    if (!current.includes(valid) && current.length >= MAX_WATCHED_PROFILES)
+      throw new ConnectionRefusal(`The app watches at most ${MAX_WATCHED_PROFILES} machines at once.`);
+    if (!current.includes(valid)) preferences.saveWatchedProfiles([...current, valid]);
+  } else preferences.saveWatchedProfiles(current.filter((other) => other !== valid));
+  refreshFleet();
+  return null;
+}
 ipcMain.handle("orca:profiles.save", (_event, input: unknown) =>
   profileResult(async () => {
     const id = typeof input === "object" && input !== null && "id" in input ? input.id : undefined;
