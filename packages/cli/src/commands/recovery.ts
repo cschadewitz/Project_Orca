@@ -6,10 +6,16 @@
  * operator's side-effect review of a step that may have acted and never finished (#357, phase 2).
  * Until one is recorded, resume refuses to run that step again.
  *
- * Read-only: it takes no lease and writes nothing. It lists Resume, New run and Checkpoint
- * attempt with why each is or is not available, the steps whose effects are uncertain, and for
- * each completed step of a failed run which steps a checkpoint attempt would reuse and which
- * ran after it last time. Executing a checkpoint attempt is not offered yet.
+ * `orca recovery start <runId> [--checkpoint <stepRunId|nodeId>] [--idempotency-key k]` - start a
+ * checkpoint attempt of a failed run and follow it, as `orca run` does (#357, phase 2).
+ *
+ * `orca recovery retire <runId> <attemptRunId>` - retire a checkpoint attempt that was reserved
+ * and never created (an interrupted admission), so another attempt of the run may start.
+ *
+ * The preview is read-only: it takes no lease and writes nothing. It lists Resume, New run and
+ * Checkpoint attempt with why each is or is not available, the steps whose effects are
+ * uncertain, and for each completed step of a failed run which steps a checkpoint attempt would
+ * reuse and which ran after it last time.
  */
 import {
   consoleLogger,
@@ -23,13 +29,17 @@ import {
   type RecoveryStep,
 } from "@orca/core";
 import { resolve } from "node:path";
-import { INLINE_SEP, previewRecovery } from "@orca/engine";
+import { INLINE_SEP, previewRecovery, type CheckpointAdmissionAuthority } from "@orca/engine";
 import { enterStoreFormat, fileStores } from "@orca/store";
 import { bootstrap, loadConfig, releaseAssets } from "../bootstrap.js";
-import type { CommandContext } from "./index.js";
+import { attachEventPrinter, finish, type CommandContext } from "./index.js";
+import { admissionRetryOptions } from "./admission-retry.js";
+import { localDirectAdmissionAuthority } from "../local-submission-authority.js";
 
 export async function recoveryCommand(ctx: CommandContext): Promise<number> {
   if (ctx.positionals[0] === "review") return reviewCommand(ctx);
+  if (ctx.positionals[0] === "start") return startCommand(ctx);
+  if (ctx.positionals[0] === "retire") return retireCommand(ctx);
   const runId = ctx.positionals[0];
   if (!runId) throw new OrcaError("CONFIG_INVALID", "recovery needs a run id");
   const checkpoint = typeof ctx.flags.checkpoint === "string" ? ctx.flags.checkpoint : undefined;
@@ -44,7 +54,79 @@ export async function recoveryCommand(ctx: CommandContext): Promise<number> {
   return 0;
 }
 
-/** The one writing subcommand: it takes the run's lease, appends the review, and nothing else. */
+/**
+ * Start a checkpoint attempt and follow it. With a retry claim store (any persistent store), it
+ * goes through retry-safe admission: the printed retry key, given again, returns the same
+ * attempt rather than starting another. A run that recorded no configuration generation has
+ * nothing to pin an admission to and is started directly.
+ */
+async function startCommand(ctx: CommandContext): Promise<number> {
+  const runId = ctx.positionals[1];
+  if (!runId) throw new OrcaError("CONFIG_INVALID", "recovery start needs a run id");
+  const checkpoint = typeof ctx.flags.checkpoint === "string" ? ctx.flags.checkpoint : undefined;
+  const key = typeof ctx.flags["idempotency-key"] === "string" ? ctx.flags["idempotency-key"] : undefined;
+  const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
+  const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
+  try {
+    const source = await app.orchestrator.getSummary(runId);
+    let attemptId: string;
+    if (app.checkpointAdmissions && source.provenance) {
+      const retry = admissionRetryOptions(key);
+      if (key === undefined) ctx.err(`Retry key: ${retry.idempotencyKey}`);
+      const direct = await localDirectAdmissionAuthority(app);
+      // Starting an attempt starts a run of the source's workflow.
+      const authority: CheckpointAdmissionAuthority = {
+        ...direct,
+        authorize: () => direct.authorize({ workflowId: source.workflowId }),
+      };
+      let response = await app.checkpointAdmissions.startAttempt(
+        { runId, ...(checkpoint ? { checkpoint } : {}) },
+        retry,
+        authority,
+      );
+      // An interrupted admission is reconciled here, once: it creates its own reserved attempt.
+      if (response.state === "resolved" && response.result.state === "recoverable-failure")
+        response = await app.checkpointAdmissions.reconcile(response.operationId, authority);
+      if (response.state !== "resolved" || response.result.state !== "accepted") {
+        const reserved = response.state === "resolved" ? response.result.runId : undefined;
+        throw new OrcaError(
+          "RUN_STATE",
+          `Checkpoint admission requires reconciliation${
+            reserved
+              ? `; if attempt ${reserved} should never start, retire it with 'orca recovery retire ${runId} ${reserved}'`
+              : ""
+          }`,
+          { ...response },
+        );
+      }
+      attemptId = response.result.runId;
+    } else {
+      if (key !== undefined)
+        throw new OrcaError("NOT_SUPPORTED", "this store has no retry claims, so --idempotency-key cannot be honoured");
+      attemptId = await app.orchestrator.startCheckpointAttempt({ runId, ...(checkpoint ? { checkpoint } : {}) });
+    }
+    ctx.err(`Checkpoint attempt ${attemptId} of ${runId}`);
+    return await finish(app, ctx, await app.orchestrator.run(attemptId));
+  } finally {
+    detach();
+  }
+}
+
+/**
+ * Retire the source's latest checkpoint attempt when it was reserved and never created, so its
+ * admission can never create it and another attempt may start. A created attempt is refused.
+ */
+async function retireCommand(ctx: CommandContext): Promise<number> {
+  const [, runId, attemptRunId] = ctx.positionals;
+  if (!runId || !attemptRunId)
+    throw new OrcaError("CONFIG_INVALID", "recovery retire needs a run id and the reserved attempt's run id");
+  const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
+  await app.orchestrator.retireCheckpointReservation(runId, attemptRunId);
+  ctx.out(`Retired checkpoint attempt ${attemptRunId} of ${runId}: it will never be created.`);
+  return 0;
+}
+
+/** A writing subcommand: it takes the run's lease, appends the review, and nothing else. */
 async function reviewCommand(ctx: CommandContext): Promise<number> {
   const [, runId, stepRunId] = ctx.positionals;
   const runAgain = Boolean(ctx.flags["run-again"]);

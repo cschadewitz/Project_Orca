@@ -45,6 +45,12 @@ export type OrcaErrorCode =
    * while the run's cancellation is still to finish. `details` as for EFFECT_REVIEW_REQUIRED.
    */
   | "EFFECT_ABANDONED"
+  /**
+   * The recovery asked for is not possible for this run now (#357): a checkpoint attempt of a
+   * run that did not fail, whose pin, inputs or artifacts are gone, or with an unreviewed step.
+   * `details` has `runId`, `blockers` (RecoveryBlocker codes) and `checkpointStepRunId` when known.
+   */
+  | "RECOVERY_BLOCKED"
   /** Another interpreter holds the run's single-writer lease; see store/lease-store.ts. */
   | "RUN_LEASED"
   | "CLAIM_NOT_FOUND"

@@ -15,6 +15,7 @@ import {
   GateOptionSchema,
   HumanInputLiveIdentitySchema,
   RunOutcomeSchema,
+  RunCheckpointSchema,
   RunOverridesSchema,
   RunStatusSchema,
   StepResultSchema,
@@ -144,6 +145,8 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       workflowStored: z.literal(true).optional(),
       /** Exact launch values require the private execution store; missing records fail closed. */
       executionInputsStored: z.literal(true).optional(),
+      /** A checkpoint attempt (#357): the source, and the steps, artifacts and vars it reuses. */
+      checkpoint: RunCheckpointSchema.optional(),
     }),
   ),
   base("run.started", z.object({})),

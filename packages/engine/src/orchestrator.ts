@@ -51,6 +51,7 @@ import {
   type Artifact,
   type ArtifactRef,
   type RunOverrides,
+  type RunCheckpoint,
   type ArtifactSpec,
   type Clock,
   type Edge,
@@ -82,6 +83,7 @@ import {
   type EventFilter,
   type EventListener,
   type EventRange,
+  type ExecutionInputs,
   type HeldLease,
   type Lease,
   type Stores,
@@ -109,6 +111,7 @@ import { recoverReleasedWorkItem } from "./program/work-items.js";
 import { RunContext } from "./run-context.js";
 import type { LiveHumanInput, ExecutionResumeAuthority, ExecutionActivity } from "./live-input.js";
 import { protectExecutionInputs } from "./execution-inputs.js";
+import { checkpointSeed } from "./checkpoint-attempt.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 import {
   capabilityRefusal,
@@ -264,6 +267,56 @@ export interface StartRunOptions {
    * written - so a client never validates one definition and starts another.
    */
   expectedWorkflowRevision?: string;
+  /**
+   * Trusted in-process only: create this run as a checkpoint attempt (#357) with this id,
+   * starting from `seed`, its launch inputs' sensitivity inherited from the source's `inputs`.
+   * See `startCheckpointAttempt`.
+   */
+  checkpoint?: { runId: string; seed: RunCheckpoint; inputs?: ExecutionInputs | undefined };
+}
+
+/** Starting a checkpoint attempt of a failed run (#357). */
+export interface CheckpointAttemptOptions {
+  /** The failed run to recover. */
+  runId: string;
+  /** The checkpoint: a step run id, or a node id that names exactly one. The latest usable one when absent. */
+  checkpoint?: string | undefined;
+  /** Who starts it; a run that recorded its creator is recovered only by that principal. */
+  actor?: MutationActor | undefined;
+  /** Trusted admission journal only (see CheckpointAdmissionService). */
+  admissionRunId?: string | undefined;
+  directAdmissionId?: string | undefined;
+}
+
+/**
+ * The execution-store record of the `n`th checkpoint attempt (from 1) started from a run (#357).
+ * Records are write-once, so each attempt takes the next number.
+ */
+export const checkpointAttemptKey = (sourceRunId: string, n: number): string =>
+  `checkpoint-attempt:${sourceRunId}:${n}`;
+
+/** A reserved checkpoint attempt that was retired before it was created (#357). */
+const checkpointRetiredKey = (attemptRunId: string): string => `checkpoint-attempt-retired:${attemptRunId}`;
+export async function checkpointReservationRetired(
+  stores: Pick<Stores, "execution">,
+  attemptRunId: string,
+): Promise<boolean> {
+  return (await stores.execution.getGeneration(checkpointRetiredKey(attemptRunId))) !== undefined;
+}
+
+/** The checkpoint attempts started from a run, oldest first. */
+export async function checkpointAttempts(
+  stores: Pick<Stores, "execution">,
+  sourceRunId: string,
+): Promise<{ runId: string; checkpointStepRunId: string }[]> {
+  const found: { runId: string; checkpointStepRunId: string }[] = [];
+  for (let n = 1; ; n++) {
+    const record = (await stores.execution.getGeneration(checkpointAttemptKey(sourceRunId, n))) as
+      { runId?: unknown; checkpointStepRunId?: unknown } | undefined;
+    if (record === undefined) return found;
+    if (typeof record.runId !== "string" || typeof record.checkpointStepRunId !== "string") throw unavailable();
+    found.push({ runId: record.runId, checkpointStepRunId: record.checkpointStepRunId });
+  }
 }
 
 export const INLINE_SEP = "::";
@@ -561,7 +614,18 @@ export class Orchestrator {
         (opts.directAdmissionId && opts.requestAdmissionId))
     )
       throw new OrcaError("RUN_STATE", "Invalid reserved admission identity");
-    const runId = opts.admissionRunId ?? newId("run", this.clock.now());
+    if (
+      opts.checkpoint &&
+      (opts.parentRunId || opts.inline || (opts.admissionRunId && opts.admissionRunId !== opts.checkpoint.runId))
+    )
+      throw new OrcaError("RUN_STATE", "a checkpoint attempt is a top-level run with its own reserved id");
+    const runId = opts.admissionRunId ?? opts.checkpoint?.runId ?? newId("run", this.clock.now());
+    if (
+      opts.checkpoint &&
+      ((await this.stores.events.readRange(runId, { limit: 1 })).length ||
+        (await this.stores.execution.getInputs(runId)))
+    )
+      throw new OrcaError("RUN_STATE", "this checkpoint attempt was already prepared");
     if (
       opts.admissionRunId &&
       ((await this.stores.events.readRange(runId, { limit: 1 })).length ||
@@ -585,7 +649,8 @@ export class Orchestrator {
         : this.workspaceProvider;
     // Record only after every admission/inherited-integrity check, before public run creation.
     const workflowStored = await this.recordDefinition(def);
-    let protectedInputs = protectExecutionInputs(runId, def, vars, parentInputs);
+    // A checkpoint attempt keeps everything its source treated as sensitive, overlays included.
+    let protectedInputs = protectExecutionInputs(runId, def, vars, opts.checkpoint?.inputs ?? parentInputs);
     const configuredSecrets = generation ? configuredGenerationSecrets(generation) : [];
     if (configuredSecrets.length)
       protectedInputs = {
@@ -593,7 +658,7 @@ export class Orchestrator {
         secrets: [...(protectedInputs?.secrets ?? []), ...configuredSecrets],
       };
     // Authenticate actor and lineage even for public application inputs.
-    if (!protectedInputs && (opts.actor || opts.parentRunId || generation))
+    if (!protectedInputs && (opts.actor || opts.parentRunId || generation || opts.checkpoint))
       protectedInputs = {
         runId,
         workflowId: def.id,
@@ -631,6 +696,7 @@ export class Orchestrator {
         ...(opts.parentStepRunId ? { parentStepRunId: opts.parentStepRunId } : {}),
         ...(opts.overrides ? { overrides: opts.overrides } : {}),
         ...(workflowStored ? { workflowStored: true as const } : {}),
+        ...(opts.checkpoint ? { checkpoint: opts.checkpoint.seed } : {}),
       },
     };
     await this.stores.events.append(
@@ -675,6 +741,168 @@ export class Orchestrator {
 
   async startAndRun(opts: StartRunOptions): Promise<RunState> {
     return this.run(await this.startRun(opts));
+  }
+
+  /**
+   * Create (not drive) a checkpoint attempt of a failed run (#357): a new top-level run on the
+   * source's pinned workflow and recorded configuration, with its launch inputs and workspace,
+   * that reuses the steps up to the checkpoint and routes on from it. Refused with
+   * `RECOVERY_BLOCKED` and the preview's reasons when the checkpoint is not usable. Taken under
+   * the source's lease, and one attempt per source at a time: attempts share its workspace.
+   */
+  async startCheckpointAttempt(opts: CheckpointAttemptOptions): Promise<string> {
+    const sourceRunId = opts.runId;
+    if (this.running.has(sourceRunId) || this.live.has(sourceRunId))
+      throw new OrcaError("RUN_LEASED", `run ${sourceRunId} is being driven in this process`, { runId: sourceRunId });
+    const holder = newId("orc", this.clock.now());
+    const lease = await this.stores.leases.acquire({
+      resource: runLeaseResource(sourceRunId),
+      holder,
+      ttlMs: this.leaseTtlMs,
+      note: "checkpoint attempt",
+    });
+    if (!ownsLease(lease, holder))
+      throw new OrcaError(
+        "RUN_LEASED",
+        `run ${sourceRunId} is being interpreted by pid ${lease.pid} on ${lease.host}: recover it once that stops`,
+        { runId: sourceRunId, ...describeLease(lease) },
+      );
+    try {
+      return await this.stores.leases.withOwnership(lease, async () => {
+        const attempts = await checkpointAttempts(this.stores, sourceRunId);
+        const prior = attempts.at(-1);
+        const own = opts.admissionRunId !== undefined && prior?.runId === opts.admissionRunId;
+        if (opts.admissionRunId !== undefined && (await checkpointReservationRetired(this.stores, opts.admissionRunId)))
+          throw new OrcaError(
+            "RUN_STATE",
+            `checkpoint attempt ${opts.admissionRunId} was retired before it was created`,
+            {
+              runId: sourceRunId,
+              attemptRunId: opts.admissionRunId,
+            },
+          );
+        if (prior && !own) {
+          if ((await this.stores.events.lastSeq(prior.runId)) !== undefined) {
+            const summary = await this.getSummary(prior.runId);
+            if (!isTerminalStatus(summary.status))
+              throw new OrcaError(
+                "RUN_STATE",
+                `checkpoint attempt ${prior.runId} of run ${sourceRunId} has not finished; recover from it, or wait`,
+                { runId: sourceRunId, attemptRunId: prior.runId },
+              );
+          } else if (!(await checkpointReservationRetired(this.stores, prior.runId)))
+            // Reserved but never created (interrupted): its admission may still create it, so
+            // it keeps the workspace until that admission completes or the reservation is retired.
+            throw new OrcaError(
+              "RUN_STATE",
+              `checkpoint attempt ${prior.runId} of run ${sourceRunId} was reserved and not created; reconcile its admission, or retire it with 'orca recovery retire ${sourceRunId} ${prior.runId}'`,
+              { runId: sourceRunId, attemptRunId: prior.runId },
+            );
+        }
+        const { seed, source } = await checkpointSeed(this.stores, sourceRunId, {
+          checkpoint: opts.checkpoint,
+          principalId: opts.actor?.principalId,
+          leaseHolder: holder,
+          newStepId: () => newId("step", this.clock.now()),
+        });
+        const first = (await this.stores.events.readRange(sourceRunId, { limit: 1 }))[0];
+        if (first?.type !== "run.created") throw unavailable();
+        const inputs = await this.stores.execution.getInputs(sourceRunId);
+        if (first.payload.executionInputsStored && !inputs) throw unavailable();
+        const provenance = source.run.provenance;
+        let generation: GenerationMaterial | undefined;
+        if (provenance) {
+          if (!this.generations) throw unavailable();
+          generation = await this.generations.restore(provenance.configGeneration);
+        }
+        const runId = opts.admissionRunId ?? newId("run", this.clock.now());
+        // Named before the run exists, so a crash in between still keeps a second attempt out.
+        // An admission recovering its own reserved attempt finds it already named.
+        if (!own)
+          await this.stores.execution.putGeneration(checkpointAttemptKey(sourceRunId, attempts.length + 1), {
+            runId,
+            sourceRunId,
+            checkpointStepRunId: seed.stepRunId,
+          });
+        return this.startRun(
+          {
+            ...(opts.actor ? { actor: opts.actor } : {}),
+            workflowId: source.run.workflowId,
+            workflowVersion: source.run.workflowVersion,
+            ...(provenance ? { expectedWorkflowRevision: provenance.workflow.revision } : {}),
+            vars: structuredClone(inputs?.vars ?? first.payload.vars),
+            workspace: structuredClone(source.run.workspace),
+            ...(source.run.requestId ? { requestId: source.run.requestId } : {}),
+            ...(source.run.workItemId ? { workItemId: source.run.workItemId } : {}),
+            ...(source.run.overrides ? { overrides: structuredClone(source.run.overrides) } : {}),
+            ...(opts.admissionRunId ? { admissionRunId: opts.admissionRunId } : {}),
+            ...(opts.directAdmissionId ? { directAdmissionId: opts.directAdmissionId } : {}),
+            checkpoint: { runId, seed, inputs },
+          },
+          generation,
+        );
+      });
+    } finally {
+      await this.stores.leases.release(lease).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Retire a checkpoint attempt that was reserved and never created (an interruption between
+   * the two), so another attempt of its source may start (#357). Only the source's latest
+   * reservation, and only while it has no log; afterwards its admission can never create it.
+   */
+  async retireCheckpointReservation(sourceRunId: string, attemptRunId: string): Promise<void> {
+    const holder = newId("orc", this.clock.now());
+    const lease = await this.stores.leases.acquire({
+      resource: runLeaseResource(sourceRunId),
+      holder,
+      ttlMs: this.leaseTtlMs,
+      note: "retire checkpoint reservation",
+    });
+    if (!ownsLease(lease, holder))
+      throw new OrcaError(
+        "RUN_LEASED",
+        `run ${sourceRunId} is being interpreted by pid ${lease.pid} on ${lease.host}`,
+        {
+          runId: sourceRunId,
+          ...describeLease(lease),
+        },
+      );
+    try {
+      await this.stores.leases.withOwnership(lease, async () => {
+        const latest = (await checkpointAttempts(this.stores, sourceRunId)).at(-1);
+        if (latest?.runId !== attemptRunId)
+          throw new OrcaError(
+            "RUN_STATE",
+            `${attemptRunId} is not the latest checkpoint attempt of run ${sourceRunId}`,
+            {
+              runId: sourceRunId,
+              attemptRunId,
+            },
+          );
+        if ((await this.stores.events.lastSeq(attemptRunId)) !== undefined)
+          throw new OrcaError(
+            "RUN_STATE",
+            `checkpoint attempt ${attemptRunId} was created; it is a run, not a reservation`,
+            {
+              runId: sourceRunId,
+              attemptRunId,
+            },
+          );
+        // Private inputs without run.created: creation may have begun. Ambiguous, not a reservation.
+        if (await this.stores.execution.getInputs(attemptRunId))
+          throw new OrcaError(
+            "RUN_STATE",
+            `checkpoint attempt ${attemptRunId} has execution inputs and no log: its creation may have begun, so it cannot be retired; reconcile its admission`,
+            { runId: sourceRunId, attemptRunId },
+          );
+        if (!(await checkpointReservationRetired(this.stores, attemptRunId)))
+          await this.stores.execution.putGeneration(checkpointRetiredKey(attemptRunId), { sourceRunId });
+      });
+    } finally {
+      await this.stores.leases.release(lease).catch(() => undefined);
+    }
   }
 
   async cancel(runId: string, reason?: string, actor?: MutationActor): Promise<void> {

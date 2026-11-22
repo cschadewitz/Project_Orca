@@ -369,6 +369,47 @@ export class ProtectedEventStore implements EventStore {
       viaEdge.from = input.payload.viaEdge.from;
     }
     if (input.type === "vars.set") publicPayload.vars = publicInputVars({ ...inputs, vars: input.payload.vars });
+    if (input.type === "run.created" && input.payload.checkpoint) {
+      // A checkpoint attempt's seed (#357): its identities, routing results and artifact records
+      // are structural, as in step.completed and artifact.recorded; data and vars are not.
+      const checkpoint = input.payload.checkpoint;
+      const publicCheckpoint = publicPayload.checkpoint as Record<string, unknown>;
+      publicCheckpoint.runId = checkpoint.runId;
+      publicCheckpoint.stepRunId = checkpoint.stepRunId;
+      const steps = publicCheckpoint.steps as Record<string, unknown>[];
+      checkpoint.steps.forEach((step, index) => {
+        const target = steps[index]!;
+        for (const key of ["stepRunId", "from", "nodeId", "nodeType", "attempt", "iteration", "completedAt"] as const)
+          if (Object.hasOwn(step, key)) target[key] = structuredClone(step[key]);
+        const result = target.result as Record<string, unknown>;
+        result.artifactIds = [...step.result.artifactIds];
+        if (step.result.outcome) result.outcome = step.result.outcome;
+        if (step.result.choice !== undefined) result.choice = step.result.choice;
+        result.data = redactExecutionValue(step.result.data, inputs.secrets, true);
+        const children = target.children as Record<string, unknown>[];
+        step.children.forEach((child, at) => {
+          for (const key of ["runId", "workItemId", "resumed", "status", "outcome"] as const)
+            if (Object.hasOwn(child, key)) children[at]![key] = child[key];
+        });
+      });
+      const artifacts = publicCheckpoint.artifacts as Record<string, unknown>[];
+      checkpoint.artifacts.forEach((artifact, index) => {
+        const target = artifacts[index]!;
+        for (const key of [
+          "id",
+          "kind",
+          "version",
+          "size",
+          "contentHash",
+          "createdAt",
+          "producedBy",
+          "parents",
+        ] as const)
+          target[key] = structuredClone(artifact[key]);
+        target.data = redactExecutionValue(artifact.data, inputs.secrets, true);
+      });
+      publicCheckpoint.vars = publicInputVars({ ...inputs, vars: checkpoint.vars });
+    }
     if (input.type === "run.created")
       Object.assign(payload, { vars: publicInputVars(inputs), executionInputsStored: true });
     // A future field must fail closed rather than persist a projection that readers cannot parse.

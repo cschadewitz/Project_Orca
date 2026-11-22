@@ -8,7 +8,13 @@ export interface RetryOptions {
 }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type RetryOperationKind =
-  "request.submit" | "run.admit" | "revision.submit" | "revision.replace" | "run.continue";
+  | "request.submit"
+  | "run.admit"
+  | "revision.submit"
+  | "revision.replace"
+  | "run.continue"
+  /** A checkpoint attempt of a failed run (#357). */
+  | "run.recover";
 export type RetryResult<T> =
   | { state: "resolved"; operationId: string; replayed: boolean; result: T }
   | { state: "in-progress"; operationId: string; recovery: "inspect-or-retry" };
