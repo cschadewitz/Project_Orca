@@ -2,6 +2,12 @@
 # full or as a percentage rollout, or halt a rollout. feed-publish.yml only ever offers a
 # new version to `internal`; everything past that is a deliberate dispatch of this workflow.
 #
+# `channel` picks the Windows desktop channel or the server bundle channel (#877). Promote
+# servers first: from the 0.8 line a ring's desktops are refused any version that ring's
+# servers are not all offered (its full server version), with a message saying so. That is
+# what the feed offers, not what any host has installed or runs (#878/#879 establish that). Servers may
+# run ahead of desktops, and a halt is always allowed.
+#
 # The rules are in tools/deploy/feed-worker/rings.js: rings never move backwards (the client
 # refuses downgrades, so moving a pointer back would only strand people already updated),
 # `stable` never takes a prerelease, and percent 0 halts a rollout without touching the
@@ -14,6 +20,12 @@ name: Desktop feed (promote)
 on:
   workflow_dispatch:
     inputs:
+      channel:
+        description: "desktop = Windows app, server = headless server bundle (promote servers first)"
+        required: true
+        type: choice
+        options: [desktop, server]
+        default: desktop
       ring:
         description: "Ring to change"
         required: true
@@ -39,7 +51,7 @@ permissions:
 
 jobs:
   promote:
-    name: promote ${{ inputs.version }} in ${{ inputs.ring }}
+    name: promote ${{ inputs.channel }} ${{ inputs.version }} in ${{ inputs.ring }}
     if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
     runs-on: ubuntu-24.04
     environment: desktop-feed
@@ -74,7 +86,12 @@ jobs:
           RING: ${{ inputs.ring }}
           VERSION: ${{ inputs.version }}
           PERCENT: ${{ inputs.percent }}
+          CHANNEL: ${{ inputs.channel }}
         # Prove R2 still honours conditional writes before relying on them.
         run: |
           bash tools/deploy/feed-r2.sh probe
-          bash tools/deploy/feed-r2.sh promote "$RING" "$VERSION" "$PERCENT"
+          case "$CHANNEL" in
+            desktop) bash tools/deploy/feed-r2.sh promote "$RING" "$VERSION" "$PERCENT" ;;
+            server) bash tools/deploy/feed-r2.sh promote-server "$RING" "$VERSION" "$PERCENT" ;;
+            *) echo "::error::unknown channel $CHANNEL"; exit 1 ;;
+          esac

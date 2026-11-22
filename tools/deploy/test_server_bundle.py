@@ -193,6 +193,23 @@ class ServerBundleTests(unittest.TestCase):
         self.assertEqual(self.deployment.stage_bundle("v0.8.0").name, "v0.8.0")
         self.assertEqual(len(fetched), 3)
 
+    def test_fetch_only_verifies_without_a_deployment(self):
+        # The update feed's publication (#877): the same fetch and verification, no staging.
+        self.fetch_fixture("RECORD")
+        out = self.tmp / "fetched"
+        with patch.object(release.BundleSource, "cosign", release.Deployment.cosign), \
+                patch("sys.stdout", new_callable=io.StringIO) as printed:
+            release.fetch_only(["--cache", str(self.tmp / "cache"), "0.8.0", str(out)])
+        self.assertEqual(json.loads(printed.getvalue())["archive"], self.manifest["archive"])
+        self.assertEqual(sorted(p.name for p in out.iterdir()), sorted(p.name for p in self.files.iterdir()))
+        self.assertIn(release.BUNDLE_SIGNER, self.cosign_log.read_text().splitlines())
+        with self.assertRaises(FileExistsError):
+            release.fetch_only(["--cache", str(self.tmp / "cache"), "0.8.0", str(out)])
+        self.cosign_exit = 1
+        with patch.object(release.BundleSource, "cosign", release.Deployment.cosign), \
+                self.assertRaisesRegex(RuntimeError, "signature refused"):
+            release.fetch_only(["--cache", str(self.tmp / "cache"), "0.8.0", str(self.tmp / "again")])
+
     def test_a_bundle_without_its_record_is_not_ready(self):
         for body in ("Notes.", "RECORD RECORD"):
             with self.subTest(body=body):
