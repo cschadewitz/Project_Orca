@@ -65,6 +65,8 @@ describe("store workload benchmark", () => {
     expect(md).toMatch(/\| Checks \| pass \| pass \| pass \|/);
     expect(md).toContain("- absent: skipped (not built here)");
     expect(md).not.toContain("undefined");
+    // Memory has no cold reads: its cold cell says so rather than borrowing the warm figure.
+    expect(md).toMatch(/\| History tail page p95 \(cold\) \| no cold state \| [\d.]+ ms \| [\d.]+ ms \|/);
     for (const plain of ["memory", "file"])
       expect(report.results.find((r) => r.backend === plain).workloads.walCheckpoint).toMatchObject({
         skipped: "no write-ahead log on this backend",

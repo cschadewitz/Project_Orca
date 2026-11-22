@@ -110,8 +110,8 @@ optional `repeat`). Each report is kept as an artifact for 90 days
 
 A hosted runner is not dedicated hardware: its CPU model can change between runs and it
 shares a host, so compare reports by their recorded `machine` and treat small
-differences as noise. Each report records the commit, CPU model and count, memory, and
-Node version, so a comparison across runs is always of known machines.
+differences as noise. Each report records the commit, CPU model and count, memory,
+Node version and, on a hosted runner, the runner image and its version, so a comparison across runs is always of known machines.
 
 ## What is next (not in this PR)
 

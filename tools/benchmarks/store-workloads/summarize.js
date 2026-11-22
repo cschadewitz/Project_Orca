@@ -20,7 +20,9 @@ export function summarize(report) {
   lines.push("");
   lines.push(
     `Commit \`${String(report.commit ?? "unknown").slice(0, 12)}\`${report.dirty ? " (dirty)" : ""}, ` +
-      `${m.cpu ?? "unknown CPU"} x${m.cpus ?? "?"}, Node ${m.node ?? "?"}, seed ${report.seed}, repeat ${report.repeat}.`,
+      `${m.cpu ?? "unknown CPU"} x${m.cpus ?? "?"}, Node ${m.node ?? "?"}` +
+      (m.runnerImage ? `, runner image ${m.runnerImage.os} ${m.runnerImage.version ?? "?"}` : "") +
+      `, seed ${report.seed}, repeat ${report.repeat}.`,
   );
   lines.push("");
   const ran = report.results.filter((r) => r.status === "ran");
@@ -36,10 +38,13 @@ export function summarize(report) {
   lines.push(row("Event appends while seeding (/s)", (_, r) => num(r.seeding?.history?.appendsPerSecond)));
   lines.push(row("Dependency question, warm p95", (w) => ms(w.dependencyTraversal?.warm?.p95)));
   lines.push(row("History page, forward walk p95 (warm)", (w) => ms(w.paginatedHistory?.warm?.forwardPages?.p95)));
+  // A backend with no cold state (in-process) says so; a cold row never shows a warm figure.
   lines.push(
-    row("History tail page p95 (cold)", (w) =>
-      ms(w.paginatedHistory?.cold?.tailPage?.p95 ?? w.paginatedHistory?.warm?.tailPage?.p95),
-    ),
+    row("History tail page p95 (cold)", (w) => {
+      const cold = w.paginatedHistory?.cold;
+      if (typeof cold === "string") return "no cold state";
+      return cold?.tailPage ? ms(cold.tailPage.p95) : "unavailable";
+    }),
   );
   for (const n of writers)
     lines.push(
