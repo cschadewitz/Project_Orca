@@ -8,6 +8,8 @@
  * ran after it last time. Executing a checkpoint attempt is not offered yet.
  */
 import {
+  consoleLogger,
+  loadWorkflows,
   OrcaError,
   RECOVERY_BLOCKER_TEXT,
   type RecoveryAssessment,
@@ -15,28 +17,16 @@ import {
   type RecoveryOption,
   type RecoveryStep,
 } from "@orca/core";
-import { previewRecovery } from "@orca/engine";
-import { bootstrap } from "../bootstrap.js";
+import { resolve } from "node:path";
+import { INLINE_SEP, previewRecovery } from "@orca/engine";
+import { enterStoreFormat, fileStores } from "@orca/store";
+import { loadConfig, releaseAssets } from "../bootstrap.js";
 import type { CommandContext } from "./index.js";
 
 export async function recoveryCommand(ctx: CommandContext): Promise<number> {
   const runId = ctx.positionals[0];
   if (!runId) throw new OrcaError("CONFIG_INVALID", "recovery needs a run id");
-  const app = await bootstrap({
-    cwd: ctx.cwd,
-    ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
-    logLevel: "warn",
-  });
-  const orchestrator = app.orchestrator;
-  const summary = await orchestrator.getSummary(runId);
-  const currentWorkflowVersion = await orchestrator
-    .selectDefinition(summary.workflowId)
-    .then((definition) => definition.version)
-    .catch(() => undefined);
-  const assessment = await previewRecovery(orchestrator.stores, runId, {
-    currentWorkflowVersion,
-    currentConfigGeneration: orchestrator.generations?.current.snapshot.id,
-  });
+  const assessment = await readRecovery(ctx.cwd, ctx.configPath, runId);
   const only = typeof ctx.flags.checkpoint === "string" ? ctx.flags.checkpoint : undefined;
   if (only !== undefined && !assessment.checkpoints.some((c) => c.nodeId === only))
     throw new OrcaError("CONFIG_INVALID", `run ${runId} has no completed step '${only}' to recover from`);
@@ -51,6 +41,35 @@ export async function recoveryCommand(ctx: CommandContext): Promise<number> {
   return 0;
 }
 
+/**
+ * A reader-only composition, not `bootstrap`: no writer claim, no store-format stamp, no plugin
+ * loading and no configuration generation. It reads the config file, checks the store format in
+ * read mode, opens the file stores and reads; the workflow files are parsed only to say which
+ * version a new run would use now. Configuration drift needs a generation, which only a writer
+ * records, so this path does not report it.
+ */
+export async function readRecovery(
+  cwd: string,
+  configPath: string | undefined,
+  runId: string,
+): Promise<RecoveryAssessment> {
+  const { config, configDir } = await loadConfig(cwd, configPath);
+  const storeDir = resolve(configDir, config.storeDir);
+  await enterStoreFormat(storeDir, { appVersion: "recovery-preview", mode: "read" });
+  const stores = fileStores(storeDir, undefined, consoleLogger("error"));
+  const summary = await stores.events.readRange(runId, { limit: 1 });
+  const first = summary[0];
+  if (!first) throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
+  const rootId = first.type === "run.created" ? first.payload.workflowId.split(INLINE_SEP)[0]! : undefined;
+  const currentWorkflowVersion = rootId
+    ? await releaseAssets(config)
+        .then((assets) => loadWorkflows(assets.workflows, configDir))
+        .then((workflows) => (workflows.has(rootId) ? workflows.get(rootId).version : undefined))
+        .catch(() => undefined)
+    : undefined;
+  return previewRecovery(stores, runId, { currentWorkflowVersion });
+}
+
 const KIND_LABEL: Record<RecoveryOption["kind"], string> = {
   resume: "Resume",
   "new-run": "New run",
@@ -61,6 +80,7 @@ const EFFECT_LABEL: Record<RecoveryStep["effect"], string> = {
   repeats: "runs again; its earlier changes stay",
   reused: "reused",
   "not-started": "never started",
+  restarts: "did not complete; it acts only inside ORCA and starts again",
 };
 
 function step(s: RecoveryStep): string {

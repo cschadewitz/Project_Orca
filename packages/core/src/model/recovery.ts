@@ -66,10 +66,17 @@ export const RecoveryEffectSchema = z.enum([
   "reused",
   /** Scheduled and never started: nothing it did needs review. */
   "not-started",
+  /**
+   * Started and did not complete, but it acts only inside ORCA (a gate waiting on a person, a
+   * container waiting on its children, a `set`): it starts again with nothing outside to review.
+   */
+  "restarts",
 ]);
 export type RecoveryEffect = z.infer<typeof RecoveryEffectSchema>;
 
 export const RecoveryStepSchema = z.object({
+  /** The run the step belongs to: an ancestor's step when resume re-drives that ancestor. */
+  runId: z.string(),
   stepRunId: z.string(),
   nodeId: z.string(),
   nodeType: z.string(),
@@ -129,6 +136,15 @@ export const RecoveryAssessmentSchema = z.object({
 });
 export type RecoveryAssessment = z.infer<typeof RecoveryAssessmentSchema>;
 
+/** What resume needs to know about one run it would drive. */
+export interface RecoveryRunFacts {
+  state: RunState;
+  workflowStored: boolean;
+  workflowReadable: boolean;
+  executionInputsAvailable: boolean;
+  leased: boolean;
+}
+
 export interface RecoveryFacts {
   state: RunState;
   /** `run.created`'s recorded principal, when the run recorded one. */
@@ -143,8 +159,12 @@ export interface RecoveryFacts {
   executionInputsAvailable: boolean;
   /** A live lease on the run is held by someone (not lapsed). */
   leased: boolean;
-  /** The run to re-drive on resume: the run itself, or its topmost paused ancestor. */
-  resumeTargetRunId: string;
+  /**
+   * The paused ancestors resume would re-drive with this run, nearest first; the last is the run
+   * actually re-driven. Empty for a top-level run or one whose parent is not paused. Each is
+   * checked as the run itself is, because resume drives all of them.
+   */
+  resumeAncestors?: readonly RecoveryRunFacts[];
   /** False for an artifact id the store cannot read. */
   artifactPresent: (artifactId: string) => boolean;
   currentWorkflowVersion?: string | undefined;
@@ -154,32 +174,54 @@ export interface RecoveryFacts {
 const TERMINAL: ReadonlySet<string> = new Set(["completed", "failed", "cancelled"]);
 const HUMAN_NODES: ReadonlySet<string> = new Set(["gate", "decision"]);
 const SETTLED_STEP: ReadonlySet<StepStatus> = new Set(["completed", "skipped"]);
+/**
+ * Node types whose own work stays inside ORCA. A container's effects belong to its child runs,
+ * which are assessed as runs. Anything else - an agent, a plugin's custom node, a decision an
+ * agent made - can act on the workspace or the outside world.
+ */
+const INTERNAL_NODES: ReadonlySet<string> = new Set([
+  "start",
+  "end",
+  "gate",
+  "decision",
+  "set",
+  "loop",
+  "parallel",
+  "subworkflow",
+]);
+const mayActOutside = (step: StepRun): boolean =>
+  !INTERNAL_NODES.has(step.nodeType) || step.agentSessionId !== undefined;
 
 export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
   const { state } = facts;
   const run = state.run;
   const steps = state.stepOrder.map((id) => state.steps[id]).filter((s): s is StepRun => Boolean(s));
-  const agentFor = new Map((run.provenance?.selections ?? []).map((s) => [s.nodeId, s.agent.value]));
-  const humanSteps = new Set(Object.values(state.humanInputs).map((input) => input.stepRunId));
-  const view = (step: StepRun, effect: RecoveryEffect): RecoveryStep => {
-    const artifactIds = step.result?.artifactIds ?? [];
-    const agent = agentFor.get(step.nodeId);
-    return {
-      stepRunId: step.id,
-      nodeId: step.nodeId,
-      nodeType: step.nodeType,
-      attempt: step.attempt,
-      status: step.status,
-      effect,
-      ...(agent !== undefined && step.nodeType === "agent" ? { agent } : {}),
-      asksAgain: effect !== "reused" && (HUMAN_NODES.has(step.nodeType) || humanSteps.has(step.id)),
-      artifactIds,
-      missingArtifactIds: artifactIds.filter((id) => !facts.artifactPresent(id)),
+  const viewIn = (owner: RunState) => {
+    const agentFor = new Map((owner.run.provenance?.selections ?? []).map((s) => [s.nodeId, s.agent.value]));
+    const humanSteps = new Set(Object.values(owner.humanInputs).map((input) => input.stepRunId));
+    return (step: StepRun, effect: RecoveryEffect): RecoveryStep => {
+      const artifactIds = step.result?.artifactIds ?? [];
+      const agent = agentFor.get(step.nodeId);
+      return {
+        runId: owner.run.id,
+        stepRunId: step.id,
+        nodeId: step.nodeId,
+        nodeType: step.nodeType,
+        attempt: step.attempt,
+        status: step.status,
+        effect,
+        ...(agent !== undefined && step.nodeType === "agent" ? { agent } : {}),
+        asksAgain: effect !== "reused" && (HUMAN_NODES.has(step.nodeType) || humanSteps.has(step.id)),
+        artifactIds,
+        missingArtifactIds: artifactIds.filter((id) => !facts.artifactPresent(id)),
+      };
     };
   };
-  // A step that began and never reported success may have acted. A skipped or merely scheduled
-  // step never ran; a completed one is known done.
-  const isUncertain = (step: StepRun): boolean => step.startedAt !== undefined && !SETTLED_STEP.has(step.status);
+  const view = viewIn(state);
+  // A step that began, never reported success and can act outside ORCA may have acted. A skipped
+  // or merely scheduled step never ran; a completed one is known done.
+  const isUncertain = (step: StepRun): boolean =>
+    step.startedAt !== undefined && !SETTLED_STEP.has(step.status) && mayActOutside(step);
   const uncertain = steps.filter(isUncertain).map((step) => view(step, "uncertain"));
 
   const terminal = TERMINAL.has(run.status);
@@ -188,11 +230,31 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
   if (facts.leased) shared.push("leased");
   if (!facts.executionInputsAvailable) shared.push("execution-inputs-missing");
 
-  // Resume: what the interpreter does today (orchestrator resume) - re-attempt the last step
-  // when it did not complete, then carry on routing.
-  const resumeBlockers: RecoveryBlocker[] = [...(terminal ? (["terminal"] as const) : []), ...shared];
-  const last = steps.at(-1);
-  const resumeRunsAgain = !terminal && last && last.status !== "completed" ? [view(last, effectOf(last))] : [];
+  // Resume: what the interpreter does today (orchestrator resume). It re-drives the topmost
+  // paused ancestor, which re-attaches down to this run, and each run it drives re-attempts its
+  // last step when that did not complete. Every run in that chain is checked, not only this one.
+  const ancestors = facts.resumeAncestors ?? [];
+  const chain: RecoveryRunFacts[] = [
+    {
+      state,
+      workflowStored: facts.workflowStored,
+      workflowReadable: facts.workflowReadable,
+      executionInputsAvailable: facts.executionInputsAvailable,
+      leased: facts.leased,
+    },
+    ...ancestors,
+  ];
+  const resumeTargetRunId = chain.at(-1)!.state.run.id;
+  const resumeBlockers: RecoveryBlocker[] = terminal ? ["terminal"] : [];
+  const resumeRunsAgain: RecoveryStep[] = [];
+  for (const member of terminal ? [] : [...chain].reverse()) {
+    if (member.leased) resumeBlockers.push("leased");
+    if (!member.executionInputsAvailable) resumeBlockers.push("execution-inputs-missing");
+    if (member.workflowStored && !member.workflowReadable) resumeBlockers.push("workflow-missing");
+    const order = member.state.stepOrder;
+    const last = member.state.steps[order[order.length - 1] ?? ""];
+    if (last && last.status !== "completed") resumeRunsAgain.push(viewIn(member.state)(last, effectOf(last)));
+  }
 
   // Checkpoints: every completed step, in scheduling order. A loop back to an earlier node makes
   // several, one for each point in the history.
@@ -277,7 +339,7 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
         kind: "resume",
         available: resumeBlockers.length === 0,
         blockers: unique(resumeBlockers),
-        ...(child || facts.resumeTargetRunId !== run.id ? { targetRunId: facts.resumeTargetRunId } : {}),
+        ...(resumeTargetRunId !== run.id ? { targetRunId: resumeTargetRunId } : {}),
         runsAgain: resumeRunsAgain,
       },
       newRun,
@@ -299,7 +361,8 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
 
   function effectOf(step: StepRun): RecoveryEffect {
     if (step.startedAt === undefined || step.status === "skipped") return "not-started";
-    return isUncertain(step) ? "uncertain" : "repeats";
+    if (isUncertain(step)) return "uncertain";
+    return step.status === "completed" ? "repeats" : "restarts";
   }
 }
 

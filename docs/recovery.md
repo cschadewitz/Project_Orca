@@ -11,6 +11,12 @@ orca recovery <runId> --checkpoint <nodeId> # what a checkpoint after that step 
 orca recovery <runId> --json                # the RecoveryAssessment, for tools
 ```
 
+The command does not go through `bootstrap`: it takes no writer claim, stamps no store format,
+loads no plugin and records no configuration generation. It reads the config file, checks the
+store format in read mode, opens the file stores and reads. Configuration drift needs a
+generation, which only a writer records, so the CLI does not report it; the API does when given
+the current generation.
+
 The model is `assessRecovery` in `packages/core/src/model/recovery.ts` (pure); the store read
 that feeds it is `previewRecovery` in `packages/engine/src/recovery-preview.ts`.
 
@@ -18,7 +24,7 @@ that feeds it is `previewRecovery` in `packages/engine/src/recovery-preview.ts`.
 
 | Option | What it is | Available when |
 | --- | --- | --- |
-| **Resume** | Re-drives the existing run from its own log, exactly as `orca resume` does today. A step that did not complete is attempted again as a new attempt; the topmost paused ancestor is the run actually re-driven. | The run has not ended, no live lease is held by another process, and its recorded launch inputs are readable. |
+| **Resume** | Re-drives the existing run from its own log, exactly as `orca resume` does today. The topmost paused ancestor is the run actually re-driven, and it re-attaches down to this one; each run in that chain attempts its unfinished last step again. | The run has not ended, and for every run in that chain: no live lease held by another process, readable launch inputs, and a readable pinned definition. |
 | **New run** | An intentional fresh execution of the workflow. Reuses nothing. | Always. The preview lists what the old run did so it is visible what would run again. |
 | **Checkpoint attempt** | A separately identified new run that would start after a completed step of a failed run, reusing that step's and its predecessors' recorded results and artifacts, linked to the original. Previewed only. | The run failed, it is a top-level run, the asker is the principal that started it (when the run recorded one), its workflow version is pinned and readable, its launch inputs are readable, it is not leased, and every artifact the checkpoint reuses reads back. |
 
@@ -30,12 +36,16 @@ exception.
 
 Each step in a preview carries one effect:
 
-- **uncertain**: it started and did not complete. It may have changed the workspace or external
+- **uncertain**: it started, did not complete, and can act outside ORCA (an agent, a plugin's
+  custom node, a decision an agent made). It may have changed the workspace or external
   systems, and nothing in ORCA can confirm whether it did. These are listed together under
   "Review before anything runs these again". Resume of an interrupted run lists its interrupted
   step this way, because resume runs that step again.
 - **repeats**: it completed; running it again repeats its work on top of the changes it already made.
 - **reused**: its recorded result and artifacts are reused and it does not run.
+- **restarts**: it started and did not complete, but it acts only inside ORCA (a gate waiting on
+  a person, a container waiting on its children, a `set`), so it starts again with nothing outside
+  to review. A container's children are assessed as runs of their own.
 - **not-started**: it was scheduled or skipped and never ran.
 
 A gate, decision or step that asked a person is marked `asksAgain` whenever it would run again.

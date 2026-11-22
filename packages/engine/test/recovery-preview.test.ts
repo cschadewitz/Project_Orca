@@ -195,6 +195,58 @@ describe("previewRecovery", () => {
     expect(a.uncertain.map((s) => s.nodeId)).toEqual(["a"]);
   });
 
+  it("resume of a child checks the paused ancestor it would actually re-drive", async () => {
+    const stores = memoryStores();
+    const append = (runId: string, event: Omit<OrcaEventInput, "runId">) =>
+      stores.events.append({ ...event, runId } as OrcaEventInput);
+    // parent (paused, its fan-out step waiting on the child) -> child (paused at an agent step).
+    await append("run_p", {
+      type: "run.created",
+      payload: { workflowId: "wf", workflowVersion: "1", workspace: ws, vars: {}, workflowStored: true },
+    });
+    await append("run_p", { type: "run.started", payload: {} } as never);
+    await append("run_p", {
+      type: "step.scheduled",
+      payload: { stepRunId: "p_fan", nodeId: "fan", nodeType: "parallel", attempt: 1 },
+    });
+    await append("run_p", { type: "step.started", payload: { stepRunId: "p_fan", inputArtifactIds: [] } });
+    await append("run_p", { type: "run.paused", payload: {} } as never);
+    await append("run_c", {
+      type: "run.created",
+      payload: {
+        workflowId: "wf::fan",
+        workflowVersion: "1",
+        workspace: ws,
+        vars: {},
+        parentRunId: "run_p",
+        parentStepRunId: "p_fan",
+      },
+    });
+    await append("run_c", { type: "run.started", payload: {} } as never);
+    await append("run_c", {
+      type: "step.scheduled",
+      payload: { stepRunId: "c_a", nodeId: "a", nodeType: "agent", attempt: 1 },
+    });
+    await append("run_c", { type: "step.started", payload: { stepRunId: "c_a", inputArtifactIds: [] } });
+    await append("run_c", { type: "run.paused", payload: {} } as never);
+
+    // The parent's pinned definition is unreadable, and another process holds its lease.
+    const lease = await stores.leases.acquire({ resource: runLeaseResource("run_p"), holder: "other", ttlMs: 60_000 });
+    let resume = (await previewRecovery(stores, "run_c")).options.find((o) => o.kind === "resume")!;
+    expect(resume).toMatchObject({ available: false, targetRunId: "run_p" });
+    expect(resume.blockers).toEqual(expect.arrayContaining(["leased", "workflow-missing"]));
+    expect(resume.runsAgain.map((s) => [s.runId, s.nodeId, s.effect])).toEqual([
+      ["run_p", "fan", "restarts"],
+      ["run_c", "a", "uncertain"],
+    ]);
+
+    // Readable and free: available, and still targeting the parent.
+    await stores.leases.release(lease);
+    await stores.workflows.put({ id: "wf", version: "1", nodes: { start: { type: "start" } }, edges: [] } as never);
+    resume = (await previewRecovery(stores, "run_c")).options.find((o) => o.kind === "resume")!;
+    expect(resume).toMatchObject({ available: true, blockers: [], targetRunId: "run_p" });
+  });
+
   it("an unknown run is RUN_NOT_FOUND", async () => {
     await expect(previewRecovery(memoryStores(), "run_nope")).rejects.toMatchObject({ code: "RUN_NOT_FOUND" });
   });

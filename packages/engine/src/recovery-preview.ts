@@ -3,7 +3,14 @@
  * `assessRecovery` needs from the stores and changes nothing. It takes no lease, appends no
  * event and starts nothing, so it is safe to call while another process drives the run.
  */
-import { assessRecovery, OrcaError, reduceRun, type RecoveryAssessment } from "@orca/core";
+import {
+  assessRecovery,
+  OrcaError,
+  reduceRun,
+  type OrcaEventPayload,
+  type RecoveryAssessment,
+  type RecoveryRunFacts,
+} from "@orca/core";
 import { lapsed, type Stores } from "@orca/store";
 import { INLINE_SEP, runLeaseResource } from "./orchestrator.js";
 
@@ -22,39 +29,19 @@ export async function previewRecovery(
   runId: string,
   options: RecoveryPreviewOptions = {},
 ): Promise<RecoveryAssessment> {
-  const events = await stores.events.read(runId);
-  const first = events[0];
-  if (!first) throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
-  if (first.type !== "run.created") throw new OrcaError("RUN_STATE", `run ${runId} has no run.created event`);
-  const state = reduceRun(events);
-  const created = first.payload;
+  const self = await runFacts(stores, runId, options.now);
+  if (!self) throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
+  const { facts, created } = self;
+  const state = facts.state;
 
-  const rootId = state.run.workflowId.split(INLINE_SEP)[0]!;
-  const workflowStored = created.workflowStored === true;
-  const workflowReadable = workflowStored
-    ? await stores.workflows.get(rootId, state.run.workflowVersion).then(
-        (definition) => definition !== undefined,
-        () => false,
-      )
-    : true;
-  const executionInputsAvailable = created.executionInputsStored
-    ? await stores.execution.getInputs(runId).then(
-        (inputs) => inputs !== undefined,
-        () => false,
-      )
-    : true;
-  const lease = await stores.leases.get(runLeaseResource(runId));
-  const leased = lease !== undefined && !lapsed(lease, options.now);
-
-  // Resume re-drives the topmost paused ancestor, as the orchestrator does.
-  let resumeTargetRunId = runId;
+  // Resume re-drives the topmost paused ancestor, as the orchestrator does, and so drives every
+  // paused run between it and this one. Each of them is checked like this run.
+  const resumeAncestors: RecoveryRunFacts[] = [];
   for (let parentId = state.run.parentRunId; parentId;) {
-    const parentEvents = await stores.events.read(parentId);
-    if (!parentEvents.length) break;
-    const parent = reduceRun(parentEvents);
-    if (parent.run.status !== "paused") break;
-    resumeTargetRunId = parentId;
-    parentId = parent.run.parentRunId;
+    const parent = await runFacts(stores, parentId, options.now);
+    if (!parent || parent.facts.state.run.status !== "paused") break;
+    resumeAncestors.push(parent.facts);
+    parentId = parent.facts.state.run.parentRunId;
   }
 
   // An artifact counts only when its record and its bytes read back (the file backend also
@@ -72,16 +59,43 @@ export async function previewRecovery(
   }
 
   return assessRecovery({
-    state,
+    ...facts,
     creatorPrincipalId: created.actor?.principalId,
     principalId: options.principalId,
-    workflowStored,
-    workflowReadable,
-    executionInputsAvailable,
-    leased,
-    resumeTargetRunId,
+    resumeAncestors,
     artifactPresent: (id) => present.has(id),
     currentWorkflowVersion: options.currentWorkflowVersion,
     currentConfigGeneration: options.currentConfigGeneration,
   });
+}
+
+/** One run's log, pinned definition, launch inputs and lease, read without writing anything. */
+async function runFacts(
+  stores: Stores,
+  runId: string,
+  now: number | undefined,
+): Promise<{ facts: RecoveryRunFacts; created: OrcaEventPayload<"run.created"> } | undefined> {
+  const events = await stores.events.read(runId);
+  const first = events[0];
+  if (!first) return undefined;
+  if (first.type !== "run.created") throw new OrcaError("RUN_STATE", `run ${runId} has no run.created event`);
+  const state = reduceRun(events);
+  const created = first.payload;
+  const rootId = state.run.workflowId.split(INLINE_SEP)[0]!;
+  const workflowStored = created.workflowStored === true;
+  const workflowReadable = workflowStored
+    ? await stores.workflows.get(rootId, state.run.workflowVersion).then(
+        (definition) => definition !== undefined,
+        () => false,
+      )
+    : true;
+  const executionInputsAvailable = created.executionInputsStored
+    ? await stores.execution.getInputs(runId).then(
+        (inputs) => inputs !== undefined,
+        () => false,
+      )
+    : true;
+  const lease = await stores.leases.get(runLeaseResource(runId));
+  const leased = lease !== undefined && !lapsed(lease, now);
+  return { facts: { state, workflowStored, workflowReadable, executionInputsAvailable, leased }, created };
 }

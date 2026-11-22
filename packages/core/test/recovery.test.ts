@@ -44,7 +44,6 @@ function facts(status: RunState["run"]["status"], steps: StepRun[], extra: Parti
     workflowReadable: true,
     executionInputsAvailable: true,
     leased: false,
-    resumeTargetRunId: "run",
     artifactPresent: () => true,
     ...extra,
   };
@@ -65,12 +64,30 @@ describe("assessRecovery", () => {
     }
   });
 
-  it("a child run is recovered through its parent", () => {
-    const f = facts("paused", [stepRun("s1", "a", "waiting")], { resumeTargetRunId: "parent" });
+  it("a child run is resumed through its paused parent, and the parent is checked too", () => {
+    const parentFacts = facts("paused", [stepRun("p1", "fan", "running")]);
+    parentFacts.state.run.id = "parent";
+    const f = facts("paused", [stepRun("s1", "a", "waiting")], { resumeAncestors: [parentFacts] });
     f.state.run.parentRunId = "parent";
     const a = assessRecovery(f);
     expect(option(a, "resume")).toMatchObject({ available: true, targetRunId: "parent" });
+    // Both runs' unfinished steps are attempted again; the parent's first, as it is driven first.
+    expect(option(a, "resume").runsAgain.map((s) => [s.runId, s.nodeId])).toEqual([
+      ["parent", "fan"],
+      ["run", "a"],
+    ]);
     expect(option(a, "checkpoint-attempt").blockers).toEqual(expect.arrayContaining(["not-terminal", "child-run"]));
+
+    for (const broken of [
+      { leased: true, blocker: "leased" },
+      { executionInputsAvailable: false, blocker: "execution-inputs-missing" },
+      { workflowReadable: false, blocker: "workflow-missing" },
+    ] as const) {
+      const { blocker, ...fault } = broken;
+      const g = facts("paused", [stepRun("s1", "a", "waiting")], { resumeAncestors: [{ ...parentFacts, ...fault }] });
+      g.state.run.parentRunId = "parent";
+      expect(option(assessRecovery(g), "resume")).toMatchObject({ available: false, blockers: [blocker] });
+    }
   });
 
   it("unreadable history fails closed for every option that continues it", () => {
