@@ -24,7 +24,24 @@
 import { randomUUID } from "node:crypto";
 import type { RunsRecoverResult } from "@orca/protocol";
 import type { RecoveryIntentOutcome, RecoveryIntentView } from "../bridge.js";
+import { daemonEndpoint, type DaemonTargetSnapshot } from "../daemon-connection.js";
 import { type IntentEncryption, type IntentScope, ProtectedJournal } from "./admission-intents.js";
+
+/**
+ * The stable half of an intent's scope: where the daemon is, independent of this connection.
+ * An SSH profile's tunnel listens on a new loopback port each time, so a profile is named by its
+ * id and destination, never its local URL; editing the destination makes it a different target,
+ * whose intents stay hidden and block the same run until the original is reached again.
+ * Workspace and principal come from the verified discovery beside it, and the connection epoch
+ * stays a separate in-flight guard (`assertCurrent`).
+ */
+export function recoveryTarget(
+  target: Pick<DaemonTargetSnapshot, "source" | "url" | "profile">,
+  bundledPath: string,
+): string {
+  if (target.profile) return `ssh:${target.profile.id}@${target.profile.destination}`;
+  return target.source === "bundled" ? `bundled:${bundledPath}` : daemonEndpoint(target.url);
+}
 
 export interface RecoveryIntentRecord extends IntentScope {
   id: string;

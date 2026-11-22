@@ -245,7 +245,9 @@ none of it and a `--read-only` daemon shows the assessment without buttons.
   verified connection and principal, the source run, the checkpoint, its idempotency key, a
   reserved receipt once there is one, and the attempt the daemon accepted) is kept by the app's
   main process in an encrypted journal (`recovery-intents.enc`, OS keychain, never plain text),
-  not in the window. Leaving the run, selecting a step, reloading or restarting the app finds the
+  not in the window. An SSH profile's connection is identified by the profile and its
+  destination, not its tunnel's local port, so reconnecting finds the same intent while a
+  changed destination does not. Leaving the run, selecting a step, reloading or restarting the app finds the
   same intent above the checkpoints, and no other checkpoint of that run can be started
   meanwhile:
   - **Ask again** sends the same key after any answer that is not an outcome: a lost reply, an

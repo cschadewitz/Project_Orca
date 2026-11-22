@@ -11,7 +11,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunsRecoverResult } from "@orca/protocol";
 import type { IntentEncryption, IntentScope } from "../src/main/admission-intents.js";
-import { RecoveryIntentController, RecoveryIntents, type RecoveryConnection } from "../src/main/recovery-intents.js";
+import {
+  RecoveryIntentController,
+  RecoveryIntents,
+  recoveryTarget,
+  type RecoveryConnection,
+} from "../src/main/recovery-intents.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -224,4 +229,37 @@ it("keeps an intent to its own connection and principal, and dismisses only afte
   expect(await f.controller().dismiss(intent!.id)).toEqual({ abandoned: true });
   expect(await f.controller().list("run-src")).toEqual([]);
   expect(f.recover).toHaveBeenCalledTimes(1);
+});
+
+it("finds an SSH profile's intent after a reconnect on another loopback port, and refuses a changed destination", async () => {
+  const f = fixture();
+  const profile = { id: "prof-1", name: "lab", destination: "orca@build-host" };
+  const viaPort = (port: number, destination = profile.destination) => ({
+    ...f.scope,
+    target: recoveryTarget(
+      { source: "saved", url: `http://127.0.0.1:${port}`, profile: { ...profile, destination } },
+      "/unused",
+    ),
+  });
+  f.useConnection(async () => f.connection({ scope: viaPort(40001) }));
+  f.recover.mockRejectedValueOnce(new Error("tunnel closed"));
+  await expect(f.controller().start("run-src", "cp-1")).rejects.toThrow("tunnel closed");
+
+  // Reconnected through a new tunnel: same profile and destination, so the same intent and key.
+  f.useConnection(async () => f.connection({ scope: viaPort(40517) }));
+  expect(await f.controller().list("run-src")).toHaveLength(1);
+  f.recover.mockResolvedValueOnce(accepted("run-attempt"));
+  await f.controller().start("run-src", "cp-1");
+  const [first, second] = f.recover.mock.calls.map(([params]) => params.idempotencyKey);
+  expect(second).toBe(first);
+
+  // The profile now points somewhere else: not this intent's daemon.
+  f.useConnection(async () => f.connection({ scope: viaPort(40517, "orca@other-host") }));
+  expect(await f.controller().list("run-src")).toEqual([]);
+  await expect(f.controller().start("run-src", "cp-1")).rejects.toThrow(/another connection or principal/);
+  // A plain URL target is still its endpoint, and a bundled daemon its store path.
+  expect(recoveryTarget({ source: "saved", url: "http://10.0.0.5:6722/" }, "/x")).toBe(
+    recoveryTarget({ source: "saved", url: "http://10.0.0.5:6722" }, "/x"),
+  );
+  expect(recoveryTarget({ source: "bundled", url: "http://127.0.0.1:6722" }, "/work/orca")).toBe("bundled:/work/orca");
 });

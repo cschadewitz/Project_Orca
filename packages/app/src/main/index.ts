@@ -31,7 +31,7 @@ import { installFirstRunIPC, startFirstRunWorkspace } from "./first-run/ipc.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
 import type { DiagnosticsResult } from "../diagnostics-contract.js";
 import { AdmissionIntents, AdmissionIntentController, protectedStorageBridgeError } from "./admission-intents.js";
-import { RecoveryIntentController, RecoveryIntents } from "./recovery-intents.js";
+import { RecoveryIntentController, RecoveryIntents, recoveryTarget } from "./recovery-intents.js";
 import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
 import type { LaunchReview, PreflightParams } from "../configuration-launch-contract.js";
 import { RunsAdmitResultSchema, ServerPathSchema } from "@orca/protocol";
@@ -488,7 +488,7 @@ const recoveryIntents = new RecoveryIntentController(
       throw new Error("The authenticated daemon target changed or recovery is unavailable. Refresh before retrying.");
     return {
       scope: {
-        target: target.source === "bundled" ? `bundled:${workspace.snapshot.path}` : daemonEndpoint(target.url),
+        target: recoveryTarget(target, workspace.snapshot.path),
         principalId: found.principalId,
         workspaceId: found.target.workspaceId,
       },
