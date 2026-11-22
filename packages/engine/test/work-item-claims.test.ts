@@ -11,6 +11,8 @@ import {
   WorkItemSchema,
   TemplateRegistry,
   WorkflowRegistry,
+  type OrcaError,
+  type RunState,
 } from "@orca/core";
 import {
   LocalWorkspaceProvider,
@@ -223,7 +225,19 @@ describe("work item claims", () => {
     // The "dead" interpreter is really this process and still heartbeats, so its run lease is
     // taken the way an operator would; a real crash lapses it without anyone asking.
     await second.orchestrator.breakLease(runId, { force: true });
-    const state = await second.orchestrator.run(runId);
+    // Each child died inside a step that may have acted: refused, writing nothing, until an
+    // operator reviews it (#357). One refusal names one step; review until none is left.
+    let state: RunState | undefined;
+    for (let reviews = 0; !state; reviews++) {
+      expect(reviews).toBeLessThan(3);
+      state = await second.orchestrator.run(runId).catch(async (e: unknown) => {
+        const refusal = e as OrcaError;
+        if (refusal.code !== "EFFECT_REVIEW_REQUIRED") throw e;
+        const { runId: child, stepRunId } = refusal.details as { runId: string; stepRunId: string };
+        await second.orchestrator.reviewEffect(child, stepRunId, "run-again");
+        return undefined;
+      });
+    }
 
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(skips(state)).toEqual([]);

@@ -29,7 +29,7 @@ function artifact(id: string, stepRunId: string): Artifact {
 /** spec (agent, done) -> review (gate, answered) -> build (agent, started then failed) -> run failed. */
 async function failedRun(
   stores: Stores,
-  opts: { actor?: string; stored?: boolean; revision?: string; generation?: boolean } = {},
+  opts: { actor?: string; stored?: boolean; revision?: string; generation?: boolean; reviewed?: boolean } = {},
 ): Promise<void> {
   const runId = "run_1";
   const e = (event: Omit<OrcaEventInput, "runId">) => stores.events.append({ ...event, runId } as OrcaEventInput);
@@ -85,6 +85,10 @@ async function failedRun(
     payload: { stepRunId: "s_build", error: { code: "AGENT_FAILED", message: "lost connection" }, willRetry: false },
   });
   await e({ type: "run.failed", payload: { error: { code: "AGENT_FAILED", message: "lost connection" } } });
+  // An operator checked what the failed build did and marked it to run again (#357), unless a
+  // test is about the review itself.
+  if (opts.reviewed !== false)
+    await e({ type: "step.effect.reviewed", payload: { stepRunId: "s_build", decision: "run-again" } });
   await stores.artifacts.put(artifact("art_spec", "s_spec"), "x");
   if (opts.stored !== false) await stores.workflows.put(definition);
   if (opts.generation !== false) await stores.execution.putGeneration("gen_1", { id: "gen_1" });
@@ -93,7 +97,21 @@ async function failedRun(
 describe("previewRecovery", () => {
   it("offers a checkpoint attempt for a failed run and flags the interrupted agent as uncertain", async () => {
     const stores = memoryStores();
-    await failedRun(stores);
+    await failedRun(stores, { reviewed: false });
+    // Until the interrupted build is reviewed, no checkpoint may run it again.
+    const unreviewed = await previewRecovery(stores, "run_1");
+    expect(unreviewed.options.find((o) => o.kind === "checkpoint-attempt")).toMatchObject({
+      readiness: "blocked",
+      blockers: ["effect-unreviewed"],
+    });
+    expect(unreviewed.uncertain).toEqual([
+      expect.objectContaining({ nodeId: "build", effect: "uncertain", agent: "coder", status: "failed" }),
+    ]);
+    await stores.events.append({
+      type: "step.effect.reviewed",
+      runId: "run_1",
+      payload: { stepRunId: "s_build", decision: "run-again" },
+    });
     const before = (await stores.events.read("run_1")).length;
     const a = await previewRecovery(stores, "run_1", { currentWorkflowVersion: "2", currentConfigGeneration: "gen_2" });
     // Read-only: nothing appended.
@@ -109,16 +127,17 @@ describe("previewRecovery", () => {
       unverified: ["generation-restore"],
     });
 
-    expect(a.uncertain).toEqual([
-      expect.objectContaining({ nodeId: "build", effect: "uncertain", agent: "coder", status: "failed" }),
-    ]);
+    // Reviewed: no longer waiting on a decision, and shown as reviewed where it runs again.
+    expect(a.uncertain).toEqual([]);
     const afterReview = a.checkpoints.find((c) => c.nodeId === "review")!;
     expect(afterReview.readiness).toBe("unverified");
     expect(afterReview.reused.map((s) => [s.nodeId, s.effect, s.asksAgain])).toEqual([
       ["spec", "reused", false],
       ["review", "reused", false],
     ]);
-    expect(afterReview.ranAfter).toEqual([expect.objectContaining({ nodeId: "build", effect: "uncertain" })]);
+    expect(afterReview.ranAfter).toEqual([
+      expect.objectContaining({ nodeId: "build", effect: "reviewed", review: "run-again" }),
+    ]);
     // The best checkpoint is the latest eligible one; what it would run again is listed.
     expect(byKind["checkpoint-attempt"]!.runsAgain.map((s) => s.nodeId)).toEqual(["build"]);
     // A checkpoint after spec would ask the person again rather than reuse their approval.
@@ -147,7 +166,7 @@ describe("previewRecovery", () => {
       ["review", 1],
     ]);
     expect(afterReview.ranAfter.map((s) => [s.nodeId, s.attempt, s.effect])).toEqual([
-      ["build", 1, "uncertain"],
+      ["build", 1, "reviewed"],
       ["spec", 2, "not-started"],
     ]);
   });
@@ -196,12 +215,18 @@ describe("previewRecovery", () => {
     await e({ type: "step.started", payload: { stepRunId: "s_a", inputArtifactIds: [] } });
     // The process died here: no completion, no run end, and its lease lapsed long ago.
     await stores.leases.acquire({ resource: runLeaseResource("run_2"), holder: "gone", ttlMs: 1 });
-    const a = await previewRecovery(stores, "run_2", { now: Date.now() + 60_000 });
-    const resume = a.options.find((o) => o.kind === "resume")!;
-    expect(resume).toMatchObject({ readiness: "available", blockers: [] });
+    const now = Date.now() + 60_000;
+    const a = await previewRecovery(stores, "run_2", { now });
+    let resume = a.options.find((o) => o.kind === "resume")!;
+    // It may have acted and nobody has looked: resume would run it again, so it waits for review.
+    expect(resume).toMatchObject({ readiness: "blocked", blockers: ["effect-unreviewed"] });
     expect(resume.runsAgain).toEqual([expect.objectContaining({ nodeId: "a", attempt: 1, effect: "uncertain" })]);
     expect(a.options.find((o) => o.kind === "checkpoint-attempt")!.blockers).toContain("not-terminal");
     expect(a.uncertain.map((s) => s.nodeId)).toEqual(["a"]);
+    await e({ type: "step.effect.reviewed", payload: { stepRunId: "s_a", decision: "run-again" } });
+    resume = (await previewRecovery(stores, "run_2", { now })).options.find((o) => o.kind === "resume")!;
+    expect(resume).toMatchObject({ readiness: "available", blockers: [] });
+    expect(resume.runsAgain).toEqual([expect.objectContaining({ nodeId: "a", effect: "reviewed" })]);
   });
 
   it("resume of a child checks the paused ancestor it would actually re-drive", async () => {
@@ -246,7 +271,8 @@ describe("previewRecovery", () => {
     expect(resume.blockers).toEqual(expect.arrayContaining(["leased", "workflow-missing"]));
     expect(resume.runsAgain.map((s) => [s.runId, s.nodeId, s.effect])).toEqual([
       ["run_p", "fan", "restarts"],
-      ["run_c", "a", "uncertain"],
+      // It paused on purpose (the run is paused on it), so it is attempted again by design.
+      ["run_c", "a", "repeats"],
     ]);
 
     // Readable and free: available, and still targeting the parent.

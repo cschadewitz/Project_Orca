@@ -298,7 +298,10 @@ it.each([
       expect((await readAdmissionExecutionStatus(reopened.stores, runId)).state).toBe(
         boundary === "witness-after" || boundary === "effect-after" ? "started" : "blocked",
       );
-      await expect(reopened.orc.run(runId)).rejects.toMatchObject({ code: "RUN_STATE" });
+      // After the effect, its step may have acted: the side-effect review refuses first (#357).
+      await expect(reopened.orc.run(runId)).rejects.toMatchObject({
+        code: boundary === "effect-after" ? "EFFECT_REVIEW_REQUIRED" : "RUN_STATE",
+      });
       expect(reopened.effects()).toBe(0);
       expect(await reopened.stores.events.read(runId)).toEqual(before);
     }

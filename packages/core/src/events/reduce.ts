@@ -51,6 +51,12 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       break;
     case "run.paused":
       state.run.status = "paused";
+      // The open attempt paused on purpose; resume re-attempts it by design (#357).
+      for (const id of state.stepOrder) {
+        const open = state.steps[id];
+        if (open && (open.status === "scheduled" || open.status === "running" || open.status === "waiting"))
+          open.parked = true;
+      }
       break;
     case "run.resumed":
       state.run.status = "running";
@@ -153,6 +159,16 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       const s = step(e.payload.stepRunId);
       s.status = "skipped";
       s.completedAt = e.at;
+      break;
+    }
+    case "step.effect.reviewed": {
+      const s = step(e.payload.stepRunId);
+      s.effectReview = {
+        decision: e.payload.decision,
+        at: e.at,
+        ...(e.payload.note !== undefined ? { note: e.payload.note } : {}),
+        ...(e.payload.actor ? { actor: e.payload.actor } : {}),
+      };
       break;
     }
     case "agent.session.opened":

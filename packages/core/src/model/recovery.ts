@@ -9,12 +9,12 @@
  * - **New run** is an intentional fresh execution of the workflow. It reuses nothing.
  * - **Checkpoint attempt** is a separately identified new run that would start after one
  *   completed step attempt of a failed run, reusing that point's recorded results and artifacts,
- *   with provenance links back to the original. Phase 1 only assesses and previews it; there is
- *   no execution control yet.
+ *   with provenance links back to the original.
  *
  * Nothing here mutates history or decides that an effect happened. A step that started, did not
- * complete and can act outside ORCA is reported as an *uncertain effect* the operator has to
- * review before anything runs it again. What the read path cannot confirm (a recorded
+ * complete, was not paused on purpose and can act outside ORCA is reported as an *uncertain
+ * effect*: until an operator records a review (`step.effect.reviewed`), nothing runs it again,
+ * and the interpreter refuses to on its own (`needsEffectReview`, phase 2). What the read path cannot confirm (a recorded
  * configuration generation actually restoring) is reported as *unverified*, never as available.
  */
 import { z } from "zod";
@@ -39,6 +39,7 @@ export const RecoveryBlockerSchema = z.enum([
   "execution-inputs-missing",
   "missing-artifact",
   "no-checkpoint",
+  "effect-unreviewed",
 ]);
 export type RecoveryBlocker = z.infer<typeof RecoveryBlockerSchema>;
 
@@ -63,6 +64,8 @@ export const RECOVERY_BLOCKER_TEXT: Record<RecoveryBlocker, string> = {
   "missing-artifact":
     "An artifact this checkpoint reuses is missing from the artifact store. Pick an earlier checkpoint or start a new run.",
   "no-checkpoint": "No completed step of this run can be reused. Start a new run instead.",
+  "effect-unreviewed":
+    "A step that may have changed the workspace or external systems did not finish. Check what it did, then mark it to run again or abandon the run.",
 };
 
 /** What the read path could not confirm. An option with any of these is unverified, not available. */
@@ -95,6 +98,8 @@ export const RecoveryEffectSchema = z.enum([
    * container waiting on its children, a `set`): it starts again with nothing outside to review.
    */
   "restarts",
+  /** Did not complete and may have acted; an operator checked it and marked it to run again. */
+  "reviewed",
 ]);
 export type RecoveryEffect = z.infer<typeof RecoveryEffectSchema>;
 
@@ -118,6 +123,8 @@ export const RecoveryStepSchema = z.object({
   answerCarried: z.boolean(),
   artifactIds: z.array(z.string()),
   missingArtifactIds: z.array(z.string()),
+  /** The operator's recorded review of this attempt, when there is one. */
+  review: z.enum(["run-again", "abandon"]).optional(),
 });
 export type RecoveryStep = z.infer<typeof RecoveryStepSchema>;
 
@@ -200,6 +207,11 @@ export interface RecoveryFacts extends RecoveryRunFacts {
    * actually re-driven. Each is checked as the run itself is, because resume drives all of them.
    */
   resumeAncestors?: readonly RecoveryRunFacts[];
+  /**
+   * The runs below the re-driven one that have not ended: resume re-attaches to each of them, so
+   * each is checked too, and an interrupted step in any of them needs review first.
+   */
+  resumeDescendants?: readonly RecoveryRunFacts[];
   /** False for an artifact id the store cannot read. */
   artifactPresent: (artifactId: string) => boolean;
   /**
@@ -230,6 +242,23 @@ const INTERNAL_NODES: ReadonlySet<string> = new Set([
 ]);
 const mayActOutside = (step: StepRun): boolean =>
   !INTERNAL_NODES.has(step.nodeType) || step.agentSessionId !== undefined;
+
+/**
+ * The attempt began, never reported success, was not paused on purpose and can act outside
+ * ORCA, so it may have acted and nobody can say whether it did. A skipped or merely scheduled
+ * step never ran; a completed one is known done; a parked one asked to be attempted again.
+ */
+export function uncertainEffect(step: StepRun): boolean {
+  return step.startedAt !== undefined && !SETTLED_STEP.has(step.status) && !step.parked && mayActOutside(step);
+}
+
+/**
+ * Nothing may run this attempt again until an operator reviews it (#357). The interpreter
+ * checks this before re-attempting a run's last step; recovery previews block on it.
+ */
+export function needsEffectReview(step: StepRun): boolean {
+  return uncertainEffect(step) && step.effectReview === undefined;
+}
 
 /** What continuing this run's recorded history requires and cannot be confirmed here. */
 function pinChecks(member: RecoveryRunFacts): { blockers: RecoveryBlocker[]; unverified: RecoveryUnverified[] } {
@@ -282,38 +311,42 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
         answerCarried: carried,
         artifactIds,
         missingArtifactIds: artifactIds.filter((id) => !facts.artifactPresent(id)),
+        ...(step.effectReview ? { review: step.effectReview.decision } : {}),
       };
     };
   };
   const fresh = viewIn(state, "fresh");
-  // A step that began, never reported success and can act outside ORCA may have acted. A skipped
-  // or merely scheduled step never ran; a completed one is known done.
-  const isUncertain = (step: StepRun): boolean =>
-    step.startedAt !== undefined && !SETTLED_STEP.has(step.status) && mayActOutside(step);
   const effectOf = (step: StepRun): RecoveryEffect => {
     if (step.startedAt === undefined || step.status === "skipped") return "not-started";
-    if (isUncertain(step)) return "uncertain";
-    return step.status === "completed" ? "repeats" : "restarts";
+    if (uncertainEffect(step)) return step.effectReview?.decision === "run-again" ? "reviewed" : "uncertain";
+    // Completed, or parked on purpose: it runs again on top of what it already did.
+    if (step.status === "completed" || (step.parked && mayActOutside(step))) return "repeats";
+    return "restarts";
   };
-  const uncertain = steps.filter(isUncertain).map((step) => fresh(step, "uncertain"));
+  // Only what still needs a decision; a reviewed step shows its review where it runs again.
+  const uncertain = steps.filter(needsEffectReview).map((step) => fresh(step, "uncertain"));
   const terminal = TERMINAL.has(run.status);
 
-  // Resume: what the interpreter does today (orchestrator resume). It re-drives the topmost
-  // paused ancestor, which re-attaches down to this run, and each run it drives re-attempts its
-  // last step when that did not complete. Every run in that chain is checked, not only this one.
-  const chain: RecoveryRunFacts[] = [facts, ...(facts.resumeAncestors ?? [])];
-  const resumeTargetRunId = chain.at(-1)!.state.run.id;
+  // Resume: what the interpreter does (orchestrator resume). It re-drives the topmost paused
+  // ancestor, which re-attaches down to this run and every other unfinished run below it, and
+  // each run it drives re-attempts its last step when that did not complete. Every run it drives
+  // is checked, not only this one: the ancestors from the top down, then the rest below.
+  const ancestry: RecoveryRunFacts[] = [facts, ...(facts.resumeAncestors ?? [])];
+  const resumeTargetRunId = ancestry.at(-1)!.state.run.id;
+  const below = (facts.resumeDescendants ?? []).filter((d) => !ancestry.some((a) => a.state.run.id === d.state.run.id));
   const resumeBlockers: RecoveryBlocker[] = terminal ? ["terminal"] : [];
   const resumeUnverified: RecoveryUnverified[] = [];
   const resumeRunsAgain: RecoveryStep[] = [];
-  for (const member of terminal ? [] : [...chain].reverse()) {
+  for (const member of terminal ? [] : [...[...ancestry].reverse(), ...below]) {
     const checks = pinChecks(member);
     resumeBlockers.push(...checks.blockers);
     resumeUnverified.push(...checks.unverified);
     const order = member.state.stepOrder;
     const last = member.state.steps[order[order.length - 1] ?? ""];
-    if (last && last.status !== "completed")
+    if (last && last.status !== "completed") {
       resumeRunsAgain.push(viewIn(member.state, "continue")(last, effectOf(last)));
+      if (needsEffectReview(last)) resumeBlockers.push("effect-unreviewed");
+    }
   }
 
   // Checkpoints: every completed, non-terminal step attempt, in scheduling order. A loop back to
@@ -344,6 +377,9 @@ export function assessRecovery(facts: RecoveryFacts): RecoveryAssessment {
       .map((s) => fresh(s, "reused"));
     const blockers = [...checkpointBlockers];
     if (reused.some((s) => s.missingArtifactIds.length)) blockers.push("missing-artifact");
+    // The attempt runs again what ran after this point; anything there that may have acted
+    // needs its review first.
+    if (steps.slice(index + 1).some(needsEffectReview)) blockers.push("effect-unreviewed");
     checkpoints.push({
       stepRunId: step.id,
       nodeId: step.nodeId,

@@ -30,6 +30,9 @@ function stepRun(id: string, nodeId: string, status: StepRun["status"], extra: P
   };
 }
 function facts(status: RunState["run"]["status"], steps: StepRun[], extra: Partial<RecoveryFacts> = {}): RecoveryFacts {
+  // A paused run paused on its open step, as the reducer records it.
+  if (status === "paused")
+    for (const s of steps) if (["scheduled", "running", "waiting"].includes(s.status)) s.parked = true;
   return {
     state: {
       run: {

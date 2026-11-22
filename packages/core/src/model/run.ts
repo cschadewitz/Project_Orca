@@ -95,6 +95,14 @@ export const SkippedBranchSchema = z.object({
 });
 export type SkippedBranch = z.infer<typeof SkippedBranchSchema>;
 
+/**
+ * What an operator decided about a step attempt whose effects nobody can confirm (#357).
+ * `run-again`: they checked, and it may run again. `abandon`: it must not run again, and the run
+ * ends here.
+ */
+export const EffectReviewDecisionSchema = z.enum(["run-again", "abandon"]);
+export type EffectReviewDecision = z.infer<typeof EffectReviewDecisionSchema>;
+
 export const StepRunSchema = z.object({
   id: z.string(),
   runId: z.string(),
@@ -118,6 +126,20 @@ export const StepRunSchema = z.object({
   scheduledAt: z.string(),
   startedAt: z.string().optional(),
   completedAt: z.string().optional(),
+  /**
+   * The run paused on this attempt on purpose (a person to answer, a child run to finish), so
+   * resume re-attempts it by design. An attempt that stopped without this was interrupted (#357).
+   */
+  parked: z.literal(true).optional(),
+  /** An operator's side-effect review of this attempt (#357): `step.effect.reviewed`. */
+  effectReview: z
+    .object({
+      decision: EffectReviewDecisionSchema,
+      at: z.string(),
+      note: z.string().optional(),
+      actor: z.object({ principalId: z.string(), credentialId: z.string().optional() }).optional(),
+    })
+    .optional(),
 });
 export type StepRun = z.infer<typeof StepRunSchema>;
 

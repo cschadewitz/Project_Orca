@@ -15,6 +15,8 @@ import {
 import { lapsed, type Stores } from "@orca/store";
 import { INLINE_SEP, inlineWorkflowDefinition, runLeaseResource, workflowRevision } from "./orchestrator.js";
 
+const TERMINAL: ReadonlySet<string> = new Set(["completed", "failed", "cancelled"]);
+
 export interface RecoveryPreviewOptions {
   /** The checkpoint to describe: a step run id, or a node id that names exactly one. */
   checkpoint?: string | undefined;
@@ -47,6 +49,23 @@ export async function previewRecovery(
     parentId = parent.facts.state.run.parentRunId;
   }
 
+  // Resume also re-attaches to every unfinished run below the one it drives (this run's own
+  // children included, when an ancestor is the one driven); each is checked too.
+  const target = resumeAncestors.at(-1) ?? facts;
+  const resumeDescendants: RecoveryRunFacts[] = [];
+  const seen = new Set([state.run.id, ...resumeAncestors.map((a) => a.state.run.id)]);
+  const children = (s: RecoveryRunFacts["state"]) => Object.values(s.steps).flatMap((step) => step.childRunIds);
+  const queue = [...children(target.state), ...children(state)];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const child = await runFacts(stores, id, options.now);
+    if (!child || TERMINAL.has(child.facts.state.run.status)) continue;
+    resumeDescendants.push(child.facts);
+    queue.push(...children(child.facts.state));
+  }
+
   // An artifact counts only when its record and its bytes read back (the file backend also
   // checks the bytes against their hash). Checked once per id.
   const artifactIds = new Set(Object.values(state.steps).flatMap((step) => step.result?.artifactIds ?? []));
@@ -66,6 +85,7 @@ export async function previewRecovery(
     creatorPrincipalId: created.actor?.principalId,
     principalId: options.principalId,
     resumeAncestors,
+    resumeDescendants,
     artifactPresent: (id) => present.has(id),
     checkpoint: options.checkpoint,
     currentWorkflowVersion: options.currentWorkflowVersion,

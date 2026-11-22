@@ -10,6 +10,7 @@ import { z } from "zod";
 import { ArtifactSchema } from "../model/artifact.js";
 import {
   BranchSkipReasonSchema,
+  EffectReviewDecisionSchema,
   ErrorInfoSchema,
   GateOptionSchema,
   HumanInputLiveIdentitySchema,
@@ -177,6 +178,19 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
   base("step.failed", z.object({ stepRunId: z.string(), error: ErrorInfoSchema, willRetry: z.boolean() })),
   base("step.cancelled", z.object({ stepRunId: z.string() })),
   base("step.skipped", z.object({ stepRunId: z.string(), reason: z.string() })),
+  /**
+   * An operator reviewed a step attempt that started, never reported an outcome and may have
+   * acted outside ORCA (#357). Until one is recorded, nothing runs that step again on its own.
+   */
+  base(
+    "step.effect.reviewed",
+    z.object({
+      stepRunId: z.string(),
+      decision: EffectReviewDecisionSchema,
+      note: z.string().max(2000).optional(),
+      actor: MutationActorSchema.optional(),
+    }),
+  ),
 
   base(
     "agent.session.opened",
