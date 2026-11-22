@@ -13,6 +13,7 @@ import { checkLinePullRequest, inLine, lineOf, referencedIssues } from "../relea
 import {
   ACTIONS_APP_ID,
   GUARD_WORKFLOW,
+  guardTitle,
   LINE_CHECKS,
   guardRunProblems,
   laneOf,
@@ -310,6 +311,18 @@ describe("the lane policy", () => {
       expect(guardRunProblems(checkRun, workflowRun, head, pr)).toEqual([]);
     });
 
+    it("is bound by its run title when GitHub leaves pull_requests empty, as on pull_request_target", () => {
+      const titled = { ...workflowRun, display_title: guardTitle(906, "release/0.7"), pull_requests: [] };
+      expect(guardRunProblems({ ...checkRun, pull_requests: [] }, titled, head, pr)).toEqual([]);
+    });
+
+    it("gets that title from main's guard workflow, set from the event", () => {
+      const run = workflow("release-line-guard.yml")["run-name"];
+      expect(run).toBe(
+        guardTitle("${{ github.event.pull_request.number }}", "${{ github.event.pull_request.base.ref }}"),
+      );
+    });
+
     it.each([
       ["a failure", { ...checkRun, conclusion: "failure" }, workflowRun, /did not succeed/],
       ["another head", { ...checkRun, head_sha: "b".repeat(40) }, workflowRun, /ran on b+/],
@@ -325,6 +338,24 @@ describe("the lane policy", () => {
         /into release\/0\.7/,
       ],
       ["linked to no pull request", { ...checkRun, pull_requests: [] }, workflowRun, /not linked/],
+      [
+        "titled for another pull request",
+        { ...checkRun, pull_requests: [] },
+        { ...workflowRun, display_title: guardTitle(907, "release/0.7") },
+        /not linked to #906/,
+      ],
+      [
+        "titled for another line",
+        { ...checkRun, pull_requests: [] },
+        { ...workflowRun, display_title: guardTitle(906, "release/0.6") },
+        /into release\/0\.7/,
+      ],
+      [
+        "titled for this pull request on another head",
+        { ...checkRun, pull_requests: [] },
+        { ...workflowRun, display_title: guardTitle(906, "release/0.7"), head_sha: "c".repeat(40) },
+        /not linked/,
+      ],
     ])("is not %s", (_, run, workflow, message) => {
       expect(guardRunProblems(run, workflow, head, pr).join("; ")).toMatch(message);
     });
@@ -408,7 +439,7 @@ describe("a real release's reviewed-commit check", () => {
     mkdirSync(bin);
     writeFileSync(
       join(bin, "gh"),
-      '#!/bin/sh\ncase "$*" in *rules/branches*) printf "%s" "$RULES";; *check-runs*) printf "%s" "$CHECKS";; *actions/runs*) printf "%s" "$RUNS";; *) exit 1;; esac\n',
+      '#!/bin/sh\ncase "$*" in *rules/branches*) printf "%s" "$RULES";; *check-runs*) printf "%s" "$CHECKS";; *actions/runs*) id=$(echo "$*" | sed -n "s/.*check_suite_id=\\([0-9]*\\).*/\\1/p"); eval "v=\\${RUNS_$id:-\\$RUNS}"; printf "%s" "$v";; *) exit 1;; esac\n',
       { mode: 0o755 },
     );
   });
@@ -420,6 +451,7 @@ describe("a real release's reviewed-commit check", () => {
     rules = protectedRules,
     checks,
     runs,
+    suites = {},
     eventFile,
   }) =>
     execFileSync("bash", ["-c", step.run], {
@@ -434,6 +466,7 @@ describe("a real release's reviewed-commit check", () => {
         RULES: rules,
         CHECKS: checks ?? guardChecks(),
         RUNS: runs ?? guardRuns(),
+        ...Object.fromEntries(Object.entries(suites).map(([id, run]) => [`RUNS_${id}`, run])),
         GITHUB_EVENT_PATH: eventFile ?? "/dev/null",
         GITHUB_REPOSITORY: "o/r",
         RUNNER_TEMP: work,
@@ -452,14 +485,24 @@ describe("a real release's reviewed-commit check", () => {
           head_sha: commits.line,
           app: { slug: "github-actions" },
           check_suite: { id: 2 },
-          pull_requests: [{ number: 906, base: { ref: "release/0.7" }, head: { sha: commits.line } }],
+          // As GitHub reports a pull_request_target run: no pull_requests, the title binds it.
+          pull_requests: [],
           ...over,
         },
       ],
     });
   const guardRuns = (over = {}) =>
     JSON.stringify({
-      workflow_runs: [{ path: GUARD_WORKFLOW, event: "pull_request_target", head_sha: commits.line, ...over }],
+      workflow_runs: [
+        {
+          path: GUARD_WORKFLOW,
+          event: "pull_request_target",
+          head_sha: commits.line,
+          display_title: guardTitle(906, "release/0.7"),
+          pull_requests: [],
+          ...over,
+        },
+      ],
     });
   const refused = (fn) => {
     try {
@@ -547,15 +590,20 @@ describe("a real release's reviewed-commit check", () => {
     ).toMatch(message);
   });
 
-  const runsOf = (...entries) =>
-    JSON.stringify({
-      check_runs: entries.map(([id, conclusion, number]) => ({
+  // Check runs, each in its own suite whose workflow run's title names its pull request.
+  const runsOf = (...entries) => ({
+    checks: JSON.stringify({
+      check_runs: entries.map(([id, conclusion]) => ({
         ...JSON.parse(guardChecks()).check_runs[0],
         id,
         conclusion,
-        pull_requests: [{ number, base: { ref: "release/0.7" }, head: { sha: commits.line } }],
+        check_suite: { id: id + 100 },
       })),
-    });
+    }),
+    suites: Object.fromEntries(
+      entries.map(([id, , number]) => [id + 100, guardRuns({ display_title: guardTitle(number, "release/0.7") })]),
+    ),
+  });
 
   it("counts only this pull request's newest guard result: a later failure outlives an older pass", () => {
     const eventFile = merged();
@@ -565,7 +613,7 @@ describe("a real release's reviewed-commit check", () => {
           sha: commits.line,
           event: "pull_request",
           eventFile,
-          checks: runsOf([1, "success", 906], [3, "failure", 906]),
+          ...runsOf([1, "success", 906], [3, "failure", 906]),
         }),
       ),
     ).toMatch(/newest result for #906, check run 3: it did not succeed/);
@@ -575,11 +623,11 @@ describe("a real release's reviewed-commit check", () => {
         sha: commits.line,
         event: "pull_request",
         eventFile,
-        checks: runsOf([1, "success", 906], [5, "failure", 907]),
+        ...runsOf([1, "success", 906], [5, "failure", 907]),
       }),
     ).toMatch(/from release\/0\.7/);
     expect(
-      refused(() => run({ sha: commits.line, event: "pull_request", eventFile, checks: runsOf([5, "success", 907]) })),
+      refused(() => run({ sha: commits.line, event: "pull_request", eventFile, ...runsOf([5, "success", 907]) })),
     ).toMatch(/no release line check for #906 into release\/0\.7/);
   });
 

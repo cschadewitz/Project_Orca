@@ -134,12 +134,20 @@ function verify(sha, version) {
 
 export const GUARD_WORKFLOW = ".github/workflows/release-line-guard.yml";
 
-/** Whether a guard result was recorded for pull request `pr.number` into `pr.base` at `headSha`. */
+/** The run title release-line-guard.yml gives itself (its `run-name`) for a pull request. */
+export const guardTitle = (number, base) => `release line check: #${number} into ${base}`;
+
+/**
+ * Whether a guard result was recorded for pull request `pr.number` into `pr.base` at `headSha`.
+ * GitHub leaves `pull_requests` empty on pull_request_target runs, so the workflow run's title,
+ * which main's guard workflow sets from the event, is the binding; `pull_requests` is still
+ * honoured where GitHub fills it.
+ */
 export function linkedTo(checkRun, workflowRun, headSha, pr = {}) {
   const linked = [...(checkRun?.pull_requests ?? []), ...(workflowRun?.pull_requests ?? [])];
-  return linked.some(
-    (p) => p?.number === pr.number && p?.base?.ref === pr.base && (p?.head?.sha ?? headSha) === headSha,
-  );
+  if (linked.some((p) => p?.number === pr.number && p?.base?.ref === pr.base && (p?.head?.sha ?? headSha) === headSha))
+    return true;
+  return workflowRun?.display_title === guardTitle(pr.number, pr.base) && workflowRun?.head_sha === headSha;
 }
 
 /**

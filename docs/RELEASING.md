@@ -459,7 +459,9 @@ which first checks, with `main`'s copy of `release-lane.js`:
   merging);
 - on a line, also: the newest release line check recorded for this pull request into this
   line, on that exact head, passed, posted by GitHub Actions from `main`'s
-  `release-line-guard.yml` on a `pull_request_target` event. An older pass does not outlive a
+  `release-line-guard.yml` on a `pull_request_target` event. GitHub leaves `pull_requests` empty on
+  those runs, so a result is tied to its pull request and line by the run title the guard sets
+  from the event (`release line check: #N into release/X.Y`). An older pass does not outlive a
   later failure, and a check run with the right name from anywhere else does not count.
 
 A final then goes through the same draft, signing, acceptance, upgrade check and publish-final
