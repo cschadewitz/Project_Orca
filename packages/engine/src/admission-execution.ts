@@ -59,7 +59,13 @@ const StartSchema = z.strictObject({
   attemptDigest: z.string(),
   started: EvidenceSchema,
 });
+const IntentSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  kind: z.literal("admission-execution-intent"),
+  binding: BindingSchema,
+});
 const policyKey = (id: string) => `admission-execution-policy:${id}`;
+const intentKey = (id: string) => `admission-execution-intent:${id}`;
 const attemptKey = (id: string) => `admission-execution-attempt:${id}`;
 const startKey = (id: string) => `admission-execution-start:${id}`;
 const unavailable = () => new OrcaError("RUN_STATE", "admitted execution evidence is missing, ambiguous or invalid");
@@ -139,7 +145,54 @@ export async function publishAdmissionExecutionPolicy(
   stores: AdmissionStores,
   input: AdmissionExecutionBinding,
 ): Promise<AdmissionExecutionPolicy> {
+  return writePolicy(stores, BindingSchema.parse(structuredClone(input)));
+}
+
+/**
+ * The pre-publication phase of a two-phase policy publish: durably record, before the run
+ * exists, that this exact binding will be published for it. Write-once; repeating it with the
+ * same binding is a no-op, and it is refused once the run has been created.
+ */
+export async function reserveAdmissionExecutionPolicy(
+  stores: AdmissionStores,
+  input: AdmissionExecutionBinding,
+): Promise<void> {
   const binding = BindingSchema.parse(structuredClone(input));
+  const existing = await stores.execution.getGeneration(intentKey(binding.runId));
+  if (existing !== undefined) {
+    const parsed = IntentSchema.safeParse(existing);
+    if (!parsed.success || !equal(parsed.data.binding, binding)) throw unavailable();
+    return;
+  }
+  if ((await stores.events.lastSeq(binding.runId)) !== undefined) throw unavailable();
+  await stores.execution.putGeneration(intentKey(binding.runId), {
+    schemaVersion: 1,
+    kind: "admission-execution-intent",
+    binding,
+  } satisfies z.infer<typeof IntentSchema>);
+}
+
+/**
+ * The commit phase: publish the policy a reservation named, or verify the one already
+ * published. Only an exact reservation written before the run was created allows a publish
+ * after an interruption, and only while the run has its creation alone (nothing attached).
+ */
+export async function completeAdmissionExecutionPolicy(
+  stores: AdmissionStores,
+  input: AdmissionExecutionBinding,
+): Promise<AdmissionExecutionPolicy> {
+  const binding = BindingSchema.parse(structuredClone(input));
+  const intent = IntentSchema.safeParse(await stores.execution.getGeneration(intentKey(binding.runId)));
+  if (!intent.success || !equal(intent.data.binding, binding)) throw unavailable();
+  if ((await stores.execution.getGeneration(policyKey(binding.runId))) !== undefined)
+    return requireAdmissionExecutionPolicy(stores, binding);
+  return writePolicy(stores, binding);
+}
+
+async function writePolicy(
+  stores: AdmissionStores,
+  binding: AdmissionExecutionBinding,
+): Promise<AdmissionExecutionPolicy> {
   if (
     (await stores.execution.getGeneration(policyKey(binding.runId))) !== undefined ||
     (await stores.execution.getGeneration(attemptKey(binding.runId))) !== undefined ||

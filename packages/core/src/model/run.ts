@@ -125,6 +125,11 @@ export const StepRunSchema = z.object({
   childRunIds: z.array(z.string()).default([]),
   /** Same children as `childRunIds`, with their branch key and last known status. */
   children: z.array(ChildRunLinkSchema).default([]),
+  /**
+   * A reused step's children (#357), as the run that ran it recorded them. History for display
+   * only: they belong to that run, so nothing here cancels, leases, resumes or answers them.
+   */
+  reusedChildren: z.array(ChildRunLinkSchema).optional(),
   /** Fan-out branches of this step that never became child runs. */
   skippedBranches: z.array(SkippedBranchSchema).default([]),
   scheduledAt: z.string(),

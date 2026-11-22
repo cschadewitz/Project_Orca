@@ -38,9 +38,11 @@ export * from "./recovery-preview.js";
 export * from "./revision-runtime.js";
 
 export {
+  completeAdmissionExecutionPolicy,
   publishAdmissionExecutionPolicy,
   requireAdmissionExecutionPolicy,
   readAdmissionExecutionStatus,
+  reserveAdmissionExecutionPolicy,
   type AdmissionExecutionBinding,
   type AdmissionExecutionPolicy,
   type AdmissionExecutionRuntime,

@@ -152,8 +152,11 @@ checkpoint as in the preview; without it, the latest one that is not blocked is 
   block: the source run and checkpoint step, the reused steps (under new step run ids, each
   with `reusedFrom` naming the source attempt, plus its recorded result and child-run links),
   the artifact records they produced (same ids, `producedBy` unchanged) and the vars as they
-  stood when the checkpoint completed. The projection shows the reused steps as completed, never
-  started here, and `run.checkpoint` links back to the source. The interpreter then routes on from
+  stood when the checkpoint completed (read from the run that ran it, when the source itself
+  reused it). The projection shows the reused steps as completed, never started here, and
+  `run.checkpoint` links back to the source. A reused step's child runs appear as
+  `reusedChildren`, history only: they stay the source's, so cancelling, resuming or answering
+  the attempt never reaches them. The interpreter then routes on from
   the checkpoint, as resume does from a completed step.
 - **Nothing carries authority.** A reused gate's recorded choice routes the attempt, but nobody's
   answer is replayed: any step that runs again asks again.
@@ -173,6 +176,9 @@ checkpoint as in the preview; without it, the latest one that is not blocked is 
 - **Retry-safe.** With a persistent store, the command goes through retry-safe admission
   (`run.recover`, `CheckpointAdmissionService`). It reserves the run id before anything is
   written, and the attempt runs under the same bounded first-attachment policy as a direct run.
+  That policy is published in two phases: its binding is recorded before the run is created, so
+  an interruption between the two is finished by reconciling the admission rather than leaving
+  a run nothing can attach.
   The printed retry key, given again with `--idempotency-key`, returns the same attempt rather
   than starting another, and the same key with a different run or checkpoint is a conflict. An
   admission that was interrupted after reserving its attempt is reconciled by the command (the

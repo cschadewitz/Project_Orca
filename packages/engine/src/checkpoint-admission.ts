@@ -19,8 +19,9 @@ import type {
 import { checkpointAttempts, type Orchestrator } from "./orchestrator.js";
 import { canonicalJson, type RegisteredRetryClaims } from "./admission-retry.js";
 import {
-  publishAdmissionExecutionPolicy,
+  completeAdmissionExecutionPolicy,
   requireAdmissionExecutionPolicy,
+  reserveAdmissionExecutionPolicy,
   type AdmissionExecutionBinding,
 } from "./admission-execution.js";
 import { previewRecovery } from "./recovery-preview.js";
@@ -201,7 +202,13 @@ export class CheckpointAdmissionService {
     try {
       const material = await this.material(binding, command);
       await context.reauthorize();
-      if (await this.findRun(binding, material)) return await this.accept(binding, context, material);
+      if (await this.findRun(binding, material)) {
+        // Created, possibly interrupted before its policy was published: finish the publish
+        // this admission reserved before creating the run, or verify the published one.
+        await context.reauthorize();
+        await completeAdmissionExecutionPolicy(this.options.orchestrator.stores, this.policyBinding(binding, material));
+        return await this.accept(binding, context, material);
+      }
       // A private record without run.created: do not guess what it started.
       if (await this.options.orchestrator.stores.execution.getInputs(binding.runId))
         return { state: "recoverable-failure", admissionId: binding.admissionId, runId: binding.runId, failure };
@@ -214,6 +221,9 @@ export class CheckpointAdmissionService {
   private async admit(context: RetryContext, binding: Binding, material: Material): Promise<CheckpointAdmissionResult> {
     try {
       await context.reauthorize();
+      // The policy's first phase, before the run exists: an interruption between the run's
+      // creation and its policy leaves a publish recovery may finish, not a stranded run.
+      await reserveAdmissionExecutionPolicy(this.options.orchestrator.stores, this.policyBinding(binding, material));
       const runId = await this.options.orchestrator.startCheckpointAttempt({
         runId: material.command.runId,
         checkpoint: material.command.checkpoint,
@@ -223,7 +233,7 @@ export class CheckpointAdmissionService {
       });
       if (runId !== binding.runId || !(await this.findRun(binding, material))) throw unavailable();
       await context.reauthorize();
-      await publishAdmissionExecutionPolicy(this.options.orchestrator.stores, this.policyBinding(binding, material));
+      await completeAdmissionExecutionPolicy(this.options.orchestrator.stores, this.policyBinding(binding, material));
       return await this.accept(binding, context, material);
     } catch (error) {
       // A refusal before anything was written is the caller's answer, not a reconciliation.

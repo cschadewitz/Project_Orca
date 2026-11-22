@@ -81,7 +81,8 @@ export async function checkpointSeed(
       attempt: step.attempt,
       ...(step.iteration !== undefined ? { iteration: step.iteration } : {}),
       result: structuredClone(step.result),
-      children: structuredClone(step.children),
+      // A step the source itself reused lists its origin's children as history only.
+      children: structuredClone(step.reusedChildren ?? step.children),
       completedAt: step.completedAt,
     };
   });

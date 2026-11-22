@@ -49,8 +49,10 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
         status: "completed",
         inputArtifactIds: [],
         result: structuredClone(reused.result),
-        childRunIds: reused.children.map((c) => c.runId),
-        children: structuredClone(reused.children),
+        // The source's children stay the source's: an attempt owns none of them.
+        childRunIds: [],
+        children: [],
+        ...(reused.children.length ? { reusedChildren: structuredClone(reused.children) } : {}),
         skippedBranches: [],
         scheduledAt: first.at,
         completedAt: reused.completedAt,

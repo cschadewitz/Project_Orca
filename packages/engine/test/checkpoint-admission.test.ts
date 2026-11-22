@@ -19,6 +19,7 @@ import {
 import { FileExecutionStore, memoryStores } from "@orca/store";
 import { FileRetryClaimStore } from "../../store/src/admission-retry-store.js";
 import { RegisteredRetryClaims } from "../src/admission-retry.js";
+import { completeAdmissionExecutionPolicy, readAdmissionExecutionStatus } from "../src/admission-execution.js";
 import { ConfigurationGenerations } from "../src/configuration-generation.js";
 import {
   builtinExecutors,
@@ -243,4 +244,44 @@ it("lets a retired reservation go: its admission can never create it, and anothe
   await expect(f.orc.retireCheckpointReservation(f.source.run.id, second.result.runId)).rejects.toMatchObject({
     code: "RUN_STATE",
   });
+});
+
+it("finishes a policy publish interrupted after the attempt was created, and only one it reserved", async () => {
+  const f = await fixture();
+  // Interrupted after run.created and before the policy: the attempt exists, unattachable.
+  const create = f.orc.startCheckpointAttempt.bind(f.orc);
+  const crash = vi.spyOn(f.orc, "startCheckpointAttempt").mockImplementationOnce(async (opts) => {
+    await create(opts);
+    throw new Error("interrupted");
+  });
+  const first = await f.service.startAttempt({ runId: f.source.run.id }, { idempotencyKey: "k1" }, f.authority);
+  crash.mockRestore();
+  if (first.state !== "resolved" || first.result.state !== "recoverable-failure" || !first.result.runId)
+    throw new Error(JSON.stringify(first));
+  const attemptId = first.result.runId;
+  expect(await f.stores.events.lastSeq(attemptId)).toBe(0);
+  expect(await readAdmissionExecutionStatus(f.stores, attemptId)).toEqual({ state: "unknown" });
+
+  // Reconciling finishes the publish this admission reserved before creating the run.
+  const reconciled = await f.service.reconcile(first.operationId, f.authority);
+  expect(reconciled).toMatchObject({ state: "resolved", result: { state: "accepted", runId: attemptId } });
+  expect(await f.service.startAttempt({ runId: f.source.run.id }, { idempotencyKey: "k1" }, f.authority)).toEqual({
+    ...reconciled,
+    replayed: true,
+  });
+  const done = await f.orc.run(attemptId);
+  expect(done.run.status, JSON.stringify(done.run.error)).toBe("completed");
+
+  // Without a reservation written before the run existed, nothing publishes a policy.
+  await expect(
+    completeAdmissionExecutionPolicy(f.stores, {
+      kind: "direct",
+      admissionId: "direct-unreserved",
+      runId: f.source.run.id,
+      workspaceId: f.authority.workspaceId,
+      actor: { principalId: "owner", credentialId: "credential-test" },
+      generationId: f.source.run.provenance!.configGeneration,
+      workflow: f.source.run.provenance!.workflow,
+    }),
+  ).rejects.toMatchObject({ code: "RUN_STATE" });
 });
