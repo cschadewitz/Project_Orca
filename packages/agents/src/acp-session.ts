@@ -68,6 +68,12 @@ export interface OpenSessionOptions {
    * is up and initialized. A denial fails the open, and startup cleanup stops the process.
    */
   authorizeCapabilityDelivery?: (() => Promise<void>) | undefined;
+  /**
+   * Set when the session will carry skills as embedded `resource` blocks (#337): an agent that
+   * does not say at `initialize` that it accepts embedded context is refused right there,
+   * with the error this returns, before `session/new` or `session/load` configures anything.
+   */
+  requireEmbeddedContext?: (() => Error) | undefined;
   /** Handed every resolved secret value, before anything else happens, so the caller can redact it. */
   onSecretValues?: (values: readonly string[]) => void;
   host: AgentHost;
@@ -425,6 +431,7 @@ async function openPlanned(
     );
     logger.debug("initialized", { protocolVersion: init.protocolVersion, agentInfo: init.agentInfo });
     embeddedContext = init.agentCapabilities?.promptCapabilities?.embeddedContext === true;
+    if (opts.requireEmbeddedContext && !embeddedContext) throw opts.requireEmbeddedContext();
     const newSession: acp.NewSessionRequest = {
       cwd: opts.cwd,
       mcpServers: mcpServers.map((m) => ({

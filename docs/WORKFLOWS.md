@@ -647,8 +647,11 @@ on the daemon's machine reaches an agent on an SSH host the same way.
 - The use decision is asked again before every prompt that carries the skills, so a grant
   revoked while the step waits sends nothing.
 - The agent must say at `initialize` that it accepts embedded context
-  (`promptCapabilities.embeddedContext`). One that does not refuses the step: ORCA does not
-  fall back to leaving the skill out or pasting it in as plain text.
+  (`promptCapabilities.embeddedContext`). One that does not is refused right after
+  `initialize`, before `session/new` or `session/load` configures any MCP server, and the
+  step fails; a `per-run` session that could not take the skills is closed rather than kept
+  in the pool. ORCA does not fall back to leaving the skill out or pasting it in as plain
+  text.
 - **A skill is instructions, not authority.** It grants nothing: tool calls still go through
   the agent's permission policy and ORCA's asks. ORCA delivers the skills it lists in the
   preview and nothing else, but it cannot stop an agent from also loading skills of its own

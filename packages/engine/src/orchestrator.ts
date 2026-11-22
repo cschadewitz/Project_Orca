@@ -2602,21 +2602,50 @@ export class Orchestrator {
       try {
         await authorize();
       } catch (error) {
-        const pooled = this.sessions.get(key);
-        if (pooled?.session === base) {
-          rc.logger.info("catalog capabilities no longer granted; retiring the pooled session", { key });
-          this.sessions.delete(key);
-          await pooled.close().catch(() => undefined);
-          void pooled.returnSlot();
-          await rc
-            .emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: base.id } })
-            .catch(() => undefined);
-        }
+        await this.retirePooled(rc, step, key, base, "catalog capabilities no longer granted");
         throw error;
       }
       return base.prompt(input, options);
     };
     return { session, release: opened.release };
+  }
+
+  /**
+   * Close a pooled session and take it out of the pool, so no later step is handed it. Does
+   * nothing when `session` (or the session a step's view was made from) is not the pooled one.
+   */
+  private async retirePooled(
+    rc: RunContext,
+    step: StepRun,
+    key: string,
+    session: AgentSession,
+    why: string,
+  ): Promise<void> {
+    const pooled = this.sessions.get(key);
+    if (!pooled) return;
+    let match = false;
+    for (let at: object | null = session; at; at = Object.getPrototypeOf(at) as object | null)
+      if (at === pooled.session) match = true;
+    if (!match) return;
+    rc.logger.info(`${why}; retiring the pooled session`, { key });
+    this.sessions.delete(key);
+    await pooled.close().catch(() => undefined);
+    void pooled.returnSlot();
+    await rc
+      .emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: pooled.session.id } })
+      .catch(() => undefined);
+  }
+
+  /** The refusal for a step whose agent cannot be given its skills (#337). */
+  private embeddedContextRefusal(step: StepRun, agent: AgentSpec, skills: DeliveredSkill[]): OrcaError {
+    return capabilityRefusal(step.nodeId, [
+      {
+        path: `workflow.nodes.${step.nodeId}.capabilities.skills`,
+        message: `agent '${agent.id}' does not accept embedded context in its prompts (ACP promptCapabilities.embeddedContext), so ORCA cannot give it skill${
+          skills.length > 1 ? "s" : ""
+        } ${skills.map((s) => `'${s.id}'`).join(", ")}. Remove them from the selection, or use an agent that accepts them`,
+      },
+    ]);
   }
 
   /**
@@ -2627,23 +2656,21 @@ export class Orchestrator {
    * itself, so a later step with other skills gets only its own.
    */
   private withSkills(
+    rc: RunContext,
     step: StepRun,
     agent: AgentSpec,
+    key: string,
     opened: { session: AgentSession; release: () => Promise<void> },
     skills: DeliveredSkill[],
   ): Promise<{ session: AgentSession; release: () => Promise<void> }> {
     if (skills.length === 0) return Promise.resolve(opened);
     return (async () => {
+      // ACP startup refuses such an agent before `session/new`; a session factory that does
+      // not is refused here, and a pooled session is retired rather than kept for later.
       if (opened.session.promptCapabilities?.embeddedContext !== true) {
         await opened.release().catch(() => undefined);
-        throw capabilityRefusal(step.nodeId, [
-          {
-            path: `workflow.nodes.${step.nodeId}.capabilities.skills`,
-            message: `agent '${agent.id}' does not accept embedded context in its prompts (ACP promptCapabilities.embeddedContext), so ORCA cannot give it skill${
-              skills.length > 1 ? "s" : ""
-            } ${skills.map((s) => `'${s.id}'`).join(", ")}. Remove them from the selection, or use an agent that accepts them`,
-          },
-        ]);
+        await this.retirePooled(rc, step, key, opened.session, "agent does not accept embedded context");
+        throw this.embeddedContextRefusal(step, agent, skills);
       }
       const blocks = skillBlocks(skills);
       const base = opened.session;
@@ -2705,8 +2732,10 @@ export class Orchestrator {
       // The pooled session is already on the run's model, or has no option to drift in.
       if (model === undefined || now === undefined || now === model)
         return this.withSkills(
+          rc,
           step,
           agent,
+          key,
           this.guardCatalogUse(rc, step, key, { session: pooled.session, release: async () => {} }, authorize),
           delivered.skills,
         );
@@ -2723,8 +2752,10 @@ export class Orchestrator {
           },
         });
         return this.withSkills(
+          rc,
           step,
           agent,
+          key,
           this.guardCatalogUse(rc, step, key, { session: pooled.session, release: async () => {} }, authorize),
           delivered.skills,
         );
@@ -2748,7 +2779,7 @@ export class Orchestrator {
         slot.release();
         throw error;
       }
-    // A denial at `session/new` is the run's authority, not the agent's health.
+    // A denial at `session/new`, or a step the agent cannot take, is not the agent's health.
     let deniedAtDelivery = false;
     const current = { step };
     let pendingAsks = 0;
@@ -2764,6 +2795,16 @@ export class Orchestrator {
         host,
         // Only the step's resolved MCP servers reach `session/new` (#335).
         agent: { ...agent, mcpServers },
+        // An agent that cannot take the step's skills is refused right after `initialize`,
+        // before `session/new` configures its servers (#337).
+        ...(delivered.skills.length
+          ? {
+              requireEmbeddedContext: () => {
+                deniedAtDelivery = true;
+                return this.embeddedContextRefusal(step, agent, delivered.skills);
+              },
+            }
+          : {}),
         // And again immediately before ACP hands the agent its servers (#337).
         ...(authorize
           ? {
@@ -2962,15 +3003,19 @@ export class Orchestrator {
           if (this.sessions.get(key) === pooled) this.sessions.delete(key);
         });
         return this.withSkills(
+          rc,
           step,
           agent,
+          key,
           this.guardCatalogUse(rc, step, key, { session, release: async () => {} }, authorize),
           delivered.skills,
         );
       }
       return this.withSkills(
+        rc,
         step,
         agent,
+        key,
         this.guardCatalogUse(rc, step, key, { session, release: close }, authorize),
         delivered.skills,
       );

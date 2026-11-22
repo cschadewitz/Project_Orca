@@ -684,7 +684,9 @@ describe("delivering catalog MCP servers (#337)", () => {
 });
 
 describe("delivering skills (#337)", () => {
-  async function withSkill(opts: { embeddedContext?: boolean; allow?: boolean; refuseFrom?: number } = {}) {
+  async function withSkill(
+    opts: { embeddedContext?: boolean; allow?: boolean; refuseFrom?: number; sessionMode?: "per-run" } = {},
+  ) {
     const dir = await tempDir();
     await mkdir(join(dir, "review"));
     await writeFile(join(dir, "review", "SKILL.md"), "# Review\nreview carefully");
@@ -705,6 +707,7 @@ describe("delivering skills (#337)", () => {
       },
       {
         ...(opts.embeddedContext === undefined ? {} : { embeddedContext: opts.embeddedContext }),
+        ...(opts.sessionMode ? { sessionMode: opts.sessionMode } : {}),
         workflow: flow.replace(
           "capabilities: { mcpServers: { enable: [files] } }",
           "capabilities: { skills: { enable: [review] } }",
@@ -778,6 +781,40 @@ describe("delivering skills (#337)", () => {
     expect(JSON.stringify(await made.orchestrator.events(run.id))).toMatch(
       /agent 'claude' does not accept embedded context.*skill 'review'/,
     );
+    expect(JSON.stringify(made.prompts)).not.toContain("review carefully");
+  });
+
+  it("asks ACP startup to refuse such an agent, and retires a pooled session that was not", async () => {
+    const made = await withSkill({ embeddedContext: false, sessionMode: "per-run" });
+    const required: boolean[] = [];
+    const closed: string[] = [];
+    const factory = made.orchestrator.sessionFactory;
+    made.orchestrator.sessionFactory = async (o) => {
+      required.push(o.requireEmbeddedContext !== undefined);
+      // This factory ignores the requirement, as a non-ACP integration might.
+      const session = await factory(o);
+      const close = session.close.bind(session);
+      session.close = async () => {
+        closed.push(session.id);
+        return close();
+      };
+      return session;
+    };
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    // `plan` selects no skill; `build` does, so its open carries the requirement.
+    expect(required).toEqual([false, true]);
+    // Both pooled sessions were closed: plan's when build needed other capabilities, and
+    // build's own when it could not take the skill, rather than kept in the pool.
+    expect(closed).toHaveLength(2);
+    // Closed as the step is refused, never kept pooled for another step.
+    const events = (await made.orchestrator.events(run.id)).map((e) => e.type);
+    expect(events.slice(events.lastIndexOf("agent.session.opened"))).toEqual([
+      "agent.session.opened",
+      "agent.session.closed",
+      "step.failed",
+      "run.failed",
+    ]);
     expect(JSON.stringify(made.prompts)).not.toContain("review carefully");
   });
 
