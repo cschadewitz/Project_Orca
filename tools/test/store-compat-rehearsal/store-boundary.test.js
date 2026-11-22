@@ -78,17 +78,24 @@ async function oldShapedWorkspace() {
 }
 const added = (comparison) => comparison.added.map((path) => path.replace(/^workspace:/, ""));
 
-it("D1/D2: the current read command and read-only daemon write new-epoch state into a store without it", async () => {
+it("D1/D2: startup refuses an older store unchanged; after carry-forward, read commands and the read-only daemon add new-epoch state", async () => {
   const { base, workspace } = await oldShapedWorkspace();
+  const run = (cwd, ...args) =>
+    promisify(execFile)(process.execPath, ["--import", "tsx", cli, "--cwd", cwd, ...args], { env, timeout: 60_000 });
+  // #566: ordinary startup never converts an older store, and refuses it byte for byte unchanged.
+  const untouched = await snapshotRoots({ workspace });
+  const refused = await run(workspace, "runs").catch((error) => error);
+  expect(refused.stderr).toContain("CARRYOVER_REQUIRED");
+  const afterRefusal = compareSnapshots(untouched, await snapshotRoots({ workspace }));
+  expect([afterRefusal.added, afterRefusal.removed, afterRefusal.changed]).toEqual([[], [], []]);
+  expect((await run(workspace, "store", "carry-forward")).stdout).toMatch(/^carried .* forward from unmarked/);
+
   const daemonWorkspace = join(base, "daemon", "workspace");
   await mkdir(join(base, "daemon"));
   await copyToNew(workspace, daemonWorkspace);
   const before = await snapshotRoots({ workspace });
 
-  const listed = await promisify(execFile)(process.execPath, ["--import", "tsx", cli, "--cwd", workspace, "runs"], {
-    env,
-    timeout: 60_000,
-  });
+  const listed = await run(workspace, "runs");
   expect(listed.stdout).toContain(RUN);
   const afterRead = compareSnapshots(before, await snapshotRoots({ workspace }));
   // Existing bytes are untouched; what is new is key material and a configuration generation.
