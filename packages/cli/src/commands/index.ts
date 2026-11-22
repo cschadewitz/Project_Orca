@@ -96,6 +96,7 @@ import { formatEvent, formatPaused, formatPendingInput, formatRunState, stepAgen
 import { daemonCall, DaemonRedirectError, isAuthenticationFailure } from "../daemon-client.js";
 import { parseVars, workflowGuards } from "./launch-options.js";
 import { authCommand } from "./auth.js";
+import { remoteCommand } from "./remote.js";
 import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
 import { recoveryCommand } from "./recovery.js";
@@ -268,6 +269,12 @@ export const commands: Record<string, Command> = {
     usage:
       "issue defaults to --preset client (owner, operator, viewer also supported).\n--workflow-scope id may be repeated; --runs-scope all|owned selects run scope.\n--label text names a credential; --expires-at ISO sets an expiry for issue or rotate.\n--json prints structured results. Only issue and rotate print a token, once. Restart serve to rotate its local bootstrap credential.\nLocal clients use ORCA_DAEMON_TOKEN, ORCA_DAEMON_TOKEN_FILE, or auth/local-client.token beside the workspace config.\n",
     run: authCommand,
+  },
+  remote: {
+    help: "remote enroll <id>  Enroll a configured remote daemon so steps can be delegated to it.",
+    usage:
+      "enroll connects once over SSH, pins the remote's host keys (and its jump host's), checks the credential in auth/remotes/<id>.token, and records the workspace and principal the daemon there names in auth/remotes/<id>.json.\nDelegated steps go only to an enrolled remote, over those keys, with that credential. Enroll again after replacing the credential or moving the remote.\n--json prints the enrollment record.\n",
+    run: remoteCommand,
   },
 
   validate: {

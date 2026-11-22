@@ -112,6 +112,21 @@ export class AdmissionRetryModel {
       release?.();
     }
   }
+  /** A direct admission's receipt by its idempotency key, or `absent`; never claims (#883). */
+  async find(
+    idempotencyKey: string,
+    authorities: AdmissionAuthorities,
+  ): Promise<{ state: "absent" } | RetryResult<unknown>> {
+    await authorities.check();
+    const authority = await authorities.direct();
+    return this.options.direct.withRetryAuthority(authority, () =>
+      this.options.claims.find("run.admit", idempotencyKey, {
+        principalId: authority.actor.principalId,
+        workspaceId: authority.workspaceId,
+        authorize: (command: unknown) => authority.authorize(command as DirectAdmissionCommand),
+      }),
+    );
+  }
   inspect(operationId: string, authorities: AdmissionAuthorities): Promise<RetryResult<unknown>> {
     return this.receipt(operationId, authorities, false);
   }

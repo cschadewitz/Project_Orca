@@ -118,4 +118,10 @@ export interface RetryClaimStore {
   write(record: RetryRecord): Promise<void>;
   /** Fixed-size discovery; cursor is persisted by the store, no whole-ledger scan. */
   batch(): Promise<string[]>;
+  /**
+   * The claim an idempotency key already made in this scope, or undefined. Never claims,
+   * creates a lookup salt or charges a quota: a caller that must not create work (a cancel
+   * whose admission answer was lost, #883) asks this instead of repeating the admission.
+   */
+  find?(scope: RetryScope, key: string): Promise<RetryRecord | undefined>;
 }

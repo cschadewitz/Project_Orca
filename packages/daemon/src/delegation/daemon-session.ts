@@ -3,16 +3,28 @@
  * run of a named workflow on another ORCA daemon, reached over the remote profile's SSH
  * tunnel (`@orca/protocol/remote-access`, #874), with the credential that daemon issued.
  *
- * - **Admission is retry-safe.** A turn is admitted with `runs.admit` under an idempotency key
- *   derived from the parent run and step run, so a call repeated after a dropped connection
- *   gets the same receipt and the same remote run, never a second one.
+ * - **Only to the enrolled daemon.** The session is opened over a tunnel that trusts only the
+ *   host keys sealed at enrollment (`orca remote enroll`), and refuses before any admission
+ *   unless the daemon there names the enrolled workspace and principal; every admission is
+ *   bound to them with `expectedScope`.
+ * - **One logical delegation, one remote run at a time.** A step's delegation is named by its
+ *   first attempt (`TurnContext.delegationId`) and recorded in a durable receipt
+ *   (`receipts.ts`) before anything is sent. An engine retry or a restart of this daemon reads
+ *   the receipt: it re-sends the same idempotency key while the answer is unknown, follows the
+ *   admitted run, and submits replacement work only once the earlier run is verified ended
+ *   without success, or verified never admitted.
+ * - **Cancel never creates work.** Cancelled while an admission's answer is unknown, the
+ *   session looks the key up with `admissions.find` (which never claims it) and cancels what it
+ *   finds; while the answer stays unknown the receipt stays `cancel-pending`, and each later
+ *   session to the remote looks again.
  * - **Progress follows the remote log** by cursor (`runs.events`): remote step milestones and
  *   the remote agents' own updates become this session's updates, and so the parent step's
  *   `agent.update` events.
  * - **Gates are forwarded.** An open input on the remote run (or its children) is asked through
  *   the parent's `askPermission`, and the parent's answer is sent back with `inputs.answer`.
  * - **Reattach, not resubmit.** A connection lost mid-run is retried until the turn's deadline;
- *   the session keeps the remote run id and its cursor, so it picks up where it was.
+ *   the session keeps the remote run id and its cursor, so it picks up where it was. A terminal
+ *   event, once seen, stays latched until the run's authoritative result has been read.
  * - **Cancellation reaches the remote run** (`runs.cancel`), whether the parent cancelled the
  *   step or its turn timed out.
  * - **Artifacts come back** once the remote run succeeds: each of the step's deliverables is
@@ -29,7 +41,6 @@ import { randomUUID } from "node:crypto";
 import {
   newId,
   OrcaError,
-  sha256,
   silentLogger,
   systemClock,
   type AgentSpec,
@@ -50,6 +61,7 @@ import type {
   TurnResult,
 } from "@orca/agents";
 import {
+  AdmissionsFindResultSchema,
   ArtifactsGetResultSchema,
   ArtifactsListResultSchema,
   daemonRelation,
@@ -64,6 +76,7 @@ import {
   type OpenInputView,
 } from "@orca/protocol";
 import { RemoteDaemonClient, RemoteFault, RemoteUnreachable } from "./remote-client.js";
+import { delegationKey, type DelegationReceipt, type DelegationReceipts } from "./receipts.js";
 
 /** ACP shapes, through `@orca/agents`' own types: this package does not import the SDK. */
 type PromptInput = Parameters<AgentSession["prompt"]>[0];
@@ -76,6 +89,7 @@ export const DELEGATION_METHODS = [
   "hello",
   "operator.discover",
   "runs.admit",
+  "admissions.find",
   "admissions.get",
   "admissions.reconcile",
   "runs.get",
@@ -91,6 +105,7 @@ export const DELEGATION_METHODS = [
 export type DelegationRefusalReason =
   | "profile-invalid"
   | "credential-missing"
+  | "not-enrolled"
   | "tunnel"
   | "auth"
   | "protocol"
@@ -127,6 +142,10 @@ export interface OpenDaemonSessionOptions {
   remoteName: string;
   transport: DelegationTransport;
   token: string;
+  /** What enrollment proved the remote daemon names: the session refuses any other. */
+  expected: { workspaceId: string; principalId: string };
+  /** Where this daemon records what it asked the remote to run. */
+  receipts: DelegationReceipts;
   askPermission?: (req: PermissionRequest, invocation?: PermissionInvocation) => Promise<string | undefined>;
   logger?: Logger;
   clock?: Clock;
@@ -140,6 +159,8 @@ export interface OpenDaemonSessionOptions {
 interface Turn {
   runId: string;
   cancelled: boolean;
+  /** The cancel sent to the remote run: true once the remote took it (or the run had ended). */
+  cancelling?: Promise<boolean>;
   id: string;
   abort: AbortController;
   /** A forwarded question the parent could not take (it parked or failed): ends the turn. */
@@ -168,15 +189,14 @@ function parentOf(path: string): string {
   return at <= 0 ? path.slice(0, 1) : path.slice(0, at);
 }
 
-/** The remote run's key: one per parent step attempt, within the 128-byte retry key limit. */
-export function delegationKey(turn: Pick<TurnContext, "runId" | "stepRunId">): string {
-  return `orca-delegate-${sha256(`${turn.runId}\n${turn.stepRunId}`).slice(0, 48)}`;
-}
+/** A `cancel-pending` receipt whose key is still unknown after this long is settled as never admitted. */
+const CANCEL_PENDING_LIMIT_MS = 24 * 60 * 60_000;
 
 /**
- * Open a session on a remote daemon: `hello` (the protocol must match and every delegation
- * method must be served), then `operator.discover` (the credential's principal and the remote
- * workspace, which every admission is then bound to with `expectedScope`).
+ * Open a session on a remote daemon: `hello` (the protocol must match, every delegation
+ * method must be served, and the workspace must be the enrolled one), then `operator.discover`
+ * (the credential's principal and the remote workspace must be the enrolled ones). Then any
+ * cancelled admission to this remote whose fate is still unknown is looked up again.
  */
 export async function openDaemonSession(options: OpenDaemonSessionOptions): Promise<AgentSession> {
   const clock = options.clock ?? systemClock;
@@ -201,6 +221,11 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
         `The daemon on ${options.remoteName} speaks protocol ${formatProtocolVersion(hello.protocol)}, which this daemon cannot delegate to. Update ORCA on one of them so both speak the same major version.`,
         { remoteProtocol: formatProtocolVersion(hello.protocol) },
       );
+    const changed = (what: string) =>
+      refuse(
+        "scope-changed",
+        `The daemon on ${options.remoteName} now names a different ${what} than when it was enrolled. Nothing was sent to run. If the change is intended, run \`orca remote enroll ${options.profile}\` again.`,
+      );
     const missing = DELEGATION_METHODS.filter((m) => !hello.methods?.includes(m));
     if (missing.length)
       throw refuse(
@@ -208,21 +233,26 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
         `The daemon on ${options.remoteName} does not take delegated runs (it does not answer ${missing.join(", ")}). It may be read-only, not in token mode, or an older ORCA.`,
         { missing },
       );
+    if (hello.identity && hello.identity.workspaceId !== options.expected.workspaceId) throw changed("workspace");
     const discovery = OperatorDiscoverySchema.parse(
       await client.call("operator.discover", {}).catch((e: unknown) => {
         throw fault(e);
       }),
     );
+    if (discovery.target.workspaceId !== options.expected.workspaceId) throw changed("workspace");
+    if (discovery.principalId !== options.expected.principalId) throw changed("principal");
     if (!discovery.operations.includes("runs.admit"))
       throw refuse(
         "auth",
         `The credential for ${options.remoteName} may not start runs there. Issue one with the client preset.`,
         { principal: discovery.principalId },
       );
-    return new DaemonSession(options, client, clock, logger, {
+    const session = new DaemonSession(options, client, clock, logger, {
       principalId: discovery.principalId,
       workspaceId: discovery.target.workspaceId,
     });
+    await session.sweep();
+    return session;
   } catch (error) {
     client.close();
     await options.transport.close().catch(() => undefined);
@@ -323,7 +353,7 @@ class DaemonSession implements AgentSession {
     const current = this.current;
     if (!current || current.cancelled) return;
     current.cancelled = true;
-    await this.cancelRemote(current.runId, "cancelled by the delegating run");
+    await (current.cancelling ??= this.cancelRemote(current.runId, "cancelled by the delegating run"));
   }
 
   close(): Promise<void> {
@@ -342,29 +372,50 @@ class DaemonSession implements AgentSession {
   async prompt(input: PromptInput, options: PromptOptions = {}): Promise<TurnResult> {
     const started = this.clock.now();
     const turn = options.turn;
+    if (!turn)
+      throw new OrcaError("NOT_SUPPORTED", "a delegated agent runs workflow steps only", {
+        profile: this.options.profile,
+      });
     const deadline = started + (options.timeoutMs ?? this.options.agent.turnTimeoutMs);
-    if (turn && turn.followUp > 0) {
+    if (turn.followUp > 0) {
       // The remote run already ended and delivered what it had; asking again would start a
       // second remote run for the same step. What is still missing stays missing.
       this.note(`The remote run for this step already finished; ${this.options.remoteName} is not asked again.`);
       return { stopReason: "end_turn", durationMs: 0 };
     }
-    const task = turn?.task ?? (typeof input === "string" ? input : textOf(input));
-    const key = turn ? delegationKey(turn) : `orca-delegate-${newId("sess", started)}`;
-    const runId = await this.admit(task, key, deadline, options.signal);
+    const task = turn.task || (typeof input === "string" ? input : textOf(input));
+    const signal = options.signal;
+    let receipt = await this.resolve(turn, task, deadline, signal);
+    const runId = receipt.remoteRunId!;
+    if (receipt.state === "settled") {
+      // A run that already succeeded for this delegation, whose artifacts never came back.
+      this.note(
+        `The remote run ${runId} on ${this.options.remoteName} already succeeded; bringing its artifacts back.`,
+      );
+      await this.deliver(runId, turn.deliverables, deadline);
+      this.store({ ...receipt, deliveredAttempt: turn.attempt });
+      return { stopReason: "end_turn", durationMs: this.clock.now() - started };
+    }
     const current: Turn = { runId, cancelled: false, id: randomUUID(), abort: new AbortController() };
     this.current = current;
     this.note(`Delegated to ${this.options.remoteName} as run ${runId}.`);
+    const settle = (outcome: NonNullable<DelegationReceipt["outcome"]>) =>
+      (receipt = this.store({ ...receipt, state: "settled", outcome }));
     try {
-      const outcome = await this.follow(runId, deadline, options.signal, current);
-      if (outcome === "cancelled") return { stopReason: "cancelled", durationMs: this.clock.now() - started };
+      const outcome = await this.follow(runId, deadline, signal, current);
+      if (outcome === "cancelled") {
+        // Settled only once the remote took the cancel; otherwise a later attempt looks again.
+        if (await current.cancelling) settle("cancelled");
+        return { stopReason: "cancelled", durationMs: this.clock.now() - started };
+      }
       if (outcome === "timeout") {
-        await this.cancelRemote(runId, "the delegating step timed out");
+        if (await this.cancelRemote(runId, "the delegating step timed out")) settle("cancelled");
         throw new OrcaError("STEP_TIMEOUT", `the remote run ${runId} did not finish within the turn timeout`, {
           profile: this.options.profile,
           remoteRunId: runId,
         });
       }
+      settle(outcome.status);
       if (outcome.status !== "succeeded")
         throw new OrcaError(
           "DELEGATED_RUN_FAILED",
@@ -376,8 +427,13 @@ class DaemonSession implements AgentSession {
             ...(outcome.error !== undefined ? { remoteError: outcome.error } : {}),
           },
         );
-      if (turn) await this.deliver(runId, turn.deliverables, deadline);
+      await this.deliver(runId, turn.deliverables, deadline);
+      this.store({ ...receipt, deliveredAttempt: turn.attempt });
       return { stopReason: "end_turn", durationMs: this.clock.now() - started };
+    } catch (error) {
+      // A turn that ended on its own cancel (a forwarded question the parent could not take).
+      if (receipt.state === "admitted" && current.cancelling && (await current.cancelling)) settle("cancelled");
+      throw error;
     } finally {
       // Questions still being asked belong to this turn only.
       current.abort.abort();
@@ -385,31 +441,191 @@ class DaemonSession implements AgentSession {
     }
   }
 
+  // ------------------------------------------------------------------ receipts
+
+  /** Replace this delegation's receipt (durable before it returns). */
+  private store(receipt: Omit<DelegationReceipt, "version" | "updatedAt">): DelegationReceipt {
+    const { version: _v, updatedAt: _u, ...rest } = receipt as DelegationReceipt;
+    return this.options.receipts.write(rest);
+  }
+
+  /**
+   * The remote run this turn follows: an `admitted` receipt, or a `settled` one whose
+   * succeeded run's artifacts are still to be brought back. Reads the delegation's receipt and
+   * submits only what it proves safe to submit (see `receipts.ts`).
+   */
+  private async resolve(
+    turn: TurnContext,
+    task: string,
+    deadline: number,
+    signal: AbortSignal | undefined,
+  ): Promise<DelegationReceipt> {
+    const { runId: parentRunId, delegationId } = turn;
+    for (;;) {
+      if (signal?.aborted) throw new OrcaError("CANCELLED", "cancelled before the remote run was admitted");
+      const receipt = this.options.receipts.read(parentRunId, delegationId);
+      if (receipt && receipt.profile !== this.options.profile)
+        throw delegationRefusal(
+          this.options.profile,
+          "scope-changed",
+          `This step was delegated to remote ${receipt.profile}, and its agent now names ${this.options.profile}. Nothing was sent; cancel the run and start it again to delegate to the new remote.`,
+          { delegatedTo: receipt.profile },
+        );
+      if (!receipt) {
+        const fresh = this.store({
+          profile: this.options.profile,
+          parentRunId,
+          delegationId,
+          generation: 0,
+          key: delegationKey(parentRunId, delegationId, 0),
+          state: "submitting",
+        });
+        return this.submit(fresh, task, deadline, signal);
+      }
+      switch (receipt.state) {
+        case "admitted": {
+          // Reattach only to a run that may still go on; one that ended is settled first.
+          const ended = await this.call("runs.get", { runId: receipt.remoteRunId! }, deadline).then(
+            (answer) => RunsGetResultSchema.parse(answer).run.status,
+          );
+          if (ended !== "succeeded" && ended !== "failed" && ended !== "cancelled") return receipt;
+          this.store({ ...receipt, state: "settled", outcome: ended });
+          continue;
+        }
+        case "submitting":
+          // The answer was never learned. The same key replays the admission if it was made.
+          return this.submit(receipt, task, deadline, signal);
+        case "cancel-pending": {
+          const found = await this.find(receipt.key, deadline, signal);
+          if (found === "pending") {
+            if (this.clock.now() > deadline)
+              throw new OrcaError("STEP_TIMEOUT", "an earlier admission to the remote daemon did not settle in time", {
+                profile: this.options.profile,
+              });
+            await sleep(this.pollMs, signal);
+            continue;
+          }
+          if (found === "absent") {
+            // Never admitted so far: sending the same key now either admits it once or replays it.
+            return this.submit(this.store({ ...receipt, state: "submitting" }), task, deadline, signal);
+          }
+          await this.cancelRemote(found, "cancelled by the delegating run");
+          this.store({ ...receipt, state: "settled", remoteRunId: found, outcome: "cancelled" });
+          continue;
+        }
+        case "settled": {
+          if (
+            receipt.outcome === "succeeded" &&
+            receipt.remoteRunId &&
+            (receipt.deliveredAttempt === undefined || receipt.deliveredAttempt >= turn.attempt)
+          )
+            return receipt;
+          // The earlier run is verified ended (or never admitted): a new generation may start.
+          const generation = receipt.generation + 1;
+          const next = this.store({
+            profile: this.options.profile,
+            parentRunId,
+            delegationId,
+            generation,
+            key: delegationKey(parentRunId, delegationId, generation),
+            state: "submitting",
+          });
+          return this.submit(next, task, deadline, signal);
+        }
+      }
+    }
+  }
+
+  /**
+   * Whether the remote holds an admission under `key`, without ever making one: its run id,
+   * `absent`, or `pending` (prepared, or the remote could not be asked).
+   */
+  private async find(key: string, deadline: number, signal?: AbortSignal): Promise<string | "absent" | "pending"> {
+    let answer: unknown;
+    try {
+      answer = await this.client.call("admissions.find", { idempotencyKey: key }, { signal, timeoutMs: 10_000 });
+    } catch (error) {
+      if (error instanceof RemoteFault || this.options.transport.failed() || this.clock.now() > deadline)
+        throw classify(this.options.profile, this.options.transport, error);
+      return "pending";
+    }
+    const found = AdmissionsFindResultSchema.parse(answer);
+    if (found.state === "absent") return "absent";
+    if (found.state === "in-progress") return "pending";
+    // The retained admission result, without the wire receipt's operation id.
+    const result = (found.result ?? {}) as { state?: unknown; runId?: unknown };
+    if ((result.state === "accepted" || result.state === "recoverable-failure") && typeof result.runId === "string")
+      return result.runId;
+    return "pending";
+  }
+
+  /**
+   * Look again at cancelled admissions to this remote whose fate was unknown: cancel the runs
+   * they made, and settle the ones that never made one. Best effort; never fails the open.
+   */
+  async sweep(): Promise<void> {
+    let pending: DelegationReceipt[];
+    try {
+      pending = this.options.receipts.cancelPending(this.options.profile);
+    } catch {
+      return;
+    }
+    for (const receipt of pending) {
+      try {
+        const found = await this.find(receipt.key, this.clock.now() + 10_000);
+        if (found === "pending") continue;
+        if (found === "absent") {
+          if (this.clock.now() - Date.parse(receipt.updatedAt) > CANCEL_PENDING_LIMIT_MS)
+            this.store({ ...receipt, state: "settled", outcome: "never-admitted" });
+          continue;
+        }
+        if (await this.cancelRemote(found, "cancelled by the delegating run"))
+          this.store({ ...receipt, state: "settled", remoteRunId: found, outcome: "cancelled" });
+      } catch (error) {
+        this.logger.warn("delegation sweep could not settle a cancelled admission", {
+          profile: this.options.profile,
+          error: String(error),
+        });
+      }
+    }
+  }
+
   // ------------------------------------------------------------------ admission
 
-  private async admit(task: string, key: string, deadline: number, signal?: AbortSignal): Promise<string> {
-    const vars = { [this.options.agent.promptVar ?? "prompt"]: task };
+  /** Send the receipt's admission (same key every time) until it is accepted; `admitted` after. */
+  private async submit(
+    receipt: DelegationReceipt,
+    task: string,
+    deadline: number,
+    signal?: AbortSignal,
+  ): Promise<DelegationReceipt> {
     const params = {
       workflowId: this.options.agent.workflow!,
-      vars,
-      idempotencyKey: key,
+      vars: { [this.options.agent.promptVar ?? "prompt"]: task },
+      idempotencyKey: receipt.key,
       expectedScope: this.scope,
     };
+    const admitted = (runId: string) => this.store({ ...receipt, state: "admitted", remoteRunId: runId });
     for (let attempt = 0; ; attempt++) {
-      if (signal?.aborted) throw new OrcaError("CANCELLED", "cancelled before the remote run was admitted");
+      if (signal?.aborted) return this.abandon(receipt, deadline);
       try {
-        let receipt = RunsAdmitResultSchema.parse(await this.client.call("runs.admit", params, { signal }));
+        let answer = RunsAdmitResultSchema.parse(await this.client.call("runs.admit", params, { signal }));
         // A prepared or recoverable admission settles through its receipt, never a new submit.
-        while (receipt.state !== "accepted") {
-          if (receipt.state === "recoverable-failure" && receipt.runId) return receipt.runId;
+        while (answer.state !== "accepted") {
+          if (answer.state === "recoverable-failure" && answer.runId) return admitted(answer.runId);
           await sleep(this.pollMs, signal);
-          if (signal?.aborted) throw new OrcaError("CANCELLED", "cancelled while the remote run was admitted");
-          const method = receipt.state === "recoverable-failure" ? "admissions.reconcile" : "admissions.get";
-          const settled = (await this.client.call(method, { operationId: receipt.operationId }, { signal })) as {
+          if (signal?.aborted) return this.abandon(receipt, deadline);
+          const method = answer.state === "recoverable-failure" ? "admissions.reconcile" : "admissions.get";
+          const settled = (await this.client.call(method, { operationId: answer.operationId }, { signal })) as {
             state: string;
             result?: unknown;
           };
-          if (settled.state === "resolved") receipt = RunsAdmitResultSchema.parse(settled.result);
+          // The retained result carries no operation id; the receipt's is the same operation.
+          if (settled.state === "resolved")
+            answer = RunsAdmitResultSchema.parse({
+              operationId: answer.operationId,
+              ...(settled.result as Record<string, unknown>),
+            });
           if (this.clock.now() > deadline)
             throw new OrcaError(
               "STEP_TIMEOUT",
@@ -419,24 +635,10 @@ class DaemonSession implements AgentSession {
               },
             );
         }
-        return receipt.runId;
+        return admitted(answer.runId);
       } catch (error) {
         if (error instanceof OrcaError) throw error;
-        if (signal?.aborted) {
-          // Cancelled with the admission's answer in flight: the remote may have admitted the
-          // run. The same key replays that admission (or makes it), so it can be cancelled
-          // rather than left running for nobody.
-          await this.client
-            .call("runs.admit", params, { timeoutMs: 10_000 })
-            .then((answer) => {
-              const receipt = RunsAdmitResultSchema.safeParse(answer);
-              if (receipt.success && receipt.data.state === "accepted")
-                return this.cancelRemote(receipt.data.runId, "cancelled by the delegating run");
-              return undefined;
-            })
-            .catch(() => undefined);
-          throw new OrcaError("CANCELLED", "cancelled while the remote run was admitted");
-        }
+        if (signal?.aborted) return this.abandon(receipt, deadline);
         if (error instanceof RemoteFault) {
           if (error.code === "AUTH_FORBIDDEN" && /scope/i.test(error.message))
             throw delegationRefusal(
@@ -457,6 +659,27 @@ class DaemonSession implements AgentSession {
     }
   }
 
+  /**
+   * Cancelled while an admission's answer is unknown. Nothing is sent that could admit work:
+   * the key is looked up (`admissions.find` never claims it), a run it made is cancelled, and
+   * otherwise the receipt stays `cancel-pending` for the next session to this remote.
+   */
+  private async abandon(receipt: DelegationReceipt, deadline: number): Promise<never> {
+    const pending = this.store({ ...receipt, state: "cancel-pending" });
+    try {
+      const found = await this.find(pending.key, Math.min(deadline, this.clock.now() + 10_000));
+      if (
+        found !== "absent" &&
+        found !== "pending" &&
+        (await this.cancelRemote(found, "cancelled by the delegating run"))
+      )
+        this.store({ ...pending, state: "settled", remoteRunId: found, outcome: "cancelled" });
+    } catch {
+      // The receipt stays cancel-pending; the next session to this remote looks again.
+    }
+    throw new OrcaError("CANCELLED", "cancelled while the remote run was admitted");
+  }
+
   // ------------------------------------------------------------------ following
 
   private async follow(
@@ -466,14 +689,15 @@ class DaemonSession implements AgentSession {
     current: Turn,
   ): Promise<Terminal | "cancelled" | "timeout"> {
     let cursor: number | undefined;
+    // Once a terminal event is seen it stays seen: the cursor is past it, so a lost read of the
+    // authoritative result must be retried, never followed by more pages.
+    let terminal = false;
     const asked = new Set<string>();
     let unreachableSince: number | undefined;
     for (;;) {
       if (signal?.aborted || current.cancelled) {
-        if (!current.cancelled) {
-          current.cancelled = true;
-          await this.cancelRemote(runId, "cancelled by the delegating run");
-        }
+        current.cancelled = true;
+        await (current.cancelling ??= this.cancelRemote(runId, "cancelled by the delegating run"));
         return "cancelled";
       }
       if (this.clock.now() > deadline) return "timeout";
@@ -486,13 +710,12 @@ class DaemonSession implements AgentSession {
         // The parent parked or failed on a forwarded question: the remote run must not go on
         // waiting for an answer nobody will send through this turn.
         current.cancelled = true;
-        await this.cancelRemote(runId, "the delegating step stopped on a forwarded question");
+        await (current.cancelling ??= this.cancelRemote(runId, "the delegating step stopped on a forwarded question"));
         throw current.failure;
       }
       try {
-        let terminal = false;
         // Every page the cursor has, then the open questions; each is idempotent to repeat.
-        for (;;) {
+        while (!terminal) {
           const page = RunsEventsResultSchema.parse(
             await this.client.call("runs.events", {
               runId,
@@ -507,7 +730,12 @@ class DaemonSession implements AgentSession {
           if (page.nextCursor !== undefined) cursor = page.nextCursor;
           if (!page.hasMore) break;
         }
-        if (terminal) return await this.settled(runId);
+        if (terminal) {
+          const result = await this.settled(runId);
+          if (result) return result;
+          // The log said it ended, and the run was taken up again since: follow it on.
+          terminal = false;
+        }
         const open = InputsListResultSchema.parse(await this.client.call("inputs.list", { runId }));
         for (const input of open.inputs)
           if (!asked.has(input.id)) {
@@ -535,10 +763,12 @@ class DaemonSession implements AgentSession {
     }
   }
 
-  private async settled(runId: string): Promise<Terminal> {
+  /** The run's authoritative result, or undefined while it is not ended. */
+  private async settled(runId: string): Promise<Terminal | undefined> {
     const state = RunsGetResultSchema.parse(await this.client.call("runs.get", { runId }));
     const status = state.run.status;
     if (status === "succeeded") return { status };
+    if (status !== "failed" && status !== "cancelled") return undefined;
     return {
       status: status === "cancelled" ? "cancelled" : "failed",
       ...(state.run.error ? { error: state.run.error } : {}),
@@ -624,18 +854,20 @@ class DaemonSession implements AgentSession {
       });
   }
 
-  private async cancelRemote(runId: string, reason: string): Promise<void> {
+  /** Cancel a remote run. True once the remote took it, or the run had already ended. */
+  private async cancelRemote(runId: string, reason: string): Promise<boolean> {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         await this.client.call("runs.cancel", { runId, reason });
-        return;
+        return true;
       } catch (error) {
         // A run that already ended cannot be cancelled, and that is fine.
-        if (error instanceof RemoteFault) return;
+        if (error instanceof RemoteFault) return true;
         await sleep(this.pollMs);
       }
     }
     this.logger.warn("could not cancel the remote run", { profile: this.options.profile, runId });
+    return false;
   }
 
   // ------------------------------------------------------------------ artifacts

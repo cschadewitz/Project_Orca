@@ -5,8 +5,9 @@
  *
  * - Over SSH (where sshd is installed): `a` reaches `b` through a throwaway loopback sshd with
  *   the shared `SshTunnel`, exactly as it would a remote machine, with a credential `b` issued.
- * - Over a direct stream: the session against `b` with a transport the test can cut, for the
- *   reattach and idempotency cases that a real tunnel cannot be made to drop on cue.
+ * - Over a direct stream: the session against `b` through a proxy the test controls, for the
+ *   reattach, lost-answer, cancel-before-commit and restart cases that a real tunnel cannot be
+ *   made to hit on cue.
  *
  * Needs `pnpm run build` (it runs the compiled CLI); CI builds before it tests.
  */
@@ -14,13 +15,19 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { connect, type Socket } from "node:net";
+import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AgentSpecSchema, isOrcaError } from "@orca/core";
 import { LocalHost } from "@orca/agents";
-import { delegationKey, openDaemonSession, type DelegationTransport } from "@orca/daemon";
+import {
+  delegationKey,
+  DelegationReceipts,
+  openDaemonSession,
+  type DelegationTransport,
+  type OpenDaemonSessionOptions,
+} from "@orca/daemon";
 import {
   CLI_ENTRY,
   loopbackSshd,
@@ -147,6 +154,11 @@ async function until<T>(what: string, read: () => Promise<T | undefined>, ms = 6
   }
 }
 
+/** Run the CLI in a daemon's directory. */
+function cli(daemon: TestDaemon, args: string[]) {
+  return spawnSync(process.execPath, [CLI_ENTRY, ...args], { cwd: daemon.dir, encoding: "utf8", env: process.env });
+}
+
 const finished = (daemon: TestDaemon, runId: string) =>
   until(`run ${runId} to finish`, async () => {
     const { run } = await runOf(daemon, runId);
@@ -216,11 +228,41 @@ edges:
     writeFileSync(join(parent.dir, "auth", "remotes", "remote-box.token"), `${token}\n`, { mode: 0o600 });
   }, 90_000);
 
+  const enrollmentPath = () => join(parent.dir, "auth", "remotes", "remote-box.json");
+  const knownHostsPath = () => join(parent.dir, "auth", "remotes", "remote-box.known_hosts");
+
   afterAll(async () => {
     await parent?.close();
     await remote?.close();
     await sshd?.close();
   });
+
+  it("refuses a remote that was never enrolled, before connecting to it", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const run = await finished(parent, await admit(parent, "delegate", { city: "Nowhere" }));
+    expect(run).toMatchObject({
+      status: "failed",
+      error: { code: "DELEGATION_REFUSED", message: expect.stringContaining("orca remote enroll remote-box") },
+    });
+    // No host key was trusted on first use by the delegation.
+    await expect(readFile(knownHostsPath(), "utf8")).rejects.toThrow();
+    expect(((await call(remote, "runs.list", {})).runs as unknown[]).length).toBe(0);
+  }, 120_000);
+
+  it("enrolls the remote: pins its host keys and records its workspace and principal", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const out = cli(parent, ["remote", "enroll", "remote-box", "--json"]);
+    expect(out.status, out.stderr).toBe(0);
+    const record = JSON.parse(out.stdout) as Record<string, string>;
+    const discovered = (await call(remote, "operator.discover", {})).target as { workspaceId: string };
+    expect(record).toMatchObject({ profile: "remote-box", workspaceId: discovered.workspaceId });
+    expect(record.principalId).toBeTruthy();
+    // The record names the credential by id only.
+    const token = await readFile(join(parent.dir, "auth", "remotes", "remote-box.token"), "utf8");
+    expect(record.credentialId).toBe(token.trim().split(".")[1]);
+    expect(JSON.stringify(record)).not.toContain(token.trim().split(".")[2]);
+    await expect(readFile(knownHostsPath(), "utf8")).resolves.toMatch(/ssh-ed25519/);
+  }, 120_000);
 
   it("runs a parent step as a run on the remote daemon and brings its artifact back", async (ctx) => {
     if (!sshd) return ctx.skip();
@@ -252,11 +294,6 @@ edges:
     expect(
       audit.some((r) => JSON.stringify(r).includes("parent-daemon") && JSON.stringify(r).includes("runs.admit")),
     ).toBe(true);
-
-    // The remote's pinned host key was enrolled for the profile on the first connect.
-    await expect(readFile(join(parent.dir, "auth", "remotes", "remote-box.known_hosts"), "utf8")).resolves.toMatch(
-      /ssh-ed25519/,
-    );
   }, 120_000);
 
   it("forwards a remote gate to the parent and sends the parent's answer back", async (ctx) => {
@@ -303,124 +340,350 @@ edges:
     expect(await finished(remote, remoteRun.id)).toMatchObject({ status: "cancelled" });
   }, 120_000);
 
-  it("fails the step with a typed refusal when the remote refuses the credential", async (ctx) => {
+  it("sends no bearer with a credential other than the enrolled one", async (ctx) => {
     if (!sshd) return ctx.skip();
     const file = join(parent.dir, "auth", "remotes", "remote-box.token");
     const good = await readFile(file, "utf8");
-    // A well-formed token the remote never issued.
+    const before = ((await call(remote, "runs.list", {})).runs as unknown[]).length;
+    // A well-formed token, but not the enrolled credential.
     writeFileSync(file, `orca1.AAAAAAAAAAAA.${"A".repeat(43)}\n`, { mode: 0o600 });
     try {
       const run = await finished(parent, await admit(parent, "delegate", { city: "Nowhere" }));
       expect(run).toMatchObject({
         status: "failed",
-        error: { code: "DELEGATION_REFUSED", message: expect.stringContaining("refused this daemon's credential") },
+        error: { code: "DELEGATION_REFUSED", message: expect.stringContaining("not the one it was enrolled with") },
       });
     } finally {
       writeFileSync(file, good, { mode: 0o600 });
     }
+    expect(((await call(remote, "runs.list", {})).runs as unknown[]).length).toBe(before);
+  }, 120_000);
+
+  it("refuses a host whose keys are not the enrolled ones", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const file = enrollmentPath();
+    const good = await readFile(file, "utf8");
+    const before = ((await call(remote, "runs.list", {})).runs as unknown[]).length;
+    const record = JSON.parse(good) as { keys: string };
+    writeFileSync(file, JSON.stringify({ ...record, keys: `${record.keys}-other` }), { mode: 0o600 });
+    try {
+      const run = await finished(parent, await admit(parent, "delegate", { city: "Elsewhere" }));
+      expect(run).toMatchObject({ status: "failed", error: { code: "DELEGATION_REFUSED" } });
+    } finally {
+      writeFileSync(file, good, { mode: 0o600 });
+    }
+    expect(((await call(remote, "runs.list", {})).runs as unknown[]).length).toBe(before);
+  }, 120_000);
+
+  it("fails the step with a typed refusal once the remote revokes the credential", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const { credentialId } = JSON.parse(await readFile(enrollmentPath(), "utf8")) as { credentialId: string };
+    const revoked = cli(remote, ["auth", "revoke", credentialId]);
+    expect(revoked.status, revoked.stderr).toBe(0);
+    const run = await finished(parent, await admit(parent, "delegate", { city: "Nowhere" }));
+    expect(run).toMatchObject({
+      status: "failed",
+      error: { code: "DELEGATION_REFUSED", message: expect.stringContaining("refused this daemon's credential") },
+    });
   }, 120_000);
 });
 
-describe("delegation over a stream the test can cut (#883)", () => {
+describe("delegation through a proxy the test controls (#883)", () => {
   let remote: TestDaemon;
   let token: string;
   let work: string;
+  let expected: OpenDaemonSessionOptions["expected"];
 
   beforeAll(async () => {
     remote = await remoteDaemon();
     token = issueCredential(remote, "parent-direct");
     work = await mkdtemp(join(tmpdir(), "orca-883-work-"));
     dirs.push(work);
+    const discovery = (await remote.call("operator.discover", {}, token)) as {
+      ok: true;
+      result: { principalId: string; target: { workspaceId: string } };
+    };
+    expected = { principalId: discovery.result.principalId, workspaceId: discovery.result.target.workspaceId };
   }, 60_000);
   afterAll(async () => {
     await remote?.close();
   });
 
-  /** A transport straight to the remote's port, with a switch that refuses every new stream. */
-  function cuttable() {
+  /**
+   * A TCP proxy in front of the remote, and a transport through it. The proxy can cut every
+   * stream, hold the stream that carries a given method (never forwarding it, until `release`
+   * replays it to the remote on a fresh connection), or drop the stream that carries a method.
+   */
+  async function proxied() {
     const live = new Set<Socket>();
+    const rules: { hold?: string | undefined; drop?: string | undefined } = {};
+    let held: Buffer[] | undefined;
+    let onHeld: (() => void) | undefined;
+    const heldNow = new Promise<void>((resolve) => (onHeld = resolve));
     const state = {
       down: false,
-      closed: false,
       streams: 0,
+      rules,
+      /** Resolves once a stream carrying `rules.hold` was held. */
+      held: heldNow,
       /** Drop every open stream and refuse new ones, as a lost network would. */
       cut() {
         state.down = true;
         for (const socket of live) socket.destroy();
       },
+      /** Deliver the held stream's bytes to the remote after all, as a late packet would. */
+      release(): Promise<void> {
+        const bytes = Buffer.concat(held ?? []);
+        return new Promise((resolve, reject) => {
+          const late = connect(remote.port, "127.0.0.1", () => late.end(bytes));
+          late.on("data", () => undefined);
+          late.on("close", () => resolve());
+          late.on("error", reject);
+        });
+      },
     };
-    const transport: DelegationTransport = {
+    const server: Server = createServer((client) => {
+      live.add(client);
+      const upstream = connect(remote.port, "127.0.0.1");
+      const log: Buffer[] = [];
+      let holding = false;
+      client.on("data", (chunk: Buffer) => {
+        log.push(chunk);
+        const text = chunk.toString("utf8");
+        if (rules.drop && text.includes(`"method":"${rules.drop}"`)) {
+          rules.drop = undefined;
+          client.destroy();
+          upstream.destroy();
+          return;
+        }
+        if (rules.hold && text.includes(`"method":"${rules.hold}"`)) {
+          rules.hold = undefined;
+          holding = true;
+          held = log;
+          onHeld?.();
+        }
+        if (!holding) upstream.write(chunk);
+      });
+      upstream.on("data", (chunk) => client.write(chunk));
+      upstream.on("close", () => client.destroy());
+      upstream.on("error", () => client.destroy());
+      client.on("close", () => {
+        live.delete(client);
+        upstream.destroy();
+      });
+      client.on("error", () => upstream.destroy());
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    const transport = (): DelegationTransport => ({
       connect: () => {
-        if (state.down || state.closed) throw new Error("tunnel down");
+        if (state.down) throw new Error("tunnel down");
         state.streams++;
-        const socket = connect(remote.port, "127.0.0.1");
-        live.add(socket);
-        socket.once("close", () => live.delete(socket));
-        return socket;
+        return connect(port, "127.0.0.1");
       },
       failed: () => undefined,
-      close: async () => {
-        state.closed = true;
-      },
-    };
-    return { state, transport };
+      close: async () => undefined,
+    });
+    const close = () => new Promise<void>((resolve) => server.close(() => resolve()));
+    return { state, transport, close };
   }
 
-  const agent = AgentSpecSchema.parse({
-    id: "remote",
-    type: "orca-daemon",
-    profile: "direct",
-    workflow: "remote-task",
-  });
+  const agentFor = (workflow: string) =>
+    AgentSpecSchema.parse({ id: "remote", type: "orca-daemon", profile: "direct", workflow });
   const host = new LocalHost({ id: "local", type: "local" });
-  const turn = (stepRunId: string, path: string) => ({
-    runId: "run_parent",
+  const turn = (
+    parentRunId: string,
+    path: string,
+    attempt = 1,
+    stepRunId = `${parentRunId}_step${attempt}`,
+    delegationId = `${parentRunId}_step1`,
+  ) => ({
+    runId: parentRunId,
     stepRunId,
+    delegationId,
     nodeId: "hand",
-    attempt: 1,
+    attempt,
     followUp: 0,
-    task: `task ${stepRunId}`,
+    task: `task ${parentRunId}`,
     deliverables: [{ kind: "report", name: "report", path, required: true }],
   });
+  const runsOf = async (workflowId: string) =>
+    ((await call(remote, "runs.list", {})).runs as { id: string; workflowId: string; status: string }[]).filter(
+      (r) => r.workflowId === workflowId,
+    );
 
-  it("reattaches to the same remote run after the connection drops, without a second submission", async () => {
-    const { state, transport } = cuttable();
-    const session = await openDaemonSession({
-      agent,
+  function open(
+    transport: DelegationTransport,
+    receipts: DelegationReceipts,
+    extra: Partial<OpenDaemonSessionOptions> = {},
+  ) {
+    return openDaemonSession({
+      agent: agentFor("remote-task"),
       host,
       cwd: work,
       profile: "direct",
       remoteName: "direct",
       transport,
       token,
+      expected,
+      receipts,
       pollMs: 100,
+      ...extra,
     });
+  }
+
+  it("reattaches to the same remote run after the connection drops, without a second submission", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-reattach"));
+    const session = await open(proxy.transport(), receipts);
     const notes: string[] = [];
     session.onUpdate((e) => notes.push(e.summary.text ?? ""));
+    const before = (await runsOf("remote-task")).length;
     const path = join(work, "reattach", "report.md");
-    const running = session.prompt("ignored", { timeoutMs: 60_000, turn: turn("step_reattach", path) });
+    const running = session.prompt("ignored", { timeoutMs: 60_000, turn: turn("run_reattach", path) });
     // Drop the connection as soon as the remote run is admitted, and restore it shortly after.
     await until("admission", async () => (notes.some((n) => n.startsWith("Delegated to")) ? true : undefined));
-    state.cut();
+    proxy.state.cut();
     await new Promise((r) => setTimeout(r, 600));
-    state.down = false;
+    proxy.state.down = false;
     await expect(running).resolves.toMatchObject({ stopReason: "end_turn" });
     expect(notes.join("")).toContain("reattaching");
-    await expect(readFile(path, "utf8")).resolves.toContain("Remote report for: task step_reattach");
+    await expect(readFile(path, "utf8")).resolves.toContain("Remote report for: task run_reattach");
 
     // The same turn again (a retried call after a lost answer) admits nothing new.
     const again = join(work, "reattach-again", "report.md");
-    await session.prompt("ignored", { timeoutMs: 60_000, turn: turn("step_reattach", again) });
-    const runs = (await call(remote, "runs.list", {})).runs as { workflowId: string }[];
-    expect(runs.filter((r) => r.workflowId === "remote-task")).toHaveLength(1);
+    await session.prompt("ignored", { timeoutMs: 60_000, turn: turn("run_reattach", again) });
+    await expect(readFile(again, "utf8")).resolves.toContain("Remote report for: task run_reattach");
+    expect(await runsOf("remote-task")).toHaveLength(before + 1);
+    expect(receipts.read("run_reattach", "run_reattach_step1")).toMatchObject({
+      state: "settled",
+      outcome: "succeeded",
+      generation: 0,
+    });
     await session.close();
     await expect(session.terminated).resolves.toBeUndefined();
+    await proxy.close();
   }, 120_000);
 
-  it("keys every step attempt to its own remote run", () => {
-    expect(delegationKey({ runId: "r", stepRunId: "s1" })).not.toBe(delegationKey({ runId: "r", stepRunId: "s2" }));
-    expect(delegationKey({ runId: "r", stepRunId: "s1" })).toBe(delegationKey({ runId: "r", stepRunId: "s1" }));
-    expect(new TextEncoder().encode(delegationKey({ runId: "r", stepRunId: "s1" })).length).toBeLessThanOrEqual(128);
+  it("keeps a seen terminal event until the run's result is read, across a lost reply", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-latch"));
+    const session = await open(proxy.transport(), receipts);
+    // The first read of the run's result is lost on the way: its stream drops mid-call.
+    proxy.state.rules.drop = "runs.get";
+    const path = join(work, "latch", "report.md");
+    await expect(
+      session.prompt("ignored", { timeoutMs: 30_000, turn: turn("run_latch", path) }),
+    ).resolves.toMatchObject({ stopReason: "end_turn" });
+    expect(proxy.state.rules.drop).toBeUndefined();
+    await expect(readFile(path, "utf8")).resolves.toContain("Remote report for: task run_latch");
+    await session.close();
+    await proxy.close();
+  }, 60_000);
+
+  it("never creates work when cancelled before the admission committed, and cancels a late one", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-cancel"));
+    const gated = agentFor("remote-gated");
+    const session = await open(proxy.transport(), receipts, { agent: gated });
+    const before = (await runsOf("remote-gated")).length;
+    // The admission is held in the network: the remote never sees it while the parent waits.
+    proxy.state.rules.hold = "runs.admit";
+    const abort = new AbortController();
+    const running = session.prompt("ignored", {
+      timeoutMs: 60_000,
+      signal: abort.signal,
+      turn: turn("run_cancel", join(work, "cancel", "report.md")),
+    });
+    await proxy.state.held;
+    abort.abort();
+    await expect(running).rejects.toMatchObject({ code: "CANCELLED" });
+    // Cancelling sent nothing that could admit work: no run, and the receipt keeps the question open.
+    expect(await runsOf("remote-gated")).toHaveLength(before);
+    expect(receipts.read("run_cancel", "run_cancel_step1")).toMatchObject({ state: "cancel-pending" });
+    await session.close();
+
+    // The held admission arrives late after all, and makes a run nobody follows.
+    await proxy.state.release();
+    const late = await until("the late run", async () => {
+      const runs = await runsOf("remote-gated");
+      return runs.length > before
+        ? runs.find((r) => !["succeeded", "failed", "cancelled"].includes(r.status))
+        : undefined;
+    });
+    // Once its admission has settled there, the next session to the remote finds it by its key
+    // and cancels it. (While it is still settling, the receipt just stays cancel-pending.)
+    const { key } = receipts.read("run_cancel", "run_cancel_step1")!;
+    await until("the late admission to settle", async () => {
+      const found = await remote.call("admissions.find", { idempotencyKey: key }, token);
+      return found.ok && (found.result as { state: string }).state === "resolved" ? true : undefined;
+    });
+    const next = await open(proxy.transport(), receipts, { agent: gated });
+    expect(await finished(remote, late.id)).toMatchObject({ status: "cancelled" });
+    expect(receipts.read("run_cancel", "run_cancel_step1")).toMatchObject({
+      state: "settled",
+      outcome: "cancelled",
+      remoteRunId: late.id,
+    });
+    expect(await runsOf("remote-gated")).toHaveLength(before + 1);
+    await next.close();
+    await proxy.close();
+  }, 120_000);
+
+  it("reattaches a retried step to the run its earlier attempt started, after a restart", async () => {
+    const proxy = await proxied();
+    const dir = join(work, "receipts-restart");
+    const gated = agentFor("remote-gated");
+    const before = (await runsOf("remote-gated")).length;
+    const path = join(work, "restart", "report.md");
+
+    // Attempt 1 admits a remote run that waits on a gate; then this daemon goes away.
+    const first = await open(proxy.transport(), new DelegationReceipts(dir), { agent: gated });
+    const notes: string[] = [];
+    first.onUpdate((e) => notes.push(e.summary.text ?? ""));
+    const lost = first
+      .prompt("ignored", { timeoutMs: 60_000, turn: turn("run_restart", path) })
+      .catch((e: unknown) => e);
+    await until("admission", async () => (notes.some((n) => n.startsWith("Delegated to")) ? true : undefined));
+    await first.close();
+    expect(await lost).toMatchObject({ code: "AGENT_TRANSPORT" });
+
+    // Attempt 2, from a new session that knows only the receipts on disk.
+    const asked: string[] = [];
+    const second = await open(proxy.transport(), new DelegationReceipts(dir), {
+      agent: gated,
+      askPermission: async (req) => {
+        asked.push(String(req.toolCall.title));
+        return "ship";
+      },
+    });
+    await expect(
+      second.prompt("ignored", { timeoutMs: 60_000, turn: turn("run_restart", path, 2) }),
+    ).resolves.toMatchObject({ stopReason: "end_turn" });
+    expect(asked).toEqual([expect.stringContaining("Ship the report?")]);
+    await expect(readFile(path, "utf8")).resolves.toContain("Remote report for: task run_restart");
+    expect(await runsOf("remote-gated")).toHaveLength(before + 1);
+    await second.close();
+    await proxy.close();
+  }, 120_000);
+
+  it("refuses a daemon that names another principal than the enrolled one, before admitting", async () => {
+    const proxy = await proxied();
+    const before = (await runsOf("remote-task")).length;
+    const error = await open(proxy.transport(), new DelegationReceipts(join(work, "receipts-scope")), {
+      expected: { ...expected, principalId: "someone-else" },
+    }).catch((e: unknown) => e);
+    expect(isOrcaError(error, "DELEGATION_REFUSED")).toBe(true);
+    expect((error as { details: { reason: string } }).details.reason).toBe("scope-changed");
+    expect(await runsOf("remote-task")).toHaveLength(before);
+    await proxy.close();
+  }, 60_000);
+
+  it("keys each generation of a delegation to its own remote admission", () => {
+    expect(delegationKey("r", "d", 0)).not.toBe(delegationKey("r", "d", 1));
+    expect(delegationKey("r", "d", 0)).not.toBe(delegationKey("r", "e", 0));
+    expect(delegationKey("r", "d", 0)).toBe(delegationKey("r", "d", 0));
+    expect(new TextEncoder().encode(delegationKey("r", "d", 0)).length).toBeLessThanOrEqual(128);
   });
 
   it("refuses a daemon that does not take delegated runs, as a typed failure", async () => {
@@ -431,13 +694,9 @@ describe("delegation over a stream the test can cut (#883)", () => {
         failed: () => undefined,
         close: async () => {},
       };
-      const error = await openDaemonSession({
-        agent,
-        host,
-        cwd: work,
+      const error = await open(transport, new DelegationReceipts(join(work, "receipts-ro")), {
         profile: "ro",
         remoteName: "ro",
-        transport,
         token: readOnly.token,
       }).catch((e: unknown) => e);
       expect(isOrcaError(error, "DELEGATION_REFUSED")).toBe(true);

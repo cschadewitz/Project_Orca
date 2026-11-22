@@ -54,7 +54,12 @@ import {
   RequestsAdmissionParamsSchema,
   RequestsAdmissionsParamsSchema,
 } from "@orca/protocol";
-import { RunsAdmitParamsSchema, AdmissionsGetParamsSchema, AdmissionsReconcileParamsSchema } from "@orca/protocol";
+import {
+  RunsAdmitParamsSchema,
+  AdmissionsFindParamsSchema,
+  AdmissionsGetParamsSchema,
+  AdmissionsReconcileParamsSchema,
+} from "@orca/protocol";
 import { checkAdmissionScope, type AdmissionRetryModel, type AdmissionAuthorities } from "./admission-retry.js";
 import type { RequestSubmissionModel } from "./request-submission.js";
 import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine";
@@ -956,6 +961,10 @@ export function methodsFor(ctx: MethodContext): MethodTable {
     table["admissions.get"] = {
       params: AdmissionsGetParamsSchema,
       handle: async (params, invocation) => model.inspect(params.operationId, await authorities(invocation)),
+    };
+    table["admissions.find"] = {
+      params: AdmissionsFindParamsSchema,
+      handle: async (params, invocation) => model.find(params.idempotencyKey, await authorities(invocation)),
     };
     table["admissions.reconcile"] = {
       params: AdmissionsReconcileParamsSchema,

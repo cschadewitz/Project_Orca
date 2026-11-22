@@ -491,7 +491,11 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   // edit reaches the next session.
   let currentRemotes = () => config.remotes;
   const delegating = (base: SessionFactory): SessionFactory =>
-    delegatingSessionFactory(base, { remotes: () => currentRemotes(), configDir });
+    delegatingSessionFactory(base, {
+      remotes: () => currentRemotes(),
+      configDir,
+      receiptsDir: resolve(configDir, config.storeDir, "delegations"),
+    });
   const openSession = delegating(makeSessionFactory({ configDir, storeDir: config.storeDir, configFile }));
   const orchestrator = new Orchestrator({
     stores,

@@ -8,11 +8,15 @@
  * - `auth/remotes/<id>.token`: the bearer credential the remote daemon issued for this daemon
  *   (`orca auth issue <principal> --json` there). Read at every session open, never logged.
  *   `credentialFile` moves it.
- * - `auth/remotes/<id>.known_hosts`: the remote's pinned SSH host key, pinned on the first
- *   connect like the desktop app's profiles (#874), and the only host trust from then on.
+ * - `auth/remotes/<id>.known_hosts`: the remote's SSH host keys (and its jump host's), pinned
+ *   only by `orca remote enroll <id>`.
+ * - `auth/remotes/<id>.json`: the enrollment record (`enrollment.ts`): the sealed keys, the
+ *   workspace and principal the daemon there named, and the enrolled credential's id.
  *
- * Each session opens its own tunnel and closes it with the session, so a session's slot (#873)
- * is held exactly while its ssh processes live.
+ * A remote that was never enrolled is refused before any connection. Each session opens its own
+ * tunnel, trusting only the enrolled keys, and closes it with the session, so a session's slot
+ * (#873) is held exactly while its ssh processes live. What each session asked the remote to run
+ * is recorded under the store's `delegations/` (`receipts.ts`).
  */
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
@@ -26,9 +30,10 @@ import {
   type TunnelRefusalCode,
 } from "@orca/protocol/remote-access";
 import { delegationRefusal, openDaemonSession, type DelegationTransport } from "./daemon-session.js";
+import { credentialIdOf, enrollmentFile, readEnrollment, type Enrollment } from "./enrollment.js";
+import { DelegationReceipts } from "./receipts.js";
 
 export {
-  delegationKey,
   delegationRefusal,
   DELEGATION_METHODS,
   openDaemonSession,
@@ -37,6 +42,16 @@ export {
   type OpenDaemonSessionOptions,
 } from "./daemon-session.js";
 export { RemoteDaemonClient, RemoteFault, RemoteUnreachable } from "./remote-client.js";
+export { delegationKey, DelegationReceipts, DelegationReceiptSchema, type DelegationReceipt } from "./receipts.js";
+export {
+  credentialIdOf,
+  enrollmentFile,
+  enrollRemote,
+  EnrollmentSchema,
+  readEnrollment,
+  type Enrollment,
+  type EnrollOptions,
+} from "./enrollment.js";
 
 /** Tunnel refusals that only the person can fix; a retry would meet them again. */
 const PERMANENT_TUNNEL: ReadonlySet<TunnelRefusalCode> = new Set([
@@ -84,6 +99,7 @@ export function validateRemotes(config: Pick<OrcaConfig, "remotes">): string[] {
 export interface RemoteFiles {
   credentialFile: string;
   knownHostsFile: string;
+  enrollmentFile: string;
 }
 
 /** Where a remote's credential and pinned host key live, beside the config. */
@@ -92,6 +108,7 @@ export function remoteFiles(configDir: string, remote: RemoteDaemonSpec): Remote
   return {
     credentialFile: isAbsolute(credential) ? credential : resolve(configDir, credential),
     knownHostsFile: resolve(configDir, "auth", "remotes", `${remote.id}.known_hosts`),
+    enrollmentFile: enrollmentFile(configDir, remote.id),
   };
 }
 
@@ -127,6 +144,27 @@ export function readRemoteCredential(remote: RemoteDaemonSpec, file: string): st
   return token;
 }
 
+/** The remote's enrollment record, or a refusal saying how to enroll it. */
+export function enrolled(remote: RemoteDaemonSpec, files: RemoteFiles): Enrollment {
+  let record: Enrollment | undefined;
+  try {
+    record = readEnrollment(files.enrollmentFile);
+  } catch {
+    throw delegationRefusal(
+      remote.id,
+      "not-enrolled",
+      `The enrollment record for remote ${remote.id} (${files.enrollmentFile}) cannot be read. Run \`orca remote enroll ${remote.id}\` again.`,
+    );
+  }
+  if (!record || record.profile !== remote.id)
+    throw delegationRefusal(
+      remote.id,
+      "not-enrolled",
+      `Remote ${remote.id} is not enrolled, so this daemon does not send it a credential. Run \`orca remote enroll ${remote.id}\` once to pin its host keys and check its credential.`,
+    );
+  return record;
+}
+
 /** An SSH tunnel as the session's transport. */
 export function tunnelTransport(tunnel: SshTunnel): DelegationTransport {
   let permanent: TunnelRefusalCode | undefined;
@@ -152,8 +190,10 @@ export interface DelegationOptions {
   /** The config's remotes, read at each open so an applied config edit takes effect. */
   remotes: () => readonly RemoteDaemonSpec[];
   configDir: string;
-  /** Test seam: the tunnel for a profile. */
-  tunnel?: (profile: ConnectionProfile, files: RemoteFiles) => SshTunnel;
+  /** Where delegation receipts are kept: the store's `delegations/`. */
+  receiptsDir: string;
+  /** Test seam: the tunnel for a profile (always pinned-only, expecting the enrolled keys). */
+  tunnel?: (profile: ConnectionProfile, files: RemoteFiles, enrollment: Enrollment) => SshTunnel;
   /** Test seam: how often a running remote run is read. */
   pollMs?: number;
 }
@@ -165,6 +205,7 @@ export type SessionFactoryLike = (options: OpenSessionOptions) => Promise<AgentS
  * and every other agent goes to `base` unchanged.
  */
 export function delegatingSessionFactory(base: SessionFactoryLike, options: DelegationOptions): SessionFactoryLike {
+  const receipts = new DelegationReceipts(options.receiptsDir);
   return async (open) => {
     if (open.agent.type !== "orca-daemon") return base(open);
     const id = open.agent.profile!;
@@ -173,7 +214,22 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
     const profile = remoteProfile(remote);
     const files = remoteFiles(options.configDir, remote);
     const token = readRemoteCredential(remote, files.credentialFile);
-    const tunnel = options.tunnel?.(profile, files) ?? new SshTunnel({ profile, knownHostsFile: files.knownHostsFile });
+    const enrollment = enrolled(remote, files);
+    // The bearer goes only where enrollment proved it belongs: this credential, these keys.
+    if (credentialIdOf(token) !== enrollment.credentialId)
+      throw delegationRefusal(
+        id,
+        "not-enrolled",
+        `The credential for remote ${id} is not the one it was enrolled with. Run \`orca remote enroll ${id}\` to enroll it.`,
+      );
+    const tunnel =
+      options.tunnel?.(profile, files, enrollment) ??
+      new SshTunnel({
+        profile,
+        knownHostsFile: files.knownHostsFile,
+        pinnedOnly: true,
+        expectKeys: enrollment.keys,
+      });
     try {
       await tunnel.open();
     } catch (error) {
@@ -196,6 +252,8 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
       remoteName: profile.name,
       transport: tunnelTransport(tunnel),
       token,
+      expected: { workspaceId: enrollment.workspaceId, principalId: enrollment.principalId },
+      receipts,
       ...(open.askPermission ? { askPermission: (req, invocation) => open.askPermission!(req, invocation) } : {}),
       ...(open.logger ? { logger: open.logger } : {}),
       ...(open.clock ? { clock: open.clock } : {}),

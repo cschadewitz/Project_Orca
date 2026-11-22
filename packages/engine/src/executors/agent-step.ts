@@ -365,6 +365,7 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
         const turnContext: TurnContext = {
           runId: ctx.run.id,
           stepRunId: ctx.step.id,
+          delegationId: firstAttemptOf(ctx.run.state, ctx.step),
           nodeId: ctx.nodeId,
           attempt: ctx.step.attempt,
           followUp,
@@ -450,3 +451,29 @@ export const agentExecutor: NodeExecutor<AgentNode> = {
     return completed({ artifactIds: turn.artifacts.map((a) => a.id), data: { stopReason: turn.stopReason } });
   },
 };
+
+/**
+ * The step run of this visit's first attempt: what names one logical delegation (#883) across
+ * the step's retries. A visit's attempts are the earlier step runs of the same node with
+ * descending attempt numbers; steps of other nodes (parallel branches) may sit between them.
+ * A later visit through a back-edge starts again at attempt 1 and so names a new delegation.
+ */
+export function firstAttemptOf(
+  state: {
+    stepOrder: readonly string[];
+    steps: Readonly<Record<string, { nodeId: string; attempt: number } | undefined>>;
+  },
+  step: { id: string; nodeId: string; attempt: number },
+): string {
+  let first = step.id;
+  let want = step.attempt - 1;
+  const order = state.stepOrder;
+  for (let i = order.indexOf(step.id) - 1; i >= 0 && want >= 1; i--) {
+    const prev = state.steps[order[i]!];
+    if (!prev || prev.nodeId !== step.nodeId) continue;
+    if (prev.attempt !== want) break;
+    first = order[i]!;
+    want--;
+  }
+  return first;
+}

@@ -35,6 +35,11 @@ export interface PromptOptions {
 export interface TurnContext {
   runId: string;
   stepRunId: string;
+  /**
+   * The step run of this visit's first attempt: the same for every retry of the step, so a
+   * delegating session (#883) can tell a retry from new work.
+   */
+  delegationId: string;
   nodeId: string;
   attempt: number;
   /** 0 for the step's first turn; a follow-up asks again for deliverables that were missing. */
