@@ -43,6 +43,7 @@ import { installMacUpdateIPC } from "./mac-update-application.js";
 import { createManagedMacUpdateApplication } from "./mac-managed-update-application.js";
 import { createManagedMacNativeProviders } from "./mac-native-providers.js";
 import { updateDriver } from "./update-driver.js";
+import { isDebInstall, LinuxReleaseWatch } from "./linux-release-notice.js";
 import { basename, dirname, join } from "node:path";
 import { windowIcon } from "./window-icon.js";
 import { revealWhenReady } from "./window-reveal.js";
@@ -59,6 +60,9 @@ import {
   powerMonitor,
   autoUpdater,
   systemPreferences,
+  clipboard,
+  net,
+  shell,
 } from "electron";
 import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
@@ -1068,6 +1072,38 @@ ipcMain.handle("orca:update.act", async (event, action: unknown) => {
   return { ok: true, result: await updates.act(action) };
 });
 
+/* The Linux .deb has no updater: a read-only release check and a notice (#888). Only the
+   two main-built strings ever leave here: the renderer cannot name a URL or a command. */
+const linuxReleases = isDebInstall(app.isPackaged, process.platform, process.execPath)
+  ? new LinuxReleaseWatch({
+      current: app.getVersion(),
+      arch: process.arch,
+      fetch: (url, init) => net.fetch(url, init),
+      changed: (notice) => send("orca:linuxUpdate", notice ?? null),
+    })
+  : undefined;
+ipcMain.on("orca:linuxUpdate.read", (event) => {
+  event.returnValue = linuxReleases?.notice ?? null;
+});
+ipcMain.handle("orca:linuxUpdate.act", async (event, action: unknown) => {
+  const notice = linuxReleases?.notice;
+  if (!notice || event.senderFrame !== event.sender.mainFrame || (action !== "open" && action !== "copy"))
+    return { ok: false, error: { code: "UPDATE", message: "No release notice to act on" } };
+  try {
+    if (action === "copy") await clipboard.writeText(notice.installCommand);
+    else await shell.openExternal(notice.releaseUrl);
+  } catch {
+    return {
+      ok: false,
+      error: {
+        code: "UPDATE",
+        message: action === "copy" ? "The install command could not be copied" : "The release page could not be opened",
+      },
+    };
+  }
+  return { ok: true, result: null };
+});
+
 /* ---------- deep links ---------- */
 
 // Synchronous and draining: a link is delivered to one reader once (`./deep-link.ts`).
@@ -1363,6 +1399,7 @@ if (!primary) {
         ),
       );
     createWindow();
+    linuxReleases?.start();
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
@@ -1377,6 +1414,7 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   stopDiagnosticObservations();
   targets.cancel();
+  linuxReleases?.stop();
   connection.close();
   alerts.close();
 });

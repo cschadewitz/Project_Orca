@@ -22,6 +22,7 @@ import type { FirstRunBridge } from "./first-run-contract.js";
 import type { DaemonConnectionBridge } from "./daemon-connection.js";
 import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
 import type { MacUpdateCommand, MacUpdateView } from "./mac-update-contract.js";
+import type { LinuxUpdateAction, LinuxUpdateNotice } from "./linux-update-contract.js";
 import type {
   CheckoutEvidence,
   LaunchReview,
@@ -230,6 +231,12 @@ export interface OrcaBridge {
     read(): MacUpdateView;
     act(command: MacUpdateCommand): Promise<BridgeResult<MacUpdateView>>;
     subscribe(listener: (state: MacUpdateView) => void): () => void;
+  };
+  /** The Linux `.deb`'s release notice (#888); `null` when there is nothing newer. */
+  linuxUpdates?: {
+    read(): LinuxUpdateNotice | null;
+    act(action: LinuxUpdateAction): Promise<BridgeResult<null>>;
+    subscribe(listener: (notice: LinuxUpdateNotice | null) => void): () => void;
   };
   guidedLaunch?: {
     snapshot(): Promise<BridgeResult<GuidedLaunchSnapshot>>;

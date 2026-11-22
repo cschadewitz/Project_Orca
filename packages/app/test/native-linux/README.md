@@ -7,6 +7,7 @@ that the other Playwright projects cannot see:
 | Spec | Covers | What it asserts |
 |---|---|---|
 | `reopen-cycles.spec.ts` | #858 | On X11 (Xvfb) and on Wayland (headless Weston), `ORCA_NATIVE_CYCLES` (default 5) quit/reopen cycles each show the window within 8 s (`BrowserWindow.isVisible()`, and on X11 a mapped window named ORCA), connect to the bundled daemon, render the shell, and leave no ORCA or daemon process after quit. |
+| `release-notice.spec.ts` | #888 | Against a local release-list stub (`ORCA_RELEASES_URL`): an install older than the newest stable release with an amd64 `.deb` shows the title-bar notice, with the `apt` command and **Open release page**; a current install shows nothing; an unreachable list is silent and the window is still visible within the usual budget. |
 | `keyring-prompt.spec.ts` | #857 | With a locked GNOME login keyring and the real gcr unlock prompt: Cancel on a fresh install gives the before-send refusal and no run, with no in-app Retry. Quit, reopen and Unlock admits the sample once and it succeeds. Another reopen still lists exactly one run. Locking again with a journal on disk and cancelling gives the recovery-only refusal, Launch disabled, and no new run. |
 
 ## Run it
