@@ -3,7 +3,7 @@
 // that choice of branch, the gate that keeps minor work off a line, the reviewed-commit check
 // a real release makes, and main's record of a patch it never merged.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -627,5 +627,130 @@ describe("the patch path through the workflows", () => {
       expect(readFileSync(new URL(`../../.github/workflows/${name}`, import.meta.url), "utf8")).not.toContain(
         "ORCA_RELEASE_APP_PRIVATE_KEY",
       );
+  });
+});
+
+describe("Release (sync main) on a rerun", () => {
+  const step = workflow("release-sync-main.yml").jobs.sync.steps.find((s) => s.name === "Record the release on main");
+  const header = "# Changelog\n\nIntro.\n\n## Unreleased\n\nPending entries live in changelog.d/.\n\n";
+  const section = (version, body) => `## ${version} - 2026-11-22\n\n### Fixed\n\n- ${body}\n`;
+  const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  const commitAll = (cwd, message) => {
+    git(cwd, "add", "-A");
+    git(cwd, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", message);
+    return git(cwd, "rev-parse", "HEAD");
+  };
+  let origin;
+  let clone;
+  let sha;
+  let log;
+
+  beforeEach(() => {
+    origin = join(work, "origin");
+    mkdirSync(join(origin, "tools"), { recursive: true });
+    mkdirSync(join(origin, "changelog.d"));
+    git(origin, "init", "-q", "-b", "main");
+    for (const tool of ["release.js", "changelog.js", "release-lane.js"])
+      writeFileSync(join(origin, "tools", tool), readFileSync(new URL(`../${tool}`, import.meta.url), "utf8"));
+    writeFileSync(join(origin, "CHANGELOG.md"), header + section("0.7.0", "first"));
+    writeFileSync(join(origin, "changelog.d", "12-crash.fixed.md"), "- app: no crash\n");
+    commitAll(origin, "base");
+    // The line's release commit: the section added, the fragment consumed.
+    git(origin, "checkout", "-qb", "release/0.7");
+    writeFileSync(
+      join(origin, "CHANGELOG.md"),
+      header + section("0.7.1", "no crash") + "\n" + section("0.7.0", "first"),
+    );
+    rmSync(join(origin, "changelog.d", "12-crash.fixed.md"));
+    sha = commitAll(origin, "release 0.7.1");
+    git(origin, "checkout", "-q", "main");
+    clone = join(work, "clone");
+    git(work, "clone", "-q", "--no-local", origin, clone);
+    git(clone, "fetch", "-q", "origin", "release/0.7");
+    const bin = join(work, "bin");
+    mkdirSync(bin);
+    log = join(work, "gh.log");
+    writeFileSync(
+      join(bin, "gh"),
+      '#!/bin/sh\necho "$*" >> "$LOG"\ncase "$1 $2" in "pr list") printf "%s\\n" "$PRS";; "pr create") echo https://x/pull/1;; "pr merge") ;; *) exit 1;; esac\n',
+      { mode: 0o755 },
+    );
+  });
+
+  // Every run starts from a fresh checkout of main, as in Actions.
+  const run = (prs = " ") => {
+    git(clone, "fetch", "-q", "origin", "main");
+    git(clone, "reset", "-q", "--hard", "FETCH_HEAD");
+    return execFileSync("bash", ["-c", step.run], {
+      cwd: clone,
+      env: {
+        ...process.env,
+        PATH: `${join(work, "bin")}:${process.env.PATH}`,
+        LOG: log,
+        PRS: prs,
+        GH_TOKEN: "t",
+        REPO: "o/r",
+        DEFAULT_BRANCH: "main",
+        SHA: sha,
+        VERSION: "0.7.1",
+        RUNNER_TEMP: work,
+        GITHUB_STEP_SUMMARY: join(work, "summary"),
+      },
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+  };
+  const branchHead = () => git(origin, "rev-parse", "refs/heads/release-sync/v0.7.1");
+  const calls = () => (existsSync(log) ? readFileSync(log, "utf8") : "");
+
+  it("opens one pull request and asks to auto-merge exactly the head it pushed", () => {
+    run();
+    const head = branchHead();
+    expect(git(origin, "show", `${head}:CHANGELOG.md`)).toContain("## 0.7.1 ");
+    expect(calls()).toContain("pr create");
+    expect(calls()).toContain(`pr merge https://x/pull/1 --auto --squash --match-head-commit ${head}`);
+  });
+
+  it("reuses an identical result on a rerun without pushing over it, even after main moved", () => {
+    run();
+    const head = branchHead();
+    writeFileSync(join(origin, "README.md"), "moved\n");
+    commitAll(origin, "main moved");
+    rmSync(log);
+    run(`https://x/pull/1 ${head}`);
+    expect(branchHead()).toBe(head);
+    expect(calls()).not.toContain("pr create");
+    expect(calls()).toContain(`--match-head-commit ${head}`);
+  });
+
+  it("stops, changing nothing, when the branch holds an edit", () => {
+    run();
+    git(origin, "checkout", "-q", "release-sync/v0.7.1");
+    writeFileSync(join(origin, "CHANGELOG.md"), `${readFileSync(join(origin, "CHANGELOG.md"), "utf8")}\nedited\n`);
+    const edited = commitAll(origin, "a reviewer's edit");
+    git(origin, "checkout", "-q", "main");
+    rmSync(log);
+    let out = "";
+    try {
+      run(`https://x/pull/1 ${edited}`);
+    } catch (error) {
+      out = String(error.stdout);
+    }
+    expect(out).toMatch(/already holds a different change/);
+    expect(branchHead()).toBe(edited);
+    expect(calls()).not.toMatch(/pr (create|merge)/);
+  });
+
+  it("stops when the open pull request is not at the head it checked", () => {
+    run();
+    rmSync(log);
+    let out = "";
+    try {
+      run(`https://x/pull/1 ${"f".repeat(40)}`);
+    } catch (error) {
+      out = String(error.stdout);
+    }
+    expect(out).toMatch(/is at f+, not/);
+    expect(calls()).not.toContain("pr merge");
   });
 });

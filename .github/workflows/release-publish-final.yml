@@ -59,6 +59,7 @@ jobs:
           persist-credentials: false
 
       - name: Publish the draft with its recorded installer
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -69,9 +70,19 @@ jobs:
           EXE: ${{ inputs.exe_sha256 }}
         run: bash tools/deploy/release-attach.sh publish "$ID" "$VERSION" "$SHA" "$DEB" "$EXE"
 
+      - name: Hand over to the desktop feed
+        if: vars.ORCA_FEED_AUTO == 'true' && vars.ORCA_FEED_BUCKET != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run feed-auto.yml --repo "$GITHUB_REPOSITORY" --ref main
+
       # Only now, after release-attach.sh read the published release back: a line release's
       # notes go to main (Release (sync main) reads it back again and no-ops for a main release).
       - name: Record a line release on main
+        # Independent of the feed handover above: it runs whether or not that dispatch worked,
+        # and its own failure cannot suppress the feed. Either is retried on its own (Release
+        # (sync main) and Feed (auto) are plain dispatches that re-read the release).
+        if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           ID: ${{ inputs.release_id }}
@@ -79,9 +90,3 @@ jobs:
         run: |
           gh workflow run release-sync-main.yml --repo "$GITHUB_REPOSITORY" --ref main \
             -f version="$VERSION" -f release_id="$ID"
-
-      - name: Hand over to the desktop feed
-        if: vars.ORCA_FEED_AUTO == 'true' && vars.ORCA_FEED_BUCKET != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run feed-auto.yml --repo "$GITHUB_REPOSITORY" --ref main
