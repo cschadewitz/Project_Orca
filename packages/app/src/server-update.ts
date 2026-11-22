@@ -84,6 +84,8 @@ export type ServerUpdateOutcome =
   | { status: "work-running"; detail: string }
   /** Another update holds the server's update lock: its timer, or another operator. */
   | { status: "another-update"; detail: string }
+  /** The server no longer runs the release the update was confirmed against; nothing changed. */
+  | { status: "moved"; detail: string }
   /** The update failed. `restored`: the server says the previous release is back and healthy. */
   | { status: "failed"; detail: string; restored: boolean }
   /** ssh refused before the updater could start; nothing ran. `message` is the app's own. */
@@ -113,10 +115,29 @@ export interface ManagedServerView {
   ring?: ServerRing;
 }
 
-/** The exact argv run on the server. Throws for a version the app would never offer. */
-export function serverUpdateCommand(deployment: ServerUpdaterPaths, version: string): string[] {
+/** A version a server can be running, as the updater records it. */
+export const SERVER_RUNNING_VERSION = /^\d+\.\d+\.\d+(?:-(?:rc|beta|alpha)\.\d+)?$/;
+
+/**
+ * The exact argv run on the server. `current` is the release the person confirmed the server
+ * runs: the updater checks it under its update lock, where the update commits, and refuses
+ * with `Server moved:` when another update got there first. Throws for a version the app
+ * would never offer.
+ */
+export function serverUpdateCommand(deployment: ServerUpdaterPaths, version: string, current: string): string[] {
   if (!SERVER_UPDATE_VERSION.test(version)) throw new Error(`Not a release version: ${version}`);
-  return ["python3", deployment.adapter, "--deployment", deployment.manifest, "update", "--bundle", `v${version}`];
+  if (!SERVER_RUNNING_VERSION.test(current)) throw new Error(`Not a release version: ${current}`);
+  return [
+    "python3",
+    deployment.adapter,
+    "--deployment",
+    deployment.manifest,
+    "update",
+    "--bundle",
+    `v${version}`,
+    "--expect-current",
+    current,
+  ];
 }
 
 /** The updater's last `orca-release:` message, if it printed one. */
@@ -161,6 +182,7 @@ export function classifyServerUpdate(
   if (exit.code === 0) return { status: "updated", version };
   const detail = updaterError(lines) ?? `The updater exited with ${exit.code}.`;
   if (/^Busy: update\.lock\b/.test(detail)) return { status: "another-update", detail };
+  if (/^Server moved:/.test(detail)) return { status: "moved", detail };
   if (
     /^Busy: admission\.lock\b/.test(detail) ||
     /^Daemon busy:/.test(detail) ||

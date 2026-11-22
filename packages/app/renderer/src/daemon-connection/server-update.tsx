@@ -15,6 +15,7 @@ import type { ConnectionSnapshot } from "../../../src/bridge.js";
 import {
   serverBehind,
   serverUpdateCommand,
+  SERVER_RUNNING_VERSION,
   SERVER_UPDATE_VERSION,
   type ServerUpdateBridge,
   type ServerUpdateOutcome,
@@ -85,6 +86,7 @@ export function ServerUpdatePanel({
     serverVersion !== undefined &&
     serverBehind(serverVersion, targetVersion) &&
     SERVER_UPDATE_VERSION.test(targetVersion) &&
+    SERVER_RUNNING_VERSION.test(serverVersion) &&
     (!approved || approved.adapter !== declared.adapter || approved.manifest !== declared.manifest),
   );
   return (
@@ -125,7 +127,11 @@ export function ServerUpdatePanel({
           <PathInput label="Deployment manifest" value={manifest} onChange={setManifest} />
           {adapter.trim() && manifest.trim() && (
             <Well label="Command the app will run on the server">
-              {serverUpdateCommand({ adapter: adapter.trim(), manifest: manifest.trim() }, targetVersion).join(" ")}
+              {serverUpdateCommand(
+                { adapter: adapter.trim(), manifest: manifest.trim() },
+                targetVersion,
+                serverVersion!,
+              ).join(" ")}
             </Well>
           )}
           <Button
@@ -199,6 +205,8 @@ export function describe(outcome: ServerUpdateOutcome): string {
     }
     case "work-running":
       return `The server is running work, so it kept its current release; nothing was cancelled. Try again when it is idle. The server said: ${outcome.detail}`;
+    case "moved":
+      return `The server's release changed since you checked, so this update did not run. Check the server again. The server said: ${outcome.detail}`;
     case "another-update":
       return `Another update is running on the server (its scheduled updater, or another operator), so this one did not start. The server said: ${outcome.detail}`;
     case "failed":

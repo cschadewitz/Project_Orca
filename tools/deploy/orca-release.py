@@ -722,13 +722,24 @@ class Deployment:
             raise RuntimeError("Managed daemon lacks the persistent admission guard; migrate its launcher first")
         return service_pid
 
+    def expect_current(self, expected):
+        """Refuse unless the active release is exactly `expected` (an app's confirmed predecessor)."""
+        if expected is None:
+            return
+        running = metadata((self.root / "current").resolve(strict=True))["version"]
+        if running != expected:
+            raise RuntimeError(f"Server moved: it runs {running}, not the {expected} this update was confirmed against")
+
     @typed_operation("update")
-    def activate(self, candidate):
+    def activate(self, candidate, expected=None):
         assertion = self.typed_guard("update", (str(candidate),))
         self.retain_typed_inspection(assertion)
         with lock(self.root / "admission.lock"):
             if self.pending.exists():
                 raise RuntimeError("Interrupted activation exists. Run recover before another update.")
+            # Checked where the update commits, under both locks: another operator or the timer
+            # may have moved the server since the caller looked.
+            self.expect_current(expected)
             previous = (self.root / "current").resolve(strict=True)
             compatible(previous, candidate)
             old_version = version_key(metadata(previous)["version"])
@@ -854,7 +865,18 @@ def main():
             with lock(deploy.root / "admission.lock"):
                 deploy.restore(json.loads(deploy.pending.read_text()))
         else:
-            args = options.args
+            args = list(options.args)
+            expected = None
+            if "--expect-current" in args:
+                at = args.index("--expect-current")
+                if options.action != "update" or at + 1 >= len(args):
+                    raise RuntimeError("--expect-current takes one release version, with update")
+                expected = args[at + 1]
+                if not re.fullmatch(VERSION_RE, expected):
+                    raise RuntimeError("--expect-current takes a release version such as 0.8.0")
+                del args[at:at + 2]
+                # Fail before staging when the server already moved; activation checks again.
+                deploy.expect_current(expected)
             bundle = args[:1] == ["--bundle"]
             if bundle:
                 args = args[1:]
@@ -871,7 +893,7 @@ def main():
             else:
                 candidate = deploy.stage(args[0])
             if options.action == "update":
-                deploy.activate(candidate)
+                deploy.activate(candidate, expected)
             print(candidate)
 
 

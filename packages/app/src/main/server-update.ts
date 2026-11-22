@@ -10,7 +10,10 @@
  *   host key and workspace they were approved on, and apply to that server only. The file
  *   must be `orca-release.py`. The daemon's `hello.deployment` is a hint that must match them.
  * - **Only forward, only this app's release.** Main checks that the target is a release, is
- *   this app's own version, and is newer than what the server runs.
+ *   this app's own version, and is newer than what the server runs; the command carries the
+ *   release the preview saw (`--expect-current`), which the updater checks again under its
+ *   update lock, where the update commits, refusing with `Server moved:` if another update
+ *   got there first.
  * - **A confirmed outcome.** A success is reported only once a fresh authenticated hello from
  *   the same server says it runs the target, and the connection is checked again after that
  *   hello answers. A session lost after the updater could have started is "unknown".
@@ -25,6 +28,7 @@ import {
   classifyServerUpdate,
   samePaths,
   SERVER_UPDATE_MAX_LINES,
+  SERVER_RUNNING_VERSION,
   SERVER_UPDATE_VERSION,
   SERVER_UPDATER_NAME,
   serverBehind,
@@ -165,6 +169,8 @@ export class ServerUpdater {
       return `This app (${look.targetVersion}) is not a release build.`;
     if (!look.hostKey || !look.workspaceId || look.serverVersion === undefined)
       return "This server has not identified itself yet.";
+    if (!SERVER_RUNNING_VERSION.test(look.serverVersion))
+      return `The server runs ${look.serverVersion}, which is not a release the updater recorded.`;
     if (!serverBehind(look.serverVersion, look.targetVersion))
       return `The server already runs ${look.serverVersion}; the app only updates a server that is older than it.`;
     if (!look.declared) return "This server was not installed by the managed server updater.";
@@ -197,7 +203,7 @@ export class ServerUpdater {
     };
     let started: { command: RemoteCommand } | undefined;
     try {
-      started = this.deps.run(serverUpdateCommand(look.approved, look.targetVersion), onLine);
+      started = this.deps.run(serverUpdateCommand(look.approved, look.targetVersion, look.serverVersion!), onLine);
     } catch (error) {
       if (!(error instanceof TunnelRefusal)) throw error;
       return { status: "unreachable", refusal: error.code, message: error.message };

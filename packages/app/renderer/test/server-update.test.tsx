@@ -128,7 +128,7 @@ describe("the connected server", () => {
     type("Updater (orca-release.py)", " /opt/orca/orca-release.py ");
     type("Deployment manifest", "/etc/orca/deployment.json");
     expect(screen.getByRole("region", { name: "Command the app will run on the server" }).textContent).toBe(
-      "python3 /opt/orca/orca-release.py --deployment /etc/orca/deployment.json update --bundle v0.8.0",
+      "python3 /opt/orca/orca-release.py --deployment /etc/orca/deployment.json update --bundle v0.8.0 --expect-current 0.7.1",
     );
     fireEvent.click(screen.getByText("Approve this updater"));
     expect(b.fake.approve).toHaveBeenCalledExactlyOnceWith({ preview: "preview-1", ...PATHS });
@@ -264,6 +264,7 @@ it("sits in the connection dialog for a profile connection only", async () => {
 describe("outcome sentences", () => {
   it.each<[ServerUpdateOutcome, string]>([
     [{ status: "another-update", detail: "Busy: update.lock" }, "Another update is running"],
+    [{ status: "moved", detail: "Server moved: it runs 0.8.0" }, "release changed since you checked"],
     [{ status: "failed", detail: "x", restored: true }, "back on its previous release"],
     [{ status: "failed", detail: "bad signer", restored: false }, "The update failed. The server said: bad signer"],
     [

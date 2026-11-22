@@ -26,8 +26,8 @@ const err = (line: string): ServerUpdateProgress => ({ stream: "stderr", line })
 const explain = (code: string) => `explained ${code}`;
 
 describe("the command", () => {
-  it("is the updater an operator would type, for this app's release", () => {
-    expect(serverUpdateCommand(deployment, "0.8.0-rc.2")).toEqual([
+  it("is the updater an operator would type, for this app's release, from the release confirmed", () => {
+    expect(serverUpdateCommand(deployment, "0.8.0-rc.2", "0.7.1")).toEqual([
       "python3",
       "/opt/orca/orca-release.py",
       "--deployment",
@@ -35,10 +35,14 @@ describe("the command", () => {
       "update",
       "--bundle",
       "v0.8.0-rc.2",
+      "--expect-current",
+      "0.7.1",
     ]);
+    expect(serverUpdateCommand(deployment, "0.8.0", "0.8.0-beta.1")).toContain("0.8.0-beta.1");
   });
   it.each(["0.8.0-dev", "v0.8.0", "0.8", "0.8.0; reboot"])("refuses %j", (version) => {
-    expect(() => serverUpdateCommand(deployment, version)).toThrow(/Not a release version/);
+    expect(() => serverUpdateCommand(deployment, version, "0.7.1")).toThrow(/Not a release version/);
+    expect(() => serverUpdateCommand(deployment, "0.8.0", version)).toThrow(/Not a release version/);
   });
 });
 
@@ -60,6 +64,11 @@ describe("reading the updater's exit", () => {
       { kind: "exited", code: 1 },
       [err("orca-release: Busy: update.lock; another update is running")],
       { status: "another-update", detail: "Busy: update.lock; another update is running" },
+    ],
+    [
+      { kind: "exited", code: 1 },
+      [err("orca-release: Server moved: it runs 0.8.0, not the 0.7.1 this update was confirmed against")],
+      { status: "moved", detail: "Server moved: it runs 0.8.0, not the 0.7.1 this update was confirmed against" },
     ],
     [
       { kind: "exited", code: 1 },
@@ -199,6 +208,7 @@ describe("ServerUpdater", () => {
     ["a development build", { version: "0.8.0-dev" }, /not a release build/],
     ["a server already on the release", { serverVersion: "0.8.0" }, /already runs 0\.8\.0/],
     ["a newer server", { serverVersion: "0.9.0" }, /already runs 0\.9\.0/],
+    ["a server on a version the updater never recorded", { serverVersion: "0.7.1-dev" }, /not a release the updater/],
     ["an unmanaged daemon", { declared: undefined }, /not installed by the managed server updater/],
     ["no approval", { approved: undefined }, /Approve this server's updater first/],
     ["an approval made on another host key", { approved: { ...paths, ...SERVER, hostKey: "SHA256:old" } }, /Approve/],
@@ -282,7 +292,7 @@ describe("ServerUpdater", () => {
     const preview = r.preview();
     const first = r.updater.update({ preview });
     expect(r.updater.update({ preview })).toBe(first);
-    expect(r.run).toHaveBeenCalledExactlyOnceWith(serverUpdateCommand(paths, "0.8.0"), expect.any(Function));
+    expect(r.run).toHaveBeenCalledExactlyOnceWith(serverUpdateCommand(paths, "0.8.0", "0.7.1"), expect.any(Function));
     r.print("stdout", "/opt/orca/releases/0.8.0");
     r.finish({ kind: "exited", code: 0 });
     expect(await first).toEqual({ status: "updated", version: "0.8.0" });

@@ -518,7 +518,9 @@ python3 /srv/dev/orca-live/orca-release.py --deployment /srv/dev/orca-live/deplo
 ```
 
 `update --bundle` stages (or reuses an already validated `releases/v0.8.0`) and then activates
-through exactly the path above. `--bundle` also takes a directory holding the three files, for a
+through exactly the path above. `update --expect-current X.Y.Z` additionally refuses
+(`Server moved:`), under the update and admission locks, unless the active release is exactly
+`X.Y.Z`; the app always passes it. `--bundle` also takes a directory holding the three files, for a
 server without direct access to github.com. A release candidate (`v0.8.0-rc.1`) is accepted by
 its full version and sorts before its release; dry runs are never signed and never accepted.
 
@@ -583,21 +585,24 @@ What the daemon reports is a hint, never what the app runs:
   connection, host key, workspace, the server's version and the target version) comes from
   one look the app took. Approving and updating name that look, and the app refuses if the
   connection no longer matches it.
-- **Only forward, only the app's release.** The target is the app's own version, it must be
-  a release, and the server must be running an older one; the app checks this itself, not
-  only the dialog.
+- **Only forward, only the app's release, from the release you saw.** The target is the
+  app's own version, it must be a release, and the server must be running an older one; the
+  app checks this itself, not only the dialog. The command also names the release you saw the
+  server running (`--expect-current`), and the updater checks that again under its update
+  and admission locks, where the update commits: if the scheduled updater or another operator
+  moved the server in between, it refuses with `Server moved:` and nothing changes.
 
 The connection dialog shows the server's version, protocol, ring and host key, and whether it
 is older than the app. **Update now** runs, over the profile's own ssh (the pinned host key, the
 profile's key, no forwards, no ssh config):
 
 ```sh
-python3 <adapter> --deployment <manifest> update --bundle v<app version>
+python3 <adapter> --deployment <manifest> update --bundle v<app version> --expect-current <server version>
 ```
 
-That is the command above, so the server's rules decide: the bundle's signer and digests,
-forward-only versions, the update lock and the admission barrier. Nothing installs through the
-daemon's RPC. The app streams what the updater prints and then says how it ended:
+That is the command above plus `--expect-current`, so the server's rules decide: the bundle's
+signer and digests, forward-only versions, the update lock and the admission barrier. Nothing
+installs through the daemon's RPC. The app streams what the updater prints and then says how it ended:
 
 - **Updated**: the updater succeeded *and* a fresh authenticated hello from the same server
   (same profile, host key and workspace, checked again once the hello answers) reports the
@@ -609,6 +614,8 @@ daemon's RPC. The app streams what the updater prints and then says how it ended
   unmanaged ORCA process); nothing was cancelled and the old release keeps serving.
 - **Another update is running**: `Busy: update.lock`, held by the scheduled updater or another
   operator; this one did not start.
+- **The server moved**: `Server moved:`, another update finished between your check and this
+  one; nothing changed, check again.
 - **Failed**: the updater's own `orca-release:` message, and whether the previous release was
   restored and healthy.
 - **SSH refused before it started**: a missing ssh client, a changed or missing host key, or a
