@@ -1980,14 +1980,24 @@ export class Orchestrator {
     return { mcpServers: resolved.manifest.mcpServers.map((m) => m.server), key };
   }
 
+  /** A child's values redact its ancestors too: a child's result is written to its parent's log. */
+  private rememberSecrets(rc: RunContext, values: readonly string[]): void {
+    const seen = new Set<string>();
+    for (let at: RunContext | undefined = rc; at && !seen.has(at.id);) {
+      seen.add(at.id);
+      at.addRuntimeSecrets(values);
+      const parent: string | undefined = at.state.run.parentRunId;
+      at = parent ? this.live.get(parent) : undefined;
+    }
+  }
+
   private async openSession(
     rc: RunContext,
     step: StepRun,
     selector: AgentSelector,
   ): Promise<{ session: AgentSession; release: () => Promise<void> }> {
-    const { agent, host } = (this.contextGenerations.get(rc)?.agents ?? this.agents)
-      .withOverrides(rc.state.run.overrides)
-      .resolve(selector);
+    const registry = this.contextGenerations.get(rc)?.agents ?? this.agents;
+    const { agent, host } = registry.withOverrides(rc.state.run.overrides).resolve(selector);
     if (
       rc.workspace.rootProvisioning &&
       (process.platform !== "linux" || !(host instanceof LocalHost) || host.id !== rc.workspace.hostId)
@@ -2057,6 +2067,9 @@ export class Orchestrator {
         cwd: rc.workspace.cwd,
         logger: rc.logger,
         clock: this.clock,
+        // Secret references are read on the session's own host, at this open, every time (#336).
+        secrets: registry.secrets(),
+        onSecretValues: (values) => this.rememberSecrets(rc, values),
         onSessionContinuity: (state) => {
           continuity = state;
         },

@@ -20,7 +20,8 @@
  */
 import { spawn } from "node:child_process";
 import { posix } from "node:path";
-import { OrcaError, type AgentSpec, type SshHost as SshHostSpec } from "@orca/core";
+import { OrcaError, literalEnv, type AgentSpec, type SecretSource, type SshHost as SshHostSpec } from "@orca/core";
+import { sourceMissing, trimSecret } from "../secrets.js";
 import {
   collectChildProcess,
   killIfRunning,
@@ -127,13 +128,32 @@ export class SshHost implements AgentHost {
   }
 
   spawnAgent(agent: AgentSpec, options: SpawnAgentOptions): Promise<AgentProcessHandle> {
-    const env = { ...agent.env, ...(options.env ?? {}) };
+    const env = { ...literalEnv(agent.env), ...(options.env ?? {}) };
     const envPrefix = Object.entries(env)
       .map(([k, v]) => `${k}=${shellQuote(v)}`)
       .join(" ");
+    // Resolved secrets (#336) never go in the command line, where `ps` on either machine
+    // would show them. The remote shell reads one base64 line per variable from stdin with
+    // builtins only, exports it, and then execs the agent, which inherits the rest of stdin
+    // for ACP. ORCA writes those lines before anything else.
+    const secrets = Object.entries(options.secretEnv ?? {});
+    for (const [name] of secrets)
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+        throw new OrcaError("CONFIG_INVALID", `environment variable name '${name}' cannot carry a secret`, {
+          hostId: this.id,
+        });
+    const preamble = secrets
+      .map(
+        ([name]) =>
+          `IFS= read -r __orca_secret && ${name}=$(printf '%s' "$__orca_secret" | base64 -d) && export ${name} && `,
+      )
+      .join("");
     const script =
-      `cd ${shellQuote(options.cwd)} && exec ${envPrefix ? `env ${envPrefix} ` : ""}${shellQuote(agent.command)} ${agent.args.map(shellQuote).join(" ")}`.trim();
-    return wrapAgentProcess(this.spawnSsh(script), {
+      `${secrets.length ? `${preamble}unset __orca_secret && ` : ""}cd ${shellQuote(options.cwd)} && exec ${envPrefix ? `env ${envPrefix} ` : ""}${shellQuote(agent.command)} ${agent.args.map(shellQuote).join(" ")}`.trim();
+    const child = this.spawnSsh(script);
+    if (secrets.length)
+      child.stdin.write(secrets.map(([, value]) => `${Buffer.from(value, "utf8").toString("base64")}\n`).join(""));
+    return wrapAgentProcess(child, {
       onSpawnError: (e) =>
         new OrcaError(
           "AGENT_TRANSPORT",
@@ -142,6 +162,26 @@ export class SshHost implements AgentHost {
           { cause: e },
         ),
     });
+  }
+
+  /**
+   * Read a secret on the remote machine (#336): a variable of the remote login shell's
+   * environment, or a remote file. The value comes back over the SSH channel's stdout and
+   * nothing about it is in either machine's command lines.
+   */
+  async readSecret(id: string, source: SecretSource): Promise<string> {
+    // A login shell's profile may print to stdout first; the value is whatever follows the marker.
+    const marker = "__orca_secret_value__";
+    const r = await this.exec(
+      `printf '%s\\n' ${marker} && ${
+        source.provider === "env" ? `printenv ${source.name}` : `cat -- ${shellQuote(source.path)}`
+      }`,
+      { timeoutMs: this.spec.connectTimeoutMs },
+    );
+    const at = r.stdout.indexOf(`${marker}\n`);
+    const value = at < 0 ? "" : trimSecret(r.stdout.slice(at + marker.length + 1));
+    if (r.code !== 0 || value === "") throw sourceMissing(id, source, this.id);
+    return value;
   }
 
   exec(command: string, options: { cwd?: string; stdin?: string; timeoutMs?: number } = {}): Promise<ExecResult> {

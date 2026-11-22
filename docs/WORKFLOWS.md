@@ -483,6 +483,62 @@ hashes to what its launch recorded is refused rather than given the edited skill
 
 As with catalog servers, this version resolves skills but does not deliver them yet (#337).
 
+## Secret references
+
+An agent's `env`, or an MCP server's `env`, can name a credential instead of holding it
+(#336). Say once in `orca.config.yaml` where each credential lives and on which host, then
+refer to it by id:
+
+```yaml
+secrets:
+  github-token: { host: local, provider: env, name: GITHUB_TOKEN }    # the daemon's environment
+  db-password:  { host: build-box, provider: file, path: /etc/orca/db-password }
+agents:
+  - id: claude
+    command: claude-code-acp
+    env:
+      GITHUB_TOKEN: { secret: github-token }
+      LOG_LEVEL: info                       # a literal, as before
+    mcpServers:
+      - name: github
+        command: github-mcp-server
+        env: { GITHUB_PERSONAL_ACCESS_TOKEN: { secret: github-token } }
+```
+
+- **Only where it lives is configured, never the value.** `provider: env` reads a variable
+  from the host's environment: the daemon's own on a local host, the remote login shell's on
+  an SSH host. `provider: file` reads a file on the host whole, dropping one trailing newline;
+  the path must be absolute.
+- **A secret is only ever read on its own host.** Each definition is bound to one `host`. An
+  agent may only refer to secrets bound to the host it runs on (its `hostId`), and the config
+  does not load otherwise, naming the field: `agents[0].env.GITHUB_TOKEN: secret
+  'db-password' is bound to host 'build-box', but this agent runs on 'local'`. There is no
+  fallback: ORCA never uses a value of the same name from the daemon's environment, another
+  host, or an earlier session. A reference in a catalog MCP server is checked against the
+  host of the agent it is given to once catalog servers reach sessions (#337).
+- **Read at every session open.** The value is read on the host immediately before the agent
+  process starts, and not cached, so a rotated value is used by the next session and a
+  revoked one stops working then. A missing or unreadable value refuses the step before
+  anything is spawned (`secret 'github-token' is unavailable: environment variable
+  GITHUB_TOKEN is not set on host 'local'`). A `per-run` session keeps the values it was
+  started with for its lifetime; a step that needs a fresh value needs a fresh session.
+- **Never on a command line.** On a local host the values are in the agent process's
+  environment only. Over SSH they are sent on the connection's standard input, read by the
+  remote shell and exported before the agent starts, so neither machine's process list shows
+  them. The remote host needs `base64` (coreutils), which decodes them.
+- **Never written.** Config, drafts, launch records, provenance, events and logs hold the
+  reference (`{ secret: github-token }`), never the value. As defense in depth, a value ORCA
+  read is replaced with `[REDACTED]` in every event and log line the run writes afterwards,
+  the run's parents included. This catches the value copied verbatim, not encodings,
+  transformations or fragments of it, and it does not rewrite what an agent writes to files
+  or artifacts itself.
+- **Moving from literal values.** A literal in `env` keeps working, but it is stored in
+  `orca.config.yaml` as written, shown to anyone who can read the config, and only redacted
+  from run output where ORCA recognises it as a credential. To move one, put the value where
+  the host can read it (an environment variable of the daemon, or a file only the daemon's
+  user can read), add a `secrets` entry bound to that host, and replace the literal with
+  `{ secret: <id> }`.
+
 ## Templates
 
 Markdown files with front matter (`id`, `name`, `description`, `version`, `requires`,

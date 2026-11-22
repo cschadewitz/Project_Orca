@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import * as acp from "@agentclientprotocol/sdk";
 import {
   describeError,
+  literalEnv,
   newId,
   OrcaError,
   silentLogger,
@@ -20,8 +21,10 @@ import {
   type AgentSpec,
   type Clock,
   type Logger,
+  type SecretsConfig,
   type SessionConfigOption,
 } from "@orca/core";
+import { redactingLogger, resolveSessionSecrets } from "./secrets.js";
 import { processCleanup } from "./process-cleanup.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
@@ -41,6 +44,14 @@ import {
 } from "./session.js";
 
 export interface OpenSessionOptions {
+  /**
+   * Where each `{ secret: <id> }` in the agent's env, or its MCP servers' env, is read (#336).
+   * Every reference is resolved on `host` before the agent is spawned; a missing, unreadable
+   * or other-host reference fails the open with nothing started.
+   */
+  secrets?: SecretsConfig | undefined;
+  /** Handed every resolved secret value, before anything else happens, so the caller can redact it. */
+  onSecretValues?: (values: readonly string[]) => void;
   host: AgentHost;
   agent: AgentSpec;
   cwd: string;
@@ -129,7 +140,14 @@ function withinRoots(path: string, roots: string[]): boolean {
 
 export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSession> {
   if (opts.requireContextRecovery && !opts.resumeSessionId?.trim()) throw contextRecoveryFailure("missing-session-id");
-  const logger = (opts.logger ?? silentLogger).child({ agent: opts.agent.id, host: opts.host.id });
+  // Secret references (#336) are read first, on the session's own host: a reference that
+  // cannot be read refuses the session before any process exists.
+  const sessionSecrets = await resolveSessionSecrets(opts.host, opts.agent, opts.secrets);
+  opts.onSecretValues?.(sessionSecrets.values);
+  const logger = redactingLogger(
+    (opts.logger ?? silentLogger).child({ agent: opts.agent.id, host: opts.host.id }),
+    sessionSecrets.values,
+  );
   const clock = opts.clock ?? systemClock;
   const roots = [opts.cwd, ...(opts.additionalDirectories ?? [])];
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
@@ -190,9 +208,10 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     throw acp.RequestError.invalidParams({ path, reason: "protected: ORCA's own files are not open to agents" });
   };
 
-  const proc: AgentProcessHandle = await opts.host.spawnAgent(opts.agent, {
+  const proc: AgentProcessHandle = await opts.host.spawnAgent(sessionSecrets.agent, {
     cwd: opts.cwd,
     ...(opts.env ? { env: opts.env } : {}),
+    ...(Object.keys(sessionSecrets.secretEnv).length ? { secretEnv: sessionSecrets.secretEnv } : {}),
   });
 
   const app = acp
@@ -363,11 +382,12 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     logger.debug("initialized", { protocolVersion: init.protocolVersion, agentInfo: init.agentInfo });
     const newSession: acp.NewSessionRequest = {
       cwd: opts.cwd,
-      mcpServers: opts.agent.mcpServers.map((m) => ({
+      mcpServers: sessionSecrets.agent.mcpServers.map((m) => ({
         name: m.name,
         command: m.command,
         args: m.args,
-        env: Object.entries(m.env).map(([name, value]) => ({ name, value })),
+        // Every reference was resolved above, so only literal values remain.
+        env: Object.entries(literalEnv(m.env)).map(([name, value]) => ({ name, value })),
       })),
     };
     if (opts.additionalDirectories) newSession.additionalDirectories = opts.additionalDirectories;

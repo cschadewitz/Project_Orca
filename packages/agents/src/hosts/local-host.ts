@@ -2,7 +2,8 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile, access } from "node:fs/promises";
 import { join } from "node:path";
-import { OrcaError, type AgentSpec, type LocalHost as LocalHostSpec } from "@orca/core";
+import { OrcaError, literalEnv, type AgentSpec, type LocalHost as LocalHostSpec, type SecretSource } from "@orca/core";
+import { sourceMissing, trimSecret } from "../secrets.js";
 import {
   collectChildProcess,
   wrapAgentProcess,
@@ -47,7 +48,7 @@ export class LocalHost implements AgentHost {
   spawnAgent(agent: AgentSpec, options: SpawnAgentOptions): Promise<AgentProcessHandle> {
     const child = spawn(agent.command, agent.args, {
       cwd: options.cwd,
-      env: { ...process.env, ...agent.env, ...(options.env ?? {}) },
+      env: { ...process.env, ...literalEnv(agent.env), ...(options.env ?? {}), ...(options.secretEnv ?? {}) },
       stdio: ["pipe", "pipe", "pipe"],
     });
     return wrapAgentProcess(child, {
@@ -59,6 +60,23 @@ export class LocalHost implements AgentHost {
           { cause: e },
         ),
     });
+  }
+
+  /** The daemon's own environment, or a file on this machine (#336). */
+  async readSecret(id: string, source: SecretSource): Promise<string> {
+    if (source.provider === "env") {
+      const value = process.env[source.name];
+      if (value === undefined || value === "") throw sourceMissing(id, source, this.id);
+      return value;
+    }
+    try {
+      const value = trimSecret(await readFile(source.path, "utf8"));
+      if (value === "") throw sourceMissing(id, source, this.id);
+      return value;
+    } catch (error) {
+      if (error instanceof OrcaError) throw error;
+      throw sourceMissing(id, source, this.id);
+    }
   }
 
   exec(command: string, options: { cwd?: string; stdin?: string; timeoutMs?: number } = {}): Promise<ExecResult> {

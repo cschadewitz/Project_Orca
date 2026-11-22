@@ -10,7 +10,7 @@
 import type { ChildProcess, ChildProcessByStdio } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
-import type { AgentSpec, HostSpec } from "@orca/core";
+import type { AgentSpec, HostSpec, SecretSource } from "@orca/core";
 
 /** A child spawned with `stdio: ["pipe", "pipe", "pipe"]`: all three streams present. */
 export type PipedChildProcess = ChildProcessByStdio<Writable, Readable, Readable>;
@@ -54,6 +54,12 @@ export interface HostFileSystem {
 export interface SpawnAgentOptions {
   cwd: string;
   env?: Record<string, string>;
+  /**
+   * Environment variables whose values are resolved secrets (#336). A host must never put
+   * these in a process argument list: a local host sets them in the child's environment,
+   * an SSH host sends them over the session's own stdin.
+   */
+  secretEnv?: Record<string, string>;
 }
 
 export interface AgentHost {
@@ -65,6 +71,11 @@ export interface AgentHost {
   exec(command: string, options?: { cwd?: string; stdin?: string; timeoutMs?: number }): Promise<ExecResult>;
   /** Join path segments using the host's conventions. */
   joinPath(...parts: string[]): string;
+  /**
+   * Read one secret's value on this host (#336), or throw `CONFIG_INVALID` naming why. A host
+   * without it cannot run a session that uses a secret reference.
+   */
+  readSecret?(id: string, source: SecretSource): Promise<string>;
 }
 
 /**

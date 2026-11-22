@@ -116,6 +116,7 @@ export class AgentModel {
         // Catalog servers are not delivered to sessions yet (#337), so a ping does not start them.
         agent: { ...agent, mcpServers: scoped.manifest.mcpServers.filter((m) => !m.catalog).map((m) => m.server) },
         cwd,
+        secrets: registry.secrets(),
         logger: this.orc.logger,
         clock: this.clock,
       });
