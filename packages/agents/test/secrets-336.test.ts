@@ -16,6 +16,7 @@ import {
   redactError,
   redactingLogger,
   secretHostBinding,
+  secretText,
   SshHost,
   type AgentHost,
   type AgentProcessHandle,
@@ -434,6 +435,30 @@ describe("SshHost secret reports", () => {
     expect(await exists(out)).toBe(false);
   });
 
+  it("does not start the agent when the value is not UTF-8 text that round-trips", async () => {
+    const dir = await tempDir();
+    const host = sshHost(await tracingSsh(dir, "/bin/sh"));
+    // Disposable bytes: a stray continuation byte, and an encoded UTF-16 surrogate.
+    for (const bytes of [
+      [0x61, 0xff, 0x62],
+      [0x61, 0xed, 0xa0, 0x80],
+    ]) {
+      await writeFile(join(dir, "not-text"), Buffer.from(bytes));
+      const out = join(dir, "seen");
+      await expect(
+        host.spawnAgent(
+          AgentSpecSchema.parse({ id: "a", command: process.execPath, args: ["-e", envReporter(out, ["TOKEN"])] }),
+          {
+            cwd: dir,
+            secrets: [{ id: "bin", source: { provider: "file", path: join(dir, "not-text") }, env: ["TOKEN"] }],
+          },
+        ),
+      ).rejects.toMatchObject({ code: "AGENT_TRANSPORT", details: { reason: "report" } });
+      await new Promise((r) => setTimeout(r, 100));
+      expect(await exists(out)).toBe(false);
+    }
+  });
+
   it("accepts only a complete, canonical report and starts the agent after it", async () => {
     const dir = await tempDir();
     const host = sshHost(await tracingSsh(dir, "/bin/sh"));
@@ -637,6 +662,28 @@ describe("openAcpSession with secret references", () => {
         authorizeSecretUse: allow,
       }),
     ).rejects.toMatchObject({ code: "CONFIG_INVALID", details: { secret: "token", reason: "missing" } });
+  });
+});
+
+describe("the secret text contract", () => {
+  it("accepts UTF-8 that round-trips and nothing else", () => {
+    expect(secretText(Buffer.from("pw ünï 🔑", "utf8"))).toBe("pw ünï 🔑");
+    expect(secretText(Buffer.from([0xef, 0xbb, 0xbf, 0x61]))).toBe("\ufeffa");
+    for (const bytes of [[0xff], [0xc0, 0xaf], [0xed, 0xa0, 0x80], [0xe2, 0x82]])
+      expect(secretText(Buffer.from(bytes)), JSON.stringify(bytes)).toBeUndefined();
+  });
+
+  it("refuses a local file that is not UTF-8 text before spawning", async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, "not-text"), Buffer.from([0x61, 0xff]));
+    const out = join(dir, "seen");
+    await expect(
+      local().spawnAgent(
+        AgentSpecSchema.parse({ id: "a", command: process.execPath, args: ["-e", envReporter(out, ["T"])] }),
+        { cwd: dir, secrets: [{ id: "bin", source: { provider: "file", path: join(dir, "not-text") }, env: ["T"] }] },
+      ),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID", details: { secret: "bin", reason: "unsupported" } });
+    expect(await exists(out)).toBe(false);
   });
 });
 

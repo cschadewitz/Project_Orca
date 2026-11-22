@@ -104,6 +104,10 @@ shell is a controlled boundary that fails closed:
   secret has exactly one non-empty, canonical base64 report. The agent starts only after the
   wrapper has checked them and written a go line to the shell; on any reporting failure it
   writes nothing, kills the connection, and the agent never starts.
+- A secret value is UTF-8 text. A report is accepted only if its bytes decode as UTF-8 with
+  nothing replaced and encode back to exactly the same bytes, so the text redacted is the
+  text the agent receives; anything else is refused before the agent starts. A local host
+  refuses a file that is not UTF-8 text the same way (`reason: unsupported`).
 - Redaction covers each value's base64, unpadded base64 and base64url forms as well as the
   value itself.
 

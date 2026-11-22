@@ -114,6 +114,32 @@ export function secretUnavailable(secret: string, reason: SecretFailure, detail:
   });
 }
 
+/**
+ * The text contract for a secret value: it is UTF-8 text, and redaction works on that text.
+ * Returns the text only when `bytes` decode as UTF-8 with no replacement and encode back to
+ * exactly the same bytes; `undefined` when the value cannot be represented losslessly, so a
+ * host refuses it rather than redacting a different string from the one the agent receives.
+ */
+export function secretText(bytes: Uint8Array): string | undefined {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+  return Buffer.compare(Buffer.from(text, "utf8"), Buffer.from(bytes)) === 0 ? text : undefined;
+}
+
+/** For hosts: a value that is not UTF-8 text, in words that never include it. */
+export function sourceNotText(id: string, source: SecretSource, hostId: string): OrcaError {
+  return secretUnavailable(
+    id,
+    "unsupported",
+    `${source.provider === "env" ? `environment variable ${source.name}` : `file ${source.path}`} on host '${hostId}' is not UTF-8 text`,
+    hostId,
+  );
+}
+
 /** For hosts: the error for a source that is not there, in words that never include a value. */
 export function sourceMissing(id: string, source: SecretSource, hostId: string): OrcaError {
   return secretUnavailable(

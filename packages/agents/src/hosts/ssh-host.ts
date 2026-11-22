@@ -21,7 +21,7 @@
 import { spawn } from "node:child_process";
 import { posix } from "node:path";
 import { OrcaError, literalEnv, type AgentSpec, type SshHost as SshHostSpec } from "@orca/core";
-import { sourceMissing } from "../secrets.js";
+import { secretText, sourceMissing } from "../secrets.js";
 import {
   collectChildProcess,
   killIfRunning,
@@ -207,13 +207,15 @@ export class SshHost implements AgentHost {
           if (marker === MISSING_MARKER) missing = Number(index);
           else if (marker === VALUE_MARKER) {
             // A report the wrapper cannot use to redact is no report: the agent must not start.
+            // The report must be canonical base64 of UTF-8 text that round-trips exactly
+            // (`secretText`): what is redacted is then byte-for-byte what the agent gets.
             const valid =
               encoded !== undefined &&
               !extra.length &&
               BASE64.test(encoded) &&
               Buffer.from(encoded, "base64").toString("base64") === encoded;
-            const value = valid ? Buffer.from(encoded, "base64").toString("utf8") : "";
-            if (valid && value.length && !values.has(d.id)) values.set(d.id, value);
+            const value = valid ? secretText(Buffer.from(encoded, "base64")) : undefined;
+            if (value && !values.has(d.id)) values.set(d.id, value);
             else malformed = true;
           }
         }
