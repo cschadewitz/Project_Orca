@@ -350,8 +350,8 @@ branch** `release/X.Y`, and every patch of it is cut from that branch.
 
 A patch commit on `main`, or a `.0` commit on a line, is refused. A line counts as protected
 when the rules API reports, for that branch, a pull request requirement, no force pushes, no
-deletion, and both `check (node 24)` and `release line check` as required checks; prepare,
-publish and signing all check that before they open, build or sign anything from a line.
+deletion, both `check (node 24)` and `release line check` as required checks that only GitHub
+Actions may satisfy, and branches kept up to date before merging; prepare, publish and signing all check that before they open, build or sign anything from a line.
 Dry runs are unchanged: they rehearse any ref and never tag, sign or feed.
 
 | Branch | Holds | Who merges into it |
@@ -385,9 +385,13 @@ the release pull request against it. Merging that pull request runs **Release (p
 which first checks, with `main`'s copy of `release-lane.js`:
 
 - the commit is on its version's lane (and the line is protected);
-- for a merged release pull request: head `release/vV` from this repository into V's lane,
-  and, on a line, the release line check passed on the exact head that was reviewed and the
-  merge commit's tree equals that head's tree (keep the branch up to date before merging).
+- for a merged release pull request, on either lane: head `release/vV` from this repository
+  into V's lane, `package.json` saying V at both the reviewed head and the merge commit, and
+  the merge commit's tree equal to that head's tree (keep the branch up to date before
+  merging);
+- on a line, also: the release line check passed on that exact head, posted by GitHub Actions
+  from `main`'s `release-line-guard.yml` on a `pull_request_target` event. A check run with the
+  right name from anywhere else does not count.
 
 A final then goes through the same draft, signing, acceptance, upgrade check and publish-final
 chain ([Publishing a final](#publishing-a-final)). **Windows signed (spike)** compares a patch's
@@ -438,8 +442,8 @@ patches need.
 
 **What the repository needs once.** A ruleset on `release/0.*` (and `release/1.*` when there is
 one), not on the `release/vX.Y.Z` pull request heads: pull requests only, no force pushes or
-deletion, the `check (node 24)` and `release line check` status checks required, and branches
-kept up to date before merging. And a GitHub App with contents and pull-requests write,
+deletion, the `check (node 24)` and `release line check` status checks required with GitHub
+Actions as their source (not "any source"), and branches kept up to date before merging. And a GitHub App with contents and pull-requests write,
 installed on this repository, with its id in the variable `ORCA_RELEASE_APP_ID` and its private
 key in the secret `ORCA_RELEASE_APP_PRIVATE_KEY`, both in a `release-bot` environment whose
 deployment branches are `main` only (so no other branch's workflow can read the key): prepare opens release pull requests, and
