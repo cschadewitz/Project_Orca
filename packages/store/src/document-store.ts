@@ -18,6 +18,20 @@ import { FileWorkflowVersionStore, InMemoryWorkflowVersionStore, type WorkflowVe
 import { FileExecutionStore, InMemoryExecutionStore, type ExecutionStore } from "./execution-store.js";
 import { ProtectedEventStore } from "./protected-event-store.js";
 import { filePlanStores, memoryPlanStores, type PlanStores } from "./plan-store.js";
+import {
+  documentVersion,
+  FILE_STORE_CAPABILITIES,
+  MEMORY_STORE_CAPABILITIES,
+  pageDocuments,
+  type ConditionalWriteResult,
+  type DocumentPage,
+  type DocumentQuery,
+  type DocumentVersion,
+  type StoreCapabilityMatrix,
+  type UnitOfWork,
+  type VersionedDocument,
+  type VersionedDocumentStore,
+} from "./store-contracts.js";
 
 export interface DocumentStore<T extends { id: string }> {
   get(id: string): Promise<T | undefined>;
@@ -28,7 +42,11 @@ export interface DocumentStore<T extends { id: string }> {
   list(predicate?: (doc: T) => boolean): Promise<T[]>;
 }
 
-export class InMemoryDocumentStore<T extends { id: string }> implements DocumentStore<T> {
+/**
+ * The in-process reference collection. Every method is synchronous between its read and its
+ * write, so a conditional write cannot interleave with another one.
+ */
+export class InMemoryDocumentStore<T extends { id: string }> implements VersionedDocumentStore<T> {
   private readonly docs = new Map<string, T>();
   async get(id: string): Promise<T | undefined> {
     return this.docs.get(id);
@@ -46,6 +64,30 @@ export class InMemoryDocumentStore<T extends { id: string }> implements Document
     const all = [...this.docs.values()];
     return predicate ? all.filter(predicate) : all;
   }
+  async getVersioned(id: string): Promise<VersionedDocument<T> | undefined> {
+    const doc = this.docs.get(id);
+    return doc && { doc, version: documentVersion(doc) };
+  }
+  async putIfVersion(doc: T, expected: DocumentVersion | null): Promise<ConditionalWriteResult<T>> {
+    const conflict = this.conflict(doc.id, expected);
+    if (conflict) return conflict;
+    this.docs.set(doc.id, doc);
+    return { ok: true, version: documentVersion(doc) };
+  }
+  async deleteIfVersion(id: string, expected: DocumentVersion): Promise<ConditionalWriteResult<T>> {
+    const conflict = this.conflict(id, expected);
+    if (conflict) return conflict;
+    this.docs.delete(id);
+    return { ok: true, version: undefined };
+  }
+  async query(query?: DocumentQuery<T>): Promise<DocumentPage<T>> {
+    return pageDocuments(this.docs.values(), query);
+  }
+  private conflict(id: string, expected: DocumentVersion | null): ConditionalWriteResult<T> | undefined {
+    const doc = this.docs.get(id);
+    const current = doc && { doc, version: documentVersion(doc) };
+    return (current?.version ?? null) === expected ? undefined : { ok: false, current };
+  }
 }
 
 /** What the cached collection was read from; the cache is trusted only while this still holds. */
@@ -55,8 +97,15 @@ interface Fingerprint {
   mtimeMs: number;
 }
 
-/** A mutation waiting to be applied to the file, kept until a locked write has carried it. */
-type Mutation<T> = { kind: "put"; doc: T } | { kind: "delete"; id: string };
+/**
+ * A mutation waiting to be applied to the file, kept until a locked write has carried it. A
+ * conditional one (`expect` present) is decided inside the lock against the file as it is
+ * then, and leaves its outcome in `result` for the caller that queued it.
+ */
+type Mutation<T> = ({ kind: "put"; doc: T } | { kind: "delete"; id: string }) & {
+  expect?: DocumentVersion | null;
+  result?: ConditionalWriteResult<T>;
+};
 
 /**
  * Whole-collection JSON file, written atomically (tmp + rename), safe for two
@@ -78,8 +127,15 @@ type Mutation<T> = { kind: "put"; doc: T } | { kind: "delete"; id: string };
  * concurrent puts cost at most two writes rather than N. Reads see the cache
  * with the queue applied on top, and each call still resolves only once its own
  * change has hit disk.
+ *
+ * Compare-and-swap (#338) rides the same queue: a conditional mutation is checked
+ * inside the lock, against the freshly re-read file and the batch's earlier
+ * mutations, so of two writers holding one version only the first can win - in
+ * this process or another. A document's version is the hash of its parsed
+ * content, computed on read, so nothing new is written to the file. Reads do not
+ * show a conditional mutation until it has been decided and written.
  */
-export class JsonFileDocumentStore<T extends { id: string }> implements DocumentStore<T> {
+export class JsonFileDocumentStore<T extends { id: string }> implements VersionedDocumentStore<T> {
   private cache: Map<string, T> | undefined;
   private fingerprint: Fingerprint | undefined;
   /** Mutations not yet carried by a completed write, in the order they were made. */
@@ -133,11 +189,20 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Document
   /** What a reader should see: the file plus this process's not-yet-written mutations. */
   private async view(): Promise<Map<string, T>> {
     const map = await this.load();
-    if (this.queue.length === 0) return map;
+    const unconditional = this.queue.filter((m) => !("expect" in m));
+    if (unconditional.length === 0) return map;
     const view = new Map(map);
-    for (const m of this.queue) apply(view, m);
+    for (const m of unconditional) apply(view, m, this.versionOf);
     return view;
   }
+
+  /**
+   * The version a reader of the file would compute: the document as it parses back from JSON,
+   * so a write and the read after it agree even when the schema fills defaults or drops
+   * `undefined` fields.
+   */
+  private readonly versionOf = (doc: T): DocumentVersion =>
+    documentVersion(this.schema.parse(JSON.parse(JSON.stringify(doc))));
 
   /**
    * Schedule a locked rewrite of the whole collection. Callers that mutate
@@ -158,7 +223,10 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Document
         await withFileLock(`${this.file}.lock`, async () => {
           // Inside the lock, so nothing can write between this read and the rename.
           const map = new Map(await this.load());
-          for (const m of batch) apply(map, m);
+          let changed = false;
+          for (const m of batch) changed = apply(map, m, this.versionOf) || changed;
+          // Every mutation was a conditional write that lost: the file is already right.
+          if (!changed) return;
           const body = JSON.stringify([...map.values()], null, 2);
           // A random tag, not the pid alone (file-lock.ts uses the same idiom): two writers
           // in one process - two collections is the ordinary case, and a pid is reused after
@@ -211,6 +279,23 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Document
     const all = [...(await this.view()).values()];
     return predicate ? all.filter(predicate) : all;
   }
+  async getVersioned(id: string): Promise<VersionedDocument<T> | undefined> {
+    const doc = (await this.view()).get(id);
+    return doc && { doc, version: this.versionOf(doc) };
+  }
+  async putIfVersion(doc: T, expected: DocumentVersion | null): Promise<ConditionalWriteResult<T>> {
+    const m: Mutation<T> = { kind: "put", doc, expect: expected };
+    await this.enqueue(m);
+    return m.result!;
+  }
+  async deleteIfVersion(id: string, expected: DocumentVersion): Promise<ConditionalWriteResult<T>> {
+    const m: Mutation<T> = { kind: "delete", id, expect: expected };
+    await this.enqueue(m);
+    return m.result!;
+  }
+  async query(query?: DocumentQuery<T>): Promise<DocumentPage<T>> {
+    return pageDocuments((await this.view()).values(), query);
+  }
 }
 
 function same(a: Fingerprint | undefined, b: Fingerprint | undefined): boolean {
@@ -218,9 +303,25 @@ function same(a: Fingerprint | undefined, b: Fingerprint | undefined): boolean {
   return a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
 }
 
-function apply<T extends { id: string }>(map: Map<string, T>, m: Mutation<T>): void {
+/** Apply one mutation; false when it was a conditional write whose expectation did not hold. */
+function apply<T extends { id: string }>(
+  map: Map<string, T>,
+  m: Mutation<T>,
+  versionOf: (doc: T) => DocumentVersion,
+): boolean {
+  const id = m.kind === "put" ? m.doc.id : m.id;
+  if ("expect" in m) {
+    const doc = map.get(id);
+    const current = doc && { doc, version: versionOf(doc) };
+    if ((current?.version ?? null) !== m.expect) {
+      m.result = { ok: false, current };
+      return false;
+    }
+    m.result = { ok: true, version: m.kind === "put" ? versionOf(m.doc) : undefined };
+  }
   if (m.kind === "put") map.set(m.doc.id, m.doc);
   else map.delete(m.id);
+  return true;
 }
 
 export interface Stores {
@@ -238,6 +339,10 @@ export interface Stores {
   plan: PlanStores;
   /** The workflow definitions runs were started on, by `(id, version)`; see workflow-store.ts. */
   workflows: WorkflowVersionStore;
+  /** What this backend guarantees beyond the baseline contracts (#338); see store-contracts.ts. */
+  capabilities?: StoreCapabilityMatrix;
+  /** Present only on a backend that can commit several metadata collections together. */
+  unitOfWork?: UnitOfWork;
 }
 
 /** `logger` receives what the file-backed stores notice and survive: torn log lines, stale locks. */
@@ -254,6 +359,7 @@ export function fileStores(dir: string, clock?: Clock, logger?: Logger): Stores 
     leases: new FileLeaseStore(dir, clock),
     plan: filePlanStores(dir, clock, logger),
     workflows,
+    capabilities: FILE_STORE_CAPABILITIES,
   };
 }
 
@@ -270,5 +376,6 @@ export function memoryStores(clock?: Clock): Stores {
     leases: new InMemoryLeaseStore(clock),
     plan: memoryPlanStores(clock),
     workflows,
+    capabilities: MEMORY_STORE_CAPABILITIES,
   };
 }
