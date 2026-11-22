@@ -39,12 +39,16 @@ fence), #905 (Linux package hand-off) and #910 (Windows durability).
   then the store retries asynchronously with jittered backoff (1 to 32 ms) until
   the busy deadline (default 10 s, `busyDeadlineMs`), then fails with
   `STORE_LOCK_TIMEOUT`. The event loop is never held for the whole deadline.
+- **Reads:** every read is one `BEGIN DEFERRED ... COMMIT` snapshot, so a read
+  made of several statements (rows and a write counter; an observation's size
+  check and its rows) never mixes two commits of another connection.
 - **Write outcomes:** a failure before `COMMIT` rolls back and rejects with the
   underlying error (retry is safe); a failure of `COMMIT` is `STORE_WRITE` with
   `details.outcome: "uncertain"` (re-read before retrying).
 - **Schema:** migrations in `sqlite/schema.ts`, tracked in `PRAGMA user_version`,
   applied at open in one transaction. A database from a newer build is refused
-  with `STORE_FORMAT` (`reason: "NEWER"`), never opened and half-understood.
+  with `STORE_FORMAT` (`reason: "NEWER"`) before anything can change the file
+  (journal mode included), never opened and half-understood.
 - **Ids:** `documents.sort_key` holds the id as UTF-16 code units, so query
   pagination is the contract's code-unit order on every host.
 
@@ -117,4 +121,8 @@ leaves only an unreferenced blob.
 - Checkpoint behaviour under sustained load, and the `large` scale on the
   reference machine.
 - Making SQLite selectable for a workspace, after the format gates above. That
-  switch is also when the daemon serves history from it to #255.
+  switch is also when the daemon serves history from it to #255. **Precondition
+  for that change:** a populated workspace can never be opened by both backends.
+  The selection records the backend in the store, each backend refuses a store
+  recorded for the other, and the only way from file to SQLite is the supported
+  import-then-switch migration.

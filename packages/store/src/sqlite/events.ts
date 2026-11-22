@@ -241,11 +241,21 @@ export class SqliteEventStore extends BaseEventStore {
       throw new OrcaError("RUN_STATE", "Invalid event observation limits");
     const read = () =>
       this.db.read(() => {
+        // Both bounds are checked in SQL, in the same snapshot, before a single body is read:
+        // an over-limit history is refused without materialising it. A line's size is its
+        // UTF-8 bytes plus the newline, as on the file backend.
+        const size = this.db
+          .prepare(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(length(CAST(body AS BLOB)) + 1), 0) AS bytes " +
+              "FROM (SELECT body FROM events WHERE run_id = ? ORDER BY seq LIMIT ?)",
+          )
+          .get(runId, maxEvents + 1) as { n: number; bytes: number };
+        if (Number(size.n) === 0) throw new OrcaError("RUN_STATE", "Event observation requires an existing history");
+        if (Number(size.n) > maxEvents) throw new OrcaError("RUN_STATE", "Event observation exceeds its event limit");
+        if (Number(size.bytes) > maxBytes) throw new OrcaError("RUN_STATE", "Event observation exceeds its byte limit");
         const rows = this.db
-          .prepare("SELECT body FROM events WHERE run_id = ? ORDER BY seq LIMIT ?")
-          .all(runId, maxEvents + 1) as unknown as Row[];
-        if (rows.length === 0) throw new OrcaError("RUN_STATE", "Event observation requires an existing history");
-        if (rows.length > maxEvents) throw new OrcaError("RUN_STATE", "Event observation exceeds its event limit");
+          .prepare("SELECT body FROM events WHERE run_id = ? ORDER BY seq")
+          .all(runId) as unknown as Row[];
         const events: OrcaEvent[] = [];
         const ids = new Set<string>();
         let bytes = 0;

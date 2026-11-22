@@ -197,7 +197,7 @@ export async function backupSqliteMetadata(dir: string, target: string): Promise
     });
   const db = new SqliteDatabase(join(dir, SQLITE_METADATA_FILE));
   try {
-    await db.read(() => db.prepare("VACUUM INTO ?").run(target));
+    await db.statement(() => db.prepare("VACUUM INTO ?").run(target));
   } finally {
     db.close();
   }

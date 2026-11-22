@@ -58,25 +58,42 @@ export class SqliteDatabase {
     mkdirSync(dirname(file), { recursive: true });
     const { DatabaseSync } = sqlite();
     this.db = new DatabaseSync(file);
-    this.db.exec("PRAGMA busy_timeout = 50");
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA synchronous = FULL");
-    this.db.exec("PRAGMA foreign_keys = ON");
-    this.migrate();
+    try {
+      this.db.exec("PRAGMA busy_timeout = 50");
+      // Before anything that can change the file: a database from a newer build is refused
+      // exactly as it was found, journal mode included.
+      this.refuseNewer();
+      this.db.exec("PRAGMA journal_mode = WAL");
+      this.db.exec("PRAGMA synchronous = FULL");
+      this.db.exec("PRAGMA foreign_keys = ON");
+      this.migrate();
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
-  /** Apply pending migrations in one immediate transaction; refuse a database from a newer build. */
-  private migrate(): void {
-    const version = () =>
-      Number((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+  private schemaVersion(): number {
+    return Number((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+  }
+
+  private refuseNewer(): void {
+    const schema = this.schemaVersion();
     const known = SQLITE_MIGRATIONS.length;
-    if (version() > known)
-      throw new OrcaError("STORE_FORMAT", `SQLite metadata schema ${version()} is newer than this build (${known})`, {
+    if (schema > known)
+      throw new OrcaError("STORE_FORMAT", `SQLite metadata schema ${schema} is newer than this build (${known})`, {
         reason: "NEWER",
         file: this.file,
-        schema: version(),
+        schema,
         supported: known,
       });
+  }
+
+  /** Apply pending migrations in one immediate transaction; a newer database is refused first. */
+  private migrate(): void {
+    const version = () => this.schemaVersion();
+    const known = SQLITE_MIGRATIONS.length;
+    this.refuseNewer();
     if (version() === known) return;
     for (let attempt = 0; ; attempt++) {
       try {
@@ -147,8 +164,25 @@ export class SqliteDatabase {
     });
   }
 
-  /** Run a read; WAL readers rarely see `SQLITE_BUSY`, but recovery and checkpoints can cause it. */
+  /**
+   * Run `body` as one read transaction: every statement in it sees the same committed snapshot,
+   * so a read made of several statements (rows and a write counter, a size check and the rows it
+   * bounds) can never mix two commits of another connection. WAL readers rarely see
+   * `SQLITE_BUSY`, but recovery and checkpoints can cause it, so it is retried like a write.
+   */
   read<T>(body: () => T): Promise<T> {
+    return this.retry(() => {
+      this.db.exec("BEGIN DEFERRED");
+      try {
+        return body();
+      } finally {
+        if (this.db.isTransaction) this.db.exec("COMMIT");
+      }
+    });
+  }
+
+  /** Run `body` outside any transaction, with the same busy handling: for `VACUUM INTO`. */
+  statement<T>(body: () => T): Promise<T> {
     return this.retry(body);
   }
 
