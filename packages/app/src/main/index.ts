@@ -1104,11 +1104,28 @@ function serverSetupScripts(): string {
     ? join(process.resourcesPath, "server-setup")
     : fileURLToPath(new URL("../../../../tools/deploy/", import.meta.url));
 }
-ipcMain.handle("orca:profiles.setUpServer", (_event, id: unknown) =>
+ipcMain.handle("orca:profiles.inspectServer", (_event, id: unknown) =>
   profileResult(async () => {
     const valid = ProfileIdSchema.parse(id);
     if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before setting up this server.");
-    return remoteProfiles.setUpServer(valid, { version: app.getVersion(), scripts: serverSetupScripts() });
+    const { inspection, outcome } = await remoteProfiles.inspectServer(valid, {
+      version: app.getVersion(),
+      scripts: serverSetupScripts(),
+    });
+    return inspection ? { inspection } : { setup: outcome as Exclude<typeof outcome, { kind: "inspected" }> };
+  }),
+);
+ipcMain.handle("orca:profiles.setUpServer", (_event, id: unknown, confirmation: unknown) =>
+  profileResult(async () => {
+    const valid = ProfileIdSchema.parse(id);
+    if (typeof confirmation !== "string" || confirmation.length > 64)
+      throw new ConnectionRefusal("Confirm the server first.");
+    if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before setting up this server.");
+    return remoteProfiles.setUpServer(valid, {
+      version: app.getVersion(),
+      scripts: serverSetupScripts(),
+      confirmation,
+    });
   }),
 );
 /** Main reads the file the person picks; the token goes from disk to the keychain slot only. */

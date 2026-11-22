@@ -84,9 +84,18 @@ class FakeServer {
     ].join("\n"),
     serverLines: [],
   };
+  /** What `python3 - --inspect` (the read-only check before a setup, #881) prints. */
+  inspect: RemoteResult = {
+    code: 0,
+    stdout: [
+      'orca-setup: {"detail": "", "result": "ok", "step": "platform"}',
+      'orca-setup: {"account": "casey", "current": null, "inspected": true, "root": "/home/casey/.local/share/orca-server"}',
+    ].join("\n"),
+    serverLines: [],
+  };
   run(command: readonly string[]): RemoteResult {
     this.commands.push([...command]);
-    if (command[0] === "python3") return this.setup;
+    if (command[0] === "python3") return command.includes("--inspect") ? this.inspect : this.setup;
     if (this.fail) return { code: this.fail.code, stdout: "", serverLines: this.fail.lines };
     const words = [...command];
     const flag = (name: string) => {
@@ -191,6 +200,7 @@ class FakeTunnel {
         // ssh's accept-new on first use: the probe pins the server's key.
         const pins = this.options.knownHostsFile;
         if (pinState(pins) === "none") {
+          if (this.options.pinnedOnly) throw new TunnelRefusal("host-key-missing");
           mkdirSync(dirname(pins), { recursive: true });
           writeFileSync(pins, "orca-lab ssh-ed25519 AAAAFIRSTUSE\n");
         }
@@ -1491,11 +1501,36 @@ describe("server commands (#875)", () => {
 describe("setting a machine up as a managed server (#881)", () => {
   const scripts = fileURLToPath(new URL("../../../tools/deploy/", import.meta.url));
   const managed = "/home/casey/.local/share/orca-server/orca";
+  const inspectAndSetUp = async (profiles: RemoteProfiles, version = "0.8.0") => {
+    const { inspection } = await profiles.inspectServer("lab", { version, scripts });
+    return profiles.setUpServer("lab", { version, scripts, confirmation: inspection!.confirmation });
+  };
 
-  it("runs this build's setup over the profile's ssh, then runs the managed launcher and signs in", async () => {
-    const { profiles, server, tunnels } = store();
+  it("first inspects read only: shows keys and account, and pins and installs nothing", async () => {
+    const { profiles, server, dir } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const { inspection, outcome } = await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    expect(outcome.kind).toBe("inspected");
+    expect(inspection).toMatchObject({
+      destination: "casey@lab",
+      account: "casey",
+      firstUse: true,
+      version: "0.8.0",
+      current: null,
+      scope: "install-and-sign-in",
+      fingerprints: { server: [expect.stringMatching(/^ssh-ed25519 SHA256:/)] },
+    });
+    expect(inspection!.fingerprints).not.toHaveProperty("jump");
+    expect(server.commands).toEqual([["python3", "-", "--version", "0.8.0", "--port", "6722", "--inspect"]]);
+    // The first-seen key was not pinned for the profile.
+    expect(pinState(join(dir, "known_hosts", "lab"))).toBe("none");
+    expect(profiles.list()[0]).toMatchObject({ hostKeyPinned: false });
+  });
+
+  it("then, confirmed, pins exactly those keys and sets up pinned-only as that account, then signs in", async () => {
+    const { profiles, server, tunnels, dir } = store();
     profiles.save({ name: "Lab", destination: "casey@lab", serverConfig: "/srv/old/orca.config.yaml" });
-    const result = await profiles.setUpServer("lab", { version: "0.8.0", scripts });
+    const result = await inspectAndSetUp(profiles);
     expect(result.setup).toMatchObject({ kind: "ready", version: "0.8.0", command: managed, port: 6722 });
     expect(result.setup.steps.map((step) => [step.step, step.result])).toEqual([
       ["platform", "ok"],
@@ -1503,15 +1538,32 @@ describe("setting a machine up as a managed server (#881)", () => {
       ["linger", "warning"],
     ]);
     expect(result.signIn).toEqual({ ok: true });
-    // Exactly `python3 -` with the version and port, and this build's own two files on its input.
-    expect(server.commands[0]).toEqual(["python3", "-", "--version", "0.8.0", "--port", "6722"]);
+    expect(pinState(join(dir, "known_hosts", "lab"))).toBe("pinned");
+    // Exactly `python3 -` with the version, port and confirmed account, and this build's own
+    // two files on its input; over a pinned-only tunnel sealed to the inspected keys.
+    expect(server.commands[1]).toEqual([
+      "python3",
+      "-",
+      "--version",
+      "0.8.0",
+      "--port",
+      "6722",
+      "--expect-account",
+      "casey",
+    ]);
+    expect(tunnels[1]!.options).toMatchObject({
+      knownHostsFile: join(dir, "known_hosts", "lab"),
+      pinnedOnly: true,
+      expectKeys: tunnels[0]!.pinnedKeys,
+    });
     const adapter = readFileSync(join(scripts, "orca-release.py")).toString("base64");
-    expect(server.inputs[0]).toBe(
+    expect(server.inputs[1]).toBe(
       `EMBEDDED_ADAPTER = "${adapter}"\n${readFileSync(join(scripts, "orca-server-setup.py"), "utf8")}`,
     );
-    // Its own tunnel, closed again; then the sign-in through the managed launcher, which passes
+    // Its own tunnels, closed again; then the sign-in through the managed launcher, which passes
     // the server's config itself.
     expect(tunnels[0]!.closed).toBe(1);
+    expect(tunnels[1]!.closed).toBe(1);
     expect(profiles.list()[0]).toMatchObject({ serverCommand: managed, hasCredential: true });
     expect(profiles.list()[0]).not.toHaveProperty("serverConfig");
     const issue = server.commands.find((command) => command[2] === "issue")!;
@@ -1519,13 +1571,74 @@ describe("setting a machine up as a managed server (#881)", () => {
     expect(issue).not.toContain("--config");
   });
 
+  it("a confirmation is used once, for that profile revision and version only, and expires", async () => {
+    const { profiles, server, dir } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const { inspection } = await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    const confirmation = inspection!.confirmation;
+    const setUp = (version = "0.8.0", code = confirmation) =>
+      profiles.setUpServer("lab", { version, scripts, confirmation: code });
+    await expect(setUp("0.8.0", "0000-0000-0000")).rejects.toThrow("not current");
+    // A failed attempt used it up: inspect again.
+    await expect(setUp()).rejects.toThrow("not current");
+
+    // Edited after the inspection: what was confirmed is not this profile any more.
+    await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    profiles.save({ id: "lab", name: "Lab", destination: "casey@lab", sshPort: 2222 });
+    const again = (await profiles.inspectServer("lab", { version: "0.8.0", scripts })).inspection!;
+    profiles.save({ id: "lab", name: "Lab", destination: "casey@lab", sshPort: 2200 });
+    await expect(setUp("0.8.0", again.confirmation)).rejects.toThrow("not current");
+
+    // Another version than the one confirmed.
+    const third = (await profiles.inspectServer("lab", { version: "0.8.0", scripts })).inspection!;
+    await expect(setUp("0.8.1", third.confirmation)).rejects.toThrow("not current");
+
+    // Expired.
+    const fourth = (await profiles.inspectServer("lab", { version: "0.8.0", scripts })).inspection!;
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 16 * 60_000);
+    try {
+      await expect(setUp("0.8.0", fourth.confirmation)).rejects.toThrow("not current");
+    } finally {
+      clock.mockRestore();
+    }
+    expect(server.commands.filter((command) => !command.includes("--inspect"))).toEqual([]);
+    expect(pinState(join(dir, "known_hosts", "lab"))).toBe("none");
+  });
+
+  it("refuses to set up through a key other than the one confirmed", async () => {
+    const { profiles, server, dir } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const { inspection } = await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    // A pin for another key appeared meanwhile: it is kept, and the setup refuses through it.
+    mkdirSync(join(dir, "known_hosts"), { recursive: true });
+    writeFileSync(join(dir, "known_hosts", "lab"), "orca-lab ssh-ed25519 AAAAANOTHERKEY\n");
+    await expect(
+      profiles.setUpServer("lab", { version: "0.8.0", scripts, confirmation: inspection!.confirmation }),
+    ).rejects.toThrow(TunnelRefusal);
+    expect(server.commands.filter((command) => !command.includes("--inspect"))).toEqual([]);
+  });
+
+  it("reports a server the inspection refuses, with nothing to confirm", async () => {
+    const { profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    server.inspect = {
+      code: 2,
+      stdout:
+        'orca-setup: {"detail": "Found an ORCA installation this setup did not make: launcher /usr/local/bin/orca.", "result": "refused", "step": "inventory"}',
+      serverLines: [],
+    };
+    const result = await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    expect(result.outcome).toMatchObject({ kind: "refused", step: "inventory" });
+    expect(result).not.toHaveProperty("inspection");
+  });
+
   it("changes nothing on the profile when the setup refuses, fails or cannot say", async () => {
     for (const [setup, kind] of [
       [
         {
           code: 2,
-          stdout:
-            'orca-setup: {"detail": "Found an ORCA installation this setup did not make: launcher /usr/local/bin/orca. Migrate it by hand first", "result": "refused", "step": "inventory"}',
+          stdout: 'orca-setup: {"detail": "current is v0.7.9, not v0.8.0.", "result": "refused", "step": "existing"}',
           serverLines: [],
         },
         "refused",
@@ -1548,7 +1661,7 @@ describe("setting a machine up as a managed server (#881)", () => {
       const { profiles, server } = store();
       profiles.save({ name: "Lab", destination: "casey@lab" });
       server.setup = { ...setup, serverLines: [...setup.serverLines] };
-      const result = await profiles.setUpServer("lab", { version: "0.8.0", scripts });
+      const result = await inspectAndSetUp(profiles);
       expect(result.setup.kind).toBe(kind);
       expect(result).not.toHaveProperty("signIn");
       expect(profiles.list()[0]).not.toHaveProperty("serverCommand");
@@ -1559,15 +1672,16 @@ describe("setting a machine up as a managed server (#881)", () => {
   it("holds the profile while its server is set up: no connect, edit, removal or second setup", async () => {
     const { profiles, server } = store();
     profiles.save({ name: "Lab", destination: "casey@lab" });
+    const { inspection } = await profiles.inspectServer("lab", { version: "0.8.0", scripts });
     let release!: () => void;
     server.gate = new Promise<void>((resolve) => (release = resolve));
-    const running = profiles.setUpServer("lab", { version: "0.8.0", scripts });
+    const running = profiles.setUpServer("lab", { version: "0.8.0", scripts, confirmation: inspection!.confirmation });
     await new Promise((resolve) => setTimeout(resolve, 10));
     await expect(profiles.open("lab")).rejects.toThrow("being set up");
     expect(() => profiles.save({ id: "lab", name: "Lab", destination: "casey@other" })).toThrow("being set up");
     await expect(profiles.remove("lab")).rejects.toThrow("being set up");
     expect(() => profiles.forgetHostKey("lab")).toThrow();
-    await expect(profiles.setUpServer("lab", { version: "0.8.0", scripts })).rejects.toThrow("being set up");
+    await expect(profiles.inspectServer("lab", { version: "0.8.0", scripts })).rejects.toThrow("being set up");
     release();
     server.gate = undefined;
     await expect(running).resolves.toMatchObject({ setup: { kind: "ready" }, signIn: { ok: true } });
@@ -1576,7 +1690,7 @@ describe("setting a machine up as a managed server (#881)", () => {
   it("installs only a release version", async () => {
     const { profiles, server } = store();
     profiles.save({ name: "Lab", destination: "casey@lab" });
-    await expect(profiles.setUpServer("lab", { version: "0.8.0-dryrun.1", scripts })).rejects.toThrow(
+    await expect(profiles.inspectServer("lab", { version: "0.8.0-dryrun.1", scripts })).rejects.toThrow(
       "release version",
     );
     expect(server.commands).toEqual([]);

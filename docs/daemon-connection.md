@@ -258,28 +258,53 @@ A reachable Linux x64 machine with Python 3.8+ and a systemd user manager become
 ORCA server in one step, from either side:
 
 - **App:** in the connection dialog, fill in a new profile and choose **Add a machine…**, or
-  choose **Set up ORCA server** on a saved profile. The app saves the profile, sets the server
-  up over the profile's own pinned SSH connection, points the profile at the managed launcher
-  it installed, and then signs in automatically (#875).
+  choose **Set up ORCA server** on a saved profile. The app first checks the machine and
+  shows what it found; once you choose **Set up**, it installs the server, points the profile
+  at the managed launcher it installed, and signs in automatically (#875).
 - **CLI, from a source checkout:** `orca remote add [user@]host [--ssh-port N] [--identity FILE]
-  [--port N] [--json]`. It pins the host key in `~/.config/orca/known_hosts/<profile>` on first
-  use, prints each step and the server command to use, and issues no credential: sign in from
-  the app.
+  [--port N] [--json]`. The first run only checks, prints what it found and a confirmation
+  code, and exits 3; run it again with `--confirm CODE` to set the machine up. Host keys are
+  pinned in `~/.config/orca/known_hosts/<profile>`. It issues no credential: sign in from the
+  app.
 
-Both run `tools/deploy/orca-server-setup.py` on the server (sent over ssh as `python3 -`, with
-the managed adapter embedded), which installs what the bootstrap in
+**Nothing is installed on a key nobody confirmed.** The check connects without pinning a
+host key it has not seen before (it is held in a scratch file), and runs the setup with
+`--inspect`, which changes nothing on the server. You confirm exactly what it shows: the
+SHA-256 fingerprints of the server's host keys (and the jump host's), the account it runs as,
+the version and the directory, and what it will do (install and start the service; in the app,
+also sign in). Check a first-seen key against `ssh-keygen -lf` on the server. The app's
+confirmation is used once, for that profile as it was (any edit, removal or host key reset
+voids it), and for 15 minutes; the CLI's code is checked against a fresh check of the server
+and refused if the keys, account or version differ. Only then are those keys pinned, and the
+setup runs over a connection that refuses any other key, as exactly the confirmed account.
+
+The setup runs `tools/deploy/orca-server-setup.py` on the server (sent over ssh as
+`python3 -`, with the managed adapter embedded), which installs what the bootstrap in
 [UPDATING](UPDATING.md#prebuilt-server-bundle) describes under `~/.local/share/orca-server`:
 the adapter, `deployment.json`, the `orca`/`orca-acp` wrappers, this version's signed server
-bundle (verified against its pinned signer, #876), `current`, and the `orca.service` user unit
-with lingering. It then starts the unit and checks the daemon's hello.
+bundle (verified against its pinned signer, #876) with a receipt of what was verified,
+`current`, and the `orca.service` user unit with lingering. It then starts the unit and checks
+the daemon's hello.
 
-Every step is idempotent. A re-run on a healthy server changes nothing; a stopped or disabled
-unit, a missing wrapper or a missing `current` link is repaired. A server already on another
-version keeps it (updating is #879's job). A machine with an ORCA installation the setup did
-not make (a launcher, unit, process or directory) is refused with the
-[inventory guidance](UPDATING.md#debian-inventory-before-migration) and left untouched. A run
-that fails after it created `current` or the unit takes both back, so a failed first setup
-leaves no half-written link and no enabled unit. The update timer (#878) is not enabled here.
+Every step is idempotent, and a re-run only verifies and repairs what the setup owns:
+
+- A re-run on a healthy server changes nothing. A stopped or disabled unit, a missing wrapper or
+  a missing `current` link is repaired.
+- `deployment.json` is written once. A re-run checks the keys the setup owns (`root`,
+  `service`, `userService`, `setup`, `url`), adds any that are missing, and keeps every other
+  setting as the operator left it. A changed owned key is refused for you to repair.
+- A release is started only if this setup staged it from the verified bundle, for exactly the
+  version asked for: its receipt must still match, and it must be a directory of
+  `<root>/releases`. A `current` on another version, or a release the setup did not stage or
+  that changed since, is refused for separate reconciliation with `orca-release.py` (updating
+  is #879's job), and nothing is started.
+- A machine with an ORCA installation the setup did not make (a launcher, unit, process or
+  directory) is refused with the
+  [inventory guidance](UPDATING.md#debian-inventory-before-migration) and left untouched.
+- A run that fails after it created `current` or the unit takes both back, so a failed first
+  setup leaves no half-written link and no enabled unit.
+
+The update timer (#878) is not enabled here.
 
 ## Target identity and drafts
 

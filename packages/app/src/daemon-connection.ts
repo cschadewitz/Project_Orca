@@ -92,6 +92,27 @@ export interface ServerSetupView {
   signIn?: { ok: true } | { ok: false; message: string };
 }
 
+/**
+ * What the person confirms before their machine is set up (#881): read-only findings, over host
+ * keys shown here before they are enrolled. `confirmation` goes back to `setUpServer`.
+ */
+export interface ServerInspectionView {
+  confirmation: string;
+  destination: string;
+  account: string;
+  fingerprints: { server: string[]; jump?: string[] };
+  firstUse: boolean;
+  version: string;
+  root: string;
+  current: string | null;
+  scope: "install-and-sign-in";
+}
+/** An inspection: something to confirm, or (`setup`) why this server cannot be set up. */
+export interface ServerInspectionResultView {
+  inspection?: ServerInspectionView;
+  setup?: ServerSetupView["setup"];
+}
+
 /** Profile management. Every call is main-process work; secrets never cross this bridge. */
 export interface RemoteProfilesBridge {
   list(this: void): Promise<RemoteProfileView[]>;
@@ -103,10 +124,15 @@ export interface RemoteProfilesBridge {
   /** Drop an imported credential, so the next connect signs in automatically. */
   useAutomaticSignIn(this: void, id: string): Promise<ProfileResult<RemoteProfileView>>;
   /**
-   * Make the profile's machine a managed ORCA server, or verify and repair it (#881), then sign
-   * in. Runs for minutes; absent in builds without server setup.
+   * Check the profile's machine before setting it up (#881): read only, nothing enrolled or
+   * changed. Absent in builds without server setup.
    */
-  setUpServer?(this: void, id: string): Promise<ProfileResult<ServerSetupView>>;
+  inspectServer?(this: void, id: string): Promise<ProfileResult<ServerInspectionResultView>>;
+  /**
+   * Make the profile's machine a managed ORCA server, or verify and repair it (#881), then sign
+   * in, exactly as confirmed (`inspectServer`'s confirmation, used once). Runs for minutes.
+   */
+  setUpServer?(this: void, id: string, confirmation: string): Promise<ProfileResult<ServerSetupView>>;
 }
 export interface DaemonConnectionBridge {
   read(this: void): DaemonTargetSnapshot;

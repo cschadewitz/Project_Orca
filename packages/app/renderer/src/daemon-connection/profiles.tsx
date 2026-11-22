@@ -10,6 +10,7 @@ import type {
   RemoteProfileInput,
   RemoteProfilesBridge,
   RemoteProfileView,
+  ServerInspectionView,
   ServerSetupStepView,
   ServerSetupView,
 } from "../../../src/daemon-connection.js";
@@ -154,6 +155,11 @@ export function ConnectionProfiles({
   /** A profile whose server is being set up, and what the last setup reported. */
   const [settingUp, setSettingUp] = useState<string>();
   const [steps, setSteps] = useState<ServerSetupStepView[]>([]);
+  /** What the server was found to be, waiting for the person to confirm the setup. */
+  const [confirming, setConfirming] = useState<{
+    profile: Pick<RemoteProfileView, "id" | "name" | "destination">;
+    inspection: ServerInspectionView;
+  }>();
   /** The editor was opened by "Add a machine": saving it also sets the server up. */
   const [addingMachine, setAddingMachine] = useState(false);
   const live = useRef(true);
@@ -191,18 +197,35 @@ export function ConnectionProfiles({
   };
   const disabled = busy || working;
   const setUpServer = profiles.setUpServer;
+  const inspectServer = profiles.inspectServer;
+  const report = (profile: Pick<RemoteProfileView, "name" | "destination">, view: ServerSetupView) => {
+    setSteps(view.setup.steps);
+    const summary = setupSummary(profile, view);
+    if (summary.alert) setError(summary.text);
+    else setNotice(summary.text);
+  };
+  /** First, read only: what the person confirms. Nothing is enrolled or installed yet. */
   const setUp = (profile: Pick<RemoteProfileView, "id" | "name" | "destination">) => {
-    if (!setUpServer) return;
+    if (!inspectServer || !setUpServer) return;
+    setConfirming(undefined);
+    setSteps([]);
+    void run(
+      () => inspectServer(profile.id),
+      (found) => {
+        if (found.inspection) setConfirming({ profile, inspection: found.inspection });
+        else if (found.setup) report(profile, { setup: found.setup });
+      },
+    );
+  };
+  const confirmSetUp = () => {
+    if (!setUpServer || !confirming) return;
+    const { profile, inspection } = confirming;
+    setConfirming(undefined);
     setSettingUp(profile.id);
     setSteps([]);
     void run(
-      () => setUpServer(profile.id),
-      (view) => {
-        setSteps(view.setup.steps);
-        const summary = setupSummary(profile, view);
-        if (summary.alert) setError(summary.text);
-        else setNotice(summary.text);
-      },
+      () => setUpServer(profile.id, inspection.confirmation),
+      (view) => report(profile, view),
     ).finally(() => live.current && setSettingUp(undefined));
   };
 
@@ -292,7 +315,7 @@ export function ConnectionProfiles({
               >
                 Import credential…
               </Button>
-              {setUpServer && (
+              {setUpServer && inspectServer && (
                 <Button
                   size="sm"
                   disabled={disabled || current === profile.id}
@@ -392,7 +415,7 @@ export function ConnectionProfiles({
           >
             Add profile…
           </Button>
-          {setUpServer && (
+          {setUpServer && inspectServer && (
             <Button
               size="sm"
               disabled={disabled}
@@ -408,10 +431,20 @@ export function ConnectionProfiles({
       )}
       {addingMachine && editing && (
         <Text style="caption" as="p">
-          Saving sets the machine up as a managed ORCA server over SSH: it installs this version&apos;s signed server
-          bundle and a systemd user service, then signs this computer in. It refuses a machine that already has an ORCA
-          it did not install. Linux x64 with Python 3.8 or newer.
+          Saving checks the machine over SSH and shows you its host keys, the account and what will be installed. Once
+          you confirm, it sets the machine up as a managed ORCA server: this version&apos;s signed server bundle and a
+          systemd user service, then signs this computer in. It refuses a machine that already has an ORCA it did not
+          install. Linux x64 with Python 3.8 or newer.
         </Text>
+      )}
+      {confirming && (
+        <ServerConfirmation
+          inspection={confirming.inspection}
+          name={confirming.profile.name}
+          disabled={disabled}
+          confirm={confirmSetUp}
+          cancel={() => setConfirming(undefined)}
+        />
       )}
       {settingUp && (
         <Text style="caption" as="p" role="status">
@@ -442,6 +475,71 @@ export function ConnectionProfiles({
         </Text>
       )}
     </section>
+  );
+}
+
+/**
+ * Everything a setup is confirmed for (#881 review), as the read-only inspection found it: the
+ * host keys (not trusted for the profile until this is confirmed), the account it runs as,
+ * and what it will install and do.
+ */
+function ServerConfirmation({
+  inspection,
+  name,
+  disabled,
+  confirm,
+  cancel,
+}: {
+  inspection: ServerInspectionView;
+  name: string;
+  disabled: boolean;
+  confirm(this: void): void;
+  cancel(this: void): void;
+}): JSX.Element {
+  const { fingerprints } = inspection;
+  return (
+    <div className="orca-field" role="group" aria-label="Confirm server setup">
+      <Text style="label-strong" as="p">
+        Set up {name} as an ORCA server?
+      </Text>
+      <Text style="caption" as="p">
+        {inspection.firstUse
+          ? "This server has not been connected to before. Check that these host keys are the server's own (ssh-keygen -lf on the server) before you confirm: confirming pins them."
+          : "The server presented the host keys pinned for this profile."}
+      </Text>
+      <ul aria-label="Host keys">
+        {fingerprints.server.map((key) => (
+          <li key={`server ${key}`}>
+            <Text style="caption" as="span">
+              Server <span className={textClass("mono-id")}>{key}</span>
+            </Text>
+          </li>
+        ))}
+        {(fingerprints.jump ?? []).map((key) => (
+          <li key={`jump ${key}`}>
+            <Text style="caption" as="span">
+              Jump host <span className={textClass("mono-id")}>{key}</span>
+            </Text>
+          </li>
+        ))}
+      </ul>
+      <Text style="caption" as="p">
+        As <span className={textClass("mono-id")}>{inspection.account}</span> on {inspection.destination}:{" "}
+        {inspection.current
+          ? `verify and repair ORCA ${inspection.current} in ${inspection.root}`
+          : `install ORCA ${inspection.version} from its signed server bundle in ${inspection.root}`}
+        , enable and start its systemd user service (with lingering, so it runs without a login), then sign this
+        computer in.
+      </Text>
+      <div className="orca-dialog__actions">
+        <Button size="sm" onClick={cancel}>
+          Cancel
+        </Button>
+        <Button size="sm" tone="primary" disabled={disabled} onClick={confirm}>
+          Set up
+        </Button>
+      </div>
+    </div>
   );
 }
 

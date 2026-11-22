@@ -1,6 +1,7 @@
 """One-step server setup (#881): every step idempotent, a re-run verifies and repairs, an
-unmanaged installation is refused, and a failed first setup leaves no `current` link or
-enabled unit. No network and no live systemd: `systemctl` and `loginctl` are stubs that keep
+unmanaged installation is refused, a failed first setup leaves no `current` link or
+enabled unit, only a release this setup staged and verified is ever started, and the
+operator's own settings survive a re-run. No network and no live systemd: `systemctl` and `loginctl` are stubs that keep
 their state in a file, staging writes a release record, and the daemon's health is a switch.
 The live path (a real sshd, the app's own ssh) is packages/app/test/server-setup.test.ts."""
 import importlib.util
@@ -93,7 +94,7 @@ class ServerSetupTests(unittest.TestCase):
         state.update(values)
         (self.bin / "systemd.json").write_text(json.dumps(state))
 
-    def setup(self, version="0.8.0"):
+    def setup(self, version="0.8.0", expect_account=None):
         test = self
 
         class Under(setup_module.Setup):
@@ -114,14 +115,16 @@ class ServerSetupTests(unittest.TestCase):
                 if not test.healthy:
                     raise RuntimeError("Health check failed: connection refused")
 
-        made = Under(None, version, 6722, ADAPTER, home=self.home, systemctl=str(self.bin / "systemctl"))
+        made = Under(None, version, 6722, ADAPTER, home=self.home, systemctl=str(self.bin / "systemctl"),
+                     expect_account=expect_account)
         made.proc = self.proc
         return made
 
-    def run_setup(self, version="0.8.0"):
+    def run_setup(self, version="0.8.0", inspect=False, expect_account=None):
         out = io.StringIO()
         with redirect_stdout(out):
-            code = self.setup(version).run()
+            made = self.setup(version, expect_account)
+            code = made.inspect() if inspect else made.run()
         lines = [json.loads(line[len("orca-setup: "):]) for line in out.getvalue().splitlines() if line.startswith("orca-setup: ")]
         return code, lines
 
@@ -131,7 +134,8 @@ class ServerSetupTests(unittest.TestCase):
     def test_a_clean_machine_becomes_a_managed_server(self):
         code, lines = self.run_setup()
         self.assertEqual(code, 0, lines)
-        self.assertEqual(self.results(lines), {"platform": "ok", "inventory": "ok", "adapter": "changed", "files": "changed",
+        self.assertEqual(self.results(lines), {"account": "ok", "platform": "ok", "inventory": "ok", "existing": "ok",
+                                               "adapter": "changed", "files": "changed",
                                                "stage": "changed", "select": "changed", "unit": "changed", "linger": "ok",
                                                "start": "changed"})
         self.assertEqual(lines[-1], {"done": True, "root": str(self.root), "command": str(self.root / "orca"),
@@ -175,14 +179,128 @@ class ServerSetupTests(unittest.TestCase):
         self.run_setup()
         self.assertEqual((self.root / "orca.config.yaml").read_text(), "workflows: ['/srv/mine/**/*.yaml']\n")
 
-    def test_a_server_on_another_version_keeps_it(self):
+    def snapshot(self):
+        files = {str(p.relative_to(self.home)): (p.read_bytes() if p.is_file() and not p.is_symlink() else os.readlink(p)
+                                                 if p.is_symlink() else None)
+                 for p in sorted(self.home.rglob("*"))}
+        return files, {k: v for k, v in self.systemd().items() if k != "calls"}
+
+    def assert_refused_unchanged(self, before, lines, code, step, words):
+        self.assertEqual(code, 2, lines)
+        self.assertEqual((lines[-1]["step"], lines[-1]["result"]), (step, "refused"), lines)
+        self.assertIn(words, lines[-1]["detail"])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_server_on_another_version_is_refused_not_started_or_changed(self):
         self.assertEqual(self.run_setup("0.8.0")[0], 0)
+        before = self.snapshot()
         code, lines = self.run_setup("0.8.1")
-        self.assertEqual(code, 0)
-        select = next(line for line in lines if line.get("step") == "select")
-        self.assertEqual(select["result"], "ok")
-        self.assertIn("update to v0.8.1", select["detail"])
-        self.assertEqual(lines[-1]["version"], "0.8.0")
+        self.assert_refused_unchanged(before, lines, code, "existing", "is v0.8.0, not v0.8.1")
+        self.assertIn("orca-release.py", lines[-1]["detail"])
+        self.assertEqual(self.staged, ["0.8.0"])
+
+    def test_starts_only_the_release_it_staged_and_verified(self):
+        """A retry trusts no release by its metadata: only by this setup's receipt for exactly
+        this version, confined to the release directory."""
+        releases = self.root / "releases"
+
+        def plant_release(at):
+            (at / "runtime" / "bin").mkdir(parents=True)
+            (at / "runtime" / "bin" / "node").write_text("#!/bin/sh\n")
+            (at / "orca-daemon.mjs").write_text("// someone else's\n")
+            release.write_json(at / ".orca-release.json", {
+                "version": "0.8.0", "sha": "b" * 40, "node": "runtime/bin/node", "entry": "orca-daemon.mjs",
+                "source": "bundle", "compatibility": {"storeEpoch": "e", "protocol": {"major": 2, "minor": 2},
+                                                      "capabilities": []}})
+
+        # A release with good-looking metadata that this setup never staged (no receipt).
+        self.root.mkdir(parents=True)
+        (self.root / ".orca-setup.json").write_text(json.dumps({"by": "orca-server-setup", "version": 1}))
+        plant_release(releases / "v0.8.0")
+        before = self.snapshot()
+        code, lines = self.run_setup()
+        self.assert_refused_unchanged(before, lines, code, "existing", "no receipt from this setup")
+        self.assertEqual(self.staged, [])
+
+        # One it staged, changed afterwards: refused, and the running unit is not restarted.
+        self.setUp()
+        self.assertEqual(self.run_setup()[0], 0)
+        (self.root / "releases" / "v0.8.0" / "orca-daemon.mjs").write_text("// changed\n")
+        self.set_systemd(active=False)
+        before = self.snapshot()
+        code, lines = self.run_setup()
+        self.assert_refused_unchanged(before, lines, code, "existing", "changed since this setup staged")
+        self.assertFalse(self.systemd()["active"])
+
+        # `current` pointing outside the release directory, at a copy of a verified release.
+        self.setUp()
+        self.assertEqual(self.run_setup()[0], 0)
+        elsewhere = self.tmp / "elsewhere" / "v0.8.0"
+        plant_release(elsewhere)
+        (self.root / "current").unlink()
+        (self.root / "current").symlink_to(elsewhere)
+        before = self.snapshot()
+        code, lines = self.run_setup()
+        self.assert_refused_unchanged(before, lines, code, "existing", "not v0.8.0")
+
+        # A release that is a link to somewhere else.
+        self.setUp()
+        self.root.mkdir(parents=True)
+        (self.root / ".orca-setup.json").write_text(json.dumps({"by": "orca-server-setup", "version": 1}))
+        plant_release(self.tmp / "outside" / "v0.8.0")
+        releases = self.root / "releases"
+        releases.mkdir()
+        (releases / "v0.8.0").symlink_to(self.tmp / "outside" / "v0.8.0")
+        before = self.snapshot()
+        code, lines = self.run_setup()
+        self.assert_refused_unchanged(before, lines, code, "existing", "is not a directory of")
+
+    def test_a_rerun_keeps_the_operators_deployment_settings(self):
+        self.assertEqual(self.run_setup()[0], 0)
+        manifest = json.loads((self.root / "deployment.json").read_text())
+        manifest["cliConfig"] = "/srv/operator/orca.config.yaml"
+        manifest["feed"] = {"channel": "stable", "tokenFile": "/srv/operator/feed.token"}
+        del manifest["launchAudit"]
+        (self.root / "deployment.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        code, lines = self.run_setup()
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.results(lines)["files"], "repaired")
+        after = json.loads((self.root / "deployment.json").read_text())
+        # Every operator setting kept; only the missing key added back.
+        self.assertEqual(after, {**manifest, "launchAudit": "all-cli-acp-and-daemon-launches-migrated"})
+        # Then a no-op.
+        code, lines = self.run_setup()
+        self.assertEqual(self.results(lines)["files"], "ok")
+        self.assertEqual(json.loads((self.root / "deployment.json").read_text()), after)
+
+        # A key setup owns, changed: refused for the operator to repair, never rewritten.
+        after["service"] = "other.service"
+        (self.root / "deployment.json").write_text(json.dumps(after, indent=2) + "\n")
+        before = self.snapshot()
+        code, lines = self.run_setup()
+        self.assert_refused_unchanged(before, lines, code, "files", "sets service")
+
+    def test_inspect_changes_nothing_and_says_who_and_what(self):
+        before = self.snapshot()
+        code, lines = self.run_setup(inspect=True)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(lines[-1], {"inspected": True, "account": setup_module.getpass.getuser(),
+                                     "root": str(self.root), "current": None})
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.staged, [])
+        self.assertEqual(self.run_setup()[0], 0)
+        self.assertEqual(self.run_setup(inspect=True)[1][-1]["current"], "0.8.0")
+        # A refusal shows up at inspection, before anything is confirmed.
+        self.setUp()
+        (self.bin / "orca").write_text("#!/bin/sh\nexec python3 /opt/orca/orca-release.py cli \"$@\"\n")
+        code, lines = self.run_setup(inspect=True)
+        self.assertEqual((code, lines[-1]["step"], lines[-1]["result"]), (2, "inventory", "refused"))
+
+    def test_runs_only_as_the_confirmed_account(self):
+        before = self.snapshot()
+        code, lines = self.run_setup(expect_account="someone-else")
+        self.assert_refused_unchanged(before, lines, code, "account", "not someone-else as confirmed")
+        self.assertEqual(self.run_setup(expect_account=setup_module.getpass.getuser())[0], 0)
 
     def test_refuses_an_unmanaged_installation_and_changes_nothing(self):
         cases = {

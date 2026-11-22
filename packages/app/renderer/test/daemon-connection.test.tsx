@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { useLayoutEffect } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { DaemonConnectionBridge, DaemonTargetSnapshot } from "../../src/daemon-connection.js";
 import { ConnectionBoundary } from "../src/daemon-connection/boundary.js";
 import { ConnectionDialog } from "../src/daemon-connection/dialog.js";
@@ -256,6 +256,22 @@ it("adds a machine: saves the profile, sets its server up, and says what each st
     importCredential: vi.fn(),
     forgetHostKey: vi.fn(),
     useAutomaticSignIn: vi.fn(),
+    inspectServer: vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        inspection: {
+          confirmation: "abcd-ef01-2345",
+          destination: "casey@lab",
+          account: "casey",
+          fingerprints: { server: ["ssh-ed25519 SHA256:Q2FzZXlzTGFiS2V5"] },
+          firstUse: true,
+          version: "0.8.0",
+          root: "/home/casey/.local/share/orca-server",
+          current: null,
+          scope: "install-and-sign-in" as const,
+        },
+      },
+    })),
     setUpServer: vi.fn(() => new Promise((resolve) => (finish = resolve))),
   };
   render(
@@ -264,12 +280,21 @@ it("adds a machine: saves the profile, sets its server up, and says what each st
     </h.Providers>,
   );
   fireEvent.click(await screen.findByText("Add a machine…"));
-  await screen.findByText(/sets the machine up as a managed ORCA server/);
+  await screen.findByText(/it sets the machine up as a managed ORCA server/);
   const inputs = [...screen.getByRole("group", { name: "New profile" }).querySelectorAll("input")];
   fireEvent.change(inputs[0]!, { target: { value: "Lab" } });
   fireEvent.change(inputs[1]!, { target: { value: "casey@lab" } });
   fireEvent.click(screen.getByText("Save profile"));
-  await waitFor(() => expect(profiles.setUpServer).toHaveBeenCalledWith("lab"));
+  // First a read-only check: nothing is set up until the person confirms what it found.
+  await waitFor(() => expect(profiles.inspectServer).toHaveBeenCalledWith("lab"));
+  const confirm = await screen.findByRole("group", { name: "Confirm server setup" });
+  expect(confirm.textContent).toContain("ssh-ed25519 SHA256:Q2FzZXlzTGFiS2V5");
+  expect(confirm.textContent).toContain("has not been connected to before");
+  expect(confirm.textContent).toContain("casey");
+  expect(confirm.textContent).toContain("install ORCA 0.8.0 from its signed server bundle");
+  expect(profiles.setUpServer).not.toHaveBeenCalled();
+  fireEvent.click(within(confirm).getByText("Set up"));
+  await waitFor(() => expect(profiles.setUpServer).toHaveBeenCalledWith("lab", "abcd-ef01-2345"));
   await screen.findByText(/Setting up the ORCA server on casey@lab/);
   finish({
     ok: true,
@@ -289,8 +314,9 @@ it("adds a machine: saves the profile, sets its server up, and says what each st
   await screen.findByText("stage: done (v0.8.0 staged from the signed bundle)");
   await screen.findByText("linger: warning (could not enable lingering)");
 
-  // Set up again from the profile's row: a refusal says what to do, as an alert.
-  profiles.setUpServer.mockImplementation(async () => ({
+  // Set up again from the profile's row: a refusal found by the check says what to do, as an
+  // alert, with nothing to confirm.
+  profiles.inspectServer.mockImplementation(async () => ({
     ok: true,
     value: {
       setup: {
@@ -299,12 +325,15 @@ it("adds a machine: saves the profile, sets its server up, and says what each st
         detail: "Found an ORCA installation this setup did not make: launcher /usr/local/bin/orca.",
         steps: [{ step: "inventory", result: "refused", detail: "Found an ORCA installation" }],
       },
-    },
+    } as never,
   }));
+  profiles.setUpServer.mockClear();
   fireEvent.click(screen.getByText("Set up ORCA server"));
   expect((await screen.findByRole("alert")).textContent).toContain(
     "ORCA was not set up on Lab: Found an ORCA installation",
   );
+  expect(screen.queryByRole("group", { name: "Confirm server setup" })).toBeNull();
+  expect(profiles.setUpServer).not.toHaveBeenCalled();
   h.dispose();
 });
 

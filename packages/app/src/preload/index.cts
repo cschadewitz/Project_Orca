@@ -21,6 +21,7 @@ import type {
   ProfileRemoval,
   ProfileResult,
   RemoteProfileView,
+  ServerInspectionResultView,
   ServerSetupView,
 } from "../daemon-connection.js";
 // A CommonJS file under `verbatimModuleSyntax` has no other way to spell a value import,
@@ -228,8 +229,10 @@ const bridge: OrcaBridge = {
         ipcRenderer.invoke("orca:profiles.forgetHostKey", id) as Promise<ProfileResult<RemoteProfileView>>,
       useAutomaticSignIn: (id) =>
         ipcRenderer.invoke("orca:profiles.useAutomaticSignIn", id) as Promise<ProfileResult<RemoteProfileView>>,
-      setUpServer: (id) =>
-        ipcRenderer.invoke("orca:profiles.setUpServer", id) as Promise<ProfileResult<ServerSetupView>>,
+      inspectServer: (id) =>
+        ipcRenderer.invoke("orca:profiles.inspectServer", id) as Promise<ProfileResult<ServerInspectionResultView>>,
+      setUpServer: (id, confirmation) =>
+        ipcRenderer.invoke("orca:profiles.setUpServer", id, confirmation) as Promise<ProfileResult<ServerSetupView>>,
     },
   },
   updates: {
