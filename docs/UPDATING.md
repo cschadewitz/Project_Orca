@@ -526,6 +526,33 @@ and restore validation. Never copy a live event store as a purported consistent 
 Reverting binaries cannot undo incompatible writes. Restore the complete matching backup
 before starting the old release; account for work performed since that backup separately.
 
+### Protocol compatibility window
+
+From protocol 2.1 (#880) a desktop and a daemon one protocol **major** apart can still
+connect, so an app that updates first does not lose its servers.
+
+- `hello` negotiates. A client sends its own protocol and, while its build has a window
+  open, a `fallback`: the last minor of the previous major it still speaks. The daemon
+  answers in the highest protocol both sides share and says which in `hello.protocol`.
+- A daemon on major N accepts N and N-1 clients for **one release**. A client on N-2, or an
+  N-1 client newer in minor than the daemon's N-1, is refused with a protocol message that
+  names what the daemon accepts.
+- An app on N connected to a daemon on N-1 reads and writes. Everything N added is off,
+  because that daemon does not advertise it, and the connection bar says the daemon is one
+  major version behind. A daemon outside the window is a version mismatch as before.
+- The window is the `PREVIOUS_PROTOCOL` constant in `@orca/protocol`. The release that
+  bumps the major sets it to the final N-1.x; the next major replaces it, so N-1 leaves.
+- **2.x opens no window.** 2.0 was cut before the window existed, and 1.10 peers read 2.x
+  with closed schemas, so 1.10 stays refused. 2.1 is the first daemon that understands a
+  `fallback`, which is what lets the first 3.0 app talk to it.
+- The window never covers store epochs. A store migration still needs the matching daemon;
+  see [Recovery and store compatibility](#recovery-and-store-compatibility).
+
+**Promotion order across a major: servers first.** Move daemons to N while desktops are
+still on N-1 (the N daemon accepts them), then promote the N desktop. Desktops that update
+early still reach N-1 daemons inside the window. Finish moving every daemon to N before the
+next major, when N-1 leaves the window.
+
 ### Store format carryover
 
 From 0.7.1 every store records the format (store epoch) and the ORCA version that last wrote

@@ -142,6 +142,12 @@ export const HelloParamsSchema = z.object({
   /** Client identity for logs and the daemon's session list, e.g. `orca-app/0.3.1`. */
   client: z.string().min(1),
   protocol: ProtocolVersionSchema,
+  /**
+   * The previous-major version this client can also speak, sent only while its build has a
+   * compatibility window open (protocol 2.1, #880). A daemon that does not speak `protocol`
+   * answers in this one instead, and says so in `HelloResult.protocol`.
+   */
+  fallback: ProtocolVersionSchema.optional(),
 });
 export type HelloParams = z.infer<typeof HelloParamsSchema>;
 
