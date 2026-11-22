@@ -368,7 +368,7 @@ class ServerSetupTests(unittest.TestCase):
         (self.root / "deployment.json").write_text(json.dumps(after, indent=2) + "\n")
         before = self.snapshot()
         code, lines = self.run_setup()
-        self.assert_refused_unchanged(before, lines, code, "files", "sets service")
+        self.assert_refused_unchanged(before, lines, code, "existing", "sets service")
 
     def test_inspect_changes_nothing_and_says_who_and_what(self):
         before = self.snapshot()
@@ -502,7 +502,8 @@ class ServerSetupTests(unittest.TestCase):
         self.assertTrue(self.systemd()["active"])
         self.assertTrue(self.linger())
         journal = json.loads((self.root / ".setup-journal.json").read_text())["before"]
-        self.assertEqual(journal, {"unit": None, "enabled": False, "active": False, "current": None, "linger": False})
+        self.assertEqual(journal, {"unit": None, "enabled": False, "active": False, "current": None, "linger": False,
+                                   "files": {name: None for name, _ in setup_module.OWNED_FILES}})
         # The next run (unhealthy too) first puts back what the cut-off one changed.
         test.healthy = False
         code, lines = self.run_setup()
@@ -510,6 +511,122 @@ class ServerSetupTests(unittest.TestCase):
         self.assertEqual((code, lines[-1]["step"], lines[-1]["result"]), (1, "cleanup", "ok"))
         self.assertEqual((self.systemd()["active"], self.systemd()["enabled"], self.linger()), (False, False, False))
         self.assertFalse(os.path.lexists(self.root / "current"))
+
+    def kill_at(self, method, after=None):
+        """A run that dies (a kill, the session's end) inside `method`, after `after` ran."""
+        class Killed(BaseException):
+            pass
+        made = self.setup()
+        original = getattr(made, method)
+
+        def die(*args):
+            if after:
+                after(made, original, *args)
+            raise Killed()
+        setattr(made, method, die)
+        with redirect_stdout(io.StringIO()), self.assertRaises(Killed):
+            made.run()
+
+    def test_a_confirmed_repair_stays_bound_through_recovery(self):
+        """A run cut off after it created `current` leaves a provisional link: that is not a
+        repair. Inspection says install, and a confirmation for a repair is refused unchanged."""
+        self.kill_at("check_health")
+        self.assertTrue(os.path.lexists(self.root / "current"))
+        code, lines = self.run_setup(inspect=True)
+        self.assertEqual((code, lines[-1]["current"]), (0, None), lines)
+        before = self.snapshot()
+        code, lines = self.run_setup(expect_root=str(self.root), expect_current="0.8.0")
+        self.assertEqual((code, lines[-1]["result"]), (2, "refused"), lines)
+        self.assertIn("first install", lines[-1]["detail"])
+        self.assertEqual(self.snapshot(), before)
+        self.assertTrue((self.root / ".setup-journal.json").exists())
+        # Confirmed as what it is: recovered, then installed.
+        code, lines = self.run_setup(expect_root=str(self.root), expect_current="none")
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.results(lines)["recover"], "repaired")
+
+    def test_an_interrupted_recovery_is_finished_by_the_next_run(self):
+        self.kill_at("check_health")
+        # The next run is cut off too, inside its recovery, after part of the put-back.
+        self.kill_at("restore", after=lambda made, original, *args: made.systemctl("stop", "orca.service"))
+        self.assertTrue((self.root / ".setup-journal.json").exists())
+        self.healthy = False
+        code, lines = self.run_setup()
+        self.assertEqual(self.results(lines)["recover"], "repaired")
+        self.assertEqual((code, lines[-1]["step"], lines[-1]["result"]), (1, "cleanup", "ok"))
+        self.assertEqual((self.systemd()["active"], self.systemd()["enabled"]), (False, False))
+        self.assertFalse(os.path.lexists(self.root / "current"))
+        self.assertFalse((self.root / ".setup-journal.json").exists())
+
+    def test_two_setup_owners_never_share_a_transaction(self):
+        """A second setup while the first holds the fence is refused, and touches neither the
+        first's journal nor its result; the first finishes (journal retired) under its fence."""
+        test = self
+        seen = {}
+
+        class First(type(self.setup())):
+            def check_health(self):
+                journal = (self.root / ".setup-journal.json").read_text()
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    seen["second"] = test.setup().run()
+                seen["lines"] = out.getvalue()
+                seen["journal_kept"] = (self.root / ".setup-journal.json").read_text() == journal
+
+        made = First(None, "0.8.0", 6722, ADAPTER, home=self.home, systemctl=str(self.bin / "systemctl"))
+        made.proc = self.proc
+        made.loginctl_bin = str(self.bin / "loginctl")
+        released = []
+        original = made.release_fence
+
+        def release():
+            released.append(os.path.lexists(self.root / ".setup-journal.json"))
+            original()
+        made.release_fence = release
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(made.run(), 0)
+        self.assertEqual(seen["second"], 2)
+        self.assertIn("Another setup", seen["lines"])
+        self.assertTrue(seen["journal_kept"])
+        # The journal was gone before the fence was let go.
+        self.assertEqual(released, [False])
+        self.assertIn('"done": true', out.getvalue())
+
+    def test_an_interrupted_staging_never_blocks_the_next_inspection(self):
+        def stage_then_die(made, original, source):
+            original(source)
+        self.kill_at("run_stage", after=stage_then_die)
+        self.assertTrue((self.root / "releases" / "v0.8.0").is_dir())
+        self.assertFalse((self.root / "receipts" / "v0.8.0.json").exists())
+        code, lines = self.run_setup(inspect=True)
+        self.assertEqual(code, 0, lines)
+        self.assertIn("interrupted run", self.step(lines, "existing")["detail"])
+        code, lines = self.run_setup()
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.staged, ["0.8.0", "0.8.0"])  # removed on recovery, staged again
+        self.assertTrue((self.root / "receipts" / "v0.8.0.json").exists())
+
+    def test_a_failed_run_puts_setups_own_files_back(self):
+        self.assertEqual(self.run_setup()[0], 0)
+        older = "# an older adapter\n" + ADAPTER
+        (self.root / "orca-release.py").write_text(older)
+        (self.root / "orca").unlink()
+        self.set_systemd(active=False)
+        self.healthy = False
+        code, lines = self.run_setup()
+        self.assertEqual((code, lines[-1]["step"], lines[-1]["result"]), (1, "cleanup", "ok"), lines)
+        self.assertEqual((self.root / "orca-release.py").read_text(), older)
+        self.assertFalse((self.root / "orca").exists())
+
+    def test_lingering_is_left_alone_when_its_state_is_unknown(self):
+        (self.bin / "loginctl").write_text("#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/loginctl.calls\"\nexit 1\n")
+        code, lines = self.run_setup()
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.step(lines, "linger")["result"], "warning")
+        calls = (self.bin / "loginctl.calls").read_text()
+        self.assertNotIn("enable-linger", calls)
+        self.assertNotIn("disable-linger", calls)
 
     def test_fenced_against_a_concurrent_setup_or_update(self):
         import fcntl

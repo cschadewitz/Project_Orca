@@ -83,6 +83,10 @@ RECONCILE = ("Reconcile it separately with orca-release.py (docs/UPDATING.md): t
              "release it staged and verified itself, for exactly the version asked for.")
 # deployment.json keys this setup owns: checked on every run, never left to drift.
 OWNED_KEYS = ("root", "service", "userService", "setup", "url")
+# The files this setup writes in its directory, and their modes: journaled, so a failed run
+# puts each back as it found it (or removes it, if this run created it).
+OWNED_FILES = (("orca-release.py", 0o755), ("deployment.json", 0o600), ("orca", 0o755), ("orca-acp", 0o755),
+               ("orca.config.yaml", 0o600), ("orca-kepler.config.yaml", 0o600), ("daemon.env", 0o600))
 GUIDANCE = ("Migrate it by hand first (docs/UPDATING.md, \"Debian: inventory before migration\"); "
             "this setup never takes over an installation it did not make.")
 # What an ORCA process or launcher looks like, as orca-release.py's own inventory reads it.
@@ -158,6 +162,7 @@ class Setup:
         self.loginctl_bin = "loginctl"
         self.fence = None
         self.before = None
+        self.staging = None
         # What this run created, to take back if a later step fails.
         self.created_current = False
         self.created_unit = False
@@ -203,8 +208,25 @@ class Setup:
         except KeyError:
             return str(os.geteuid())
 
+    def pending_journal(self):
+        """What an interrupted run recorded before its first change, or None. Read only."""
+        if not os.path.lexists(self.journal):
+            return None
+        try:
+            journal = json.loads(self.journal.read_text())
+            if journal.get("by") != SETUP_MARKER or not isinstance(journal.get("before"), dict):
+                raise ValueError
+        except (OSError, ValueError, AttributeError):
+            raise Refused(f"{self.journal} is unreadable: inspect the server and remove it by hand.") from None
+        return journal
+
     def lifecycle(self):
-        """What this run would be: a first install (`none`), or a repair of the selected version."""
+        """What this run would be: a first install (`none`), or a repair of the selected version.
+        With an interrupted run's journal, as it will be once that is put back: a link only that
+        run made does not make this a repair."""
+        journal = self.pending_journal()
+        if journal is not None:
+            return self.version if journal["before"].get("current") is not None else "none"
         return self.version if os.path.lexists(self.root / "current") else "none"
 
     @property
@@ -334,9 +356,51 @@ class Setup:
         self.receipt.parent.mkdir(mode=0o700, exist_ok=True)
         write_file(self.receipt, json.dumps(receipt, sort_keys=True) + "\n", 0o600)
 
+    def wanted_manifest(self):
+        root = self.root
+        return {
+            "root": str(root), "repository": "cschadewitz/Project_Orca", "cwd": str(root),
+            "cliConfig": str(root / "orca.config.yaml"), "daemonConfig": str(root / "orca.config.yaml"),
+            "acpConfig": str(root / "orca-kepler.config.yaml"), "url": f"http://127.0.0.1:{self.port}",
+            "service": SERVICE, "userService": True,
+            # This setup made every launcher there is (it refused any other): the inventory holds.
+            "launchAudit": "all-cli-acp-and-daemon-launches-migrated",
+            "setup": SETUP_MARKER,
+        }
+
+    def existing_manifest(self):
+        """Read only: the deployment.json there is, if any, checked to be this setup's with the
+        keys it owns as they must be. Refused before anything is written otherwise."""
+        if not os.path.lexists(self.manifest):
+            return None
+        wanted = self.wanted_manifest()
+        try:
+            existing = json.loads(self.manifest.read_text())
+        except (OSError, ValueError):
+            raise Refused(f"{self.manifest} is not readable JSON. Repair it by hand.") from None
+        if self.manifest.is_symlink() or not isinstance(existing, dict) or existing.get("setup") != SETUP_MARKER:
+            raise Refused(f"{self.manifest} was not written by this setup. " + GUIDANCE)
+        if existing.get("url") != wanted["url"]:
+            raise Refused(f"This server already listens on {existing.get('url')}; set up with that port.")
+        for key in OWNED_KEYS:
+            if key in existing and existing[key] != wanted[key]:
+                raise Refused(f"{self.manifest} sets {key} to {existing[key]!r}, not {wanted[key]!r}. "
+                              "Repair it by hand; setup does not rewrite it.")
+        return existing
+
+    def interrupted_staging(self):
+        """A release an interrupted run was staging and never receipted: it goes on recovery."""
+        journal = self.pending_journal()
+        return (journal is not None and journal.get("staging") == str(self.release)
+                and os.path.lexists(self.release) and not os.path.lexists(self.receipt))
+
     def check_existing(self):
         """Read only. What an earlier run left is accepted only as exactly this setup's."""
         current = self.root / "current"
+        for name, _mode in OWNED_FILES:
+            if (self.root / name).is_symlink() or (os.path.lexists(self.root / name) and not (self.root / name).is_file()):
+                raise Refused(f"{self.root / name} is not a file this setup wrote. Repair it by hand.")
+        self.existing_manifest()
         if os.path.lexists(current):
             target = current.resolve()
             if target != self.release.resolve() or not current.is_symlink():
@@ -344,6 +408,8 @@ class Setup:
                 raise Refused(f"{current} is {name}, not v{self.version}. " + RECONCILE)
             self.verify_release()
             report("existing", "ok", f"v{self.version} is selected and verified")
+        elif self.interrupted_staging():
+            report("existing", "ok", f"v{self.version} was being staged by an interrupted run; it is removed and staged again")
         elif os.path.lexists(self.release):
             self.verify_release()
             report("existing", "ok", f"v{self.version} is staged and verified")
@@ -397,6 +463,8 @@ class Setup:
             "active": query("is-active", SERVICE) == "active",
             "current": os.readlink(current) if os.path.islink(current) else None,
             "linger": (linger.stdout.strip() == "yes") if linger.returncode == 0 else None,
+            "files": {name: ((self.root / name).read_text() if (self.root / name).is_file() else None)
+                      for name, _mode in OWNED_FILES},
         }
 
     def check_confirmed(self, quiet=False):
@@ -412,14 +480,12 @@ class Setup:
 
     def recover(self):
         """A run that ended before it could finish or put things back: back to what it found."""
-        if not os.path.lexists(self.journal):
+        journal = self.pending_journal()
+        if journal is None:
             report("recover", "ok", "no interrupted setup")
             return
-        try:
-            before = json.loads(self.journal.read_text())["before"]
-        except (OSError, ValueError, KeyError, TypeError):
-            raise RuntimeError(f"{self.journal} is unreadable; inspect the server and remove it by hand") from None
-        problems = self.restore(before)
+        # Idempotent: cut off again, the journal stays and the next run does this again.
+        problems = self.restore(journal["before"], journal.get("staging"))
         if problems:
             raise RuntimeError("Could not put back what an interrupted setup changed: " + "; ".join(problems))
         self.journal.unlink()
@@ -428,11 +494,17 @@ class Setup:
     def begin(self):
         """The state found, recorded before the first change, so a failure can put it back."""
         self.before = self.state()
-        write_file(self.journal, json.dumps({"by": SETUP_MARKER, "before": self.before}, sort_keys=True) + "\n", 0o600)
+        self.staging = None
+        self.write_journal()
 
-    def restore(self, before):
-        """Put the unit, link and lingering back as `before`, then check. Returns what could
-        not be put back or confirmed (empty: all of it was)."""
+    def write_journal(self):
+        journal = {"by": SETUP_MARKER, "before": self.before, **({"staging": self.staging} if self.staging else {})}
+        write_file(self.journal, json.dumps(journal, sort_keys=True) + "\n", 0o600)
+
+    def restore(self, before, staging=None):
+        """Put the unit, link, lingering and setup's own files back as `before`, and remove a
+        release `staging` names that was never receipted, then check. Returns what could not be
+        put back or confirmed (empty: all of it was)."""
         problems = []
 
         def attempt(what, action):
@@ -472,7 +544,23 @@ class Setup:
                                   stderr=subprocess.DEVNULL).returncode != 0:
                     raise RuntimeError("loginctl disable-linger failed")
             attempt("lingering", linger)
+        for name, mode in OWNED_FILES:
+            if now["files"].get(name) != before.get("files", {}).get(name, now["files"].get(name)):
+                def put(name=name, mode=mode):
+                    text = before["files"][name]
+                    if text is None:
+                        (self.root / name).unlink(missing_ok=True)
+                    else:
+                        write_file(self.root / name, text, mode)
+                attempt(name, put)
+        if staging == str(self.release) and os.path.lexists(self.release) and not os.path.lexists(self.receipt):
+            attempt("staged release", lambda: shutil.rmtree(self.release))
         after = self.state()
+        if staging == str(self.release) and os.path.lexists(self.release) and not os.path.lexists(self.receipt):
+            problems.append("the unreceipted staged release is still there")
+        for name, _mode in OWNED_FILES:
+            if name in before.get("files", {}) and after["files"][name] != before["files"][name]:
+                problems.append(f"{name} is not back as it was")
         for key in ("unit", "enabled", "active", "current", "linger"):
             if key == "linger" and before[key] is None:
                 continue  # Unknown before: nothing to compare with, and setup leaves it be.
@@ -487,31 +575,13 @@ class Setup:
 
     def install_files(self):
         root, adapter = self.root, self.adapter
-        manifest = {
-            "root": str(root), "repository": "cschadewitz/Project_Orca", "cwd": str(root),
-            "cliConfig": str(root / "orca.config.yaml"), "daemonConfig": str(root / "orca.config.yaml"),
-            "acpConfig": str(root / "orca-kepler.config.yaml"), "url": f"http://127.0.0.1:{self.port}",
-            "service": SERVICE, "userService": True,
-            # This setup made every launcher there is (it refused any other): the inventory holds.
-            "launchAudit": "all-cli-acp-and-daemon-launches-migrated",
-            "setup": SETUP_MARKER,
-        }
+        manifest = self.wanted_manifest()
         changed, repaired = [], []
-        if os.path.lexists(self.manifest):
-            # Written once. After that the operator's: a re-run checks the keys this setup
-            # owns, adds what is missing, and keeps every other setting as the operator left it.
-            try:
-                existing = json.loads(self.manifest.read_text())
-            except (OSError, ValueError):
-                raise Refused(f"{self.manifest} is not readable JSON. Repair it by hand.") from None
-            if self.manifest.is_symlink() or not isinstance(existing, dict) or existing.get("setup") != SETUP_MARKER:
-                raise Refused(f"{self.manifest} was not written by this setup. " + GUIDANCE)
-            if existing.get("url") != manifest["url"]:
-                raise Refused(f"This server already listens on {existing.get('url')}; set up with that port.")
-            for key in OWNED_KEYS:
-                if key in existing and existing[key] != manifest[key]:
-                    raise Refused(f"{self.manifest} sets {key} to {existing[key]!r}, not {manifest[key]!r}. "
-                                  "Repair it by hand; setup does not rewrite it.")
+        # Written once. After that the operator's: a re-run checks the keys this setup owns
+        # (already, before any write: `existing`), adds what is missing, and keeps every other
+        # setting as the operator left it.
+        existing = self.existing_manifest()
+        if existing is not None:
             missing = [key for key in manifest if key not in existing]
             if missing:
                 write_file(self.manifest, json.dumps({**existing, **{key: manifest[key] for key in missing}},
@@ -546,6 +616,10 @@ class Setup:
             adapter.metadata(release)
             report("stage", "ok", f"v{self.version} already staged and verified")
             return
+        # Journaled first: a run cut off mid-stage leaves a release that recovery removes, so
+        # it never blocks the next inspection as an unreceipted one.
+        self.staging = str(release)
+        self.write_journal()
         result = self.run_stage(str(self.bundle) if self.bundle else self.version)
         if result.returncode != 0:
             reason = [line for line in result.stderr.splitlines() if line.startswith("orca-release: ")]
@@ -606,7 +680,12 @@ class Setup:
         user = self.user
         linger = subprocess.run([self.loginctl_bin, "show-user", user, "--property=Linger", "--value"],
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        if linger.returncode == 0 and linger.stdout.strip() == "yes":
+        if linger.returncode != 0:
+            # Unknown: left exactly as it is, never changed blind.
+            report("linger", "warning", "could not read lingering, so it was left as it is: if it is off, the "
+                   "daemon stops when this user logs out (an administrator can run: loginctl enable-linger "
+                   + user + ")")
+        elif linger.stdout.strip() == "yes":
             report("linger", "ok", "the daemon runs without a login")
         elif subprocess.run([self.loginctl_bin, "enable-linger", user], stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL).returncode == 0:
@@ -628,7 +707,7 @@ class Setup:
         the `cleanup` step. Unconfirmed, the journal stays for the next run to finish it."""
         if self.before is None:
             return
-        problems = self.restore(self.before)
+        problems = self.restore(self.before, self.staging)
         if problems:
             report("cleanup", "failed", "Could not confirm everything is back as it was: " + "; ".join(problems)
                    + ". The next setup run puts it back first.")
@@ -649,9 +728,9 @@ class Setup:
         except Exception as error:  # noqa: BLE001 - every failure is a typed result
             report(step, "failed", str(error)[:2000])
             return 1
-        current = self.root / "current"
+        # As it will be once an interrupted run is put back: what a confirmation is for.
         emit({"inspected": True, "account": self.user, "root": str(self.root),
-              "current": self.version if os.path.lexists(current) else None})
+              "current": None if self.lifecycle() == "none" else self.version})
         return 0
 
     def run(self):
@@ -666,6 +745,12 @@ class Setup:
                                  ("files", self.install_files), ("stage", self.stage), ("select", self.select),
                                  ("unit", self.install_unit), ("start", self.start)):
                 action()
+            # Finished under the same fence: the journal is retired and the result read
+            # before any other setup or update can start.
+            step = "finish"
+            done = {"done": True, "root": str(self.root), "command": str(self.root / "orca"), "account": self.user,
+                    "version": (self.root / "current").resolve().name[1:], "port": self.port}
+            self.journal.unlink(missing_ok=True)
         except Refused as error:
             report(step, "refused", str(error))
             self.take_back()
@@ -676,9 +761,7 @@ class Setup:
             return 1
         finally:
             self.release_fence()
-        self.journal.unlink(missing_ok=True)
-        emit({"done": True, "root": str(self.root), "command": str(self.root / "orca"), "account": self.user,
-              "version": (self.root / "current").resolve().name[1:], "port": self.port})
+        emit(done)
         return 0
 
 
