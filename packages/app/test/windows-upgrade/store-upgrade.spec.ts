@@ -275,10 +275,11 @@ test(`the previous release's daemon still reads the stamped store`, async () => 
   expect(await runIds(exe, fromBundle)).toEqual(fromRuns);
   // The format never moves. A previous release that already knows the marker (0.7.1 onward)
   // records itself as the store's last writer when it opens it; an older one leaves it as is.
+  // Only the writer and its timestamp may change: format, epoch, any backup reference and every
+  // other field stay exactly as the candidate left them.
   const after = await readMarker(STORE);
-  expect(after.epoch).toBe(before.epoch);
-  if (after.writtenBy !== before.writtenBy) expect(after.writtenBy).toBe(FROM);
-  else expect(after).toEqual(before);
+  if (after.writtenBy === before.writtenBy) expect(after).toEqual(before);
+  else expect(after).toEqual({ ...before, writtenBy: FROM, updatedAt: after.updatedAt });
 });
 
 test("the candidate refuses a store stamped by a newer format and changes nothing", async () => {
