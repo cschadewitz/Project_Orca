@@ -447,6 +447,8 @@ export interface Stores {
   capabilities?: StoreCapabilityMatrix;
   /** Present only on a backend that can commit several metadata collections together. */
   unitOfWork?: UnitOfWork;
+  /** Release what the backend holds open (a database connection). Absent when there is nothing to release. */
+  close?(): void;
 }
 
 /** `logger` receives what the file-backed stores notice and survive: torn log lines, stale locks. */

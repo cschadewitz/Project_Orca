@@ -15,6 +15,9 @@ import {
   JsonFileDocumentStore,
   memoryStores,
   MEMORY_STORE_CAPABILITIES,
+  sqliteCollection,
+  sqliteStores,
+  SQLITE_STORE_CAPABILITIES,
   type DocumentStore,
   type StoreCapabilityMatrix,
   type Stores,
@@ -74,6 +77,38 @@ export const fileBackend: ConformanceBackend = {
       collection: <T extends { id: string }>(name: string, schema: ZodType<T>) =>
         new JsonFileDocumentStore<T>(join(dir, `${name}.json`), schema),
       dispose: () => rm(dir, { recursive: true, force: true }),
+    };
+  },
+};
+
+/**
+ * The SQLite metadata backend (#339). Every `stores()` and `collection()` is a new connection, so
+ * two handles contend the way two processes do; all of them are closed on dispose.
+ */
+export const sqliteBackend: ConformanceBackend = {
+  name: "sqlite",
+  capabilities: SQLITE_STORE_CAPABILITIES,
+  async create() {
+    const clock = new FakeClock();
+    const dir = await mkdtemp(join(tmpdir(), "orca-conformance-sqlite-"));
+    const handles: { close(): void }[] = [];
+    return {
+      clock,
+      dir,
+      stores: () => {
+        const stores = sqliteStores(dir, { clock });
+        handles.push({ close: () => stores.close?.() });
+        return stores;
+      },
+      collection: <T extends { id: string }>(name: string, schema: ZodType<T>) => {
+        const collection = sqliteCollection<T>(dir, name, schema);
+        handles.push({ close: () => collection.collection.db.close() });
+        return collection;
+      },
+      dispose: async () => {
+        for (const handle of handles.splice(0)) handle.close();
+        await rm(dir, { recursive: true, force: true });
+      },
     };
   },
 };

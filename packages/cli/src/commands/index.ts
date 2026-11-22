@@ -579,7 +579,7 @@ export const commands: Record<string, Command> = {
   },
 
   store: {
-    help: "store [format | carry-forward]  Show the store's format; convert an older-format store once, with every other ORCA stopped.",
+    help: "store [format | carry-forward | sqlite import|backup <file>|restore <file>|verify]  Show the store's format; convert an older-format store once, with every other ORCA stopped; build, back up, restore or check the SQLite metadata.",
     run: storeCommand,
   },
 
