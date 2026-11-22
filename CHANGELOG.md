@@ -34,21 +34,26 @@ to read them as they stand.
 ### Store format
 
 Stores now record their format and the ORCA version that last wrote them in
-`store-format.json`. A 0.7.0 store (same format, no marker yet) is stamped on first open with
-nothing else changed. Ordinary startup never converts a store: one written in an older format
-is refused (`STORE_FORMAT` / `CARRYOVER_REQUIRED`) until `orca store carry-forward` is run once
-with every other ORCA stopped. That command refuses unless no run lease is live, a whole-store
-copy into `format-backups/` matches byte for byte, the store did not change during the copy,
-and every run log, collection and plan journal reads under the new build; only then is the
-backup published (the newest two verified backups are kept) and the format stamped. A store
-written by a newer format, or older than the previous release's, is refused without being
-changed. The store epoch stays `operator-journals-v4`; builds before 0.7.1 ignore the marker.
+`store-format.json`. The store epoch stays `operator-journals-v4`, so upgrading from 0.7.0
+needs nothing: a 0.7.0 store (same format, no marker yet) is stamped on first open with
+nothing else changed, and builds before 0.7.1 ignore the marker.
+
+Ordinary startup never converts a store. A store written in an older format is refused
+(`STORE_FORMAT` / `CARRYOVER_REQUIRED`) without being changed; no 0.7.x store is in an older
+format. Converting one takes `orca store carry-forward`, run once offline with every other
+ORCA stopped. In this build it refuses on Windows
+(`BACKUPS_UNSAFE`, before any copy), and the Ubuntu desktop `.deb` does not ship the CLI.
+The command refuses unless no run lease is live, a whole-store copy into `format-backups/`
+matches byte for byte, the store did not change during the copy, and every run log,
+collection and plan journal reads under the new build; only then is the backup published
+(the newest two verified backups are kept) and the format stamped. A store written by a newer
+format, or older than the previous release's, is refused without being changed.
 
 ### Added
 
 #### app
 
-- The app connects to a daemon one protocol major behind it, reads and writes, and shows a bar saying the daemon is a version behind and that newer features are off until it is updated.
+- Groundwork for connecting to a daemon one protocol major behind: the app can show a bar saying the daemon is a version behind and that newer features are off until it is updated. This build opens no such window (see Protocol 2.1 below); it connects to existing 2.0 daemons as before.
 - the Linux `.deb` says when a newer release is out. About 15 seconds after start
   and every six hours it reads the public release list and, when a newer stable release has
   a `.deb` for the machine, shows a notice in the title bar with the release page and the
@@ -65,6 +70,8 @@ changed. The store epoch stays `operator-journals-v4`; builds before 0.7.1 ignor
 
 - `orca store format` shows a store's recorded format; `orca store carry-forward`
   converts an older-format store once, offline, after a verified backup and read check (#566).
+  It refuses on Windows in this build (`BACKUPS_UNSAFE`), and the Ubuntu desktop `.deb` does
+  not include the CLI.
 
 #### protocol
 
