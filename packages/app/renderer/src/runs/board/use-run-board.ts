@@ -14,6 +14,15 @@
  * sees the change, and a fresh follower reads every run from nothing. A definitive refusal
  * from `runs.get` (not found, not authorized) is `FollowRefusedError`, which drops the run's
  * data instead of leaving its last snapshot on screen as an ordinary stale read would.
+ *
+ * Losing the connection is two different things. A stream that drops and is coming back
+ * (`reconnecting`) is the same caller against the same daemon, so the follower keeps its cards
+ * and says they are not current. A connection that has *ended* (`disconnected`, which is what
+ * an authentication or authorization refusal of the stream becomes, published at once rather
+ * than after the blip window; or `mismatch`) is not something to keep drawing from, even when
+ * the workspace, generation and grants all read the same: it is part of the scope, so the
+ * follower and every snapshot it held go in that same render, and nothing is read until the
+ * connection is live again, when a fresh follower reads every run from nothing.
  */
 import { useEffect, useState } from "react";
 import { FollowRefusedError, RunFollower, type FollowedRun } from "@orca/protocol";
@@ -43,6 +52,8 @@ export function useRunBoard(runIds: readonly string[], connection: ConnectionSta
   const generation = useSubscriptionGeneration();
   const workspace = useWorkspace();
   const authority = useConnection();
+  // Ended, not interrupted: no follower at all until a live connection comes back.
+  const ended = connection === "disconnected" || connection === "mismatch";
   const scope = JSON.stringify([
     workspace.path,
     workspace.source,
@@ -50,11 +61,16 @@ export function useRunBoard(runIds: readonly string[], connection: ConnectionSta
     generation,
     authority.capabilities,
     authority.methods,
+    ended,
   ]);
   const [current, setCurrent] = useState<Scoped | undefined>(undefined);
 
   // One follower per scope; its frames come from every run in the stream.
   useEffect(() => {
+    if (ended) {
+      setCurrent(undefined);
+      return;
+    }
     let live = true;
     const follower = new RunFollower({
       fetch: async (runId) => {
@@ -81,7 +97,7 @@ export function useRunBoard(runIds: readonly string[], connection: ConnectionSta
       off();
       follower.dispose();
     };
-  }, [stream, scope]);
+  }, [stream, scope, ended]);
 
   // Only a follower of this very scope is used; until the effect above has made one, nothing.
   const active = current?.scope === scope ? current : undefined;
@@ -97,8 +113,9 @@ export function useRunBoard(runIds: readonly string[], connection: ConnectionSta
   }, [follower, key]);
 
   // A new scope (a new generation among it) already re-reads everything; within one, the
-  // stream dropping and coming back is what the follower is told.
-  const live = connection === "live";
+  // stream dropping and coming back is what the follower is told. A read-only store (`file`)
+  // is served by a live daemon and streams like any other.
+  const live = connection === "live" || connection === "file";
   useEffect(() => {
     if (!follower) return;
     // Both are idempotent: a follower already connected re-reads nothing on `connectionRestored`.
@@ -106,9 +123,11 @@ export function useRunBoard(runIds: readonly string[], connection: ConnectionSta
     else follower.connectionRestored();
   }, [follower, live]);
 
-  // A run with no view yet in this scope is loading: never a view from another scope.
+  // A run with no view yet in this scope is loading, or waiting on the connection when it has
+  // ended: never a view from another scope.
+  const placeholder = ended ? "reconnecting" : "loading";
   const runs = runIds.map(
-    (runId): FollowedRun => active?.views.get(runId) ?? { runId, phase: "loading", cursor: -1, resyncs: 0 },
+    (runId): FollowedRun => active?.views.get(runId) ?? { runId, phase: placeholder, cursor: -1, resyncs: 0 },
   );
   return { runs, retry: (runId) => follower?.retry(runId) };
 }

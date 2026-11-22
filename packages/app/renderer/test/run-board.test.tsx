@@ -38,7 +38,9 @@ function withOperations(runId: string): RunsGetResult | undefined {
   return detail && { ...detail, run: { ...detail.run, operations: { ...OPERATIONS, lastSeq: detail.lastSeq } } };
 }
 
-function renderRuns(connection: "live" | "reconnecting" = "live"): (next: "live" | "reconnecting") => void {
+type Shown = "live" | "reconnecting" | "disconnected";
+
+function renderRuns(connection: Shown = "live"): (next: Shown) => void {
   h = harness();
   teardown.push(h.dispose);
   const { Providers } = h;
@@ -186,6 +188,72 @@ describe("the run board", () => {
     await waitFor(() => expect(within(board()).getByRole("article", { name: "run-gate, Not available" })).toBeTruthy());
     expect(board().textContent).not.toContain("Waiting for a person");
     expect(board().textContent).toContain("AUTH_FORBIDDEN");
+  });
+
+  it("hides every card the moment the stream is refused, though nothing else about it changed", async () => {
+    const rerender = renderRuns();
+    await openBoard();
+    await waitFor(() => expect(card("Document the rollout").textContent).toContain("Held on build-box"));
+    const snapshot = fake.connection;
+    const reads = () => fake.calls.filter((c) => c.method === "runs.get").length;
+    // An authenticated stream turned auth-failed: main publishes `disconnected` at once, with the
+    // same workspace, generation, capabilities and methods. No reconnect, no refusal from a read.
+    act(() => fake.connect({ ...snapshot, state: "disconnected" }));
+    rerender("disconnected");
+    expect(board().textContent).not.toContain("build-box");
+    expect(board().textContent).not.toContain("Document the rollout");
+    expect(board().textContent).not.toContain("Waiting for a person");
+    expect(within(board()).getByRole("article", { name: "run-gate, Reconnecting" })).toBeTruthy();
+    // Nothing is read while the connection has ended.
+    const before = reads();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(reads()).toBe(before);
+    // Signed in again: a fresh follower reads every run from nothing.
+    act(() => fake.connect({ ...snapshot, generation: (snapshot.generation ?? 0) + 1 }));
+    rerender("live");
+    await waitFor(() => expect(card("Document the rollout").getAttribute("aria-label")).toContain("Live"));
+    expect(reads()).toBeGreaterThan(before);
+  });
+
+  it("never shows the old target's run after a switch with the same path and grants", async () => {
+    const rerender = renderRuns();
+    await openBoard();
+    await waitFor(() => expect(card("Document the rollout").textContent).toContain("Held on build-box"));
+    const snapshot = fake.connection;
+    let answer: ((r: { ok: true; result: RunsGetResult }) => void) | undefined;
+    fake.script({
+      "runs.get": ({ runId }) =>
+        new Promise((resolve) => {
+          if (runId === "run-gate") answer = resolve;
+          else resolve({ ok: false, error: { code: "RUN_NOT_FOUND", message: `no run ${runId}` } });
+        }),
+    });
+    // Re-pointed at another daemon behind the same display path: main resets (no quiet window,
+    // the old daemon's grants dropped) and then attaches to the new one with identical grants.
+    const { capabilities: _c, methods: _m, ...reset } = snapshot;
+    act(() => fake.connect({ ...reset, state: "reconnecting" }));
+    rerender("reconnecting");
+    expect(board().textContent).not.toContain("build-box");
+    expect(board().textContent).not.toContain("Document the rollout");
+    act(() => fake.connect({ ...snapshot, generation: (snapshot.generation ?? 0) + 1 }));
+    rerender("live");
+    // The list reloads for the new generation; whatever is on screen, the old owner is not.
+    expect(document.body.textContent).not.toContain("build-box");
+    await waitFor(() => expect(answer).toBeDefined());
+    const other = withOperations("run-gate")!;
+    act(() =>
+      answer!({
+        ok: true,
+        result: {
+          ...other,
+          run: { ...other.run, name: "A different run", operations: { ...other.run.operations!, owner: undefined } },
+        },
+      }),
+    );
+    await waitFor(() => expect(card("A different run").getAttribute("aria-label")).toContain("Live"));
+    expect(board().textContent).not.toContain("build-box");
   });
 
   it("opens a card's run in the tree", async () => {
