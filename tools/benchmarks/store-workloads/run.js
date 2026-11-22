@@ -69,6 +69,10 @@ const output = {
     cpu: cpus()[0]?.model,
     cpus: cpus().length,
     memoryBytes: totalmem(),
+    // On a GitHub-hosted runner, which image it was: the reference machine's identity.
+    ...(process.env.ImageOS
+      ? { runnerImage: { os: process.env.ImageOS, version: process.env.ImageVersion ?? null } }
+      : {}),
   },
   limitations: [
     "Cold means a fresh store handle with empty in-process caches; the OS page cache is not dropped.",

@@ -241,8 +241,10 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Versione
    * before the write body starts join the same write; later ones get the next
    * one, which re-reads the file again before it applies them.
    */
-  private enqueue(...mutations: Mutation<T>[]): Promise<void> {
-    this.queue.push(...mutations);
+  private enqueue(mutations: readonly Mutation<T>[]): Promise<void> {
+    // A loop, not `push(...mutations)`: a spread passes every element as an argument, and a
+    // batch of tens of thousands overflows the call stack.
+    for (const mutation of mutations) this.queue.push(mutation);
     if (this.pending) return this.pending;
     const p = this.writing.then(async () => {
       // Cleared before snapshotting the queue, so mutations made from here on
@@ -289,11 +291,11 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Versione
    * call's mutations are queued together and contain at most one conditional (last), so they
    * always share one batch.
    */
-  private async commit(...mutations: Mutation<T>[]): Promise<void> {
+  private async commit(mutations: readonly Mutation<T>[]): Promise<void> {
     const settled = new Promise<void>((resolve) => {
       mutations[mutations.length - 1]!.settle = resolve;
     });
-    void this.enqueue(...mutations);
+    void this.enqueue(mutations);
     await settled;
     const failed = mutations.find((m) => m.failed)?.failed;
     if (failed) throw failed.error;
@@ -370,14 +372,14 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Versione
     return copy((await this.view()).get(id));
   }
   async put(doc: T): Promise<void> {
-    await this.commit({ kind: "put", doc: structuredClone(doc) });
+    await this.commit([{ kind: "put", doc: structuredClone(doc) }]);
   }
   async putMany(docs: readonly T[]): Promise<void> {
     if (docs.length === 0) return;
-    await this.commit(...docs.map((doc) => ({ kind: "put", doc: structuredClone(doc) }) as const));
+    await this.commit(docs.map((doc) => ({ kind: "put", doc: structuredClone(doc) }) as const));
   }
   async delete(id: string): Promise<void> {
-    await this.commit({ kind: "delete", id });
+    await this.commit([{ kind: "delete", id }]);
   }
   async list(predicate?: (doc: T) => boolean): Promise<T[]> {
     const all = [...(await this.view()).values()].map((doc) => structuredClone(doc));
@@ -389,12 +391,12 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Versione
   }
   async putIfVersion(doc: T, expected: DocumentVersion | null): Promise<ConditionalWriteResult<T>> {
     const m: Mutation<T> = { kind: "put", doc: structuredClone(doc), expect: expected };
-    await this.commit(m);
+    await this.commit([m]);
     return m.result!;
   }
   async deleteIfVersion(id: string, expected: DocumentVersion): Promise<ConditionalWriteResult<T>> {
     const m: Mutation<T> = { kind: "delete", id, expect: expected };
-    await this.commit(m);
+    await this.commit([m]);
     return m.result!;
   }
   async query(query?: DocumentQuery<T>): Promise<DocumentPage<T>> {
