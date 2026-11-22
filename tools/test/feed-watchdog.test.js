@@ -242,22 +242,32 @@ describe("feed-watchdog.yml", () => {
 const VECTOR = "5d3f25569a9aa339f4cd723849053e73975eef8b2ff42a2cf3cc8a2daf8e1a16";
 
 describe("canaryMapDigest", () => {
+  const b64 = (byte) => Buffer.alloc(32, byte).toString("base64url");
+  const FULL = { internal: b64(1), preview: b64(2), stable: b64(255) };
+
   it("hashes the canonical { sha256(token): { ring } } map with sorted hashes", () => {
     const hash = (t) => createHash("sha256").update(t).digest("hex");
     const map = Object.fromEntries(
-      Object.entries(TOKENS)
+      Object.entries(FULL)
         .map(([ring, token]) => [hash(token), { ring }])
-        .sort(([a], [b]) => a.localeCompare(b)),
+        .sort(([a], [b]) => (a < b ? -1 : 1)),
     );
-    expect(canaryMapDigest(TOKENS)).toBe(createHash("sha256").update(JSON.stringify(map)).digest("hex"));
-    expect(canaryMapDigest({ stable: TOKENS.stable, internal: TOKENS.internal })).toBe(canaryMapDigest(TOKENS));
+    expect(canaryMapDigest(FULL)).toBe(createHash("sha256").update(JSON.stringify(map)).digest("hex"));
+    expect(canaryMapDigest({ stable: FULL.stable, internal: FULL.internal, preview: FULL.preview })).toBe(
+      canaryMapDigest(FULL),
+    );
   });
 
   it("matches a fixed vector shared with the Worker's registry tooling", () => {
-    // Tokens of 32 bytes of 0x01 / 0x02 / 0xff as base64url, one per ring.
-    const b64 = (byte) => Buffer.alloc(32, byte).toString("base64url");
-    const digest = canaryMapDigest({ internal: b64(1), preview: b64(2), stable: b64(255) });
-    expect(digest).toMatch(/^[0-9a-f]{64}$/);
-    expect(digest).toBe(VECTOR);
+    expect(canaryMapDigest(FULL)).toBe(VECTOR);
+  });
+
+  it("gives no digest for a missing, extra, duplicate or malformed canary", () => {
+    expect(canaryMapDigest({ internal: FULL.internal, stable: FULL.stable })).toBeUndefined();
+    expect(canaryMapDigest({ ...FULL, beta: b64(3) })).toBeUndefined();
+    expect(canaryMapDigest({ ...FULL, preview: FULL.internal })).toBeUndefined();
+    expect(canaryMapDigest({ ...FULL, stable: "short" })).toBeUndefined();
+    expect(canaryMapDigest({ ...FULL, stable: 42 })).toBeUndefined();
+    expect(canaryMapDigest(undefined)).toBeUndefined();
   });
 });

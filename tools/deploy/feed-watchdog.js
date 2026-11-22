@@ -20,10 +20,12 @@
  * It cannot read rings.json (that needs the bucket credential, which stays in the protected
  * desktop-feed environment), so it checks what a ring is offered, not what it should be offered.
  * The canary tokens live in the `feed-canary` environment, which only main can deploy to.
- * Tokens are only ever sent as Authorization headers; nothing here prints them. It does print
- * the canary map's digest (the SHA-256 of `{ sha256(token): { ring } }` with hashes sorted, the
- * form the Worker's FEED_TOKENS uses), so whoever runs the Worker can tie its token registry to
- * the canaries this run proved against the live feed. The digest reveals no token.
+ * Tokens are only ever sent as Authorization headers; nothing here prints them. When the
+ * configuration holds exactly one well-formed, distinct canary per ring and the run is clean,
+ * it also prints a digest of those configured canaries, the canaries this run saw the feed
+ * accept (SHA-256 of `{ sha256(token): { ring } }`, hashes sorted). It is not a read-back of the
+ * Worker's token registry, nor proof of each token's ring (two rings with identical offers,
+ * empty ones included, look alike from outside). It reveals no token.
  */
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
@@ -111,12 +113,18 @@ export function channelProblems(ring, arch, channel) {
   return problems;
 }
 
-/** The SHA-256 (hex) of the canonical canary map: sorted token hashes to exactly { ring }. */
+/**
+ * The digest of the configured canaries, or undefined unless there is exactly one well-formed,
+ * distinct token per ring: SHA-256 (hex) of `{ sha256(token): { ring } }` with hashes sorted.
+ * A partial or duplicated configuration still runs the ordinary checks but gets no digest.
+ */
 export function canaryMapDigest(tokens) {
-  const entries = Object.entries(tokens).map(([ring, token]) => [
-    createHash("sha256").update(token).digest("hex"),
-    ring,
-  ]);
+  const rings = Object.keys(tokens ?? {});
+  if (rings.length !== RINGS.length || !RINGS.every((ring) => Object.hasOwn(tokens, ring))) return undefined;
+  const values = RINGS.map((ring) => tokens[ring]);
+  if (!values.every((t) => typeof t === "string" && /^[A-Za-z0-9_-]{43}$/.test(t))) return undefined;
+  if (new Set(values).size !== values.length) return undefined;
+  const entries = RINGS.map((ring) => [createHash("sha256").update(tokens[ring]).digest("hex"), ring]);
   entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const map = {};
   for (const [hash, ring] of entries) map[hash] = { ring };
@@ -255,6 +263,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   });
   for (const line of report) console.log(line);
   for (const problem of problems) console.error(`::error::${problem}`);
-  if (problems.length === 0) console.log(`canary map sha256: ${canaryMapDigest(tokens)}`);
+  const digest = problems.length === 0 ? canaryMapDigest(tokens) : undefined;
+  if (digest) console.log(`canary map sha256: ${digest} (the configured canaries, all accepted by the feed)`);
   process.exit(problems.length ? 1 : 0);
 }
