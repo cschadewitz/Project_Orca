@@ -736,10 +736,47 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
 
   it("tells a missing remote daemon apart from a broken tunnel", async () => {
     const nothing = await ephemeralLoopbackPort();
-    const tunnel = open(nothing, join(dir(), "live.known_hosts"));
+    // ssh's own lines (not its debug output), to say what the server did if this fails.
+    const said: string[] = [];
+    const { spawn } = await import("node:child_process");
+    const tunnel = new SshTunnel({
+      profile: ConnectionProfileSchema.parse({
+        id: "live",
+        name: "Live",
+        destination: live!.destination,
+        ...(live!.sshPort ? { sshPort: live!.sshPort } : {}),
+        identityFile: live!.identity,
+        remotePort: nothing,
+      }),
+      knownHostsFile: join(dir(), "live.known_hosts"),
+      spawn: (command, args) => {
+        const child = spawn(command, [...args], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+        child.stderr.on("data", (chunk: Buffer) =>
+          said.push(
+            ...chunk
+              .toString()
+              .split(/\r?\n/)
+              .filter((line) => line && !/^debug[23]:/.test(line)),
+          ),
+        );
+        return child;
+      },
+    });
+    tunnels.push(tunnel);
     const url = await tunnel.open();
     await expect(fetch(url)).rejects.toThrow();
     // Windows retries a refused loopback connect for about two seconds before giving up.
-    await until(() => tunnel.remoteRefused(), 15_000);
+    for (let i = 0; i < 6_000 && !tunnel.remoteRefused(); i++) await new Promise((r) => setTimeout(r, 5));
+    expect(
+      tunnel.remoteRefused(),
+      said
+        .filter(
+          (line) =>
+            !/^debug1: (Reading|Connecting|identity|Local version|Remote protocol|compat|kex|SSH2|expecting|Server host|load_hosts|Host |Will attempt|Offering|Server accepts|Authentications|Next authentication|Sending|pledge|client_input|Remote: )/.test(
+              line,
+            ),
+        )
+        .join("\n"),
+    ).toBe(true);
   }, 60_000);
 });
