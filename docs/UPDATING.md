@@ -944,7 +944,7 @@ command cannot hold that daemon's write fence. The app carries those forward its
 
 **Windows does not change a store's format yet (#910).** Every Windows carryover is refused
 (`UNDURABLE`) with nothing touched, and the store stays on the format the previous ORCA wrote,
-until an automated power-cut test on NTFS proves the design below. The design is built and
+until an automated power-cut test on NTFS (#947) proves the design below. The design is built and
 tested with the switch (`WINDOWS_STORE_CARRYOVER` in `packages/store/src/store-format.ts`) on;
 turning it on is a one-line change made together with that proof.
 

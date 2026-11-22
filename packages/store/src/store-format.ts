@@ -60,7 +60,7 @@ export {
 } from "./store-format-carryover.js";
 
 /**
- * Windows store format carryover (#910) stays refused (UNDURABLE) until an automated power-cut
+ * Windows store format carryover (#910) stays refused (UNDURABLE) until an automated power-cut (#947)
  * test on NTFS proves the slot archive and the recovery record survive in every order Windows
  * may write them. The machinery below is complete and tested with this switched on; turning it
  * on for real is a one-line change made together with that proof.

@@ -5,7 +5,7 @@
  * platform with `platform: "win32"`, the switch on, and Windows' BootId chosen by the test.
  */
 import { execFileSync } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -181,9 +181,9 @@ describe("Windows format carryover into a pre-boot backup slot (#910)", () => {
     await expect(carryStoreForward(dir, { ...windows, bootId: first })).rejects.toMatchObject({ reason: "UNDURABLE" });
     // Both slots replaced by copies carrying the old identity (a new file ID each).
     for (const n of [0, 1] as const) {
-      const text = await readFile(slot(dir, n));
-      await rm(slot(dir, n));
-      await writeFile(slot(dir, n), text);
+      // Written beside the original, then renamed over it, so the copy cannot reuse its inode.
+      await writeFile(`${slot(dir, n)}.copy`, await readFile(slot(dir, n)));
+      await rename(`${slot(dir, n)}.copy`, slot(dir, n));
     }
     await expect(carryStoreForward(dir, { ...windows, bootId: restarted })).rejects.toMatchObject({
       reason: "UNDURABLE",
