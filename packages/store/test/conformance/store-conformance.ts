@@ -324,6 +324,43 @@ export function runStoreConformance(backend: ConformanceBackend): void {
           expect((await reader.getVersioned("y"))?.doc).toEqual(doc("y", "b", 5));
         });
 
+        it("owns its documents: mutating an input or a returned object changes neither the store nor a version", async () => {
+          const { a, other } = await collection();
+          const v = asVersionedDocumentStore(a);
+          const input = doc("x", "a", 1);
+          const pending = a.put(input);
+          // Mutated before the put has even been written, and again after.
+          input.n = 99;
+          input.tags.push("in-flight");
+          await pending;
+          input.owner = "mutated";
+          const many = [doc("m", "a", 1)];
+          await a.putMany(many);
+          many[0]!.tags.push("after");
+          const cas = doc("c", "a", 1);
+          await v.putIfVersion(cas, null);
+          cas.tags.push("after");
+          const base = await v.getVersioned("x");
+          expect(base?.doc).toEqual(doc("x", "a", 1));
+
+          // Every way a document comes back out, mutated in place.
+          (await a.get("x"))!.tags.push("get");
+          (await a.list()).forEach((d) => d.tags.push("list"));
+          base!.doc.tags.push("versioned");
+          (await v.query({})).items.forEach((d) => d.tags.push("query"));
+          const lost = await v.putIfVersion(doc("x", "z", 0), "not-the-version");
+          expect(lost.ok).toBe(false);
+          if (!lost.ok) lost.current!.doc.tags.push("conflict");
+
+          for (const reader of [v, asVersionedDocumentStore(other())]) {
+            expect(await reader.getVersioned("x")).toEqual({ doc: doc("x", "a", 1), version: base!.version });
+            expect((await reader.get("m"))?.tags).toEqual([]);
+            expect((await reader.get("c"))?.tags).toEqual([]);
+          }
+          // The version the caller holds still wins the next CAS: nothing moved it without a write.
+          expect((await v.putIfVersion(doc("x", "a", 2), base!.version)).ok).toBe(true);
+        });
+
         it("unconditional writes from several handles are never lost (#196)", async () => {
           const { a, other } = await collection();
           const handles = [a, other(), other()];

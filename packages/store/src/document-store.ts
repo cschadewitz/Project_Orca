@@ -44,35 +44,38 @@ export interface DocumentStore<T extends { id: string }> {
 
 /**
  * The in-process reference collection. Every method is synchronous between its read and its
- * write, so a conditional write cannot interleave with another one.
+ * write, so a conditional write cannot interleave with another one. It owns its documents:
+ * what goes in and what comes out are copies (#338), so a caller mutating either can never
+ * change the stored document, or its version, without a write.
  */
 export class InMemoryDocumentStore<T extends { id: string }> implements VersionedDocumentStore<T> {
   private readonly docs = new Map<string, T>();
   async get(id: string): Promise<T | undefined> {
-    return this.docs.get(id);
+    return copy(this.docs.get(id));
   }
   async put(doc: T): Promise<void> {
-    this.docs.set(doc.id, doc);
+    this.docs.set(doc.id, structuredClone(doc));
   }
   async putMany(docs: readonly T[]): Promise<void> {
-    for (const doc of docs) this.docs.set(doc.id, doc);
+    const copies = docs.map((doc) => structuredClone(doc));
+    for (const doc of copies) this.docs.set(doc.id, doc);
   }
   async delete(id: string): Promise<void> {
     this.docs.delete(id);
   }
   async list(predicate?: (doc: T) => boolean): Promise<T[]> {
-    const all = [...this.docs.values()];
+    const all = [...this.docs.values()].map((doc) => structuredClone(doc));
     return predicate ? all.filter(predicate) : all;
   }
   async getVersioned(id: string): Promise<VersionedDocument<T> | undefined> {
-    const doc = this.docs.get(id);
-    return doc && { doc, version: documentVersion(doc) };
+    return this.versioned(id);
   }
   async putIfVersion(doc: T, expected: DocumentVersion | null): Promise<ConditionalWriteResult<T>> {
     const conflict = this.conflict(doc.id, expected);
     if (conflict) return conflict;
-    this.docs.set(doc.id, doc);
-    return { ok: true, version: documentVersion(doc) };
+    const stored = structuredClone(doc);
+    this.docs.set(stored.id, stored);
+    return { ok: true, version: documentVersion(stored) };
   }
   async deleteIfVersion(id: string, expected: DocumentVersion): Promise<ConditionalWriteResult<T>> {
     const conflict = this.conflict(id, expected);
@@ -81,13 +84,25 @@ export class InMemoryDocumentStore<T extends { id: string }> implements Versione
     return { ok: true, version: undefined };
   }
   async query(query?: DocumentQuery<T>): Promise<DocumentPage<T>> {
-    return pageDocuments(this.docs.values(), query);
+    return copyPage(pageDocuments(this.docs.values(), query));
+  }
+  private versioned(id: string): VersionedDocument<T> | undefined {
+    const doc = this.docs.get(id);
+    return doc && { doc: structuredClone(doc), version: documentVersion(doc) };
   }
   private conflict(id: string, expected: DocumentVersion | null): ConditionalWriteResult<T> | undefined {
-    const doc = this.docs.get(id);
-    const current = doc && { doc, version: documentVersion(doc) };
+    const current = this.versioned(id);
     return (current?.version ?? null) === expected ? undefined : { ok: false, current };
   }
+}
+
+/** A caller's own copy of a stored document. */
+function copy<T>(doc: T | undefined): T | undefined {
+  return doc === undefined ? undefined : structuredClone(doc);
+}
+
+function copyPage<T>(page: DocumentPage<T>): DocumentPage<T> {
+  return { ...page, items: page.items.map((doc) => structuredClone(doc)) };
 }
 
 /** What the cached collection was read from; the cache is trusted only while this still holds. */
@@ -141,6 +156,11 @@ type Mutation<T> = ({ kind: "put"; doc: T } | { kind: "delete"; id: string }) & 
  * intermediate one a later mutation in the same write overwrote. Mutations after
  * it go into the next write. A document's version is the hash of its parsed
  * content, computed on read, so nothing new is written to the file.
+ *
+ * The store owns its documents (#338): a put stores a copy of the caller's
+ * object and every read, including a conflict's `current`, hands back a copy,
+ * so the cache and queue can never be changed - nor a version moved - by a
+ * caller mutating an object it passed in or got back.
  *
  * `get`, `list` and `query` keep their read-your-writes view (the file plus this
  * process's queued unconditional mutations); `getVersioned` reads only the
@@ -311,28 +331,28 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Versione
     });
   }
   async get(id: string): Promise<T | undefined> {
-    return (await this.view()).get(id);
+    return copy((await this.view()).get(id));
   }
   async put(doc: T): Promise<void> {
-    await this.commit({ kind: "put", doc });
+    await this.commit({ kind: "put", doc: structuredClone(doc) });
   }
   async putMany(docs: readonly T[]): Promise<void> {
     if (docs.length === 0) return;
-    await this.commit(...docs.map((doc) => ({ kind: "put", doc }) as const));
+    await this.commit(...docs.map((doc) => ({ kind: "put", doc: structuredClone(doc) }) as const));
   }
   async delete(id: string): Promise<void> {
     await this.commit({ kind: "delete", id });
   }
   async list(predicate?: (doc: T) => boolean): Promise<T[]> {
-    const all = [...(await this.view()).values()];
+    const all = [...(await this.view()).values()].map((doc) => structuredClone(doc));
     return predicate ? all.filter(predicate) : all;
   }
   async getVersioned(id: string): Promise<VersionedDocument<T> | undefined> {
     const doc = (await this.load()).get(id);
-    return doc && { doc, version: this.versionOf(doc) };
+    return doc && { doc: structuredClone(doc), version: this.versionOf(doc) };
   }
   async putIfVersion(doc: T, expected: DocumentVersion | null): Promise<ConditionalWriteResult<T>> {
-    const m: Mutation<T> = { kind: "put", doc, expect: expected };
+    const m: Mutation<T> = { kind: "put", doc: structuredClone(doc), expect: expected };
     await this.commit(m);
     return m.result!;
   }
@@ -342,7 +362,7 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Versione
     return m.result!;
   }
   async query(query?: DocumentQuery<T>): Promise<DocumentPage<T>> {
-    return pageDocuments((await this.view()).values(), query);
+    return copyPage(pageDocuments((await this.view()).values(), query));
   }
 }
 
@@ -360,7 +380,7 @@ function apply<T extends { id: string }>(
   const id = m.kind === "put" ? m.doc.id : m.id;
   if ("expect" in m) {
     const doc = map.get(id);
-    const current = doc && { doc, version: versionOf(doc) };
+    const current = doc && { doc: structuredClone(doc), version: versionOf(doc) };
     if ((current?.version ?? null) !== m.expect) {
       m.result = { ok: false, current };
       return false;
