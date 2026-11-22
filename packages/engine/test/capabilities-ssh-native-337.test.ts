@@ -42,7 +42,7 @@ nodes:
 edges: [{ from: s, to: a }, { from: a, to: e }]
 `;
 
-async function run(command: string) {
+async function run(command: string, env: Record<string, string> = { TOOL_MODE: "test" }) {
   const sessionLog = join(dir, `sessions-${Math.random().toString(36).slice(2)}.jsonl`);
   const agent = scriptedAgentSpec({ id: "remote", hostId: "box", roles: ["builder"], sessionLog });
   const config = parseOrcaConfig({
@@ -50,7 +50,7 @@ async function run(command: string) {
       { id: "local", type: "local" },
       { id: "box", type: "ssh", host: "127.0.0.1", user: sshd!.user, sshArgs: sshd!.sshArgs.slice(0, -1) },
     ],
-    capabilities: { mcpServers: { tool: { command, env: { TOOL_MODE: "test" } }, unused: { command } } },
+    capabilities: { mcpServers: { tool: { command, env }, unused: { command } } },
     agents: [
       {
         ...agent,
@@ -112,5 +112,23 @@ describe("catalog MCP servers over a real sshd", () => {
     expect(state.status).toBe("failed");
     expect(sessions).toEqual([]);
     expect(JSON.stringify(events)).toMatch(/MCP server 'tool' cannot start on host 'box'/);
+  }, 60_000);
+
+  it("hands the agent the absolute executable it found on the SSH host's PATH", async (context) => {
+    if (!sshd) return context.skip("no /usr/sbin/sshd; set ORCA_REQUIRE_SSHD=1 to require it");
+    const tool = join(dir, "tool-mcp");
+    await writeFile(tool, "#!/bin/sh\nexit 0\n");
+    await chmod(tool, 0o755);
+    const { state, sessions } = await run("tool-mcp", { PATH: dir });
+    expect(state.status).toBe("completed");
+    expect(sessions).toEqual([
+      {
+        cwd: dir,
+        mcpServers: [
+          { name: "inline", command: "inline-mcp", args: [], env: [] },
+          { name: "tool", command: tool, args: [], env: ["PATH"] },
+        ],
+      },
+    ]);
   }, 60_000);
 });

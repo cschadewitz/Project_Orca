@@ -554,19 +554,39 @@ nodes:
 - **What reaches an agent session.** The agent's own inline `mcpServers`, narrowed by any
   scope, as configured. A catalog server selected for a step reaches that step's session
   only when, at that session open (#337):
-  1. the run's owner holds a current credential with `capabilities.use` whose grant names
-     that server, as it is defined now, on the agent's host and that host's endpoint
-     (`orca auth issue <principal> --mcp-server github@local`, or `--mcp-server '*'`; the
-     `owner` preset grants every server). A grant does not follow a server redefined to
+  1. the run's owner holds **one** current credential with `capabilities.use` whose grant
+     covers the step's whole selected set: each server as it is defined now, on the
+     agent's host and that host's endpoint (`orca auth issue <principal> --mcp-server
+     github@local`, or `--mcp-server '*'`; the `owner` preset grants every server). Grants
+     on two credentials do not combine. A grant does not follow a server redefined to
      another command or a host id pointed at another machine, and a revoked or expired
      credential stops the next step, even one that would reuse a `per-run` session;
-  2. the server's command is found on the **agent's host**, from the session's working
-     directory, as an executable path or on the `PATH` the server or agent is configured
-     with. Over SSH that is one quiet `command -v` on that host. ORCA never installs one,
-     and never tries another host.
+  2. the server's command resolves on the **agent's host** to an executable regular file,
+     and the agent is handed that absolute path, so it starts what was checked and does
+     not search again. Over SSH that is one quiet `command -v` on that host. ORCA never
+     installs one, and never tries another host.
+
   Otherwise the step is refused before anything starts, naming the step and the server. A
   run with no recorded owner, or a daemon with no use decision, refuses catalog servers at
-  launch. The command being there is not proof the server works: the agent starts it, over
+  launch.
+
+  What a grant covers when a server is launched:
+  - **The executable.** A grant for named servers covers only a server whose `command` is
+    an absolute path: the definition it pins is then the executable itself, and nothing
+    found on a `PATH` or under a working directory can stand in for it. A bare name
+    (searched on the server's literal `env.PATH`, else the agent's, else the host's) or a
+    relative path (resolved against the session's working directory, which is the run's
+    workspace) is covered only by `'*'`, and `orca auth issue` refuses to write a named
+    grant for one.
+  - **Arguments** are passed exactly as configured, and the grant pins them. ORCA does not
+    resolve them; a relative path in an argument is the server's to interpret, in the
+    session's working directory.
+  - **Environment.** The server's configured `env` is pinned by the grant, with secret
+    references read on the agent's host under `secrets.use`. Anything else the server
+    inherits comes from the agent process that starts it: the agent's configured `env` and
+    what the agent passes on. That is the agent's behaviour, not something ORCA enforces.
+
+  The executable being there is not proof the server works: the agent starts it, over
   ACP's stdio transport, which every ACP agent supports. Skills resolve and appear in
   validation and the preview, but a step that selects one is refused at launch (and warned
   about at validation): delivering them is the next part of #337.

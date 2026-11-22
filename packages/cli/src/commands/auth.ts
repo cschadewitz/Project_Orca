@@ -14,7 +14,7 @@ import {
   type CapabilityGrant,
   CapabilityGrantSchema,
 } from "@orca/daemon";
-import { mcpServerDefinitionDigest, secretHostBinding } from "@orca/agents";
+import { isAbsoluteCommand, mcpServerDefinitionDigest, secretHostBinding } from "@orca/agents";
 import { loadConfig } from "../bootstrap.js";
 import type { CommandContext } from "./index.js";
 
@@ -89,6 +89,11 @@ function capabilityGrant(ctx: CommandContext, config: OrcaConfig): CapabilityGra
     const spec = config.hosts.find((h) => h.id === host);
     if (!spec)
       throw new OrcaError("CONFIG_INVALID", `--mcp-server '${id}' names host '${host}', which is not configured`);
+    if (!isAbsoluteCommand(server.command, spec.type))
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `--mcp-server '${id}' runs '${server.command}', which is not an absolute path: a grant for one server pins the executable itself, so give its command as an absolute path in the catalog, or grant '*'`,
+      );
     return {
       kind: "mcpServer" as const,
       id,

@@ -25,7 +25,8 @@ beforeEach(async () => {
       "  github-token: { host: local, provider: env, name: GITHUB_TOKEN }",
       "capabilities:",
       "  mcpServers:",
-      "    github: { command: gh-mcp, args: [--stdio], env: { GITHUB_TOKEN: { secret: github-token } } }",
+      "    github: { command: /opt/mcp/gh-mcp, args: [--stdio], env: { GITHUB_TOKEN: { secret: github-token } } }",
+      "    bare: { command: gh-mcp }",
       "",
     ].join("\n"),
     "utf8",
@@ -55,7 +56,7 @@ describe("auth issue --mcp-server", () => {
     expect(await issue("ci-bot", { "mcp-server": ["github@build-box", "github@local", "github@local"] })).toBe(0);
     const c = stored("ci-bot");
     const definition = mcpServerDefinitionDigest({
-      command: "gh-mcp",
+      command: "/opt/mcp/gh-mcp",
       args: ["--stdio"],
       env: { GITHUB_TOKEN: { secret: "github-token" } },
     });
@@ -94,5 +95,9 @@ describe("auth issue --mcp-server", () => {
     });
     await expect(issue("a", { "mcp-server": ["github@nowhere"] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     await expect(issue("c", { "mcp-server": ["*", "github@local"] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    // A command found by PATH cannot be pinned by a grant for one server.
+    await expect(issue("d", { "mcp-server": ["bare@local"] })).rejects.toMatchObject({
+      message: expect.stringMatching(/'bare' runs 'gh-mcp', which is not an absolute path/),
+    });
   });
 });

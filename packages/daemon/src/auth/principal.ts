@@ -166,22 +166,34 @@ export const CapabilityGrantSchema = z.union([
 ]);
 export type CapabilityGrant = z.infer<typeof CapabilityGrantSchema>;
 
-/** Whether `grant` covers one use: that server, defined that way, on that host. */
+/**
+ * Whether `grant` covers one use: that server, defined that way, on that host. A narrow grant
+ * covers only a server whose command is an absolute path, so the definition it pins names the
+ * executable itself rather than whatever a `PATH` search or a working directory turns up.
+ */
 export function capabilityGrantCovers(
   grant: CapabilityGrant | undefined,
-  use: { kind: "mcpServer"; id: string; hostId: string; hostBinding: string; definition: string },
+  use: {
+    kind: "mcpServer";
+    id: string;
+    hostId: string;
+    hostBinding: string;
+    definition: string;
+    absoluteCommand: boolean;
+  },
 ): boolean {
   if (grant === undefined) return false;
   return (
     grant === "*" ||
-    grant.some(
-      (g) =>
-        g.kind === use.kind &&
-        g.id === use.id &&
-        g.host === use.hostId &&
-        g.binding === use.hostBinding &&
-        g.definition === use.definition,
-    )
+    (use.absoluteCommand &&
+      grant.some(
+        (g) =>
+          g.kind === use.kind &&
+          g.id === use.id &&
+          g.host === use.hostId &&
+          g.binding === use.hostBinding &&
+          g.definition === use.definition,
+      ))
   );
 }
 

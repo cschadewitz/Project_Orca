@@ -11,9 +11,10 @@ import { configuredGenerationSecrets, launchProvenance } from "./configuration-p
 import {
   AgentRegistry,
   LocalHost,
-  mcpServerCommandAvailable,
+  isAbsoluteCommand,
   mcpServerDefinitionDigest,
   openAcpSession,
+  resolveMcpServerCommand,
   secretHostBinding,
   startupTermination,
   type AgentHost,
@@ -2458,19 +2459,24 @@ export class Orchestrator {
   }
 
   /**
-   * Before a session is given a catalog MCP server (#337): the run's owner must be granted
-   * each one, as defined now, on this agent's host and endpoint; then each command must be
-   * there on that host. Either failure refuses the step before anything is spawned, naming
-   * the step and the server. Nothing is installed, and no other host is tried.
+   * Before a session is given a catalog MCP server (#337): the run's owner must hold one
+   * current credential granting the whole selected set, each server as defined now, on this
+   * agent's host and endpoint. Then each command is resolved on that host to the executable
+   * the agent is handed, so the agent starts exactly what was checked and does not search
+   * again. Either failure refuses the step before anything is spawned, naming the step and
+   * the server. Nothing is installed, and no other host is tried.
+   *
+   * Returns the session's servers with each catalog server's command replaced by that path.
    */
-  private async authorizeCatalogServers(
+  private async deliverCatalogServers(
     rc: RunContext,
     step: StepRun,
     agent: AgentSpec,
     host: AgentHost,
-    servers: ResolvedMcpServer[],
-  ): Promise<void> {
-    if (servers.length === 0) return;
+    capabilities: { mcpServers: AgentSpec["mcpServers"]; catalog: ResolvedMcpServer[] },
+  ): Promise<AgentSpec["mcpServers"]> {
+    const servers = capabilities.catalog;
+    if (servers.length === 0) return capabilities.mcpServers;
     if (!this.capabilityUse)
       throw capabilityRefusal(
         step.nodeId,
@@ -2489,21 +2495,28 @@ export class Orchestrator {
         hostId: host.spec.id,
         hostBinding,
         definition: mcpServerDefinitionDigest(m.server),
+        absoluteCommand: isAbsoluteCommand(m.server.command, host.spec.type),
       })),
     });
     const unavailable: CapabilityIssue[] = [];
+    const resolved = new Map<ResolvedMcpServer["server"], string>();
     for (const m of servers) {
-      const reason = await mcpServerCommandAvailable(host, m.server, { cwd: rc.workspace.cwd, agentEnv: agent.env });
-      if (reason)
+      const found = await resolveMcpServerCommand(host, m.server, { cwd: rc.workspace.cwd, agentEnv: agent.env });
+      if ("path" in found) resolved.set(m.server, found.path);
+      else
         unavailable.push({
           path: `workflow.nodes.${step.nodeId}.capabilities.mcpServers`,
           message:
-            reason === "missing"
-              ? `MCP server '${m.id}' cannot start on host '${host.spec.id}': command '${m.server.command}' was not found there. Install it on that host or remove the server from the selection`
+            found.reason === "missing"
+              ? `MCP server '${m.id}' cannot start on host '${host.spec.id}': command '${m.server.command}' was not found there as an executable file. Install it on that host or remove the server from the selection`
               : `MCP server '${m.id}' could not be checked on host '${host.spec.id}': the host did not answer`,
         });
     }
     if (unavailable.length) throw capabilityRefusal(step.nodeId, unavailable);
+    return capabilities.mcpServers.map((server) => {
+      const path = resolved.get(server);
+      return path === undefined ? server : { ...server, command: path };
+    });
   }
 
   /** A child's values redact its ancestors too: a child's result is written to its parent's log. */
@@ -2533,7 +2546,7 @@ export class Orchestrator {
     const model = selectedModel(rc.state.run.overrides, agent);
     const capabilities = this.stepCapabilities(rc, step, agent);
     // Asked at every open, pooled or not: a revoked grant stops the next step (#337).
-    await this.authorizeCatalogServers(rc, step, agent, host, capabilities.catalog);
+    const mcpServers = await this.deliverCatalogServers(rc, step, agent, host, capabilities);
     let pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
     if (pooled && pooled.capabilities !== capabilities.key) {
       // A per-run session carries the MCP servers it was opened with. A step whose scope
@@ -2591,7 +2604,7 @@ export class Orchestrator {
       session = await this.sessionFactory({
         host,
         // Only the step's resolved MCP servers reach `session/new` (#335).
-        agent: { ...agent, mcpServers: capabilities.mcpServers },
+        agent: { ...agent, mcpServers },
         origin: this.sessionOrigin(rc),
         cwd: rc.workspace.cwd,
         logger: rc.logger,

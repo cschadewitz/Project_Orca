@@ -21,6 +21,17 @@ export interface CapabilityUse {
   hostBinding: string;
   /** `mcpServerDefinitionDigest` of the definition as resolved now. */
   definition: string;
+  /**
+   * The configured command is an absolute path on that host, so what the grant pins is the
+   * executable itself: no `PATH` search and no working-directory resolution decide it. Only
+   * a `"*"` grant covers a server whose command is not.
+   */
+  absoluteCommand: boolean;
+}
+
+/** Whether `command` is an absolute path on a host of that type (POSIX for SSH hosts). */
+export function isAbsoluteCommand(command: string, hostType: "local" | "ssh"): boolean {
+  return hostType === "ssh" ? command.startsWith("/") : isAbsolute(command);
 }
 
 /**
@@ -66,46 +77,70 @@ async function executable(path: string): Promise<boolean> {
   }
 }
 
-async function findLocal(command: string, cwd: string, path: string | undefined): Promise<boolean> {
+async function findLocal(command: string, cwd: string, path: string | undefined): Promise<string | undefined> {
   const extensions =
     process.platform === "win32"
       ? ["", ...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)]
       : [""];
   const candidates = (base: string) => extensions.map((ext) => base + ext);
   if (isAbsolute(command) || command.includes("/") || (process.platform === "win32" && command.includes("\\"))) {
-    for (const candidate of candidates(resolve(cwd, command))) if (await executable(candidate)) return true;
-    return false;
+    for (const candidate of candidates(resolve(cwd, command))) if (await executable(candidate)) return candidate;
+    return undefined;
   }
   for (const dir of (path ?? "").split(delimiter).filter(Boolean))
-    for (const candidate of candidates(join(resolve(cwd, dir), command))) if (await executable(candidate)) return true;
-  return false;
+    for (const candidate of candidates(join(resolve(cwd, dir), command)))
+      if (await executable(candidate)) return candidate;
+  return undefined;
 }
 
+/** The longest executable path a host's answer may name; anything else is not an answer. */
+const MAX_PATH_LENGTH = 4096;
+const PATH_MARKER = "__orca_path__=";
+
 /**
- * Whether a catalog MCP server's command can be started on the host the agent runs on, from
- * the session's working directory: an executable file at that path, or found on the `PATH`
- * the agent will start it with. ORCA never installs or fetches one. This is a check that the
- * binary is there, not that the server works: the agent starts it, and a server that fails
- * after starting is the agent's to report.
+ * The executable a catalog MCP server's command names on the host the agent runs on, found
+ * the way ORCA defines it, so the agent can be handed exactly that and not search again:
  *
- * Returns undefined when the command is there, or a reason (`missing`, `unreachable`).
+ * - an absolute command is that file, which must be an executable regular file;
+ * - a relative path (`./server`) is resolved against the session's working directory;
+ * - a bare name is searched for on the server's literal `env.PATH`, else the agent's, else
+ *   the host's own (on SSH, the remote login shell's).
+ *
+ * The answer is an absolute path, or `missing` (not found, not executable, or not a file)
+ * or `unreachable` (the host did not answer). ORCA never installs or fetches one. Finding the
+ * file is not proof the server works: the agent starts it, and a server that fails after
+ * starting is the agent's to report.
  */
-export async function mcpServerCommandAvailable(
+export async function resolveMcpServerCommand(
   host: Pick<AgentHost, "spec" | "exec">,
   server: Pick<ResolvedMcpServerConfig, "command" | "env">,
   context: { cwd: string; agentEnv: Env },
-): Promise<"missing" | "unreachable" | undefined> {
+): Promise<{ path: string } | { reason: "missing" | "unreachable" }> {
   const path = configuredPath(server, context.agentEnv);
-  if (host.spec.type === "local")
-    return (await findLocal(server.command, context.cwd, path ?? process.env.PATH)) ? undefined : "missing";
-  const lookup = `command -v -- ${shellQuote(server.command)} >/dev/null`;
-  const script = `{ set +xv && exec 2>/dev/null; } || exit 4; cd ${shellQuote(context.cwd)} || exit 3; ${
-    path === undefined ? lookup : `PATH=${shellQuote(path)}; export PATH; ${lookup}`
-  } || exit 3; exit 0`;
+  if (host.spec.type === "local") {
+    const found = await findLocal(server.command, context.cwd, path ?? process.env.PATH);
+    return found ? { path: found } : { reason: "missing" };
+  }
+  // One quiet command on that host. It prints only the absolute path it found, and only
+  // after checking it is an executable regular file.
+  const script = [
+    "{ set +xv && exec 2>/dev/null; } || exit 4",
+    `cd ${shellQuote(context.cwd)} || exit 3`,
+    ...(path === undefined ? [] : [`PATH=${shellQuote(path)}`, "export PATH"]),
+    `p=$(command -v -- ${shellQuote(server.command)}) || exit 3`,
+    'case $p in /*) ;; */*) p="$PWD/$p" ;; *) exit 3 ;; esac',
+    '[ -f "$p" ] && [ -x "$p" ] || exit 3',
+    "printf '__orca_path__=%s\\n' \"$p\"",
+  ].join("; ");
   try {
-    const { code } = await host.exec(script, { timeoutMs: AVAILABILITY_TIMEOUT_MS });
-    return code === 0 ? undefined : code === 3 ? "missing" : "unreachable";
+    const { code, stdout } = await host.exec(script, { timeoutMs: AVAILABILITY_TIMEOUT_MS });
+    if (code === 3) return { reason: "missing" };
+    // A login profile may print first; the answer is the one marked line at the end.
+    const last = stdout.endsWith("\n") ? stdout.slice(stdout.lastIndexOf("\n", stdout.length - 2) + 1, -1) : "";
+    const found = last.startsWith(PATH_MARKER) ? last.slice(PATH_MARKER.length) : "";
+    if (code !== 0 || !found.startsWith("/") || found.length > MAX_PATH_LENGTH) return { reason: "unreachable" };
+    return { path: found };
   } catch {
-    return "unreachable";
+    return { reason: "unreachable" };
   }
 }

@@ -130,7 +130,7 @@ function setup(
   const registry = AgentRegistry.fromConfig(config);
   const workflows = new WorkflowRegistry();
   for (const w of [opts.workflow ?? flow].flat()) workflows.register(parseWorkflow(w));
-  const opened: { mcp: string[]; envKeys: string[][] }[] = [];
+  const opened: { mcp: string[]; envKeys: string[][]; commands: string[] }[] = [];
   let n = 0;
   const orchestrator = new Orchestrator({
     stores: opts.stores ?? memoryStores(),
@@ -146,6 +146,7 @@ function setup(
       opened.push({
         mcp: o.agent.mcpServers.map((m) => m.name),
         envKeys: o.agent.mcpServers.map((m) => Object.keys(m.env)),
+        commands: o.agent.mcpServers.map((m) => m.command),
       });
       let close!: () => void;
       const closed = new Promise<void>((r) => (close = r));
@@ -447,14 +448,16 @@ edges: [{ from: s, to: a }, { from: a, to: e }]
 
 describe("delivering catalog MCP servers (#337)", () => {
   /** A catalog whose servers' commands are real executables in a temp dir (or not, for `missing`). */
-  async function deliverable(opts: { missing?: boolean; sessionMode?: "per-run" | "per-step" } = {}) {
+  async function deliverable(opts: { missing?: boolean; bare?: boolean; sessionMode?: "per-run" | "per-step" } = {}) {
     const dir = await tempDir();
     const bin = join(dir, "gh-mcp");
     if (!opts.missing) {
       await writeFile(bin, "#!/bin/sh\nexit 0\n");
       await chmod(bin, 0o755);
     }
-    const github = { command: bin, env: { GITHUB_TOKEN: "ghp_secretsecretsecretsecret" } };
+    const github = opts.bare
+      ? { command: "gh-mcp", env: { GITHUB_TOKEN: "ghp_secretsecretsecretsecret", PATH: dir } }
+      : { command: bin, env: { GITHUB_TOKEN: "ghp_secretsecretsecretsecret" } };
     const asked: CapabilityUse[][] = [];
     let allow = true;
     const capabilityUse: CapabilityUseCheck = async ({ uses }) => {
@@ -479,6 +482,7 @@ describe("delivering catalog MCP servers (#337)", () => {
       ...made,
       asked,
       github,
+      bin,
       revoke: () => {
         allow = false;
       },
@@ -502,11 +506,21 @@ describe("delivering catalog MCP servers (#337)", () => {
           hostId: "local",
           hostBinding: secretHostBinding({ id: "local", type: "local" }),
           definition: mcpServerDefinitionDigest({ args: [], ...made.github }),
+          absoluteCommand: true,
         },
       ],
       expect.any(Array),
     ]);
     expect(JSON.stringify(made.asked)).not.toContain("ghp_");
+  });
+
+  it("hands the agent the executable it resolved, not a name for it to search for again", async () => {
+    const made = await deliverable({ bare: true });
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("completed");
+    expect(made.opened[0]!.commands).toEqual(["notes-mcp", "files-mcp", "shell-mcp", made.bin]);
+    // A name found on PATH is not an absolute command: only a "*" grant covers it.
+    expect(made.asked[0]![0]).toMatchObject({ id: "github", absoluteCommand: false });
   });
 
   it("refuses a step whose server is not granted, before anything starts", async () => {

@@ -70,7 +70,10 @@ function covers(principal: Principal, root: RunRoot, use: SecretUse): boolean {
   );
 }
 
-/** The same for a catalog capability: `capabilities.use`, the workflow, and a grant naming it. */
+/**
+ * The same for a catalog capability: `capabilities.use`, the workflow, and a grant naming it
+ * (a narrow one only for a server whose command is an absolute path).
+ */
 function coversCapability(principal: Principal, root: RunRoot, use: CapabilityUse): boolean {
   return (
     holds(principal, "capabilities.use") &&
@@ -91,6 +94,12 @@ function useDecision<U>(
     covers: (principal: Principal, root: RunRoot, use: U) => boolean;
     refuse: (use: U | undefined) => OrcaError;
     missing: (use: U) => string;
+    /**
+     * One credential must cover every use together, not each use on its own. Catalog
+     * servers are a session's selected set, granted as one; secret uses keep their
+     * documented per-use rule.
+     */
+    together?: boolean;
   },
 ) {
   return async ({ runId, uses }: { runId: string; uses: U[] }) => {
@@ -118,6 +127,24 @@ function useDecision<U>(
       throw kind.refuse(uses[0]);
     }
     const principals = opts.principals(owner).filter((p) => p.id === owner);
+    if (kind.together) {
+      if (!principals.some((p) => uses.every((use) => kind.covers(p, root, use)))) {
+        // Name the first use no single credential covers alongside the rest, if any.
+        const first = uses.find((use) => !principals.some((p) => kind.covers(p, root, use))) ?? uses[0];
+        audit(
+          "denied",
+          owner,
+          !principals.length
+            ? "no current grant"
+            : first && !principals.some((p) => kind.covers(p, root, first))
+              ? kind.missing(first)
+              : "no single credential grants the whole set",
+        );
+        throw kind.refuse(first);
+      }
+      audit("succeeded", owner);
+      return;
+    }
     for (const use of uses) {
       if (!principals.some((p) => kind.covers(p, root, use))) {
         audit("denied", owner, principals.length ? kind.missing(use) : "no current grant");
@@ -151,6 +178,7 @@ export function capabilityUseAuthority(opts: SecretUseAuthorityOptions): Capabil
     covers: coversCapability,
     refuse: refuseCapability,
     missing: (use) => `MCP server '${use.id}' not granted`,
+    together: true,
   });
 }
 
