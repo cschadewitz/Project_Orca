@@ -23,6 +23,17 @@
 # only, so the Worker serves no arm64 object of this version (docs/UPDATING.md, architecture
 # gate).
 #
+# Server bundle first (#877): from the 0.8 line (rings.js SERVER_FROM) the `server` job puts
+# the release's signed server bundle into the feed and offers it to the internal ring's
+# servers before the desktop job runs, because a ring's desktops are never offered a version
+# its servers are not all on. It downloads the bundle by the release's single
+# `orca-server-run` record with `orca-release.py fetch-bundle`, which verifies the manifest's
+# keyless signature against the pinned release-server-bundle.yml identity and the archive's
+# digest exactly as a server does, checks the manifest names the tagged commit, and uploads
+# with feed-r2.sh server-snapshot. A release candidate's bundle is attached shortly after the
+# candidate is published; until its record is there the job fails ("retry later") and the
+# desktop job does not run. Earlier lines have no bundle and the job does nothing.
+#
 # Rerunning after an interruption resumes: identical objects are skipped and different ones
 # refused. feed-promote.yml moves the version on from internal.
 name: Desktop feed (publish signed)
@@ -54,8 +65,73 @@ env:
   FEED_ARCHES: x64 arm64
 
 jobs:
+  server:
+    name: publish the ${{ inputs.version }} server bundle to internal servers
+    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
+    runs-on: ubuntu-24.04
+    environment: desktop-feed
+    steps:
+      - name: Refuse while the feed is paused
+        env:
+          PAUSE: ${{ vars.ORCA_FEED_PAUSE }}
+        run: |
+          if [ "$PAUSE" = "true" ]; then
+            echo "::error::the feed is paused (ORCA_FEED_PAUSE); nothing is published. See docs/UPDATING.md, \"Pulling a bad build\"."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Does this version have a server bundle
+        id: applies
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::invalid version"; exit 1; }
+          applies=$(node --input-type=module -e 'import { hasServer } from "./tools/deploy/feed-worker/rings.js"; console.log(hasServer(process.argv[1]))' "$VERSION")
+          echo "applies=$applies" >> "$GITHUB_OUTPUT"
+          [ "$applies" = true ] || echo "v$VERSION predates the server bundle; no server snapshot." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The same download and verification a server runs (orca-release.py): the release's one
+      # record, the recorded digests, the pinned signer, the manifest, the archive digest.
+      - name: Fetch and verify the signed server bundle
+        if: steps.applies.outputs.applies == 'true'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          manifest=$(python3 -I tools/deploy/orca-release.py fetch-bundle --cache "$RUNNER_TEMP/bundle-tools" "$VERSION" "$RUNNER_TEMP/server")
+          sha=$(git rev-parse --verify -q "refs/tags/v$VERSION^{commit}" || true)
+          [ -n "$sha" ] && [ "$(jq -r .sourceSha <<<"$manifest")" = "$sha" ] ||
+            { echo "::error::the bundle's manifest does not name v$VERSION's commit ($sha)"; exit 1; }
+          node tools/deploy/feed-server.js channel "$RUNNER_TEMP/server" "$VERSION" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload to the feed and offer to internal servers
+        if: steps.applies.outputs.applies == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
+          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          bash tools/deploy/feed-r2.sh probe
+          bash tools/deploy/feed-r2.sh server-snapshot "$RUNNER_TEMP/server" "$VERSION"
+
   publish:
     name: publish ${{ inputs.version }} to the internal ring
+    # After the server job: internal's servers hold the version before its desktops are offered it.
+    needs: server
     if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
     runs-on: windows-latest
     environment: desktop-feed

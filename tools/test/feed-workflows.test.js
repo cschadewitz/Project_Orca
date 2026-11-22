@@ -1,5 +1,6 @@
 /** The desktop feed's workflow wiring: only verified signed bytes for a tagged commit enter it. */
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 const read = (name) => readFileSync(`.github/workflows/${name}`, "utf8");
@@ -95,5 +96,47 @@ describe("automatic feed dispatch", () => {
 
   it("queues feed-publish per version so no version's dispatch replaces another's", () => {
     expect(read("feed-publish.yml")).toContain("group: feed-publish-${{ inputs.version }}");
+  });
+});
+
+describe("server bundle channel workflows (#877)", () => {
+  const { parse } = createRequire(new URL("../../packages/cli/package.json", import.meta.url))("yaml");
+  const workflow = (name) => parse(read(name));
+
+  it("publishes the server bundle to internal servers before the desktop job runs", () => {
+    const wf = workflow("feed-publish.yml");
+    const { server, publish } = wf.jobs;
+    expect(publish.needs).toBe("server");
+    expect(server.if).toBe("github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''");
+    expect(server.environment).toBe("desktop-feed");
+    const names = server.steps.map((s) => s.name ?? s.uses);
+    expect(names[0]).toBe("Refuse while the feed is paused");
+    expect(server.steps[0].run).toContain('if [ "$PAUSE" = "true" ]; then');
+    const run = server.steps.map((s) => s.run ?? "").join("\n");
+    // Main's tooling only, the same verification a server runs, the tag's commit, then upload.
+    expect(server.steps[1].with).toMatchObject({ ref: "main", "persist-credentials": false });
+    const order = [
+      "hasServer",
+      "python3 -I tools/deploy/orca-release.py fetch-bundle",
+      "refs/tags/v$VERSION^{commit}",
+      "tools/deploy/feed-server.js channel",
+      "tools/deploy/feed-r2.sh probe",
+      'tools/deploy/feed-r2.sh server-snapshot "$RUNNER_TEMP/server" "$VERSION"',
+    ].map((needle) => run.indexOf(needle));
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // Versions before the 0.8 line skip every step after the check, so the desktop job runs.
+    for (const step of server.steps.slice(server.steps.findIndex((s) => s.id === "applies") + 1))
+      expect(step.if).toBe("steps.applies.outputs.applies == 'true'");
+  });
+
+  it("promotes either channel, refusing everything but a halt while paused", () => {
+    const wf = workflow("feed-promote.yml");
+    const channel = wf.on.workflow_dispatch.inputs.channel;
+    expect(channel).toMatchObject({ type: "choice", options: ["desktop", "server"], default: "desktop" });
+    const run = wf.jobs.promote.steps.at(-1).run;
+    expect(run).toContain('desktop) bash tools/deploy/feed-r2.sh promote "$RING" "$VERSION" "$PERCENT" ;;');
+    expect(run).toContain('server) bash tools/deploy/feed-r2.sh promote-server "$RING" "$VERSION" "$PERCENT" ;;');
+    expect(wf.jobs.promote.steps[0].name).toBe("Refuse while the feed is paused");
   });
 });

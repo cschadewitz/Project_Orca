@@ -17,6 +17,11 @@
  * - the installer the feed serves has that entry's size and sha512, and its SHA-256 equals
  *   the published GitHub release asset's digest, so the feed serves the released bytes.
  *
+ * The server bundle channel (#877) is checked the same way with the same canaries:
+ * `server/latest-linux-x64.yml` must parse strictly (feed-server.js), name a published release
+ * the ring may hold, and its three files must be served with the listed sizes and SHA-256
+ * digests, equal to that release's recorded assets. A broken server channel fails the run.
+ *
  * It cannot read rings.json (that needs the bucket credential, which stays in the protected
  * desktop-feed environment), so it checks what a ring is offered, not what it should be offered.
  * The canary tokens live in the `feed-canary` environment, which only main can deploy to.
@@ -30,6 +35,7 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseServerChannel } from "./feed-server.js";
 import { RINGS } from "./feed-worker/rings.js";
 import * as worker from "./feed-worker/worker.js";
 
@@ -239,7 +245,88 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
       else report.push(`${ring} ${arch}: ${channel.version}, served bytes match the published release`);
     }
   }
+  await watchServers({ tokens, rings, feed, github, releases, problems, report });
   return { problems, report };
+}
+
+/** The server bundle channel of every ring with a canary (#877). Adds to problems and report. */
+async function watchServers({ tokens, rings, feed, github, releases, problems, report }) {
+  const anonymous = await feed("server/latest-linux-x64.yml");
+  if (anonymous.status !== 401)
+    problems.push(`a server channel request without a token got ${anonymous.status}, not 401`);
+  const served = new Map();
+  for (const ring of rings) {
+    const where = `${ring} server/latest-linux-x64.yml`;
+    const response = await feed("server/latest-linux-x64.yml", tokens[ring]);
+    if (response.status === 404) {
+      report.push(`${ring} server: nothing offered yet`);
+      continue;
+    }
+    if (response.status !== 200) {
+      problems.push(`${where}: got ${response.status}`);
+      continue;
+    }
+    let channel;
+    try {
+      channel = parseServerChannel(await response.text());
+    } catch (error) {
+      problems.push(`${where}: not a server channel file this feed publishes (${error.message})`);
+      continue;
+    }
+    if (ring === "stable" && channel.version.includes("-")) {
+      problems.push(`${where}: stable offers the prerelease ${channel.version}`);
+      continue;
+    }
+    if (!releases.has(channel.version))
+      releases.set(channel.version, await github(`releases/tags/v${channel.version}`));
+    const release = releases.get(channel.version);
+    if (!release || release.draft !== false || !release.published_at) {
+      problems.push(`${ring} server: ${channel.version} has no published GitHub release`);
+      continue;
+    }
+    let ok = true;
+    for (const kind of ["archive", "manifest", "signature"]) {
+      const name = channel[kind];
+      const digest = `sha256:${channel[`${kind}Sha256`]}`;
+      const asset = release.assets?.find((a) => a.name === name);
+      if (asset?.digest !== digest) {
+        problems.push(
+          `${ring} server: ${name} is not release v${channel.version}'s asset (${asset?.digest ?? "missing"})`,
+        );
+        ok = false;
+        continue;
+      }
+      const path = `server/${name}`;
+      if (served.has(path)) {
+        // Downloaded for another ring: this ring's token must still reach the same bytes.
+        const head = await feed(path, tokens[ring], "HEAD");
+        if (head.status !== 200 || head.headers.get("content-length") !== String(channel[`${kind}Size`])) {
+          problems.push(
+            `${ring} server: HEAD ${path} got ${head.status}, length ${head.headers.get("content-length")}`,
+          );
+          ok = false;
+        }
+        continue;
+      }
+      const download = await feed(path, tokens[ring]);
+      if (download.status !== 200) {
+        served.set(path, true);
+        problems.push(`${ring} server: ${path} got ${download.status}`);
+        ok = false;
+        continue;
+      }
+      const bytes = Buffer.from(await download.arrayBuffer());
+      served.set(path, true);
+      if (
+        bytes.length !== channel[`${kind}Size`] ||
+        `sha256:${createHash("sha256").update(bytes).digest("hex")}` !== digest
+      ) {
+        problems.push(`${ring} server: ${path} does not match the channel file's size and sha256`);
+        ok = false;
+      }
+    }
+    if (ok) report.push(`${ring} server: ${channel.version}, served bytes match the published release`);
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

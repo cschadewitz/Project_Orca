@@ -66,6 +66,8 @@ describe("feed watchdog", () => {
     expect(report).toEqual([
       "internal x64: 0.7.1-rc.1, served bytes match the published release",
       "stable x64: 0.7.0, served bytes match the published release",
+      "internal server: nothing offered yet",
+      "stable server: nothing offered yet",
     ]);
   });
 
@@ -269,5 +271,121 @@ describe("canaryMapDigest", () => {
     expect(canaryMapDigest({ ...FULL, stable: "short" })).toBeUndefined();
     expect(canaryMapDigest({ ...FULL, stable: 42 })).toBeUndefined();
     expect(canaryMapDigest(undefined)).toBeUndefined();
+  });
+});
+
+describe("server bundle channel (#877)", () => {
+  const SHA = "c".repeat(40);
+  const hex = (text) => createHash("sha256").update(text).digest("hex");
+  const stem = (version) => `orca-server-${version}-linux-x64`;
+  const serverFiles = (version) => ({
+    [`server/${stem(version)}.tar.xz`]: `archive ${version}`,
+    [`server/${stem(version)}.manifest.json`]: `manifest ${version}`,
+    [`server/${stem(version)}.manifest.json.sigstore.json`]: `signature ${version}`,
+  });
+  const channel = (version, files = serverFiles(version)) => {
+    const [archive, manifest, signature] = Object.values(files);
+    return [
+      `version: ${version}`,
+      "platform: linux-x64",
+      `sourceSha: ${SHA}`,
+      `archive: ${stem(version)}.tar.xz`,
+      `archiveSha256: ${hex(archive)}`,
+      `archiveSize: ${archive.length}`,
+      `manifest: ${stem(version)}.manifest.json`,
+      `manifestSha256: ${hex(manifest)}`,
+      `manifestSize: ${manifest.length}`,
+      `signature: ${stem(version)}.manifest.json.sigstore.json`,
+      `signatureSha256: ${hex(signature)}`,
+      `signatureSize: ${signature.length}`,
+      "",
+    ].join("\n");
+  };
+  const release = (version, files = serverFiles(version)) => ({
+    draft: false,
+    published_at: "x",
+    assets: Object.entries(files).map(([path, body]) => ({ name: path.slice("server/".length), digest: sha256(body) })),
+  });
+
+  /** The desktop world, plus a server channel: `servers` maps ring to version. */
+  function serverWorld({ servers, files, releases, text, anonymous = 401 } = {}) {
+    const offered = servers ?? { internal: "0.8.0-rc.1", stable: "0.8.0" };
+    const bodies = { ...serverFiles("0.8.0-rc.1"), ...serverFiles("0.8.0"), ...files };
+    const base = world({
+      offers: {},
+      releases: releases ?? { "0.8.0-rc.1": release("0.8.0-rc.1"), "0.8.0": release("0.8.0") },
+    });
+    const fetch = async (url, init = {}) => {
+      const name = new URL(String(url)).pathname.slice(1);
+      if (String(url).startsWith("https://api.github.com/") || !name.startsWith("server/"))
+        return base.fetch(url, init);
+      base.calls.push({ href: String(url), auth: init.headers?.Authorization, method: init.method ?? "GET" });
+      const auth = init.headers?.Authorization;
+      if (!auth) return new Response(null, { status: anonymous });
+      const ring = Object.keys(TOKENS).find((r) => auth === `Bearer ${TOKENS[r]}`);
+      if (name === "server/latest-linux-x64.yml")
+        return offered[ring]
+          ? new Response(text?.(offered[ring]) ?? channel(offered[ring]), { status: 200 })
+          : new Response(null, { status: 404 });
+      if (bodies[name] === undefined) return new Response(null, { status: 404 });
+      if (init.method === "HEAD")
+        return new Response(null, { status: 200, headers: { "Content-Length": String(bodies[name].length) } });
+      return new Response(bodies[name], { status: 200 });
+    };
+    return { fetch, calls: base.calls };
+  }
+
+  it("passes a healthy server channel and downloads each file once", async () => {
+    const w = serverWorld({ servers: { internal: "0.8.0", stable: "0.8.0" } });
+    const { problems, report } = await run(w);
+    expect(problems).toEqual([]);
+    expect(report.filter((line) => line.includes("server"))).toEqual([
+      "internal server: 0.8.0, served bytes match the published release",
+      "stable server: 0.8.0, served bytes match the published release",
+    ]);
+    const archive = w.calls.filter((c) => c.href.endsWith(".tar.xz"));
+    expect(archive.map((c) => c.method)).toEqual(["GET", "HEAD"]);
+  });
+
+  it("fails when the server channel answers without a token", async () => {
+    const { problems } = await run(serverWorld({ anonymous: 200 }));
+    expect(problems).toContain("a server channel request without a token got 200, not 401");
+  });
+
+  it("fails when stable servers are offered a prerelease", async () => {
+    const { problems } = await run(serverWorld({ servers: { stable: "0.8.0-rc.1" } }));
+    expect(problems).toContain("stable server/latest-linux-x64.yml: stable offers the prerelease 0.8.0-rc.1");
+  });
+
+  it("fails on a channel file this feed does not write", async () => {
+    const { problems } = await run(
+      serverWorld({ text: (v) => channel(v).replace("platform: linux-x64", "platform: x") }),
+    );
+    expect(problems.join("\n")).toMatch(/internal server\/latest-linux-x64\.yml: not a server channel file/);
+  });
+
+  it("fails when a served file is not the release's asset, or not the listed bytes", async () => {
+    const releases = {
+      "0.8.0-rc.1": release("0.8.0-rc.1", {
+        ...serverFiles("0.8.0-rc.1"),
+        [`server/${stem("0.8.0-rc.1")}.tar.xz`]: "x",
+      }),
+    };
+    const { problems } = await run(serverWorld({ servers: { internal: "0.8.0-rc.1" }, releases }));
+    expect(problems.join("\n")).toContain(
+      `internal server: ${stem("0.8.0-rc.1")}.tar.xz is not release v0.8.0-rc.1's asset`,
+    );
+    const swapped = { [`server/${stem("0.8.0")}.manifest.json`]: "manifest tampered" };
+    const tampered = await run(
+      serverWorld({ servers: { stable: "0.8.0" }, files: swapped, text: () => channel("0.8.0") }),
+    );
+    expect(tampered.problems).toContain(
+      `stable server: server/${stem("0.8.0")}.manifest.json does not match the channel file's size and sha256`,
+    );
+  });
+
+  it("fails when a ring is offered a server version with no published release", async () => {
+    const { problems } = await run(serverWorld({ servers: { internal: "0.8.0" }, releases: {} }));
+    expect(problems).toContain("internal server: 0.8.0 has no published GitHub release");
   });
 });

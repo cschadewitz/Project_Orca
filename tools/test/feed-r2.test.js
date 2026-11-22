@@ -317,6 +317,87 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
     expect(readdirSync(join(f.root, "store"))).toEqual([]);
   });
 
+  describe("server bundle snapshots (#877)", () => {
+    const VERSION = "0.8.0-rc.1";
+    const STEM = `orca-server-${VERSION}-linux-x64`;
+    const bundle = (f) => {
+      const dir = join(f.root, "server");
+      mkdirSync(dir, { recursive: true });
+      for (const name of [`${STEM}.tar.xz`, `${STEM}.manifest.json`, `${STEM}.manifest.json.sigstore.json`])
+        writeFileSync(join(dir, name), `${name} bytes`);
+      writeFileSync(join(dir, "latest-linux-x64.yml"), `version: ${VERSION}\n`);
+      return dir;
+    };
+
+    it("uploads the bundle, then its channel file, then its completion record, then offers it to internal servers", () => {
+      const f = setup();
+      const result = f.run("server-snapshot", bundle(f), VERSION);
+      expect(result.status, result.stderr).toBe(0);
+      const puts = f
+        .log()
+        .filter((a) => a[3] === "put-object")
+        .map((a) => a[a.indexOf("--key") + 1]);
+      expect(puts).toEqual([
+        `server/${VERSION}/${STEM}.tar.xz`,
+        `server/${VERSION}/${STEM}.manifest.json`,
+        `server/${VERSION}/${STEM}.manifest.json.sigstore.json`,
+        `server/${VERSION}/latest-linux-x64.yml`,
+        `server/${VERSION}/complete.json`,
+        "rings.json",
+      ]);
+      for (const args of f.log().filter((a) => a[3] === "put-object" && a.includes(`server/${VERSION}/complete.json`)))
+        expect(args).toContain("--if-none-match");
+      expect(JSON.parse(readFileSync(f.object(`server/${VERSION}/complete.json`), "utf8"))).toEqual({
+        format: 1,
+        version: VERSION,
+        platform: "linux-x64",
+      });
+      const rings = JSON.parse(readFileSync(f.object("rings.json"), "utf8"));
+      expect(rings).toEqual({ format: 1, rings: {}, server: { internal: { version: VERSION } } });
+      // A rerun of identical bytes is a no-op; different bytes are refused.
+      expect(f.run("server-snapshot", bundle(f), VERSION).status).toBe(0);
+      writeFileSync(join(f.root, "server", `${STEM}.tar.xz`), "other bytes");
+      expect(f.run("server-snapshot", join(f.root, "server"), VERSION).stderr).toContain(
+        "already exists with different bytes",
+      );
+    });
+
+    it("refuses a missing file before writing anything, and a pre-0.8 version before offering it", () => {
+      const f = setup();
+      const dir = bundle(f);
+      rmSync(join(dir, "latest-linux-x64.yml"));
+      expect(f.run("server-snapshot", dir, VERSION).stderr).toContain("missing latest-linux-x64.yml");
+      expect(existsSync(f.object("rings.json"))).toBe(false);
+      expect(existsSync(join(f.root, "log"))).toBe(false);
+    });
+
+    it("promotes servers only from a complete server snapshot, and desktops only behind them", () => {
+      const f = setup();
+      expect(f.run("promote-server", "preview", VERSION, "100").stderr).toContain("no complete server snapshot");
+      expect(f.run("server-snapshot", bundle(f), VERSION).status).toBe(0);
+      const promoted = f.run("promote-server", "preview", VERSION, "100");
+      expect(promoted.status, promoted.stderr).toBe(0);
+      expect(f.log().at(-1)).toContain("--if-match");
+      expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8")).server.preview).toEqual({ version: VERSION });
+      // The desktop snapshot of the same version may now be offered to internal and preview.
+      f.release(VERSION, "prerelease");
+      expect(f.run("snapshot", f.artifacts, VERSION, "x64").status).toBe(0);
+      expect(f.run("promote", "preview", VERSION, "100").status).toBe(0);
+      // The desktop rules still apply on top: rings never move backwards.
+      const again = f.run("promote", "internal", VERSION, "100");
+      expect(again.stderr).toContain("internal already offers 0.8.0-rc.1");
+    });
+
+    it("never offers desktops a server-era version before internal's servers have it", () => {
+      const f = setup();
+      f.release(VERSION, "prerelease");
+      const result = f.run("snapshot", f.artifacts, VERSION, "x64");
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("offer the server bundle 0.8.0-rc.1 to all of internal first");
+      expect(existsSync(f.object("rings.json"))).toBe(false);
+    });
+  });
+
   it("parses as bash", () => {
     expect(() => execFileSync("bash", ["-n", "tools/deploy/feed-r2.sh"])).not.toThrow();
   });

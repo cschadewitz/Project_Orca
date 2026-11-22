@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# Write the private desktop feed in Cloudflare R2 through its S3 API. Run by
-# release-publish.yml and feed-promote.yml; tools/deploy/feed-worker serves what this writes.
+# Write the private update feed in Cloudflare R2 through its S3 API. Run by
+# feed-publish.yml and feed-promote.yml; tools/deploy/feed-worker serves what this writes.
 #
 #   feed-r2.sh snapshot DIR VERSION ARCHES upload VERSION's Windows feed files for ARCHES
 #                                          ("x64" or "x64 arm64") from DIR, then offer it
 #                                          in the internal ring
 #   feed-r2.sh promote RING VERSION PERCENT
 #                                          offer VERSION to PERCENT of RING (0 halts a rollout)
+#   feed-r2.sh server-snapshot DIR VERSION
+#                                          upload VERSION's signed server bundle (#877) from
+#                                          DIR (its three release files and the channel file
+#                                          feed-server.js wrote) under server/VERSION/, then
+#                                          offer it to the internal ring's servers
+#   feed-r2.sh promote-server RING VERSION PERCENT
+#                                          the same as promote, for the server channel
 #   feed-r2.sh probe                       prove the bucket honours If-None-Match and If-Match
 #                                          on a throwaway key (run before every write job)
 #
@@ -142,6 +149,29 @@ case "${1:-}" in
     exists "$3/complete.json" || fail "no complete feed snapshot for $3"
     update_rings promote "$2" "$3" "$4"
     ;;
+  server-snapshot)
+    [[ $# -eq 3 ]] || fail "usage: feed-r2.sh server-snapshot DIR VERSION"
+    dir=$2 version=$3
+    check_version "$version"
+    stem="orca-server-$version-linux-x64"
+    files=("$stem.tar.xz" "$stem.manifest.json" "$stem.manifest.json.sigstore.json" latest-linux-x64.yml)
+    for name in "${files[@]}"; do [[ -f "$dir/$name" ]] || fail "missing $name"; done
+    # The bundle, then its channel file, then the completion record, each written once, so
+    # the Worker serves nothing of the snapshot until all of it is in place; a rerun resumes.
+    put_once "server/$version/$stem.tar.xz" "$dir/$stem.tar.xz" application/octet-stream
+    put_once "server/$version/$stem.manifest.json" "$dir/$stem.manifest.json" application/json
+    put_once "server/$version/$stem.manifest.json.sigstore.json" "$dir/$stem.manifest.json.sigstore.json" application/json
+    put_once "server/$version/latest-linux-x64.yml" "$dir/latest-linux-x64.yml" "text/yaml; charset=utf-8"
+    printf '{"format":1,"version":"%s","platform":"linux-x64"}\n' "$version" >"$work/server-complete.json"
+    put_once "server/$version/complete.json" "$work/server-complete.json" application/json
+    update_rings publish-server "$version"
+    ;;
+  promote-server)
+    [[ $# -eq 4 ]] || fail "usage: feed-r2.sh promote-server RING VERSION PERCENT"
+    check_version "$3"
+    exists "server/$3/complete.json" || fail "no complete server snapshot for $3"
+    update_rings promote-server "$2" "$3" "$4"
+    ;;
   probe)
     # Everything above relies on R2 refusing conditional writes that do not hold. Prove it on
     # a throwaway key outside any served path before writing anything real.
@@ -169,6 +199,6 @@ case "${1:-}" in
     echo "R2 honours If-None-Match and If-Match." | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
     ;;
   *)
-    fail "usage: feed-r2.sh snapshot DIR VERSION ARCHES | promote RING VERSION PERCENT | probe"
+    fail "usage: feed-r2.sh snapshot DIR VERSION ARCHES | promote RING VERSION PERCENT | server-snapshot DIR VERSION | promote-server RING VERSION PERCENT | probe"
     ;;
 esac

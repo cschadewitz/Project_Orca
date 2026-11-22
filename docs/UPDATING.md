@@ -160,6 +160,49 @@ Rings never move backwards, and halting is not a rollback. The client disallows 
 so anyone who already took a bad build keeps it until a newer fixed version ships; halting
 only stops more people from getting it. Keep early rollouts small for that reason.
 
+### Server bundle channel
+
+From the 0.8 line the same feed also serves the signed prebuilt server bundle
+([Prebuilt server bundle](#prebuilt-server-bundle)), with the same rings, rollouts, tokens and
+pause switch (#877). A server asks for `server/latest-linux-x64.yml` with its token and gets
+its ring's server version: flat `key: value` lines naming the bundle, its manifest and the
+manifest's signature with their SHA-256 digests and sizes
+([`tools/deploy/feed-server.js`](../tools/deploy/feed-server.js)). The three files are served as
+`server/orca-server-X.Y.Z-linux-x64.tar.xz` and so on, with Range and HEAD like the
+installers. The feed is transport only: the server still verifies the manifest's keyless
+signature against the pinned workflow identity before it uses anything.
+
+- **Tokens.** A server can use any token, but give it one limited to the server channel:
+  `node tools/deploy/feed-token.js RING --server` mints a `FEED_TOKENS` entry
+  `{"ring": "…", "channel": "server"}`, which the Worker lets read `server/` only.
+- **Publishing.** **Desktop feed (publish signed)** puts a release's server bundle into the
+  feed first, offered to the internal ring's servers, and only then its Windows installers.
+  It downloads the bundle by the release's single `orca-server-run` record and verifies it
+  exactly as a server does (`orca-release.py fetch-bundle`), and checks that the signed
+  manifest names the release tag's commit. A release candidate's bundle is attached shortly
+  after the candidate is published; until then the run fails with "retry later" and its
+  desktop job does not run. Versions before 0.8.0 have no bundle and skip this step.
+- **Servers first.** `rings.json` holds the server rings beside the desktop ones, so one
+  conditional write moves both. From the 0.8 line, a ring's desktops are never offered a
+  version that ring's servers are not all on: publishing or promoting desktops to `VERSION`
+  in a ring is refused ("offer the server bundle VERSION to all of RING first") unless that
+  ring's **full** server version is `VERSION` or newer. A server rollout is not enough, because
+  servers outside it stay on the full version. So promote with **Desktop feed (promote)**,
+  `channel` `server`, first (a rollout, then 100%), then `channel` `desktop`. Servers may run
+  ahead of desktops (the daemon accepts the previous protocol major for one release), and a
+  halt (percent 0) is always allowed on either channel. Server rings never move backwards and
+  `stable` never takes a prerelease, as for desktops.
+- **Pause.** `ORCA_FEED_PAUSE` stops server publication and server promotions (except a halt)
+  exactly as it does for desktops.
+- **Watchdog.** The feed watchdog also checks each ring's server channel with the same
+  canaries: a request without a token must get 401; the channel file must parse strictly and
+  name a published release (never a prerelease in `stable`); and each of the three files must
+  be served with the listed size and SHA-256, equal to that release's asset.
+
+The Worker needs no new binding or secret for this. Redeploy it from main (whatever pins its
+source) before the first server publication: an older Worker ignores `rings.json`'s server
+rings and answers 404 for `server/`, and reads a `"channel": "server"` token like any other.
+
 ### Pulling a bad build
 
 Rings never move backwards, so a bad build is never "rolled back": it is contained, then
@@ -320,7 +363,8 @@ One-time setup (Casey):
    set the bucket and your custom domain, and run `npx wrangler deploy` in that directory.
    Deploy the Worker from current main before the first feed run, and again whenever
    `worker.js` changes: an older deployment may serve architectures the feed does not.
-3. Mint a token per person with `node tools/deploy/feed-token.js RING`. Give each person their
+3. Mint a token per person with `node tools/deploy/feed-token.js RING` (add `--server` for a
+   server, so it reads only the server channel). Give each person their
    token; merge the printed entries into one JSON object and store it with
    `npx wrangler secret put FEED_TOKENS`. Revoke a person by removing their entry.
 4. Create the `desktop-feed` environment (Settings → Environments) and under deployment
