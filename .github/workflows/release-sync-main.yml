@@ -1,0 +1,169 @@
+# Records a published line release on main (docs/RELEASING.md, "Release lines").
+#
+# A patch released from `release/X.Y` never merges into main, so main would neither list it in
+# CHANGELOG.md nor know its changelog.d/ fragments were released, and the next minor would
+# repeat them. This opens one pull request on main, `changelog: record vX.Y.Z` from the branch
+# `release-sync/vX.Y.Z`, that adds the release's section and deletes exactly the fragments the
+# release commit consumed, each only where main's copy is byte-identical to the released one (a
+# differing copy is kept and named). It goes through main's normal review and checks, with
+# auto-merge requested; it is never merged directly.
+#
+# It acts only on a release that is really published: the release is read back by tag (and by
+# id when given), must not be a draft, and its tag must resolve to a commit on the version's
+# protected line (tools/release-lane.js). A draft, or a final whose acceptance failed, leaves
+# main alone. Release (publish final) dispatches it after publishing; Release (publish) does
+# for a line prerelease. A rerun updates the same branch and pull request.
+#
+# The optional release App's token lives in the `release-bot` environment, which only main may
+# deploy to; without it the pull request is opened with GITHUB_TOKEN and gets no checks.
+name: Release (sync main)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published version (X.Y.Z or X.Y.Z-rc.N)
+        required: true
+      release_id:
+        description: Its release id, when known (checked against the release the tag names)
+        required: false
+        default: ""
+
+run-name: Release (sync main) v${{ inputs.version }}
+
+concurrency:
+  group: release-sync-main-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: record a line release on main
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: release-bot
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Release bot token (optional)
+        id: app
+        if: ${{ vars.ORCA_RELEASE_APP_ID != '' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.ORCA_RELEASE_APP_ID }}
+          private-key: ${{ secrets.ORCA_RELEASE_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Read back the published release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          ID: ${{ inputs.release_id }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error::'$VERSION' is not a final or an -rc.N version"; exit 1
+          fi
+          if ! [[ -z "$ID" || "$ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::release_id must be a number"; exit 1
+          fi
+          # The tags endpoint returns published releases only; a draft is a 404 here.
+          if ! release=$(gh api "repos/$REPO/releases/tags/v$VERSION"); then
+            echo "::error::v$VERSION is not a published release; main is left alone"; exit 1
+          fi
+          read -r id draft tag published < <(jq -r '[.id, .draft, .tag_name, (.published_at // "")] | map(tostring) | join(" ")' <<<"$release")
+          if [ "$draft" != false ] || [ "$tag" != "v$VERSION" ] || [ -z "$published" ]; then
+            echo "::error::v$VERSION does not read back as a published release ($id $draft $tag); main is left alone"; exit 1
+          fi
+          if [ -n "$ID" ] && [ "$ID" != "$id" ]; then
+            echo "::error::release $ID is not the published v$VERSION (that is $id)"; exit 1
+          fi
+          git fetch -q --force origin "refs/tags/v$VERSION:refs/tags/v$VERSION"
+          sha=$(git rev-parse "refs/tags/v$VERSION^{commit}")
+          lane=$(node tools/release-lane.js lane "$VERSION")
+          if [ "$lane" = main ]; then
+            echo "v$VERSION was released from main; nothing to record." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The exact tag commit must be on the version's protected line.
+          if ! node tools/release-lane.js verify "$sha" "$VERSION" > "$RUNNER_TEMP/lane"; then
+            cat "$RUNNER_TEMP/lane"; exit 1
+          fi
+          echo "Release $id, v$VERSION, tag commit \`$sha\` on $lane." >> "$GITHUB_STEP_SUMMARY"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Record the release on main
+        if: steps.release.outputs.sha != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SHA: ${{ steps.release.outputs.sha }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git show "$SHA:CHANGELOG.md" > "$RUNNER_TEMP/line-CHANGELOG.md"
+          node tools/release.js sync "$VERSION" "$RUNNER_TEMP/line-CHANGELOG.md"
+          # The fragments this release consumed: deleted by the release commit itself. Each is
+          # removed from main only when main's copy is the exact blob that was released.
+          kept=()
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            [ -f "$file" ] || continue
+            if [ "$(git rev-parse "$SHA^1:$file")" = "$(git hash-object -- "$file")" ]; then
+              git rm -q -- "$file"
+            else
+              kept+=("$file")
+            fi
+          done < <(git diff --diff-filter=D --name-only "$SHA^1" "$SHA" -- changelog.d/)
+          for file in "${kept[@]}"; do
+            echo "::warning::kept $file on $DEFAULT_BRANCH: it differs from the copy v$VERSION released"
+          done
+          git add CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "$DEFAULT_BRANCH already records v$VERSION; nothing to do." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          changed=$(git diff --cached --name-status |
+            awk -F'\t' '!(($1 == "M" && $2 == "CHANGELOG.md") || ($1 == "D" && $2 ~ /^changelog\.d\/[^\/]+\.md$/))')
+          if [ -n "$changed" ]; then
+            echo "::error::the sync would change more than CHANGELOG.md and released fragments:"
+            echo "$changed"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qm "changelog: record v$VERSION, released from its line"
+          # One branch and one pull request per version: a rerun replaces the branch's single commit
+          # (this workflow's own branch, nobody else's) and finds the pull request already open.
+          branch="release-sync/v$VERSION"
+          git push -q --force "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" "HEAD:refs/heads/$branch"
+          url=$(gh pr list --repo "$REPO" --state open --base "$DEFAULT_BRANCH" --head "$branch" --json url --jq '.[0].url // ""')
+          if [ -z "$url" ]; then
+            body="v$VERSION was released from its release line at \`$SHA\`. This adds its CHANGELOG section to $DEFAULT_BRANCH and deletes the changelog.d/ fragments it released (only where $DEFAULT_BRANCH's copy is identical), so the next minor does not repeat them. It changes nothing else."
+            if [ ${#kept[@]} -gt 0 ]; then body+=$'\n\n'"Kept because they differ from the released copy: ${kept[*]}"; fi
+            url=$(gh pr create --repo "$REPO" --base "$DEFAULT_BRANCH" --head "$branch" --label no-changelog \
+              --title "changelog: record v$VERSION" --body "$body")
+            echo "Opened $url." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Updated $url." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # Through main's normal review and checks: auto-merge, never a direct merge.
+          if ! gh pr merge "$url" --auto --squash; then
+            echo "::warning::could not enable auto-merge on $url; it waits for review"
+          fi

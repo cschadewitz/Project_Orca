@@ -143,13 +143,11 @@ it("never hands a write token to the ref under test (#863)", () => {
     if (job.uses) continue;
     const expected = ["publish", "rehearsal"].includes(name)
       ? { contents: "write" }
-      : ["sign", "server-bundle"].includes(name)
+      : ["sign", "server-bundle", "record-line-release"].includes(name)
         ? { actions: "write" }
-        : name === "sync-main"
-          ? { contents: "write", "pull-requests": "write" }
-          : name === "check"
-            ? { contents: "read", checks: "read" }
-            : null;
+        : name === "check"
+          ? { contents: "read", checks: "read" }
+          : null;
     expect(job.permissions ?? null, name).toEqual(expected);
     for (const step of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@")))
       expect(step.with["persist-credentials"], name).toBe(false);
@@ -259,7 +257,10 @@ it("publishes a final only from main, through the checking script, and hands ove
   expect(job.permissions).toEqual({ contents: "write", actions: "write" });
   expect(job.steps[1].run).toBe('bash tools/deploy/release-attach.sh publish "$ID" "$VERSION" "$SHA" "$DEB" "$EXE"');
   expect(job.steps[1].run).not.toContain("${{");
-  expect(job.steps[2].run).toBe('gh workflow run feed-auto.yml --repo "$GITHUB_REPOSITORY" --ref main');
+  // After the publish read-back: main's record of a line release, then the feed.
+  expect(job.steps[2].name).toBe("Record a line release on main");
+  expect(job.steps[2].run).toContain("gh workflow run release-sync-main.yml");
+  expect(job.steps[3].run).toBe('gh workflow run feed-auto.yml --repo "$GITHUB_REPOSITORY" --ref main');
 });
 
 it("dispatches the signed server bundle for every real release, never a rehearsal (#876)", () => {

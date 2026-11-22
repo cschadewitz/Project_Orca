@@ -17,8 +17,9 @@
 # version of `main`. A missing line is created from the newest `vX.Y.*` final tag. A patch
 # milestone holding a `release:minor` or `release:major` issue is refused.
 #
-# With the repository variable ORCA_RELEASE_APP_ID and the secret ORCA_RELEASE_APP_PRIVATE_KEY
-# set (a GitHub App with contents and pull-requests write), the branch and pull request are
+# With the variable ORCA_RELEASE_APP_ID and the secret ORCA_RELEASE_APP_PRIVATE_KEY set in the
+# main-only `release-bot` environment (a GitHub App with contents and pull-requests write), the
+# branch and pull request are
 # made with the App's token, so CI and the release line guard run on the pull request; a line
 # branch that requires those checks cannot merge a release pull request opened without it.
 name: Release (prepare)
@@ -42,6 +43,9 @@ jobs:
   prepare:
     name: propose a release
     runs-on: ubuntu-24.04
+    # The optional release App's key lives in this environment, which only main may deploy to
+    # (no reviewers); a milestone event and a dispatch from main both run on main.
+    environment: release-bot
     steps:
       - name: Release bot token (optional)
         id: app

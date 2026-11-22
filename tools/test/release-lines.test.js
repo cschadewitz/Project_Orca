@@ -32,9 +32,12 @@ describe("the branch a version is cut from", () => {
     ["0.7.1", "release/0.7"],
     ["0.7.12", "release/0.7"],
     ["0.7.1-rc.2", "release/0.7"],
-    ["1.2.3", "release/1.2"],
   ])("%s comes from %s", (version, branch) => {
     expect(release(work, "line", version).trim()).toBe(branch);
+  });
+
+  it.each(["0.8.1", "1.2.3", "0.9.1-rc.1"])("refuses %s: line releases stop at 0.7 until the server bundle is", (v) => {
+    expect(() => release(work, "line", v)).toThrow(/built only from main/);
   });
 
   it("refuses something that is not a version", () => {
@@ -141,7 +144,7 @@ describe("the release line guard", () => {
     ["without the release label", releasePr({ labels: [] }), /must carry the release label/],
     ["with the label on another head", releasePr({ head: "fix-crash" }), /head must be release\/vX\.Y\.Z/],
     ["from a fork", releasePr({ sameRepository: false }), /from this repository/],
-    ["for another line", releasePr({ head: "release/v0.8.1" }), /cut from release\/0\.8, not release\/0\.7/],
+    ["for another line", releasePr({ head: "release/v0.6.1" }), /cut from release\/0\.6, not release\/0\.7/],
     ["for a minor", releasePr({ head: "release/v0.7.0" }), /cut from main, not release\/0\.7/],
     [
       "that changes code",
@@ -229,6 +232,12 @@ describe("the lane policy", () => {
       parameters: { required_status_checks: LINE_CHECKS.map((context) => ({ context })) },
     },
   ];
+
+  it("refuses a line patch from the server bundle's 0.8 line on, which only main can build", () => {
+    expect(() => laneOf("0.8.1")).toThrow(/server bundle, which is built only from main/);
+    expect(() => laneOf("1.0.1")).toThrow(/server bundle/);
+    expect(laneOf("0.9.0")).toBe("main");
+  });
 
   it.each([
     ["0.8.0", "main"],
@@ -470,20 +479,42 @@ describe("the patch path through the workflows", () => {
     expect(prepare[0].if).toBe("${{ vars.ORCA_RELEASE_APP_ID != '' }}");
   });
 
-  it("records a line release on main with nothing but its notes", () => {
-    const sync = workflow("release-publish.yml").jobs["sync-main"];
-    expect(sync.needs).toEqual(["check", "publish"]);
-    expect(sync.if).toBe("${{ !inputs.dry_run }}");
-    const checkout = sync.steps.find((step) => String(step.uses).startsWith("actions/checkout@"));
-    expect(checkout.with.ref).toBe("${{ github.event.repository.default_branch }}");
-    const script = sync.steps.at(-1).run;
+  it("records a line release on main only once it is published, through main's review", () => {
+    // Release (publish) only drafts a final, so it requests the record for prereleases alone;
+    // Release (publish final) requests it after its read-back.
+    const record = workflow("release-publish.yml").jobs["record-line-release"];
+    expect(record.needs).toEqual(["check", "publish"]);
+    expect(record.if).toBe("${{ !inputs.dry_run && contains(needs.check.outputs.version, '-') }}");
+    expect(workflow("release-publish.yml").jobs["sync-main"]).toBeUndefined();
+
+    const sync = workflow("release-sync-main.yml");
+    expect(Object.keys(sync.on)).toEqual(["workflow_dispatch"]);
+    const job = sync.jobs.sync;
+    expect(job.if).toBe("github.ref == 'refs/heads/main'");
+    expect(job.environment).toBe("release-bot");
+    expect(job.permissions).toEqual({ contents: "write", "pull-requests": "write" });
+    const readBack = job.steps.find((step) => step.id === "release").run;
+    expect(readBack).toContain('gh api "repos/$REPO/releases/tags/v$VERSION"');
+    expect(readBack).toContain('[ "$draft" != false ]');
+    expect(readBack).toContain('node tools/release-lane.js verify "$sha" "$VERSION"');
+    const script = job.steps.at(-1).run;
+    expect(job.steps.at(-1).if).toBe("steps.release.outputs.sha != ''");
     expect(script).toContain('node tools/release.js sync "$VERSION"');
     expect(script).toContain("::error::the sync would change more than CHANGELOG.md");
     // Only the exact fragments the release consumed, only where main's copy is identical.
     expect(script).toContain('git diff --diff-filter=D --name-only "$SHA^1" "$SHA" -- changelog.d/');
     expect(script).toContain('"$(git rev-parse "$SHA^1:$file")" = "$(git hash-object -- "$file")"');
-    // Through main's review and checks, never merged directly.
+    // One branch per version, reused; through main's review and checks, never merged directly.
+    expect(script).toContain('branch="release-sync/v$VERSION"');
     expect(script).toContain('gh pr merge "$url" --auto --squash');
     expect(script).not.toMatch(/gh pr merge "\$url" --squash/);
+  });
+
+  it("keeps the release App's key in the main-only environment", () => {
+    expect(workflow("release-prepare.yml").jobs.prepare.environment).toBe("release-bot");
+    for (const name of ["release-publish.yml", "release-publish-final.yml", "ci.yml"])
+      expect(readFileSync(new URL(`../../.github/workflows/${name}`, import.meta.url), "utf8")).not.toContain(
+        "ORCA_RELEASE_APP_PRIVATE_KEY",
+      );
   });
 });
