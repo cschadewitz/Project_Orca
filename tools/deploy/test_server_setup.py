@@ -91,6 +91,7 @@ class ServerSetupTests(unittest.TestCase):
         self.healthy = True
         self.stage_fails = False
         self.staged = []
+        self.scratches = []
         env = patch.dict(os.environ, {"PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin"})
         env.start()
         self.addCleanup(env.stop)
@@ -126,11 +127,12 @@ class ServerSetupTests(unittest.TestCase):
         test = self
 
         class Under(setup_module.Setup):
-            def run_stage(self, source):
+            def run_stage(self, source, scratch):
                 test.staged.append(source)
+                test.scratches.append(scratch)
                 if test.stage_fails:
                     return type("Result", (), {"returncode": 1, "stderr": "orca-release: no complete server bundle yet; retry later\n"})()
-                stage = self.root / "releases" / ("v" + self.version)
+                stage = scratch / "releases" / ("v" + self.version)
                 (stage / "runtime" / "bin").mkdir(parents=True)
                 (stage / "runtime" / "bin" / "node").write_text("#!/bin/sh\n")
                 (stage / "orca-daemon.mjs").write_text("// daemon\n")
@@ -593,19 +595,66 @@ class ServerSetupTests(unittest.TestCase):
         self.assertEqual(released, [False])
         self.assertIn('"done": true', out.getvalue())
 
-    def test_an_interrupted_staging_never_blocks_the_next_inspection(self):
-        def stage_then_die(made, original, source):
-            original(source)
+    def plant_release(self, at, daemon="// staged elsewhere\n"):
+        (at / "runtime" / "bin").mkdir(parents=True)
+        (at / "runtime" / "bin" / "node").write_text("#!/bin/sh\n")
+        (at / "orca-daemon.mjs").write_text(daemon)
+        release.write_json(at / ".orca-release.json", {
+            "version": "0.8.0", "sha": "c" * 40, "node": "runtime/bin/node", "entry": "orca-daemon.mjs",
+            "source": "bundle", "compatibility": {"storeEpoch": "e", "protocol": {"major": 2, "minor": 2},
+                                                  "capabilities": []}})
+
+    def test_an_interrupted_staging_leaves_only_its_own_scratch_to_remove(self):
+        def stage_then_die(made, original, source, scratch):
+            original(source, scratch)
         self.kill_at("run_stage", after=stage_then_die)
-        self.assertTrue((self.root / "releases" / "v0.8.0").is_dir())
-        self.assertFalse((self.root / "receipts" / "v0.8.0.json").exists())
+        scratch = self.scratches[0]
+        self.assertTrue((scratch / "releases" / "v0.8.0").is_dir())
+        # Nothing was published into the shared release directory.
+        self.assertFalse(os.path.lexists(self.root / "releases" / "v0.8.0"))
         code, lines = self.run_setup(inspect=True)
         self.assertEqual(code, 0, lines)
-        self.assertIn("interrupted run", self.step(lines, "existing")["detail"])
         code, lines = self.run_setup()
         self.assertEqual(code, 0, lines)
-        self.assertEqual(self.staged, ["0.8.0", "0.8.0"])  # removed on recovery, staged again
+        self.assertEqual(self.results(lines)["recover"], "repaired")
+        self.assertFalse(scratch.exists())
+        self.assertEqual(self.staged, ["0.8.0", "0.8.0"])
         self.assertTrue((self.root / "receipts" / "v0.8.0.json").exists())
+        self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith(".setup-stage-")], [])
+
+    def test_recovery_never_removes_a_release_another_writer_staged(self):
+        """An interrupted setup, then the adapter's own `stage` publishes v0.8.0 by itself: the
+        next setup removes only its scratch, leaves that release intact, and refuses it for
+        reconciliation (no receipt of this setup's) without starting it."""
+        def stage_then_die(made, original, source, scratch):
+            original(source, scratch)
+        self.kill_at("run_stage", after=stage_then_die)
+        independent = self.root / "releases" / "v0.8.0"
+        independent.parent.mkdir(exist_ok=True)
+        self.plant_release(independent)
+        before_release = sorted(str(p.relative_to(independent)) for p in independent.rglob("*"))
+        code, lines = self.run_setup()
+        self.assertEqual(self.results(lines)["recover"], "repaired")
+        self.assertEqual((code, self.step(lines, "existing")["result"]), (2, "refused"), lines)
+        self.assertIn("no receipt from this setup", self.step(lines, "existing")["detail"])
+        self.assertEqual(sorted(str(p.relative_to(independent)) for p in independent.rglob("*")), before_release)
+        self.assertEqual((independent / "orca-daemon.mjs").read_text(), "// staged elsewhere\n")
+        self.assertFalse(self.scratches[0].exists())
+        self.assertFalse(self.systemd().get("active"))
+
+    def test_holds_the_update_lock_so_no_other_writer_publishes_meanwhile(self):
+        import fcntl
+        seen = {}
+
+        def stage_and_probe(made, original, source, scratch):
+            with open(made.root / "update.lock", "a+") as other:
+                try:
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    seen["free"] = True
+                except BlockingIOError:
+                    seen["free"] = False
+        self.kill_at("run_stage", after=stage_and_probe)
+        self.assertEqual(seen, {"free": False})
 
     def test_a_failed_run_puts_setups_own_files_back(self):
         self.assertEqual(self.run_setup()[0], 0)

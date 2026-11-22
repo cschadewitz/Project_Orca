@@ -310,12 +310,14 @@ Every step is idempotent, and a re-run only verifies and repairs what the setup 
   update holds the update lock or an interrupted activation is pending.
 - Before its first change, a run records the state it found (the unit file, whether the unit
   was enabled and running, `current`, lingering, and the files it writes in its directory) in
-`<root>/.setup-journal.json`, and notes a release before it stages it. A run that
+`<root>/.setup-journal.json`, and stages a release into its own scratch directory (named there first), publishing it into
+`releases/` with its receipt only while it holds the update lock, so no other writer can
+publish meanwhile. A run that
   fails puts all of it back (a unit that was stopped is stopped again), checks it, and only
   then reports a failure; if it cannot confirm that, the result is "unknown" with what is not
   back. A run cut off before it could (the session ended) leaves the journal, and the next run
-  puts that state back first (and removes a release it was staging, so it never blocks a
-check). Inspection reports the state as it will be once that is put back, so a link only an
+  puts that state back first (and removes its own staging scratch, never a release in
+`releases/`, whose ownership it cannot prove). Inspection reports the state as it will be once that is put back, so a link only an
 interrupted run made never turns a confirmed install into a repair. Lingering whose state
 cannot be read is left as it is. A successful run retires its journal before it lets go of
 its lock. A failed first setup leaves no link and no enabled unit.

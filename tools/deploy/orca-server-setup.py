@@ -27,8 +27,10 @@ docs/UPDATING.md describes, with the managed adapter (`orca-release.py`) doing t
                configs and daemon environment (written once, never rewritten), and the
                `orca` and `orca-acp` wrappers.
 5. stage       `orca-release.py stage --bundle VERSION`: the signed server bundle, verified
-               against its pinned signer before a byte of it is unpacked (#876). Then the
-               receipt, `<root>/receipts/vVERSION.json`: a digest of the whole release (every
+               against its pinned signer before a byte of it is unpacked (#876), staged into
+               this run's own scratch (`<root>/.setup-stage-*`, named in the journal) and,
+               holding the update lock, published into `releases/` with its receipt. Recovery
+               only ever removes that scratch, never a shared release. The receipt, `<root>/receipts/vVERSION.json`: a digest of the whole release (every
                path, kind, mode and content: runtime, entry, helpers, assets, workflows,
                templates), which a later run checks before it trusts the release.
 6. select      `current` -> `releases/vVERSION`, only when there is none yet.
@@ -73,6 +75,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 SETUP_MARKER = "orca-server-setup"
@@ -83,6 +86,8 @@ RECONCILE = ("Reconcile it separately with orca-release.py (docs/UPDATING.md): t
              "release it staged and verified itself, for exactly the version asked for.")
 # deployment.json keys this setup owns: checked on every run, never left to drift.
 OWNED_KEYS = ("root", "service", "userService", "setup", "url")
+# This setup's staging scratch, a direct child of the root: the only thing recovery removes.
+SCRATCH_PREFIX = ".setup-stage-"
 # The files this setup writes in its directory, and their modes: journaled, so a failed run
 # puts each back as it found it (or removes it, if this run created it).
 OWNED_FILES = (("orca-release.py", 0o755), ("deployment.json", 0o600), ("orca", 0o755), ("orca-acp", 0o755),
@@ -163,6 +168,7 @@ class Setup:
         self.fence = None
         self.before = None
         self.staging = None
+        self.writer = None
         # What this run created, to take back if a later step fails.
         self.created_current = False
         self.created_unit = False
@@ -350,9 +356,11 @@ class Setup:
         if receipt != {"by": SETUP_MARKER, "version": self.version, "release": str(release), **digests}:
             raise Refused(f"{release} changed since this setup staged and verified it. " + RECONCILE)
 
-    def write_receipt(self):
+    def write_receipt(self, staged):
+        """For `releases/vVERSION`, from what this run staged (digests are path-independent),
+        before it is published there."""
         receipt = {"by": SETUP_MARKER, "version": self.version, "release": str(self.release),
-                   **self.release_digests(self.release)}
+                   **self.release_digests(staged)}
         self.receipt.parent.mkdir(mode=0o700, exist_ok=True)
         write_file(self.receipt, json.dumps(receipt, sort_keys=True) + "\n", 0o600)
 
@@ -388,12 +396,6 @@ class Setup:
                               "Repair it by hand; setup does not rewrite it.")
         return existing
 
-    def interrupted_staging(self):
-        """A release an interrupted run was staging and never receipted: it goes on recovery."""
-        journal = self.pending_journal()
-        return (journal is not None and journal.get("staging") == str(self.release)
-                and os.path.lexists(self.release) and not os.path.lexists(self.receipt))
-
     def check_existing(self):
         """Read only. What an earlier run left is accepted only as exactly this setup's."""
         current = self.root / "current"
@@ -408,8 +410,6 @@ class Setup:
                 raise Refused(f"{current} is {name}, not v{self.version}. " + RECONCILE)
             self.verify_release()
             report("existing", "ok", f"v{self.version} is selected and verified")
-        elif self.interrupted_staging():
-            report("existing", "ok", f"v{self.version} was being staged by an interrupted run; it is removed and staged again")
         elif os.path.lexists(self.release):
             self.verify_release()
             report("existing", "ok", f"v{self.version} is staged and verified")
@@ -433,22 +433,26 @@ class Setup:
             raise Refused("Another setup, an update or an ORCA command is running on this server. "
                           "Run the setup again once it has finished.") from None
         self.fence = fd
-        probe = os.open(self.root / "update.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        # The update lock too, held to the end: the adapter's own writers (stage, update, the
+        # update timer) cannot publish a release, or anything else, inside this setup.
+        writer = os.open(self.root / "update.lock", os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+            os.close(writer)
             raise Refused("An update is running on this server. Run the setup again once it has finished.") from None
-        finally:
-            os.close(probe)
+        self.writer = writer
         if os.path.lexists(self.root / "activation.json"):
             raise Refused("An interrupted update is pending on this server: run orca-release.py recover first "
                           "(docs/UPDATING.md).")
         report("fence", "ok", "no setup or update is running")
 
     def release_fence(self):
-        if self.fence is not None:
-            os.close(self.fence)
-            self.fence = None
+        for name in ("writer", "fence"):
+            fd = getattr(self, name, None)
+            if fd is not None:
+                os.close(fd)
+                setattr(self, name, None)
 
     def state(self):
         """The service, link and lingering state this setup may change, as it is now."""
@@ -502,9 +506,10 @@ class Setup:
         write_file(self.journal, json.dumps(journal, sort_keys=True) + "\n", 0o600)
 
     def restore(self, before, staging=None):
-        """Put the unit, link, lingering and setup's own files back as `before`, and remove a
-        release `staging` names that was never receipted, then check. Returns what could not be
-        put back or confirmed (empty: all of it was)."""
+        """Put the unit, link, lingering and setup's own files back as `before`, and remove
+        the run's own staging scratch (`staging`), then check. Returns what could not be put
+        back or confirmed (empty: all of it was). Shared artifacts, such as a release in
+        `releases/`, are never removed here: their ownership is not this transaction's."""
         problems = []
 
         def attempt(what, action):
@@ -553,11 +558,12 @@ class Setup:
                     else:
                         write_file(self.root / name, text, mode)
                 attempt(name, put)
-        if staging == str(self.release) and os.path.lexists(self.release) and not os.path.lexists(self.receipt):
-            attempt("staged release", lambda: shutil.rmtree(self.release))
+        scratch = self.owned_scratch(staging)
+        if scratch is not None and os.path.lexists(scratch):
+            attempt("staging scratch", lambda: shutil.rmtree(scratch))
         after = self.state()
-        if staging == str(self.release) and os.path.lexists(self.release) and not os.path.lexists(self.receipt):
-            problems.append("the unreceipted staged release is still there")
+        if scratch is not None and os.path.lexists(scratch):
+            problems.append("the staging scratch is still there")
         for name, _mode in OWNED_FILES:
             if name in before.get("files", {}) and after["files"][name] != before["files"][name]:
                 problems.append(f"{name} is not back as it was")
@@ -616,23 +622,52 @@ class Setup:
             adapter.metadata(release)
             report("stage", "ok", f"v{self.version} already staged and verified")
             return
-        # Journaled first: a run cut off mid-stage leaves a release that recovery removes, so
-        # it never blocks the next inspection as an unreceipted one.
-        self.staging = str(release)
+        # Staged into this transaction's own scratch, named in the journal first: a run cut off
+        # mid-stage leaves only that, which recovery removes. Then, still holding the update
+        # lock, the receipt and the publication into `releases/`: no other writer can publish
+        # there meanwhile, and nothing this run did not stage is ever receipted or removed.
+        scratch = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX, dir=self.root))
+        self.staging = str(scratch)
         self.write_journal()
-        result = self.run_stage(str(self.bundle) if self.bundle else self.version)
+        result = self.run_stage(str(self.bundle) if self.bundle else self.version, scratch)
         if result.returncode != 0:
             reason = [line for line in result.stderr.splitlines() if line.startswith("orca-release: ")]
             raise RuntimeError("Staging the signed server bundle failed: "
                                + (reason[-1][len("orca-release: "):] if reason else "see orca-release.py"))
-        adapter.metadata(release)
-        self.write_receipt()
+        staged = scratch / "releases" / release.name
+        if staged.is_symlink() or not staged.is_dir():
+            raise RuntimeError("Staging reported success but left no release")
+        adapter.metadata(staged)
+        self.write_receipt(staged)
+        (self.root / "releases").mkdir(mode=0o700, exist_ok=True)
+        if os.path.lexists(release):
+            raise RuntimeError(f"{release} appeared while this setup staged it; nothing was published")
+        os.rename(staged, release)
+        adapter.sync_dir(release.parent)
+        self.verify_release()
+        shutil.rmtree(scratch)
+        self.staging = None
+        self.write_journal()
         report("stage", "changed", f"v{self.version} staged from the signed bundle")
 
-    def run_stage(self, source):
-        """The adapter's own `stage --bundle`: the signed bundle, verified before it is unpacked."""
-        return subprocess.run([sys.executable, str(self.adapter), "--deployment", str(self.manifest),
+    def run_stage(self, source, scratch):
+        """The adapter's own `stage --bundle`, the signed bundle verified before it is unpacked,
+        into `scratch`: a deployment rooted there, with the real one's configs, so the release
+        it publishes is this transaction's and nobody else's until setup moves it in."""
+        manifest = scratch / "deployment.json"
+        write_file(manifest, json.dumps({**json.loads(self.manifest.read_text()), "root": str(scratch)}) + "\n", 0o600)
+        return subprocess.run([sys.executable, str(self.adapter), "--deployment", str(manifest),
                                "stage", "--bundle", source], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def owned_scratch(self, staging):
+        """A journal's staging scratch, only if it is one this setup makes: a direct child of
+        the root with the scratch prefix. Anything else is never removed."""
+        if not staging:
+            return None
+        path = Path(staging)
+        if path.parent != self.root or not path.name.startswith(SCRATCH_PREFIX) or path.is_symlink():
+            return None
+        return path
 
     def check_health(self):
         """The exact release `current` names, answering as the unit's own process: the
