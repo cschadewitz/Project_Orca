@@ -102,6 +102,8 @@ export const HELLO: HelloResult = {
     // a `ConfigModel`, which is why a control asks for the method and not the capability.
     "config.get",
     "config.set",
+    // The palette's content search (#255): a read, answered over event text and artifacts.
+    "search",
   ],
 };
 

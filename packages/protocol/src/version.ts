@@ -125,7 +125,11 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * them and a 2.0 daemon never sends them. No capability is minted, because a 2.0 client parses
  * `hello.capabilities` with a closed enum; the fields' presence says whether a daemon has them.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 1 };
+/**
+ * 2.2 adds the `search` read method (#255): a new name in `READ_METHODS`, answered under
+ * `runs.read`. A 2.1 client never calls it; a 2.2 client asks `hello.methods` before it does.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 2 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is
