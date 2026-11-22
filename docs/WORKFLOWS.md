@@ -343,6 +343,7 @@ fan out. Three optional caps in `orca.config.yaml` bound the whole daemon (#873)
 ```yaml
 limits:
   maxAgentSessions: 6        # every agent session this daemon holds open, across all runs
+  agentSlotWaitMs: 3600000   # optional: fail a step that waited an hour for a slot
 hosts:
   - { id: box-b, type: ssh, host: box-b.example, maxSessions: 3 }   # sessions on that host
 agents:
@@ -369,14 +370,20 @@ agents:
   full one.
 - Caps are read from the current configuration each time, so applying an edit that raises
   one lets waiting steps go at once.
-- A `per-run` agent keeps its slot until its run ends, and a run cannot end while one of its
-  own steps, or a step of a child run, is waiting. When the slots filling a cap are all held
-  by `per-run` sessions of runs that are themselves waiting on the queue, no slot can ever
-  come back: two `per-run` agents in one run under a daemon cap of one, a parent's `per-run`
-  session and a child that needs the only slot, or two runs each pinning the slot the
-  other's child needs. Those steps fail at once with `CONFIG_INVALID`, naming the cap and the
-  agents holding it, instead of waiting forever or going over the cap. Raise the cap or make
-  those agents `per-step`. A queue that is merely long is never cut off.
+- A `per-run` agent keeps its slot until its run ends, and a run cannot move on while one of
+  its own steps waits. So when a cap is full only of `per-run` sessions of the waiting step's
+  **own** run (two `per-run` agents in one run under a daemon cap of one), no slot can ever
+  come back: that step fails at once with `CONFIG_INVALID`, naming the cap and the agents
+  holding it. Raise the cap or make those agents `per-step`.
+- When the slots in the way are pinned by runs *above* the step, or by other runs whose own
+  children wait on the queue, the wait may never end - but not provably (a `parallel` with
+  `join: any` can finish another way and cancel the waiting branch). Those steps are never
+  failed as impossible: their wait reason adds "it may never be granted", and
+  `limits.agentSlotWaitMs`, when you set it, fails any wait longer than that with
+  `STEP_TIMEOUT`. With no deadline set, a long queue is never cut off. A session already
+  being torn down never counts as stuck.
+- A slot whose agent process exit cannot be confirmed stays held - the process may still be
+  running - and `agents.list` reports it as `teardownUnconfirmed`, with a warning in the log.
 - A cancel always wins: a step cancelled while waiting, or after its slot was granted but
   before its session opened, spawns nothing and gives the slot back.
 - `hello` reports the daemon-wide cap, sessions open and queue depth; `agents.list` adds the

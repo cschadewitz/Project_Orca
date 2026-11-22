@@ -26,6 +26,7 @@ const nonSecret = new Set([
   "admissionRetry.maxClaimsPerPrincipal",
   "limits",
   "limits.maxAgentSessions",
+  "limits.agentSlotWaitMs",
   "hosts",
   "hosts[]",
   "hosts[].id",

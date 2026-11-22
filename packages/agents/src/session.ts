@@ -33,10 +33,11 @@ export interface AgentSession {
   readonly acpSessionId: string;
   readonly closed: Promise<void>;
   /**
-   * Settles once the agent process this session owns is confirmed gone, which can be later
+   * Resolves once the agent process this session owns is confirmed gone, which can be later
    * than `closed` (the connection) and later than a `close()` whose cleanup could not observe
    * the exit. Session caps (#873) return a slot on this, so a queued open never starts beside
-   * a process that is still alive. Optional: a transport without an owned process omits it,
+   * a process that is still alive. Rejects when the exit cannot be observed at all, which is
+   * not evidence it is gone. Optional: a transport without an owned process omits it,
    * and then `close()` settling stands in for it.
    */
   readonly terminated?: Promise<void>;
@@ -64,11 +65,12 @@ const STARTUP_TERMINATION = Symbol.for("orca.agents.startupTermination");
  * wire, and the error's shape is unchanged.
  */
 export function withStartupTermination<E extends object>(error: E, terminated: Promise<unknown>): E {
+  // A rejection (the exit cannot be observed) stays a rejection: it is not evidence the
+  // process is gone. Marked handled here so an error nobody inspects raises no warning.
+  const exited = terminated.then(() => undefined);
+  void exited.catch(() => undefined);
   Object.defineProperty(error, STARTUP_TERMINATION, {
-    value: terminated.then(
-      () => undefined,
-      () => undefined,
-    ),
+    value: exited,
     enumerable: false,
     configurable: true,
   });

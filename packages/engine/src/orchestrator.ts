@@ -139,6 +139,8 @@ export interface OrchestratorOptions {
    * Absent means unlimited.
    */
   maxAgentSessions?: number;
+  /** Likewise `limits.agentSlotWaitMs`: how long a step may wait for a slot. Absent: no deadline. */
+  agentSlotWaitMs?: number;
   /** Planning layer; created over `stores` when omitted. */
   plan?: PlanService;
   clock?: Clock;
@@ -328,6 +330,7 @@ export class Orchestrator {
     }
   >();
   private readonly maxAgentSessions: number | undefined;
+  private readonly agentSlotWaitMs: number | undefined;
   /**
    * Open agent sessions against the optional caps (#873). Unlimited unless configured; see
    * `session-slots.ts`. Read by the daemon for `hello` and `agents.list`.
@@ -354,6 +357,7 @@ export class Orchestrator {
     this.workspaceProvider = o.workspaceProvider ?? new LocalWorkspaceProvider(process.cwd());
     this.sessionFactory = o.sessionFactory ?? openAcpSession;
     this.maxAgentSessions = o.maxAgentSessions;
+    this.agentSlotWaitMs = o.agentSlotWaitMs;
     this.clock = o.clock ?? systemClock;
     this.logger = o.logger ?? silentLogger;
     this.leaseHolder = o.lease?.holder ?? newId("orc", this.clock.now());
@@ -2054,8 +2058,14 @@ export class Orchestrator {
       handshake.failed(e);
       // A failed open whose process was spawned carries that process's exit; its bounded
       // cleanup may have given up before observing it, so the slot waits for the exit too.
+      // An exit that cannot be observed at all (the handle's promise rejects) is not evidence
+      // the process is gone: the slot stays held and is reported as unconfirmed.
       const exited = startupTermination(e);
-      if (exited) void exited.then(() => slot.release());
+      if (exited)
+        void exited.then(
+          () => slot.release(),
+          (error: unknown) => this.unconfirmedTeardown(rc, slot, agent.id, undefined, error),
+        );
       else slot.release();
       throw e;
     }
@@ -2069,8 +2079,15 @@ export class Orchestrator {
     let returning: Promise<void> | undefined;
     const returnSlot = () =>
       (returning ??= (async () => {
+        slot.closing();
         await closeOnce().catch(() => undefined);
-        await session.terminated?.catch(() => undefined);
+        try {
+          await session.terminated;
+        } catch (error) {
+          // No positive evidence the process is gone: keep the slot, and say so.
+          this.unconfirmedTeardown(rc, slot, agent.id, session.id, error);
+          return;
+        }
         slot.release();
       })());
     void session.closed.then(returnSlot, returnSlot);
@@ -2151,6 +2168,7 @@ export class Orchestrator {
       caps: () => this.sessionSlotCaps(agent, host),
       signal: rc.abort.signal,
       runs: this.runAncestry(rc),
+      deadlineMs: this.sessionSlotWaitMs(),
       ...(agent.sessionMode === "per-run" ? { pinnedTo: rc.id } : {}),
     };
     const immediate = this.sessionSlots.tryAcquire(request);
@@ -2198,6 +2216,11 @@ export class Orchestrator {
     };
   }
 
+  private sessionSlotWaitMs(): number | undefined {
+    const generation = this.generations?.current;
+    return generation ? generation.snapshot.config.limits?.agentSlotWaitMs : this.agentSlotWaitMs;
+  }
+
   private daemonSessionCap(): number | undefined {
     const generation = this.generations?.current;
     return generation ? generation.snapshot.config.limits?.maxAgentSessions : this.maxAgentSessions;
@@ -2213,7 +2236,33 @@ export class Orchestrator {
       if (cap !== undefined) hosts[h.id] = cap;
     }
     const daemon = this.daemonSessionCap();
-    return { ...(daemon === undefined ? {} : { maxAgentSessions: daemon }), agents, hosts };
+    const wait = this.sessionSlotWaitMs();
+    return {
+      ...(daemon === undefined ? {} : { maxAgentSessions: daemon }),
+      ...(wait === undefined ? {} : { agentSlotWaitMs: wait }),
+      agents,
+      hosts,
+    };
+  }
+
+  /**
+   * A session whose process exit could not be confirmed keeps its slot - the cap bounds live
+   * processes, and this one may still be running - and the operator hears about it: a warning
+   * here and `teardownUnconfirmed` in `agents.list`.
+   */
+  private unconfirmedTeardown(
+    rc: RunContext,
+    slot: SessionSlot,
+    agentId: string,
+    sessionId: string | undefined,
+    error: unknown,
+  ): void {
+    slot.unconfirmed();
+    rc.logger.warn("agent process exit not confirmed; its session slot stays held", {
+      agent: agentId,
+      ...(sessionId ? { sessionId } : {}),
+      error: describeError(error),
+    });
   }
 
   /** This run and every run above it that this process is driving, nearest first. */

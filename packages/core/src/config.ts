@@ -69,6 +69,13 @@ export const OrcaConfigSchema = z.object({
     .object({
       /** At most this many agent sessions open at once in this daemon, across every run. */
       maxAgentSessions: z.number().int().positive().optional(),
+      /**
+       * How long a step may wait for an agent slot before it fails with `STEP_TIMEOUT`. Absent
+       * means no deadline: a long queue drains however long the turns ahead of it take. Set it
+       * to bound waits the queue reports as possibly never granted (per-run sessions of runs
+       * that are themselves waiting).
+       */
+      agentSlotWaitMs: z.number().int().positive().optional(),
     })
     .optional(),
   hosts: z.array(HostSpecSchema).default([{ id: LOCAL_HOST_ID, type: "local" }]),

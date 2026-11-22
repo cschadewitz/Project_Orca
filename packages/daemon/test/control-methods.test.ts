@@ -510,6 +510,7 @@ describe("agents.list and agents.ping", () => {
       limits: { agents: {}, hosts: {} },
       inUse: { total: 0, agents: {}, hosts: {} },
       queued: 0,
+      teardownUnconfirmed: 0,
     });
     const hello = HelloResultSchema.parse(
       (await call(h.ctx, "hello", { client: "t", protocol: PROTOCOL_VERSION })).result,

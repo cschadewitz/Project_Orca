@@ -11,8 +11,9 @@
  * holds no process and no session, so a restart loses nothing - the resumed step asks again.
  *
  * Every session is counted whether or not any cap is set, so the read model can say how many
- * are open. A slot is returned exactly once (release is idempotent) by whichever comes first:
- * the step letting go of its session, the session closing, or a failed open.
+ * are open. The cap bounds live agent processes: the caller releases a slot only once the
+ * process is confirmed gone, and a slot whose teardown could not be confirmed stays held and
+ * is reported (`teardownUnconfirmed`) rather than handed to the next step.
  *
  * Ordering. Waiters that belong to a plan are ordered among themselves by plan priority
  * (`computeSchedule()` score, best first); waiters outside a plan by age. Between the two,
@@ -25,18 +26,22 @@
  * same slot. Waiters on unrelated caps do not block each other (a full host does not hold
  * up a step bound for another host).
  *
- * Waits that can never end fail instead of hanging. A `per-run` session holds its slot until
- * its run ends, and a run cannot end while one of its own steps - or a step of a run below it
- * - waits for a slot. Every other slot comes back on its own (a `per-step` session ends with
- * its turn, which has its own timeout). So the queue keeps a wait-for check: start from every
- * waiter; drop any waiter that some full cap of its could still free a slot on, because a
- * holder there is not pinned by a run that is itself waiting; repeat until nothing drops.
- * Whoever is left waits on slots pinned by runs that wait on them in turn - the same run with
- * two per-run agents under a cap of one, a parent's per-run session and its child, or two
- * unrelated runs each pinning what the other's child needs. Those steps fail with
- * `CONFIG_INVALID` naming the cap and the agents holding it, rather than exceeding the cap or
- * waiting for ever. No deadline is needed, so a queue that will drain is never cut off,
- * however long the turns ahead of it take.
+ * Waits that may never end. A `per-run` session holds its slot until its run ends.
+ *
+ * - **Proven impossible** fails at once with `CONFIG_INVALID`: a full cap whose every slot is
+ *   held by a per-run session of the waiting step's *own* run that is not already closing.
+ *   A run is one token; while its step waits the run cannot move, so it cannot end and
+ *   cannot release them. (Cancelling it still works: that removes the waiter.) Two per-run
+ *   agents in one run under a cap of one is the common case.
+ * - **Possibly stuck** is everything a wait-for check over the whole queue cannot clear: the
+ *   slots in the way are pinned by runs above the step, or by runs whose own children wait.
+ *   Those runs *usually* cannot end, but not provably - a `parallel` with `join: any` can
+ *   finish through another branch and cancel the waiting one. So these are never failed as
+ *   impossible: the wait reason says the step may never be granted, and the operator's
+ *   optional `limits.agentSlotWaitMs` deadline, when set, ends the wait with `STEP_TIMEOUT`.
+ *   A slot already closing is never counted as stuck: it comes back on its own.
+ *
+ * A queue that is merely long is never cut off, unless the operator set that deadline.
  */
 import { OrcaError } from "@orca/core";
 
@@ -47,9 +52,11 @@ export interface SessionSlotCaps {
   host?: number | undefined;
 }
 
-/** What the daemon is configured with, for the read model. Only caps that are set appear. */
+/** What the daemon is configured with, for the read model. Only what is set appears. */
 export interface ConfiguredSessionLimits {
   maxAgentSessions?: number | undefined;
+  /** How long a step may wait for a slot before it fails; absent is no deadline. */
+  agentSlotWaitMs?: number | undefined;
   agents: Record<string, number>;
   hosts: Record<string, number>;
 }
@@ -59,6 +66,11 @@ export interface SessionSlotsView {
   inUse: { total: number; agents: Record<string, number>; hosts: Record<string, number> };
   /** Steps waiting for a slot right now. */
   queued: number;
+  /**
+   * Slots still held because their process's exit could not be confirmed. Each one is a
+   * process that may still be running; it is reported, never silently handed on.
+   */
+  teardownUnconfirmed: number;
 }
 
 export interface SessionSlotRequest {
@@ -69,15 +81,14 @@ export interface SessionSlotRequest {
    * operator raised or lowered while the step waits takes effect for it too.
    */
   caps: () => SessionSlotCaps;
-  /**
-   * The run this step belongs to, then its parent, grandparent and so on. Slots pinned by any
-   * of them cannot come back while this step waits (see "Impossible waits" above).
-   */
+  /** The run this step belongs to, then its parent, grandparent and so on. */
   runs?: readonly string[] | undefined;
   /** This open becomes a `per-run` session of that run, holding its slot until the run ends. */
   pinnedTo?: string | undefined;
   /** Plan priority score (higher goes first); absent for a step outside any plan. */
   priority?: number | undefined;
+  /** Give up after this long with `STEP_TIMEOUT`; absent waits as long as it takes. */
+  deadlineMs?: number | undefined;
   signal?: AbortSignal | undefined;
   /**
    * Told why the step is waiting, once when it starts waiting and again whenever the reason
@@ -90,12 +101,18 @@ export interface SessionSlotRequest {
 export interface SessionSlot {
   /** Return the slot. Safe to call any number of times; only the first counts. */
   release(): void;
+  /** The session is being torn down: it will come back on its own, so nobody counts on it staying. */
+  closing(): void;
+  /** Its teardown could not confirm the process exited: keep it held, and report it. */
+  unconfirmed(): void;
 }
 
 interface Held {
   agentId: string;
   hostId: string;
   pinnedTo?: string | undefined;
+  closing?: boolean;
+  unconfirmed?: boolean;
 }
 
 type Blocker = { key: Key; reason: string };
@@ -137,6 +154,7 @@ export class SessionSlots {
     if (immediate) return Promise.resolve(immediate);
     if (request.signal?.aborted) return Promise.reject(new OrcaError("CANCELLED", "cancelled"));
     return new Promise<SessionSlot>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const waiter: Waiter = {
         seq: this.seq++,
         request,
@@ -153,16 +171,33 @@ export class SessionSlots {
           waiter.dispose();
           reject(error);
         },
-        dispose: () => request.signal?.removeEventListener("abort", onAbort),
+        dispose: () => {
+          clearTimeout(timer);
+          request.signal?.removeEventListener("abort", onAbort);
+        },
       };
-      const onAbort = () => {
+      const leave = (error: Error) => {
         if (!this.waiters.includes(waiter)) return;
         this.waiters = this.waiters.filter((w) => w !== waiter);
-        waiter.reject(new OrcaError("CANCELLED", "cancelled"));
+        waiter.reject(error);
         // Leaving the queue can unblock whoever was queued behind this waiter.
         this.pump();
       };
+      const onAbort = () => leave(new OrcaError("CANCELLED", "cancelled"));
       request.signal?.addEventListener("abort", onAbort, { once: true });
+      if (request.deadlineMs !== undefined) {
+        const ms = request.deadlineMs;
+        timer = setTimeout(
+          () =>
+            leave(
+              new OrcaError(
+                "STEP_TIMEOUT",
+                `no agent slot within ${ms}ms (limits.agentSlotWaitMs): ${waiter.reason ?? "waiting for an agent slot"}`,
+              ),
+            ),
+          ms,
+        );
+      }
       this.waiters.push(waiter);
       this.pump();
     });
@@ -170,11 +205,14 @@ export class SessionSlots {
 
   /** Grant whoever can go now. Call after anything that may have freed room (a cap raised). */
   pump(): void {
-    for (const { waiter, message } of this.deadlocked()) {
+    for (const waiter of [...this.waiters]) {
+      const impossible = this.provenImpossible(waiter.request);
+      if (impossible === undefined) continue;
       this.waiters = this.waiters.filter((w) => w !== waiter);
-      waiter.reject(new OrcaError("CONFIG_INVALID", message));
+      waiter.reject(new OrcaError("CONFIG_INVALID", impossible));
     }
     const blocked = new Map<Key, string>();
+    const uncertain = this.possiblyStuck();
     for (const waiter of this.ordered()) {
       const reasons = this.blockers(waiter.request, blocked);
       if (reasons.length === 0) {
@@ -183,7 +221,8 @@ export class SessionSlots {
         continue;
       }
       for (const { key, reason } of reasons) if (!blocked.has(key)) blocked.set(key, reason);
-      const reason = reasons[0]!.reason;
+      const stuck = uncertain.get(waiter);
+      const reason = stuck ? `${reasons[0]!.reason}; ${stuck}` : reasons[0]!.reason;
       if (reason !== waiter.reason) {
         waiter.reason = reason;
         const onWait = waiter.request.onWait;
@@ -197,6 +236,7 @@ export class SessionSlots {
     return {
       limits: {
         ...(configured.maxAgentSessions === undefined ? {} : { maxAgentSessions: configured.maxAgentSessions }),
+        ...(configured.agentSlotWaitMs === undefined ? {} : { agentSlotWaitMs: configured.agentSlotWaitMs }),
         agents: { ...configured.agents },
         hosts: { ...configured.hosts },
       },
@@ -206,6 +246,7 @@ export class SessionSlots {
         hosts: Object.fromEntries([...this.byHost].filter(([, n]) => n > 0)),
       },
       queued: this.waiters.length,
+      teardownUnconfirmed: [...this.held].filter((h) => h.unconfirmed).length,
     };
   }
 
@@ -214,23 +255,13 @@ export class SessionSlots {
   /** Every full cap this request is subject to, plus any cap an earlier waiter is blocked on. */
   private blockers(request: SessionSlotRequest, queued: ReadonlyMap<Key, string>): Blocker[] {
     const out: Blocker[] = [];
-    const check = (key: Key, cap: number | undefined, used: number, where: string) => {
-      if (cap === undefined) return;
+    for (const { key, cap, used, where } of this.capsOf(request)) {
       if (used >= cap) out.push({ key, reason: `waiting for an agent slot: ${used} of ${cap} in use ${where}` });
       else {
         const ahead = queued.get(key);
         if (ahead !== undefined) out.push({ key, reason: ahead });
       }
-    };
-    const caps = request.caps();
-    check(DAEMON, caps.daemon, this.total, "on this daemon");
-    check(
-      agentKey(request.agentId),
-      caps.agent,
-      this.byAgent.get(request.agentId) ?? 0,
-      `for agent ${request.agentId}`,
-    );
-    check(hostKey(request.hostId), caps.host, this.byHost.get(request.hostId) ?? 0, `on host ${request.hostId}`);
+    }
     return out;
   }
 
@@ -255,41 +286,62 @@ export class SessionSlots {
     return all.flatMap((c) => (c.cap === undefined ? [] : [{ ...c, cap: c.cap }]));
   }
 
-  /**
-   * Why this request can never be granted while the runs in `waiting` wait, or undefined when
-   * some release may still reach it: a full cap of its whose every slot is a per-run session
-   * pinned by one of those runs.
-   */
-  private stuckOn(request: SessionSlotRequest, waiting: ReadonlySet<string>): string | undefined {
+  /** A full cap of this request's whose every slot is pinned by one of `runs` and not closing. */
+  private pinnedFull(
+    request: SessionSlotRequest,
+    runs: ReadonlySet<string>,
+  ): { used: number; cap: number; where: string; agents: string[] } | undefined {
     for (const { key, cap, used, where } of this.capsOf(request)) {
       if (used < cap) continue;
       const pinned = [...this.held].filter(
-        (h) => h.pinnedTo !== undefined && waiting.has(h.pinnedTo) && sameKey(key, h),
+        (h) => h.pinnedTo !== undefined && !h.closing && runs.has(h.pinnedTo) && sameKey(key, h),
       );
-      if (pinned.length < cap) continue;
-      return (
-        `an agent slot can never be free for agent ${request.agentId}: ${used} of ${cap} in use ${where}, ` +
-        `held by per-run sessions (${[...new Set(pinned.map((h) => h.agentId))].join(", ")}) of runs that cannot end ` +
-        `while a step of theirs waits for a slot - this one, or one queued with it; ` +
-        `raise the cap, or give those agents sessionMode: per-step`
-      );
+      if (pinned.length >= cap) return { used, cap, where, agents: [...new Set(pinned.map((h) => h.agentId))] };
     }
     return undefined;
   }
 
-  /** The waiters no release can ever reach (see "Waits that can never end" above). */
-  private deadlocked(): { waiter: Waiter; message: string }[] {
+  /** Why this request can never be granted, when that is proven (see the file comment). */
+  private provenImpossible(request: SessionSlotRequest): string | undefined {
+    const own = request.runs?.[0];
+    if (own === undefined) return undefined;
+    const full = this.pinnedFull(request, new Set([own]));
+    if (!full) return undefined;
+    return (
+      `an agent slot can never be free for agent ${request.agentId}: ${full.used} of ${full.cap} in use ${full.where}, ` +
+      `all held by per-run sessions of this same run (${full.agents.join(", ")}), which keep their slots until the run ends ` +
+      `and the run cannot move on while this step waits; raise the cap, or give those agents sessionMode: per-step`
+    );
+  }
+
+  /**
+   * Waiters a wait-for check cannot clear: drop any whose full caps include a slot that is not
+   * pinned by a run that is itself waiting (as some waiter's own run or ancestor), and repeat.
+   * What is left may never be granted - but only may, so it is reported, not failed.
+   */
+  private possiblyStuck(): Map<Waiter, string> {
     const stuck = new Set(this.waiters);
     const waitingRuns = () => new Set([...stuck].flatMap((w) => w.request.runs ?? []));
     for (;;) {
       const runs = waitingRuns();
-      const free = [...stuck].filter((w) => this.stuckOn(w.request, runs) === undefined);
+      const free = [...stuck].filter((w) => this.pinnedFull(w.request, runs) === undefined);
       if (free.length === 0) break;
       for (const w of free) stuck.delete(w);
     }
-    if (stuck.size === 0) return [];
+    const out = new Map<Waiter, string>();
     const runs = waitingRuns();
-    return [...stuck].map((waiter) => ({ waiter, message: this.stuckOn(waiter.request, runs)! }));
+    for (const w of stuck) {
+      const full = this.pinnedFull(w.request, runs)!;
+      out.set(
+        w,
+        `it may never be granted: the slots are held by per-run sessions (${full.agents.join(", ")}) of runs that ` +
+          `are themselves waiting on this queue` +
+          (this.configured().agentSlotWaitMs === undefined
+            ? `; set limits.agentSlotWaitMs to bound the wait, raise the cap, or make those agents per-step`
+            : ""),
+      );
+    }
+    return out;
   }
 
   /** What the waiters already queued are blocked on, so a newcomer does not overtake them. */
@@ -336,6 +388,14 @@ export class SessionSlots {
         this.byAgent.set(agentId, (this.byAgent.get(agentId) ?? 1) - 1);
         this.byHost.set(hostId, (this.byHost.get(hostId) ?? 1) - 1);
         this.pump();
+      },
+      closing: () => {
+        if (!held || record.closing) return;
+        record.closing = true;
+        this.pump();
+      },
+      unconfirmed: () => {
+        if (held) record.unconfirmed = true;
       },
     };
   }

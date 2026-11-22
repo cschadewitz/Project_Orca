@@ -87,6 +87,8 @@ export type AgentView = z.infer<typeof AgentViewSchema>;
 export const SessionSlotsViewSchema = z.object({
   limits: z.object({
     maxAgentSessions: z.number().int().positive().optional(),
+    /** `limits.agentSlotWaitMs`: how long a step may wait for a slot; absent is no deadline. */
+    agentSlotWaitMs: z.number().int().positive().optional(),
     /** Agent id -> `agents[].maxSessions`, for agents that set one. */
     agents: z.record(z.string(), z.number().int().positive()),
     /** Host id -> `hosts[].maxSessions`, for hosts that set one. */
@@ -101,6 +103,11 @@ export const SessionSlotsViewSchema = z.object({
   }),
   /** Steps waiting for a slot right now (`step.waiting` on `agent-slot`). */
   queued: z.number().int().nonnegative(),
+  /**
+   * Slots still held because their agent process's exit could not be confirmed: processes
+   * that may still be running. Optional so a daemon that predates it parses.
+   */
+  teardownUnconfirmed: z.number().int().nonnegative().optional(),
 });
 export type SessionSlotsView = z.infer<typeof SessionSlotsViewSchema>;
 

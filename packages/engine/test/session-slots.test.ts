@@ -40,6 +40,7 @@ describe("SessionSlots", () => {
       limits: { agents: {}, hosts: {} },
       inUse: { total: 50, agents: { a: 50 }, hosts: { local: 50 } },
       queued: 0,
+      teardownUnconfirmed: 0,
     });
     for (const slot of held) slot!.release();
     expect(slots.view().inUse).toEqual({ total: 0, agents: {}, hosts: {} });
@@ -162,7 +163,7 @@ interface Fake {
 }
 
 /** One single-step workflow per agent, `one-<agent>`, plus any extra workflow a test brings. */
-function workflows(extra: string | undefined, agentIds: string[]): WorkflowRegistry {
+function workflows(extra: string | string[] | undefined, agentIds: string[]): WorkflowRegistry {
   const registry = new WorkflowRegistry();
   for (const id of agentIds)
     registry.register(
@@ -176,7 +177,7 @@ nodes:
 edges: [{ from: work, to: done }]
 `),
     );
-  if (extra) registry.register(parseWorkflow(extra));
+  for (const w of extra === undefined ? [] : [extra].flat()) registry.register(parseWorkflow(w));
   return registry;
 }
 
@@ -184,7 +185,8 @@ function fake(opts: {
   agents: object[];
   hosts?: { id: string; maxSessions?: number }[];
   maxAgentSessions?: number;
-  workflow?: string;
+  agentSlotWaitMs?: number;
+  workflow?: string | string[];
   /** Held open until this resolves; defaults to a short timer so sessions overlap. */
   turn?: (agentId: string) => Promise<void>;
   openFails?: (n: number) => Error | boolean;
@@ -195,7 +197,15 @@ function fake(opts: {
    * the process still exits `cleanupMs` later. `crash`: the connection drops mid-turn by
    * itself and the turn fails, with the process still alive until it is closed.
    */
-  process?: { cleanupMs?: number; closeFails?: boolean; crash?: (n: number) => boolean };
+  process?: {
+    cleanupMs?: number;
+    closeFails?: boolean;
+    crash?: (n: number) => boolean;
+    /** The connection drops by itself as the turn ends (the turn itself succeeds). */
+    dropAfterTurn?: (agentId: string) => boolean;
+    /** `terminated` rejects: the exit can never be observed. */
+    exitUnobservable?: boolean;
+  };
 }): Fake {
   const registry = new AgentRegistry();
   for (const h of opts.hosts ?? [{ id: "local" }]) registry.addHost(new LocalHost({ type: "local", ...h }));
@@ -218,6 +228,7 @@ function fake(opts: {
     logger: silentLogger,
     agents: registry,
     ...(opts.maxAgentSessions === undefined ? {} : { maxAgentSessions: opts.maxAgentSessions }),
+    ...(opts.agentSlotWaitMs === undefined ? {} : { agentSlotWaitMs: opts.agentSlotWaitMs }),
     workflows: workflows(
       opts.workflow,
       registry.listAgents().map((a) => a.id),
@@ -234,8 +245,15 @@ function fake(opts: {
       let dropConnection!: () => void;
       const closed = new Promise<void>((r) => (dropConnection = r));
       let exit!: () => void;
-      const terminated = new Promise<void>((r) => (exit = r));
-      void terminated.then(() => bump(o.agent.id, o.host.id, -1));
+      let unobservable!: (e: Error) => void;
+      const terminated = new Promise<void>((r, j) => {
+        exit = r;
+        unobservable = j;
+      });
+      void terminated.then(
+        () => bump(o.agent.id, o.host.id, -1),
+        () => undefined,
+      );
       const cleanupMs = opts.process?.cleanupMs ?? 0;
       const crashes = opts.process?.crash?.(n) ?? false;
       let stopping = false;
@@ -255,6 +273,7 @@ function fake(opts: {
             throw new OrcaError("AGENT_TRANSPORT", "agent connection closed");
           }
           await (opts.turn ? opts.turn(o.agent.id) : new Promise((r) => setTimeout(r, 15)));
+          if (opts.process?.dropAfterTurn?.(o.agent.id)) dropConnection();
           return { stopReason: "end_turn" as const, durationMs: 1 };
         },
         onUpdate: () => () => {},
@@ -263,10 +282,11 @@ function fake(opts: {
           dropConnection();
           if (!stopping) {
             stopping = true;
-            setTimeout(exit, cleanupMs);
+            if (opts.process?.exitUnobservable) unobservable(new Error("exit unobservable"));
+            else setTimeout(exit, cleanupMs);
           }
           if (opts.process?.closeFails) throw new OrcaError("AGENT_TRANSPORT", "agent cleanup incomplete");
-          if (cleanupMs === 0) await terminated;
+          if (cleanupMs === 0 && !opts.process?.exitUnobservable) await terminated;
         },
       };
       return session;
@@ -289,6 +309,7 @@ describe("Orchestrator session slots", () => {
       limits: { agents: {}, hosts: {} },
       inUse: { total: 0, agents: {}, hosts: {} },
       queued: 0,
+      teardownUnconfirmed: 0,
     });
   });
 
@@ -418,15 +439,16 @@ edges: [{ from: first, to: second }, { from: second, to: done }]
     expect(run.run.status).toBe("failed");
     expect(run.run.error).toMatchObject({ code: "CONFIG_INVALID" });
     expect(run.run.error?.message).toContain("1 of 1 in use on this daemon");
-    expect(run.run.error?.message).toContain("held by per-run sessions (a)");
+    expect(run.run.error?.message).toContain("all held by per-run sessions of this same run (a)");
     expect(opened).toEqual(["a"]);
     await expect.poll(() => orchestrator.sessionSlots.view()).toMatchObject({ inUse: { total: 0 }, queued: 0 });
   });
 
-  it("fails a child run's wait on a slot its parent's per-run session holds", async () => {
+  it("reports a child's wait on its parent's per-run slot as possibly stuck, and ends it at agentSlotWaitMs", async () => {
     const { orchestrator } = fake({
       agents: [{ id: "a", sessionMode: "per-run" }, { id: "b" }],
       maxAgentSessions: 1,
+      agentSlotWaitMs: 100,
       workflow: `
 id: nested
 name: nested
@@ -442,11 +464,17 @@ edges: [{ from: first, to: child }, { from: child, to: done }]
     expect(run.run.status).toBe("failed");
     const childId = Object.values(run.steps).flatMap((s) => s.childRunIds)[0]!;
     const child = await orchestrator.getState(childId);
-    expect(child.run.error).toMatchObject({ code: "CONFIG_INVALID" });
+    expect(child.run.error).toMatchObject({ code: "STEP_TIMEOUT" });
+    expect(child.run.error?.message).toContain("no agent slot within 100ms (limits.agentSlotWaitMs)");
+    expect(child.run.error?.message).toContain("it may never be granted: the slots are held by per-run sessions (a)");
+    expect(waits(await orchestrator.events(childId))).toEqual([
+      "waiting for an agent slot: 1 of 1 in use on this daemon; it may never be granted: the slots are held by " +
+        "per-run sessions (a) of runs that are themselves waiting on this queue",
+    ]);
     await expect.poll(() => orchestrator.sessionSlots.view()).toMatchObject({ inUse: { total: 0 }, queued: 0 });
   });
 
-  it("fails a cycle across unrelated runs, and leaves the same runs alone when the cap fits", async () => {
+  it("bounds a cycle across unrelated runs by agentSlotWaitMs, and leaves the same runs alone when the cap fits", async () => {
     const nested = `
 id: nested
 name: nested
@@ -459,7 +487,7 @@ edges: [{ from: first, to: child }, { from: child, to: done }]
 `;
     const agents = [{ id: "a", sessionMode: "per-run" }, { id: "b" }];
     // Each parent pins one of the two slots and its child needs one: neither can ever end.
-    const stuck = fake({ agents, maxAgentSessions: 2, workflow: nested });
+    const stuck = fake({ agents, maxAgentSessions: 2, agentSlotWaitMs: 100, workflow: nested });
     const runs = await Promise.all([
       stuck.orchestrator.startAndRun({ workflowId: "nested" }),
       stuck.orchestrator.startAndRun({ workflowId: "nested" }),
@@ -467,12 +495,12 @@ edges: [{ from: first, to: child }, { from: child, to: done }]
     expect(runs.map((r) => r.run.status)).toEqual(["failed", "failed"]);
     for (const r of runs) {
       const childId = Object.values(r.steps).flatMap((st) => st.childRunIds)[0]!;
-      expect((await stuck.orchestrator.getState(childId)).run.error).toMatchObject({ code: "CONFIG_INVALID" });
+      expect((await stuck.orchestrator.getState(childId)).run.error).toMatchObject({ code: "STEP_TIMEOUT" });
     }
     expect(stuck.opened).toEqual(["a", "a"]);
     await expect.poll(() => stuck.orchestrator.sessionSlots.view()).toMatchObject({ inUse: { total: 0 }, queued: 0 });
     // One more slot and the same two runs drain on their own.
-    const fits = fake({ agents, maxAgentSessions: 3, workflow: nested });
+    const fits = fake({ agents, maxAgentSessions: 3, agentSlotWaitMs: 100, workflow: nested });
     const ok = await Promise.all([
       fits.orchestrator.startAndRun({ workflowId: "nested" }),
       fits.orchestrator.startAndRun({ workflowId: "nested" }),
@@ -535,6 +563,110 @@ edges: [{ from: first, to: child }, { from: child, to: done }]
     expect(sawSlotWait).toBe(true);
     expect(f.opened).toEqual(["a"]);
     await expect.poll(() => f.orchestrator.sessionSlots.view().inUse.total).toBe(0);
+  });
+
+  it("does not fail a branch that a join:any parallel can still finish without", async () => {
+    const { orchestrator } = fake({
+      agents: [{ id: "a", sessionMode: "per-run" }, { id: "b" }],
+      maxAgentSessions: 1,
+      workflow: [
+        `
+id: noop
+name: noop
+start: mark
+nodes:
+  mark: { type: set, vars: { quick: true } }
+  done: { type: end }
+edges: [{ from: mark, to: done }]
+`,
+        `
+id: race
+name: race
+start: first
+nodes:
+  first: { type: agent, agent: a, prompt: "go" }
+  fan:
+    type: parallel
+    join: any
+    branches:
+      slow: { workflow: one-b }
+      quick: { workflow: noop }
+  done: { type: end }
+edges: [{ from: first, to: fan }, { from: fan, to: done }]
+`,
+      ],
+    });
+    const run = await orchestrator.startAndRun({ workflowId: "race" });
+    expect(run.run.status, JSON.stringify(run.run.error)).toBe("completed");
+    const children = await Promise.all(
+      Object.values(run.steps)
+        .flatMap((st) => st.childRunIds)
+        .map((id) => orchestrator.getState(id)),
+    );
+    // The branch waiting behind its parent's per-run slot was cancelled by the join, not
+    // failed as impossible: its ancestor could, and did, finish another way.
+    expect(children.map((c) => c.run.error?.code)).not.toContain("CONFIG_INVALID");
+    expect(children.map((c) => c.run.status).sort()).toEqual(["cancelled", "completed"]);
+    await expect.poll(() => orchestrator.sessionSlots.view()).toMatchObject({ inUse: { total: 0 }, queued: 0 });
+  });
+
+  it("waits for a same-run per-run slot that is already closing instead of failing", async () => {
+    const { orchestrator, peak } = fake({
+      agents: [
+        { id: "a", sessionMode: "per-run" },
+        { id: "b", sessionMode: "per-run" },
+      ],
+      maxAgentSessions: 1,
+      // Agent a's connection drops as its turn ends; its process takes 40 ms to go.
+      process: { cleanupMs: 40, dropAfterTurn: (agentId: string) => agentId === "a" },
+      workflow: `
+id: both
+name: both
+start: first
+nodes:
+  first: { type: agent, agent: a, prompt: "go" }
+  second: { type: agent, agent: b, prompt: "go" }
+  done: { type: end }
+edges: [{ from: first, to: second }, { from: second, to: done }]
+`,
+    });
+    const run = await orchestrator.startAndRun({ workflowId: "both" });
+    expect(run.run.status, JSON.stringify(run.run.error)).toBe("completed");
+    expect(peak.total).toBe(1);
+  });
+
+  it("keeps a slot whose process exit cannot be observed, and reports it", async () => {
+    const f = fake({ agents: [{ id: "a" }], maxAgentSessions: 1, process: { exitUnobservable: true } });
+    const first = await f.orchestrator.startAndRun({ workflowId: "one-a" });
+    expect(first.run.status).toBe("completed");
+    await expect
+      .poll(() => f.orchestrator.sessionSlots.view())
+      .toMatchObject({
+        inUse: { total: 1 },
+        teardownUnconfirmed: 1,
+      });
+    // The next open does not start beside a process that may still be running.
+    const secondId = await f.orchestrator.startRun({ workflowId: "one-a" });
+    const second = f.orchestrator.run(secondId);
+    await expect.poll(() => f.orchestrator.sessionSlots.view().queued).toBe(1);
+    await f.orchestrator.cancel(secondId, "operator");
+    expect((await second).run.status).toBe("cancelled");
+    expect(f.opened).toEqual(["a"]);
+  });
+
+  it("keeps a failed open's slot when its process exit cannot be observed", async () => {
+    const failure = withStartupTermination(
+      new OrcaError("AGENT_PROTOCOL", "handshake failed"),
+      Promise.reject(new Error("exit unobservable")),
+    );
+    const f = fake({ agents: [{ id: "a" }], maxAgentSessions: 1, openFails: (n) => (n === 1 ? failure : false) });
+    expect((await f.orchestrator.startAndRun({ workflowId: "one-a" })).run.status).toBe("failed");
+    await expect
+      .poll(() => f.orchestrator.sessionSlots.view())
+      .toMatchObject({
+        inUse: { total: 1 },
+        teardownUnconfirmed: 1,
+      });
   });
 
   it("still queues when the per-run sessions in the way belong to other runs", async () => {
