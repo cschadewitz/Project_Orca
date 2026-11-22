@@ -2,7 +2,8 @@
  * Saved SSH connection profiles in the connection dialog (#874). The app opens the tunnel,
  * pins the server's host key and keeps the profile's credential in the OS keychain; this
  * list only names profiles and asks main to act on them. Nothing secret crosses the bridge:
- * a credential is imported by a file picker that main owns.
+ * main signs in on the first connect by having ORCA on the server issue a credential (#875),
+ * and a credential imported by hand comes through a file picker that main owns.
  */
 import { useEffect, useRef, useState, type JSX } from "react";
 import type { RemoteProfileInput, RemoteProfilesBridge, RemoteProfileView } from "../../../src/daemon-connection.js";
@@ -18,6 +19,9 @@ interface Draft {
   jumpDestination: string;
   jumpPort: string;
   remotePort: string;
+  serverCommand: string;
+  serverConfig: string;
+  readOnly: boolean;
 }
 const EMPTY: Draft = {
   name: "",
@@ -27,6 +31,9 @@ const EMPTY: Draft = {
   jumpDestination: "",
   jumpPort: "",
   remotePort: "",
+  serverCommand: "",
+  serverConfig: "",
+  readOnly: false,
 };
 
 function toInput(draft: Draft): RemoteProfileInput | string {
@@ -43,6 +50,8 @@ function toInput(draft: Draft): RemoteProfileInput | string {
   if (typeof jumpPort === "string") return jumpPort;
   const identityFile = draft.identityFile.trim();
   const jump = draft.jumpDestination.trim();
+  const serverCommand = draft.serverCommand.trim();
+  const serverConfig = draft.serverConfig.trim();
   return {
     ...(draft.id ? { id: draft.id } : {}),
     name: draft.name.trim(),
@@ -60,7 +69,16 @@ function toInput(draft: Draft): RemoteProfileInput | string {
         }
       : {}),
     ...(remotePort ? { remotePort } : {}),
+    ...(serverCommand ? { serverCommand } : {}),
+    ...(serverConfig ? { serverConfig } : {}),
+    ...(draft.readOnly ? { readOnly: true } : {}),
   };
+}
+
+function credentialChip(profile: RemoteProfileView): string {
+  if (!profile.hasCredential) return "Signs in on first connect";
+  if (profile.credentialImported) return "Imported credential";
+  return profile.readOnly ? "Signed in, read only" : "Signed in";
 }
 
 export function ConnectionProfiles({
@@ -79,6 +97,7 @@ export function ConnectionProfiles({
   const [editing, setEditing] = useState<Draft>();
   const [armed, setArmed] = useState<string>();
   const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
   const [working, setWorking] = useState(false);
   const live = useRef(true);
   /** The armed removal row: Keep takes focus when it appears (RULES.md 17). */
@@ -102,6 +121,7 @@ export function ConnectionProfiles({
   ) => {
     setWorking(true);
     setError(undefined);
+    setNotice(undefined);
     const result = await action();
     if (!live.current) return;
     setWorking(false);
@@ -121,8 +141,9 @@ export function ConnectionProfiles({
       </h3>
       <Text style="caption" as="p">
         ORCA opens its own SSH tunnel with your keys or agent, pins the server&apos;s host key on the first connect, and
-        keeps the profile&apos;s daemon credential in the system keychain. Your ssh config is not used: enter the user,
-        port and key here. The daemon stays on the server&apos;s loopback.
+        signs in by having ORCA on the server issue this computer a credential, kept in the system keychain and renewed
+        before it expires. Your ssh config is not used: enter the user, port and key here. The daemon stays on the
+        server&apos;s loopback.
       </Text>
       {list.length === 0 && !editing && (
         <Text style="caption" as="p">
@@ -136,7 +157,14 @@ export function ConnectionProfiles({
             {current === profile.id ? " · connected" : ""}
           </Text>
           <div className="orca-chips">
-            <Chip>{profile.hasCredential ? "Credential stored" : "No credential"}</Chip>
+            <Chip>{credentialChip(profile)}</Chip>
+            {profile.pendingRevocations ? (
+              <Chip>
+                {profile.pendingRevocations === 1
+                  ? "1 old credential not revoked yet"
+                  : `${profile.pendingRevocations} old credentials not revoked yet`}
+              </Chip>
+            ) : null}
             <Chip>
               {profile.hostKeyMissing
                 ? "Pinned host key missing"
@@ -148,7 +176,8 @@ export function ConnectionProfiles({
           {armed === profile.id ? (
             <div ref={armedRow} className="orca-dialog__actions">
               <Text style="caption" as="p">
-                Removes the profile, its pinned host key and its stored credential.
+                Removes the profile, its pinned host key and its stored credential, and revokes the credential on the
+                server when it can be reached.
               </Text>
               <Button size="sm" onClick={() => setArmed(undefined)}>
                 Keep
@@ -160,7 +189,13 @@ export function ConnectionProfiles({
                 onClick={() =>
                   void run(
                     () => profiles.remove(profile.id),
-                    () => setArmed(undefined),
+                    ({ revoke }) => {
+                      setArmed(undefined);
+                      if (revoke === "not-reached")
+                        setNotice(
+                          `Removed ${profile.name}. ${profile.destination} could not be reached, so its credential stays valid there until it expires. Revoke it there with "orca auth revoke".`,
+                        );
+                    },
                   )
                 }
               >
@@ -172,8 +207,8 @@ export function ConnectionProfiles({
               <Button
                 size="sm"
                 tone="primary"
-                disabled={disabled || !profile.hasCredential}
-                disabledReason={profile.hasCredential ? "Checking the daemon" : "Import a credential first"}
+                disabled={disabled}
+                disabledReason="Checking the daemon"
                 onClick={() => connect(profile.id)}
               >
                 Connect
@@ -185,6 +220,16 @@ export function ConnectionProfiles({
               >
                 Import credential…
               </Button>
+              {profile.credentialImported && (
+                <Button
+                  size="sm"
+                  disabled={disabled || current === profile.id}
+                  disabledReason="Connect to another daemon first"
+                  onClick={() => void run(() => profiles.useAutomaticSignIn(profile.id))}
+                >
+                  Use automatic sign-in
+                </Button>
+              )}
               <Button
                 size="sm"
                 disabled={disabled || current === profile.id}
@@ -199,6 +244,9 @@ export function ConnectionProfiles({
                     jumpDestination: profile.jump?.destination ?? "",
                     jumpPort: profile.jump?.sshPort ? String(profile.jump.sshPort) : "",
                     remotePort: String(profile.remotePort),
+                    serverCommand: profile.serverCommand ?? "",
+                    serverConfig: profile.serverConfig ?? "",
+                    readOnly: profile.readOnly ?? false,
                   })
                 }
               >
@@ -255,6 +303,11 @@ export function ConnectionProfiles({
           {error}
         </Text>
       )}
+      {notice && (
+        <Text style="caption" as="p" role="status">
+          {notice}
+        </Text>
+      )}
     </section>
   );
 }
@@ -271,7 +324,7 @@ function ProfileEditor({
   cancel(this: void): void;
 }): JSX.Element {
   const [draft, setDraft] = useState(initial);
-  const field = (key: keyof Omit<Draft, "id">, label: string, help: string, mono = true) => (
+  const field = (key: keyof Omit<Draft, "id" | "readOnly">, label: string, help: string, mono = true) => (
     <ConfigField label={label} path={`profiles.${key}`} help={help}>
       {(control) => (
         <input
@@ -293,6 +346,34 @@ function ProfileEditor({
       {field("jumpDestination", "Jump host", "Optional user@host to reach the server through.")}
       {field("jumpPort", "Jump host SSH port", "Leave empty for 22.")}
       {field("remotePort", "Daemon port", "The daemon's port on the server's loopback. Default 6722.")}
+      {field(
+        "serverCommand",
+        "Server command",
+        "ORCA's command line on the server, which issues this profile's credential. Leave empty for orca on its PATH, or enter a full path (with / on Windows too).",
+      )}
+      {field(
+        "serverConfig",
+        "Workspace config",
+        "Optional full path to the daemon's config file on the server (with / on Windows too), when the daemon does not use the SSH user's default.",
+      )}
+      <ConfigField
+        label="Read only"
+        path="profiles.readOnly"
+        help="Sign in with the viewer preset: watch runs and plans, change nothing."
+      >
+        {(control) => (
+          <label className={textClass("caption")}>
+            <input
+              {...control}
+              type="checkbox"
+              checked={draft.readOnly}
+              disabled={disabled}
+              onChange={(event) => setDraft({ ...draft, readOnly: event.target.checked })}
+            />
+            Observe only
+          </label>
+        )}
+      </ConfigField>
       <div className="orca-dialog__actions">
         <Button size="sm" onClick={cancel}>
           Cancel
