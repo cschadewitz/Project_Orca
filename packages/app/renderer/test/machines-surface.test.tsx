@@ -118,6 +118,7 @@ beforeEach(() => {
       remove: vi.fn(),
       importCredential: vi.fn(),
       forgetHostKey: vi.fn(),
+      useAutomaticSignIn: vi.fn(),
     },
     fleet,
   };
