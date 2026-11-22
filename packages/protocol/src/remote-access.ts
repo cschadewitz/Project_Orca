@@ -50,16 +50,16 @@ const DESTINATION = new RegExp(`^(?:${USER}@)?${HOST}$`);
 const KEY_PATH = /^(?:\/|[A-Za-z]:[\\/])[^"\r\n\0]{1,1023}$/;
 
 /**
- * One word of a command ORCA runs on the server. ssh hands the remote shell the words joined
- * by spaces, so each is restricted to characters no shell (sh, cmd, PowerShell) treats
- * specially: no quoting is needed, and none can be injected. (A backslash is for Windows
- * paths; on an sh server it can only escape one of these same safe characters.)
+ * One word of a command ORCA runs on the server. OpenSSH joins the words with spaces into one
+ * command text for the remote shell, so each is restricted to characters that mean the same
+ * literal text to sh, cmd and PowerShell alike: no quoting, escaping or expansion applies, and
+ * nothing can be injected. No backslash (an escape to sh): Windows paths use `/`.
  */
-const REMOTE_WORD = /^[A-Za-z0-9._:/\\-]{1,1024}$/;
-/** An absolute path on the server, as one remote word. */
-const SERVER_PATH = /^(?:\/|[A-Za-z]:[\\/])[A-Za-z0-9._\\/-]{0,1023}$/;
+const REMOTE_WORD = /^[A-Za-z0-9._:/-]{1,1024}$/;
+/** An absolute path on the server, as one remote word (`C:/…` on Windows). */
+const SERVER_PATH = /^(?:\/|[A-Za-z]:\/)[A-Za-z0-9._/-]{0,1023}$/;
 /** The server's ORCA CLI: a command name on its PATH, or an absolute path such as a managed wrapper. */
-const SERVER_COMMAND = /^(?:[A-Za-z0-9._-]{1,64}|(?:\/|[A-Za-z]:[\\/])[A-Za-z0-9._\\/-]{0,1023})$/;
+const SERVER_COMMAND = /^(?:[A-Za-z0-9._-]{1,64}|(?:\/|[A-Za-z]:\/)[A-Za-z0-9._/-]{0,1023})$/;
 
 const Port = z.number().int().min(1).max(65535);
 /**
@@ -239,6 +239,8 @@ const PERMANENT: ReadonlySet<TunnelRefusalCode> = new Set([
 const STDERR_TAIL = 16 * 1024;
 /** The most a remote command may print: ORCA's CLI prints one small JSON record. */
 const REMOTE_OUTPUT_LIMIT = 64 * 1024;
+/** How long a command's output may keep flowing after ssh exited. */
+const REMOTE_DRAIN_MS = 2_000;
 
 /** What a command run on the server returned (see `SshTunnel.run`). */
 export interface RemoteResult {
@@ -268,6 +270,23 @@ export function pinState(knownHostsFile: string): PinState {
   // A known_hosts line: `<host pattern> <key type> <base64 key>`.
   const keyLine = /^[^#\s]\S*\s+\S+\s+[A-Za-z0-9+/]+=*(\s|$)/m;
   return keyLine.test(text) ? "pinned" : "broken";
+}
+
+/**
+ * The key a pin file vouches for, as `<type> <base64>` (one per line, sorted), or `undefined`
+ * when the file holds none. What a credential is bound to: a reset pin is another server.
+ */
+export function pinnedKeyIdentity(knownHostsFile: string): string | undefined {
+  let text: string;
+  try {
+    text = readFileSync(knownHostsFile, "utf8");
+  } catch {
+    return undefined;
+  }
+  const keys = [...text.matchAll(/^[^#\s]\S*\s+(\S+)\s+([A-Za-z0-9+/]+=*)(?:\s|$)/gm)].map(
+    (match) => `${match[1]} ${match[2]}`,
+  );
+  return keys.length ? [...new Set(keys)].sort().join("\n") : undefined;
 }
 
 /** True only for a usable pin; `broken` is not pinned. */
@@ -638,9 +657,26 @@ export class SshTunnel {
         clearTimeout(timer);
         reject(new TunnelRefusal(error.code === "ENOENT" ? "ssh-missing" : "ssh-failed"));
       });
+      // A result is read only once ssh has exited and its output is drained (`close`), and
+      // drainage is bounded: output that never ends is a failure, not a partial result.
+      let exitCode: number | null = null;
+      let drain: ReturnType<typeof setTimeout> | undefined;
       child.once("exit", (code) => {
         clearTimeout(timer);
+        exitCode = code;
         if (failed) return;
+        drain = setTimeout(() => {
+          failed = true;
+          reject(new TunnelRefusal("ssh-failed"));
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+        }, REMOTE_DRAIN_MS);
+      });
+      child.once("close", () => {
+        clearTimeout(timer);
+        if (drain) clearTimeout(drain);
+        if (failed) return;
+        failed = true;
         if (!authenticated) {
           reject(new TunnelRefusal(classifySshFailure(tail)));
           return;
@@ -649,7 +685,7 @@ export class SshTunnel {
           reject(new TunnelRefusal("ssh-failed"));
           return;
         }
-        resolve({ code: code ?? 255, stdout: Buffer.concat(stdout).toString("utf8"), serverLines });
+        resolve({ code: exitCode ?? 255, stdout: Buffer.concat(stdout).toString("utf8"), serverLines });
       });
       child.stdin?.end();
     });

@@ -8,6 +8,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openAuthDirectory, startDaemon, type DaemonHandle } from "@orca/daemon";
@@ -182,6 +183,8 @@ describe.skipIf(!live)("profile connection over a real ssh", () => {
     const auth = openAuthDirectory(join(server, "auth"));
     const daemon: DaemonHandle = await startDaemon({
       orcaVersion: "ssh-live",
+      // The daemon names its workspace: what a new credential is confirmed against.
+      workspaceId: randomUUID(),
       capabilities: ["runs.read", "runs.subscribe"],
       source: { subscribe: () => () => {}, eventsRange: async () => [] },
       auth: {
@@ -216,15 +219,17 @@ describe.skipIf(!live)("profile connection over a real ssh", () => {
       ...(live!.sshPort ? { sshPort: live!.sshPort } : {}),
       identityFile: live!.identity,
       remotePort,
-      serverCommand: command,
-      serverConfig: config,
+      // Server paths are written with `/`, on Windows too: one meaning in every shell.
+      serverCommand: command.replace(/\\/g, "/"),
+      serverConfig: config.replace(/\\/g, "/"),
     });
     const liveCredentials = () => auth.credentials.list().filter((c) => !c.revokedAt);
 
     // First connect: issued on the server, stored in the slot, accepted by the daemon.
     const lease = await profiles.open(view.id);
     const issued = liveCredentials();
-    expect(issued).toMatchObject([{ principal: "desktop-live-desktop", label: `orca-app-${view.id}` }]);
+    expect(issued).toMatchObject([{ label: `orca-app-${view.id}` }]);
+    expect(issued[0]!.principal).toMatch(/^desktop-live-desktop-[a-z2-7]{16}$/);
     const client = new DaemonClient(lease.url, lease.transport.fetch, {
       auth: lease.auth,
       requireAuthentication: true,

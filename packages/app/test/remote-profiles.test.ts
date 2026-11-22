@@ -26,6 +26,7 @@ import { DaemonClient } from "../src/client/daemon-client.js";
 import { CredentialTransportUnavailable, type DaemonTokenSource } from "../src/client/auth.js";
 import { DaemonSubscription } from "../src/client/subscription.js";
 import { ConnectionTarget, connectionFailure } from "../src/main/connection-target.js";
+import { installationId, principalFor } from "../src/main/remote-credentials.js";
 import {
   helloVerdict,
   RemoteProfiles,
@@ -86,7 +87,7 @@ class FakeServer {
         label = old.label;
       }
       const id = `cred${String(++this.next).padStart(8, "0")}`;
-      const token = `orca_live_${id}_secretsecretsecret`;
+      const token = `orca1.${id}.secretsecretsecret${this.next}`;
       const expiresAt = flag("--expires-at")!;
       this.credentials.set(id, { token, principal, expiresAt, revoked: false, ...(label ? { label } : {}) });
       return {
@@ -113,9 +114,11 @@ class FakeServer {
     const known = [...this.credentials.values()].find((c) => c.token === token);
     return known && !known.revoked && !this.otherWorkspace ? "accepted" : "refused";
   }
+  /** The daemon does not say which workspace it serves. */
+  anonymous = false;
   answer(token: string): HelloAnswer {
     const verdict = this.verdict(token);
-    return verdict === "accepted" ? { verdict, workspaceId: this.workspaceId } : { verdict };
+    return verdict === "accepted" && !this.anonymous ? { verdict, workspaceId: this.workspaceId } : { verdict };
   }
 }
 
@@ -415,10 +418,10 @@ describe("credentials travel only on the tunnel's authenticated streams", () => 
       // The daemon knows none of what the server's CLI issues: another workspace.
       await expect(profiles.open("lab")).rejects.toMatchObject({ code: "wrong-workspace" });
       expect(daemon.rpc).toHaveLength(1);
-      expect(daemon.rpc[0]).toMatch(/^Bearer orca_live_cred/);
+      expect(daemon.rpc[0]).toMatch(/^Bearer orca1\.cred/);
       expect(server.live()).toEqual([]);
       // It knows the next one: accepted, and the sign-in check went only to the daemon.
-      known = "orca_live_cred00000002_secretsecretsecret";
+      known = "orca1.cred00000002.secretsecretsecret2";
       const lease = await profiles.open("lab");
       expect(lease.auth.read()).toBe(known);
       expect(daemon.rpc.at(-1)).toBe(`Bearer ${known}`);
@@ -724,7 +727,9 @@ describe("automatic sign-in (#875)", () => {
     const lease = await profiles.open("lab");
     expect(server.commands).toHaveLength(1);
     const [command] = server.commands;
-    expect(command!.slice(0, 5)).toEqual(["orca", "auth", "issue", "desktop-casey-s-pc", "--preset"]);
+    expect(command!.slice(0, 3)).toEqual(["orca", "auth", "issue"]);
+    expect(command![3]).toMatch(/^desktop-casey-s-pc-[a-z2-7]{16}$/);
+    expect(command![4]).toBe("--preset");
     expect(command).toContain("client");
     expect(command!.slice(-3)).toEqual(["--label", "orca-app-lab", "--json"]);
     const expiresAt = command![command!.indexOf("--expires-at") + 1]!;
@@ -865,16 +870,17 @@ describe("automatic sign-in (#875)", () => {
   it("revokes the server's credential when the profile is removed, and says when it could not", async () => {
     const { dir, profiles, server } = store();
     profiles.save({ name: "Lab", destination: "lab" });
-    await (await profiles.open("lab")).release();
+    // Pinned when the credential is issued: it is bound to that key.
     pin(dir);
+    await (await profiles.open("lab")).release();
     await expect(profiles.remove("lab")).resolves.toBe("revoked");
     expect(server.live()).toEqual([]);
     expect(server.commands.at(-1)!.slice(0, 3)).toEqual(["orca", "auth", "revoke"]);
     expect(existsSync(join(dir, "credentials", "lab.json"))).toBe(false);
 
     profiles.save({ name: "Lab", destination: "lab" });
-    await (await profiles.open("lab")).release();
     pin(dir);
+    await (await profiles.open("lab")).release();
     server.fail = { code: 255, lines: [] };
     await expect(profiles.remove("lab")).resolves.toBe("not-reached");
     expect(profiles.list()).toEqual([]);
@@ -1029,8 +1035,8 @@ describe("automatic sign-in keeps every credential accounted for (#875 review)",
   it("refuses edits, imports, resets and connects while a removal is revoking", async () => {
     const { dir, profiles, server } = store();
     profiles.save({ name: "Lab", destination: "lab" });
-    await (await profiles.open("lab")).release();
     pin(dir);
+    await (await profiles.open("lab")).release();
     let release!: () => void;
     server.gate = new Promise<void>((resolve) => (release = resolve));
     const removing = profiles.remove("lab");
@@ -1062,5 +1068,97 @@ describe("automatic sign-in keeps every credential accounted for (#875 review)",
     expect(subs(server)).toEqual(["issue", "revoke"]);
     expect(server.live()).toEqual([]);
     expect(profiles.list()[0]!.hasCredential).toBe(false);
+  });
+});
+
+describe("credentials are bound to the server's keys and this installation (#875 review 2)", () => {
+  const pinKey = (dir: string, key: string) => {
+    mkdirSync(join(dir, "known_hosts"), { recursive: true });
+    writeFileSync(join(dir, "known_hosts", "lab"), `orca-lab ssh-ed25519 ${key}\n`);
+  };
+  const subs = (server: FakeServer) => server.commands.map((c) => c[2]);
+
+  it("quarantines credentials on a pin reset: never sent under the new key, revoked only under the old", async () => {
+    const { dir, profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    pinKey(dir, "AAAAoldkey");
+    const lease = await profiles.open("lab");
+    const old = lease.auth.read()!;
+    await lease.release();
+
+    profiles.forgetHostKey("lab");
+    expect(profiles.list()[0]).toMatchObject({ hasCredential: false, pendingRevocations: 1 });
+    // Another key answers now: a new credential, and the old token goes nowhere near it.
+    pinKey(dir, "AAAAnewkey");
+    const fresh = await profiles.open("lab");
+    expect(fresh.auth.read()).not.toBe(old);
+    await fresh.release();
+    expect(subs(server)).toEqual(["issue", "issue"]);
+    expect(profiles.list()[0]).toMatchObject({ pendingRevocations: 1 });
+
+    // A pin that changed underneath (not through a reset) quarantines just the same.
+    pinKey(dir, "AAAAthirdkey");
+    await (await profiles.open("lab")).release();
+    expect(subs(server)).toEqual(["issue", "issue", "issue"]);
+    expect(profiles.list()[0]).toMatchObject({ pendingRevocations: 2 });
+  });
+
+  it("asks for an imported credential again after its server's key was reset", async () => {
+    const { dir, profiles } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    pinKey(dir, "AAAAoldkey");
+    profiles.importCredential("lab", TOKEN);
+    await (await profiles.open("lab")).release();
+    profiles.forgetHostKey("lab");
+    expect(profiles.list()[0]).toMatchObject({ hasCredential: true, credentialImported: true });
+    pinKey(dir, "AAAAnewkey");
+    await expect(profiles.open("lab")).rejects.toMatchObject({ code: "imported-reauthorize" });
+    // Importing it again is the person's authorization for the new key.
+    profiles.importCredential("lab", TOKEN);
+    const lease = await profiles.open("lab");
+    expect(lease.auth.read()).toBe(TOKEN);
+    await lease.release();
+    // And a key that changes under the import without a reset is refused too.
+    pinKey(dir, "AAAAthirdkey");
+    await expect(profiles.open("lab")).rejects.toMatchObject({ code: "imported-reauthorize" });
+  });
+
+  it("switches in a credential only when the daemon names its workspace", async () => {
+    const { profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    server.anonymous = true;
+    await expect(profiles.open("lab")).rejects.toMatchObject({ code: "unverified" });
+    // Taken back, nothing in the slot.
+    expect(subs(server)).toEqual(["issue", "revoke"]);
+    expect(server.live()).toEqual([]);
+    expect(profiles.list()[0]!.hasCredential).toBe(false);
+
+    // Bound to a workspace, a credential is refused by a daemon that no longer names one.
+    server.anonymous = false;
+    await (await profiles.open("lab")).release();
+    server.anonymous = true;
+    await expect(profiles.open("lab")).rejects.toMatchObject({ code: "unverified" });
+  });
+
+  it("names each installation in its principal, even on machines with the same name", async () => {
+    const a = store();
+    const b = store();
+    for (const { profiles } of [a, b]) {
+      profiles.save({ name: "Lab", destination: "lab" });
+      await (await profiles.open("lab")).release();
+    }
+    const principal = (server: FakeServer) => server.commands[0]![3]!;
+    expect(principal(a.server)).toMatch(/^desktop-casey-s-pc-[a-z2-7]{16}$/);
+    expect(principal(b.server)).toMatch(/^desktop-casey-s-pc-[a-z2-7]{16}$/);
+    expect(principal(a.server)).not.toBe(principal(b.server));
+    // Durable: the same installation keeps its id across restarts.
+    expect(installationId(a.dir)).toBe(principal(a.server).slice(-16));
+    expect(installationId(a.dir)).toBe(installationId(a.dir));
+    // Within the daemon's principal rules, whatever the host name.
+    const long = principalFor("A".repeat(200) + ".example.com", installationId(a.dir));
+    expect(long.length).toBeLessThanOrEqual(64);
+    expect(long).toMatch(/^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$/);
+    expect(principalFor("---", installationId(a.dir))).toMatch(/^desktop-computer-/);
+    expect(() => principalFor("pc", "short")).toThrow();
   });
 });

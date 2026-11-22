@@ -21,6 +21,7 @@ import {
   forgetPin,
   markPinEnrolled,
   pinState,
+  pinnedKeyIdentity,
   profileIdFor,
   sshOptionPath,
   SshTunnel,
@@ -180,6 +181,8 @@ class FakeSsh extends EventEmitter {
   killed = false;
   /** Every byte a client handed this ssh to carry. */
   received = "";
+  /** Output that keeps flowing after exit: `close` never comes. */
+  holdOutput = false;
   constructor() {
     super();
     this.stdin.on("data", (chunk: Buffer) => (this.received += chunk.toString()));
@@ -198,7 +201,11 @@ class FakeSsh extends EventEmitter {
     this.signalCode = signal;
     this.stdout.end();
     this.stdin.destroy();
-    setImmediate(() => this.emit("exit", code, signal));
+    setImmediate(() => {
+      this.emit("exit", code, signal);
+      // Real children close once stdio has drained; `holdOutput` keeps it open.
+      if (!this.holdOutput) setImmediate(() => this.emit("close", code, signal));
+    });
   }
 }
 
@@ -599,8 +606,8 @@ describe("commands on the server (#875)", () => {
       "--expires-at",
       "2027-01-01T00:00:00.000Z",
     ]);
-    // Windows paths and credential ids pass as they are.
-    expect(commandArgs(hops.daemon, ["C:\\Orca\\orca.cmd", "auth", "revoke", "AbC_dEf-1234"]).at(-1)).toBe(
+    // Windows paths (written with `/`) and credential ids pass as they are.
+    expect(commandArgs(hops.daemon, ["C:/Orca/orca.cmd", "auth", "revoke", "AbC_dEf-1234"]).at(-1)).toBe(
       "AbC_dEf-1234",
     );
   });
@@ -613,6 +620,9 @@ describe("commands on the server (#875)", () => {
     [["orca", "'x'"]],
     [["orca", "a&b"]],
     [["orca", "%PATH%"]],
+    // A backslash escapes in sh and is literal in cmd: the same word, two meanings.
+    [["C:\\Orca\\orca.cmd"]],
+    [["orca", "a\\nb"]],
     [["orca", ""]],
   ])("refuses %j before ssh starts", (command) => {
     const hops = tunnelHops(profile(), join(dir(), "lab.known_hosts"));
@@ -641,6 +651,42 @@ describe("commands on the server (#875)", () => {
     expect(spawned).toHaveLength(1);
     expect(tunnel.state.phase).toBe("closed");
     await expect(tunnel.runOnce(["orca"])).rejects.toThrow();
+  });
+
+  it("names the key a pin vouches for, so a reset pin reads as another server", () => {
+    const pins = pinned();
+    expect(pinnedKeyIdentity(pins)).toBe("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6");
+    writeFileSync(pins, "# none\n");
+    expect(pinnedKeyIdentity(pins)).toBeUndefined();
+    expect(pinnedKeyIdentity(join(dir(), "missing"))).toBeUndefined();
+  });
+
+  it("reads a result only once the output has drained, and output that never ends is a failure", async () => {
+    const late = fakeTunnel(
+      (ssh) => {
+        ssh.say(authed);
+        ssh.stdout.write("{");
+        ssh.exitCode = 0;
+        ssh.emit("exit", 0, null);
+        // Output still arriving after exit: part of the result.
+        setImmediate(() => {
+          ssh.stdout.end("}");
+          ssh.emit("close", 0, null);
+        });
+      },
+      { knownHostsFile: pinned() },
+    );
+    await expect(late.tunnel.runOnce(["orca"])).resolves.toMatchObject({ code: 0, stdout: "{}" });
+
+    const endless = fakeTunnel(
+      (ssh) => {
+        ssh.holdOutput = true;
+        ssh.say(authed);
+        ssh.exit(0);
+      },
+      { knownHostsFile: pinned() },
+    );
+    await expect(endless.tunnel.runOnce(["orca"])).rejects.toMatchObject({ code: "ssh-failed" });
   });
 
   it("never trusts a key on first use: an unpinned server or jump host is refused before ssh starts", async () => {

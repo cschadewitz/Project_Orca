@@ -11,7 +11,18 @@
  * workspace config), so every one of them is revoked where it came from, or kept on the list
  * until it can be.
  */
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import type { ConnectionProfile, RemoteResult } from "@orca/protocol/remote-access";
@@ -42,6 +53,8 @@ export type CredentialSetupCode =
   | "wrong-workspace"
   | "credential-refused"
   | "imported-refused"
+  | "imported-reauthorize"
+  | "unverified"
   | "store-failed";
 
 /** Automatic sign-in could not finish. The message says what to do; it never carries server output. */
@@ -76,6 +89,10 @@ function refusalMessage(code: CredentialSetupCode, profile: ConnectionProfile): 
       return `The daemon on ${profile.destination} refused this profile's credential, and a new one could not be issued. Connect again, or import a credential.`;
     case "imported-refused":
       return `The daemon on ${profile.destination} refused the credential imported for ${profile.name}. Import a new one, or choose "Use automatic sign-in" to have ORCA issue one.`;
+    case "imported-reauthorize":
+      return `The host key of ${profile.destination} was reset since the credential for ${profile.name} was imported, so ORCA will not send it there. Import it again if this is the same server, or choose "Use automatic sign-in".`;
+    case "unverified":
+      return `The daemon on ${profile.destination} port ${profile.remotePort} did not confirm which workspace it serves, so ORCA did not use the new credential. Update ORCA on the server, then connect again.`;
     case "store-failed":
       return `ORCA could not keep a new credential for ${profile.name} in the system keychain, so it was not used. Check that the keychain is unlocked and available, then connect again.`;
   }
@@ -86,24 +103,54 @@ export function credentialRefusal(code: CredentialSetupCode, profile: Connection
 }
 
 /**
- * Who the credential is for on the server: this computer. `desktop-<hostname>`, cut to the
- * daemon's principal rules (1-64 of letters, digits, `. _ @ -`).
+ * Who the credential is for on the server: this installation of the app, which owns the runs
+ * it starts. `desktop-<hostname>-<installation id>`: the host name for people reading
+ * `orca auth list`, the installation id so two installations never share a principal (and
+ * so each other's runs), even on machines with the same name. Within the daemon's principal
+ * rules (1-64 of letters, digits, `. _ @ -`).
  */
-export function principalFor(hostname: string): string {
+export function principalFor(hostname: string, installationId: string): string {
+  if (!INSTALLATION_ID.test(installationId)) throw new Error("Invalid installation id");
   const host =
     hostname
       .toLowerCase()
       .replace(/[^a-z0-9.-]+/g, "-")
       .replace(/^[-.]+|[-.]+$/g, "")
-      .slice(0, 56)
+      .slice(0, 36)
       .replace(/[-.]+$/, "") || "computer";
-  return `desktop-${host}`;
+  return `desktop-${host}-${installationId}`;
+}
+
+const INSTALLATION_ID = /^[a-z0-9]{16}$/;
+
+/**
+ * This installation's durable id (`<dir>/installation.json`), made once from 80 random bits.
+ * Not secret: it names the installation in principals, it grants nothing.
+ */
+export function installationId(dir: string): string {
+  const file = join(dir, "installation.json");
+  try {
+    const parsed = z
+      .object({ id: z.string().regex(INSTALLATION_ID) })
+      .safeParse(JSON.parse(readFileSync(file, "utf8")));
+    if (parsed.success) return parsed.data.id;
+  } catch {
+    // None yet, or unreadable: make one.
+  }
+  const id = [...randomBytes(16)].map((byte) => "abcdefghijklmnopqrstuvwxyz234567"[byte % 32]).join("");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify({ id })}\n`, { mode: 0o600 });
+  renameSync(tmp, file);
+  return id;
 }
 
 /** Where a credential was issued: which server, through which CLI, for which workspace config. */
 const TargetSchema = z
   .object({
     server: z.string().max(1024),
+    /** The pinned host keys (server, and jump host) it was issued through: its server's identity. */
+    hostKeys: z.string().max(16384),
     serverCommand: z.string().max(1024).optional(),
     serverConfig: z.string().max(1024).optional(),
   })
@@ -120,9 +167,10 @@ export function serverKey(profile: ConnectionProfile): string {
   ]);
 }
 
-export function targetOf(profile: ConnectionProfile): CredentialTarget {
+export function targetOf(profile: ConnectionProfile, hostKeys: string): CredentialTarget {
   return {
     server: serverKey(profile),
+    hostKeys,
     ...(profile.serverCommand ? { serverCommand: profile.serverCommand } : {}),
     ...(profile.serverConfig ? { serverConfig: profile.serverConfig } : {}),
   };
@@ -185,9 +233,16 @@ export function issuedFrom(result: RemoteResult, profile: ConnectionProfile, pri
     throw credentialRefusal("cli-failed", profile);
   }
   const issued = { token: parsed.token, credentialId: parsed.credential.id, expiresAt: parsed.credential.expiresAt };
-  // Not the credential that was asked for: never stored, and the caller takes it back.
-  if (parsed.credential.principal !== principal) throw new StrayCredential(issued.credentialId);
+  // Not the credential that was asked for (another principal, or a token that is not this
+  // credential's): never stored, and the caller takes it back.
+  if (parsed.credential.principal !== principal || tokenCredentialId(parsed.token) !== issued.credentialId)
+    throw new StrayCredential(issued.credentialId);
   return issued;
+}
+
+/** The credential id a daemon token carries (`orca1.<id>.<secret>`). */
+export function tokenCredentialId(token: string): string | undefined {
+  return /^orca1\.([A-Za-z0-9_-]{12})\.[A-Za-z0-9_-]+$/.exec(token)?.[1];
 }
 
 /** The server issued a credential that is not the one asked for. Revoke it; never store it. */
@@ -236,6 +291,14 @@ const RecordSchema = z
     current: IssuedEntrySchema.optional(),
     next: IssuedEntrySchema.optional(),
     retired: z.array(CredentialEntrySchema).max(64).optional(),
+    /**
+     * An imported credential: the host keys it was first accepted through, and whether a pin
+     * reset since means the person must authorize it again before it is sent anywhere.
+     */
+    imported: z
+      .object({ hostKeys: z.string().max(16384).optional(), reauthorize: z.literal(true).optional() })
+      .strict()
+      .optional(),
   })
   .strict();
 export type CredentialRecord = z.infer<typeof RecordSchema>;

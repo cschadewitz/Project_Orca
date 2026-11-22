@@ -23,6 +23,7 @@ import {
   ConnectionProfileSchema,
   CredentialSlots,
   forgetPin,
+  pinnedKeyIdentity,
   pinState,
   profileIdFor,
   SshTunnel,
@@ -47,8 +48,10 @@ import {
   issuedFrom,
   principalFor,
   revokeCommand,
+  installationId,
   serverKey,
   StrayCredential,
+  tokenCredentialId,
   targetOf,
   type CredentialEntry,
   type CredentialPolicy,
@@ -124,6 +127,8 @@ export interface RemoteProfilesDeps {
   onTunnelState?: (profileId: string, state: TunnelState) => void;
   /** Names this computer in the principal of issued credentials. Default: the OS host name. */
   hostname?: string;
+  /** Test seam: this installation's id. Default: made once and kept in `<dir>/installation.json`. */
+  installationId?: string;
   credentialPolicy?: CredentialPolicy;
   now?: () => number;
   /** Test seam: ask the daemon, over the tunnel's streams, whether it accepts `token`. */
@@ -170,6 +175,12 @@ export class RemoteProfiles {
     this.slots = new CredentialSlots(join(deps.dir, "credentials"), deps.cipher);
     this.nextSlots = new CredentialSlots(join(deps.dir, "credentials", "next"), deps.cipher);
     this.records = new CredentialRecords(join(deps.dir, "credentials"));
+  }
+
+  private installationNow: string | undefined;
+  /** This installation's durable id, which names it in every principal it is issued. */
+  private get installation(): string {
+    return (this.installationNow ??= this.deps.installationId ?? installationId(this.deps.dir));
   }
 
   private get policy(): CredentialPolicy {
@@ -321,7 +332,7 @@ export class RemoteProfiles {
         existing.serverConfig !== profile.serverConfig ||
         Boolean(existing.readOnly) !== Boolean(profile.readOnly);
       // The old credentials keep where they were issued, so they are revoked there, not here.
-      if (otherServer || otherIssue) this.retireCredentials(id, { keepImported: false });
+      if (otherServer || otherIssue) this.retireCredentials(id, otherServer ? "drop" : "keep");
       if (otherServer) this.forgetPins(id);
       this.bump(id);
     }
@@ -351,17 +362,22 @@ export class RemoteProfiles {
    * revoke, each with where it was issued, and empty the slots. An imported credential is
    * the person's: dropped from the slot only when it no longer fits the profile.
    */
-  private retireCredentials(id: string, options: { keepImported: boolean }): void {
+  private retireCredentials(id: string, imported: "drop" | "keep" | "reauthorize"): void {
     const record = this.records.read(id);
     const issued = [record?.current, record?.next].filter((entry): entry is IssuedEntry => entry !== undefined);
     const retired = [
       ...(record?.retired ?? []),
       ...issued.map(({ credentialId, target }) => ({ credentialId, target })),
     ].slice(-64);
-    const imported = this.slots.has(id) && !record?.current;
-    if (!imported || !options.keepImported) this.slots.remove(id);
+    const hasImport = this.slots.has(id) && !record?.current;
+    const keep = hasImport && imported !== "drop";
+    if (!keep) this.slots.remove(id);
     this.nextSlots.remove(id);
-    if (retired.length) this.records.write(id, { version: 1, retired });
+    const importState = keep
+      ? { imported: { ...record?.imported, ...(imported === "reauthorize" ? { reauthorize: true as const } : {}) } }
+      : {};
+    if (retired.length || keep)
+      this.records.write(id, { version: 1, ...(retired.length ? { retired } : {}), ...importState });
     else this.records.remove(id);
     this.generations.set(id, this.generation(id) + 1);
   }
@@ -378,7 +394,7 @@ export class RemoteProfiles {
     this.removing.add(id);
     this.bump(id);
     try {
-      this.retireCredentials(id, { keepImported: false });
+      this.retireCredentials(id, "drop");
       const left = await this.revokeRetired(profile, (command) => this.newTunnel(profile, true).runOnce(command));
       const outcome: RevokeOutcome = left === undefined ? "none" : left.length ? "not-reached" : "revoked";
       const profiles = this.read();
@@ -420,18 +436,17 @@ export class RemoteProfiles {
     } catch (error) {
       throw new ConnectionRefusal(error instanceof Error ? error.message : "The credential could not be stored.");
     }
-    // The slot holds the import now; what ORCA issued before is only still to revoke.
+    // The slot holds the import now; what ORCA issued before is only still to revoke. The
+    // import is bound to the host keys it is first accepted through.
     const record = this.records.read(id);
-    if (record?.current || record?.next) {
-      const retired = [
-        ...(record.retired ?? []),
-        ...[record.current, record.next]
-          .filter((entry): entry is IssuedEntry => entry !== undefined)
-          .map(({ credentialId, target }) => ({ credentialId, target })),
-      ].slice(-64);
-      this.nextSlots.remove(id);
-      this.records.write(id, { version: 1, retired });
-    }
+    const retired = [
+      ...(record?.retired ?? []),
+      ...[record?.current, record?.next]
+        .filter((entry): entry is IssuedEntry => entry !== undefined)
+        .map(({ credentialId, target }) => ({ credentialId, target })),
+    ].slice(-64);
+    this.nextSlots.remove(id);
+    this.records.write(id, { version: 1, ...(retired.length ? { retired } : {}), imported: {} });
     this.generations.set(id, this.generation(id) + 1);
     return this.view(profile);
   }
@@ -441,8 +456,14 @@ export class RemoteProfiles {
     const profile = this.get(id);
     if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
     this.assertIdle(id, "resetting");
-    if (!this.records.read(id)?.current) {
+    const record = this.records.read(id);
+    if (!record?.current) {
       this.slots.remove(id);
+      if (record) {
+        const { imported: _dropped, ...rest } = record;
+        if (rest.retired?.length || rest.next) this.records.write(id, rest);
+        else this.records.remove(id);
+      }
       this.generations.set(id, this.generation(id) + 1);
     }
     return this.view(profile);
@@ -464,7 +485,19 @@ export class RemoteProfiles {
     )
       throw new ConnectionRefusal("Connect to another daemon before forgetting this profile's host key.");
     this.bump(id);
+    // The credentials belong to the server behind the old key: never sent to whatever
+    // answers under a new one. ORCA's go on the list to revoke (through the old key only);
+    // an import waits for the person to authorize it again.
+    this.retireCredentials(id, "reauthorize");
     this.forgetPins(id);
+  }
+
+  /** The host keys the profile's pins vouch for now (server, and jump host). */
+  private hostKeys(profile: ConnectionProfile): string {
+    return JSON.stringify([
+      pinnedKeyIdentity(this.pins(profile.id)) ?? null,
+      profile.jump ? (pinnedKeyIdentity(`${this.pins(profile.id)}.jump`) ?? null) : null,
+    ]);
   }
 
   private forgetPins(id: string): void {
@@ -605,6 +638,16 @@ export class RemoteProfiles {
     };
     const ask = (token: string) => (this.deps.verify ?? helloVerdict)(() => shared.tunnel.connect(), url, token);
 
+    // Credentials are bound to the host keys they were issued through. Any issued through
+    // keys the pins no longer hold are quarantined: never sent here, revoked only there.
+    const keys = this.hostKeys(profile);
+    const bound = this.records.read(id);
+    if (
+      (bound?.current && bound.current.target.hostKeys !== keys) ||
+      (bound?.next && bound.next.target.hostKeys !== keys)
+    )
+      this.retireCredentials(id, "keep");
+
     // A replacement staged by an earlier connect: switch to it, or take it back.
     if (this.records.read(id)?.next) {
       const outcome = await this.settleNext(profile, run, ask);
@@ -619,12 +662,21 @@ export class RemoteProfiles {
       return;
     }
     if (!record?.current) {
-      // Imported: kept as it is. Refused, it is the person's to replace, never ORCA's.
+      // Imported: kept as it is, and sent only through the host keys it was first accepted
+      // through. Refused, or its server's key reset, it is the person's to act on, never ORCA's.
+      const imported = record?.imported;
+      if (imported?.reauthorize || (imported?.hostKeys !== undefined && imported.hostKeys !== keys))
+        throw credentialRefusal("imported-reauthorize", profile);
       const token = this.slots.read(id);
       const answer = token ? await ask(token) : { verdict: "unknown" as const };
       if (answer.verdict === "refused") throw credentialRefusal("imported-refused", profile);
-      // What ORCA had issued before the import is still revoked where it came from.
-      if (answer.verdict === "accepted") await this.revokeRetired(profile, run);
+      if (answer.verdict === "accepted") {
+        const latest = this.records.read(id);
+        if (!latest?.imported?.hostKeys)
+          this.records.write(id, { ...(latest ?? { version: 1 as const }), imported: { hostKeys: keys } });
+        // What ORCA had issued before the import is still revoked where it came from.
+        await this.revokeRetired(profile, run);
+      }
       return;
     }
     if (dueForRenewal(record.current, this.policy, this.now()) && !record.next) {
@@ -642,10 +694,10 @@ export class RemoteProfiles {
     const token = this.slots.read(id);
     const answer = token ? await ask(token) : { verdict: "refused" as const };
     if (answer.verdict === "accepted") {
-      if (record.current && !this.sameWorkspace(record.current, answer.workspaceId))
+      // The daemon must say which workspace it is, and be the one this credential is bound to.
+      if (!answer.workspaceId) throw credentialRefusal("unverified", profile);
+      if (record.current && record.current.workspaceId !== answer.workspaceId)
         throw credentialRefusal("wrong-workspace", profile);
-      if (record.current && !record.current.workspaceId && answer.workspaceId)
-        this.records.write(id, { ...record, current: { ...record.current, workspaceId: answer.workspaceId } });
       await this.revokeRetired(profile, run);
       return;
     }
@@ -664,30 +716,27 @@ export class RemoteProfiles {
       throw credentialRefusal("credential-refused", profile);
   }
 
-  private sameWorkspace(entry: IssuedEntry, workspaceId: string | undefined): boolean {
-    return !entry.workspaceId || !workspaceId || entry.workspaceId === workspaceId;
-  }
-
   /**
    * Issue a credential into the staging slot. It is durable (token sealed, id and target on
    * record) before anything uses it; if it cannot be kept, it is taken back on the server.
    */
   private async stage(profile: ConnectionProfile, run: (command: string[]) => Promise<RemoteResult>): Promise<void> {
-    const principal = principalFor(this.deps.hostname ?? osHostname());
+    const keys = this.hostKeys(profile);
+    const principal = principalFor(this.deps.hostname ?? osHostname(), this.installation);
     const result = await run(issueCommand(profile, principal, new Date(this.now() + this.policy.ttlMs)));
     let issued: Issued;
     try {
       issued = issuedFrom(result, profile, principal);
     } catch (error) {
       if (error instanceof StrayCredential) {
-        await run(revokeCommand(targetOf(profile), error.credentialId)).catch(() => undefined);
+        await run(revokeCommand(targetOf(profile, keys), error.credentialId)).catch(() => undefined);
         throw credentialRefusal("cli-failed", profile);
       }
       throw error;
     }
     const entry: IssuedEntry = {
       credentialId: issued.credentialId,
-      target: targetOf(profile),
+      target: targetOf(profile, keys),
       principal,
       ...(issued.expiresAt ? { expiresAt: issued.expiresAt } : {}),
       issuedAt: new Date(this.now()).toISOString(),
@@ -744,7 +793,17 @@ export class RemoteProfiles {
       return "unknown";
     }
     const answer = await ask(token);
-    if (answer.verdict === "accepted" && (!record.current || this.sameWorkspace(record.current, answer.workspaceId))) {
+    if (answer.verdict === "unknown") return "unknown";
+    // Promotion needs positive proof: this token is the credential the CLI issued for this
+    // installation's principal (checked when it was staged, and again here), the daemon
+    // accepts it, and the daemon names its workspace, the same one as before if there was one.
+    const workspaceId = answer.verdict === "accepted" ? answer.workspaceId : undefined;
+    const proven =
+      answer.verdict === "accepted" &&
+      workspaceId !== undefined &&
+      tokenCredentialId(token) === next.credentialId &&
+      (!record.current?.workspaceId || record.current.workspaceId === workspaceId);
+    if (proven) {
       // Durable in this order: the slot, then the record that says it is current. A crash
       // between them leaves the staged one on record, which the next connect settles again.
       try {
@@ -759,7 +818,7 @@ export class RemoteProfiles {
       ].slice(-64);
       this.records.write(id, {
         version: 1,
-        current: { ...next, ...(answer.workspaceId ? { workspaceId: answer.workspaceId } : {}) },
+        current: { ...next, workspaceId },
         ...(retired.length ? { retired } : {}),
       });
       this.nextSlots.remove(id);
@@ -767,17 +826,16 @@ export class RemoteProfiles {
       await this.revokeRetired(profile, run);
       return "promoted";
     }
-    if (answer.verdict === "unknown") return "unknown";
-    // Not the daemon's workspace (or not the asked-for preset): take it back.
+    // Not proven for this daemon's workspace: take it back.
     this.nextSlots.remove(id);
     this.remember(id, next);
     await this.revokeRetired(profile, run).catch(() => undefined);
-    throw credentialRefusal("wrong-workspace", profile);
+    throw credentialRefusal(answer.verdict === "accepted" && !workspaceId ? "unverified" : "wrong-workspace", profile);
   }
 
   /**
    * Revoke the credentials still to revoke, each with the CLI and workspace config it was
-   * issued under, and only on the server it was issued on (this profile's, as pinned now).
+   * issued under, and only on the server it was issued on, behind the same pinned host keys.
    * What could not be revoked stays on the list. `undefined`: there was nothing to revoke.
    */
   private async revokeRetired(
@@ -787,9 +845,11 @@ export class RemoteProfiles {
     const record = this.records.read(profile.id);
     if (!record?.retired?.length) return undefined;
     const here = serverKey(profile);
+    const keys = this.hostKeys(profile);
     const left: CredentialEntry[] = [];
     for (const entry of record.retired) {
-      if (entry.target.server !== here) {
+      // Only through the server, and the very host keys, it was issued through.
+      if (entry.target.server !== here || entry.target.hostKeys !== keys) {
         left.push(entry);
         continue;
       }

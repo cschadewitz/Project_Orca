@@ -349,12 +349,12 @@ function ProfileEditor({
       {field(
         "serverCommand",
         "Server command",
-        "ORCA's command line on the server, which issues this profile's credential. Leave empty for orca on its PATH, or enter a full path.",
+        "ORCA's command line on the server, which issues this profile's credential. Leave empty for orca on its PATH, or enter a full path (with / on Windows too).",
       )}
       {field(
         "serverConfig",
         "Workspace config",
-        "Optional full path to the daemon's config file on the server, when the daemon does not use the SSH user's default.",
+        "Optional full path to the daemon's config file on the server (with / on Windows too), when the daemon does not use the SSH user's default.",
       )}
       <ConfigField
         label="Read only"

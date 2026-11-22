@@ -142,14 +142,23 @@ Once the tunnel's ssh has authenticated the server against its pin, the app runs
 ORCA's own command line there over the same kind of config-free ssh:
 
 ```
-<server command> auth issue desktop-<this computer> --preset client|viewer \
+<server command> auth issue desktop-<host name>-<installation id> --preset client|viewer \
   --expires-at <now + 90 days> --label orca-app-<profile> [--config <workspace config>] --json
 ```
 
+The principal names this installation of the app, which owns the runs it starts: the
+host name for people reading `orca auth list`, plus an installation id made once and kept
+in `<userData>/remote-daemons/installation.json`, so two installations never share a
+principal, even on machines with the same name.
+
 Commands on the server never trust a host key on first use: they run only once the
 server (and its jump host) is pinned, with `StrictHostKeyChecking=yes`, and are refused
-before ssh starts otherwise. Each command word is limited to letters, digits and
-`. _ : / \ -`, so no shell on the server (sh, cmd or PowerShell) reads anything into it.
+before ssh starts otherwise. OpenSSH joins the command's words into one command text for
+the server's shell, so each word is limited to letters, digits and `. _ : / -`, which
+read as the same literal text in sh, cmd and PowerShell: no quoting, escaping or
+expansion applies. Paths on a Windows server are written with `/` (`C:/ORCA/orca.cmd`).
+A command's result is read only after ssh has exited and its output has drained, within
+a bound; output that does not end is a failure.
 
 - **Server command** is ORCA's CLI on the server: `orca` on the SSH user's `PATH` by
   default, or a full path such as a managed install's wrapper.
@@ -164,9 +173,13 @@ the command's output into a staging slot in the keychain, and its id, expiry and
 it was issued (server, CLI and workspace config) go into a small nonsecret record
 (`credentials/<profile>.json`) before anything else happens; a credential the
 keychain cannot keep is revoked on the server at once. The app then asks the daemon
-for an authenticated `hello` with it over the tunnel. Accepted, it becomes the
-profile's credential, the daemon's workspace id is remembered, and the credential it
-replaces is revoked. If the daemon cannot be asked (no daemon running, say), nothing
+for an authenticated `hello` with it over the tunnel. It switches in only on positive
+proof: the token is the credential the CLI reported for this installation's principal,
+the daemon accepts it, and the daemon names its workspace (the same one as before, if
+the profile had a credential). Then the workspace id is remembered, and the credential
+it replaces is revoked. A daemon that accepts the credential but names no workspace (an
+older ORCA) gets the credential revoked again, and the connect asks to update ORCA on
+the server. If the daemon cannot be asked (no daemon running, say), nothing
 switches: the staged credential waits for the next connect, and the one in use stays.
 If the daemon refuses a credential that was just issued, or answers from another
 workspace than before, the CLI issued it for another workspace than the daemon's on
@@ -181,8 +194,16 @@ that fails leaves the current credential in use while it is valid. A credential 
 daemon refuses (expired or revoked on the server) gets one replacement, then a clear
 refusal.
 
+Credentials are bound to the host keys they were issued through, the server's and the
+jump host's. **Forget host key** quarantines the profile's credentials: they go on the
+list to revoke and are never sent to whatever answers under a new key. The same happens
+if the pinned key changes in any other way. An imported credential is bound to the keys
+it was first accepted through; after a key reset it is not sent until the person imports
+it again or switches to automatic sign-in.
+
 Every replaced credential is revoked where it was issued, with the CLI and workspace
-config it was issued under, and only through the server it was issued on. One that
+config it was issued under, and only through the server and the very host keys it was
+issued through. One that
 cannot be revoked yet stays on the profile's list ("old credentials not revoked yet")
 and is tried again on later connects. Changing the server command, workspace config or
 read-only setting replaces the credential on the next connect; pointing the profile at
@@ -200,8 +221,9 @@ that one on the list to revoke.
 Failures name what to do: ORCA not found on the server under the server command, not
 allowed to run it, no workspace there (or a workspace config path with no file), another
 CLI failure (run `orca auth list` on the server), the daemon on the port belonging to
-another workspace, a refused credential that could not be replaced, a refused import,
-and a keychain that could not keep the new credential. Server output is never shown or
+another workspace, a daemon that does not name its workspace, a refused credential that
+could not be replaced, a refused import, an import waiting for authorization after a key
+reset, and a keychain that could not keep the new credential. Server output is never shown or
 logged.
 
 ### Choosing a remote access path
