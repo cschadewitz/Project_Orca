@@ -2,7 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { OrcaError, OrcaEventSchema } from "@orca/core";
+import { OrcaError, OrcaEventSchema, RunOriginSchema } from "@orca/core";
 import type { MutationActor } from "@orca/core";
 import type {
   DirectAdmissionAuthority,
@@ -31,13 +31,7 @@ export const DirectAdmissionCommandSchema = z.strictObject({
   expectedConfigGeneration: z.string().min(1).optional(),
   requestId: z.string().min(1).optional(),
   workItemId: z.string().min(1).optional(),
-  origin: z
-    .strictObject({
-      workspaceId: z.string().min(1).max(128),
-      runId: z.string().min(1).max(256),
-      stepRunId: z.string().min(1).max(256).optional(),
-    })
-    .optional(),
+  origin: RunOriginSchema.optional(),
   fence: z.literal(true).optional(),
 });
 /** Reserved orchestrator/generation integration supplies this explicit capability. */

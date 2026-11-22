@@ -203,7 +203,11 @@ it("refuses a root whose creation acknowledgement was lost before policy publica
 
 it("records a stated origin on the admitted run, and a key replayed with another origin conflicts (#883)", async () => {
   const f = await fixture();
-  const origin = { workspaceId: "8c1f2d3e-0a4b-4c5d-8e6f-7a8b9c0d1e2f", runId: "run_parent", stepRunId: "step_1" };
+  const origin = {
+    workspaceId: "8c1f2d3e-0a4b-4c5d-8e6f-7a8b9c0d1e2f",
+    runId: "run_01JD0000000000000000000000",
+    stepRunId: "step_01JD0000000000000000000000",
+  };
   const first = await f.service.admitRun({ workflowId: "program", origin }, { idempotencyKey: "origin" }, f.authority);
   expect(first).toMatchObject({ state: "resolved", result: { state: "accepted" } });
   const runId = (first as { result: { runId: string } }).result.runId;
@@ -214,7 +218,7 @@ it("records a stated origin on the admitted run, and a key replayed with another
   ).resolves.toMatchObject({ replayed: true });
   await expect(
     f.service.admitRun(
-      { workflowId: "program", origin: { ...origin, runId: "run_other" } },
+      { workflowId: "program", origin: { ...origin, runId: "run_01JD0000000000000000000009" } },
       { idempotencyKey: "origin" },
       f.authority,
     ),
@@ -223,4 +227,16 @@ it("records a stated origin on the admitted run, and a key replayed with another
   // Execution's first-attachment fence checks the origin the admission recorded.
   await f.orc.run(runId);
   expect((await f.orc.getState(runId)).run.status).not.toBe("created");
+});
+
+it("refuses an origin that is not canonical ids before anything is claimed or admitted (#883)", async () => {
+  const f = await fixture();
+  for (const origin of [
+    { workspaceId: "workspace", runId: "run_01JD0000000000000000000000" },
+    { workspaceId: "8c1f2d3e-0a4b-4c5d-8e6f-7a8b9c0d1e2f", runId: "private-token-value" },
+  ])
+    await expect(
+      f.service.admitRun({ workflowId: "program", origin }, { idempotencyKey: "bad-origin" }, f.authority),
+    ).rejects.toMatchObject({ code: "WORKFLOW_INPUT_INVALID" });
+  expect(await f.orc.listRuns()).toEqual([]);
 });

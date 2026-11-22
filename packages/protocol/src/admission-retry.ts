@@ -1,6 +1,6 @@
 /** Additive receipt schemas. Registration/capabilities require production wiring. */
 import { z } from "zod";
-import { SubmissionCommandSchema } from "@orca/core/schemas";
+import { RunOriginSchema, SubmissionCommandSchema } from "@orca/core/schemas";
 import { RunsStartParamsSchema } from "./control.js";
 import type { DirectAdmissionResult, RetryResult, RetryOptions } from "../../core/src/model/admission-retry.js";
 export const RetryKeySchema = z.string().refine((key) => {
@@ -16,11 +16,7 @@ export const AdmissionExpectedScopeSchema = z.strictObject({
   workspaceId: z.uuid(),
 });
 /** Protocol 2.6 (#883): the parent workspace, run and step a delegated run is started for. */
-export const RunOriginParamsSchema = z.strictObject({
-  workspaceId: z.string().min(1).max(128),
-  runId: z.string().min(1).max(256),
-  stepRunId: z.string().min(1).max(256).optional(),
-});
+export const RunOriginParamsSchema = RunOriginSchema;
 export const RunsAdmitParamsSchema = RunsStartParamsSchema.extend({
   expectedScope: AdmissionExpectedScopeSchema.optional(),
   idempotencyKey: RetryKeySchema.optional(),

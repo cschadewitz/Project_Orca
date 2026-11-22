@@ -48,6 +48,7 @@ import {
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { RunOriginSchema } from "@orca/core";
 
 /** What a receipt is bound to; see the module comment. */
 export const DelegationBindingSchema = z
@@ -82,14 +83,12 @@ export const DelegationReceiptSchema = z
     state: z.enum(["submitting", "admitted", "cancel-pending", "settled"]),
     remoteRunId: z.string().min(1).optional(),
     /**
-     * The origin this generation's admission states (#883, protocol 2.6): this daemon's
+     * The origin this generation's admission states (#883): this daemon's
      * workspace, the parent run and the step. Fixed when the generation is created, so every
-     * replay of its key sends the same command; absent when the remote predates 2.6.
+     * replay of its key sends the same command; absent when the remote did not list `origin` in `hello.admitFields`. A remote that stops
+     * taking it is refused the replay rather than sent a different command.
      */
-    origin: z
-      .object({ workspaceId: z.string().min(1), runId: z.string().min(1), stepRunId: z.string().min(1).optional() })
-      .strict()
-      .optional(),
+    origin: RunOriginSchema.optional(),
     outcome: z.enum(["succeeded", "failed", "cancelled", "never-admitted"]).optional(),
     updatedAt: z.string(),
   })

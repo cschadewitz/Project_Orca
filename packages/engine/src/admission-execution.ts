@@ -1,7 +1,7 @@
 /** Bounded first-attachment fence; admission receipts remain in the existing retry journal. */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { OrcaError, sha256, type OrcaEvent } from "@orca/core";
+import { OrcaError, RunOriginSchema, sha256, type OrcaEvent } from "@orca/core";
 import type { Stores } from "@orca/store";
 import { canonicalJson } from "./admission-retry.js";
 import { GenerationSnapshotSchema } from "./configuration-generation.js";
@@ -24,13 +24,7 @@ const BindingSchema = z.strictObject({
   workflow: IdentitySchema,
   requestId: z.string().min(1).optional(),
   workItemId: z.string().min(1).optional(),
-  origin: z
-    .strictObject({
-      workspaceId: z.string().min(1),
-      runId: z.string().min(1),
-      stepRunId: z.string().min(1).optional(),
-    })
-    .optional(),
+  origin: RunOriginSchema.optional(),
 });
 export type AdmissionExecutionBinding = z.infer<typeof BindingSchema>;
 const EvidenceSchema = z.strictObject({

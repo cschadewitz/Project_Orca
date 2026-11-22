@@ -168,11 +168,13 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * `admissions.reconcile` takes an optional `kind` (`run.recover`) and refuses any other kind
  * before it reconciles; a 2.4 daemon rejects the unknown field, so it fails closed.
  *
- * 2.6 (#883) adds an optional `origin` ({ workspaceId, runId, stepRunId? }) to `runs.admit`:
- * the parent workspace, run and step a delegated run was started for. The daemon records it
- * on the run (`origin` on `RunSummaryView`) and in the audit record of the admission. It is
- * the admitting principal's statement, never authority. A 2.5 daemon rejects the unknown
- * field, so a delegating daemon sends it only to a daemon that answered `hello` in 2.6 or later.
+ * 2.6 (#883) adds an optional `origin` ({ workspaceId, runId, stepRunId? }, canonical ids
+ * only) to `runs.admit`: the parent workspace, run and step a delegated run was started for.
+ * The daemon records it on the run (`origin` on `RunSummaryView`; left off the public
+ * projection if a secret touched it) and in the audit record of the admission. It is the
+ * admitting principal's statement, never authority. `runs.admit` params are strict, so a
+ * daemon that takes the field says so in `hello.admitFields` (also new), and a caller sends
+ * it only to a daemon that lists it there, never on the strength of the minor alone.
  */
 export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 6 };
 

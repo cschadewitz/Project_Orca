@@ -111,11 +111,20 @@ export type StepOrigin = z.infer<typeof StepOriginSchema>;
  * Where a delegated run came from (#883): the parent daemon's workspace, run and step. The
  * admitting principal states it; it is a record of that statement, never authority.
  */
-export const RunOriginSchema = z.object({
-  workspaceId: z.string().min(1).max(128),
-  runId: z.string().min(1).max(256),
-  stepRunId: z.string().min(1).max(256).optional(),
-});
+const CANONICAL = "(?:[0-9A-HJKMNP-TV-Z]{26}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})";
+/** A run id as ORCA makes them: `run_` and a ULID, or `run_` and a UUID (admission reservations). */
+export const CANONICAL_RUN_ID = new RegExp(`^run_${CANONICAL}$`);
+/** A step run id as ORCA makes them: `step_` and a ULID or a UUID. */
+export const CANONICAL_STEP_RUN_ID = new RegExp(`^step_${CANONICAL}$`);
+/** A workspace id: the lowercase UUID a store's workspace identity holds. */
+export const CANONICAL_WORKSPACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const RunOriginSchema = z
+  .object({
+    workspaceId: z.string().regex(CANONICAL_WORKSPACE_ID),
+    runId: z.string().regex(CANONICAL_RUN_ID),
+    stepRunId: z.string().regex(CANONICAL_STEP_RUN_ID).optional(),
+  })
+  .strict();
 export type RunOrigin = z.infer<typeof RunOriginSchema>;
 
 export const StepRunSchema = z.object({

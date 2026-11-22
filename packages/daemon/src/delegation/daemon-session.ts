@@ -45,6 +45,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   newId,
   OrcaError,
+  RunOriginSchema,
   silentLogger,
   systemClock,
   type AgentSpec,
@@ -172,7 +173,7 @@ export interface OpenDaemonSessionOptions {
   callTimeoutMs?: number;
   /**
    * This daemon's workspace id. With it, each admission states its origin (this workspace,
-   * the parent run and the step) to a remote that speaks protocol 2.6 or later (#883).
+   * the parent run and the step) to a remote whose `hello.admitFields` lists `origin` (#883).
    */
   originWorkspaceId?: string;
 }
@@ -223,9 +224,12 @@ const MAX_PAGES_PER_ROUND = 50;
 const MAX_CHILD_DEPTH = 8;
 
 /** The workspace and principal every remote mutation for a receipt is scoped to. */
-/** Whether a daemon that answered `hello` in this version takes `runs.admit` `origin` (2.6+). */
-export function recordsOrigin(version: { major: number; minor: number }): boolean {
-  return version.major > 2 || (version.major === 2 && version.minor >= 6);
+/**
+ * Whether a daemon takes `runs.admit` `origin`: only when its `hello` lists the field in
+ * `admitFields`, never on the strength of a protocol minor (another 2.6 need not have it).
+ */
+export function recordsOrigin(hello: { admitFields?: readonly string[] | undefined }): boolean {
+  return hello.admitFields?.includes("origin") ?? false;
 }
 
 function scopeOf(receipt: DelegationReceipt): { workspaceId: string; principalId: string } {
@@ -304,7 +308,7 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
       clock,
       logger,
       { principalId: discovery.principalId, workspaceId: discovery.target.workspaceId },
-      recordsOrigin(hello.protocol),
+      recordsOrigin(hello),
     );
     await session.sweep();
     return session;
@@ -374,7 +378,7 @@ class DaemonSession implements AgentSession {
     private readonly clock: Clock,
     private readonly logger: Logger,
     private readonly scope: { principalId: string; workspaceId: string },
-    /** The remote takes `runs.admit` `origin` (protocol 2.6). */
+    /** The remote's `hello.admitFields` lists `origin`. */
     private readonly takesOrigin = false,
   ) {
     this.id = newId("sess", clock.now());
@@ -578,9 +582,13 @@ class DaemonSession implements AgentSession {
    */
   private originOf(turn: TurnContext): Pick<DelegationReceipt, "origin"> {
     if (!this.takesOrigin || !this.options.originWorkspaceId) return {};
-    return {
-      origin: { workspaceId: this.options.originWorkspaceId, runId: turn.runId, stepRunId: turn.delegationId },
-    };
+    // Canonical ids only, as the remote checks them; an origin that is not one is left out.
+    const origin = RunOriginSchema.safeParse({
+      workspaceId: this.options.originWorkspaceId,
+      runId: turn.runId,
+      stepRunId: turn.delegationId,
+    });
+    return origin.success ? { origin: origin.data } : {};
   }
 
   /** One decision on a delegation's receipt: the receipt to follow, or undefined to read again. */
@@ -759,6 +767,14 @@ class DaemonSession implements AgentSession {
       expectedScope: scopeOf(receipt),
       ...(receipt.origin ? { origin: receipt.origin } : {}),
     };
+    // The receipt's admission is replayed exactly as it was first sent: an origin it carries is
+    // part of that command. A remote that no longer takes one is refused, never sent less.
+    if (receipt.origin && !this.takesOrigin)
+      throw delegationRefusal(
+        this.options.profile,
+        "protocol",
+        `The daemon on ${this.options.remoteName} no longer takes a run origin, which this step's earlier admission stated. Nothing was sent; update ORCA there to settle the step.`,
+      );
     const admitted = (runId: string) => this.store({ ...receipt, state: "admitted", remoteRunId: runId });
     for (let attempt = 0; ; attempt++) {
       if (signal?.aborted) return this.abandon(receipt, deadline);

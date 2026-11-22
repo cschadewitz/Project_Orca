@@ -260,5 +260,11 @@ export const HelloResultSchema = z.object({
    * `config.read`. Absent for any other daemon. Protocol 2.2.
    */
   deployment: ManagedDeploymentSchema.optional(),
+  /**
+   * The optional `runs.admit` fields this daemon takes and records (#883), named explicitly
+   * because `runs.admit` params are strict: a caller sends such a field only to a daemon that
+   * lists it here, never on the strength of a protocol minor alone. Protocol 2.6: `origin`.
+   */
+  admitFields: z.array(z.string()).optional(),
 });
 export type HelloResult = z.infer<typeof HelloResultSchema>;
