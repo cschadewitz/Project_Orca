@@ -25,3 +25,11 @@ export { SqliteDocumentStore } from "./sqlite/documents.js";
 export { SqliteEventStore } from "./sqlite/events.js";
 export { SqlitePlanJournal } from "./sqlite/journal.js";
 export { SqliteArtifactStore } from "./sqlite/artifacts.js";
+export {
+  backupSqliteMetadata,
+  importFileMetadata,
+  restoreSqliteMetadata,
+  verifySqliteMetadata,
+  type SqliteImportReport,
+  type SqliteVerifyReport,
+} from "./sqlite/maintenance.js";

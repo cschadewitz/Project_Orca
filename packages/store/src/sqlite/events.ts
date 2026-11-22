@@ -40,6 +40,24 @@ interface Row {
 /** How many rows a filtered page reads per step when `match` has to be applied in process. */
 const CHUNK = 256;
 
+/** Insert one event row; the caller's transaction has chosen `event.seq`. Shared with import. */
+export function insertEvent(db: SqliteDatabase, event: OrcaEvent): void {
+  db.prepare("INSERT OR IGNORE INTO runs (run_id) VALUES (?)").run(event.runId);
+  db.prepare(
+    "INSERT INTO events (run_id, seq, id, type, journal_kind, journal_id, journal_revision, body) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    event.runId,
+    event.seq,
+    event.id,
+    event.type,
+    event.journal?.kind ?? null,
+    event.journal?.id ?? null,
+    event.journal?.revision ?? null,
+    JSON.stringify(event),
+  );
+}
+
 export class SqliteEventStore extends BaseEventStore {
   constructor(
     private readonly db: SqliteDatabase,
@@ -59,29 +77,10 @@ export class SqliteEventStore extends BaseEventStore {
     return row.seq === null ? 0 : Number(row.seq) + 1;
   }
 
-  private insert(event: OrcaEvent): void {
-    this.db.prepare("INSERT OR IGNORE INTO runs (run_id) VALUES (?)").run(event.runId);
-    this.db
-      .prepare(
-        "INSERT INTO events (run_id, seq, id, type, journal_kind, journal_id, journal_revision, body) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(
-        event.runId,
-        event.seq,
-        event.id,
-        event.type,
-        event.journal?.kind ?? null,
-        event.journal?.id ?? null,
-        event.journal?.revision ?? null,
-        JSON.stringify(event),
-      );
-  }
-
   protected write(runId: string, build: (seq: number) => OrcaEvent): Promise<OrcaEvent> {
     return this.db.write(() => {
       const event = build(this.nextSeq(runId));
-      this.insert(event);
+      insertEvent(this.db, event);
       return event;
     });
   }
@@ -203,7 +202,7 @@ export class SqliteEventStore extends BaseEventStore {
           seq,
           at: this.clock.isoNow(),
         });
-        this.insert(event);
+        insertEvent(this.db, event);
         return { event, fresh: true };
       });
       if (!outcome.fresh) return replay(outcome.event);

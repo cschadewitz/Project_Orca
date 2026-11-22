@@ -90,11 +90,31 @@ landing inside the measured window.
 Every workload invariant held on all backends. These are observations, not the
 baseline: the #341 ADR records its budgets and the reference machine first.
 
+## Operations
+
+All four commands work on the configured store directory and never touch the
+file-backed metadata they read from.
+
+| Command | What it does |
+|---|---|
+| `orca store sqlite import` | Mirrors the file store's metadata into `<store>/metadata.sqlite`: collections are replaced, runs and plan journals are extended with the events the database lacks, the artifact index is upserted (blobs are already in place). Ids, sequence numbers and timestamps are copied, never reassigned. Each collection, run and journal is one transaction, so a rerun finishes an interrupted import. History the database has that the files do not is refused (`STORE_FORMAT`, `IMPORT_CONFLICT`), never overwritten. |
+| `orca store sqlite backup <file>` | `VACUUM INTO` a consistent copy while the database stays in use, synced and integrity-checked. Refuses an existing file. Blobs, encrypted records, claims and leases are files and are backed up as files. |
+| `orca store sqlite restore <file>` | Checks the copy (integrity, schema not newer), then copies, syncs and renames it into place; a crash leaves no database or the whole backup. Refuses a store that already has a database (or a stray `-wal`): move it aside first. |
+| `orca store sqlite verify` | Integrity check, per-run and per-plan sequence gaps, every stored event, journal entry and artifact record parsed, every artifact row's blob present and matching its hash. Blobs no row references (an interrupted `put`) are listed, not deleted. Exit 1 on any problem. |
+
+Until a workspace can select SQLite, the database is inert: nothing reads it, and
+older ORCA versions ignore the file.
+
+**Crash behaviour.** `sqlite-recovery.test.ts` kills a writer with `SIGKILL` at
+random points, four times on one database, and checks that every acknowledged
+write survives (at most the one write in flight is also there), journal
+operations are never duplicated, event sequences have no gaps, and `verify`
+finds no dangling artifact reference: a kill between a blob and its index row
+leaves only an unreferenced blob.
+
 ## Not in this change (follow-ups under #339)
 
-- Import from an existing file-backed workspace (rerunnable after interruption),
-  backup (`VACUUM INTO`), restore into a fresh instance, and recovery commands.
-- Kill/restart tests at each commit boundary.
 - Checkpoint behaviour under sustained load, and the `large` scale on the
   reference machine.
-- Making SQLite selectable for a workspace, after the format gates above.
+- Making SQLite selectable for a workspace, after the format gates above. That
+  switch is also when the daemon serves history from it to #255.

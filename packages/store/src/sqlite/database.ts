@@ -32,7 +32,8 @@ const BUSY = 5;
 const LOCKED = 6;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function sqlite(): typeof import("node:sqlite") {
+/** The built-in `node:sqlite` module, loaded on first use. */
+export function sqlite(): typeof import("node:sqlite") {
   const mod = process.getBuiltinModule?.("node:sqlite") as typeof import("node:sqlite") | undefined;
   if (!mod) throw new OrcaError("NOT_SUPPORTED", "this Node.js runtime has no built-in SQLite (node:sqlite)");
   return mod;
