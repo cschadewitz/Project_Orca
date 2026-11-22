@@ -15,9 +15,11 @@ import {
 } from "@orca/core";
 import {
   capabilityChecker,
+  ConfigurationGenerations,
   launchProvenance,
   LocalWorkspaceProvider,
   Orchestrator,
+  PausingHumanInput,
   skillDigest,
   type GenerationMaterial,
 } from "@orca/engine";
@@ -78,7 +80,15 @@ nodes:
 edges: [{ from: s, to: plan }, { from: plan, to: build }, { from: build, to: e }]
 `;
 
-function setup(configRaw: object, opts: { sessionMode?: "per-run" | "per-step"; workflow?: string } = {}) {
+function setup(
+  configRaw: object,
+  opts: {
+    sessionMode?: "per-run" | "per-step";
+    workflow?: string | string[];
+    stores?: ReturnType<typeof memoryStores>;
+    pause?: boolean;
+  } = {},
+) {
   const config: OrcaConfig = parseOrcaConfig({
     capabilities: {
       mcpServers: {
@@ -103,11 +113,12 @@ function setup(configRaw: object, opts: { sessionMode?: "per-run" | "per-step"; 
   });
   const registry = AgentRegistry.fromConfig(config);
   const workflows = new WorkflowRegistry();
-  workflows.register(parseWorkflow(opts.workflow ?? flow));
+  for (const w of [opts.workflow ?? flow].flat()) workflows.register(parseWorkflow(w));
   const opened: { mcp: string[]; envKeys: string[][] }[] = [];
   let n = 0;
   const orchestrator = new Orchestrator({
-    stores: memoryStores(),
+    stores: opts.stores ?? memoryStores(),
+    ...(opts.pause ? { humanInput: new PausingHumanInput() } : {}),
     logger: silentLogger,
     agents: registry,
     workflows,
@@ -140,6 +151,26 @@ function setup(configRaw: object, opts: { sessionMode?: "per-run" | "per-step"; 
     },
   });
   return { orchestrator, registry, config, workflows, opened };
+}
+
+/** `setup` with configuration generations wired the way bootstrap wires them, so runs record provenance. */
+async function withGenerations(
+  configRaw: object,
+  opts: Parameters<typeof setup>[1] & { stores: ReturnType<typeof memoryStores> },
+) {
+  const made = setup(configRaw, opts);
+  const generations = new ConfigurationGenerations({
+    store: opts.stores.execution,
+    workflows: opts.stores.workflows,
+    loadAssets: async () => ({ workflows: made.workflows.list(), templates: [] }),
+    admission: {
+      validateStartRun: (options, generation) => made.orchestrator.validateStartRun(options, generation),
+      startRun: (options, generation) => made.orchestrator.startRun(options, generation),
+    },
+  });
+  await generations.initialize(made.config, "rev", { workflows: made.workflows.list(), templates: [] });
+  made.orchestrator.generations = generations;
+  return { ...made, generations };
 }
 
 describe("scoped capabilities at session open", () => {
@@ -193,6 +224,93 @@ edges: [{ from: s, to: a }, { from: a, to: e }]
     );
     await orchestrator.startAndRun({ workflowId: "flow" });
     expect(opened).toHaveLength(1);
+  });
+});
+
+// A nested graph is part of its workflow's file; a registered child workflow is not.
+const nested = `
+id: nested
+name: Nested
+capabilities: { mcpServers: { disable: [docs] } }
+start: s
+nodes:
+  s: { type: start }
+  loop:
+    type: loop
+    mode: until
+    condition: 'true'
+    maxIterations: 1
+    body:
+      graph:
+        start: s
+        nodes:
+          s: { type: start }
+          a: { type: agent, agent: claude, prompt: a }
+          g: { type: gate, question: go on? }
+          b: { type: agent, agent: claude, prompt: b, capabilities: { mcpServers: { enable: [db] } } }
+          e: { type: end }
+        edges: [{ from: s, to: a }, { from: a, to: g }, { from: g, to: b }, { from: b, to: e }]
+  sub: { type: subworkflow, workflow: plain }
+  e: { type: end }
+edges: [{ from: s, to: loop }, { from: loop, to: sub }, { from: sub, to: e }]
+`;
+const plain = `
+id: plain
+name: Plain
+start: s
+nodes: { s: { type: start }, c: { type: agent, agent: claude, prompt: c }, e: { type: end } }
+edges: [{ from: s, to: c }, { from: c, to: e }]
+`;
+
+describe("scoped capabilities in child runs", () => {
+  it("runs a nested graph under its workflow's scope, fresh and after resume, and a registered child under its own", async () => {
+    const stores = memoryStores();
+    const first = setup({}, { workflow: [nested, plain], stores, pause: true });
+    const parked = await first.orchestrator.startAndRun({ workflowId: "nested" });
+    expect(parked.run.status).toBe("paused");
+    // Fresh inline child admission: the workflow's `disable: [docs]` holds.
+    expect(first.opened.map((o) => o.mcp)).toEqual([["github", "inline"]]);
+
+    // A new process over the same store reconstructs the child from the stored definition.
+    const second = setup({}, { workflow: [nested, plain], stores });
+    const [request] = await second.orchestrator.pendingInputs();
+    await second.orchestrator.answer(request!.id, "approve", request!.runId);
+    const done = await second.orchestrator.resume(request!.runId);
+    expect(done.run.status).toBe("completed");
+    expect(second.opened.map((o) => o.mcp)).toEqual([
+      // `b` in the nested graph: the workflow scope still applies, plus the node's opt-in.
+      ["github", "inline", "db"],
+      // The registered `plain` child: its own (empty) scope, so docs is back.
+      ["github", "docs", "inline"],
+    ]);
+  });
+});
+
+describe("scoped capabilities in child runs with recorded provenance", () => {
+  it("admits a nested child under the enclosing scope, records it, and resumes it in another process", async () => {
+    const stores = memoryStores();
+    const first = await withGenerations({}, { workflow: [nested, plain], stores, pause: true });
+    const launch = await first.generations.captureLaunch({ purpose: "workflow", workflowId: "nested" });
+    const id = await launch.startRun({});
+    expect((await first.orchestrator.run(id)).run.status).toBe("paused");
+    expect(first.opened.map((o) => o.mcp)).toEqual([["github", "inline"]]);
+    const [request] = await first.orchestrator.pendingInputs();
+    const child = await first.orchestrator.getState(request!.runId);
+    expect(child.run.parentRunId).toBe(id);
+    // The child's own launch record carries the enclosing workflow's scope.
+    expect(child.run.provenance?.selections.find((s) => s.nodeId === "b")?.capabilities?.mcpServers).toEqual([
+      { id: "github", source: "config.capabilities.workspace" },
+      { id: "inline", source: "agents.claude.mcpServers" },
+      { id: "db", source: "workflow.nodes.b.capabilities" },
+    ]);
+
+    const second = await withGenerations({}, { workflow: [nested, plain], stores });
+    await second.orchestrator.answer(request!.id, "approve", request!.runId);
+    expect((await second.orchestrator.resume(request!.runId)).run.status).toBe("completed");
+    expect(second.opened.map((o) => o.mcp)).toEqual([
+      ["github", "inline", "db"],
+      ["github", "docs", "inline"],
+    ]);
   });
 });
 

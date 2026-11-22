@@ -209,7 +209,12 @@ export interface StartRunOptions {
   /** Only trusted in-process callers supply actor metadata; transports bind it server-side. */
   actor?: MutationActor;
   workflowId?: string;
-  inline?: { graph: WorkflowGraph; id: string; version?: string };
+  /**
+   * A nested graph of a running workflow (in-process only). `capabilities` is the enclosing
+   * workflow's scope (#335): the graph is part of that file, so it runs under it, exactly as
+   * `walkInline` reconstructs it on resume.
+   */
+  inline?: { graph: WorkflowGraph; id: string; version?: string; capabilities?: CapabilityScope | undefined };
   vars?: Record<string, unknown>;
   /** Trusted captured-launch attribution; never accepted from wire launch params. */
   itemWorkflowSource?: "config.program.itemWorkflow";
@@ -400,7 +405,7 @@ export class Orchestrator {
     // launch vars - all before anything is written, provisioned or appended, so a refused
     // launch leaves no definition, workspace, run, agent or child behind.
     const def = opts.inline
-      ? this.inlineDefinition(opts.inline.id, opts.inline.graph, opts.inline.version ?? "1")
+      ? this.inlineDefinition(opts.inline.id, opts.inline.graph, opts.inline.version ?? "1", opts.inline.capabilities)
       : await this.selectDefinition(opts.workflowId!, opts.workflowVersion, generation?.workflows);
     if (opts.expectedWorkflowRevision !== undefined && opts.expectedWorkflowRevision !== workflowRevision(def))
       throw new OrcaError(
@@ -1754,7 +1759,16 @@ export class Orchestrator {
             self.startRun({
               ...("workflow" in target
                 ? { workflowId: target.workflow }
-                : { inline: { graph: target.graph, id: target.inlineId, version: rc.definition.version } }),
+                : {
+                    inline: {
+                      graph: target.graph,
+                      id: target.inlineId,
+                      version: rc.definition.version,
+                      // The enclosing workflow's scope (#335). A registered child workflow
+                      // (`workflowId` above) runs under its own definition's instead.
+                      ...(rc.definition.capabilities ? { capabilities: rc.definition.capabilities } : {}),
+                    },
+                  }),
               parentRunId: rc.id,
               parentStepRunId: step.id,
               ...(options.vars ? { vars: { ...rc.state.run.vars, ...options.vars } } : { vars: rc.state.run.vars }),
