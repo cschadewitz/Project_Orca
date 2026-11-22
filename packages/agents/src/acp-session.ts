@@ -33,6 +33,7 @@ import {
 } from "./permissions.js";
 import {
   summarizeUpdate,
+  withStartupTermination,
   type AgentSession,
   type PromptOptions,
   type SessionUpdateEvent,
@@ -410,18 +411,22 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     try {
       await terminate(e);
     } catch (cleanupError) {
-      // Keep the handshake as the primary failure and retain it as the cause.
-      throw new OrcaError(
-        failure.code,
-        failure.message,
-        {
-          ...failure.details,
-          cleanup: describeError(cleanupError),
-        },
-        { cause: failure },
+      // Keep the handshake as the primary failure and retain it as the cause. The process may
+      // still be alive: carry its exit so a caller counting live processes can wait for it.
+      throw withStartupTermination(
+        new OrcaError(
+          failure.code,
+          failure.message,
+          {
+            ...failure.details,
+            cleanup: describeError(cleanupError),
+          },
+          { cause: failure },
+        ),
+        proc.exited,
       );
     }
-    throw failure;
+    throw withStartupTermination(failure, proc.exited);
   }
 
   const cancelGraceMs = opts.cancelGraceMs ?? opts.agent.cancelGraceMs;

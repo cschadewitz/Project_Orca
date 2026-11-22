@@ -25,12 +25,17 @@
  * same slot. Waiters on unrelated caps do not block each other (a full host does not hold
  * up a step bound for another host).
  *
- * Impossible waits fail instead of hanging. A `per-run` session holds its slot until its run
- * ends, and a run cannot end while one of its own steps - or a step of a run below it - waits
- * for a slot. So when the slots that fill a cap are all held by per-run sessions of the
- * waiting step's own run or its ancestors, no release can ever come, and the step fails with
- * `CONFIG_INVALID` naming the cap and the sessions that hold it, rather than exceeding the
- * cap or waiting for ever. This needs no deadline: a queue that will drain is never cut off,
+ * Waits that can never end fail instead of hanging. A `per-run` session holds its slot until
+ * its run ends, and a run cannot end while one of its own steps - or a step of a run below it
+ * - waits for a slot. Every other slot comes back on its own (a `per-step` session ends with
+ * its turn, which has its own timeout). So the queue keeps a wait-for check: start from every
+ * waiter; drop any waiter that some full cap of its could still free a slot on, because a
+ * holder there is not pinned by a run that is itself waiting; repeat until nothing drops.
+ * Whoever is left waits on slots pinned by runs that wait on them in turn - the same run with
+ * two per-run agents under a cap of one, a parent's per-run session and its child, or two
+ * unrelated runs each pinning what the other's child needs. Those steps fail with
+ * `CONFIG_INVALID` naming the cap and the agents holding it, rather than exceeding the cap or
+ * waiting for ever. No deadline is needed, so a queue that will drain is never cut off,
  * however long the turns ahead of it take.
  */
 import { OrcaError } from "@orca/core";
@@ -93,7 +98,7 @@ interface Held {
   pinnedTo?: string | undefined;
 }
 
-type Blocker = { key: Key; reason: string; impossible?: string };
+type Blocker = { key: Key; reason: string };
 
 type Key = string;
 const DAEMON: Key = "daemon";
@@ -165,17 +170,13 @@ export class SessionSlots {
 
   /** Grant whoever can go now. Call after anything that may have freed room (a cap raised). */
   pump(): void {
+    for (const { waiter, message } of this.deadlocked()) {
+      this.waiters = this.waiters.filter((w) => w !== waiter);
+      waiter.reject(new OrcaError("CONFIG_INVALID", message));
+    }
     const blocked = new Map<Key, string>();
     for (const waiter of this.ordered()) {
       const reasons = this.blockers(waiter.request, blocked);
-      const impossible = reasons.find((r) => r.impossible !== undefined)?.impossible;
-      if (impossible !== undefined) {
-        this.waiters = this.waiters.filter((w) => w !== waiter);
-        waiter.reject(new OrcaError("CONFIG_INVALID", impossible));
-        // Its leaving can unblock waiters queued behind it; go round again.
-        queueMicrotask(() => this.pump());
-        continue;
-      }
       if (reasons.length === 0) {
         this.waiters = this.waiters.filter((w) => w !== waiter);
         waiter.resolve(this.take(waiter.request));
@@ -213,26 +214,10 @@ export class SessionSlots {
   /** Every full cap this request is subject to, plus any cap an earlier waiter is blocked on. */
   private blockers(request: SessionSlotRequest, queued: ReadonlyMap<Key, string>): Blocker[] {
     const out: Blocker[] = [];
-    const runs = new Set(request.runs ?? []);
     const check = (key: Key, cap: number | undefined, used: number, where: string) => {
       if (cap === undefined) return;
-      if (used >= cap) {
-        const reason = `waiting for an agent slot: ${used} of ${cap} in use ${where}`;
-        const stuck = [...this.held].filter((h) => h.pinnedTo !== undefined && runs.has(h.pinnedTo) && sameKey(key, h));
-        out.push(
-          stuck.length >= cap
-            ? {
-                key,
-                reason,
-                impossible:
-                  `an agent slot can never be free for agent ${request.agentId}: ${used} of ${cap} in use ${where}, ` +
-                  `and ${stuck.length} of them are per-run sessions of this run or a run above it ` +
-                  `(${[...new Set(stuck.map((h) => h.agentId))].join(", ")}), which hold their slots until the run ends; ` +
-                  `raise the cap, or give those agents sessionMode: per-step`,
-              }
-            : { key, reason },
-        );
-      } else {
+      if (used >= cap) out.push({ key, reason: `waiting for an agent slot: ${used} of ${cap} in use ${where}` });
+      else {
         const ahead = queued.get(key);
         if (ahead !== undefined) out.push({ key, reason: ahead });
       }
@@ -247,6 +232,64 @@ export class SessionSlots {
     );
     check(hostKey(request.hostId), caps.host, this.byHost.get(request.hostId) ?? 0, `on host ${request.hostId}`);
     return out;
+  }
+
+  /** The caps this request is subject to, with their use and where they apply. */
+  private capsOf(request: SessionSlotRequest): { key: Key; cap: number; used: number; where: string }[] {
+    const caps = request.caps();
+    const all = [
+      { key: DAEMON, cap: caps.daemon, used: this.total, where: "on this daemon" },
+      {
+        key: agentKey(request.agentId),
+        cap: caps.agent,
+        used: this.byAgent.get(request.agentId) ?? 0,
+        where: `for agent ${request.agentId}`,
+      },
+      {
+        key: hostKey(request.hostId),
+        cap: caps.host,
+        used: this.byHost.get(request.hostId) ?? 0,
+        where: `on host ${request.hostId}`,
+      },
+    ];
+    return all.flatMap((c) => (c.cap === undefined ? [] : [{ ...c, cap: c.cap }]));
+  }
+
+  /**
+   * Why this request can never be granted while the runs in `waiting` wait, or undefined when
+   * some release may still reach it: a full cap of its whose every slot is a per-run session
+   * pinned by one of those runs.
+   */
+  private stuckOn(request: SessionSlotRequest, waiting: ReadonlySet<string>): string | undefined {
+    for (const { key, cap, used, where } of this.capsOf(request)) {
+      if (used < cap) continue;
+      const pinned = [...this.held].filter(
+        (h) => h.pinnedTo !== undefined && waiting.has(h.pinnedTo) && sameKey(key, h),
+      );
+      if (pinned.length < cap) continue;
+      return (
+        `an agent slot can never be free for agent ${request.agentId}: ${used} of ${cap} in use ${where}, ` +
+        `held by per-run sessions (${[...new Set(pinned.map((h) => h.agentId))].join(", ")}) of runs that cannot end ` +
+        `while a step of theirs waits for a slot - this one, or one queued with it; ` +
+        `raise the cap, or give those agents sessionMode: per-step`
+      );
+    }
+    return undefined;
+  }
+
+  /** The waiters no release can ever reach (see "Waits that can never end" above). */
+  private deadlocked(): { waiter: Waiter; message: string }[] {
+    const stuck = new Set(this.waiters);
+    const waitingRuns = () => new Set([...stuck].flatMap((w) => w.request.runs ?? []));
+    for (;;) {
+      const runs = waitingRuns();
+      const free = [...stuck].filter((w) => this.stuckOn(w.request, runs) === undefined);
+      if (free.length === 0) break;
+      for (const w of free) stuck.delete(w);
+    }
+    if (stuck.size === 0) return [];
+    const runs = waitingRuns();
+    return [...stuck].map((waiter) => ({ waiter, message: this.stuckOn(waiter.request, runs)! }));
   }
 
   /** What the waiters already queued are blocked on, so a newcomer does not overtake them. */

@@ -12,6 +12,7 @@ import {
   AgentRegistry,
   LocalHost,
   openAcpSession,
+  startupTermination,
   type AgentHost,
   type AgentSession,
   type OpenSessionOptions,
@@ -2051,8 +2052,11 @@ export class Orchestrator {
       });
     } catch (e) {
       handshake.failed(e);
-      // `openAcpSession` has already run its bounded process cleanup before it throws.
-      slot.release();
+      // A failed open whose process was spawned carries that process's exit; its bounded
+      // cleanup may have given up before observing it, so the slot waits for the exit too.
+      const exited = startupTermination(e);
+      if (exited) void exited.then(() => slot.release());
+      else slot.release();
       throw e;
     }
     // The cap bounds live agent processes, not connections. However the session ends -
@@ -2150,7 +2154,11 @@ export class Orchestrator {
       ...(agent.sessionMode === "per-run" ? { pinnedTo: rc.id } : {}),
     };
     const immediate = this.sessionSlots.tryAcquire(request);
-    if (immediate) return immediate;
+    if (immediate) {
+      if (!rc.abort.signal.aborted) return immediate;
+      immediate.release();
+      throw new OrcaError("CANCELLED", "cancelled");
+    }
     let waited = false;
     const slot = await this.sessionSlots.acquire({
       ...request,
@@ -2162,12 +2170,14 @@ export class Orchestrator {
           .catch(() => undefined);
       },
     });
+    if (waited)
+      await rc.emit({ type: "step.waiting", payload: { stepRunId: step.id, on: "agent-turn" } }).catch(() => undefined);
+    // A cancel that lands after the queue granted the slot but before the open must not spawn:
+    // this is the last await before `openSession` calls the factory.
     if (rc.abort.signal.aborted) {
       slot.release();
       throw new OrcaError("CANCELLED", "cancelled");
     }
-    if (waited)
-      await rc.emit({ type: "step.waiting", payload: { stepRunId: step.id, on: "agent-turn" } }).catch(() => undefined);
     return slot;
   }
 

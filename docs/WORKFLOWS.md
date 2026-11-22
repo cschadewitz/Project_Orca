@@ -354,7 +354,8 @@ agents:
 - A step takes one slot from every cap that applies to it when it opens an agent session.
   The cap bounds live agent processes, so the slot comes back only once the session's
   process is confirmed gone - after the step, at the end of the run for a `per-run` session
-  (which holds its slot for the whole run), after a failed open, or after the agent's
+  (which holds its slot for the whole run), after a failed open (once the process it spawned
+  has exited, even if cleanup gave up waiting), or after the agent's
   connection drops and ORCA has cleaned the process up. A queued open never starts beside a
   process that is still shutting down.
 - Runs are still admitted at once. A step that cannot have a slot waits *before* it spawns
@@ -369,12 +370,15 @@ agents:
 - Caps are read from the current configuration each time, so applying an edit that raises
   one lets waiting steps go at once.
 - A `per-run` agent keeps its slot until its run ends, and a run cannot end while one of its
-  own steps, or a step of a child run, is waiting. So when a cap is full only of `per-run`
-  sessions held by the waiting step's own run or the runs above it - two `per-run` agents
-  in one run under a daemon cap of one, or a parent's `per-run` session and a child that
-  needs the only slot - no slot can ever come back. That step fails at once with
-  `CONFIG_INVALID`, naming the cap and the agents holding it, instead of waiting forever or
-  going over the cap. Raise the cap or make those agents `per-step`.
+  own steps, or a step of a child run, is waiting. When the slots filling a cap are all held
+  by `per-run` sessions of runs that are themselves waiting on the queue, no slot can ever
+  come back: two `per-run` agents in one run under a daemon cap of one, a parent's `per-run`
+  session and a child that needs the only slot, or two runs each pinning the slot the
+  other's child needs. Those steps fail at once with `CONFIG_INVALID`, naming the cap and the
+  agents holding it, instead of waiting forever or going over the cap. Raise the cap or make
+  those agents `per-step`. A queue that is merely long is never cut off.
+- A cancel always wins: a step cancelled while waiting, or after its slot was granted but
+  before its session opened, spawns nothing and gives the slot back.
 - `hello` reports the daemon-wide cap, sessions open and queue depth; `agents.list` adds the
   per-agent and per-host caps and use (optional fields; older clients ignore them).
 

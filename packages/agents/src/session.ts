@@ -54,6 +54,33 @@ export interface AgentSession {
   close(): Promise<void>;
 }
 
+const STARTUP_TERMINATION = Symbol.for("orca.agents.startupTermination");
+
+/**
+ * Attach the owned process's exit to a session-open failure. A failed open has no session to
+ * carry `terminated`, and its bounded cleanup may have given up before the exit was observed
+ * (`details.cleanup.details.cleanupIncomplete`), so a caller that counts live processes -
+ * session caps (#873) - needs the exit itself. Non-enumerable: it never reaches a log or the
+ * wire, and the error's shape is unchanged.
+ */
+export function withStartupTermination<E extends object>(error: E, terminated: Promise<unknown>): E {
+  Object.defineProperty(error, STARTUP_TERMINATION, {
+    value: terminated.then(
+      () => undefined,
+      () => undefined,
+    ),
+    enumerable: false,
+    configurable: true,
+  });
+  return error;
+}
+
+/** The exit attached by `withStartupTermination`, or undefined when the failure spawned nothing. */
+export function startupTermination(error: unknown): Promise<void> | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  return (error as { [STARTUP_TERMINATION]?: Promise<void> })[STARTUP_TERMINATION];
+}
+
 /** Reduce an ACP update to the compact form stored in the event log. */
 export function summarizeUpdate(u: acp.SessionUpdate): AgentUpdateSummary {
   switch (u.sessionUpdate) {
