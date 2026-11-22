@@ -6,9 +6,11 @@
  * Bundled (esbuild, `__ORCA_FIRST_RUN_BUNDLED__`) beside the packaged first-run boundary, as the
  * desktop app's daemon is. It builds a store the way the app does (private directories from the
  * boundary, files inheriting their owner-only DACL) and gives one source file an explicit ACE for
- * Everyone. Carrying it forward must be refused on Windows (UNDURABLE: no verified barrier orders
- * the backup before the marker yet, #910) with nothing written. The private-copy path itself is
- * then exercised directly: the backup is staged and published with `windowsPrivateCopy` (no
+ * Everyone. Carrying it forward must first be refused (UNDURABLE) with only the two empty backup
+ * slots created, because they do not yet predate the current boot (#910). With the slots' creation
+ * time set a day back, as after a restart, it must carry: the backup archived into slot 1, the
+ * marker naming it, and Windows' own `Expand-Archive` restoring the store's files byte for byte.
+ * The private-copy path itself is then exercised directly: the backup is staged and published with `windowsPrivateCopy` (no
  * marker), and every published entry's security descriptor is read back with PowerShell:
  *
  * - owner is this user, and every ACE names only this user or SYSTEM;
@@ -21,7 +23,7 @@
  * refused (BACKUPS_UNSAFE). Prints one JSON result; exits non-zero on failure.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, lstatSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, lstatSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { windowsDirectory, windowsPrivateChild } from "@orca/protocol/first-run-fence";
 import {
@@ -30,6 +32,8 @@ import {
   readStoreFormat,
   stageCarryover,
   STORE_FORMAT_BACKUP_DIR,
+  STORE_FORMAT_BACKUP_MANIFEST,
+  STORE_FORMAT_BACKUP_SLOTS,
   STORE_FORMAT_EPOCH,
 } from "@orca/store";
 import { windowsPrivateCopy } from "../src/store-privacy.js";
@@ -84,9 +88,14 @@ $out = foreach ($p in (Get-Content -LiteralPath $env:PROBE_PATHS)) {
   }
 }
 ConvertTo-Json -InputObject @($out) -Depth 5 -Compress`;
+  const text = powershell(script, paths);
+  return JSON.parse(text) as Descriptor[];
+}
+/** Windows PowerShell, with `paths` listed in the file $env:PROBE_PATHS names. */
+function powershell(script: string, paths: string[]): string {
   const list = join(profile, "orca-probe-paths.txt");
   writeFileSync(list, paths.join("\r\n"));
-  const text = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+  return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
     encoding: "utf8",
     // Windows PowerShell cannot load its own modules with PowerShell 7's PSModulePath, which the
     // runner's pwsh step passes down.
@@ -96,7 +105,6 @@ ConvertTo-Json -InputObject @($out) -Depth 5 -Compress`;
     },
     maxBuffer: 16 * 1024 * 1024,
   });
-  return JSON.parse(text) as Descriptor[];
 }
 const walk = (root: string): string[] =>
   readdirSync(root).flatMap((name) => {
@@ -174,17 +182,48 @@ const store = safely("orca-carryover-probe");
 // A source file readable by Everyone: its copy must not carry that ACE.
 grantEveryone(join(store, "runs", "run_old.jsonl"));
 const root = join(store, STORE_FORMAT_BACKUP_DIR);
-// Fails closed on Windows before anything is copied, whatever privacy backend is offered.
-const undurable = await carryStoreForward(store, { appVersion: "0.0.0-probe", privacy: windowsPrivateCopy }).then(
-  () => undefined,
-  (error: { details?: { reason?: string } }) => error.details?.reason,
+// Before its backup slots predate the current boot, carryover fails closed (UNDURABLE) having
+// created only the two empty slots (#910): nothing is copied and no marker is written.
+const carry = () =>
+  carryStoreForward(store, { appVersion: "0.0.0-probe", privacy: windowsPrivateCopy }).then(
+    (outcome) => outcome,
+    (error: { details?: { reason?: string }; message?: string }) => error.details?.reason ?? error.message ?? "failed",
+  );
+const undurable = await carry();
+check(undurable === "UNDURABLE", `carry-forward with new slots: ${JSON.stringify(undurable)}`);
+check((await readStoreFormat(store)) === undefined, "carry-forward with new slots: marker written");
+const slots = STORE_FORMAT_BACKUP_SLOTS.map((name) => join(root, name));
+check(
+  JSON.stringify(readdirSync(root).sort()) === JSON.stringify([...STORE_FORMAT_BACKUP_SLOTS].sort()),
+  `carry-forward with new slots: backups folder holds ${readdirSync(root).join(", ")}`,
 );
-check(undurable === "UNDURABLE", `carry-forward on Windows: ${undurable ?? "carried"}`);
-check((await readStoreFormat(store)) === undefined, "carry-forward on Windows: marker written");
-check(!existsSync(root), "carry-forward on Windows: backups folder created");
+// Stand in for a restart: date the slots' creation a day back, as a slot made before this boot.
+powershell(
+  `foreach ($p in (Get-Content -LiteralPath $env:PROBE_PATHS)) { (Get-Item -LiteralPath $p).CreationTime = (Get-Date).AddDays(-1) }`,
+  slots,
+);
+const carried = await carry();
+check(
+  typeof carried === "object" && carried.status === "carried" && carried.backup === slots[0],
+  `carry-forward with aged slots: ${JSON.stringify(carried)}`,
+);
+check(
+  (await readStoreFormat(store))?.backup === slots[0],
+  "carry-forward with aged slots: marker does not name slot 1",
+);
+// Windows' own Expand-Archive restores the backup, byte for byte.
+const restored = join(profile, "orca-carryover-probe-restored");
+rmSync(restored, { recursive: true, force: true });
+powershell(`Expand-Archive -LiteralPath '${slots[0]}' -DestinationPath '${restored}'`, []);
+for (const file of [".workspace-identified", "private-execution/payload", "runs/run_old.jsonl"])
+  check(
+    existsSync(join(restored, file)) && readFileSync(join(restored, file)).equals(readFileSync(join(store, file))),
+    `Expand-Archive: ${file} differs from the store`,
+  );
+check(existsSync(join(restored, STORE_FORMAT_BACKUP_MANIFEST)), "Expand-Archive: no backup manifest");
 const staged = await stageCarryover(store, "unmarked", STORE_FORMAT_EPOCH, new Date(), { privacy: windowsPrivateCopy });
 const backup = await staged.commit();
-const entries = descriptors([root, backup, ...walk(backup)]);
+const entries = descriptors([root, ...slots, backup, ...walk(backup)]);
 for (const entry of entries) {
   const where = entry.path.slice(store.length);
   check(entry.owner === me, `${where}: owner ${entry.owner}, expected ${me}`);

@@ -31,7 +31,10 @@ import { z } from "zod";
 import { OrcaError } from "@orca/core";
 import { withFileLock } from "./file-lock.js";
 import {
+  bootTime,
   CarryoverRefused,
+  chooseBackupSlot,
+  ensureBackupSlots,
   posixPrivateCopy,
   pruneFormatBackups,
   stageCarryover,
@@ -40,12 +43,14 @@ import {
 } from "./store-format-carryover.js";
 
 export {
+  BACKUP_SLOT_BOOT_MARGIN_MS,
   CarryoverRefused,
   posixPrivateCopy,
   stageCarryover,
   STORE_FORMAT_BACKUP_DIR,
   STORE_FORMAT_BACKUP_MANIFEST,
   STORE_FORMAT_BACKUP_RETENTION,
+  STORE_FORMAT_BACKUP_SLOTS,
   STORE_UPDATE_HANDOFF_FILE,
   type PrivateCopyBackend,
 } from "./store-format-carryover.js";
@@ -129,8 +134,18 @@ export interface StoreFormatOptions {
    * `undefined` keeps the refusal, exactly as without this option.
    */
   carryover?: () => Promise<CarryoverAuthority | undefined>;
+  /**
+   * Windows (#910): where private files may be created. With it, a Windows write-mode open of a
+   * store this build may write also creates the store's two backup slots if they are missing, so
+   * that a later format carryover finds slots older than the current boot.
+   */
+  privacy?: PrivateCopyBackend;
   /** Injected for tests. */
   now?: () => Date;
+  /** Injected for tests; defaults to this process's platform. */
+  platform?: NodeJS.Platform;
+  /** Injected for tests: when this computer last started (ms since the epoch). */
+  bootTime?: () => number;
 }
 
 /** Read the marker without checking it; `undefined` when the store has none. */
@@ -308,12 +323,16 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
         outcome = await carryLocked(storeDir, marker, {
           appVersion: options.appVersion,
           fence: authority.fence,
-          ...(authority.privacy ? { privacy: authority.privacy } : {}),
+          ...((authority.privacy ?? options.privacy) ? { privacy: authority.privacy ?? options.privacy! } : {}),
           ...(authority.afterCopy ? { afterCopy: authority.afterCopy } : {}),
           ...(options.now ? { now: options.now } : {}),
+          ...(options.platform ? { platform: options.platform } : {}),
+          ...(options.bootTime ? { bootTime: options.bootTime } : {}),
         });
       } catch (refusal) {
-        if (refusal instanceof StoreFormatError) await authority.settle("refused");
+        // UNDURABLE waits for Windows to restart, with nothing copied: the handoff stays bound to
+        // this writer's claim, as after an interruption, so the next start retries under it.
+        if (refusal instanceof StoreFormatError && refusal.reason !== "UNDURABLE") await authority.settle("refused");
         throw refusal;
       }
       await authority.settle("carried");
@@ -322,6 +341,9 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
     const now = (options.now ?? (() => new Date()))();
     if (status !== "current" || marker?.writtenBy !== options.appVersion)
       await stamp(storeDir, options.appVersion, now, marker?.backup);
+    if ((options.platform ?? process.platform) === "win32" && options.privacy)
+      // Best effort: without slots a later carryover only waits for a restart (UNDURABLE).
+      await ensureBackupSlots(storeDir, options.privacy).catch(() => undefined);
     return { status, epoch: current };
   });
 }
@@ -339,6 +361,8 @@ export interface CarryForwardOptions {
   privacy?: PrivateCopyBackend;
   /** Injected for tests; defaults to this process's platform. */
   platform?: NodeJS.Platform;
+  /** Injected for tests: when this computer last started (ms since the epoch). */
+  bootTime?: () => number;
 }
 
 /**
@@ -370,20 +394,32 @@ async function carryLocked(
   if (marker?.epoch === current) return { status: "current", epoch: current };
   if (!marker && !(await holdsData(storeDir)))
     throw new StoreFormatError("UNREADABLE", `${storeDir} holds no ORCA store to carry forward.`, storeDir);
-  // The marker may only become durable after the backup it names. POSIX orders the two with a
-  // directory fsync after each rename; Windows has no barrier ORCA has verified for a directory
-  // entry (a rename), so a power loss could keep the marker and lose the backup. Fail closed
-  // there until one is (#910): nothing is copied and the prior format stays in charge.
-  if ((options.platform ?? process.platform) === "win32")
-    throw new StoreFormatError(
-      "UNDURABLE",
-      "On Windows this ORCA cannot yet guarantee that the backup reaches the disk before the store's format changes, so the store was not carried forward. Nothing was changed. Keep using the ORCA version that last wrote this store.",
-      storeDir,
-    );
   const privacy = options.privacy ?? posixPrivateCopy;
   const fence = () => {
     if (options.fence && !options.fence.check()) throw fenceLost(storeDir);
   };
+  // The marker may only become durable after the backup it names. POSIX orders the two with a
+  // directory fsync after each rename. Windows documents no such barrier for a directory entry,
+  // so there the backup goes into a slot file that already existed before Windows last started,
+  // rewritten in place and flushed before the marker is created (#910). Until a slot is that
+  // old, carryover fails closed: nothing is copied and the prior format stays in charge.
+  let slot: string | undefined;
+  if ((options.platform ?? process.platform) === "win32") {
+    try {
+      fence();
+      await ensureBackupSlots(storeDir, privacy);
+    } catch (error) {
+      if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
+      throw error;
+    }
+    slot = await chooseBackupSlot(storeDir, privacy, marker?.backup, (options.bootTime ?? bootTime)());
+    if (!slot)
+      throw new StoreFormatError(
+        "UNDURABLE",
+        "This ORCA keeps the backup it takes before changing the store's format in a file that must already have been on disk when Windows last started, and none is yet, so the store was not carried forward. Nothing else was changed. Restart Windows, then start ORCA again.",
+        storeDir,
+      );
+  }
   const from = marker?.epoch ?? "unmarked";
   const now = (options.now ?? (() => new Date()))();
   let backup: string;
@@ -392,6 +428,7 @@ async function carryLocked(
       ...(options.afterCopy ? { afterCopy: options.afterCopy } : {}),
       fence,
       privacy,
+      ...(slot ? { slot } : {}),
     });
     backup = await staged.commit();
     // The backup is published and durable; the marker is what changes the format, and the fence

@@ -942,14 +942,36 @@ honours the flushes on power loss. The desktop app's own
 workspaces are refused (`APP_OWNED`): only the daemon the app launches may write them, and this
 command cannot hold that daemon's write fence. The app carries those forward itself, below.
 
-**Windows refuses format carryover for now (`UNDURABLE`), automatic or explicit, and copies
-nothing.** Node cannot flush a directory there, and ORCA has no verified barrier yet that makes
-the backup's rename reach the disk before the marker's, so a power loss could keep the new
-marker and lose the backup (#910). Until that lands, the store format must not change for
-Windows. Marker adoption of 0.7 stores, which copies nothing, works on Windows as everywhere
-else.
+**On Windows the backup is one ZIP archive in a backup slot that already existed before
+Windows last started (#910).** Windows documents no way for an unelevated program to make a
+new or renamed directory entry reach the disk before a later one, so the POSIX order above (a
+published backup folder, then the marker) cannot be shown to survive a power loss there. What
+Windows does document is that flushing a file (`FlushFileBuffers`) writes its data to the device
+before returning, and a file that existed before the current boot has its directory entry on
+disk already: it survived a restart. So on Windows:
 
-The private-copy path for Windows is in place for when it does: the copies hold the execution
+1. Every write-mode start of a store this ORCA may write creates `format-backups/` (owner-only)
+   and two empty slot files in it, `store-backup-1.zip` and `store-backup-2.zip`, if missing.
+2. Carryover uses only a slot that is a private regular file created at least ten minutes before
+   Windows last started, and never the slot the current marker names (an empty slot first, then
+   the one written longest ago). With no such slot it refuses (`UNDURABLE`) having copied
+   nothing: restart Windows and start ORCA again. The automatic carryover keeps the update's
+   handoff for that retry.
+3. Steps 1 to 4 above run as on Linux and macOS. Then the verified copy and its
+   `format-backup.json` manifest are written over the slot in place as a stored (uncompressed)
+   ZIP archive, the file is truncated to its new length and flushed, and the archive is read
+   back and compared entry by entry with the copy. Only after that flush has returned is the
+   marker created, so it cannot reach the disk before the backup, whatever order the file
+   system writes in.
+
+The two slots are the retention on Windows: the marker's backup and the one before it. To go
+back to the older release, stop ORCA, move the store aside, and extract the slot the marker
+names (`backup` in `store-format.json`) with Explorer's "Extract all" or
+`Expand-Archive -LiteralPath <slot> -DestinationPath <store>`. A Windows CI job runs this as a
+standard user on NTFS: refusal with fresh slots, carryover once the slots' creation time is set
+before the boot, and `Expand-Archive` restoring the store's files byte for byte.
+
+The private-copy path for Windows: the copies hold the execution
 key and private records, and anyone with the default "bypass traverse checking" right can reach
 a file by its path whatever its parent's ACL. So every directory of the backup and of the
 throwaway read copy is created with an owner-only protected DACL by the packaged first-run
@@ -991,15 +1013,16 @@ changes nothing in the store, the record included. One interrupted by a crash is
 by the next start under the same proof (the daemon moves the record onto its own claim before it
 copies), at most three times. Without the record, or with any part of the proof missing, startup
 keeps refusing (`CARRYOVER_REQUIRED`) exactly as before, and `orca store carry-forward` remains
-the way through. This covers app-owned workspaces updated by the Windows in-app updater, where
-the carryover itself is refused (`UNDURABLE`, above) until #910 lands. The Linux `.deb` has no
+the way through. This covers app-owned workspaces updated by the Windows in-app updater, with
+the backup in a pre-boot slot (above, #910). The Linux `.deb` has no
 in-app updater and no `orca` command, so the store format must not change for it until it has a
 supported carryover route (#905).
 
 The backup covers the store directory only: not the config file, the permission sidecar or
 `auth/` beside the config. Agents cannot read `format-backups/`, which holds copies of the
 store's private directories. To go back to the older release after a carryover, stop ORCA,
-move the store aside, copy the backup back in its place, and start the older release. Work
+move the store aside, copy the backup back in its place (on Windows, extract the slot archive
+there), and start the older release. Work
 done after the backup is not in it.
 
 During compatible activation, `activation.json` is fsynced before any service/pointer change.

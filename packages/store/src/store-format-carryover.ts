@@ -13,8 +13,11 @@
  * source. Any difference discards the staged copy and refuses startup with the prior format
  * still authoritative.
  *
- * Backups are directories under `format-backups/` that this code names and marks with
- * `format-backup.json`; retention removes only those, never anything else it finds there.
+ * On Linux and macOS, backups are directories under `format-backups/` that this code names and
+ * marks with `format-backup.json`; retention removes only those, never anything else it finds
+ * there. On Windows, a backup is one ZIP archive written in place into one of two backup slot
+ * files under `format-backups/` that existed before Windows last started (backup-archive.ts,
+ * #910): the two slots are the retention.
  *
  * The copies hold the execution key and private records, so they are only ever written where
  * a {@link PrivateCopyBackend} has verified they stay private to this user: on POSIX an
@@ -25,8 +28,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { chmod, lstat, mkdir, readdir, readFile, rename, rm, utimes } from "node:fs/promises";
+import { uptime } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { readArchive, writeArchiveSlot } from "./backup-archive.js";
 import { fileStores } from "./document-store.js";
 import { createCopy, createDurable, syncDirectory } from "./durable-file.js";
 import { FileLeaseStore, lapsed } from "./lease-store.js";
@@ -36,6 +41,16 @@ export const STORE_FORMAT_BACKUP_RETENTION = 2;
 export const STORE_FORMAT_BACKUP_MANIFEST = "format-backup.json";
 const BACKUP_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-from-[a-z0-9-]{1,64}(-\d{1,4})?$/;
 const SCRATCH_NAME = /^\.(partial|validate)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Windows backup slots (#910), under `format-backups/`. Created empty, flushed, whenever a
+ * Windows ORCA opens the store for writing; usable once they predate the current boot.
+ */
+export const STORE_FORMAT_BACKUP_SLOTS = ["store-backup-1.zip", "store-backup-2.zip"] as const;
+/** How much earlier than the computed boot time a slot must be, against clock adjustments. */
+export const BACKUP_SLOT_BOOT_MARGIN_MS = 10 * 60_000;
+/** When this computer last started, from the system clock and the monotonic uptime. */
+export const bootTime = (): number => Date.now() - uptime() * 1000;
 
 /** The desktop updater's handoff record (`@orca/protocol/update-handoff`, #897). */
 export const STORE_UPDATE_HANDOFF_FILE = "update-handoff.json";
@@ -251,6 +266,11 @@ export async function stageCarryover(
     /** Throws {@link CarryoverRefused} (FENCE_LOST) once the writer fence no longer holds. */
     fence?: () => void;
     privacy?: PrivateCopyBackend;
+    /**
+     * Windows (#910): the backup slot ({@link chooseBackupSlot}) the backup is archived into, in
+     * place and flushed, instead of being published by rename.
+     */
+    slot?: string;
   } = {},
 ): Promise<{ commit(): Promise<string> }> {
   const fence = hooks.fence ?? (() => undefined);
@@ -319,6 +339,12 @@ export async function stageCarryover(
       async commit() {
         try {
           if (!sameSnapshot(before, await snapshot(storeDir))) throw busy();
+          if (hooks.slot) {
+            fence();
+            await archiveInto(hooks.slot, partial, before);
+            await rm(partial, { recursive: true, force: true });
+            return hooks.slot;
+          }
           const name = `${now.toISOString().replace(/[:.]/g, "-")}-from-${from}`;
           let target = join(root, name);
           for (let n = 1; await present(target); n++) target = join(root, `${name}-${n}`);
@@ -381,4 +407,75 @@ export async function pruneFormatBackups(
   ours.sort();
   for (const name of ours.slice(0, Math.max(0, ours.length - STORE_FORMAT_BACKUP_RETENTION)))
     if (join(root, name) !== keep) await rm(join(root, name), { recursive: true, force: true });
+}
+
+/**
+ * Archive the staged, verified copy into `slot` (flushed before this returns), then read the
+ * archive back and compare every entry with the staged copy. Throws when they differ.
+ */
+async function archiveInto(slot: string, partial: string, entries: Snapshot): Promise<void> {
+  const listed = [...entries].map(([path, entry]) => ({ path, type: entry.type }));
+  listed.push({ path: STORE_FORMAT_BACKUP_MANIFEST, type: "file" });
+  const withTimes = await Promise.all(
+    listed.map(async (entry) => ({ ...entry, mtime: (await lstat(join(partial, entry.path))).mtime })),
+  );
+  await writeArchiveSlot(slot, partial, withTimes, []);
+  const archived = await readArchive(slot);
+  const expected = new Map<string, string>();
+  for (const entry of listed)
+    expected.set(
+      entry.type === "dir" ? `${entry.path}/` : entry.path,
+      entry.type === "dir" ? "" : await digest(join(partial, entry.path)),
+    );
+  if (
+    archived.entries.size !== expected.size ||
+    [...expected].some(([name, hash]) => archived.entries.get(name) !== hash)
+  )
+    throw new Error(`the backup archived into ${slot} does not match the staged copy`);
+}
+
+/**
+ * Windows (#910): make sure the backups directory and both backup slots exist, each private to
+ * this user. A slot created now is usable only after Windows restarts.
+ */
+export async function ensureBackupSlots(storeDir: string, privacy: PrivateCopyBackend): Promise<void> {
+  const root = await backupRoot(storeDir, privacy);
+  for (const name of STORE_FORMAT_BACKUP_SLOTS) {
+    const path = join(root, name);
+    if (!(await present(path)))
+      try {
+        await createDurable(path, "");
+      } catch (error) {
+        // Another ORCA may have created it meanwhile; it is checked below either way.
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    const info = await lstat(path);
+    if (!info.isFile() || !(await privacy.privateEntry(path, "file").catch(() => false))) throw unsafeCopy(path);
+  }
+}
+
+/**
+ * Windows (#910): the backup slot a carryover may overwrite, or `undefined` when none may be yet.
+ * A slot qualifies only if it is a private regular file created before this computer last
+ * started (its directory entry is then on disk), and is not `keep`, the backup the store's
+ * current marker names. An empty slot is preferred, then the one written longest ago.
+ */
+export async function chooseBackupSlot(
+  storeDir: string,
+  privacy: PrivateCopyBackend,
+  keep: string | undefined,
+  booted: number,
+): Promise<string | undefined> {
+  const root = join(storeDir, STORE_FORMAT_BACKUP_DIR);
+  const eligible: { path: string; size: number; mtime: number }[] = [];
+  for (const name of STORE_FORMAT_BACKUP_SLOTS) {
+    const path = join(root, name);
+    if (path === keep) continue;
+    const info = await lstat(path).catch(() => undefined);
+    if (!info?.isFile() || info.birthtimeMs <= 0 || info.birthtimeMs > booted - BACKUP_SLOT_BOOT_MARGIN_MS) continue;
+    if (!(await privacy.privateEntry(path, "file").catch(() => false))) continue;
+    eligible.push({ path, size: info.size, mtime: info.mtimeMs });
+  }
+  eligible.sort((a, b) => Number(a.size > 0) - Number(b.size > 0) || a.mtime - b.mtime);
+  return eligible[0]?.path;
 }

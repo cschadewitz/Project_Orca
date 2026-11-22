@@ -47,9 +47,12 @@ export async function enterDaemonStoreFormat(
   /** Injected for tests. */
   afterCopy?: () => Promise<void>,
 ): Promise<StoreFormatOutcome> {
+  const privacy = storePrivacy();
   const outcome = await enterStoreFormat(storeDir, {
     appVersion: version,
     mode,
+    // Windows: keep the store's backup slots in place for a later carryover (#910).
+    ...(privacy ? { privacy } : {}),
     ...(writer ? { carryover: () => Promise.resolve(desktopCarryover(writer, version, afterCopy)) } : {}),
   });
   if (writer && outcome.status !== "carried") spendSameFormatHandoff(writer);
