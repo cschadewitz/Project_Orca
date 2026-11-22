@@ -1,16 +1,17 @@
-# Attach a final's signed Windows x64 installer to its staged draft, so nobody downloads and
-# uploads it by hand.
+# Attach a final's signed Windows installers (x64 and arm64) to its staged draft, so nobody
+# downloads and uploads them by hand.
 #
 # release-publish.yml stages a final as a draft with only the Ubuntu .deb and (with
 # ORCA_RELEASE_AUTO_SIGN on) dispatches `Windows signed (spike)` for the same commit. When that
 # signed run succeeds, this finds the single draft (not a prerelease) whose target is the
-# commit it signed, re-checks the x64 installer's Authenticode signature, timestamp and
-# publisher (ORCA_FEED_PUBLISHER_CN), and uploads it to the draft by id. Before every write
+# commit it signed, re-checks both installers' Authenticode signature, timestamp and
+# publisher (ORCA_FEED_PUBLISHER_CN), and uploads them to the draft by id. Before every write
 # tools/deploy/release-attach.sh re-reads that exact draft (still a draft, same target and
 # name, only the expected assets, no other record) and stops if it changed, so a draft
-# published in the meantime is never written to. It records the run id and digest in the
-# draft's notes as an HTML comment, which feed-auto.yml uses to feed exactly these bytes once
-# published. It never publishes, tags or touches the feed.
+# published in the meantime is never written to. It records the run id and each installer's
+# digest in the draft's notes as HTML comments, which feed-auto.yml uses to feed exactly these
+# bytes once published. When it succeeds, Release (accept Windows arm64) runs native acceptance
+# on the attached arm64 installer (#889). It never publishes, tags or touches the feed.
 #
 # The signing run is checked first (a successful windows-signed.yml run of this repository,
 # dispatched from main, with exactly one unexpired signed artifact). The record is written
@@ -39,7 +40,7 @@ permissions:
 
 jobs:
   attach:
-    name: attach the signed x64 installer to the draft
+    name: attach the signed installers to the draft
     # Shared with Release (publish final): an attachment and a publication never interleave.
     # A pending run displaced here loses nothing: the draft keeps its record (written before
     # the upload) and the reconcile below dispatches the attach again.
@@ -89,7 +90,7 @@ jobs:
           github-token: ${{ github.token }}
           path: signed
 
-      - name: Verify the x64 installer's signature, timestamp and publisher
+      - name: Verify both installers' signatures, timestamps and publisher
         if: steps.find.outputs.id != ''
         shell: pwsh
         env:
@@ -98,13 +99,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:EXPECTED) { throw 'ORCA_FEED_PUBLISHER_CN is not set' }
-          $files = @(Get-ChildItem -Path signed -Recurse -File -Filter "ORCA-$($env:VERSION)-win-x64.exe")
-          if ($files.Count -ne 1) { throw "expected one ORCA-$($env:VERSION)-win-x64.exe, found $($files.Count)" }
-          $sig = Get-AuthenticodeSignature -LiteralPath $files[0].FullName
-          $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
-          "{0} stamped={1} cn='{2}'" -f $sig.Status, [bool]$sig.TimeStamperCertificate, $cn
-          if ($sig.Status -ne 'Valid' -or $cn -ne $env:EXPECTED -or -not $sig.TimeStamperCertificate) {
-            throw "the installer is not validly signed and timestamped by '$($env:EXPECTED)'"
+          foreach ($arch in 'x64', 'arm64') {
+            $files = @(Get-ChildItem -Path signed -Recurse -File -Filter "ORCA-$($env:VERSION)-win-$arch.exe")
+            if ($files.Count -ne 1) { throw "expected one ORCA-$($env:VERSION)-win-$arch.exe, found $($files.Count)" }
+            $sig = Get-AuthenticodeSignature -LiteralPath $files[0].FullName
+            $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+            "{0} {1} stamped={2} cn='{3}'" -f $arch, $sig.Status, [bool]$sig.TimeStamperCertificate, $cn
+            if ($sig.Status -ne 'Valid' -or $cn -ne $env:EXPECTED -or -not $sig.TimeStamperCertificate) {
+              throw "the $arch installer is not validly signed and timestamped by '$($env:EXPECTED)'"
+            }
           }
 
       - name: Attach it to the draft by id, re-validating the draft before each write
@@ -117,9 +120,10 @@ jobs:
         run: |
           set -euo pipefail
           file=$(find signed -type f -name "ORCA-$VERSION-win-x64.exe")
-          bash tools/deploy/release-attach.sh attach "$ID" "$SHA" "$VERSION" "$RUN_ID" "$file"
+          arm_file=$(find signed -type f -name "ORCA-$VERSION-win-arm64.exe")
+          bash tools/deploy/release-attach.sh attach "$ID" "$SHA" "$VERSION" "$RUN_ID" "$file" "$arm_file"
           echo "id=$ID" >> "$GITHUB_OUTPUT"
-          echo "Next: the upgrade check runs on its own; native acceptance of the .deb, then publish (docs/RELEASING.md)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Next: the x64 upgrade check and arm64 acceptance run by themselves; native acceptance of the .deb, then publish (docs/RELEASING.md)." >> "$GITHUB_STEP_SUMMARY"
 
   # The attached installer's native upgrade check from the current Latest (#566). This job
   # checks nothing out and can only dispatch.
@@ -160,7 +164,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Dispatch the attach for drafts missing their installer or record
+      - name: Dispatch the attach for drafts missing an installer or record
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

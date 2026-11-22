@@ -1,0 +1,304 @@
+# Native acceptance of a final's signed Windows arm64 installer, on a GitHub-hosted Windows
+# arm64 machine, with nobody involved (#889).
+#
+# Release (attach signed installer) attaches both signed installers to the staged draft and
+# records each one's digest. When it completes, this picks the oldest final draft whose
+# recorded arm64 installer is attached and not yet accepted (tools/deploy/release-attach.sh
+# accept-select) and, on the exact draft bytes:
+#
+# 1. re-checks the installer's Authenticode signature, timestamp and publisher;
+# 2. installs the newest published final older than this one that carries an arm64 installer
+#    first, so the new one is accepted as an upgrade over it (fresh install only when the
+#    full, successfully read release list has none, as before #889; feed-arches.js baseline);
+# 3. installs the new one silently per-user, as the updater does, and checks that Windows
+#    reports the version, that the installed ORCA.exe is an ARM64 binary signed by the same
+#    publisher, and that the app starts and its window reaches a live connection to its
+#    bundled daemon (tools/deploy/windows-launch-check.js);
+# 4. uploads the run's evidence (`arm64-acceptance-evidence`: release id, version, source
+#    commit, installer digest, mode and prior version/digest), then records
+#    `<!-- orca-arm64-accepted: RUN sha256:HEX -->` in the draft's notes, pointing at it.
+#
+# Release (publish final) and the feed verify that record against this run and its evidence
+# (tools/deploy/feed-arches.js verify) before publishing or serving arm64. The
+# update path itself (an installed arm64 N taking N+1 from the feed Worker) is proven on every
+# change to it by Desktop feed (update test). If acceptance fails, fix and re-sign, or
+# dispatch this with `x64_only` and the draft's `release_id`: that records the decision in the
+# draft, removes its arm64 installer, and attach, reconcile, accept, publish and the feed all
+# keep to it (docs/RELEASING.md).
+#
+# Runs after every Release (attach signed installer) run, including its 6-hourly reconcile, so
+# a failed or displaced acceptance is retried; a dispatch from main can name a draft. Only the
+# select and record jobs can write to releases; the job that runs the installer reads only.
+name: Release (accept Windows arm64)
+
+on:
+  workflow_run:
+    workflows: ["Release (attach signed installer)"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Final draft to accept (empty = the oldest one waiting); required with x64_only
+        required: false
+        default: ""
+      x64_only:
+        description: Instead, release this draft without arm64 (records the decision, removes its arm64 installer)
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    name: find a draft waiting for arm64 acceptance
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !inputs.x64_only) ||
+      (github.event_name == 'workflow_run' && vars.ORCA_RELEASE_AUTO_SIGN == 'true' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-24.04
+    # Reading drafts needs write access; this job only reads and downloads.
+    permissions:
+      contents: write
+    outputs:
+      id: ${{ steps.find.outputs.id }}
+      sha: ${{ steps.find.outputs.sha }}
+      version: ${{ steps.find.outputs.version }}
+      digest: ${{ steps.find.outputs.digest }}
+      previous: ${{ steps.download.outputs.previous }}
+      previous_digest: ${{ steps.download.outputs.previous_digest }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Find the draft
+        id: find
+        env:
+          ID: ${{ inputs.release_id }}
+        run: |
+          set -euo pipefail
+          # stdout carries only the output assignments; notes go to stderr.
+          bash tools/deploy/release-attach.sh accept-select $ID >> "$GITHUB_OUTPUT"
+
+      # The baseline comes from the full release list, read the same way publication and the
+      # feed read it; a failed read stops the run instead of passing for a fresh install.
+      - name: Download the draft's arm64 installer and its upgrade baseline's, if any
+        id: download
+        if: steps.find.outputs.id != ''
+        env:
+          VERSION: ${{ steps.find.outputs.version }}
+          DIGEST: ${{ steps.find.outputs.digest }}
+          ASSET: ${{ steps.find.outputs.asset }}
+        run: |
+          set -euo pipefail
+          mkdir -p accept/new accept/previous
+          new="accept/new/ORCA-$VERSION-win-arm64.exe"
+          gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/$ASSET" > "$new"
+          [[ "sha256:$(sha256sum "$new" | cut -d' ' -f1)" == "$DIGEST" ]] || { echo "::error::downloaded bytes are not $DIGEST"; exit 1; }
+          gh api --paginate "repos/$REPO/releases" --jq '.[]' | jq -s . > releases.json
+          # The baseline's own acceptance run must be a successful one on main; a baseline
+          # without that proof stops here instead of being accepted as a fresh install.
+          base_run=$(node tools/deploy/feed-arches.js baseline-run "$VERSION" releases.json)
+          echo '{}' > baseline-run.json
+          [[ -z "$base_run" ]] || tools/deploy/release-attach.sh run-with-jobs "$base_run" > baseline-run.json ||
+            echo "::warning::could not read the baseline's acceptance run $base_run"
+          base=$(node tools/deploy/feed-arches.js baseline "$VERSION" "$REPO" releases.json baseline-run.json)
+          previous="" previous_digest=""
+          if [[ -n "$base" ]]; then
+            read -r previous previous_digest previous_asset <<<"$base"
+            file="accept/previous/ORCA-$previous-win-arm64.exe"
+            gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/$previous_asset" > "$file"
+            [[ "sha256:$(sha256sum "$file" | cut -d' ' -f1)" == "$previous_digest" ]] ||
+              { echo "::error::$file is not its published $previous_digest"; exit 1; }
+          fi
+          { echo "previous=$previous"; echo "previous_digest=$previous_digest"; } >> "$GITHUB_OUTPUT"
+          echo "Accepting v$VERSION's arm64 installer (\`$DIGEST\`); upgrade from: ${previous:-none, no earlier arm64 release (fresh install)}." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Hand the installers to the acceptance machine
+        if: steps.find.outputs.id != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arm64-acceptance
+          path: accept/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+  accept:
+    name: install, upgrade and start it on Windows arm64
+    needs: select
+    if: needs.select.outputs.id != ''
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      VERSION: ${{ needs.select.outputs.version }}
+      PREVIOUS: ${{ needs.select.outputs.previous }}
+      EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: arm64-acceptance
+          path: accept
+
+      - name: This is a Windows arm64 machine
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+          "OS architecture: $arch"
+          if ("$arch" -ne 'Arm64') { throw "not an arm64 machine ($arch)" }
+
+      - name: Verify the installers' signatures, timestamps and publisher
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:EXPECTED) { throw 'ORCA_FEED_PUBLISHER_CN is not set' }
+          foreach ($file in Get-ChildItem -Path accept -Recurse -File -Filter *.exe) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+            "{0} stamped={1} cn='{2}' {3}" -f $sig.Status, [bool]$sig.TimeStamperCertificate, $cn, $file.Name
+            if ($sig.Status -ne 'Valid' -or $cn -ne $env:EXPECTED -or -not $sig.TimeStamperCertificate) {
+              throw "$($file.Name) is not validly signed and timestamped by '$($env:EXPECTED)'"
+            }
+          }
+
+      - name: Install, over the Latest release's arm64 build when there is one
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Install-Orca([string] $installer, [string] $version) {
+            $process = Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "$installer exited $($process.ExitCode)" }
+            $entry = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+              Where-Object DisplayName -like 'ORCA*'
+            if (@($entry).Count -ne 1) { throw "expected one ORCA uninstall entry, found $(@($entry).Count)" }
+            if ($entry.DisplayVersion -ne $version) { throw "Windows reports $($entry.DisplayVersion), not $version" }
+            # electron-builder writes no InstallLocation; DisplayIcon is "<install dir>\ORCA.exe,0".
+            $exe = ($entry.DisplayIcon -replace ',\d+$', '').Trim('"')
+            if (-not (Test-Path $exe)) { throw "missing $exe" }
+            Write-Host "installed $version at $exe"
+            return $exe
+          }
+          if ($env:PREVIOUS) {
+            $null = Install-Orca "accept/previous/ORCA-$($env:PREVIOUS)-win-arm64.exe" $env:PREVIOUS
+          }
+          $exe = Install-Orca "accept/new/ORCA-$($env:VERSION)-win-arm64.exe" $env:VERSION
+          # IMAGE_FILE_MACHINE_ARM64 (0xAA64) in the PE header: native arm64, not emulated x64.
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+          "ORCA.exe machine: 0x{0:X4}" -f $machine
+          if ($machine -ne 0xAA64) { throw ("ORCA.exe is not an ARM64 binary (0x{0:X4})" -f $machine) }
+          $sig = Get-AuthenticodeSignature -LiteralPath $exe
+          $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+          if ($sig.Status -ne 'Valid' -or $cn -ne $env:EXPECTED) { throw "installed ORCA.exe is not validly signed by '$($env:EXPECTED)'" }
+          "ORCA_EXECUTABLE=$exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Start it and wait for a live connection to its bundled daemon
+        run: node tools/deploy/windows-launch-check.js "$env:ORCA_EXECUTABLE"
+
+      - name: Stop anything left running
+        if: always()
+        run: Get-Process ORCA -ErrorAction SilentlyContinue | Stop-Process -Force
+
+  record:
+    # The name is the durable receipt (tools/deploy/feed-arches.js receipt): a later release's
+    # acceptance reads it to trust this release as its upgrade baseline after the evidence
+    # artifact expires. Keep the two in step.
+    name: "arm64 acceptance receipt: release ${{ needs.select.outputs.id }} v${{ needs.select.outputs.version }} ${{ needs.select.outputs.sha }} ${{ needs.select.outputs.digest }}"
+    needs: [select, accept]
+    runs-on: ubuntu-24.04
+    # Shared with the attach and the publication: draft writes never interleave.
+    concurrency:
+      group: release-draft-writes
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      # The evidence first, so the record in the notes never points at a run without it.
+      - name: Write the acceptance evidence
+        env:
+          ID: ${{ needs.select.outputs.id }}
+          SHA: ${{ needs.select.outputs.sha }}
+          VERSION: ${{ needs.select.outputs.version }}
+          DIGEST: ${{ needs.select.outputs.digest }}
+          PREVIOUS: ${{ needs.select.outputs.previous }}
+          PREVIOUS_DIGEST: ${{ needs.select.outputs.previous_digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          jq -n --arg run "$GITHUB_RUN_ID" --arg id "$ID" --arg version "$VERSION" --arg sha "$SHA" \
+            --arg digest "$DIGEST" --arg previous "$PREVIOUS" --arg previous_digest "$PREVIOUS_DIGEST" \
+            '{format: 1, run_id: $run, release_id: $id, version: $version, source_sha: $sha, digest: $digest,
+              mode: (if $previous == "" then "fresh" else "upgrade" end),
+              previous: (if $previous == "" then null else {version: $previous, digest: $previous_digest} end)}' \
+            > evidence/evidence.json
+          cat evidence/evidence.json
+
+      - name: Keep the evidence with this run
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arm64-acceptance-evidence
+          path: evidence/evidence.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+
+      - name: Record it, re-validating the draft first
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ID: ${{ needs.select.outputs.id }}
+          SHA: ${{ needs.select.outputs.sha }}
+          VERSION: ${{ needs.select.outputs.version }}
+          DIGEST: ${{ needs.select.outputs.digest }}
+        run: bash tools/deploy/release-attach.sh accept "$ID" "$SHA" "$VERSION" "$GITHUB_RUN_ID" "$DIGEST"
+
+  x64-only:
+    name: release the draft without arm64
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.x64_only
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: release-draft-writes
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Record the decision and remove the arm64 installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ID: ${{ inputs.release_id }}
+        run: |
+          set -euo pipefail
+          [[ "$ID" =~ ^[0-9]+$ ]] || { echo "::error::x64_only needs the draft's release_id"; exit 1; }
+          facts=$(gh api "repos/$REPO/releases/$ID" --jq '[.target_commitish, .name] | @tsv')
+          read -r sha name <<<"$facts"
+          [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::release $ID is named '$name', not a final"; exit 1; }
+          bash tools/deploy/release-attach.sh x64-only "$ID" "$sha" "${name#v}"
