@@ -83,6 +83,8 @@ if (method === "DELETE" && (m = path.match(/^releases\/assets\/(\d+)$/))) {
   if (state.tags[m[1]]) out = { object: { sha: state.tags[m[1]] } };
 } else if ((m = path.match(/^actions\/runs\/(\d+)$/))) {
   out = state.runs[m[1]];
+} else if ((m = path.match(/^actions\/runs\/(\d+)\/jobs/))) {
+  if (state.runs[m[1]]) out = { jobs: (state.jobs || {})[m[1]] || [] };
 } else if ((m = path.match(/^releases\/tags\/(.+)$/))) {
   out = state.releases.find((r) => r.tag_name === m[1]);
 } else if (/^releases(\?|$)/.test(path)) {
@@ -685,6 +687,16 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
           ...extra,
         );
         st.runs["800"] = run800;
+        // The receipt job run 800 left for each prior release it accepted.
+        st.jobs = {
+          800: st.releases
+            .filter((r) => r.draft === false)
+            .map((r) => ({
+              name: `arm64 acceptance receipt: release ${r.id} ${r.tag_name} ${r.target_commitish} ${r.assets[0].digest}`,
+              status: "completed",
+              conclusion: "success",
+            })),
+        };
       });
       expect(f.attachBoth().status).toBe(0);
       return f;
@@ -712,6 +724,13 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     const failedRun = setupPrior([], { ...priorRun, conclusion: "failure" });
     expect(failedRun.accepted({}, upgradeFrom("0.7.10", NEWER)).status).toBe(0);
     expect(publish(failedRun).stderr).toContain("upgrade baseline v0.7.10 has no verified arm64 acceptance");
+    // And a baseline whose acceptance run left no receipt for that release's installer.
+    const noReceipt = setupPrior();
+    noReceipt.edit((st) => (st.jobs = { 800: [] }));
+    expect(noReceipt.accepted({}, upgradeFrom("0.7.10", NEWER)).status).toBe(0);
+    expect(publish(noReceipt).stderr).toMatch(
+      /upgrade baseline v0\.7\.10 has no verified arm64 acceptance: .*no successful job/,
+    );
   });
 
   it("refuses to publish without arm64 unless x64-only was decided", () => {

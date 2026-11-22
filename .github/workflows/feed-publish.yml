@@ -120,7 +120,7 @@ jobs:
           gh api --paginate "repos/$REPO/releases" --jq '.[]' | jq -s . > "$evidence/releases.json"
           echo '{}' > "$evidence/baseline-run.json"
           base_run=$(node tools/deploy/feed-arches.js baseline-run "$VERSION" "$evidence/releases.json")
-          [[ -z "$base_run" ]] || gh api "repos/$REPO/actions/runs/$base_run" > "$evidence/baseline-run.json" ||
+          [[ -z "$base_run" ]] || tools/deploy/release-attach.sh run-with-jobs "$base_run" > "$evidence/baseline-run.json" ||
             echo "::warning::could not read the upgrade baseline's acceptance run $base_run"
           run=$(node tools/deploy/feed-arches.js acceptance-run "$VERSION" "$evidence/release.json")
           if [[ -n "$run" ]]; then

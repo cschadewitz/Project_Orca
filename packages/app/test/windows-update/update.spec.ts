@@ -128,15 +128,22 @@ async function act(page: Page, action: string): Promise<Snapshot> {
   return reply.result!;
 }
 
-/** DisplayVersion of the per-user ORCA install, as Apps & features shows it. */
+/**
+ * DisplayVersion of the per-user ORCA install, as Apps & features shows it. Read with reg.exe,
+ * not PowerShell: the installer starts PowerShell for its own checks, and on the arm64 runner
+ * a PowerShell started every poll slowed those checks enough to outlast the wait.
+ */
 async function installedVersion(): Promise<string> {
-  const { stdout } = await execute("powershell", [
-    "-NoProfile",
-    "-Command",
-    "(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | " +
-      "Where-Object DisplayName -like 'ORCA*' | Select-Object -First 1).DisplayVersion",
+  const { stdout } = await execute("reg", [
+    "query",
+    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+    "/s",
   ]);
-  return stdout.trim();
+  for (const block of stdout.split(/\r?\n(?=HKEY_)/)) {
+    const value = (name: string) => new RegExp(`^\\s+${name}\\s+REG_SZ\\s+(.*)$`, "m").exec(block)?.[1]?.trim();
+    if (value("DisplayName")?.startsWith("ORCA")) return value("DisplayVersion") ?? "";
+  }
+  return "";
 }
 
 /**
@@ -177,7 +184,7 @@ test("a preview token, whose ring holds the installed version, is not offered th
 test("an internal token is offered the next version, downloads it and installs it", async () => {
   // Each step has its own bound, so a hang names the step; the feed's request log is in the
   // workflow output.
-  test.setTimeout(900_000);
+  test.setTimeout(1_200_000);
   const launched = await launch("internal");
   const { child, page } = launched;
   let quit = false;
@@ -217,10 +224,10 @@ test("an internal token is offered the next version, downloads it and installs i
     // an installer that never started reads differently from one that waits or fails.
     const watch = setInterval(() => {
       void installerProcesses().then((lines) => process.stdout.write(`[installer] ${lines || "none"}\n`));
-    }, 15_000);
+    }, 60_000);
     try {
       await expect
-        .poll(installedVersion, { timeout: 300_000, intervals: [2_000], message: `Windows reports ${TO} installed` })
+        .poll(installedVersion, { timeout: 480_000, intervals: [5_000], message: `Windows reports ${TO} installed` })
         .toBe(TO);
     } finally {
       clearInterval(watch);

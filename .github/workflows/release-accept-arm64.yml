@@ -107,7 +107,7 @@ jobs:
           # without that proof stops here instead of being accepted as a fresh install.
           base_run=$(node tools/deploy/feed-arches.js baseline-run "$VERSION" releases.json)
           echo '{}' > baseline-run.json
-          [[ -z "$base_run" ]] || gh api "repos/$REPO/actions/runs/$base_run" > baseline-run.json ||
+          [[ -z "$base_run" ]] || tools/deploy/release-attach.sh run-with-jobs "$base_run" > baseline-run.json ||
             echo "::warning::could not read the baseline's acceptance run $base_run"
           base=$(node tools/deploy/feed-arches.js baseline "$VERSION" "$REPO" releases.json baseline-run.json)
           previous="" previous_digest=""
@@ -218,7 +218,10 @@ jobs:
         run: Get-Process ORCA -ErrorAction SilentlyContinue | Stop-Process -Force
 
   record:
-    name: record the acceptance in the draft
+    # The name is the durable receipt (tools/deploy/feed-arches.js receipt): a later release's
+    # acceptance reads it to trust this release as its upgrade baseline after the evidence
+    # artifact expires. Keep the two in step.
+    name: "arm64 acceptance receipt: release ${{ needs.select.outputs.id }} v${{ needs.select.outputs.version }} ${{ needs.select.outputs.sha }} ${{ needs.select.outputs.digest }}"
     needs: [select, accept]
     runs-on: ubuntu-24.04
     # Shared with the attach and the publication: draft writes never interleave.

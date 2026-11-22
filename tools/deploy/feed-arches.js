@@ -6,7 +6,8 @@
  *   feed-arches.js baseline-run VERSION RELEASES_JSON
  *       print the acceptance run id of VERSION's upgrade baseline candidate (the newest
  *       published final older than VERSION, not marked x64-only, with an arm64 installer),
- *       or nothing; the caller fetches that run for the commands below (BASELINE_RUN_JSON)
+ *       or nothing; the caller fetches that run, with its jobs under "jobs", for the commands
+ *       below (BASELINE_RUN_JSON)
  *   feed-arches.js baseline VERSION REPO RELEASES_JSON BASELINE_RUN_JSON
  *       print "VERSION DIGEST ASSET_ID" of the verified baseline, nothing when there is no
  *       candidate, and exit 1 when the candidate has no verified acceptance
@@ -27,8 +28,9 @@
  * release id, version, source commit and installer digest, with a mode and prior
  * version/digest equal to the baseline computed here from the published releases. That
  * baseline must itself carry signing and acceptance records for its installer naming a
- * successful acceptance run on main; a candidate without them stops the check rather than
- * passing as a fresh install or falling back to an older release.
+ * successful acceptance run on main whose receipt job names that release, commit and
+ * digest; a candidate without them stops the check rather than passing as a fresh install
+ * or falling back to an older release.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -116,18 +118,44 @@ function runProblem(run, id, repo) {
 }
 
 /**
+ * The name the record job of release-accept-arm64.yml takes, binding that run's success to
+ * one release, version, source commit and installer digest. A job's name is set by the
+ * workflow file on main, not by anything a release's notes say, and it outlives the run's
+ * artifacts: it is the baseline's durable receipt.
+ */
+export const receipt = ({ id, version, sha, digest }) =>
+  `arm64 acceptance receipt: release ${id} v${version} ${sha} ${digest}`;
+
+/** undefined if RUN's jobs include a successful receipt for RELEASE's arm64 installer. */
+function receiptProblem(run, version, release) {
+  if (!/^[0-9a-f]{40}$/.test(release.target_commitish ?? "")) return `v${version} does not target a commit`;
+  const name = receipt({
+    id: release.id,
+    version,
+    sha: release.target_commitish,
+    digest: arm64Asset(version, release).digest,
+  });
+  if (!Array.isArray(run.jobs)) return `run ${run.id}'s jobs could not be read`;
+  const found = run.jobs.some((job) => job.name === name && job.status === "completed" && job.conclusion === "success");
+  return found ? undefined : `run ${run.id} has no successful job named "${name}"`;
+}
+
+/**
  * The verified upgrade baseline: { none: true } when no earlier release is a candidate,
  * { version, digest, asset } when the candidate's arm64 installer has one signing and one
- * acceptance record for its digest and that record names a successful acceptance run on
- * main (RUN, fetched by the caller), and { problem } when the candidate lacks that proof.
- * The run's evidence artifact expires, so the run record and the release notes are the proof.
+ * acceptance record for its digest, that record names a successful acceptance run on main
+ * (RUN, fetched by the caller with its jobs), and that run's receipt job names this release,
+ * version, source commit and digest; { problem } when the candidate lacks any of it. The
+ * run's evidence artifact expires, so the run and its receipt job are the durable proof.
  */
 export function baseline(version, releases, { repo, run } = {}) {
   const candidate = baselineCandidate(version, releases);
   if (!candidate) return { none: true };
   const prefix = `upgrade baseline v${candidate.version} has no verified arm64 acceptance`;
   const problem =
-    recordProblem(candidate.version, candidate.release) ?? runProblem(run, acceptanceRun(candidate.release), repo);
+    recordProblem(candidate.version, candidate.release) ??
+    runProblem(run, acceptanceRun(candidate.release), repo) ??
+    receiptProblem(run, candidate.version, candidate.release);
   if (problem) return { problem: `${prefix}: ${problem}` };
   const asset = arm64Asset(candidate.version, candidate.release);
   return { version: candidate.version, digest: asset.digest, asset: asset.id };

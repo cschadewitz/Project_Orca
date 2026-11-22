@@ -32,6 +32,9 @@
 #                                       with verified native acceptance (tools/deploy/
 #                                       feed-arches.js verify) or the x64-only decision, and
 #                                       VERSION is newer than Latest
+#   release-attach.sh run-with-jobs RUN_ID
+#                                       print run RUN_ID with its latest attempt's jobs under
+#                                       "jobs", for feed-arches.js's upgrade baseline receipt
 #
 # Every write is preceded by a fresh read of the exact draft: still a draft, the same target
 # and name, only the expected assets, and no other record. The records are written before the
@@ -133,7 +136,22 @@ upload() {
   fi
 }
 
+# A run and its latest attempt's jobs, one JSON object: the jobs carry the receipt that binds
+# an arm64 acceptance run to the release it accepted (feed-arches.js receipt).
+run_with_jobs() {
+  [[ "$1" =~ ^[0-9]+$ ]] || fail "invalid run id: $1"
+  local run jobs
+  run=$(gh api "repos/$REPO/actions/runs/$1") || fail "could not read run $1"
+  jobs=$(gh api --paginate "repos/$REPO/actions/runs/$1/jobs?per_page=100" --jq '.jobs[]' | jq -s .) ||
+    fail "could not read run $1's jobs"
+  jq --argjson jobs "$jobs" '. + {jobs: $jobs}' <<<"$run"
+}
+
 case "${1:-}" in
+  run-with-jobs)
+    [[ $# -eq 2 ]] || fail "usage: release-attach.sh run-with-jobs RUN_ID"
+    run_with_jobs "$2"
+    ;;
   select)
     [[ "${2:-}" =~ ^[0-9]+$ ]] || fail "usage: release-attach.sh select RUN_ID"
     artifact=$(signed_artifact "$2")
@@ -364,7 +382,7 @@ case "${1:-}" in
         fail "could not read the releases; nothing written"
       echo '{}' >"$evidence/baseline-run.json"
       base_run=$(node "$HERE/feed-arches.js" baseline-run "$version" "$evidence/releases.json")
-      [[ -z "$base_run" ]] || gh api "repos/$REPO/actions/runs/$base_run" >"$evidence/baseline-run.json" 2>/dev/null || true
+      [[ -z "$base_run" ]] || run_with_jobs "$base_run" >"$evidence/baseline-run.json" 2>/dev/null || true
       run=$(node "$HERE/feed-arches.js" acceptance-run "$version" "$evidence/release.json")
       if [[ -n "$run" ]]; then
         gh api "repos/$REPO/actions/runs/$run" >"$evidence/run.json" 2>/dev/null || true

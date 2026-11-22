@@ -1,10 +1,10 @@
 /** feed-arches.js (#889): arm64 is published and fed only with verified native acceptance. */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { acceptanceProblem, baseline, baselineRun, feedArches } from "../deploy/feed-arches.js";
+import { acceptanceProblem, baseline, baselineRun, feedArches, receipt } from "../deploy/feed-arches.js";
 
 const ARM = `sha256:${"a".repeat(64)}`;
 const OTHER = `sha256:${"b".repeat(64)}`;
@@ -70,7 +70,17 @@ const published = (version, digest, over = {}) => ({
 // A published release whose arm64 installer passed acceptance in run 6.
 const accepted06 = (version, digest, over = {}) =>
   published(version, digest, { body: [signed(digest, 5), accepted(digest, 6)].join("\n\n"), ...over });
-const prior = run({ id: 6 });
+// The record job a successful acceptance of VERSION's DIGEST leaves in its run.
+const receiptJob = (version, digest, over = {}) => ({
+  name: receipt({ id: Number(version.replace(/\D/g, "")), version, sha: SHA, digest }),
+  status: "completed",
+  conclusion: "success",
+  ...over,
+});
+const prior = run({
+  id: 6,
+  jobs: [receiptJob("0.6.10", ARM), receiptJob("0.6.9", X64), receiptJob("0.7.0", OTHER), receiptJob("0.7.0", ARM)],
+});
 
 describe("baseline", () => {
   it("is the newest published final older than the version with an accepted arm64 installer", () => {
@@ -119,12 +129,49 @@ describe("baseline", () => {
     ["an unreadable run", accepted06("0.7.0", ARM), undefined, /could not be read/],
     ["a failed run", accepted06("0.7.0", ARM), run({ id: 6, conclusion: "failure" }), /not a successful/],
     ["a run off main", accepted06("0.7.0", ARM), run({ id: 6, head_branch: "x" }), /not a successful/],
+    ["a run without its jobs", accepted06("0.7.0", ARM), run({ id: 6 }), /jobs could not be read/],
+    ["no receipt", accepted06("0.7.0", ARM), run({ id: 6, jobs: [] }), /no successful job named/],
+    [
+      "a receipt for other bytes",
+      accepted06("0.7.0", ARM),
+      run({ id: 6, jobs: [receiptJob("0.7.0", OTHER)] }),
+      /no successful job named/,
+    ],
+    [
+      "a receipt for another release",
+      accepted06("0.7.0", ARM, { id: 69 }),
+      run({ id: 6, jobs: [receiptJob("0.7.0", ARM)] }),
+      /no successful job named/,
+    ],
+    [
+      "a receipt for another commit",
+      accepted06("0.7.0", ARM, { target_commitish: "e".repeat(40) }),
+      run({ id: 6, jobs: [receiptJob("0.7.0", ARM)] }),
+      /no successful job named/,
+    ],
+    [
+      "a failed receipt job",
+      accepted06("0.7.0", ARM),
+      run({ id: 6, jobs: [receiptJob("0.7.0", ARM, { conclusion: "failure" })] }),
+      /no successful job named/,
+    ],
   ])("reports missing proof, not no baseline, for %s", (_label, candidate, baseRun, problem) => {
     // An older accepted release never stands in for the newest candidate.
     const result = baseline("0.7.1", [accepted06("0.6.9", X64), candidate], { repo: REPO, run: baseRun });
     expect(result.none).toBeUndefined();
     expect(result.problem).toMatch(/^upgrade baseline v0\.7\.0 has no verified arm64 acceptance: /);
     expect(result.problem).toMatch(problem);
+  });
+});
+
+describe("receipt", () => {
+  it("is the name release-accept-arm64.yml gives its record job", () => {
+    const workflow = readFileSync(".github/workflows/release-accept-arm64.yml", "utf8");
+    const name = /\n {2}record:\n(?: {4}#.*\n)* {4}name: "(.+)"\n/.exec(workflow)?.[1];
+    const outputs = { id: "42", version: "0.7.1", sha: SHA, digest: ARM };
+    expect(name?.replace(/\$\{\{ needs\.select\.outputs\.(\w+) \}\}/g, (_m, key) => outputs[key])).toBe(
+      receipt(outputs),
+    );
   });
 });
 
