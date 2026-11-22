@@ -4,10 +4,10 @@ Phase 1 is **assessment and preview**. `orca recovery <runId>` says how a run co
 recovered and what each way would reuse, repeat or leave uncertain. It takes no lease, appends no
 event, starts nothing and carries no approval or permission forward.
 
-Phase 2 starts with **side-effect review** (below): a step that may have acted and never finished
-is never run again on its own, and `orca recovery review` records an operator's decision about
-it. Starting a checkpoint attempt and the app's recovery panel follow; host reconnection and
-reassignment stay with #344.
+Phase 2 adds **side-effect review** (below): a step that may have acted and never finished is
+never run again on its own, and `orca recovery review` records an operator's decision about it.
+It also adds **starting a checkpoint attempt** (`orca recovery start`, below). The app's recovery
+panel follows; host reconnection and reassignment stay with #344.
 
 ```sh
 orca recovery <runId>                       # options, reasons, uncertain effects, checkpoints
@@ -15,9 +15,10 @@ orca recovery <runId> --checkpoint <stepRunId|nodeId> # one checkpoint: what it 
 orca recovery <runId> --json                # the RecoveryAssessment, for tools
 orca recovery review <runId> <stepRunId> --run-again [--note text]  # checked it; it may run again
 orca recovery review <runId> <stepRunId> --abandon [--note text]    # it must not; end the run here
+orca recovery start <runId> [--checkpoint <stepRunId|nodeId>] [--idempotency-key k]  # start a checkpoint attempt and follow it
 ```
 
-The command does not go through `bootstrap`: it takes no writer claim, stamps no store format,
+The preview does not go through `bootstrap`: it takes no writer claim, stamps no store format,
 loads no plugin and records no configuration generation. It reads the config file, checks the
 store format in read mode, opens the file stores and reads. Configuration drift needs a
 generation, which only a writer records, so the CLI does not report it; the API does when given
@@ -32,7 +33,7 @@ that feeds it is `previewRecovery` in `packages/engine/src/recovery-preview.ts`.
 | --- | --- | --- |
 | **Resume** | Re-drives the existing run from its own log, exactly as `orca resume` does. The topmost paused ancestor is the run actually re-driven, and it re-attaches down to this one and every other unfinished run below it; each of them attempts its unfinished last step again. | The run has not ended, and for every run resume drives: no live lease held by another process, readable launch inputs, a readable pinned definition, and no interrupted step that may have acted and has not been reviewed. |
 | **New run** | An intentional fresh execution of the workflow. Reuses nothing. | Always. The preview lists what the old run did so it is visible what would run again. |
-| **Checkpoint attempt** | A separately identified new run that would start after a completed step of a failed run, reusing that step's and its predecessors' recorded results and artifacts, linked to the original. Previewed only, for now. | The run failed, it is a top-level run, the asker is the principal that started it (when the run recorded one), its workflow version is pinned and readable, its launch inputs are readable, it is not leased, every artifact the checkpoint reuses reads back, and every step after it that may have acted has been reviewed. |
+| **Checkpoint attempt** | A separately identified new run that would start after a completed step of a failed run, reusing that step's and its predecessors' recorded results and artifacts, linked to the original. Started with `orca recovery start` (below). | The run failed, it is a top-level run, the asker is the principal that started it (when the run recorded one), its workflow version is pinned and readable, its launch inputs are readable, it is not leased, every artifact the checkpoint reuses reads back, and every step after it that may have acted has been reviewed. |
 
 Each option and checkpoint has a **readiness**: `available` (nothing blocks it and nothing is
 unconfirmed), `unverified` (nothing blocks it, but the read path cannot confirm something the
@@ -140,6 +141,39 @@ node id that completed exactly once; after a loop a node id names several points
 is refused with their ids. The checkpoint-attempt option's readiness, reasons and repeat list
 describe the named checkpoint, and without one the latest checkpoint that is not blocked.
 
+## Starting a checkpoint attempt
+
+`orca recovery start <runId>` creates the attempt and follows it as `orca run` does (exit 0 on
+success, 2 on failure or cancellation, 3 when it pauses for input). `--checkpoint` names the
+checkpoint as in the preview; without it, the latest one that is not blocked is used.
+
+- **One event.** The attempt is a new top-level run. Its `run.created` carries a `checkpoint`
+  block: the source run and checkpoint step, the reused steps (under new step run ids, each
+  with `reusedFrom` naming the source attempt, plus its recorded result and child-run links),
+  the artifact records they produced (same ids, `producedBy` unchanged) and the vars as they
+  stood when the checkpoint completed. The projection shows the reused steps as completed, never
+  started here, and `run.checkpoint` links back to the source. The interpreter then routes on from
+  the checkpoint, as resume does from a completed step.
+- **Nothing carries authority.** A reused gate's recorded choice routes the attempt, but nobody's
+  answer is replayed: any step that runs again asks again.
+- **Pinned like the source.** The attempt uses the source's recorded configuration generation
+  and its pinned workflow revision, its launch inputs (with everything it treated as sensitive,
+  overlays included) and its workspace, so the reused steps' changes are where the next step
+  expects them. It is checked again when it is created: a preview that went stale (a review now
+  missing, the source leased, an artifact gone) refuses with `RECOVERY_BLOCKED` and its reasons,
+  and writes nothing.
+- **One at a time.** It is created under the source's run lease. Each attempt is recorded
+  against its source in the execution store (`checkpointAttempts`), and a new one is refused
+  while the last one has not finished, because they share the workspace. The source's log is
+  never changed.
+- **Retry-safe.** With a persistent store, the command goes through retry-safe admission
+  (`run.recover`, `CheckpointAdmissionService`). It reserves the run id before anything is
+  written, and the attempt runs under the same bounded first-attachment policy as a direct run.
+  The printed retry key, given again with `--idempotency-key`, returns the same attempt rather
+  than starting another, and the same key with a different run or checkpoint is a conflict. A
+  run that recorded no configuration generation has nothing to pin an admission to, so it is
+  started directly.
+
 ## Drift
 
 When the workflow a new run would use is at a different version, or the configuration
@@ -149,7 +183,7 @@ resolve differently and is shown for review, not refused.
 
 ## Not yet
 
-Starting a checkpoint attempt and the app's recovery panel (both phase 2, next), reconciling an
+The app's recovery panel and daemon methods (phase 2, next), reconciling an
 uncertain effect automatically, the operations console (#340), host-specific orphan handling
 (#344), and agent-context recovery for approvals (the Approved, then Continue contract recorded
 on #357).

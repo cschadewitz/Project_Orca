@@ -582,7 +582,7 @@ export const commands: Record<string, Command> = {
   },
 
   recovery: {
-    help: "recovery <runId> [--checkpoint <stepRunId|nodeId>] [--json] | review <runId> <stepRunId> --run-again|--abandon [--note text]  Preview how a run could be recovered (resume, new run, checkpoint attempt) without changing anything; or record your review of a step that may have acted and never finished.",
+    help: "recovery <runId> [--checkpoint <stepRunId|nodeId>] [--json] | review <runId> <stepRunId> --run-again|--abandon [--note text] | start <runId> [--checkpoint <stepRunId|nodeId>] [--idempotency-key k] [--quiet]  Preview how a run could be recovered (resume, new run, checkpoint attempt) without changing anything; record your review of a step that may have acted and never finished; or start a checkpoint attempt of a failed run and follow it.",
     run: recoveryCommand,
   },
 

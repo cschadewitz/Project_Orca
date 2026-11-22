@@ -230,3 +230,53 @@ it("lists options with reasons, the uncertain step, and one checkpoint in detail
   expect(text).toContain("The workflow is now at 2; recovery from history uses 1.");
   expect(text).toMatch(/^Nothing was changed\. A new run or checkpoint attempt asks every person again/m);
 });
+
+it("start begins one checkpoint attempt per retry key and follows it", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orca-recovery-start-"));
+  dirs.push(dir);
+  await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: [pick.yaml]\ntemplates: []\n", "utf8");
+  await writeFile(
+    join(dir, "pick.yaml"),
+    `
+id: pick
+name: pick
+start: s
+nodes:
+  s: { type: start }
+  mark: { type: set, vars: { marked: true } }
+  pick: { type: decision, source: { kind: expression, expr: "vars.choice" }, options: [a] }
+  done: { type: end }
+edges:
+  - { from: s, to: mark }
+  - { from: mark, to: pick }
+  - { from: pick, to: done }
+`,
+    "utf8",
+  );
+  const started = ctx(dir, ["pick"], { var: ["choice=c"] });
+  expect(await commands.run!.run(started.context)).toBe(2);
+  const runId = /^run (run_\S+)/m.exec(started.lines.join("\n"))![1]!;
+
+  const first = ctx(dir, ["start", runId], { "idempotency-key": "again" });
+  // The attempt takes the same failing decision again: it is followed to its end, as `run` does.
+  expect(await commands.recovery!.run(first.context)).toBe(2);
+  const stores = fileStores(join(dir, ".orca"));
+  const runs = await stores.events.listRuns();
+  const attemptId = runs.find((id) => id !== runId)!;
+  const attempt = reduceRun(await stores.events.read(attemptId));
+  expect(attempt.run.checkpoint).toMatchObject({ runId });
+  expect(attempt.stepOrder.map((id) => [attempt.steps[id]!.nodeId, Boolean(attempt.steps[id]!.reusedFrom)])).toEqual([
+    ["s", true],
+    ["mark", true],
+    ["pick", false],
+  ]);
+  // The same key again returns that attempt; nothing new is started.
+  expect(await commands.recovery!.run(ctx(dir, ["start", runId], { "idempotency-key": "again" }).context)).toBe(2);
+  expect(await stores.events.listRuns()).toHaveLength(runs.length);
+  // A checkpoint that is not there is a usage error; nothing is written.
+  await expect(
+    commands.recovery!.run(ctx(dir, ["start", runId], { checkpoint: "nowhere" }).context),
+  ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+  expect(await stores.events.listRuns()).toHaveLength(runs.length);
+  expect(await main(["recovery", "start", runId, "--checkpoint", "mark", "--quiet", "--cwd", dir])).toBe(2);
+});

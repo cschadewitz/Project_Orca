@@ -46,3 +46,5 @@ export {
   type AdmissionExecutionRuntime,
   type AdmissionExecutionStatus,
 } from "./admission-execution.js";
+export * from "./checkpoint-attempt.js";
+export * from "./checkpoint-admission.js";

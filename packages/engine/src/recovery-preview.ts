@@ -27,6 +27,8 @@ export interface RecoveryPreviewOptions {
   /** The configuration generation a new run would be admitted on now, when known. */
   currentConfigGeneration?: string | undefined;
   now?: number;
+  /** A lease this holder holds on a run is not counted as another process driving it. */
+  leaseHolder?: string | undefined;
 }
 
 export async function previewRecovery(
@@ -34,7 +36,7 @@ export async function previewRecovery(
   runId: string,
   options: RecoveryPreviewOptions = {},
 ): Promise<RecoveryAssessment> {
-  const self = await runFacts(stores, runId, options.now);
+  const self = await runFacts(stores, runId, options.now, options.leaseHolder);
   if (!self) throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
   const { facts, created } = self;
   const state = facts.state;
@@ -43,7 +45,7 @@ export async function previewRecovery(
   // paused run between it and this one. Each of them is checked like this run.
   const resumeAncestors: RecoveryRunFacts[] = [];
   for (let parentId = state.run.parentRunId; parentId;) {
-    const parent = await runFacts(stores, parentId, options.now);
+    const parent = await runFacts(stores, parentId, options.now, options.leaseHolder);
     if (!parent || parent.facts.state.run.status !== "paused") break;
     resumeAncestors.push(parent.facts);
     parentId = parent.facts.state.run.parentRunId;
@@ -61,7 +63,7 @@ export async function previewRecovery(
     const id = queue.shift()!;
     if (seen.has(id)) continue;
     seen.add(id);
-    const child = await runFacts(stores, id, options.now);
+    const child = await runFacts(stores, id, options.now, options.leaseHolder);
     if (!child || TERMINAL.has(child.facts.state.run.status)) continue;
     resumeDescendants.push(child.facts);
     queue.push(...children(child.facts.state));
@@ -99,6 +101,7 @@ async function runFacts(
   stores: Stores,
   runId: string,
   now: number | undefined,
+  leaseHolder?: string,
 ): Promise<{ facts: RecoveryRunFacts; created: OrcaEventPayload<"run.created"> } | undefined> {
   const events = await stores.events.read(runId);
   const first = events[0];
@@ -139,7 +142,7 @@ async function runFacts(
       )
     : true;
   const lease = await stores.leases.get(runLeaseResource(runId));
-  const leased = lease !== undefined && !lapsed(lease, now);
+  const leased = lease !== undefined && !lapsed(lease, now) && lease.holder !== leaseHolder;
   return {
     facts: { state, workflowStored, workflowReadable, revision, generation, executionInputsAvailable, leased },
     created,

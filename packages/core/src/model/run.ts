@@ -103,6 +103,10 @@ export type SkippedBranch = z.infer<typeof SkippedBranchSchema>;
 export const EffectReviewDecisionSchema = z.enum(["run-again", "abandon"]);
 export type EffectReviewDecision = z.infer<typeof EffectReviewDecisionSchema>;
 
+/** The step attempt of another run a reused step stands for (#357). */
+export const StepOriginSchema = z.object({ runId: z.string(), stepRunId: z.string() });
+export type StepOrigin = z.infer<typeof StepOriginSchema>;
+
 export const StepRunSchema = z.object({
   id: z.string(),
   runId: z.string(),
@@ -137,6 +141,8 @@ export const StepRunSchema = z.object({
    * `agentSessionId`, is what shows an agent may have acted for it (#357).
    */
   dispatched: z.literal(true).optional(),
+  /** Reused by a checkpoint attempt from this attempt of another run; it did not run here (#357). */
+  reusedFrom: StepOriginSchema.optional(),
   /** The executor reported this failed attempt did nothing outside ORCA (`step.failed.effect`). */
   noEffect: z.literal(true).optional(),
   /** An operator's side-effect review of this attempt (#357): `step.effect.reviewed`. */
@@ -168,6 +174,39 @@ export const RunOverridesSchema = z
   .strict();
 export type RunOverrides = z.infer<typeof RunOverridesSchema>;
 
+/**
+ * A step a checkpoint attempt reuses (#357): the source attempt's recorded result, under a new
+ * step run id of this run. It did not run here and asks nobody; only its result carries over.
+ */
+export const ReusedStepSchema = z.object({
+  stepRunId: z.string(),
+  from: StepOriginSchema,
+  nodeId: z.string(),
+  nodeType: z.string(),
+  attempt: z.number().int().positive(),
+  iteration: z.number().int().nonnegative().optional(),
+  result: StepResultSchema,
+  /** The source's child runs of a reused container step, so their artifacts stay readable. */
+  children: z.array(ChildRunLinkSchema).default([]),
+  /** When the source attempt completed. */
+  completedAt: z.string(),
+});
+export type ReusedStep = z.infer<typeof ReusedStepSchema>;
+
+/**
+ * What a checkpoint attempt starts from (#357), recorded in its `run.created`: the source run
+ * and checkpoint, the steps it reuses in history order (the checkpoint last), the artifact
+ * records those steps produced, and the run's vars as they were when the checkpoint completed.
+ */
+export const RunCheckpointSchema = z.object({
+  runId: z.string(),
+  stepRunId: z.string(),
+  steps: z.array(ReusedStepSchema).min(1),
+  artifacts: z.array(ArtifactSchema).default([]),
+  vars: z.record(z.string(), z.unknown()),
+});
+export type RunCheckpoint = z.infer<typeof RunCheckpointSchema>;
+
 export const RunSchema = z.object({
   id: z.string(),
   workflowId: z.string(),
@@ -183,6 +222,8 @@ export const RunSchema = z.object({
   /** The run's selection overrides, from `run.created`; absent on runs that had none. */
   overrides: RunOverridesSchema.optional(),
   provenance: RunProvenanceSchema.optional(),
+  /** A checkpoint attempt's source run and checkpoint step (#357). */
+  checkpoint: StepOriginSchema.optional(),
   error: ErrorInfoSchema.optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
@@ -206,6 +247,7 @@ export const RunSummarySchema = RunSchema.pick({
   parentRunId: true,
   overrides: true,
   provenance: true,
+  checkpoint: true,
   createdAt: true,
   startedAt: true,
   completedAt: true,

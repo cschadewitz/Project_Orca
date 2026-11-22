@@ -29,7 +29,7 @@ const RecordSchema = z.strictObject({
   operationId: z.string().regex(idPattern),
   workspaceId: z.string(),
   principalId: z.string(),
-  kind: z.enum(["request.submit", "run.admit", "revision.submit", "revision.replace", "run.continue"]),
+  kind: z.enum(["request.submit", "run.admit", "revision.submit", "revision.replace", "run.continue", "run.recover"]),
   command: z.json(),
   canonical: z.string(),
   binding: z.record(z.string(), z.json()).optional(),

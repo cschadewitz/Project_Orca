@@ -13,7 +13,12 @@ import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
 import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR, enterStoreFormat } from "@orca/store";
 import { readOrcaVersion } from "./version.js";
-import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
+import {
+  CheckpointAdmissionService,
+  RegisteredRetryClaims,
+  DirectAdmissionService,
+  RetrySafeAdmissionService,
+} from "@orca/engine";
 
 import { createHash, randomUUID } from "node:crypto";
 
@@ -142,6 +147,8 @@ export interface OrcaApp {
   retryClaims?: RegisteredRetryClaims | undefined;
   retryClaimStore?: RetryClaimStore | undefined;
   directAdmissions?: DirectAdmissionService | undefined;
+  /** Retry-safe checkpoint attempts of failed runs (#357). */
+  checkpointAdmissions?: CheckpointAdmissionService | undefined;
   submissionAuthority?: SubmissionAuthority | undefined;
   plan: PlanService;
   workflows: WorkflowRegistry;
@@ -594,6 +601,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
         restoreLaunch: generations.restoreDirectLaunch,
       })
     : undefined;
+  const checkpointAdmissions = retryClaims
+    ? new CheckpointAdmissionService({ orchestrator, retries: retryClaims })
+    : undefined;
   const submission = {
     ...(retryClaims ? { retries: retryClaims } : {}),
     admissions: opts.ephemeral
@@ -626,6 +636,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       }
     },
     directAdmissions,
+    checkpointAdmissions,
     retrySafeAdmissions:
       directAdmissions && program.submissions
         ? new RetrySafeAdmissionService({ requests: program.submissions, direct: directAdmissions })

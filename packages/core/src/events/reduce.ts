@@ -23,6 +23,9 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
       ...(first.payload.parentStepRunId ? { parentStepRunId: first.payload.parentStepRunId } : {}),
       ...(first.payload.overrides ? { overrides: first.payload.overrides } : {}),
       ...(first.payload.provenance ? { provenance: first.payload.provenance } : {}),
+      ...(first.payload.checkpoint
+        ? { checkpoint: { runId: first.payload.checkpoint.runId, stepRunId: first.payload.checkpoint.stepRunId } }
+        : {}),
     },
     steps: {},
     stepOrder: [],
@@ -30,6 +33,33 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
     humanInputs: {},
     lastSeq: first.seq,
   };
+  const checkpoint = first.payload.checkpoint;
+  if (checkpoint) {
+    // A checkpoint attempt (#357) starts from the source's state at its checkpoint: the reused
+    // steps completed, in history order, and the run continues by routing from the last one.
+    Object.assign(state.run.vars, checkpoint.vars);
+    for (const artifact of checkpoint.artifacts) state.artifacts[artifact.id] = artifact;
+    for (const reused of checkpoint.steps) {
+      state.steps[reused.stepRunId] = {
+        id: reused.stepRunId,
+        runId: first.runId,
+        nodeId: reused.nodeId,
+        nodeType: reused.nodeType,
+        attempt: reused.attempt,
+        status: "completed",
+        inputArtifactIds: [],
+        result: structuredClone(reused.result),
+        childRunIds: reused.children.map((c) => c.runId),
+        children: structuredClone(reused.children),
+        skippedBranches: [],
+        scheduledAt: first.at,
+        completedAt: reused.completedAt,
+        reusedFrom: reused.from,
+        ...(reused.iteration !== undefined ? { iteration: reused.iteration } : {}),
+      };
+      state.stepOrder.push(reused.stepRunId);
+    }
+  }
   for (let i = 1; i < events.length; i++) applyEvent(state, events[i]!);
   return state;
 }
@@ -345,6 +375,7 @@ export function runSummary(state: RunState): RunSummary {
     ...(r.workItemId ? { workItemId: r.workItemId } : {}),
     ...(r.parentRunId ? { parentRunId: r.parentRunId } : {}),
     ...(r.overrides ? { overrides: r.overrides } : {}),
+    ...(r.checkpoint ? { checkpoint: r.checkpoint } : {}),
     ...(r.startedAt ? { startedAt: r.startedAt } : {}),
     ...(r.completedAt ? { completedAt: r.completedAt } : {}),
   };
@@ -371,6 +402,9 @@ export function reduceRunSummary(events: readonly OrcaEvent[]): RunSummary {
     ...(first.payload.parentRunId ? { parentRunId: first.payload.parentRunId } : {}),
     ...(first.payload.overrides ? { overrides: first.payload.overrides } : {}),
     ...(first.payload.provenance ? { provenance: first.payload.provenance } : {}),
+    ...(first.payload.checkpoint
+      ? { checkpoint: { runId: first.payload.checkpoint.runId, stepRunId: first.payload.checkpoint.stepRunId } }
+      : {}),
   };
   for (let i = 1; i < events.length; i++) {
     const e = events[i]!;
