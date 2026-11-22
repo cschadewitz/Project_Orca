@@ -16,20 +16,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import {
-  chmod,
-  copyFile,
-  lstat,
-  mkdir,
-  readdir,
-  readFile,
-  readlink,
-  rename,
-  rm,
-  symlink,
-  utimes,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readdir, readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { fileStores } from "./document-store.js";
@@ -70,9 +57,9 @@ export class CarryoverRefused extends Error {
 }
 
 interface Entry {
-  type: "dir" | "file" | "symlink";
+  type: "dir" | "file";
   mode: number;
-  /** Only what a writer changes: size, mtime and inode for files, target for links. */
+  /** Only what a writer changes: size, mtime and inode for files. */
   state: string;
 }
 type Snapshot = Map<string, Entry>;
@@ -86,8 +73,14 @@ async function snapshot(root: string): Promise<Snapshot> {
       const path = join(dir, name);
       const info = await lstat(path, { bigint: true });
       const mode = Number(info.mode & 0o7777n);
-      if (info.isSymbolicLink()) out.set(relative, { type: "symlink", mode, state: await readlink(path) });
-      else if (info.isDirectory()) {
+      // Links are refused: a backup must be self-contained and the throwaway read copy
+      // isolated, and neither holds if a link can point outside them.
+      if (info.isSymbolicLink())
+        throw new CarryoverRefused(
+          "UNREADABLE",
+          `${path} is a link. This store cannot be carried forward automatically while it holds links; replace the link with what it points to, or restore a complete backup. Nothing was changed.`,
+        );
+      if (info.isDirectory()) {
         out.set(relative, { type: "dir", mode, state: "" });
         await walk(path, relative);
       } else if (info.isFile())
@@ -108,7 +101,7 @@ const sameSnapshot = (a: Snapshot, b: Snapshot) =>
 
 const signatureOf = (s: Snapshot) =>
   createHash("sha256")
-    .update(JSON.stringify([...s].map(([path, e]) => [path, e.type, e.mode, e.type === "file" ? "" : e.state])))
+    .update(JSON.stringify([...s].map(([path, e]) => [path, e.type, e.mode])))
     .digest("hex");
 
 function digest(path: string): Promise<string> {
@@ -131,7 +124,7 @@ async function copyTree(source: string, target: string, entries: Snapshot): Prom
       await chmod(join(target, path), entry.mode);
       const info = await lstat(join(source, path));
       await utimes(join(target, path), info.atime, info.mtime);
-    } else if (entry.type === "symlink") await symlink(entry.state, join(target, path));
+    }
   }
   for (const [path, entry] of [...entries].reverse())
     if (entry.type === "dir") await chmod(join(target, path), entry.mode);
@@ -227,11 +220,18 @@ export async function stageCarryover(
     await hooks.afterCopy?.();
     if (!sameSnapshot(before, await snapshot(storeDir)) || !(await verifyCopy(storeDir, partial, before))) throw busy();
     // The readers may write (keys, generation records); they get a throwaway copy, never the backup.
+    const staged = await snapshot(partial);
     await mkdir(validate, { mode: 0o700 });
     await copyTree(partial, validate, before);
     try {
       await readsUnderCurrentFormat(validate);
+      // The readers may write, but only inside the throwaway copy: with links refused, every
+      // store path resolves under the directory it was given. Prove that the backup and the
+      // store itself were left exactly as they were.
+      if (!sameSnapshot(staged, await snapshot(partial)) || !(await verifyCopy(storeDir, partial, before)))
+        throw new Error("the read check changed the staged backup");
     } catch (error) {
+      if (error instanceof CarryoverRefused) throw error;
       throw new CarryoverRefused(
         "UNREADABLE",
         `This store could not be read by this ORCA before its format was changed, so nothing was changed: ${(error as Error).message}. Open it with the ORCA version that last wrote it, or restore a complete backup.`,

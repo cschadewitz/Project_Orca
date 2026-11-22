@@ -4,8 +4,8 @@
  * A store records the format (store epoch) and the ORCA version that last wrote it in
  * `store-format.json`. Every writer checks it before touching anything else:
  *
- * - Same format, or an unmarked store this format's line already wrote: open in place (and
- *   stamp). An app update that keeps the format, the automatic desktop path, needs nothing else.
+ * - Same format, or an unmarked store with positive evidence that a released build of this
+ *   format wrote it (see {@link ADOPTABLE_UNMARKED_FORMAT}): open in place (and stamp). An app update that keeps the format, the automatic desktop path, needs nothing else.
  * - The previous supported format, or an unmarked store from before that line: ordinary startup
  *   refuses (CARRYOVER_REQUIRED). `orca store carry-forward`, run with every other ORCA process
  *   stopped, converts it explicitly (store-format-carryover.ts): a verified whole-store backup
@@ -19,7 +19,8 @@
  * them together. Changing the epoch means appending to {@link STORE_FORMAT_HISTORY}.
  */
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { OrcaError } from "@orca/core";
@@ -140,10 +141,49 @@ function judge(storeDir: string, marker: StoreFormatMarker, current: string): vo
   );
 }
 
-/** Written only by builds of the current format's line (#566 rehearsal: v0.6.0 has neither). */
-async function identifiedAsCurrent(storeDir: string): Promise<boolean> {
-  const names = await readdir(storeDir).catch(() => [] as string[]);
-  return names.includes(".workspace-identified") && names.includes("workspace-identity");
+/**
+ * The one format whose unmarked stores startup may stamp without converting: every released
+ * ORCA that wrote it (0.7.0-rc.2, 0.7.0) predates the marker. Once the epoch moves on, no
+ * unmarked store is adopted again.
+ */
+export const ADOPTABLE_UNMARKED_FORMAT = "operator-journals-v4";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n$/i;
+
+/** A regular, non-linked file or directory, private to this user where modes apply. */
+async function ownedEntry(path: string, kind: "file" | "dir"): Promise<Stats | undefined> {
+  const info = await lstat(path).catch(() => undefined);
+  if (!info || (kind === "dir" ? !info.isDirectory() : !info.isFile())) return undefined;
+  if (process.platform !== "win32" && ((info.mode & 0o077) !== 0 || info.uid !== process.getuid?.())) return undefined;
+  return info;
+}
+
+/**
+ * Positive evidence that an unmarked store was written by a released 0.7 build, which is the
+ * only line that writes either of these, and that both are intact (#566):
+ *
+ * - workspace identity: `.workspace-identified` holding exactly "1\n", and
+ *   `workspace-identity/id` holding one v4 UUID (store/workspace-identity.ts);
+ * - the private execution key: `private-execution/.execution-key`, exactly 32 bytes
+ *   (store/protected-file.ts).
+ *
+ * v0.6.0 and every earlier release wrote neither. The 0.7 desktop app's daemon (`serve`,
+ * including `serve --read-only`) and `submit` write both on first open; a store only ever
+ * used through other 0.7 commands has no identity and goes through `orca store carry-forward`.
+ * Anything partial, linked, foreign-owned or malformed is not evidence.
+ */
+async function writtenByAdoptableLine(storeDir: string): Promise<boolean> {
+  if (STORE_FORMAT_EPOCH !== ADOPTABLE_UNMARKED_FORMAT) return false;
+  const marker = await ownedEntry(join(storeDir, ".workspace-identified"), "file");
+  const identityDir = await ownedEntry(join(storeDir, "workspace-identity"), "dir");
+  const identity = await ownedEntry(join(storeDir, "workspace-identity", "id"), "file");
+  const privateDir = await ownedEntry(join(storeDir, "private-execution"), "dir");
+  const key = await ownedEntry(join(storeDir, "private-execution", ".execution-key"), "file");
+  if (!marker || !identityDir || !identity || !privateDir || !key || key.size !== 32) return false;
+  const [flag, id] = await Promise.all([
+    readFile(join(storeDir, ".workspace-identified"), "utf8"),
+    readFile(join(storeDir, "workspace-identity", "id"), "utf8"),
+  ]);
+  return flag === "1\n" && UUID.test(id);
 }
 
 const carryoverRequired = (storeDir: string, from: string) =>
@@ -183,7 +223,7 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
     if (marker?.epoch === current) return "current" as const;
     if (marker) throw carryoverRequired(storeDir, marker.epoch);
     if (!(await holdsData(storeDir))) return "fresh" as const;
-    if (await identifiedAsCurrent(storeDir)) return "adopted" as const;
+    if (await writtenByAdoptableLine(storeDir)) return "adopted" as const;
     throw carryoverRequired(storeDir, "unmarked");
   };
   if (options.mode === "read") return { status: await classify(await check()), epoch: current };

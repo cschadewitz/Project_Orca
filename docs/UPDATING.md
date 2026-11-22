@@ -536,8 +536,8 @@ converts a store:
 | The store was written in | What ordinary startup does |
 | --- | --- |
 | Its own format | Opens it in place. Updates that keep the format, such as 0.7.0 to 0.7.1, need nothing else. |
-| Its own format, before the marker existed (it has `workspace-identity/`, which 0.6 never wrote) | Stamps the marker and opens it in place. No conversion, no backup. |
-| The previous release's format, or an unmarked store from before 0.7 | Refuses (`CARRYOVER_REQUIRED`) and changes nothing. Run `orca store carry-forward` once, below. |
+| `operator-journals-v4`, before the marker existed, with intact evidence a released 0.7 build wrote it: `.workspace-identified` holding `1`, a valid `workspace-identity/id` and a 32-byte `private-execution/.execution-key`, none of them linked or foreign-owned. The 0.7 desktop app's daemon and `submit` write all three; 0.6 and earlier wrote none | Stamps the marker and opens it in place. No conversion, no backup, no other byte changed. |
+| The previous release's format, or any other unmarked store (incomplete or missing evidence included) | Refuses (`CARRYOVER_REQUIRED`) and changes nothing. Run `orca store carry-forward` once, below. |
 | An older format than that | Refuses, naming the release line to open it with first. |
 | A format it does not know (a newer ORCA) | Refuses for reads and writes alike and changes nothing. The message names the version that wrote it and, when there is one, the backup that version made. |
 | A damaged marker | Refuses until the marker is restored or repaired with ORCA stopped. |
@@ -550,6 +550,8 @@ command can see, so it also checks for itself, and refuses with the prior format
 charge if any step fails:
 
 1. No run lease in the store is live, and the leases can be read. Otherwise it refuses (`BUSY`).
+   A store that holds links is refused (`UNREADABLE`): the backup must be self-contained and
+   the read check isolated.
 2. The whole store is copied into a private staging folder under `format-backups/`, and every
    copied file is compared byte for byte with the original.
 3. The store's complete file listing (path, type, size, modification time, inode) must be
@@ -557,7 +559,8 @@ charge if any step fails:
    the copy is discarded and the command refuses (`BUSY`).
 4. A second, throwaway copy is opened with this build's own readers: every run log, the
    request, work-item, artifact, lease and plan collections and every plan journal. If any of
-   them fails to read, nothing changes (`UNREADABLE`).
+   them fails to read, nothing changes (`UNREADABLE`). The staged backup must be unchanged
+   afterwards, so the readers' own writes stay in the throwaway copy.
 5. Just before the marker is written, the listing is checked once more. Then the staged copy
    is published as `format-backups/<time>-from-<format>/` with a `format-backup.json`
    manifest, and only then is the marker stamped.

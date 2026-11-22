@@ -1,11 +1,12 @@
 /** Store format marker and the verified carryover of older stores (#566). */
-import { lstat, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   carryStoreForward,
   enterStoreFormat,
+  FileExecutionStore,
   readStoreFormat,
   STORE_FORMAT_BACKUP_DIR,
   STORE_FORMAT_BACKUP_MANIFEST,
@@ -14,6 +15,7 @@ import {
   STORE_FORMAT_HISTORY,
   StoreFormatError,
   SUPPORTED_STORE_FORMATS,
+  workspaceIdentity,
 } from "../src/index.js";
 
 const store = async () => join(await mkdtemp(join(tmpdir(), "orca-store-format-")), ".orca");
@@ -42,6 +44,30 @@ const legacy = async (dir: string) => {
   await mkdir(join(dir, "private-execution"), { mode: 0o700 });
   await writeFile(join(dir, "private-execution", "payload"), "opaque", { mode: 0o600 });
   await mkdir(join(dir, "plan.lock"));
+};
+/**
+ * What a released 0.7 daemon (`serve`) leaves on first open, written by the same store code
+ * (packages/store is unchanged since v0.7.0 apart from the format marker): workspace identity,
+ * the private execution key and a generation record, plus a run log.
+ */
+const v070 = async (dir: string) => {
+  await workspaceIdentity(dir);
+  await new FileExecutionStore(dir).putGeneration("gen_1", { workflows: [] });
+  await mkdir(join(dir, "runs"), { recursive: true });
+  await writeFile(join(dir, "runs", "run_old.jsonl"), LOG);
+};
+/** Every file's bytes, for "nothing was changed" checks. */
+const contents = async (dir: string): Promise<Record<string, string>> => {
+  const out: Record<string, string> = {};
+  const walk = async (path: string, prefix: string) => {
+    for (const name of (await readdir(path)).sort()) {
+      const info = await lstat(join(path, name));
+      if (info.isDirectory()) await walk(join(path, name), `${prefix}${name}/`);
+      else out[`${prefix}${name}`] = (await readFile(join(path, name))).toString("base64");
+    }
+  };
+  await walk(dir, "");
+  return out;
 };
 const clock = (iso: string) => () => new Date(iso);
 const backups = (dir: string) => readdir(join(dir, STORE_FORMAT_BACKUP_DIR)).catch(() => [] as string[]);
@@ -75,16 +101,48 @@ describe("store format marker (#566)", () => {
     expect(await backups(dir)).toEqual([]);
   });
 
-  it("stamps an unmarked store its own format line wrote, without converting it", async () => {
+  it("stamps an unmarked store a released 0.7 daemon wrote, without converting it", async () => {
     const dir = await store();
-    await mkdir(join(dir, "workspace-identity"), { recursive: true });
-    await legacy(dir);
+    await v070(dir);
+    const before = await contents(dir);
     expect(await enterStoreFormat(dir, { appVersion: "0.7.1", mode: "read" })).toMatchObject({ status: "adopted" });
     expect(await readStoreFormat(dir)).toBeUndefined();
     expect(await enterStoreFormat(dir, { appVersion: "0.7.1", mode: "write" })).toMatchObject({ status: "adopted" });
     expect(await readStoreFormat(dir)).toMatchObject({ epoch: STORE_FORMAT_EPOCH, writtenBy: "0.7.1" });
+    const after = await contents(dir);
+    delete after[STORE_FORMAT_FILE];
+    expect(after).toEqual(before);
     expect(await backups(dir)).toEqual([]);
   });
+
+  const missingEvidence: [string, (dir: string) => Promise<unknown>][] = [
+    ["no execution key", (dir) => rm(join(dir, "private-execution"), { recursive: true })],
+    ["a short execution key", (dir) => writeFile(join(dir, "private-execution", ".execution-key"), "short")],
+    ["no identity", (dir) => rm(join(dir, "workspace-identity"), { recursive: true })],
+    ["a malformed identity", (dir) => writeFile(join(dir, "workspace-identity", "id"), "not-a-uuid\n")],
+    ["a changed identity marker", (dir) => writeFile(join(dir, ".workspace-identified"), "2\n")],
+    [
+      "a linked identity",
+      async (dir) => {
+        const elsewhere = join(dir, "..", "elsewhere-id");
+        await writeFile(elsewhere, "00000000-0000-4000-8000-000000000000\n", { mode: 0o600 });
+        await rm(join(dir, "workspace-identity", "id"));
+        await symlink(elsewhere, join(dir, "workspace-identity", "id"));
+      },
+    ],
+  ];
+  for (const [what, damage] of missingEvidence)
+    it(`refuses an unmarked store with ${what}, byte for byte unchanged`, async () => {
+      const dir = await store();
+      await v070(dir);
+      await damage(dir);
+      const before = await contents(dir);
+      for (const mode of ["write", "read"] as const)
+        await expect(enterStoreFormat(dir, { appVersion: "0.7.1", mode })).rejects.toMatchObject({
+          reason: "CARRYOVER_REQUIRED",
+        });
+      expect(await contents(dir)).toEqual(before);
+    });
 
   it("never converts an older store during ordinary startup", async () => {
     const dir = await store();
@@ -260,12 +318,21 @@ describe("store format marker (#566)", () => {
     });
   });
 
+  it("refuses to carry forward a store that holds links", async () => {
+    const dir = await store();
+    await mkdir(dir, { recursive: true });
+    await legacy(dir);
+    await symlink(join(dir, "runs", "run_old.jsonl"), join(dir, "linked.jsonl"));
+    await expect(carryStoreForward(dir, { appVersion: "0.7.1" })).rejects.toMatchObject({ reason: "UNREADABLE" });
+    expect(await readStoreFormat(dir)).toBeUndefined();
+    expect(await backups(dir)).toEqual([]);
+  });
+
   it("only checks in read mode", async () => {
     const dir = await store();
-    await mkdir(join(dir, "workspace-identity"), { recursive: true });
-    await legacy(dir);
+    await v070(dir);
+    const before = await contents(dir);
     expect(await enterStoreFormat(dir, { appVersion: "0.7.1", mode: "read" })).toMatchObject({ status: "adopted" });
-    expect(await readdir(dir)).not.toContain(STORE_FORMAT_FILE);
-    expect(await backups(dir)).toEqual([]);
+    expect(await contents(dir)).toEqual(before);
   });
 });
