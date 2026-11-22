@@ -78,16 +78,38 @@ async function oldShapedWorkspace() {
 }
 const added = (comparison) => comparison.added.map((path) => path.replace(/^workspace:/, ""));
 
-it("D1/D2: startup refuses an older store unchanged; after carry-forward, read commands and the read-only daemon add new-epoch state", async () => {
-  const { base, workspace } = await oldShapedWorkspace();
-  const run = (cwd, ...args) =>
-    promisify(execFile)(process.execPath, ["--import", "tsx", cli, "--cwd", cwd, ...args], { env, timeout: 60_000 });
-  // #566: ordinary startup never converts an older store, and refuses it byte for byte unchanged.
+const run = (cwd, ...args) =>
+  promisify(execFile)(process.execPath, ["--import", "tsx", cli, "--cwd", cwd, ...args], { env, timeout: 60_000 });
+const unchanged = (comparison) => [comparison.added, comparison.removed, comparison.changed];
+
+it("D1/D2 refused: the read command and read-only daemon refuse an older store and leave it unchanged (#566)", async () => {
+  const { workspace } = await oldShapedWorkspace();
   const untouched = await snapshotRoots({ workspace });
   const refused = await run(workspace, "runs").catch((error) => error);
   expect(refused.stderr).toContain("CARRYOVER_REQUIRED");
-  const afterRefusal = compareSnapshots(untouched, await snapshotRoots({ workspace }));
-  expect([afterRefusal.added, afterRefusal.removed, afterRefusal.changed]).toEqual([[], [], []]);
+  expect(unchanged(compareSnapshots(untouched, await snapshotRoots({ workspace })))).toEqual([[], [], []]);
+  const daemon = await run(workspace, "serve", "--read-only", "--port", "0").catch((error) => error);
+  expect(daemon.code).not.toBe(0);
+  expect(daemon.stderr).toContain("CARRYOVER_REQUIRED");
+  expect(unchanged(compareSnapshots(untouched, await snapshotRoots({ workspace })))).toEqual([[], [], []]);
+}, 120_000);
+
+it("same epoch: an unmarked store a 0.7 daemon wrote is stamped and read with no other change (#566)", async () => {
+  const { workspace, store } = await oldShapedWorkspace();
+  // What a released 0.7 `serve` leaves on first open, by the same store writers.
+  await workspaceIdentity(store);
+  await new FileExecutionStore(store).putGeneration("gen_1", { workflows: [] });
+  const before = await snapshotRoots({ workspace });
+  expect((await run(workspace, "runs")).stdout).toContain(RUN);
+  const after = compareSnapshots(before, await snapshotRoots({ workspace }));
+  expect(after.removed).toEqual([]);
+  expect(after.changed).toEqual([]);
+  expect(added(after)).toContain(".orca/store-format.json");
+  expect(added(after).filter((path) => path.startsWith(".orca/format-backups"))).toEqual([]);
+}, 120_000);
+
+it("D1/D2 after carry-forward: read commands and the read-only daemon add new-epoch state to the converted store", async () => {
+  const { base, workspace } = await oldShapedWorkspace();
   expect((await run(workspace, "store", "carry-forward")).stdout).toMatch(/^carried .* forward from unmarked/);
 
   const daemonWorkspace = join(base, "daemon", "workspace");
