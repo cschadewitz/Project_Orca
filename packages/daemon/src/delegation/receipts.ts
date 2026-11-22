@@ -13,11 +13,14 @@
  * - `submitting`: an admission was (or is about to be) sent and its answer is not known. The
  *   same key is safe to send again (the remote replays it); anything else first looks it up.
  * - `admitted`: the remote run exists (`remoteRunId`); follow it, never submit.
- * - `cancel-pending`: the parent cancelled while the admission's answer was unknown, and the
- *   no-create lookup has not yet shown whether a run exists. Kept until it does.
- * - `settled`: the remote run ended (`outcome`), or was found never to exist after a cancel.
- *   A later attempt of the step reuses a succeeded run whose artifacts it has not yet brought
- *   back (the parent stopped in between); any other settled receipt starts a new generation.
+ * - `cancel-pending`: the parent cancelled, and it is not yet authoritative what that left on
+ *   the remote. Without `remoteRunId`, the key is to be fenced (`admissions.fence`), which
+ *   either makes any later admission under it impossible or names the run it made; with one,
+ *   that run is to be cancelled and seen ended. Nothing in this state submits work.
+ * - `settled`: the remote run was seen ended (`outcome`), or the key was fenced before any
+ *   admission (`never-admitted`). A succeeded run is the delegation's result for good: a
+ *   later attempt brings its artifacts back again. Any other outcome lets a later attempt of
+ *   the step start a new generation.
  *
  * One JSON file per delegation under `<store>/delegations/`, replaced atomically.
  */
@@ -37,8 +40,6 @@ export const DelegationReceiptSchema = z
     state: z.enum(["submitting", "admitted", "cancel-pending", "settled"]),
     remoteRunId: z.string().min(1).optional(),
     outcome: z.enum(["succeeded", "failed", "cancelled", "never-admitted"]).optional(),
-    /** The parent step attempt that last brought a succeeded run's artifacts back. */
-    deliveredAttempt: z.number().int().positive().optional(),
     updatedAt: z.string(),
   })
   .strict();

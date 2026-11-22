@@ -81,6 +81,7 @@ describe("the operation inventory", () => {
       ...Object.keys(OperatorMutationContracts),
       "runs.admit",
       "admissions.find",
+      "admissions.fence",
       "admissions.get",
       "admissions.reconcile",
       "runs.continue",

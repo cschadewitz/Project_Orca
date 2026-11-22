@@ -28,6 +28,8 @@ export const ArtifactViewSchema = z.object({
   path: z.string().optional(),
   createdAt: z.string(),
   producedByStepRunId: z.string().optional(),
+  /** The body's sha256, hex (protocol 2.4): what a copy of the artifact is checked against. */
+  contentHash: z.string().optional(),
 });
 export type ArtifactView = z.infer<typeof ArtifactViewSchema>;
 

@@ -412,20 +412,30 @@ describe("delegation through a proxy the test controls (#883)", () => {
   /**
    * A TCP proxy in front of the remote, and a transport through it. The proxy can cut every
    * stream, hold the stream that carries a given method (never forwarding it, until `release`
-   * replays it to the remote on a fresh connection), or drop the stream that carries a method.
+   * replays it to the remote on a fresh connection), drop the stream that carries a method,
+   * lose the reply to a method the remote did receive, or rewrite a reply's bytes.
    */
   async function proxied() {
     const live = new Set<Socket>();
-    const rules: { hold?: string | undefined; drop?: string | undefined } = {};
+    const rules: {
+      hold?: string | undefined;
+      drop?: string | undefined;
+      dropReply?: string | undefined;
+      tamper?: { method: string; from: string; to: string } | undefined;
+    } = {};
     let held: Buffer[] | undefined;
     let onHeld: (() => void) | undefined;
     const heldNow = new Promise<void>((resolve) => (onHeld = resolve));
+    let onReplyDropped: (() => void) | undefined;
+    const replyDropped = new Promise<void>((resolve) => (onReplyDropped = resolve));
     const state = {
       down: false,
       streams: 0,
       rules,
       /** Resolves once a stream carrying `rules.hold` was held. */
       held: heldNow,
+      /** Resolves once the reply to `rules.dropReply` was lost. */
+      replyDropped,
       /** Drop every open stream and refuse new ones, as a lost network would. */
       cut() {
         state.down = true;
@@ -447,6 +457,8 @@ describe("delegation through a proxy the test controls (#883)", () => {
       const upstream = connect(remote.port, "127.0.0.1");
       const log: Buffer[] = [];
       let holding = false;
+      let loseReply = false;
+      let tamper: { from: string; to: string } | undefined;
       client.on("data", (chunk: Buffer) => {
         log.push(chunk);
         const text = chunk.toString("utf8");
@@ -456,6 +468,14 @@ describe("delegation through a proxy the test controls (#883)", () => {
           upstream.destroy();
           return;
         }
+        if (rules.dropReply && text.includes(`"method":"${rules.dropReply}"`)) {
+          rules.dropReply = undefined;
+          loseReply = true;
+        }
+        if (rules.tamper && text.includes(`"method":"${rules.tamper.method}"`)) {
+          tamper = rules.tamper;
+          rules.tamper = undefined;
+        }
         if (rules.hold && text.includes(`"method":"${rules.hold}"`)) {
           rules.hold = undefined;
           holding = true;
@@ -464,7 +484,24 @@ describe("delegation through a proxy the test controls (#883)", () => {
         }
         if (!holding) upstream.write(chunk);
       });
-      upstream.on("data", (chunk) => client.write(chunk));
+      upstream.on("data", (chunk: Buffer) => {
+        if (loseReply) {
+          // The remote did the work; the answer never arrives.
+          loseReply = false;
+          client.destroy();
+          upstream.destroy();
+          onReplyDropped?.();
+          return;
+        }
+        if (tamper) {
+          const text = chunk.toString("latin1");
+          if (text.includes(tamper.from)) {
+            chunk = Buffer.from(text.replace(tamper.from, tamper.to), "latin1");
+            tamper = undefined;
+          }
+        }
+        client.write(chunk);
+      });
       upstream.on("close", () => client.destroy());
       upstream.on("error", () => client.destroy());
       client.on("close", () => {
@@ -554,6 +591,10 @@ describe("delegation through a proxy the test controls (#883)", () => {
     const again = join(work, "reattach-again", "report.md");
     await session.prompt("ignored", { timeoutMs: 60_000, turn: turn("run_reattach", again) });
     await expect(readFile(again, "utf8")).resolves.toContain("Remote report for: task run_reattach");
+    // So does a later attempt of the step: the delegation's succeeded run is its result.
+    const retried = join(work, "reattach-retried", "report.md");
+    await session.prompt("ignored", { timeoutMs: 60_000, turn: turn("run_reattach", retried, 2) });
+    await expect(readFile(retried, "utf8")).resolves.toContain("Remote report for: task run_reattach");
     expect(await runsOf("remote-task")).toHaveLength(before + 1);
     expect(receipts.read("run_reattach", "run_reattach_step1")).toMatchObject({
       state: "settled",
@@ -581,7 +622,7 @@ describe("delegation through a proxy the test controls (#883)", () => {
     await proxy.close();
   }, 60_000);
 
-  it("never creates work when cancelled before the admission committed, and cancels a late one", async () => {
+  it("never creates work when cancelled before the admission committed, even when it arrives late", async () => {
     const proxy = await proxied();
     const receipts = new DelegationReceipts(join(work, "receipts-cancel"));
     const gated = agentFor("remote-gated");
@@ -598,37 +639,73 @@ describe("delegation through a proxy the test controls (#883)", () => {
     await proxy.state.held;
     abort.abort();
     await expect(running).rejects.toMatchObject({ code: "CANCELLED" });
-    // Cancelling sent nothing that could admit work: no run, and the receipt keeps the question open.
+    // Cancelling sent nothing that could admit work, and fenced the key: authoritative.
     expect(await runsOf("remote-gated")).toHaveLength(before);
-    expect(receipts.read("run_cancel", "run_cancel_step1")).toMatchObject({ state: "cancel-pending" });
-    await session.close();
-
-    // The held admission arrives late after all, and makes a run nobody follows.
-    await proxy.state.release();
-    const late = await until("the late run", async () => {
-      const runs = await runsOf("remote-gated");
-      return runs.length > before
-        ? runs.find((r) => !["succeeded", "failed", "cancelled"].includes(r.status))
-        : undefined;
-    });
-    // Once its admission has settled there, the next session to the remote finds it by its key
-    // and cancels it. (While it is still settling, the receipt just stays cancel-pending.)
-    const { key } = receipts.read("run_cancel", "run_cancel_step1")!;
-    await until("the late admission to settle", async () => {
-      const found = await remote.call("admissions.find", { idempotencyKey: key }, token);
-      return found.ok && (found.result as { state: string }).state === "resolved" ? true : undefined;
-    });
-    const next = await open(proxy.transport(), receipts, { agent: gated });
-    expect(await finished(remote, late.id)).toMatchObject({ status: "cancelled" });
     expect(receipts.read("run_cancel", "run_cancel_step1")).toMatchObject({
       state: "settled",
-      outcome: "cancelled",
-      remoteRunId: late.id,
+      outcome: "never-admitted",
     });
-    expect(await runsOf("remote-gated")).toHaveLength(before + 1);
-    await next.close();
+    await session.close();
+
+    // The held admission arrives late after all: the fenced key admits nothing.
+    await proxy.state.release();
+    const { key } = receipts.read("run_cancel", "run_cancel_step1")!;
+    const late = await remote.call(
+      "runs.admit",
+      { workflowId: "remote-gated", vars: { prompt: "task run_cancel" }, idempotencyKey: key },
+      token,
+    );
+    expect(late.ok).toBe(false);
+    expect(await runsOf("remote-gated")).toHaveLength(before);
     await proxy.close();
   }, 120_000);
+
+  it("cancels the run an admission made when only its reply was lost", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-lost-reply"));
+    const gated = agentFor("remote-gated");
+    const session = await open(proxy.transport(), receipts, { agent: gated });
+    const before = (await runsOf("remote-gated")).length;
+    // The remote admits the run; the reply never reaches the parent, which then cancels.
+    proxy.state.rules.dropReply = "runs.admit";
+    const abort = new AbortController();
+    const running = session.prompt("ignored", {
+      timeoutMs: 60_000,
+      signal: abort.signal,
+      turn: turn("run_lost_reply", join(work, "lost-reply", "report.md")),
+    });
+    await proxy.state.replyDropped;
+    abort.abort();
+    await expect(running).rejects.toMatchObject({ code: "CANCELLED" });
+    const runs = await runsOf("remote-gated");
+    expect(runs).toHaveLength(before + 1);
+    const made = runs.find((r) => receipts.read("run_lost_reply", "run_lost_reply_step1")?.remoteRunId === r.id);
+    expect(made).toBeDefined();
+    // The fence named the run instead of claiming the key; the run was cancelled and seen ended.
+    expect(await finished(remote, made!.id)).toMatchObject({ status: "cancelled" });
+    expect(receipts.read("run_lost_reply", "run_lost_reply_step1")).toMatchObject({
+      state: "settled",
+      outcome: "cancelled",
+      remoteRunId: made!.id,
+    });
+    await session.close();
+    await proxy.close();
+  }, 120_000);
+
+  it("refuses an artifact copy that does not match the remote's record of it", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-tamper"));
+    const session = await open(proxy.transport(), receipts);
+    // Same length, other bytes: only the digest can tell.
+    proxy.state.rules.tamper = { method: "artifacts.get", from: "Remote report", to: "Remote rep0rt" };
+    const path = join(work, "tamper", "report.md");
+    await expect(
+      session.prompt("ignored", { timeoutMs: 60_000, turn: turn("run_tamper", path) }),
+    ).rejects.toMatchObject({ code: "AGENT_PROTOCOL", details: { mismatch: "digest" } });
+    await expect(readFile(path, "utf8")).rejects.toThrow();
+    await session.close();
+    await proxy.close();
+  }, 60_000);
 
   it("reattaches a retried step to the run its earlier attempt started, after a restart", async () => {
     const proxy = await proxied();

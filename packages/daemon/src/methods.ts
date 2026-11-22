@@ -56,6 +56,7 @@ import {
 } from "@orca/protocol";
 import {
   RunsAdmitParamsSchema,
+  AdmissionsFenceParamsSchema,
   AdmissionsFindParamsSchema,
   AdmissionsGetParamsSchema,
   AdmissionsReconcileParamsSchema,
@@ -965,6 +966,11 @@ export function methodsFor(ctx: MethodContext): MethodTable {
     table["admissions.find"] = {
       params: AdmissionsFindParamsSchema,
       handle: async (params, invocation) => model.find(params.idempotencyKey, await authorities(invocation)),
+    };
+    table["admissions.fence"] = {
+      params: AdmissionsFenceParamsSchema,
+      handle: async (params, invocation) =>
+        model.fence(params.idempotencyKey, params.workflowId, await authorities(invocation)),
     };
     table["admissions.reconcile"] = {
       params: AdmissionsReconcileParamsSchema,

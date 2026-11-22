@@ -237,6 +237,7 @@ that the two match. A method that is missing from the table is refused with
 | `runs.start` | `runs.start` | the workflow; the new run is attributed to the caller | mutation |
 | `runs.admit` | `runs.start` | the workflow and authorized associations; prompt durable receipt | mutation |
 | `admissions.find` | `runs.start` | own direct admission by idempotency key; never claims the key | — |
+| `admissions.fence` | `runs.start` | the workflow; claims an unused key so no later admission under it admits a run | mutation |
 | `admissions.get` | `runs.start` | own operation, original grants and resources; Request also needs `plan.write` | — |
 | `admissions.reconcile` | `runs.start` | own operation, original grants/resources; attachment requires current execution authority | mutation |
 | `runs.resume` | `runs.control` | the run | mutation |

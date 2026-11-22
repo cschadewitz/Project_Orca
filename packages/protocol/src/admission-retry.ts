@@ -28,6 +28,16 @@ export const AdmissionsReconcileParamsSchema = AdmissionsGetParamsSchema;
  */
 export const AdmissionsFindParamsSchema = z.strictObject({ idempotencyKey: RetryKeySchema });
 export const ADMISSIONS_FIND_METHOD = "admissions.find";
+/**
+ * `admissions.fence` (#883): claim a direct admission's idempotency key so no later
+ * `runs.admit` under it admits a run. Answers the admission already under the key, if any;
+ * else a resolved receipt whose result is `{ state: "fenced" }`.
+ */
+export const AdmissionsFenceParamsSchema = z.strictObject({
+  idempotencyKey: RetryKeySchema,
+  workflowId: z.string().min(1),
+});
+export const ADMISSIONS_FENCE_METHOD = "admissions.fence";
 export const RUNS_ADMIT_METHOD = "runs.admit";
 export const ADMISSIONS_GET_METHOD = "admissions.get";
 export const ADMISSIONS_RECONCILE_METHOD = "admissions.reconcile";

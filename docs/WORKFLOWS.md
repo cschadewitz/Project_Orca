@@ -444,26 +444,30 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
   attempt. Before anything is sent, a receipt is written under the store's `delegations/`.
   A retried step, or this daemon after a restart, reads the receipt: it sends the same key
   again while the answer is unknown (the remote replays it), follows a run that was admitted
-  (and brings back the artifacts of one that already succeeded), and starts new remote work
-  only once the earlier run is known to have ended without success.
+  (and brings back the artifacts of one that already succeeded: a succeeded run stays the
+  step's result across its retries), and starts new remote work only once the earlier run is
+  known to have ended without success, or known never to have been admitted.
 - **The work is the remote daemon's.** It appears in that daemon's run list, owned by the
   credential's principal, and its audit log names that principal on the admission.
 - **Progress shows on the step.** Remote step milestones and the remote agents' updates
   appear as the step's agent output.
-- **Remote gates are asked here.** A question the remote run opens is forwarded as a
-  question on this step; the answer is sent back to the remote. Free-text remote questions
+- **Remote gates are asked here.** A question the remote run (or a child run the remote's
+  records tie to it) opens is forwarded as a question on this step; the answer is sent back
+  to the remote. Free-text remote questions
   are left to be answered on the remote daemon.
 - **Cancelling cancels the remote run, and never starts one.** So does the step's turn
   timeout (`turnTimeoutMs`, 30 minutes by default; raise it for long remote work). Cancelled
-  while an admission's answer is unknown, this daemon only looks the key up
-  (`admissions.find`, which never admits) and cancels a run it finds; while the answer stays
-  unknown, every later session to that remote looks again and cancels a run that turns up.
+  while an admission's answer is unknown, this daemon fences the key (`admissions.fence`:
+  from then on no admission under it can start a run, however late it arrives) or, if a run
+  was already admitted, cancels it. A cancel counts as done only once the remote run is seen
+  ended; until then every later session to that remote takes it up again.
 - **A dropped connection reattaches.** The session keeps the remote run id and its place in
   the run's log and keeps trying until the turn's deadline. Once the log shows the run ended,
   the session reads the run's result until it gets it.
 - **Artifacts come back.** When the remote run succeeds, each of the step's `produces`
-  entries is matched to the remote run's artifact of the same `name` (or, without a name,
-  the same `kind`), and its text is written where the step collects it.
+  entries is matched to an artifact of the remote run's own succeeded steps with the same
+  `name` (or, without a name, the same `kind`). Its text is checked against the remote's
+  record (size and sha256) and written where the step collects it.
 - **Failures are typed.** `DELEGATION_REFUSED` (not retried) means the remote or the way to
   it refused for a reason a retry cannot fix: a refused credential, an incompatible
   protocol, a daemon that admits no runs (read-only, or an older ORCA), an unknown workflow,

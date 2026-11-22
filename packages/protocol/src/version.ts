@@ -142,7 +142,14 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * 2.2 daemon ignores the unknown params and answers the unfiltered page, so a 2.3 client
  * checks the daemon's version before it trusts a filter it sent.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 3 };
+/**
+ * 2.4 adds what a daemon delegating steps to another needs (#883): the `admissions.find` and
+ * `admissions.fence` methods (a direct admission's receipt by idempotency key without claiming
+ * it, and a claim that keeps any later admission under the key from admitting a run), and an
+ * optional `contentHash` on `ArtifactView`. New method names in `hello.methods` and an
+ * optional field: a 2.3 client never calls them and strips the field.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 4 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is

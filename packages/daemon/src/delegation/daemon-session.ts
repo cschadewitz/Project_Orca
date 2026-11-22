@@ -14,9 +14,10 @@
  *   admitted run, and submits replacement work only once the earlier run is verified ended
  *   without success, or verified never admitted.
  * - **Cancel never creates work.** Cancelled while an admission's answer is unknown, the
- *   session looks the key up with `admissions.find` (which never claims it) and cancels what it
- *   finds; while the answer stays unknown the receipt stays `cancel-pending`, and each later
- *   session to the remote looks again.
+ *   session fences the key (`admissions.fence`: afterwards no admission under it can admit a
+ *   run) or, if a run was already admitted, cancels it and reads it until it is seen ended.
+ *   Until one of those is authoritative the receipt stays `cancel-pending`, and each later
+ *   session to the remote takes it a step further; nothing in that state submits.
  * - **Progress follows the remote log** by cursor (`runs.events`): remote step milestones and
  *   the remote agents' own updates become this session's updates, and so the parent step's
  *   `agent.update` events.
@@ -28,8 +29,11 @@
  * - **Cancellation reaches the remote run** (`runs.cancel`), whether the parent cancelled the
  *   step or its turn timed out.
  * - **Artifacts come back** once the remote run succeeds: each of the step's deliverables is
- *   matched to a remote artifact by name (else kind) and written to the deliverable's path on
- *   the agent's host, where the step collects it like any agent's output.
+ *   matched to an artifact of the run's own succeeded steps by name (else kind), checked
+ *   against the remote's record of it (size and sha256), and written to the deliverable's path
+ *   on the agent's host, where the step collects it like any agent's output.
+ * - **Gates are answered only on the delegated run** or a descendant the remote's own run
+ *   records tie to it, and every remote call is bounded by the turn's signal and deadline.
  * - **Refusals are typed.** What a retry cannot fix fails `DELEGATION_REFUSED` with
  *   `details.reason`; a lost connection that outlives the turn is `AGENT_TRANSPORT`; a remote
  *   run that ends without success is `DELEGATED_RUN_FAILED`.
@@ -37,7 +41,7 @@
  * `terminated` resolves once every ssh process of the session's tunnel has exited, so the
  * session's slot (#873) comes back only then.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   newId,
   OrcaError,
@@ -73,6 +77,7 @@ import {
   RunsAdmitResultSchema,
   RunsEventsResultSchema,
   RunsGetResultSchema,
+  type ArtifactView,
   type OpenInputView,
 } from "@orca/protocol";
 import { RemoteDaemonClient, RemoteFault, RemoteUnreachable } from "./remote-client.js";
@@ -90,6 +95,7 @@ export const DELEGATION_METHODS = [
   "operator.discover",
   "runs.admit",
   "admissions.find",
+  "admissions.fence",
   "admissions.get",
   "admissions.reconcile",
   "runs.get",
@@ -159,9 +165,13 @@ export interface OpenDaemonSessionOptions {
 interface Turn {
   runId: string;
   cancelled: boolean;
-  /** The cancel sent to the remote run: true once the remote took it (or the run had ended). */
-  cancelling?: Promise<boolean>;
+  /** The cancel sent to the remote run: the run's terminal status once seen, else undefined. */
+  cancelling?: Promise<Terminal["status"] | undefined>;
   id: string;
+  /** The turn's deadline: every call made for it is bounded by it. */
+  deadline: number;
+  /** The delegated run and the descendants it was verified to have. */
+  owned: Set<string>;
   abort: AbortController;
   /** A forwarded question the parent could not take (it parked or failed): ends the turn. */
   failure?: Error;
@@ -189,8 +199,23 @@ function parentOf(path: string): string {
   return at <= 0 ? path.slice(0, 1) : path.slice(0, at);
 }
 
-/** A `cancel-pending` receipt whose key is still unknown after this long is settled as never admitted. */
-const CANCEL_PENDING_LIMIT_MS = 24 * 60 * 60_000;
+/** How long a cancel is read for before it is left to a later session to confirm. */
+const CANCEL_CONFIRM_MS = 30_000;
+/** Event pages read per follow round, so a long log cannot hold the loop past its checks. */
+const MAX_PAGES_PER_ROUND = 50;
+/** How deep a remote input's run may sit below the delegated run. */
+const MAX_CHILD_DEPTH = 8;
+
+/** Why a remote artifact's copy does not match its record, or undefined when it does. */
+function artifactMismatch(listed: ArtifactView, got: ArtifactView, text: string): string | undefined {
+  if (got.id !== listed.id || got.name !== listed.name || got.kind !== listed.kind) return "identity";
+  if (got.producedByStepRunId !== listed.producedByStepRunId) return "producing step";
+  if (!got.contentHash || got.contentHash !== listed.contentHash) return "no matching digest";
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length !== got.size) return "size";
+  if (createHash("sha256").update(bytes).digest("hex") !== got.contentHash) return "digest";
+  return undefined;
+}
 
 /**
  * Open a session on a remote daemon: `hello` (the protocol must match, every delegation
@@ -353,7 +378,7 @@ class DaemonSession implements AgentSession {
     const current = this.current;
     if (!current || current.cancelled) return;
     current.cancelled = true;
-    await (current.cancelling ??= this.cancelRemote(current.runId, "cancelled by the delegating run"));
+    await (current.cancelling ??= this.cancelAndConfirm(current.runId, "cancelled by the delegating run"));
   }
 
   close(): Promise<void> {
@@ -388,28 +413,40 @@ class DaemonSession implements AgentSession {
     let receipt = await this.resolve(turn, task, deadline, signal);
     const runId = receipt.remoteRunId!;
     if (receipt.state === "settled") {
-      // A run that already succeeded for this delegation, whose artifacts never came back.
+      // This delegation's run already succeeded (an earlier attempt, or this daemon before a
+      // restart, did not get to record the step): its artifacts are brought back again.
       this.note(
         `The remote run ${runId} on ${this.options.remoteName} already succeeded; bringing its artifacts back.`,
       );
-      await this.deliver(runId, turn.deliverables, deadline);
-      this.store({ ...receipt, deliveredAttempt: turn.attempt });
+      await this.deliver(runId, turn.deliverables, deadline, signal);
       return { stopReason: "end_turn", durationMs: this.clock.now() - started };
     }
-    const current: Turn = { runId, cancelled: false, id: randomUUID(), abort: new AbortController() };
+    const current: Turn = {
+      runId,
+      cancelled: false,
+      id: randomUUID(),
+      abort: new AbortController(),
+      deadline,
+      owned: new Set([runId]),
+    };
     this.current = current;
     this.note(`Delegated to ${this.options.remoteName} as run ${runId}.`);
     const settle = (outcome: NonNullable<DelegationReceipt["outcome"]>) =>
       (receipt = this.store({ ...receipt, state: "settled", outcome }));
+    /** After a cancel: settled once the run is seen ended, else the intent is kept for later. */
+    const afterCancel = (status: Terminal["status"] | undefined) => {
+      if (receipt.state !== "admitted") return;
+      if (status) settle(status);
+      else receipt = this.store({ ...receipt, state: "cancel-pending" });
+    };
     try {
       const outcome = await this.follow(runId, deadline, signal, current);
       if (outcome === "cancelled") {
-        // Settled only once the remote took the cancel; otherwise a later attempt looks again.
-        if (await current.cancelling) settle("cancelled");
+        afterCancel(await current.cancelling);
         return { stopReason: "cancelled", durationMs: this.clock.now() - started };
       }
       if (outcome === "timeout") {
-        if (await this.cancelRemote(runId, "the delegating step timed out")) settle("cancelled");
+        afterCancel(await (current.cancelling ??= this.cancelAndConfirm(runId, "the delegating step timed out")));
         throw new OrcaError("STEP_TIMEOUT", `the remote run ${runId} did not finish within the turn timeout`, {
           profile: this.options.profile,
           remoteRunId: runId,
@@ -427,12 +464,11 @@ class DaemonSession implements AgentSession {
             ...(outcome.error !== undefined ? { remoteError: outcome.error } : {}),
           },
         );
-      await this.deliver(runId, turn.deliverables, deadline);
-      this.store({ ...receipt, deliveredAttempt: turn.attempt });
+      await this.deliver(runId, turn.deliverables, deadline, signal);
       return { stopReason: "end_turn", durationMs: this.clock.now() - started };
     } catch (error) {
       // A turn that ended on its own cancel (a forwarded question the parent could not take).
-      if (receipt.state === "admitted" && current.cancelling && (await current.cancelling)) settle("cancelled");
+      if (current.cancelling) afterCancel(await current.cancelling);
       throw error;
     } finally {
       // Questions still being asked belong to this turn only.
@@ -450,9 +486,10 @@ class DaemonSession implements AgentSession {
   }
 
   /**
-   * The remote run this turn follows: an `admitted` receipt, or a `settled` one whose
-   * succeeded run's artifacts are still to be brought back. Reads the delegation's receipt and
-   * submits only what it proves safe to submit (see `receipts.ts`).
+   * The remote run this turn follows: an `admitted` receipt, or a `settled` one whose run
+   * succeeded. Reads the delegation's receipt and submits only what it proves safe to submit
+   * (see `receipts.ts`): never while an earlier admission's fate is unknown, and never to
+   * settle a cancellation.
    */
   private async resolve(
     turn: TurnContext,
@@ -461,6 +498,13 @@ class DaemonSession implements AgentSession {
     signal: AbortSignal | undefined,
   ): Promise<DelegationReceipt> {
     const { runId: parentRunId, delegationId } = turn;
+    const wait = async (what: string) => {
+      if (this.clock.now() > deadline)
+        throw new OrcaError("STEP_TIMEOUT", `${what} did not settle within the turn timeout`, {
+          profile: this.options.profile,
+        });
+      await sleep(this.pollMs, signal);
+    };
     for (;;) {
       if (signal?.aborted) throw new OrcaError("CANCELLED", "cancelled before the remote run was admitted");
       const receipt = this.options.receipts.read(parentRunId, delegationId);
@@ -485,7 +529,7 @@ class DaemonSession implements AgentSession {
       switch (receipt.state) {
         case "admitted": {
           // Reattach only to a run that may still go on; one that ended is settled first.
-          const ended = await this.call("runs.get", { runId: receipt.remoteRunId! }, deadline).then(
+          const ended = await this.call("runs.get", { runId: receipt.remoteRunId! }, deadline, signal).then(
             (answer) => RunsGetResultSchema.parse(answer).run.status,
           );
           if (ended !== "succeeded" && ended !== "failed" && ended !== "cancelled") return receipt;
@@ -495,32 +539,14 @@ class DaemonSession implements AgentSession {
         case "submitting":
           // The answer was never learned. The same key replays the admission if it was made.
           return this.submit(receipt, task, deadline, signal);
-        case "cancel-pending": {
-          const found = await this.find(receipt.key, deadline, signal);
-          if (found === "pending") {
-            if (this.clock.now() > deadline)
-              throw new OrcaError("STEP_TIMEOUT", "an earlier admission to the remote daemon did not settle in time", {
-                profile: this.options.profile,
-              });
-            await sleep(this.pollMs, signal);
-            continue;
-          }
-          if (found === "absent") {
-            // Never admitted so far: sending the same key now either admits it once or replays it.
-            return this.submit(this.store({ ...receipt, state: "submitting" }), task, deadline, signal);
-          }
-          await this.cancelRemote(found, "cancelled by the delegating run");
-          this.store({ ...receipt, state: "settled", remoteRunId: found, outcome: "cancelled" });
+        case "cancel-pending":
+          // A cancellation still being settled. Nothing here submits: the key is fenced or its
+          // run is cancelled, and only once that is authoritative may a new generation start.
+          if (!(await this.settleCancel(receipt, deadline, signal))) await wait("an earlier cancellation");
           continue;
-        }
         case "settled": {
-          if (
-            receipt.outcome === "succeeded" &&
-            receipt.remoteRunId &&
-            (receipt.deliveredAttempt === undefined || receipt.deliveredAttempt >= turn.attempt)
-          )
-            return receipt;
-          // The earlier run is verified ended (or never admitted): a new generation may start.
+          if (receipt.outcome === "succeeded" && receipt.remoteRunId) return receipt;
+          // The earlier run is verified ended without success, or verified never admitted.
           const generation = receipt.generation + 1;
           const next = this.store({
             profile: this.options.profile,
@@ -537,31 +563,63 @@ class DaemonSession implements AgentSession {
   }
 
   /**
-   * Whether the remote holds an admission under `key`, without ever making one: its run id,
-   * `absent`, or `pending` (prepared, or the remote could not be asked).
+   * One step towards settling a `cancel-pending` receipt; true once it is `settled`. Without a
+   * run, the key is fenced (`admissions.fence`): then no admission under it can ever make one,
+   * or the run it already made is named. With a run, the run is cancelled and read until it is
+   * seen ended. Anything less leaves the receipt as it is.
    */
-  private async find(key: string, deadline: number, signal?: AbortSignal): Promise<string | "absent" | "pending"> {
+  private async settleCancel(receipt: DelegationReceipt, deadline: number, signal?: AbortSignal): Promise<boolean> {
+    let runId = receipt.remoteRunId;
+    if (runId === undefined) {
+      const fenced = await this.fence(receipt.key, deadline, signal);
+      if (fenced === "pending") return false;
+      if (fenced === "fenced") {
+        this.store({ ...receipt, state: "settled", outcome: "never-admitted" });
+        return true;
+      }
+      runId = fenced.runId;
+      receipt = this.store({ ...receipt, remoteRunId: runId });
+    }
+    const status = await this.cancelAndConfirm(runId, "cancelled by the delegating run");
+    if (!status) return false;
+    this.store({ ...receipt, state: "settled", outcome: status });
+    return true;
+  }
+
+  /**
+   * Claim the key so no admission under it can admit a run: `fenced`, the run an admission
+   * under it already made, or `pending` (an admission still being prepared, or no answer).
+   */
+  private async fence(
+    key: string,
+    deadline: number,
+    signal?: AbortSignal,
+  ): Promise<{ runId: string } | "fenced" | "pending"> {
     let answer: unknown;
     try {
-      answer = await this.client.call("admissions.find", { idempotencyKey: key }, { signal, timeoutMs: 10_000 });
+      answer = await this.client.call(
+        "admissions.fence",
+        { idempotencyKey: key, workflowId: this.options.agent.workflow! },
+        this.bounded(deadline, signal),
+      );
     } catch (error) {
-      if (error instanceof RemoteFault || this.options.transport.failed() || this.clock.now() > deadline)
+      if (error instanceof RemoteFault || this.options.transport.failed())
         throw classify(this.options.profile, this.options.transport, error);
       return "pending";
     }
     const found = AdmissionsFindResultSchema.parse(answer);
-    if (found.state === "absent") return "absent";
-    if (found.state === "in-progress") return "pending";
-    // The retained admission result, without the wire receipt's operation id.
+    if (found.state !== "resolved") return "pending";
+    // The retained result, without the wire receipt's operation id.
     const result = (found.result ?? {}) as { state?: unknown; runId?: unknown };
+    if (result.state === "fenced") return "fenced";
     if ((result.state === "accepted" || result.state === "recoverable-failure") && typeof result.runId === "string")
-      return result.runId;
+      return { runId: result.runId };
     return "pending";
   }
 
   /**
-   * Look again at cancelled admissions to this remote whose fate was unknown: cancel the runs
-   * they made, and settle the ones that never made one. Best effort; never fails the open.
+   * Settle what earlier sessions left cancel-pending for this remote, one step each. Best
+   * effort; never fails the open.
    */
   async sweep(): Promise<void> {
     let pending: DelegationReceipt[];
@@ -572,15 +630,7 @@ class DaemonSession implements AgentSession {
     }
     for (const receipt of pending) {
       try {
-        const found = await this.find(receipt.key, this.clock.now() + 10_000);
-        if (found === "pending") continue;
-        if (found === "absent") {
-          if (this.clock.now() - Date.parse(receipt.updatedAt) > CANCEL_PENDING_LIMIT_MS)
-            this.store({ ...receipt, state: "settled", outcome: "never-admitted" });
-          continue;
-        }
-        if (await this.cancelRemote(found, "cancelled by the delegating run"))
-          this.store({ ...receipt, state: "settled", remoteRunId: found, outcome: "cancelled" });
+        await this.settleCancel(receipt, this.clock.now() + 10_000);
       } catch (error) {
         this.logger.warn("delegation sweep could not settle a cancelled admission", {
           profile: this.options.profile,
@@ -609,23 +659,14 @@ class DaemonSession implements AgentSession {
     for (let attempt = 0; ; attempt++) {
       if (signal?.aborted) return this.abandon(receipt, deadline);
       try {
-        let answer = RunsAdmitResultSchema.parse(await this.client.call("runs.admit", params, { signal }));
+        let answer = RunsAdmitResultSchema.parse(
+          await this.client.call("runs.admit", params, this.bounded(deadline, signal)),
+        );
         // A prepared or recoverable admission settles through its receipt, never a new submit.
         while (answer.state !== "accepted") {
           if (answer.state === "recoverable-failure" && answer.runId) return admitted(answer.runId);
           await sleep(this.pollMs, signal);
           if (signal?.aborted) return this.abandon(receipt, deadline);
-          const method = answer.state === "recoverable-failure" ? "admissions.reconcile" : "admissions.get";
-          const settled = (await this.client.call(method, { operationId: answer.operationId }, { signal })) as {
-            state: string;
-            result?: unknown;
-          };
-          // The retained result carries no operation id; the receipt's is the same operation.
-          if (settled.state === "resolved")
-            answer = RunsAdmitResultSchema.parse({
-              operationId: answer.operationId,
-              ...(settled.result as Record<string, unknown>),
-            });
           if (this.clock.now() > deadline)
             throw new OrcaError(
               "STEP_TIMEOUT",
@@ -634,6 +675,18 @@ class DaemonSession implements AgentSession {
                 profile: this.options.profile,
               },
             );
+          const method = answer.state === "recoverable-failure" ? "admissions.reconcile" : "admissions.get";
+          const settled = (await this.client.call(
+            method,
+            { operationId: answer.operationId },
+            this.bounded(deadline, signal),
+          )) as { state: string; result?: unknown };
+          // The retained result carries no operation id; the receipt's is the same operation.
+          if (settled.state === "resolved")
+            answer = RunsAdmitResultSchema.parse({
+              operationId: answer.operationId,
+              ...(settled.result as Record<string, unknown>),
+            });
         }
         return admitted(answer.runId);
       } catch (error) {
@@ -661,19 +714,13 @@ class DaemonSession implements AgentSession {
 
   /**
    * Cancelled while an admission's answer is unknown. Nothing is sent that could admit work:
-   * the key is looked up (`admissions.find` never claims it), a run it made is cancelled, and
-   * otherwise the receipt stays `cancel-pending` for the next session to this remote.
+   * the receipt becomes `cancel-pending`, the key is fenced (or the run it made is cancelled),
+   * and what cannot be settled now is settled by a later session to this remote.
    */
   private async abandon(receipt: DelegationReceipt, deadline: number): Promise<never> {
     const pending = this.store({ ...receipt, state: "cancel-pending" });
     try {
-      const found = await this.find(pending.key, Math.min(deadline, this.clock.now() + 10_000));
-      if (
-        found !== "absent" &&
-        found !== "pending" &&
-        (await this.cancelRemote(found, "cancelled by the delegating run"))
-      )
-        this.store({ ...pending, state: "settled", remoteRunId: found, outcome: "cancelled" });
+      await this.settleCancel(pending, Math.min(deadline, this.clock.now() + 10_000));
     } catch {
       // The receipt stays cancel-pending; the next session to this remote looks again.
     }
@@ -697,7 +744,7 @@ class DaemonSession implements AgentSession {
     for (;;) {
       if (signal?.aborted || current.cancelled) {
         current.cancelled = true;
-        await (current.cancelling ??= this.cancelRemote(runId, "cancelled by the delegating run"));
+        await (current.cancelling ??= this.cancelAndConfirm(runId, "cancelled by the delegating run"));
         return "cancelled";
       }
       if (this.clock.now() > deadline) return "timeout";
@@ -710,18 +757,22 @@ class DaemonSession implements AgentSession {
         // The parent parked or failed on a forwarded question: the remote run must not go on
         // waiting for an answer nobody will send through this turn.
         current.cancelled = true;
-        await (current.cancelling ??= this.cancelRemote(runId, "the delegating step stopped on a forwarded question"));
+        await (current.cancelling ??= this.cancelAndConfirm(
+          runId,
+          "the delegating step stopped on a forwarded question",
+        ));
         throw current.failure;
       }
       try {
-        // Every page the cursor has, then the open questions; each is idempotent to repeat.
-        while (!terminal) {
+        // The pages the cursor has (a bounded number per round), then the open questions;
+        // each is idempotent to repeat.
+        for (let pages = 0; !terminal && pages < MAX_PAGES_PER_ROUND; pages++) {
           const page = RunsEventsResultSchema.parse(
-            await this.client.call("runs.events", {
-              runId,
-              ...(cursor !== undefined ? { after: cursor } : {}),
-              limit: 200,
-            }),
+            await this.client.call(
+              "runs.events",
+              { runId, ...(cursor !== undefined ? { after: cursor } : {}), limit: 200 },
+              this.bounded(deadline, signal),
+            ),
           );
           for (const event of page.events) {
             this.relay(event);
@@ -731,12 +782,14 @@ class DaemonSession implements AgentSession {
           if (!page.hasMore) break;
         }
         if (terminal) {
-          const result = await this.settled(runId);
+          const result = await this.settled(runId, deadline, signal);
           if (result) return result;
           // The log said it ended, and the run was taken up again since: follow it on.
           terminal = false;
         }
-        const open = InputsListResultSchema.parse(await this.client.call("inputs.list", { runId }));
+        const open = InputsListResultSchema.parse(
+          await this.client.call("inputs.list", { runId }, this.bounded(deadline, signal)),
+        );
         for (const input of open.inputs)
           if (!asked.has(input.id)) {
             asked.add(input.id);
@@ -754,7 +807,7 @@ class DaemonSession implements AgentSession {
         }
         if (error instanceof RemoteFault || this.options.transport.failed())
           throw classify(this.options.profile, this.options.transport, error);
-        if (unreachableSince === undefined) {
+        if (unreachableSince === undefined && !signal?.aborted) {
           unreachableSince = this.clock.now();
           this.note(`Lost the connection to ${this.options.remoteName}; reattaching to run ${runId}.`);
         }
@@ -764,15 +817,14 @@ class DaemonSession implements AgentSession {
   }
 
   /** The run's authoritative result, or undefined while it is not ended. */
-  private async settled(runId: string): Promise<Terminal | undefined> {
-    const state = RunsGetResultSchema.parse(await this.client.call("runs.get", { runId }));
+  private async settled(runId: string, deadline: number, signal?: AbortSignal): Promise<Terminal | undefined> {
+    const state = RunsGetResultSchema.parse(
+      await this.client.call("runs.get", { runId }, this.bounded(deadline, signal)),
+    );
     const status = state.run.status;
     if (status === "succeeded") return { status };
     if (status !== "failed" && status !== "cancelled") return undefined;
-    return {
-      status: status === "cancelled" ? "cancelled" : "failed",
-      ...(state.run.error ? { error: state.run.error } : {}),
-    };
+    return { status, ...(state.run.error ? { error: state.run.error } : {}) };
   }
 
   /** One remote event as this session's update: the remote agents' own, and step milestones. */
@@ -796,8 +848,44 @@ class DaemonSession implements AgentSession {
     }
   }
 
+  /**
+   * Whether `runId` is the delegated run or one of its descendants, by the remote's own run
+   * records (each child names its parent): an input is answered only on a run this turn owns.
+   */
+  private async owns(turn: Turn, runId: string): Promise<boolean> {
+    const chain: string[] = [];
+    let id = runId;
+    for (let depth = 0; depth < MAX_CHILD_DEPTH; depth++) {
+      if (turn.owned.has(id)) {
+        for (const owned of chain) turn.owned.add(owned);
+        return true;
+      }
+      chain.push(id);
+      const state = RunsGetResultSchema.parse(
+        await this.client.call("runs.get", { runId: id }, this.bounded(turn.deadline, turn.abort.signal)),
+      );
+      if (!state.run.parentRunId) return false;
+      id = state.run.parentRunId;
+    }
+    return false;
+  }
+
   /** Ask the parent an open remote input, and answer it on the remote with what the parent chose. */
   private async forward(input: OpenInputView, turn: Turn): Promise<void> {
+    let owned = false;
+    try {
+      owned = await this.owns(turn, input.runId);
+    } catch {
+      // Not provable now; the follow loop has already moved on and will not ask it again.
+    }
+    if (!owned) {
+      this.logger.warn("remote input not on the delegated run", {
+        profile: this.options.profile,
+        runId: turn.runId,
+        inputRunId: input.runId,
+      });
+      return;
+    }
     if (input.options.length === 0 || !this.options.askPermission) {
       this.note(`${this.options.remoteName} asks "${input.question}"; answer it on that daemon.`);
       return;
@@ -832,8 +920,9 @@ class DaemonSession implements AgentSession {
       return;
     }
     if (optionId === undefined || turn.abort.signal.aborted) return;
-    // The remote re-drives its run under the answer and replies once it parks again or ends,
-    // which may be long after this; the follow loop sees the outcome either way.
+    if (!input.options.some((o) => o.id === optionId)) return;
+    // The remote re-drives its run under the answer and replies once it parks again or ends;
+    // the wait is bounded by this turn, and the follow loop sees the outcome either way.
     void this.client
       .call(
         "inputs.answer",
@@ -844,7 +933,7 @@ class DaemonSession implements AgentSession {
           ...(input.live ? { live: input.live.target } : {}),
           resume: true,
         },
-        { timeoutMs: 24 * 60 * 60_000 },
+        this.bounded(turn.deadline, turn.abort.signal, Number.POSITIVE_INFINITY),
       )
       .catch((error: unknown) => {
         if (error instanceof RemoteFault && error.code === "INPUT_ANSWERED") return;
@@ -854,55 +943,116 @@ class DaemonSession implements AgentSession {
       });
   }
 
-  /** Cancel a remote run. True once the remote took it, or the run had already ended. */
-  private async cancelRemote(runId: string, reason: string): Promise<boolean> {
+  /**
+   * Cancel a remote run and read it until it is seen ended: its terminal status, or undefined
+   * when that could not be seen (the cancel is then not taken as done).
+   */
+  private async cancelAndConfirm(runId: string, reason: string): Promise<Terminal["status"] | undefined> {
+    const until = this.clock.now() + CANCEL_CONFIRM_MS;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await this.client.call("runs.cancel", { runId, reason });
-        return true;
+        await this.client.call("runs.cancel", { runId, reason }, { timeoutMs: 10_000 });
+        break;
       } catch (error) {
-        // A run that already ended cannot be cancelled, and that is fine.
-        if (error instanceof RemoteFault) return true;
+        // Refused (a run that already ended, say): what the run's state says decides.
+        if (error instanceof RemoteFault) break;
         await sleep(this.pollMs);
       }
     }
-    this.logger.warn("could not cancel the remote run", { profile: this.options.profile, runId });
-    return false;
+    for (;;) {
+      try {
+        const status = RunsGetResultSchema.parse(await this.client.call("runs.get", { runId }, { timeoutMs: 10_000 }))
+          .run.status;
+        if (status === "succeeded" || status === "failed" || status === "cancelled") return status;
+      } catch {
+        // Read again until the bound.
+      }
+      if (this.clock.now() > until) break;
+      await sleep(this.pollMs);
+    }
+    this.logger.warn("could not confirm the remote run's cancellation", { profile: this.options.profile, runId });
+    return undefined;
   }
 
   // ------------------------------------------------------------------ artifacts
 
-  private async deliver(runId: string, deliverables: readonly TurnDeliverable[], deadline: number): Promise<void> {
+  /**
+   * Bring the succeeded run's artifacts back to the step's deliverables. Only artifacts of the
+   * run's own succeeded steps are taken, and each copy is checked against the remote's record
+   * of it (identity, producing step, size and sha256) before it is written.
+   */
+  private async deliver(
+    runId: string,
+    deliverables: readonly TurnDeliverable[],
+    deadline: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (deliverables.length === 0) return;
-    const listed = ArtifactsListResultSchema.parse(await this.call("artifacts.list", { runId, limit: 500 }, deadline));
+    const run = RunsGetResultSchema.parse(await this.call("runs.get", { runId }, deadline, signal));
+    if (run.run.status !== "succeeded")
+      throw new OrcaError("DELEGATED_RUN_FAILED", `the remote run ${runId} is ${run.run.status}, not succeeded`, {
+        profile: this.options.profile,
+        remoteRunId: runId,
+      });
+    const succeededSteps = new Set(
+      run.steps.filter((s) => s.runId === runId && s.status === "succeeded").map((s) => s.id),
+    );
+    const listed = ArtifactsListResultSchema.parse(
+      await this.call("artifacts.list", { runId, limit: 500 }, deadline, signal),
+    );
     // Newest first: a later attempt's artifact wins over an earlier one of the same name.
-    const remote = [...listed.artifacts].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const remote = listed.artifacts
+      .filter((a) => a.producedByStepRunId !== undefined && succeededSteps.has(a.producedByStepRunId))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     for (const d of deliverables) {
       const match = remote.find((a) => (d.name ? a.name === d.name : a.kind === d.kind));
       if (!match) continue;
-      const got = ArtifactsGetResultSchema.parse(await this.call("artifacts.get", { artifactId: match.id }, deadline));
+      const got = ArtifactsGetResultSchema.parse(
+        await this.call("artifacts.get", { artifactId: match.id }, deadline, signal),
+      );
       if (got.text === undefined) {
         this.note(
           `${this.options.remoteName}: artifact ${match.name} was not brought back (${got.omitted?.reason ?? "no text"}).`,
         );
         continue;
       }
+      const mismatch = artifactMismatch(match, got.artifact, got.text);
+      if (mismatch)
+        throw new OrcaError(
+          "AGENT_PROTOCOL",
+          `the remote daemon's copy of artifact ${match.name} does not match its record (${mismatch})`,
+          { profile: this.options.profile, remoteRunId: runId, artifactId: match.id, mismatch },
+        );
       await this.options.host.fs.mkdirp(parentOf(d.path));
       await this.options.host.fs.writeFile(d.path, got.text);
     }
   }
 
   /** A read that may be repeated: retried across a lost connection until the deadline. */
-  private async call(method: string, params: unknown, deadline: number): Promise<unknown> {
+  private async call(method: string, params: unknown, deadline: number, signal?: AbortSignal): Promise<unknown> {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.client.call(method, params);
+        return await this.client.call(method, params, this.bounded(deadline, signal));
       } catch (error) {
-        if (error instanceof RemoteFault || this.options.transport.failed() || this.clock.now() > deadline)
+        if (
+          error instanceof RemoteFault ||
+          this.options.transport.failed() ||
+          this.clock.now() > deadline ||
+          signal?.aborted
+        )
           throw classify(this.options.profile, this.options.transport, error);
-        await sleep(Math.min(this.pollMs * 2 ** Math.min(attempt, 5), 30_000));
+        await sleep(Math.min(this.pollMs * 2 ** Math.min(attempt, 5), 30_000), signal);
       }
     }
+  }
+
+  /** A call's limits: the turn's signal, and no longer than the turn has left (or `cap`). */
+  private bounded(
+    deadline: number,
+    signal: AbortSignal | undefined,
+    cap = this.options.callTimeoutMs ?? 30_000,
+  ): { timeoutMs: number; signal: AbortSignal | undefined } {
+    return { timeoutMs: Math.max(1_000, Math.min(cap, deadline - this.clock.now())), signal };
   }
 
   // ------------------------------------------------------------------ updates
