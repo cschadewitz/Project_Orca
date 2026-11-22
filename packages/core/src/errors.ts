@@ -34,6 +34,17 @@ export type OrcaErrorCode =
   /** Expected revision/destination/attempt no longer accepts this mutation. */
   | "REVISION_STALE"
   | "CONTINUATION_STALE"
+  /**
+   * A step that may have acted outside ORCA was interrupted, and nobody has reviewed it (#357).
+   * Nothing runs it again until an operator marks it to run again or abandons the run.
+   * `details` has `runId`, `stepRunId` and `nodeId`.
+   */
+  | "EFFECT_REVIEW_REQUIRED"
+  /**
+   * An operator abandoned that step after reviewing it (#357): nothing may run it again, even
+   * while the run's cancellation is still to finish. `details` as for EFFECT_REVIEW_REQUIRED.
+   */
+  | "EFFECT_ABANDONED"
   /** Another interpreter holds the run's single-writer lease; see store/lease-store.ts. */
   | "RUN_LEASED"
   | "CLAIM_NOT_FOUND"

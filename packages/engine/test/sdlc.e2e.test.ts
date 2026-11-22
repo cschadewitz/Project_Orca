@@ -10,6 +10,11 @@ import { harness } from "./helpers.js";
 import { RequestSchema, WorkItemSchema } from "@orca/core";
 
 const dirs: string[] = [];
+/** The `willRetry` of each failed step. */
+const events = (log: { type: string; payload: unknown }[]) =>
+  log
+    .filter((e) => e.type === "step.failed")
+    .map((e) => ({ willRetry: (e.payload as { willRetry: boolean }).willRetry }));
 afterAll(async () => {
   for (const d of dirs) await rm(d, { recursive: true, force: true });
 });
@@ -136,7 +141,7 @@ describe("ai-sdlc workflow (e2e with scripted ACP agent)", () => {
     expect(gate).toBeDefined();
   }, 60_000);
 
-  it("re-prompts when a required artifact is missing, then fails the run when the budget is exhausted", async () => {
+  it("re-prompts when a required artifact is missing, then fails the run without repeating a prompted attempt", async () => {
     const h = await harness({
       kinds: {
         spec: [
@@ -154,10 +159,13 @@ describe("ai-sdlc workflow (e2e with scripted ACP agent)", () => {
     expect(state.run.status).toBe("failed");
     expect(state.run.error?.code).toBe("ARTIFACT_MISSING");
     const buildSteps = state.stepOrder.map((id) => state.steps[id]!).filter((s) => s.nodeId === "build");
-    expect(buildSteps.map((s) => s.attempt)).toEqual([1, 2]); // completion.maxAttempts: 2
+    // completion.maxAttempts is 2, but the first attempt sent the agent prompts, so it may have
+    // changed the workspace: it is not repeated automatically and waits for review (#357).
+    expect(buildSteps.map((s) => [s.attempt, s.dispatched])).toEqual([[1, true]]);
+    expect(events(await h.orchestrator.events(state.run.id))).toContainEqual({ willRetry: false });
     const prompts = await h.prompts();
     const followUps = prompts.filter((p) => p.text.includes("deliverables are missing or invalid"));
-    expect(followUps.length).toBe(4); // 2 follow-ups per attempt (maxFollowUps: 2)
+    expect(followUps.length).toBe(2); // maxFollowUps: 2
   }, 60_000);
 
   it("routes high-risk specs to the human gate and honours a rejection", async () => {
