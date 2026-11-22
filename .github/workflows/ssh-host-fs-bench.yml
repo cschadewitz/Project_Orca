@@ -1,0 +1,103 @@
+# Records SFTP vs per-command ssh file access for SshHost (#886) against a throwaway
+# sshd on the runner's loopback: once as is, once with 20 ms of round-trip latency
+# added to loopback to stand in for a LAN/WAN host. Results land in the job summary
+# and as an artifact; docs/performance/ssh-host-fs.md records a reviewed run.
+name: SSH host file benchmark
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/agents/src/hosts/**
+      - tools/benchmarks/ssh-host-fs/**
+      - .github/workflows/ssh-host-fs-bench.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ssh-host-fs-bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: sftp vs per-command ssh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: npx tsc -b packages/agents
+
+      - name: Start a loopback sshd for this user
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v /usr/sbin/sshd >/dev/null || { sudo apt-get update -q && sudo apt-get install -yq openssh-server; }
+          b="$RUNNER_TEMP/sshd"; mkdir -p "$b" ~/.ssh; chmod 700 ~/.ssh
+          ssh-keygen -q -t ed25519 -N "" -f "$b/hostkey"
+          ssh-keygen -q -t ed25519 -N "" -f "$b/client"
+          cat "$b/client.pub" >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys
+          sftp_server=$(ls /usr/lib/openssh/sftp-server /usr/libexec/openssh/sftp-server 2>/dev/null | head -1)
+          cat > "$b/sshd_config" <<CONF
+          Port 2222
+          ListenAddress 127.0.0.1
+          HostKey $b/hostkey
+          PidFile $b/sshd.pid
+          AuthorizedKeysFile $HOME/.ssh/authorized_keys
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          StrictModes no
+          # The per-command path opens one connection per file, all at once on pickup.
+          MaxStartups 500
+          Subsystem sftp $sftp_server
+          CONF
+          /usr/sbin/sshd -f "$b/sshd_config" -E "$b/sshd.log"
+          for i in $(seq 20); do nc -z 127.0.0.1 2222 && break; sleep 0.5; done
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$b/client" -p 2222 127.0.0.1 true
+          echo "SSH_BENCH_KEY=$b/client" >> "$GITHUB_ENV"
+
+      - name: Benchmark on loopback
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/benchmarks/ssh-host-fs/run.js --host 127.0.0.1 --port 2222 --identity "$SSH_BENCH_KEY" \
+            --ssh-arg -o --ssh-arg StrictHostKeyChecking=no --ssh-arg -o --ssh-arg UserKnownHostsFile=/dev/null \
+            --dir "$RUNNER_TEMP/bench-remote" > loopback.json
+          cat loopback.json
+
+      - name: Benchmark with 20 ms round trips
+        # Needs the netem qdisc on the runner kernel; the loopback numbers stand without it.
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo tc qdisc add dev lo root netem delay 10ms
+          trap 'sudo tc qdisc del dev lo root' EXIT
+          node tools/benchmarks/ssh-host-fs/run.js --host 127.0.0.1 --port 2222 --identity "$SSH_BENCH_KEY" \
+            --ssh-arg -o --ssh-arg StrictHostKeyChecking=no --ssh-arg -o --ssh-arg UserKnownHostsFile=/dev/null \
+            --dir "$RUNNER_TEMP/bench-remote" > rtt20.json
+          cat rtt20.json
+
+      - name: Summarize
+        if: always()
+        shell: bash
+        run: node tools/benchmarks/ssh-host-fs/summarize.js loopback.json rtt20.json >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: ssh-host-fs-bench
+          path: |
+            loopback.json
+            rtt20.json
+          if-no-files-found: ignore

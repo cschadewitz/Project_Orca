@@ -17,4 +17,5 @@ commands (`cat`, `test -e`, `mkdir -p`, `git worktree add`). Other transports im
 + Zero remote install beyond the agent itself; key‑based ssh is the only requirement.
 + Permission requests, fs requests and cancellation behave identically local/remote.
 − Per‑file ssh round trips; an SFTP `HostFileSystem` is a drop‑in optimisation.
+  (Done in 0.7.1, #886: one SFTP session per host, per‑command path kept as the fallback.)
 − Terminal capability is not served yet (agents fall back to their own shells).
