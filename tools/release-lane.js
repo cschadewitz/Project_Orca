@@ -136,11 +136,12 @@ export const GUARD_WORKFLOW = ".github/workflows/release-line-guard.yml";
 
 /**
  * Whether a check run is the release line guard as main runs it: by GitHub Actions, from
- * main's release-line-guard.yml on a pull_request_target event, attached to exactly `headSha`.
+ * main's release-line-guard.yml on a pull_request_target event, attached to exactly `headSha`,
+ * and linked to this pull request (`pr.number`) into this line (`pr.base`).
  * The check run binds the commit: a pull_request_target run itself runs main's revision. A
  * check name alone is not provenance: anything with checks: write could post one.
  */
-export function guardRunProblems(checkRun, workflowRun, headSha) {
+export function guardRunProblems(checkRun, workflowRun, headSha, pr = {}) {
   const problems = [];
   if (checkRun?.conclusion !== "success") problems.push("it did not succeed");
   if (checkRun?.head_sha !== headSha) problems.push(`it ran on ${checkRun?.head_sha}, not ${headSha}`);
@@ -148,6 +149,11 @@ export function guardRunProblems(checkRun, workflowRun, headSha) {
     problems.push(`it was posted by ${checkRun?.app?.slug ?? "an unknown app"}`);
   if (workflowRun?.path !== GUARD_WORKFLOW) problems.push(`it came from ${workflowRun?.path ?? "no workflow"}`);
   if (workflowRun?.event !== "pull_request_target") problems.push(`it ran on ${workflowRun?.event ?? "no"} event`);
+  // For this pull request into this line, at this head: a pass for another pull request that
+  // shares the commit, or for the same commit aimed at another branch, is not this one's.
+  const linked = [...(checkRun?.pull_requests ?? []), ...(workflowRun?.pull_requests ?? [])];
+  if (!linked.some((p) => p?.number === pr.number && p?.base?.ref === pr.base && (p?.head?.sha ?? headSha) === headSha))
+    problems.push(`it is not linked to #${pr.number} into ${pr.base} at ${headSha}`);
   return problems;
 }
 
@@ -205,7 +211,7 @@ function releasePr(eventPath, sha) {
       const workflow = run.check_suite?.id
         ? ghJson(`repos/${repo()}/actions/runs?check_suite_id=${run.check_suite.id}`).workflow_runs?.[0]
         : undefined;
-      const problems = guardRunProblems(run, workflow, pr.head.sha);
+      const problems = guardRunProblems(run, workflow, pr.head.sha, { number: pr.number, base: lane });
       if (!problems.length) trusted = true;
       else seen.push(`check run ${run.id}: ${problems.join(", ")}`);
     }

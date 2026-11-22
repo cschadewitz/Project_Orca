@@ -301,11 +301,13 @@ describe("the lane policy", () => {
 
   describe("whose release line check counts", () => {
     const head = "a".repeat(40);
-    const checkRun = { conclusion: "success", head_sha: head, app: { slug: "github-actions" } };
+    const linked = [{ number: 906, base: { ref: "release/0.7" }, head: { sha: head } }];
+    const pr = { number: 906, base: "release/0.7" };
+    const checkRun = { conclusion: "success", head_sha: head, app: { slug: "github-actions" }, pull_requests: linked };
     const workflowRun = { path: GUARD_WORKFLOW, event: "pull_request_target", head_sha: head };
 
     it("is main's guard workflow, run by Actions on the exact head", () => {
-      expect(guardRunProblems(checkRun, workflowRun, head)).toEqual([]);
+      expect(guardRunProblems(checkRun, workflowRun, head, pr)).toEqual([]);
     });
 
     it.each([
@@ -315,8 +317,16 @@ describe("the lane policy", () => {
       ["another workflow", checkRun, { ...workflowRun, path: ".github/workflows/ci.yml" }, /came from/],
       ["the pull request's own code", checkRun, { ...workflowRun, event: "pull_request" }, /pull_request event/],
       ["no workflow run", checkRun, undefined, /no workflow/],
+      ["another pull request's", { ...checkRun, pull_requests: [{ ...linked[0], number: 907 }] }, workflowRun, /#906/],
+      [
+        "for another line",
+        { ...checkRun, pull_requests: [{ ...linked[0], base: { ref: "release/0.6" } }] },
+        workflowRun,
+        /into release\/0\.7/,
+      ],
+      ["linked to no pull request", { ...checkRun, pull_requests: [] }, workflowRun, /not linked/],
     ])("is not %s", (_, run, workflow, message) => {
-      expect(guardRunProblems(run, workflow, head).join("; ")).toMatch(message);
+      expect(guardRunProblems(run, workflow, head, pr).join("; ")).toMatch(message);
     });
   });
 
@@ -442,6 +452,7 @@ describe("a real release's reviewed-commit check", () => {
           head_sha: commits.line,
           app: { slug: "github-actions" },
           check_suite: { id: 2 },
+          pull_requests: [{ number: 906, base: { ref: "release/0.7" }, head: { sha: commits.line } }],
           ...over,
         },
       ],
