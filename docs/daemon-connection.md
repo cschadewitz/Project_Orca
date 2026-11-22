@@ -333,6 +333,81 @@ its lock. A failed first setup leaves no link and no enabled unit.
 
 The update timer (#878) is not enabled here.
 
+## Watching several daemons (#882)
+
+The app connects to one daemon at a time for everything it shows and writes: the
+**focused** target above. The **Machines** surface (`⌘7`) adds read-only connections
+beside it, so several daemons can be watched at once without the daemons talking to
+each other:
+
+- **What is watched.** Saved SSH profiles a person adds with **Watch a machine…**
+  (stored main-only as `watchedProfiles` in the preferences file, at most 16), and the
+  bundled daemon whenever the app has parked it because focus moved to another daemon.
+  The focused daemon is always listed first.
+- **One connection each.** Every watched machine has its own client, push stream,
+  cursor and credential (a profile lease over its own `ssh -W` streams), managed in
+  `packages/app/src/main/fleet.ts`. Each connection has a generation that every frame
+  and read captures, and each identity seen on it a scope, so a late reply or frame
+  from an old connection or another store is dropped instead of shown under this
+  machine. A reconnect reads `runs.list` and `inputs.list` again rather than replaying
+  frames, so nothing appears twice.
+- **Shown only for a verified store.** Each answer a machine keeps is bound to the
+  workspace id that the connection's `hello` verified. After a reopen it is held back
+  until the new connection verifies that same workspace; a different or missing
+  identity, a refused credential (`auth-failed` or an authentication error on a read)
+  or any change to the profile (edit, host key reset or credential import, all of
+  which raise its revision) drops it and its alerts at once.
+- **Watching changes nothing.** A watched profile is opened with
+  `RemoteProfiles.observe`, never `open`: it uses the credential the profile already
+  has, over host keys already pinned, and never issues, renews, replaces or revokes a
+  credential, pins a key on first use or moves a legacy token. A profile that has never
+  signed in says so and waits; focusing it once signs in. A tunnel shared with the
+  focused connection stops renewing once only watchers hold it. Saving the choice of
+  watched profiles is an app write: it runs under the app writer fence and is refused
+  while setup, an update's preparation or native recovery holds the app.
+- **Read-only.** A watched connection only calls `hello`, `runs.list`, `inputs.list`
+  and `subscribe`. Its rows name the work and do not open it. **Focus** goes through
+  the same path as the connection dialog (authenticated probe, then the all-window
+  draft check), after which the fleet closes its own connection to that machine so it
+  is never streamed twice, and reopens the one it stopped focusing if it is watched.
+- **Freshness.** A machine shows the design's connection states with the same five
+  quiet seconds as the status bar. One that drops out keeps its last answer under
+  "Last heard …"; one that has never answered says "Not read yet", and the summary's
+  counts leave it out, so a missing machine never reads as zero work. A tunnel that
+  will not open is retried with backoff up to once a minute.
+- **Slots.** When a daemon reports `hello.sessionSlots` (#873), its section shows
+  sessions in use against the cap and the queue depth.
+- **Notifications.** Waiting gates, permission asks and failures it saw happen on a
+  watched machine post OS notifications that name the machine ("Build is waiting on
+  build-box"). Alert ids are scoped by the verified workspace id, so moving focus or
+  renaming the profile does not post the same alert twice. While focus changes hands
+  there is a moment when neither the fleet nor the renderer states an alert; the
+  alerts manager remembers the last 512 ids it already presented, so one that comes
+  back is not posted or brought forward again. Each alert also carries the workspace
+  it was verified on, and a click routes only while its machine still reaches that
+  workspace, and for the focused daemon only under a current authority
+  (`ConnectionMachine.authority`). A refusal ends that authority even though the last
+  workspace id is still known: the focused machine's alerts and its Machines section
+  are cleared, reads and renderer reports in flight are dropped, and only a `hello`
+  answered after the refusal grants a new one (a reconnecting socket does not). The
+  grant is a number the connection snapshot carries: the renderer's Attention reads
+  restart when it moves, and its alert report is stamped with the grant those reads
+  ran under, so a report from before a refusal is dropped even after a same-store
+  `hello` grants a new one. Each alert records the grant it was read under (the
+  focused connection's, or the watched machine's, which moves whenever what it
+  retained is dropped), and a click resolves to the alert as it is stated now when it
+  is still open, else as it was posted, which routes nowhere once its grant is gone.
+  A click on an alert from a repointed, refused or unwatched machine just brings the
+  window forward. Clicking one from an unfocused machine opens Machines. The dock badge
+  stays the focused daemon's count, the same number as the title bar.
+- **Changing a watched profile.** A profile is not edited, removed, reset or given a
+  credential while any tunnel of it is open (#875). For a watched profile the fleet
+  lets go of its connection for the length of the change and then reopens it, so the
+  person does not have to stop watching first.
+
+Not here yet: observe-only profiles with read-only credentials wait on #875's
+credential bootstrap.
+
 ## Target identity and drafts
 
 Authenticated hello can include `{ identity: { workspaceId, instanceId } }`.

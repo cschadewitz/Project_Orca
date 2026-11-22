@@ -137,7 +137,7 @@ it("covers every declared glyph in both stacks without a host font", () => {
   }
 });
 
-it("uses DejaVu for nineteen glyphs and only supplements the two known gaps", () => {
+it("uses DejaVu for twenty glyphs and only supplements the two known gaps", () => {
   const sans = create(loaded.find((face) => face.file === "DejaVuSans.woff2").bytes);
   const supplement = create(loaded.find((face) => face.family === "Orca Proof Supplement").bytes);
   const gaps = [...glyphs].filter((cp) => !sans.hasGlyphForCodePoint(cp));

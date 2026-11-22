@@ -64,7 +64,7 @@ the meantime stays where they put it.
 | Scope | Key | Action |
 | --- | --- | --- |
 | Global | `⌘K` | Command palette |
-| Global | `⌘1`–`⌘6` | Attention, Runs, Plan, Workflows, Agents, Config |
+| Global | `⌘1`–`⌘7` | Attention, Runs, Plan, Workflows, Agents, Config, Machines |
 | Global | `⌘\` | Toggle the docked panel |
 | Global | `⌘⇧D` | Toggle density on the focused surface |
 | Global | `⌘⇧L` | Cycle theme: system, light, dark |
@@ -220,7 +220,7 @@ layout and
 none is planned. The six glyphs that rail collapses to are designed and declared — they are
 `semantics.json`'s `surface` map, bundled in the symbol face and listed in
 `10-information-architecture.md` beside the surfaces they name (#261). Each button keeps its
-label as its accessible name and its `⌘1`–`⌘6` address at every width, so the rail loses the
+label as its accessible name and its `⌘1`–`⌘7` address at every width, so the rail loses the
 word on screen and nothing else.
 
 ## How this is enforced

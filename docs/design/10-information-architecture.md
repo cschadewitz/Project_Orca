@@ -58,7 +58,7 @@ The splitter is the shell's, so a surface still to be built inherits a resizable
 inventing one — the dependency graph, the risk matrix and the decision log all want a pane
 boundary and none of them has to draw its own.
 
-## Six surfaces
+## Seven surfaces
 
 | Surface | Glyph | What it answers | Phase |
 | --- | :---: | --- | --- |
@@ -68,6 +68,7 @@ boundary and none of them has to draw its own.
 | **Workflows** | ⑂ | What the workflows are, and changing them | Added with the editor (#181): the list, the viewer (#177) and the editor (#180–#182) |
 | **Agents** | ◉ | Who is doing the work and are they healthy | 1 read, 2 write — both shipped |
 | **Config** | ❋ | How the system is wired | 2 — shipped in v0.5.0 (#175, #266); the configuration studio, guided launch, templates and first-run setup in 0.7.0 |
+| **Machines** | ❐ | What every daemon I run is doing, side by side | Added in 0.8.0 (#882): watched machines, read-only, one focused for writes |
 
 **Workflows is the sixth surface, added with the editor.** The design had five, with the
 workflow viewer living under Config, reached only by link, from the palette, or from a run's
@@ -75,6 +76,19 @@ workflow viewer living under Config, reached only by link, from the palette, or 
 rail. With no workflow named, the surface lists every registered workflow, with its version,
 size and whether a draft is open; **Open** is the viewer and **Edit** the editor. It sits after
 Plan, with the surfaces about work, so Agents and Config moved to `⌘5` and `⌘6`.
+
+**Machines is the seventh, added for several daemons (#882).** Every other surface shows one
+daemon, the **focused** one, and every write in the app goes to it. Machines lists the focused
+daemon beside every machine the person chose to watch (saved SSH profiles) and the bundled
+daemon the app parked when focus moved elsewhere, each as a section with its connection state,
+its waiting gates and permission asks, its active runs and, when the daemon reports them, its
+agent session slots and queue depth (#873). Unfocused machines are read-only: their rows name
+the work and do not open it, and **Focus** goes through the same probe and draft check as the
+connection dialog. A machine that drops out keeps what it last said under "Last heard …", and
+one that has never answered says "Not read yet", so a missing machine never reads as idle.
+Notifications from a machine say which one ("Build is waiting on build-box"), and clicking one
+from an unfocused machine opens Machines rather than a route on the focused daemon. It is last
+in the rail, `⌘7`, so no existing shortcut moved.
 
 Phase 2 is the configuration and monitoring wave, and as of v0.5.0 every surface the design
 then had — the five before Workflows — has content. Plan is the schedule table, the scheduler's explanations, a requests sidebar and the

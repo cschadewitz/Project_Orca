@@ -18,6 +18,7 @@
  */
 import type {
   DaemonTargetSnapshot,
+  FleetSnapshot,
   ProfileRemoval,
   ProfileResult,
   RemoteProfileView,
@@ -235,6 +236,17 @@ const bridge: OrcaBridge = {
       setUpServer: (id, confirmation) =>
         ipcRenderer.invoke("orca:profiles.setUpServer", id, confirmation) as Promise<ProfileResult<ServerSetupView>>,
     },
+    fleet: {
+      read: () => ipcRenderer.sendSync("orca:fleet.read") as FleetSnapshot,
+      subscribe: (listener) => {
+        const forward = (_event: unknown, snapshot: FleetSnapshot) => listener(snapshot);
+        ipcRenderer.on("orca:fleet", forward);
+        return () => {
+          ipcRenderer.off("orca:fleet", forward);
+        };
+      },
+      watch: (id, watched) => ipcRenderer.invoke("orca:fleet.watch", id, watched) as Promise<ProfileResult<null>>,
+    },
   },
   serverUpdate: {
     read: () => ipcRenderer.invoke("orca:server.read") as Promise<ServerUpdatePreview | undefined>,
@@ -352,7 +364,8 @@ const bridge: OrcaBridge = {
   alerts: {
     // `send`, not `invoke`: the main process has no verdict to give back about what is
     // waiting, and a promise nobody awaits is a promise nobody notices rejecting.
-    update: (update: AlertsUpdate) => ipcRenderer.send("orca:alerts.update", update, targetEpoch),
+    update: (update: AlertsUpdate, authority: number | undefined) =>
+      ipcRenderer.send("orca:alerts.update", update, targetEpoch, authority),
     // A third push channel, one `ipcRenderer` listener per renderer listener as above.
     subscribe: (listener: (activation: AlertActivation) => void) => {
       const forward = (_event: unknown, activation: AlertActivation): void => listener(activation);

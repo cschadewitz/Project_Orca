@@ -20,7 +20,7 @@ be captured on Tyler, visually reviewed, and deliberately committed before the
 new comparison can pass. No screenshot tolerance is increased.
 
 DejaVu Sans/Mono 2.37 come from Debian `fonts-dejavu-core` 2.37-8. Their regular
-and bold faces provide text, box drawing and nineteen of the twenty-one declared
+and bold faces provide text, box drawing and twenty of the twenty-two declared
 glyphs. The two remaining glyphs, U+23F8 and U+2442, come from the independently
 pinned Noto Sans Symbols2 2.003 file in Debian `fonts-noto-core` 20201225-2. This
 supplement contains only those two glyphs. It is not the product's subset, and no

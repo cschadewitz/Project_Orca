@@ -407,6 +407,23 @@ describe("pending work does not outlive a profile change", () => {
     expect(profiles.list()[0]?.hasCredential).toBe(false);
   });
 
+  it("raises the revision a watcher keys on for every change, a credential import included (#882)", () => {
+    const { profiles } = store();
+    profiles.save({ name: "Lab", destination: "lab" });
+    const seen = [profiles.revisionOf("lab")];
+    for (const change of [
+      () => profiles.importCredential("lab", TOKEN),
+      () => profiles.save({ id: "lab", name: "Lab", destination: "lab" }),
+      () => profiles.forgetHostKey("lab"),
+      () => profiles.importCredential("lab", TOKEN),
+      () => profiles.useAutomaticSignIn("lab"),
+    ]) {
+      change();
+      seen.push(profiles.revisionOf("lab"));
+    }
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeGreaterThan(seen[i - 1]!);
+  });
+
   it("refuses a pin reset while a connect is in flight or open, and allows it after a failure", async () => {
     let finish!: (url: string) => void;
     const { profiles, tunnels } = store(() => new Promise<string>((resolve) => (finish = resolve)));
@@ -867,6 +884,23 @@ describe("saved profile preference", () => {
     expect(file.read().daemonProfile).toBe("lab");
     file.saveDaemonUrl(null);
     expect(file.read().daemonProfile).toBeUndefined();
+  });
+});
+
+describe("watched profiles preference (#882)", () => {
+  it("is main-only, survives a renderer patch and a focus change, and refuses junk", () => {
+    const file = new PreferencesFile(join(mkdtempSync(join(tmpdir(), "orca-prefs-")), "preferences.json"));
+    file.saveWatchedProfiles(["lab", "build-box", "lab"]);
+    expect(file.read().watchedProfiles).toEqual(["lab", "build-box"]);
+    // A renderer patch cannot name it, and writing anything else keeps it.
+    file.write({ theme: "dark", watchedProfiles: ["evil"] });
+    expect(file.read().watchedProfiles).toEqual(["lab", "build-box"]);
+    // Focusing a profile is a separate choice from watching one.
+    file.saveDaemonProfile("lab");
+    expect(file.read().watchedProfiles).toEqual(["lab", "build-box"]);
+    expect(() => file.saveWatchedProfiles(["../etc"])).toThrow();
+    file.saveWatchedProfiles([]);
+    expect(file.read()).not.toHaveProperty("watchedProfiles");
   });
 });
 
@@ -1799,5 +1833,85 @@ describe("setting a machine up as a managed server (#881)", () => {
       "release version",
     );
     expect(server.commands).toEqual([]);
+  });
+});
+
+describe("watching only (#882)", () => {
+  const snapshot = (dir: string) =>
+    existsSync(join(dir, "credentials"))
+      ? readdirSync(join(dir, "credentials"), { recursive: true })
+          .map(String)
+          .sort()
+          .map((name) => {
+            const path = join(dir, "credentials", name);
+            try {
+              return `${name}:${readFileSync(path, "utf8")}`;
+            } catch {
+              return `${name}/`;
+            }
+          })
+      : [];
+
+  it("never pins a key, signs in or writes a record for a profile it cannot already use", async () => {
+    const writes: string[] = [];
+    const { dir, profiles, server } = store(undefined, undefined, { beforeRecordWrite: (id) => writes.push(id) });
+    profiles.save({ name: "Lab", destination: "lab" });
+    // No pinned key: refused, and no key is trusted on first use.
+    await expect(profiles.observe("lab")).rejects.toThrow();
+    expect(existsSync(join(dir, "known_hosts", "lab"))).toBe(false);
+    // Pinned, but never signed in: refused rather than issued.
+    mkdirSync(join(dir, "known_hosts"), { recursive: true });
+    writeFileSync(join(dir, "known_hosts", "lab"), "orca-lab ssh-ed25519 AAAA\n");
+    await expect(profiles.observe("lab")).rejects.toThrow("Focus this machine once to sign in");
+    expect(server.commands).toEqual([]);
+    expect(writes).toEqual([]);
+    expect(snapshot(dir)).toEqual([]);
+  });
+
+  it("uses the credential it has and never renews it, even past due", async () => {
+    let now = Date.now();
+    const writes: string[] = [];
+    const { dir, profiles, server } = store(undefined, undefined, {
+      credentialPolicy: { ttlMs: 10_000, renewBeforeMs: 4_000, checkEveryMs: 20 },
+      now: () => now,
+      beforeRecordWrite: (id) => writes.push(id),
+    });
+    profiles.save({ name: "Lab", destination: "lab" });
+    // Signed in once by focusing it.
+    const focused = await profiles.open("lab");
+    const token = focused.auth.read();
+    await focused.release();
+    const commands = server.commands.length;
+    const before = snapshot(dir);
+    const issued = writes.length;
+    const revision = profiles.revisionOf("lab");
+
+    const watched = await profiles.observe("lab");
+    expect(watched.auth.read()).toBe(token);
+    // Due for renewal while only watched: nothing is asked of the server or written.
+    now += 7_000;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(server.commands).toHaveLength(commands);
+    expect(writes).toHaveLength(issued);
+    expect(snapshot(dir)).toEqual(before);
+    expect(profiles.revisionOf("lab")).toBe(revision);
+    await watched.release();
+  });
+
+  it("stops renewing a shared tunnel once only a watcher holds it", async () => {
+    let now = Date.now();
+    const { profiles, server } = store(undefined, undefined, {
+      credentialPolicy: { ttlMs: 10_000, renewBeforeMs: 4_000, checkEveryMs: 20 },
+      now: () => now,
+    });
+    profiles.save({ name: "Lab", destination: "lab" });
+    const focused = await profiles.open("lab");
+    const watched = await profiles.observe("lab");
+    await focused.release();
+    const commands = server.commands.length;
+    now += 7_000;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(server.commands).toHaveLength(commands);
+    await watched.release();
   });
 });

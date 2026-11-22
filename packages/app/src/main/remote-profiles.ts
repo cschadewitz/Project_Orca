@@ -145,8 +145,10 @@ interface SharedTunnel {
   tunnel: SshTunnel;
   url: Promise<string>;
   users: number;
-  /** Checks the credential for renewal while the tunnel is open. */
-  renewal?: ReturnType<typeof setInterval>;
+  /** Leases that may sign in and renew (`open`), as opposed to only observe (`observe`). */
+  signers?: number;
+  /** Checks the credential for renewal while a signing lease holds the tunnel open. */
+  renewal?: ReturnType<typeof setInterval> | undefined;
 }
 
 /**
@@ -373,6 +375,9 @@ export class RemoteProfiles {
       for (const slot of created) this.vault.remove(slot);
       throw error;
     }
+    // The credential a connection signs in with (`activeSlot`).
+    if ((before?.current?.slot ?? before?.imported?.slot) !== (next?.current?.slot ?? next?.imported?.slot))
+      this.credentialChanges.set(id, (this.credentialChanges.get(id) ?? 0) + 1);
     const kept = new Set([next?.current?.slot, next?.next?.slot, next?.imported?.slot]);
     for (const slot of [before?.current?.slot, before?.next?.slot, before?.imported?.slot])
       if (slot && !kept.has(slot)) this.vault.remove(slot);
@@ -469,6 +474,21 @@ export class RemoteProfiles {
   }
   private bump(id: string): void {
     this.revisions.set(id, this.revision(id) + 1);
+  }
+  /**
+   * How often the credential a profile signs in with has changed: imported, reset to
+   * automatic sign-in, issued or renewed. A change does not end open leases, so it has its
+   * own count rather than a revision bump.
+   */
+  private readonly credentialChanges = new Map<string, number>();
+
+  /**
+   * Rises whenever the profile, its pinned key or the credential it signs in with changes, so
+   * a watcher can drop what it learned under the old one (#882). Both counts only rise, so
+   * their sum only rises.
+   */
+  revisionOf(id: string): number {
+    return this.revision(id) + (this.credentialChanges.get(id) ?? 0);
   }
 
   private read(): ConnectionProfile[] {
@@ -931,7 +951,22 @@ export class RemoteProfiles {
   }
 
   /** Open (or share) the profile's tunnel and hand out its credential source. */
-  async open(id: string): Promise<ProfileLease> {
+  open(id: string): Promise<ProfileLease> {
+    return this.lease(id, "sign-in");
+  }
+
+  /**
+   * A lease for watching only (#882): the credential the profile already has, over host keys
+   * already pinned. It never issues, renews, replaces or revokes a credential, never pins a
+   * key on first use and never moves a legacy token, so watching a machine changes nothing
+   * on disk or on the server. A profile with no credential yet is refused: focusing it once
+   * signs in.
+   */
+  observe(id: string): Promise<ProfileLease> {
+    return this.lease(id, "observe");
+  }
+
+  private async lease(id: string, mode: "sign-in" | "observe"): Promise<ProfileLease> {
     if (this.closed) throw new ConnectionRefusal("The app is closing.");
     const profile = this.get(id);
     if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
@@ -939,7 +974,7 @@ export class RemoteProfiles {
     if (this.serverSetups.has(id)) throw new ConnectionRefusal("That profile's server is being set up.");
     let shared = this.tunnels.get(id);
     if (!shared || shared.tunnel.state.phase === "failed" || shared.tunnel.state.phase === "closed") {
-      const tunnel = this.newTunnel(profile);
+      const tunnel = this.newTunnel(profile, mode === "observe");
       shared = { tunnel, url: tunnel.open(), users: 0 };
       this.tunnels.set(id, shared);
     }
@@ -950,7 +985,9 @@ export class RemoteProfiles {
     try {
       url = await current.url;
       // Sign in: issue, renew or replace the credential as needed, before anyone uses it.
-      if (this.revision(id) === revision) await this.ensureCredential(id, current, url);
+      if (mode === "sign-in" && this.revision(id) === revision) await this.ensureCredential(id, current, url);
+      if (mode === "observe" && !this.activeSlot(this.records.read(id)))
+        throw new ConnectionRefusal("Not signed in yet. Focus this machine once to sign in; watching never does.");
     } catch (error) {
       await this.releaseTunnel(id, current);
       throw error;
@@ -960,7 +997,10 @@ export class RemoteProfiles {
       await this.releaseTunnel(id, current);
       throw new ConnectionRefusal("The profile changed while connecting. Connect again.");
     }
-    this.watchRenewal(id, current, url);
+    if (mode === "sign-in") {
+      current.signers = (current.signers ?? 0) + 1;
+      this.watchRenewal(id, current, url);
+    }
     let released = false;
     let cached: string | undefined;
     let cachedKeys: string | undefined;
@@ -988,7 +1028,7 @@ export class RemoteProfiles {
           if (cachedGeneration !== this.generation(id)) {
             // Whatever the record names as the profile's credential now, from its own slot,
             // with the keys it is bound to.
-            const record = this.record(id);
+            const record = mode === "observe" ? this.records.read(id) : this.record(id);
             const slot = this.activeSlot(record);
             cached = slot ? this.vault.read(slot) : undefined;
             cachedKeys = record?.current ? record.current.target.hostKeys : record?.imported?.hostKeys;
@@ -1017,6 +1057,14 @@ export class RemoteProfiles {
         if (released) return;
         released = true;
         transport.close();
+        // Renewal belongs to signing leases: a tunnel only observed renews nothing.
+        if (mode === "sign-in") {
+          current.signers = (current.signers ?? 1) - 1;
+          if (current.signers === 0 && current.renewal) {
+            clearInterval(current.renewal);
+            current.renewal = undefined;
+          }
+        }
         await this.releaseTunnel(id, current);
       },
     };

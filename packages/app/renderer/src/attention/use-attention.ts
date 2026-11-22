@@ -32,7 +32,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { OpenInputView, ProtocolError, RunSummaryView, RunChangedParams } from "@orca/protocol";
-import { useSubscriptionGeneration } from "../chrome/use-connection.js";
+import { useAuthority, useSubscriptionGeneration } from "../chrome/use-connection.js";
 import { useNotifications } from "../notifications-context.js";
 import { applyRunChanged, mergeRun, orderRuns } from "../runs/run-rows.js";
 import { useRevisions, type RevisionsFeed } from "./use-revisions.js";
@@ -57,6 +57,11 @@ export type AttentionState =
       running: readonly RunSummaryView[];
       /** When the daemon answered the read the page was drawn from. */
       asOf: string;
+      /**
+       * The grant every read behind this state ran under (#882). The alert report carries
+       * it, and the main process drops a report from a grant that is no longer current.
+       */
+      authority?: number | undefined;
     };
 
 export interface AttentionFeed {
@@ -77,6 +82,7 @@ export interface AttentionFeed {
 export function useAttention(): AttentionFeed {
   const stream = useNotifications();
   const generation = useSubscriptionGeneration();
+  const authority = useAuthority();
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<AttentionState>({ phase: "loading" });
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
@@ -230,6 +236,7 @@ export function useAttention(): AttentionFeed {
         failures: failed.ok ? orderRuns(failed.result.runs) : [],
         running: running.ok ? orderRuns(running.result.runs) : [],
         asOf: inputResult.result.asOf,
+        authority,
       };
       publish();
     });
@@ -237,14 +244,17 @@ export function useAttention(): AttentionFeed {
       live = false;
       off.forEach((remove) => remove());
     };
-  }, [stream, answered, attempt, generation, observeRevisions, revisions.scope]);
+  }, [stream, answered, attempt, generation, authority, observeRevisions, revisions.scope]);
 
   /* The main process is told what is open, and decides what to post from it (#162). Here
      rather than in the surface because this is the one place that holds both halves, and
      because a component that re-rendered for its own reasons would re-send this. */
   useEffect(() => {
     if (state.phase !== "ready") return;
-    window.orca.alerts.update({ waiting: state.waiting, items: alertItems(state.waits, state.failures) });
+    window.orca.alerts.update(
+      { waiting: state.waiting, items: alertItems(state.waits, state.failures) },
+      state.authority,
+    );
   }, [state]);
 
   return { state, reload, answered, revisions };

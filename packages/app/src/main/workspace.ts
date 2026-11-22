@@ -43,6 +43,13 @@ import {
   type FirstRunOwnership,
 } from "./first-run/ownership.js";
 
+/** A bundled daemon left running while another daemon is focused. Nonsecret: a token file path, not a token. */
+export interface ParkedBundled {
+  url: string;
+  tokenFile?: string;
+  workspace: string;
+}
+
 /** Where a workspace to serve comes from, and whether it is read-only. */
 export interface WorkspaceTarget {
   /** The directory `orca serve --cwd` is given; it reads `<path>/.orca`. */
@@ -129,6 +136,8 @@ export interface WorkspaceDeps {
   /** Open a profile's tunnel and credential. Absent: profiles are refused. */
   openProfile?: (id: string) => Promise<ProfileLease>;
   onTarget?: (target: DaemonTargetSnapshot) => void;
+  /** The parked bundled daemon changed (#882): started being, or stopped being, parked. */
+  onParked?: (parked: ParkedBundled | undefined) => void;
   defaultUrl: string;
   /** Explicit environment workspace only. No home-directory bootstrap. */
   defaultPath: () => string | undefined;
@@ -186,7 +195,16 @@ export class Workspace {
   /** The profile tunnel the current client goes through, if any. Released when it stops being current. */
   private lease: ProfileLease | undefined;
   /** Keep a live bundled daemon running when the UI leaves it; switching is not cancellation. */
-  private parkedDefault: BundledDaemon | undefined;
+  private parked: BundledDaemon | undefined;
+  private get parkedDefault(): BundledDaemon | undefined {
+    return this.parked;
+  }
+  /** Every change is told to `onParked`, so the Machines surface can watch the parked daemon (#882). */
+  private set parkedDefault(next: BundledDaemon | undefined) {
+    if (next === this.parked) return;
+    this.parked = next;
+    this.deps.onParked?.(this.parkedBundled);
+  }
   private candidates = new Set<BundledDaemon>();
   private connectionPreparations = new Set<symbol>();
   private macUpdateHold: symbol | undefined;
@@ -1242,6 +1260,20 @@ export class Workspace {
       workspace: this.target.path,
       bundled: false,
     });
+  }
+
+  /**
+   * The bundled daemon the app parked when focus moved to another daemon, for the Machines
+   * surface to watch read-only (#882). Never the focused one: the workspace streams that.
+   */
+  get parkedBundled(): ParkedBundled | undefined {
+    const parked = this.parked;
+    if (!parked || parked.exited === true || this.closed) return undefined;
+    return {
+      url: parked.url,
+      ...(parked.tokenFile ? { tokenFile: parked.tokenFile } : {}),
+      workspace: this.deps.defaultPath() ?? "",
+    };
   }
 
   /** The client every bridge handler reads, at call time and after `ready()`. */
