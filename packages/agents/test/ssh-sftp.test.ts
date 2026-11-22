@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostSpecSchema } from "@orca/core";
 import { SshHost, type SshHostOptions } from "@orca/agents";
 
@@ -24,10 +24,20 @@ afterEach(async () => {
 });
 
 /** A host whose SFTP channel is the fixture; `env(n)` sets the fixture's knobs for the n-th session. */
-function host(env: (session: number) => Record<string, string> = () => ({}), options: SshHostOptions = {}) {
+function host(
+  env: (session: number) => Record<string, string> = () => ({}),
+  options: SshHostOptions = {},
+  spec: Record<string, unknown> = {},
+) {
   let session = 0;
   const h = new SshHost(
-    HostSpecSchema.parse({ id: "remote", type: "ssh", host: "invalid", sshBinary: "orca-no-such-ssh-binary" }) as never,
+    HostSpecSchema.parse({
+      id: "remote",
+      type: "ssh",
+      host: "invalid",
+      sshBinary: "orca-no-such-ssh-binary",
+      ...spec,
+    }) as never,
     {
       openSftpChannel: () =>
         spawn(process.execPath, ["--import", "tsx", server], {
@@ -228,4 +238,60 @@ it("stops writing on the first failed chunk and closes only after every write ha
   expect(lines).not.toContain("write-after-close");
   expect(lines.at(-1)).toBe("close"); // the close came after the last write
   expect(await sessions()).toBe(1); // a disk-full status is final, not retried
+});
+
+describe("opening a session", () => {
+  it.each([
+    ["ssh cannot authenticate", { FAKE_SFTP_EXIT_EARLY: "Permission denied (publickey)." }, "Permission denied"],
+    ["the server speaks an older version", { FAKE_SFTP_VERSION: "2" }, "version 2; 3 is required"],
+    ["the VERSION packet is truncated", { FAKE_SFTP_VERSION: "short" }, "malformed sftp packet"],
+    ["the handshake never completes", { FAKE_SFTP_SILENT_INIT: "1" }, "handshake timed out after 300 ms"],
+  ])("fails typed, without falling back, when %s", async (_, env, reason) => {
+    await writeFile(p("f"), "content");
+    const h = host(() => env, { requestTimeoutMs: 200 }, { connectTimeoutMs: 100 });
+    const exec = vi.spyOn(h, "exec");
+    const started = Date.now();
+    await expect(h.fs.readFile(p("f"))).rejects.toMatchObject({
+      code: "AGENT_TRANSPORT",
+      message: expect.stringContaining(reason),
+      details: { hostId: "remote", path: p("f") },
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(await h.fs.exists(p("f"))).toBe(false);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("fails typed when ssh itself cannot be started", async () => {
+    const h = new SshHost(
+      HostSpecSchema.parse({
+        id: "remote",
+        type: "ssh",
+        host: "invalid",
+        sshBinary: "orca-no-such-ssh-binary",
+      }) as never,
+    );
+    hosts.push(h);
+    const exec = vi.spyOn(h, "exec");
+    await expect(h.fs.readFile("/w/a")).rejects.toMatchObject({
+      code: "AGENT_TRANSPORT",
+      message: expect.stringContaining("cannot start ssh for host 'remote'"),
+    });
+    expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+it("cancels calls in flight on an explicit close instead of reconnecting them", async () => {
+  await writeFile(p("f"), "content");
+  const h = host(() => ({ FAKE_SFTP_HANG_AFTER: "0" }), { requestTimeoutMs: 30_000 });
+  const pending = h.fs.readFile(p("f"));
+  await vi.waitFor(async () => expect(await sessions()).toBe(1));
+  await new Promise((r) => setTimeout(r, 200)); // let the handshake finish and the reads go out
+  const started = Date.now();
+  h.close();
+  await expect(pending).rejects.toMatchObject({
+    code: "AGENT_TRANSPORT",
+    message: expect.stringContaining("sftp session closed"),
+  });
+  expect(Date.now() - started).toBeLessThan(2_000);
+  expect(await sessions()).toBe(1);
 });

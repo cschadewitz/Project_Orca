@@ -94,6 +94,28 @@ export class SftpConnectionError extends Error {
   }
 }
 
+/** The owner closed the session on purpose: calls on it are cancelled, never retried. */
+export class SftpClosedError extends SftpConnectionError {
+  constructor(message = "sftp session closed") {
+    super(message);
+    this.name = "SftpClosedError";
+  }
+}
+
+/**
+ * The remote positively refused the SFTP subsystem (OpenSSH's "subsystem
+ * request failed"): the one failure that sends calls to the per-command path.
+ */
+export class SftpUnavailableError extends SftpConnectionError {
+  constructor(message: string) {
+    super(message);
+    this.name = "SftpUnavailableError";
+  }
+}
+
+/** The SFTP version this client speaks; servers answer INIT with theirs, and OpenSSH's is 3. */
+export const SFTP_VERSION = 3;
+
 type Reply =
   | { type: typeof SSH_FXP_STATUS; status: number; message: string }
   | { type: typeof SSH_FXP_HANDLE; handle: Buffer }
@@ -213,7 +235,7 @@ export class SftpClient {
   private buf: Buffer = Buffer.alloc(0);
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
-  private version: Pending | undefined;
+  private version: { resolve(v: number): void; reject(e: Error): void } | undefined;
   private failure: SftpConnectionError | undefined;
   /** Settles once the session can no longer be used; never rejects. */
   readonly closed: Promise<SftpConnectionError>;
@@ -243,11 +265,8 @@ export class SftpClient {
   init(): Promise<number> {
     return new Promise<number>((resolve, reject) => {
       if (this.failure) return reject(this.failure);
-      this.version = {
-        resolve: (r) => resolve((r as unknown as { version: number }).version),
-        reject,
-      };
-      this.send(new Writer().byte(SSH_FXP_INIT).u32(3).packet());
+      this.version = { resolve, reject };
+      this.send(new Writer().byte(SSH_FXP_INIT).u32(SFTP_VERSION).packet());
     });
   }
 
@@ -367,9 +386,15 @@ export class SftpClient {
     const r = new Reader(packet);
     const type = r.byte();
     if (type === SSH_FXP_VERSION) {
+      // Validate before settling: a throw here fails the session, and `fail`
+      // can only reject the handshake waiter while it is still registered.
+      if (!this.version) throw new SftpConnectionError("unexpected sftp VERSION packet");
+      const version = r.u32();
+      if (version < SFTP_VERSION)
+        throw new SftpConnectionError(`sftp server speaks version ${version}; ${SFTP_VERSION} is required`);
       const v = this.version;
       this.version = undefined;
-      v?.resolve({ version: r.u32() } as never);
+      v.resolve(version);
       return;
     }
     const id = r.u32();

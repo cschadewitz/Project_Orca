@@ -7,10 +7,12 @@
  * one persistent SFTP session per host (`ssh -s <host> sftp`, see sftp.ts):
  * requests are pipelined on that one connection instead of paying an ssh
  * process per call. A session that drops is re-established once before the
- * call fails. If the SFTP subsystem cannot be started at all (no
- * `sftp-server` on the remote, a forced command), calls fall back to
+ * call fails. If the remote refuses the SFTP subsystem (ssh reports
+ * "subsystem request failed": no `sftp-server` configured), calls fall back to
  * short-lived `ssh` commands (`cat`, `test -e`, `mkdir -p`) and SFTP is tried
- * again after `SFTP_RETRY_MS`.
+ * again after `SFTP_RETRY_MS`. Any other failure to open the session (ssh
+ * cannot connect or authenticate, the handshake times out or does not
+ * validate) fails the call with `AGENT_TRANSPORT` instead.
  *
  * Requirements: key-based auth (BatchMode=yes, no password prompts), the agent
  * binary on the remote PATH for a login shell, and the workspace already
@@ -37,8 +39,10 @@ import {
   isDirectory,
   readAll,
   SftpClient,
+  SftpClosedError,
   SftpConnectionError,
   SftpStatusError,
+  SftpUnavailableError,
   SSH_FX_NO_SUCH_FILE,
   SSH_FXF_CREAT,
   SSH_FXF_TRUNC,
@@ -224,8 +228,9 @@ class SftpFileSystem implements HostFileSystem {
     private readonly options: SshHostOptions,
   ) {}
 
+  /** Close the session. Calls in flight on it are cancelled with the typed error, not retried. */
   close(): void {
-    this.session?.client?.fail(new SftpConnectionError("sftp session closed"));
+    this.session?.client?.fail(new SftpClosedError());
     this.session = undefined;
   }
 
@@ -344,8 +349,9 @@ class SftpFileSystem implements HostFileSystem {
   }
 
   /**
-   * Run `op` on the session. A session that cannot be started sends this call
-   * (and the next ones, for `retryMs`) down the per-command path. A session
+   * Run `op` on the session. A remote that refuses the SFTP subsystem sends
+   * this call (and the next ones, for `retryMs`) down the per-command path;
+   * any other failure to start the session is this call's error. A session
    * that drops under `op` is re-established once and `op` retried; a second
    * loss propagates as the error the caller turns into `AGENT_TRANSPORT`.
    *
@@ -368,14 +374,18 @@ class SftpFileSystem implements HostFileSystem {
       let client: SftpClient;
       try {
         client = await this.client();
-      } catch {
+      } catch (e) {
+        // Only a positive "no sftp subsystem here" falls back. A timeout, a
+        // refused or failed ssh, or a handshake that does not validate is a
+        // transport failure, reported as one.
+        if (!(e instanceof SftpUnavailableError)) throw e;
         this.unavailableUntil = Date.now() + (this.options.retryMs ?? SFTP_RETRY_MS);
         return await fallback();
       }
       try {
         return await op(client);
       } catch (e) {
-        if (!(e instanceof SftpConnectionError)) throw e;
+        if (!(e instanceof SftpConnectionError) || e instanceof SftpClosedError) throw e;
         return await op(await this.client());
       }
     } finally {
@@ -422,19 +432,25 @@ class SftpFileSystem implements HostFileSystem {
       const diag = tail.text();
       return new SftpConnectionError(diag ? `${what}: ${diag}` : what);
     };
+    let handshaken = false;
     child.once("error", (e) => client.fail(lost(`cannot start ssh for host '${this.host.id}': ${e.message}`)));
     // `close`, not `exit`: by then stderr has been read, so the reason makes it into the error.
-    child.once("close", (code, signal) => client.fail(lost(`sftp session ended (${signal ?? `exit ${code}`})`)));
+    child.once("close", (code, signal) => {
+      const e = lost(`sftp session ended (${signal ?? `exit ${code}`})`);
+      // OpenSSH's own words when the server has no (or refuses the) sftp subsystem.
+      const refused = !handshaken && /subsystem request failed/i.test(tail.text());
+      client.fail(refused ? new SftpUnavailableError(e.message) : e);
+    });
     void client.closed.then(() => {
       killIfRunning(child);
       child.stdin.destroy();
     });
-    const timer = setTimeout(
-      () => client.fail(lost("sftp handshake timed out")),
-      this.host.spec.connectTimeoutMs + 5_000,
-    );
+    // ssh's own connect timeout, then one request deadline (at most 5 s) for VERSION.
+    const handshakeMs = this.host.spec.connectTimeoutMs + Math.min(this.options.requestTimeoutMs ?? 5_000, 5_000);
+    const timer = setTimeout(() => client.fail(lost(`sftp handshake timed out after ${handshakeMs} ms`)), handshakeMs);
     try {
       await client.init();
+      handshaken = true;
     } finally {
       clearTimeout(timer);
     }

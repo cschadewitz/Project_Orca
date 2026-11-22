@@ -196,9 +196,10 @@ remote agent is indistinguishable from a local one. File access for artifact pic
 `fs/*` requests goes over one persistent SFTP session per host (`ssh … -s <host> sftp`, the
 stock `sftp-server` subsystem), with requests pipelined on that one connection; an idle
 session closes after 30 s and the next call opens a new one. A session that drops mid-call is
-re-established once before the call fails with `AGENT_TRANSPORT`. If the remote has no SFTP
-subsystem, file access falls back to short `ssh … cat|test|mkdir` commands and SFTP is tried
-again a minute later. The `git-worktree` workspace provider runs `git worktree add` on the
+re-established once before the call fails with `AGENT_TRANSPORT`. If the remote refuses the SFTP
+subsystem (ssh reports "subsystem request failed"), file access falls back to short
+`ssh … cat|test|mkdir` commands and SFTP is tried again a minute later; any other failure to open
+the session is reported as `AGENT_TRANSPORT`. The `git-worktree` workspace provider runs `git worktree add` on the
 remote via `exec`. Measured numbers: [ssh-host-fs](performance/ssh-host-fs.md).
 
 Requirements: key‑based auth (no prompts), the agent binary on the remote login‑shell PATH,

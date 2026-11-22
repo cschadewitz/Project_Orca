@@ -10,6 +10,9 @@
  * - FAKE_SFTP_MALFORMED_AFTER=n  answer request n+1 with a truncated ATTRS reply
  * - FAKE_SFTP_STAT_SIZE=n   report every STAT size as n (a lying or stale size)
  * - FAKE_SFTP_WRITE_FAIL_AT=n  fail every WRITE at offset >= n with "No space left on device"
+ * - FAKE_SFTP_EXIT_EARLY=msg exit 255 before answering INIT, printing msg (auth/network failure)
+ * - FAKE_SFTP_VERSION=v     answer INIT with version v ("short" sends a truncated VERSION)
+ * - FAKE_SFTP_SILENT_INIT=1 never answer INIT
  * - FAKE_SFTP_LOG=p         append "write <offset>", "close" and "write-after-close" lines to p
  */
 import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readSync, statSync, writeSync } from "node:fs";
@@ -29,6 +32,10 @@ if (process.env.FAKE_SFTP_COUNT_FILE) appendFileSync(process.env.FAKE_SFTP_COUNT
 if (process.env.FAKE_SFTP_REFUSE) {
   process.stderr.write("subsystem request failed on channel 0\n");
   process.exit(1);
+}
+if (process.env.FAKE_SFTP_EXIT_EARLY) {
+  process.stderr.write(`${process.env.FAKE_SFTP_EXIT_EARLY}\n`);
+  process.exit(255);
 }
 let dropAfter = Number(process.env.FAKE_SFTP_DROP_AFTER ?? Infinity);
 let hangAfter = Number(process.env.FAKE_SFTP_HANG_AFTER ?? Infinity);
@@ -98,7 +105,10 @@ function handle(p: Buffer): void {
   };
   const type = p[off++]!;
   if (type === FXP.INIT) {
-    send(Buffer.from([FXP.VERSION]), u32(3));
+    if (process.env.FAKE_SFTP_SILENT_INIT) return;
+    const v = process.env.FAKE_SFTP_VERSION;
+    if (v === "short") send(Buffer.from([FXP.VERSION]), Buffer.from([0, 0]));
+    else send(Buffer.from([FXP.VERSION]), u32(v === undefined ? 3 : Number(v)));
     return;
   }
   const id = rd32();
