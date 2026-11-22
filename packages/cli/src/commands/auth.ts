@@ -12,6 +12,7 @@ import {
   type SecretGrant,
   SecretGrantSchema,
 } from "@orca/daemon";
+import { secretHostBinding } from "@orca/agents";
 import { loadConfig } from "../bootstrap.js";
 import type { CommandContext } from "./index.js";
 
@@ -46,7 +47,10 @@ function secretGrant(ctx: CommandContext, config: OrcaConfig): SecretGrant | und
     if (!bound) throw new OrcaError("CONFIG_INVALID", `--secret names '${secret}', which is not a configured secret`);
     if (bound.host !== host)
       throw new OrcaError("CONFIG_INVALID", `--secret '${secret}' is bound to host '${bound.host}', not '${host}'`);
-    return { secret, provider: bound.provider, host };
+    const spec = config.hosts.find((h) => h.id === host);
+    if (!spec)
+      throw new OrcaError("CONFIG_INVALID", `--secret '${secret}' names host '${host}', which is not configured`);
+    return { secret, provider: bound.provider, host, binding: secretHostBinding(spec) };
   });
   const parsed = SecretGrantSchema.safeParse(grants);
   if (!parsed.success) throw new OrcaError("CONFIG_INVALID", "--secret ids use letters, digits, '.', '_' and '-'");

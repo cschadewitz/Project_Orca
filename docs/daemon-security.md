@@ -122,7 +122,7 @@ directory.
 ## Principals, permissions and scopes
 
 A credential holds a list of these permissions, and optionally a `secrets` grant: `"*"` or
-a list of `{ secret, provider, host }` entries naming the secret references its principal's runs may use
+a list of `{ secret, provider, host, binding }` entries naming the secret references its principal's runs may use
 (see [secret-use-authority.md](secret-use-authority.md)). `--secret` writes it and adds
 `secrets.use`; `rotate` keeps it.
 

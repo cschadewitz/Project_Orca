@@ -113,7 +113,9 @@ function setup(
       given.push(o);
       // What openAcpSession does: ask the use check, then read the reference on the host.
       if (!o.authorizeSecretUse) throw new Error("no use check was passed");
-      await o.authorizeSecretUse([{ secret: "token", provider: "env", hostId: o.host.id, agentId: o.agent.id }]);
+      await o.authorizeSecretUse([
+        { secret: "token", provider: "env", hostId: o.host.id, hostBinding: "h1:local", agentId: o.agent.id },
+      ]);
       o.onSecretValues?.([VALUE]);
       o.logger?.info(`agent started with ${VALUE}`);
       let close!: () => void;
@@ -242,7 +244,10 @@ describe("secret references in a run", () => {
     const { run } = await orchestrator.startAndRun({ workflowId: "single" });
     expect(run.status).toBe("failed");
     expect(asked).toEqual([
-      { runId: run.id, uses: [{ secret: "token", provider: "env", hostId: "local", agentId: "claude" }] },
+      {
+        runId: run.id,
+        uses: [{ secret: "token", provider: "env", hostId: "local", hostBinding: "h1:local", agentId: "claude" }],
+      },
     ]);
     const written = await everything(stores, [run.id]);
     expect(written).toContain("is not granted to this run");

@@ -102,8 +102,9 @@ export const UNRESTRICTED: ResourceScope = { workflows: "*", runs: "all" };
 
 /**
  * The secret references a principal may use (#336): every one (`*`), or each id together
- * with its provider and the host it is bound to. A grant does not follow an id the config
- * rebinds to another host or another provider. See docs/secret-use-authority.md.
+ * with its provider, the host it is bound to and that host's endpoint binding. A grant does
+ * not follow an id the config rebinds to another host or provider, nor a host id pointed at
+ * another endpoint. See docs/secret-use-authority.md.
  */
 export const SecretGrantSchema = z.union([
   z.literal("*"),
@@ -113,6 +114,8 @@ export const SecretGrantSchema = z.union([
         secret: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
         provider: z.enum(["env", "file"]),
         host: z.string().min(1),
+        /** The host's endpoint binding when granted (`secretHostBinding`). */
+        binding: z.string().regex(/^h1:[0-9a-f]{32}$/),
       })
       .strict(),
   ),
@@ -122,11 +125,18 @@ export type SecretGrant = z.infer<typeof SecretGrantSchema>;
 /** Whether `grant` covers one use: that secret, read by that provider, on that host. */
 export function grantCovers(
   grant: SecretGrant | undefined,
-  use: { secret: string; provider: string; hostId: string },
+  use: { secret: string; provider: string; hostId: string; hostBinding: string },
 ): boolean {
   if (grant === undefined) return false;
   return (
-    grant === "*" || grant.some((g) => g.secret === use.secret && g.provider === use.provider && g.host === use.hostId)
+    grant === "*" ||
+    grant.some(
+      (g) =>
+        g.secret === use.secret &&
+        g.provider === use.provider &&
+        g.host === use.hostId &&
+        g.binding === use.hostBinding,
+    )
   );
 }
 

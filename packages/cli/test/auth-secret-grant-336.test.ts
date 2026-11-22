@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { secretHostBinding } from "@orca/agents";
+import { HostSpecSchema } from "@orca/core";
 import { openAuthDirectory } from "@orca/daemon";
 import { authCommand } from "../src/commands/auth.js";
 import type { CommandContext } from "../src/commands/index.js";
@@ -51,8 +53,13 @@ describe("auth issue --secret", () => {
     expect(await issue("ci-bot", { secret: ["github-token@build-box", "npm@local", "npm@local"] })).toBe(0);
     const c = stored("ci-bot");
     expect(c.secrets).toEqual([
-      { secret: "github-token", provider: "file", host: "build-box" },
-      { secret: "npm", provider: "env", host: "local" },
+      {
+        secret: "github-token",
+        provider: "file",
+        host: "build-box",
+        binding: secretHostBinding(HostSpecSchema.parse({ id: "build-box", type: "ssh", host: "build.example" })),
+      },
+      { secret: "npm", provider: "env", host: "local", binding: secretHostBinding({ id: "local", type: "local" }) },
     ]);
     expect(c.permissions).toContain("secrets.use");
   });

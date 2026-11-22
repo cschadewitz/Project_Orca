@@ -8,7 +8,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AgentRegistry, type AgentSession, type OpenSessionOptions } from "@orca/agents";
+import { AgentRegistry, secretHostBinding, type AgentSession, type OpenSessionOptions } from "@orca/agents";
 import { parseOrcaConfig, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput } from "@orca/engine";
 import { fileStores } from "@orca/store";
@@ -16,6 +16,7 @@ import { CREDENTIALS_FILE, CredentialStore, OWNERSHIP_FILE, OwnershipStore, PRES
 import { localSecretUse, osUserPrincipalId } from "../src/local-secret-use.js";
 
 const VALUE = "local-value-that-must-not-be-audited";
+const LOCAL_BINDING = secretHostBinding({ id: "local", type: "local" });
 const dirs: string[] = [];
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
@@ -54,7 +55,9 @@ async function workspace() {
       workspaceProvider: new LocalWorkspaceProvider(configDir),
       ...(pause ? { humanInput: new PausingHumanInput() } : {}),
       sessionFactory: async (o: OpenSessionOptions) => {
-        await o.authorizeSecretUse!([{ secret: "token", provider: "env", hostId: o.host.id, agentId: o.agent.id }]);
+        await o.authorizeSecretUse!([
+          { secret: "token", provider: "env", hostId: o.host.id, hostBinding: LOCAL_BINDING, agentId: o.agent.id },
+        ]);
         opened.push("token");
         o.onSecretValues?.([VALUE]);
         const closed = Promise.resolve();
@@ -108,7 +111,7 @@ describe("local secret use across a restart", () => {
       principal: "ci-bot",
       permissions: [...PRESETS.client.permissions, "secrets.use"],
       scope: PRESETS.client.scope,
-      secrets: [{ secret: "token", provider: "env", host: "local" }],
+      secrets: [{ secret: "token", provider: "env", host: "local", binding: LOCAL_BINDING }],
     });
     const granted = await w.parkThenResume("ci-bot");
     expect(granted.run.status, JSON.stringify(granted.run.error)).toBe("completed");

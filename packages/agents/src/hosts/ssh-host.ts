@@ -185,6 +185,7 @@ export class SshHost implements AgentHost {
     return new Promise<void>((resolve, reject) => {
       let buffered = Buffer.alloc(0);
       let failed = false;
+      let malformed = false;
       const finish = (error?: Error) => {
         clearTimeout(timer);
         child.stdout.off("data", onData);
@@ -195,13 +196,26 @@ export class SshHost implements AgentHost {
       const parse = (text: string) => {
         let missing: number | undefined;
         for (const line of text.split("\n")) {
-          const [marker, index, encoded] = line.split(" ");
+          const [marker, index, encoded, ...extra] = line.trimEnd().split(" ");
+          // The environment failure carries no index: read it before the indexed markers.
+          if (marker === FAILED_MARKER) {
+            failed = true;
+            continue;
+          }
           const d = deliveries[Number(index)];
           if (!d) continue;
-          if (marker === VALUE_MARKER && encoded !== undefined)
-            values.set(d.id, Buffer.from(encoded, "base64").toString("utf8"));
-          else if (marker === MISSING_MARKER) missing = Number(index);
-          else if (marker === FAILED_MARKER) failed = true;
+          if (marker === MISSING_MARKER) missing = Number(index);
+          else if (marker === VALUE_MARKER) {
+            // A report the wrapper cannot use to redact is no report: the agent must not start.
+            const valid =
+              encoded !== undefined &&
+              !extra.length &&
+              BASE64.test(encoded) &&
+              Buffer.from(encoded, "base64").toString("base64") === encoded;
+            const value = valid ? Buffer.from(encoded, "base64").toString("utf8") : "";
+            if (valid && value.length && !values.has(d.id)) values.set(d.id, value);
+            else malformed = true;
+          }
         }
         return missing;
       };
@@ -212,17 +226,25 @@ export class SshHost implements AgentHost {
         child.stdout.pause();
         parse(buffered.subarray(0, at).toString("utf8"));
         const rest = buffered.subarray(at + ready.length);
-        finish(
-          deliveries.every((d) => values.has(d.id))
-            ? undefined
-            : new OrcaError("AGENT_TRANSPORT", `host '${this.id}' did not report every secret it read`, {
-                hostId: this.id,
-              }),
-        );
+        if (failed || malformed || !deliveries.every((d) => values.has(d.id))) {
+          // No go: the remote shell is still waiting, so the agent never starts.
+          values.clear();
+          finish(
+            new OrcaError(
+              "AGENT_TRANSPORT",
+              `host '${this.id}' did not report every secret it read; the agent was not started`,
+              { hostId: this.id, reason: "report" },
+            ),
+          );
+          return;
+        }
+        child.stdin.write(`${GO}\n`);
+        finish();
         if (rest.length) child.stdout.unshift(rest);
       };
       const onExit = (code: number | null) => {
         const missing = parse(buffered.toString("utf8"));
+        values.clear();
         const d = missing === undefined ? undefined : deliveries[missing];
         finish(
           d
@@ -230,7 +252,7 @@ export class SshHost implements AgentHost {
             : failed
               ? new OrcaError(
                   "AGENT_TRANSPORT",
-                  `host '${this.id}' could not withhold or set the agent's environment; the agent was not started`,
+                  `host '${this.id}' could not withhold or set the agent's environment, or report a secret it read; the agent was not started`,
                   { hostId: this.id, reason: "environment" },
                 )
               : new OrcaError(
@@ -571,6 +593,9 @@ const VALUE_MARKER = "__orca_secret_value__";
 const MISSING_MARKER = "__orca_secret_missing__";
 const READY = "__orca_ready__";
 const FAILED_MARKER = "__orca_secret_failed__";
+/** What the wrapper writes to the remote shell once every report checked out. */
+const GO = "__orca_go__";
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /**
  * The remote half of secret delivery (#336), in POSIX sh. Each source is read into a shell
@@ -611,12 +636,22 @@ export function secretPreamble(deliveries: readonly SecretDelivery[], withheld: 
   deliveries.forEach((d, i) => {
     for (const name of d.env)
       parts.push(`export ${name}="$__orca_s${i}" || ${failed}`, `[ "\${${name}-}" = "$__orca_s${i}" ] || ${failed}`);
-    parts.push(`printf '\\n${VALUE_MARKER} ${i} %s\\n' "$(printf '%s' "$__orca_s${i}" | base64 | tr -d '\\n')"`);
+    // An encoder that is missing or fails leaves nothing to report: stop rather than start an
+    // agent whose value the wrapper could not redact.
+    parts.push(
+      `__orca_e=$(printf '%s' "$__orca_s${i}" | base64 | tr -d '\\n') || ${failed}`,
+      `[ -n "$__orca_e" ] || ${failed}`,
+      `printf '\\n${VALUE_MARKER} ${i} %s\\n' "$__orca_e"`,
+    );
   });
   if (deliveries.length)
     parts.push(
-      `unset __orca_v __orca_nl __orca_cr ${deliveries.map((_, i) => `__orca_s${i}`).join(" ")}`,
+      `unset __orca_v __orca_e __orca_nl __orca_cr ${deliveries.map((_, i) => `__orca_s${i}`).join(" ")}`,
       `printf '\\n${READY}\\n'`,
+      // The agent starts only once the wrapper has checked every report and says so.
+      `IFS= read -r __orca_go || exit 95`,
+      `[ "$__orca_go" = ${GO} ] || exit 95`,
+      `unset __orca_go`,
     );
   parts.push(`exec 2>&3 3>&-`);
   return parts.map((p) => `${p}; `).join("");

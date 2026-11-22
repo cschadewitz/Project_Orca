@@ -4,7 +4,7 @@
  * never on a command line, never inherited without a reference, and redacted from errors.
  */
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ import {
   planSessionSecrets,
   redactError,
   redactingLogger,
+  secretHostBinding,
   SshHost,
   type AgentHost,
   type AgentProcessHandle,
@@ -370,6 +371,8 @@ describe("SshHost launch boundary", () => {
             (e: unknown) => e,
           );
         expect(error, setup).toMatchObject({ code: "AGENT_TRANSPORT" });
+        // bash reports the failed builtin; dash exits on it, which is fail-closed too.
+        if (shell === "bash") expect(error, setup).toMatchObject({ details: { reason: "environment" } });
         expect(
           JSON.stringify({ message: (error as Error).message, details: (error as OrcaError).details }),
         ).not.toContain(value);
@@ -380,6 +383,53 @@ describe("SshHost launch boundary", () => {
       }
     },
   );
+});
+
+describe("SshHost secret reports", () => {
+  const value = "report-value-0123456789";
+  const secrets = [{ id: "token", source: { provider: "env" as const, name: "ORCA_REMOTE_TOKEN" }, env: ["TOKEN"] }];
+
+  /** A remote `base64` that prints `output` instead of encoding. */
+  async function brokenEncoder(dir: string, output: string): Promise<string> {
+    const bin = join(dir, "bin");
+    await mkdir(bin);
+    await writeFile(join(bin, "base64"), `#!/bin/sh\ncat >/dev/null\nprintf '%s' '${output}'\n`);
+    await chmod(join(bin, "base64"), 0o755);
+    return `PATH=${bin}:$PATH; `;
+  }
+
+  it.each([
+    ["prints nothing", "", "environment"],
+    ["prints something that is not base64", "!!not*base64", "report"],
+  ])("does not start the agent when the encoder %s", async (_what, output, reason) => {
+    const dir = await tempDir();
+    const host = sshHost(await tracingSsh(dir, "/bin/sh", await brokenEncoder(dir, output)));
+    vi.stubEnv("ORCA_REMOTE_TOKEN", value);
+    const out = join(dir, "seen");
+    await expect(
+      host.spawnAgent(
+        AgentSpecSchema.parse({ id: "a", command: process.execPath, args: ["-e", envReporter(out, ["TOKEN"])] }),
+        { cwd: dir, secrets, withheldEnv: ["ORCA_REMOTE_TOKEN"] },
+      ),
+    ).rejects.toMatchObject({ code: "AGENT_TRANSPORT", details: { reason } });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await exists(out)).toBe(false);
+  });
+
+  it("accepts only a complete, canonical report and starts the agent after it", async () => {
+    const dir = await tempDir();
+    const host = sshHost(await tracingSsh(dir, "/bin/sh"));
+    vi.stubEnv("ORCA_REMOTE_TOKEN", value);
+    const out = join(dir, "seen");
+    const proc = await host.spawnAgent(
+      AgentSpecSchema.parse({ id: "a", command: process.execPath, args: ["-e", envReporter(out, ["TOKEN"])] }),
+      { cwd: dir, secrets, withheldEnv: ["ORCA_REMOTE_TOKEN"] },
+    );
+    procs.push(proc);
+    expect(proc.secretValues?.get("token")).toBe(value);
+    await waitFor(out);
+    expect(JSON.parse(await readFile(out, "utf8"))).toEqual({ TOKEN: value });
+  });
 });
 
 /** An ACP agent that reports what it was started with: its env, and the MCP env it was given. */
@@ -535,7 +585,17 @@ describe("openAcpSession with secret references", () => {
       if (!granted) throw new OrcaError("CONFIG_INVALID", "use of secret 'token' was revoked");
     };
     sessions.push(await open(check));
-    expect(asked).toEqual([[{ secret: "token", provider: "file", hostId: "local", agentId: "r" }]]);
+    expect(asked).toEqual([
+      [
+        {
+          secret: "token",
+          provider: "file",
+          hostId: "local",
+          hostBinding: secretHostBinding({ id: "local", type: "local" }),
+          agentId: "r",
+        },
+      ],
+    ]);
     expect(JSON.parse(await readFile(out, "utf8"))).toMatchObject({ token: "authorized-value-555" });
     await rm(out);
 

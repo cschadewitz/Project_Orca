@@ -26,6 +26,8 @@ import {
   type SecretSource,
   type SecretsConfig,
 } from "@orca/core";
+import { createHash } from "node:crypto";
+import type { HostSpec } from "@orca/core";
 import type { AgentHost, SecretDelivery } from "./host.js";
 
 /** Why a secret could not be read. Never the value, never the provider's own error text. */
@@ -36,7 +38,35 @@ export interface SecretUse {
   secret: string;
   provider: SecretSource["provider"];
   hostId: string;
+  /**
+   * The host's execution endpoint as configured now (`secretHostBinding`): it changes when
+   * the same host id is pointed at another machine, user, port, ssh binary or shell, so a
+   * grant made for one endpoint never covers a replacement.
+   */
+  hostBinding: string;
   agentId: string;
+}
+
+/**
+ * A digest of what decides which machine and account a host's agents run on: everything in
+ * its spec except tuning (workspace root, timeouts, session ceilings). Two specs with the
+ * same id but a different endpoint have different bindings.
+ */
+export function secretHostBinding(spec: HostSpec): string {
+  const endpoint =
+    spec.type === "local"
+      ? { type: "local" }
+      : {
+          type: "ssh",
+          host: spec.host,
+          user: spec.user ?? null,
+          port: spec.port ?? null,
+          identityFile: spec.identityFile ?? null,
+          sshArgs: spec.sshArgs,
+          sshBinary: spec.sshBinary,
+          remoteShell: spec.remoteShell,
+        };
+  return `h1:${createHash("sha256").update(JSON.stringify(endpoint)).digest("hex").slice(0, 32)}`;
 }
 
 /**
@@ -50,10 +80,11 @@ export type AuthorizeSecretUse = (uses: SecretUse[]) => Promise<void>;
 /** Ask `authorize` about every planned delivery, or refuse them all when there is no check. */
 export async function checkSecretUse(
   plan: SessionSecretPlan,
-  hostId: string,
+  host: Pick<AgentHost, "id" | "spec">,
   agentId: string,
   authorize: AuthorizeSecretUse | undefined,
 ): Promise<void> {
+  const hostId = host.id;
   if (!plan.deliveries.length) return;
   if (!authorize) {
     const first = plan.deliveries[0]!.id;
@@ -65,7 +96,10 @@ export async function checkSecretUse(
     );
   }
   try {
-    await authorize(plan.deliveries.map((d) => ({ secret: d.id, provider: d.source.provider, hostId, agentId })));
+    const hostBinding = secretHostBinding(host.spec);
+    await authorize(
+      plan.deliveries.map((d) => ({ secret: d.id, provider: d.source.provider, hostId, hostBinding, agentId })),
+    );
   } catch (error) {
     if (error instanceof OrcaError) throw error;
     throw secretUnavailable(plan.deliveries[0]!.id, "unauthorized", "the use check failed", hostId);

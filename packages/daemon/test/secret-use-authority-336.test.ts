@@ -4,8 +4,26 @@
  * `secrets.use` and a grant naming that secret on the host it is bound to.
  */
 import { describe, expect, it } from "vitest";
-import { AgentRegistry, type AgentSession, type OpenSessionOptions, type SecretUse } from "@orca/agents";
-import { parseOrcaConfig, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
+import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  AgentRegistry,
+  SshHost,
+  openAcpSession,
+  secretHostBinding,
+  type AgentSession,
+  type OpenSessionOptions,
+  type SecretUse,
+} from "@orca/agents";
+import {
+  AgentSpecSchema,
+  HostSpecSchema,
+  parseOrcaConfig,
+  parseWorkflow,
+  TemplateRegistry,
+  WorkflowRegistry,
+} from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 import {
@@ -22,7 +40,14 @@ import {
 } from "../src/auth/index.js";
 
 const VALUE = "ghp_value-that-must-not-be-audited-0123";
-const use = (secret = "token", hostId = "local"): SecretUse => ({ secret, provider: "env", hostId, agentId: "claude" });
+const LOCAL_BINDING = secretHostBinding({ id: "local", type: "local" });
+const use = (secret = "token", hostId = "local", hostBinding = LOCAL_BINDING): SecretUse => ({
+  secret,
+  provider: "env",
+  hostId,
+  hostBinding,
+  agentId: "claude",
+});
 
 /** Runs `root` (owned by `owner`), `child` under it, and `orphan` with no owner. */
 function fixture(now = () => new Date("2026-11-22T12:00:00Z")) {
@@ -55,7 +80,7 @@ describe("secret use authority", () => {
       principal: "ci-bot",
       permissions: client,
       scope: PRESETS.client.scope,
-      secrets: [{ secret: "token", provider: "env", host: "local" }],
+      secrets: [{ secret: "token", provider: "env", host: "local", binding: LOCAL_BINDING }],
     });
     await f.check({ runId: "root", uses: [use()] });
     // A child run is judged by its root's owner.
@@ -73,7 +98,7 @@ describe("secret use authority", () => {
       principal: "ci-bot",
       permissions: client,
       scope: PRESETS.client.scope,
-      secrets: [{ secret: "token", provider: "env", host: "local" }],
+      secrets: [{ secret: "token", provider: "env", host: "local", binding: LOCAL_BINDING }],
     });
     const unauthorized = { code: "CONFIG_INVALID", details: { reason: "unauthorized" } };
     await expect(f.check({ runId: "root", uses: [use("other")] })).rejects.toMatchObject({
@@ -82,6 +107,18 @@ describe("secret use authority", () => {
     });
     // The same id, rebound to another host: the grant does not follow it.
     await expect(f.check({ runId: "root", uses: [use("token", "build-box")] })).rejects.toMatchObject(unauthorized);
+    // The same host id pointed at another endpoint: the grant does not follow it either.
+    const moved = secretHostBinding({
+      id: "local",
+      type: "ssh",
+      host: "elsewhere",
+      sshArgs: [],
+      sshBinary: "ssh",
+      remoteShell: "bash -lc",
+      connectTimeoutMs: 1,
+    });
+    expect(moved).not.toBe(LOCAL_BINDING);
+    await expect(f.check({ runId: "root", uses: [use("token", "local", moved)] })).rejects.toMatchObject(unauthorized);
     // One refused use refuses the open.
     await expect(f.check({ runId: "root", uses: [use(), use("other")] })).rejects.toMatchObject(unauthorized);
 
@@ -108,7 +145,7 @@ describe("secret use authority", () => {
       principal: "ci-bot",
       permissions: client,
       scope: { workflows: ["w"], runs: "owned" },
-      secrets: [{ secret: "token", provider: "file", host: "local" }],
+      secrets: [{ secret: "token", provider: "file", host: "local", binding: LOCAL_BINDING }],
     });
     // The reference was rebound to another provider: the grant does not follow it.
     await expect(f.check({ runId: "child", uses: [use()] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
@@ -171,14 +208,68 @@ describe("secret use authority", () => {
       principal: "ci-bot",
       permissions: client,
       scope: PRESETS.client.scope,
-      secrets: [{ secret: "token", provider: "env", host: "local" }],
+      secrets: [{ secret: "token", provider: "env", host: "local", binding: LOCAL_BINDING }],
     });
     const rotated = await f.credentials.rotate(credential.id, {});
-    expect(rotated.credential.secrets).toEqual([{ secret: "token", provider: "env", host: "local" }]);
+    expect(rotated.credential.secrets).toEqual([
+      { secret: "token", provider: "env", host: "local", binding: LOCAL_BINDING },
+    ]);
     await f.check({ runId: "root", uses: [use()] });
     const owner = await f.credentials.issue({ principal: "someone", preset: "owner" });
     expect(owner.credential.secrets).toBe("*");
     expect(owner.credential.permissions).toContain("secrets.use");
+  });
+
+  it("refuses a host id pointed at another endpoint before ssh is ever started", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-secret-endpoint-"));
+    try {
+      const started = join(dir, "ssh-started");
+      const ssh = join(dir, "ssh");
+      await writeFile(ssh, `#!/bin/sh\ntouch ${started}\nexit 1\n`);
+      await chmod(ssh, 0o755);
+      const spec = (host: string) =>
+        HostSpecSchema.parse({ id: "build-box", type: "ssh", host, sshBinary: ssh, remoteShell: "sh -c" });
+      const f = fixture();
+      f.ownership.record("root", "ci-bot");
+      await f.credentials.issue({
+        principal: "ci-bot",
+        permissions: client,
+        scope: PRESETS.client.scope,
+        // Granted while build-box was old.example.
+        secrets: [
+          { secret: "token", provider: "env", host: "build-box", binding: secretHostBinding(spec("old.example")) },
+        ],
+      });
+      const open = (host: string) =>
+        openAcpSession({
+          host: new SshHost(spec(host) as never),
+          agent: AgentSpecSchema.parse({ id: "claude", command: "agent", env: { T: { secret: "token" } } }),
+          cwd: "/",
+          secrets: { token: { host: "build-box", provider: "env", name: "ORCA_TOKEN" } },
+          authorizeSecretUse: (uses) => f.check({ runId: "root", uses }),
+        });
+      // Same id, new machine: refused at the decision, before the host reads anything.
+      await expect(open("new.example")).rejects.toMatchObject({
+        code: "CONFIG_INVALID",
+        details: { reason: "unauthorized", hostId: "build-box" },
+      });
+      expect(
+        await stat(started).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
+      // The binding it was granted for still passes the decision and reaches ssh.
+      await expect(open("old.example")).rejects.toMatchObject({ code: "AGENT_TRANSPORT" });
+      expect(
+        await stat(started).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("allows every reference in loopback compatibility mode", async () => {
@@ -211,7 +302,9 @@ edges: [{ from: s, to: work }, { from: work, to: e }]
       templates: new TemplateRegistry(),
       workspaceProvider: new LocalWorkspaceProvider(process.cwd()),
       sessionFactory: async (o: OpenSessionOptions) => {
-        await o.authorizeSecretUse!([{ secret: "token", provider: "env", hostId: o.host.id, agentId: o.agent.id }]);
+        await o.authorizeSecretUse!([
+          { secret: "token", provider: "env", hostId: o.host.id, hostBinding: LOCAL_BINDING, agentId: o.agent.id },
+        ]);
         read.push("token");
         o.onSecretValues?.([VALUE]);
         const closed = Promise.resolve();
@@ -253,7 +346,7 @@ edges: [{ from: s, to: work }, { from: work, to: e }]
       principal: "ci-bot",
       permissions: client,
       scope: PRESETS.client.scope,
-      secrets: [{ secret: "token", provider: "env", host: "local" }],
+      secrets: [{ secret: "token", provider: "env", host: "local", binding: LOCAL_BINDING }],
     });
     const allowed = await orchestrator.startRun({ workflowId: "single" });
     ownership.record(allowed, "ci-bot");

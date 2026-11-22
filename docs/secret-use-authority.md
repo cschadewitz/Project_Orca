@@ -14,13 +14,20 @@ may use.
 {
   "principal": "ci-bot",
   "permissions": ["runs.read", "runs.start", "secrets.use"],
-  "secrets": [{ "secret": "github-token", "provider": "file", "host": "build-box" }],
+  "secrets": [
+    { "secret": "github-token", "provider": "file", "host": "build-box", "binding": "h1:…" },
+  ],
 }
 ```
 
-- An entry names a secret id, its provider **and** the host it is bound to. If
-  `orca.config.yaml` later binds the same id to another host or another provider, the grant
-  does not follow it: the next use is refused until a grant names the new binding. `"*"` grants every reference and is what the `owner`
+- An entry names a secret id, its provider, the host it is bound to **and** that host's
+  endpoint binding: a digest of what decides which machine and account the host runs on
+  (for SSH: `host`, `user`, `port`, `identityFile`, `sshArgs`, `sshBinary`, `remoteShell`;
+  not tuning such as `workspaceRoot` or timeouts). If `orca.config.yaml` later binds the id
+  to another host or provider, or points the same host id at another endpoint, the grant
+  does not follow it: the next use is refused before the host reads anything, until a grant
+  names the new binding. Rotating the value at the same binding needs no new grant. Which
+  machine an SSH destination actually reaches is still ssh's to verify (its host keys). `"*"` grants every reference and is what the `owner`
   preset expands to.
 - Absent means none. No other preset grants any.
 - Two new permissions:
@@ -29,7 +36,7 @@ may use.
     permission, so a restricted principal cannot hold it.
 - `orca auth issue --secret <id>@<host>` (repeatable) and `--secret '*'` write the field and
   add `secrets.use`. The id must be configured and bound to that host when the credential is
-  issued; the provider is taken from that binding. `rotate` keeps the grant. `revoke` ends
+  issued; the provider and the endpoint binding are taken from the config at that moment. `rotate` keeps the grant. `revoke` ends
   it with the credential.
 
 ## The use decision
@@ -49,8 +56,8 @@ and host checks and before the host reads anything. The daemon answers it like t
 4. Each use must be covered by **one** current credential that, on its own:
    - holds `secrets.use`,
    - has a workflow scope that includes the root's workflow, and
-   - has a `secrets` grant naming that secret id with its exact provider and the host it is
-     bound to now (or is `"*"`).
+   - has a `secrets` grant naming that secret id with its exact provider, the host it is
+     bound to now and that host's current endpoint binding (or is `"*"`).
 
    Two credentials of the same principal never combine: a credential scoped to another
    workflow does not lend its grant to one that lacks it.
@@ -92,6 +99,11 @@ shell is a controlled boundary that fails closed:
 - After each withheld variable is unset and each agent variable exported, the shell checks
   that it took. If not (a readonly variable, for example), it reports a failure and exits
   before the agent starts, and the open fails with `AGENT_TRANSPORT`.
+- Each value is reported to the wrapper in base64 for redaction. An encoder that fails or
+  prints nothing stops the shell; the wrapper accepts a report only if every expected
+  secret has exactly one non-empty, canonical base64 report. The agent starts only after the
+  wrapper has checked them and written a go line to the shell; on any reporting failure it
+  writes nothing, kills the connection, and the agent never starts.
 - Redaction covers each value's base64, unpadded base64 and base64url forms as well as the
   value itself.
 
