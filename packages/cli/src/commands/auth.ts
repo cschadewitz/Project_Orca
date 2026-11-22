@@ -9,6 +9,8 @@ import {
   type CredentialInfo,
   type PresetName,
   type ResourceScope,
+  type SecretGrant,
+  SecretGrantSchema,
 } from "@orca/daemon";
 import { loadConfig } from "../bootstrap.js";
 import type { CommandContext } from "./index.js";
@@ -20,6 +22,29 @@ function expiry(ctx: CommandContext): Date | undefined {
   if (!Number.isFinite(date.getTime()) || date.getTime() <= Date.now())
     throw new OrcaError("CONFIG_INVALID", "--expires-at must be a future ISO date/time");
   return date;
+}
+
+/** `--secret <id>@<host>` (repeatable) or `--secret '*'`: the references a credential may use (#336). */
+function secretGrant(ctx: CommandContext): SecretGrant | undefined {
+  const values = ctx.flags.secret as string[] | undefined;
+  if (!values?.length) return undefined;
+  if (values.includes("*")) {
+    if (values.length > 1) throw new OrcaError("CONFIG_INVALID", "--secret '*' grants every reference; give it alone");
+    return "*";
+  }
+  const grants = values.map((value) => {
+    const at = value.lastIndexOf("@");
+    if (at <= 0 || at === value.length - 1)
+      throw new OrcaError("CONFIG_INVALID", `--secret takes <id>@<host> or '*', not '${value}'`);
+    return { secret: value.slice(0, at), host: value.slice(at + 1) };
+  });
+  const parsed = SecretGrantSchema.safeParse(grants);
+  if (!parsed.success) throw new OrcaError("CONFIG_INVALID", "--secret ids use letters, digits, '.', '_' and '-'");
+  const seen = new Set<string>();
+  return (parsed.data as Exclude<SecretGrant, "*">).filter((g) => {
+    const key = `${g.secret}@${g.host}`;
+    return !seen.has(key) && (seen.add(key), true);
+  });
 }
 
 function credentialId(value: string | undefined, sub: string): string {
@@ -58,9 +83,14 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
       const workflowIds = ctx.flags["workflow-scope"] as string[] | undefined;
       if (workflowIds?.some((id) => !id || id === "*"))
         throw new OrcaError("CONFIG_INVALID", "--workflow-scope requires workflow ids; omit it for all workflows");
+      const secrets = secretGrant(ctx);
       const issued = await auth.credentials.issue({
         principal: value,
         preset,
+        // A grant is only usable with `secrets.use`, so naming one adds it to the preset's.
+        ...(secrets !== undefined
+          ? { secrets, permissions: [...new Set([...PRESETS[preset].permissions, "secrets.use" as const])] }
+          : {}),
         scope: { workflows: workflowIds ? [...new Set(workflowIds)] : PRESETS[preset].scope.workflows, runs },
         label: ctx.flags.label as string | undefined,
         expiresAt: expiry(ctx),
@@ -80,7 +110,7 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
               ? "expired"
               : "active";
           ctx.out(
-            `${c.id} ${c.principal} ${state} workflows=${c.scope.workflows === "*" ? "*" : c.scope.workflows.join(",")} runs=${c.scope.runs}${c.expiresAt ? ` expires=${c.expiresAt}` : ""}${c.label ? ` label=${c.label}` : ""}`,
+            `${c.id} ${c.principal} ${state} workflows=${c.scope.workflows === "*" ? "*" : c.scope.workflows.join(",")} runs=${c.scope.runs}${c.secrets === undefined ? "" : ` secrets=${c.secrets === "*" ? "*" : c.secrets.map((g) => `${g.secret}@${g.host}`).join(",")}`}${c.expiresAt ? ` expires=${c.expiresAt}` : ""}${c.label ? ` label=${c.label}` : ""}`,
           );
         }
       return 0;

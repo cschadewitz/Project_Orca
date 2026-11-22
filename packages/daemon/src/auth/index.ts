@@ -10,5 +10,6 @@ export * from "./resources.js";
 export * from "./operations.js";
 export * from "./audit.js";
 export * from "./guard.js";
+export * from "./secret-use.js";
 export * from "./transport.js";
 export * from "./bootstrap.js";

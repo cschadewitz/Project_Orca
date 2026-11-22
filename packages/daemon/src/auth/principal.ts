@@ -54,6 +54,10 @@ export const PERMISSIONS = [
   "config.write",
   /** The update coordinator's maintenance method. */
   "daemon.maintenance",
+  /** secrets.list and secrets.check: secret reference metadata, never a value (#336). */
+  "secrets.read",
+  /** The principal's runs may receive values for the references its `secrets` grant names (#336). */
+  "secrets.use",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 export const PermissionSchema = z.enum(PERMISSIONS);
@@ -75,6 +79,7 @@ export const WORKSPACE_PERMISSIONS: readonly Permission[] = [
   "config.read",
   "config.write",
   "daemon.maintenance",
+  "secrets.read",
 ];
 
 /**
@@ -95,6 +100,30 @@ export type ResourceScope = z.infer<typeof ResourceScopeSchema>;
 
 export const UNRESTRICTED: ResourceScope = { workflows: "*", runs: "all" };
 
+/**
+ * The secret references a principal may use (#336): every one (`*`), or each id together
+ * with the host it is bound to. A grant does not follow an id the config rebinds to another
+ * host. See docs/secret-use-authority.md.
+ */
+export const SecretGrantSchema = z.union([
+  z.literal("*"),
+  z.array(
+    z
+      .object({
+        secret: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+        host: z.string().min(1),
+      })
+      .strict(),
+  ),
+]);
+export type SecretGrant = z.infer<typeof SecretGrantSchema>;
+
+/** Whether `grant` covers using secret `secret` while it is bound to `host`. */
+export function grantCovers(grant: SecretGrant | undefined, secret: string, host: string): boolean {
+  if (grant === undefined) return false;
+  return grant === "*" || grant.some((g) => g.secret === secret && g.host === host);
+}
+
 export function isUnrestricted(scope: ResourceScope): boolean {
   return scope.workflows === "*" && scope.runs === "all";
 }
@@ -107,6 +136,8 @@ export interface Principal {
   readonly credentialId?: string | undefined;
   readonly permissions: ReadonlySet<Permission>;
   readonly scope: ResourceScope;
+  /** The secret references this principal may use; none when absent (#336). */
+  readonly secrets?: SecretGrant | undefined;
 }
 
 /**
@@ -133,7 +164,11 @@ export function workflowAllowed(scope: ResourceScope, workflowId: string): boole
  */
 export const PRESETS = {
   /** Existing operator authority, excluding explicit opt-in host telemetry. Local bootstrap credential. */
-  owner: { permissions: PERMISSIONS.filter((p) => p !== "host.telemetry.read"), scope: UNRESTRICTED },
+  owner: {
+    permissions: PERMISSIONS.filter((p) => p !== "host.telemetry.read"),
+    scope: UNRESTRICTED,
+    secrets: "*",
+  },
   /** Drive and watch every run, plan and agent; no configuration, standing rules or admission. */
   operator: {
     permissions: [
@@ -164,7 +199,10 @@ export const PRESETS = {
     permissions: ["runs.read", "artifacts.read", "workflows.read", "runs.start", "runs.control", "inputs.answer"],
     scope: { workflows: "*", runs: "owned" },
   },
-} as const satisfies Record<string, { permissions: readonly Permission[]; scope: ResourceScope }>;
+} as const satisfies Record<
+  string,
+  { permissions: readonly Permission[]; scope: ResourceScope; secrets?: SecretGrant }
+>;
 export type PresetName = keyof typeof PRESETS;
 export const PRESET_NAMES = Object.keys(PRESETS) as PresetName[];
 
@@ -179,4 +217,5 @@ export const LOCAL_PRINCIPAL: Principal = {
   kind: "local",
   permissions: new Set(PRESETS.owner.permissions),
   scope: UNRESTRICTED,
+  secrets: "*",
 };

@@ -43,6 +43,9 @@ import {
   bootstrapLocalOwner,
   openAuthDirectory,
   orchestratorResolver,
+  credentialSecretUse,
+  loopbackSecretUse,
+  LOCAL_PRINCIPAL,
   validateDeployment,
   WorkflowInputsModel,
   orchestratorDefinitionResolver,
@@ -268,7 +271,7 @@ export const commands: Record<string, Command> = {
   auth: {
     help: "auth [issue <principal>|list|rotate <credentialId>|revoke <credentialId>]  Manage this workspace's daemon credentials.",
     usage:
-      "issue defaults to --preset client (owner, operator, viewer also supported).\n--workflow-scope id may be repeated; --runs-scope all|owned selects run scope.\n--label text names a credential; --expires-at ISO sets an expiry for issue or rotate.\n--json prints structured results. Only issue and rotate print a token, once. Restart serve to rotate its local bootstrap credential.\nLocal clients use ORCA_DAEMON_TOKEN, ORCA_DAEMON_TOKEN_FILE, or auth/local-client.token beside the workspace config.\n",
+      "issue defaults to --preset client (owner, operator, viewer also supported).\n--workflow-scope id may be repeated; --runs-scope all|owned selects run scope.\n--secret id@host (repeatable) or --secret '*' grants use of secret references and adds secrets.use; the owner preset grants '*'.\n--label text names a credential; --expires-at ISO sets an expiry for issue or rotate.\n--json prints structured results. Only issue and rotate print a token, once. Restart serve to rotate its local bootstrap credential.\nLocal clients use ORCA_DAEMON_TOKEN, ORCA_DAEMON_TOKEN_FILE, or auth/local-client.token beside the workspace config.\n",
     run: authCommand,
   },
   remote: {
@@ -1064,6 +1067,15 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
       };
   // Refuse an unsafe bind before rotating the credential local clients already use.
   validateDeployment(auth, (ctx.flags.host as string | undefined) ?? "127.0.0.1");
+  // Secret references are delivered only under the run owner's current grant (#336).
+  app.orchestrator.secretUse = authDir
+    ? credentialSecretUse({
+        resolver: orchestratorResolver(app.orchestrator),
+        ownership: authDir.ownership,
+        credentials: authDir.credentials,
+        audit: authDir.audit,
+      })
+    : loopbackSecretUse(LOCAL_PRINCIPAL);
   const workspaceId = await workspaceIdentity(storeDir);
   const identity = createDaemonIdentity(workspaceId);
   const liveRuntime =
