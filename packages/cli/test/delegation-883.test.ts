@@ -15,11 +15,13 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { hostname, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AgentSpecSchema, isOrcaError } from "@orca/core";
+import { helloOffer } from "@orca/protocol";
 import { LocalHost } from "@orca/agents";
 import {
   delegationKey,
@@ -898,6 +900,85 @@ describe("delegation through a proxy the test controls (#883)", () => {
     expect(receipts.write({ ...first, state: "admitted", remoteRunId: "run_a" })).toMatchObject({ revision: 1 });
     expect(existsSync(lock)).toBe(false);
   }, 30_000);
+
+  it("never reconciles a recoverable admission to cancel it, and keeps the cancel open while no run exists", async () => {
+    // A daemon that admits nothing it is not told to: the real remote's hello and discovery,
+    // an admission whose answer never comes, and a fence that finds that admission recoverable
+    // with a reserved run id under which no run exists.
+    const hello = await remote.call("hello", { client: "test", ...helloOffer() }, token);
+    const discovery = await remote.call("operator.discover", {}, token);
+    const calls: string[] = [];
+    let admitSeen: (() => void) | undefined;
+    const admitted = new Promise<void>((resolve) => (admitSeen = resolve));
+    const fake = createHttpServer((req, res) => {
+      let text = "";
+      req.on("data", (chunk: Buffer) => (text += chunk.toString("utf8")));
+      req.on("end", () => {
+        const message = JSON.parse(text) as { id: number; method: string };
+        calls.push(message.method);
+        const answer = (body: object) => res.end(JSON.stringify({ kind: "response", id: message.id, ...body }));
+        switch (message.method) {
+          case "hello":
+          case "operator.discover":
+            return answer(message.method === "hello" ? hello : discovery);
+          case "runs.admit":
+            admitSeen?.();
+            return; // never answered
+          case "admissions.fence":
+            return answer({
+              ok: true,
+              result: {
+                state: "resolved",
+                operationId: `retry_${randomUUID()}`,
+                replayed: true,
+                result: {
+                  state: "recoverable-failure",
+                  admissionId: "direct_reserved",
+                  runId: "run_reserved",
+                  failure: { code: "RUN_STATE", message: "incomplete", recovery: "reconcile" },
+                },
+              },
+            });
+          case "runs.get":
+            return answer({ ok: false, error: { code: "RUN_NOT_FOUND", message: "no such run" } });
+          default:
+            return answer({ ok: false, error: { code: "NOT_SUPPORTED", message: message.method } });
+        }
+      });
+    });
+    await new Promise<void>((resolve) => fake.listen(0, "127.0.0.1", resolve));
+    const port = (fake.address() as { port: number }).port;
+    const live = new Set<Socket>();
+    const transport: DelegationTransport = {
+      connect: () => {
+        const socket = connect(port, "127.0.0.1");
+        live.add(socket);
+        return socket;
+      },
+      failed: () => undefined,
+      close: async () => undefined,
+    };
+    const receipts = new DelegationReceipts(join(work, "receipts-recoverable"));
+    const session = await open(transport, receipts);
+    const abort = new AbortController();
+    const running = session.prompt("ignored", {
+      timeoutMs: 30_000,
+      signal: abort.signal,
+      turn: turn("run_recoverable", join(work, "recoverable", "report.md")),
+    });
+    await admitted;
+    abort.abort();
+    await expect(running).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(calls).toContain("admissions.fence");
+    expect(calls).toContain("runs.get");
+    expect(calls).not.toContain("admissions.reconcile");
+    expect(calls.filter((c) => c === "runs.admit")).toHaveLength(1);
+    expect(receipts.read("run_recoverable", "run_recoverable_step1")).toMatchObject({ state: "cancel-pending" });
+    expect(receipts.read("run_recoverable", "run_recoverable_step1")?.remoteRunId).toBeUndefined();
+    await session.close();
+    for (const socket of live) socket.destroy();
+    await new Promise<void>((resolve) => fake.close(() => resolve()));
+  }, 60_000);
 
   it("keys each generation of a delegation to its own remote admission", () => {
     expect(delegationKey("r", "d", 0)).not.toBe(delegationKey("r", "d", 1));

@@ -641,8 +641,8 @@ class DaemonSession implements AgentSession {
   /**
    * Claim the receipt's key so no admission under it can admit a run, in the receipt's own
    * workspace and principal and for its own workflow: `fenced`, the run an admission under it
-   * was verified to have made, or `pending` (an admission still being prepared or reconciled,
-   * or no answer). A reserved run id is never taken for a run until its operation resolves.
+   * is seen to have made, or `pending` (an admission still being prepared, a recoverable one
+   * whose reserved run does not exist, or no answer). Nothing here can admit a run.
    */
   private async fence(
     receipt: DelegationReceipt,
@@ -668,20 +668,20 @@ class DaemonSession implements AgentSession {
     const found = AdmissionsFindResultSchema.parse(answer);
     if (found.state !== "resolved") return "pending";
     // The retained result, without the wire receipt's operation id.
-    let result = (found.result ?? {}) as { state?: unknown; runId?: unknown };
+    const result = (found.result ?? {}) as { state?: unknown; runId?: unknown };
     if (result.state === "fenced") return "fenced";
     if (result.state === "recoverable-failure") {
-      // Resolve the operation first: its reserved run id names a run only once it is accepted.
+      // Never reconcile here: reconciling can admit the reserved run. Only a run that already
+      // exists under the reserved id is a cancel target; otherwise the outcome stays unknown
+      // and the receipt stays cancel-pending until a later look finds the run or none.
+      if (typeof result.runId !== "string") return "pending";
       try {
-        const reconciled = (await this.client.call(
-          "admissions.reconcile",
-          { operationId: found.operationId, expectedScope: scopeOf(receipt) },
-          this.bounded(deadline, signal),
-        )) as { state?: string; result?: { state?: unknown; runId?: unknown } };
-        if (reconciled.state !== "resolved" || !reconciled.result) return "pending";
-        result = reconciled.result;
+        const state = RunsGetResultSchema.parse(
+          await this.client.call("runs.get", { runId: result.runId }, this.bounded(deadline, signal)),
+        );
+        return state.run.id === result.runId ? { runId: result.runId } : "pending";
       } catch (error) {
-        if (error instanceof RemoteFault || this.options.transport.failed())
+        if (!(error instanceof RemoteFault) && this.options.transport.failed())
           throw classify(this.options.profile, this.options.transport, error);
         return "pending";
       }
@@ -763,7 +763,9 @@ class DaemonSession implements AgentSession {
         }
         return admitted(answer.runId);
       } catch (error) {
-        if (error instanceof OrcaError) throw error;
+        // Another session moved the receipt on: back to the outer re-read before anything else
+        // is sent.
+        if (error instanceof ReceiptConflict || error instanceof OrcaError) throw error;
         if (signal?.aborted) return this.abandon(receipt, deadline);
         if (error instanceof RemoteFault) {
           if (error.code === "AUTH_FORBIDDEN" && /scope/i.test(error.message))

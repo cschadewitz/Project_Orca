@@ -43,7 +43,6 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  statSync,
   writeSync,
 } from "node:fs";
 import { hostname } from "node:os";
@@ -95,7 +94,6 @@ export class ReceiptConflict extends Error {
   }
 }
 
-const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 5_000;
 
 function pause(ms: number): void {
@@ -114,10 +112,8 @@ function alive(pid: number): boolean {
 /** Set aside a lock whose owner is provably gone; leave every other lock alone. */
 function breakIfAbandoned(file: string): void {
   let text: string;
-  let modified: number;
   try {
     text = readFileSync(file, "utf8");
-    modified = statSync(file).mtimeMs;
   } catch {
     return;
   }
@@ -127,10 +123,14 @@ function breakIfAbandoned(file: string): void {
   } catch {
     owner = undefined;
   }
+  // Only a dead process on this host is provably gone; a slow or suspended owner, or one on
+  // another host, keeps its lock.
   const abandoned =
-    owner && typeof owner.pid === "number"
-      ? owner.host === hostname() && owner.pid !== process.pid && !alive(owner.pid)
-      : Date.now() - modified > LOCK_STALE_MS;
+    owner !== undefined &&
+    typeof owner.pid === "number" &&
+    owner.host === hostname() &&
+    owner.pid !== process.pid &&
+    !alive(owner.pid);
   if (!abandoned) return;
   // Move it aside atomically, then make sure it is the lock that was judged; a lock taken in
   // between goes back where it was.
@@ -181,7 +181,7 @@ export class DelegationReceipts {
   ): DelegationReceipt {
     mkdirSync(this.dir, { recursive: true });
     const target = this.file(receipt.parentRunId, receipt.delegationId);
-    const release = this.lock(target);
+    const lock = this.lock(target);
     try {
       const current = this.read(receipt.parentRunId, receipt.delegationId);
       if (current?.revision !== receipt.revision) throw new ReceiptConflict();
@@ -191,48 +191,62 @@ export class DelegationReceipts {
         revision: (receipt.revision ?? -1) + 1,
         updatedAt: new Date().toISOString(),
       });
+      // The lock must still be ours at the commit: never write over a successor's decision.
+      if (!lock.held()) throw new ReceiptConflict();
       this.replace(target, full);
       return full;
     } finally {
-      release();
+      lock.release();
     }
   }
 
   /**
    * An exclusive lock file beside the receipt, naming its owner (a random token, this process
-   * and host). Released only by its owner, and only while it still holds the owner's token. A
-   * lock is broken only when its owner is provably gone: a process on this host that no longer
-   * exists, or a lock that never got its owner written and is older than `LOCK_STALE_MS`.
+   * and host). It is created with its owner already in it (written aside, then hard-linked into
+   * place), so there is never an ownerless lock. Released only by its owner and only while it
+   * still holds the owner's token; broken only when the owner is provably gone (a process on
+   * this host that no longer exists). `held()` re-checks ownership just before a commit.
    */
-  private lock(target: string): () => void {
+  private lock(target: string): { release(): void; held(): boolean } {
     const file = `${target}.lock`;
     const body = JSON.stringify({ token: randomUUID(), pid: process.pid, host: hostname() });
-    const until = Date.now() + LOCK_WAIT_MS;
-    for (;;) {
-      let fd: number;
-      try {
-        fd = openSync(file, "wx", 0o600);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        breakIfAbandoned(file);
-        if (Date.now() > until) throw new ReceiptConflict();
-        pause(10);
-        continue;
-      }
-      try {
-        writeSync(fd, body);
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      return () => {
-        try {
-          if (readFileSync(file, "utf8") === body) rmSync(file);
-        } catch {
-          // Already gone; nothing of ours to remove.
-        }
-      };
+    const staged = `${file}.${randomUUID()}.tmp`;
+    const fd = openSync(staged, "wx", 0o600);
+    try {
+      writeSync(fd, body);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
     }
+    const held = () => {
+      try {
+        return readFileSync(file, "utf8") === body;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      const until = Date.now() + LOCK_WAIT_MS;
+      for (;;) {
+        try {
+          linkSync(staged, file);
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          breakIfAbandoned(file);
+          if (Date.now() > until) throw new ReceiptConflict();
+          pause(10);
+        }
+      }
+    } finally {
+      rmSync(staged, { force: true });
+    }
+    return {
+      held,
+      release: () => {
+        if (held()) rmSync(file, { force: true });
+      },
+    };
   }
 
   private replace(target: string, full: DelegationReceipt): void {
