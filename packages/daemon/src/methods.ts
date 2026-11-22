@@ -86,6 +86,13 @@ import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine
 import type { Maintenance } from "./maintenance.js";
 import { OrcaError, type MutationActor } from "@orca/core";
 import {
+  SECRETS_CHECK_METHOD,
+  SECRETS_LIST_METHOD,
+  SecretsCheckParamsSchema,
+  SecretsListParamsSchema,
+  type SecretsCheckParams,
+  type SecretsCheckResult,
+  type SecretsListResult,
   AGENTS_LIST_METHOD,
   AGENTS_PING_METHOD,
   ARTIFACTS_GET_METHOD,
@@ -253,6 +260,14 @@ export interface MethodContext {
   configurationAuthority?: (write: boolean, read?: boolean) => Promise<void>;
   /** Internal authenticated mount; never a collector constructed by the method table. */
   hostResourceRead?: (params: unknown, invocation: MethodContext) => Promise<unknown>;
+  /**
+   * `secrets.list` and `secrets.check` (#336), answered for the caller's current principal.
+   * The transport-authenticated principal is resolved by the server, never by the table.
+   */
+  secretsRead?: {
+    list(invocation: MethodContext): Promise<SecretsListResult>;
+    check(params: SecretsCheckParams, invocation: MethodContext): Promise<SecretsCheckResult>;
+  };
   operatorMutations?: OperatorMutationComposition | undefined;
   /** Internal exact decision guard; never parsed from legacy RPC params. */
   operatorDecisionTarget?:
@@ -920,6 +935,14 @@ export const agentMethods: MethodTable = {
 export function methodsFor(ctx: MethodContext): MethodTable {
   const operator = ctx.operatorReads;
   const table: MethodTable = ctx.reads ? { ...methods } : { [HELLO_METHOD]: hello };
+  if (ctx.secretsRead) {
+    const secrets = ctx.secretsRead;
+    table[SECRETS_LIST_METHOD] = { params: SecretsListParamsSchema, handle: (_p, call) => secrets.list(call) };
+    table[SECRETS_CHECK_METHOD] = {
+      params: SecretsCheckParamsSchema,
+      handle: (p: SecretsCheckParams, call) => secrets.check(p, call),
+    };
+  }
   if (ctx.hostResourceRead) {
     table["operator.hostResources"] = {
       params: z.unknown(),

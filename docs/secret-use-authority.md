@@ -120,15 +120,26 @@ shell is a controlled boundary that fails closed:
 
 ## Metadata methods
 
-These land in the PR after the use decision (with the app's reference picker, part B2). The
-permission and the grant they read are already in place.
+Protocol 2.6 (`packages/protocol/src/secrets.ts`, answered by `SecretsReadModel` in
+`packages/daemon/src/secrets-model.ts`):
 
-| Method          | Permission                     | Returns                                                                                                                                                                                                                                                                            |
-| --------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `secrets.list`  | `secrets.read`                 | Every configured reference's id, host, provider and description. A principal whose grant is not `"*"` sees only its granted ids. No variable names or paths unless it also holds `config.read`.                                                                                     |
-| `secrets.check` | `secrets.read` (and the grant) | `{ id, available, reason? }` for one reference, checked on its own host **without** reading the value: a local env variable is set and non-empty, or a file exists and is readable; on SSH, one `test` in the remote shell. A reference outside the caller's grant is not found. |
+| Method          | Permission     | Returns |
+| --------------- | -------------- | ------- |
+| `secrets.list`  | `secrets.read` | `{ secrets: [{ id, host, provider, description? }] }`, sorted by id. A principal whose grant is not `"*"` sees only the ids its grant names with the provider, host and endpoint binding each has now. `name` (env) or `path` (file) only with `config.read`. |
+| `secrets.check` | `secrets.read` | `{ id, host, available, reason? }` for one visible reference, checked on its own host **without** reading the value. `reason` is `missing`, `unreachable` or `unknown-host`. A reference outside the caller's grant is refused as not found (`CONFIG_INVALID`, `reason: "not-found"`) and never checked. |
 
-Neither method ever returns a value, and neither falls back to another host.
+How a check works:
+
+- **Local host.** An env variable is set and non-empty; a file is a regular file, readable
+  and non-empty.
+- **SSH host.** One command on that host, `set +xv; exec 2>/dev/null` first. An env variable
+  is only counted (`printenv NAME | wc -c`), never compared or printed; a file is tested with
+  `test -f/-r/-s`. Exit 0 is available, the test's own failure is `missing`, anything else
+  (including a connection failure) is `unreachable`. No output is returned.
+
+The caller's principal is read at each call: in token mode its credential is re-checked, so
+a revoked or narrowed grant stops showing what it no longer covers. Neither method ever
+returns a value, and neither falls back to another host.
 
 ## Ping
 
@@ -137,4 +148,5 @@ Neither method ever returns a value, and neither falls back to another host.
 ## Out of scope
 
 - Delegated sessions on a remote daemon (#883) resolve on that daemon under its own grants.
-- The app's reference picker (part B2) builds on `secrets.list`.
+- The app's reference picker builds on `secrets.list` and `secrets.check`. It lands with the
+  #335 desktop authoring screens, where an agent's and an MCP server's `env` are edited.
