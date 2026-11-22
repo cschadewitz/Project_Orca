@@ -97,6 +97,7 @@ import { formatEvent, formatPaused, formatPendingInput, formatRunState, stepAgen
 import { daemonCall, DaemonRedirectError, isAuthenticationFailure } from "../daemon-client.js";
 import { parseVars, workflowGuards } from "./launch-options.js";
 import { authCommand } from "./auth.js";
+import { remoteCommand } from "./remote.js";
 import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
 import { recoveryCommand } from "./recovery.js";
@@ -269,6 +270,12 @@ export const commands: Record<string, Command> = {
     usage:
       "issue defaults to --preset client (owner, operator, viewer also supported).\n--workflow-scope id may be repeated; --runs-scope all|owned selects run scope.\n--label text names a credential; --expires-at ISO sets an expiry for issue or rotate.\n--json prints structured results. Only issue and rotate print a token, once. Restart serve to rotate its local bootstrap credential.\nLocal clients use ORCA_DAEMON_TOKEN, ORCA_DAEMON_TOKEN_FILE, or auth/local-client.token beside the workspace config.\n",
     run: authCommand,
+  },
+  remote: {
+    help: "remote add [user@]host  Make a Linux machine a managed ORCA server over SSH, in one step (#881).",
+    usage:
+      "--ssh-port N and --identity FILE choose how to reach it; --port N is the daemon's port there (default 6722).\nThe server's host key is pinned on first use under ~/.config/orca/known_hosts. Re-running verifies and repairs.\nIt refuses a machine with an ORCA installation it did not make. --json prints the typed result.\n",
+    run: (ctx) => remoteCommand(ctx),
   },
 
   validate: {

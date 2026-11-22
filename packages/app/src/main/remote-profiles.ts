@@ -43,6 +43,22 @@ import { streamTransport, type StreamTransport } from "../client/stream-transpor
 import type { RemoteProfileView } from "../daemon-connection.js";
 import { ConnectionRefusal } from "./connection-target.js";
 import {
+  confirmationCode,
+  confirmedResult,
+  discoverServer,
+  dropDiscovery,
+  enrollDiscovered,
+  keyFingerprints,
+  managedLauncher,
+  readSetup,
+  setupCommand,
+  setupProgram,
+  SETUP_TIMEOUT_MS,
+  type Discovery,
+  type InspectOutcome,
+  type SetupOutcome,
+} from "@orca/protocol/server-setup";
+import {
   CredentialRecords,
   CredentialSetupRefusal,
   DEFAULT_CREDENTIAL_POLICY,
@@ -147,6 +163,43 @@ export interface HelloAnswer {
   workspaceId?: string | undefined;
 }
 
+/** What setting up a profile's server came to (#881), and whether this computer then signed in. */
+export interface ServerSetupResult {
+  setup: SetupOutcome;
+  /** Set when the setup was `ready`: the first connect signed in (#875), or why it did not. */
+  signIn?: { ok: true } | { ok: false; message: string };
+}
+
+/**
+ * What the person confirms before a server is set up (#881 review): read from the server by a
+ * read-only inspection, over keys that are shown here before they are ever enrolled.
+ */
+export interface ServerInspection {
+  /** Bound to everything below and the profile's revision: what `setUpServer` takes back. */
+  confirmation: string;
+  destination: string;
+  /** The account the setup will run as, and install for. */
+  account: string;
+  /** SHA-256 fingerprints of the server's host keys, and the jump host's. */
+  fingerprints: { server: string[]; jump?: string[] };
+  /** The keys are not pinned for this profile yet: confirming enrolls them. */
+  firstUse: boolean;
+  version: string;
+  root: string;
+  /** The version already set up there, if any (then this verifies and repairs it). */
+  current: string | null;
+  scope: "install-and-sign-in";
+}
+
+/** What an inspection came to: something to confirm, or why the server cannot be set up. */
+export interface ServerInspectionResult {
+  inspection?: ServerInspection;
+  outcome: InspectOutcome;
+}
+
+/** A confirmation waits this long for the person; then the server is inspected again. */
+const CONFIRMATION_MS = 15 * 60_000;
+
 /** What became of the server's credential when its profile was removed. */
 export type RevokeOutcome = "revoked" | "not-reached" | "none";
 
@@ -227,6 +280,22 @@ export class RemoteProfiles {
   private readonly generations = new Map<string, number>();
   /** Profiles being removed: their revoke is on the way, nothing may connect meanwhile. */
   private readonly removing = new Set<string>();
+  /** Profiles whose server is being set up (#881): nothing may connect, edit or remove them meanwhile. */
+  private readonly serverSetups = new Set<string>();
+  /** The inspection each profile's confirmation was given for (#881): one at a time, used once. */
+  private readonly inspections = new Map<
+    string,
+    {
+      code: string;
+      discovery: Discovery;
+      account: string;
+      root: string;
+      current: string | null;
+      version: string;
+      revision: number;
+      until: number;
+    }
+  >();
   /** Bumped by every edit, removal and pin reset of a profile (in memory: pending work is too). */
   private readonly revisions = new Map<string, number>();
   private closed = false;
@@ -531,6 +600,7 @@ export class RemoteProfiles {
    */
   private assertIdle(id: string, what: "editing" | "removing" | "importing" | "resetting"): void {
     if (this.removing.has(id)) throw new ConnectionRefusal("That profile is being removed.");
+    if (this.serverSetups.has(id)) throw new ConnectionRefusal("That profile's server is being set up.");
     if (this.tunnels.has(id) || this.setups.has(id)) {
       const verb = {
         editing: "editing",
@@ -606,6 +676,170 @@ export class RemoteProfiles {
     }
   }
 
+  /**
+   * The first half of setting a profile's machine up (#881): connect without enrolling any
+   * key, and inspect the server read-only. What comes back is everything the person confirms:
+   * the host keys, the account, the version and what will be done. Nothing on the server or in
+   * the profile's pins changes.
+   */
+  async inspectServer(id: string, options: { version: string; scripts: string }): Promise<ServerInspectionResult> {
+    if (this.closed) throw new ConnectionRefusal("The app is closing.");
+    this.assertIdle(id, "editing");
+    const profile = this.get(id);
+    if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
+    const revision = this.revision(id);
+    this.dropInspection(id);
+    this.serverSetups.add(id);
+    let discovery: Discovery;
+    try {
+      discovery = await discoverServer({
+        base: this.tunnelOptions(profile),
+        tunnel: (tunnelOptions) => (this.deps.tunnel ?? ((o) => new SshTunnel(o)))(tunnelOptions),
+        version: options.version,
+        program: setupProgram(options.scripts),
+      });
+    } finally {
+      this.serverSetups.delete(id);
+    }
+    const { outcome } = discovery;
+    if (outcome.kind !== "inspected" || this.revision(id) !== revision || this.closed) {
+      dropDiscovery(discovery);
+      if (outcome.kind === "inspected")
+        throw new ConnectionRefusal("The profile changed while its server was inspected. Try again.");
+      return { outcome };
+    }
+    const { account, root, current } = outcome.inspected;
+    const code = confirmationCode({
+      profile,
+      revision,
+      keys: discovery.keys,
+      account,
+      root,
+      current,
+      version: options.version,
+      scope: "install-and-sign-in",
+    });
+    this.inspections.set(id, {
+      code,
+      discovery,
+      account,
+      root,
+      current,
+      version: options.version,
+      revision,
+      until: Date.now() + CONFIRMATION_MS,
+    });
+    return {
+      outcome,
+      inspection: {
+        confirmation: code,
+        destination: profile.destination,
+        account,
+        fingerprints: keyFingerprints(discovery.keys),
+        firstUse: discovery.firstUse,
+        version: options.version,
+        root,
+        current,
+        scope: "install-and-sign-in",
+      },
+    };
+  }
+
+  private dropInspection(id: string): void {
+    const pending = this.inspections.get(id);
+    this.inspections.delete(id);
+    if (pending) dropDiscovery(pending.discovery);
+  }
+
+  /**
+   * The second half (#881): make the profile's machine a managed ORCA server, or verify and
+   * repair one set up before, exactly as the person confirmed `confirmation` (from
+   * `inspectServer`, used once). Only then are the inspected keys enrolled; the setup runs over
+   * a pinned-only connection that carries nothing unless its pins vouch for exactly those keys,
+   * as exactly the confirmed account. It stages the signed server bundle of `version` (the app's
+   * own). Once the server is ready, the profile runs the server's managed launcher, and the
+   * first connect signs this computer in (#875): the sign-in the confirmation covered. Nothing
+   * may connect, edit or remove the profile meanwhile. `scripts`: the directory holding the
+   * setup and the managed adapter.
+   */
+  async setUpServer(
+    id: string,
+    options: { version: string; scripts: string; confirmation: string },
+  ): Promise<ServerSetupResult> {
+    if (this.closed) throw new ConnectionRefusal("The app is closing.");
+    this.assertIdle(id, "editing");
+    const profile = this.get(id);
+    if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
+    const pending = this.inspections.get(id);
+    const revision = this.revision(id);
+    // Used once, whatever comes of it.
+    this.inspections.delete(id);
+    if (
+      !pending ||
+      pending.code !== options.confirmation ||
+      pending.revision !== revision ||
+      pending.version !== options.version ||
+      Date.now() > pending.until
+    ) {
+      if (pending) dropDiscovery(pending.discovery);
+      throw new ConnectionRefusal("That confirmation is not current. Check the server again, then confirm.");
+    }
+    let command: string[];
+    let program: string;
+    try {
+      command = setupCommand(options.version, profile.remotePort, pending);
+      program = setupProgram(options.scripts);
+    } catch (error) {
+      dropDiscovery(pending.discovery);
+      throw error;
+    }
+    enrollDiscovered(pending.discovery, this.pins(id), profile.jump !== undefined);
+    this.serverSetups.add(id);
+    let setup: SetupOutcome;
+    try {
+      const tunnel = this.newTunnel(profile, true, pending.discovery.keys);
+      try {
+        await tunnel.open();
+        // Only the setup that was confirmed counts: what the server reports must match it.
+        setup = confirmedResult(readSetup(await tunnel.exec(command, SETUP_TIMEOUT_MS, program)), {
+          version: options.version,
+          port: profile.remotePort,
+          account: pending.account,
+          root: pending.root,
+        });
+      } finally {
+        await tunnel.close();
+      }
+    } finally {
+      this.serverSetups.delete(id);
+    }
+    if (setup.kind !== "ready") return { setup };
+    if (this.revision(id) !== revision || this.closed)
+      throw new ConnectionRefusal("The profile changed while its server was set up. Set it up again.");
+    // Still pinned to exactly the confirmed keys: what signs in is the server that was set up.
+    if (this.hostKeys(profile) !== pending.discovery.keys)
+      throw new ConnectionRefusal(
+        "The profile's pinned host keys changed while its server was set up. Set it up again.",
+      );
+    // Repointed only at the launcher derived here from the confirmed directory, on the same
+    // server and port (so the verified pins stay). The managed launcher passes the server's
+    // config itself, so the profile names none.
+    const latest = this.get(id)!;
+    const launcher = managedLauncher(pending.root);
+    if (latest.serverCommand !== launcher || latest.serverConfig !== undefined) {
+      const { serverConfig: _config, ...rest } = latest;
+      this.save({ ...rest, serverCommand: launcher });
+      if (this.hostKeys(profile) !== pending.discovery.keys)
+        throw new ConnectionRefusal("The profile's pinned host keys changed while its server was set up.");
+    }
+    try {
+      await (await this.open(id)).release();
+      return { setup, signIn: { ok: true } };
+    } catch (error) {
+      return { setup, signIn: { ok: false, message: error instanceof Error ? error.message : String(error) } };
+    }
+  }
+
   /** Pin what an import is about to be for, before anything slow (a file picker) runs. */
   ticket(id: string): ProfileTicket {
     const profile = this.get(id);
@@ -672,6 +906,7 @@ export class RemoteProfiles {
     const shared = this.tunnels.get(id);
     if (
       this.setups.has(id) ||
+      this.serverSetups.has(id) ||
       (shared && shared.tunnel.state.phase !== "failed" && shared.tunnel.state.phase !== "closed")
     )
       throw new ConnectionRefusal("Connect to another daemon before forgetting this profile's host key.");
@@ -701,6 +936,7 @@ export class RemoteProfiles {
     const profile = this.get(id);
     if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
     if (this.removing.has(id)) throw new ConnectionRefusal("That profile is being removed.");
+    if (this.serverSetups.has(id)) throw new ConnectionRefusal("That profile's server is being set up.");
     let shared = this.tunnels.get(id);
     if (!shared || shared.tunnel.state.phase === "failed" || shared.tunnel.state.phase === "closed") {
       const tunnel = this.newTunnel(profile);
@@ -797,6 +1033,7 @@ export class RemoteProfiles {
   /** Quit: stop every tunnel. */
   async close(): Promise<void> {
     this.closed = true;
+    for (const id of [...this.inspections.keys()]) this.dropInspection(id);
     const all = [...this.tunnels.values()];
     this.tunnels.clear();
     for (const shared of all) if (shared.renewal) clearInterval(shared.renewal);
