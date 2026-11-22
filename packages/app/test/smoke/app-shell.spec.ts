@@ -243,6 +243,9 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     "guidedLaunch",
     "hello",
     "inputs",
+    // #888's Linux `.deb` release notice: read, subscribe, and open/copy of the release page
+    // and `apt` command main built. The renderer cannot pass a URL or a command across it.
+    "linuxUpdates",
     "macUpdates",
     "notifications",
     "operator",
