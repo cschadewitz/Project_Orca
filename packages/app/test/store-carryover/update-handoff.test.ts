@@ -3,6 +3,7 @@
  * real kernel-lifetime writer fence (#897): the updater's handoff, the next start's claim, the
  * daemon's carryover under the fence.
  */
+import { mkdirSync, readdirSync } from "node:fs";
 import { mkdir, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -11,7 +12,11 @@ import { readUpdateHandoff, UPDATE_HANDOFF_FILE } from "@orca/protocol/update-ha
 import { enterStoreFormat, readStoreFormat, STORE_FORMAT_EPOCH, STORE_UPDATE_HANDOFF_FILE } from "@orca/store";
 import { desktopCarryover } from "../../../cli/src/desktop-carryover.js";
 import { handOffStoreForUpdate, withdrawUpdateHandoff } from "../../src/main/first-run/update-handoff.js";
-import { inspectFirstRunOwnership, reserveFirstRunOwnership } from "../../src/main/first-run/ownership.js";
+import {
+  OWNERSHIP_DIRECTORY,
+  inspectFirstRunOwnership,
+  reserveFirstRunOwnership,
+} from "../../src/main/first-run/ownership.js";
 import { launch, selected } from "../first-run-compaction/fixture.js";
 
 /** An unmarked store from before the marker, without 0.7 evidence: ordinary startup refuses it. */
@@ -28,6 +33,13 @@ const legacy = async (store: string) => {
       payload: { workflowId: "review", workflowVersion: "1", workspace: { hostId: "local", cwd: "/w" }, vars: {} },
     }) + "\n",
   );
+};
+const nextAttempt = (path: string) => {
+  const last = readdirSync(join(path, OWNERSHIP_DIRECTORY))
+    .filter((name) => /^[0-9]{6}$/.test(name))
+    .sort()
+    .at(-1)!;
+  return String(Number(last) + 1).padStart(6, "0");
 };
 const open = (store: string, version: string, carryover: ReturnType<typeof desktopCarryover>) =>
   enterStoreFormat(store, { appVersion: version, mode: "write", carryover: () => Promise.resolve(carryover) });
@@ -58,6 +70,30 @@ it("carries the store forward on the first start after the update, under the new
   await rename(store, `${store}-moved`);
   await mkdir(store, { mode: 0o700 });
   expect(hold!.check()).toBe(false);
+}, 30000);
+
+it("does not write the marker when the real fence is lost at commit time", async () => {
+  const path = await selected();
+  launch(path);
+  const store = join(path, ".orca");
+  await legacy(store);
+  handOffStoreForUpdate(path, "0.8.0", "0.9.0");
+  const owner = reserveFirstRunOwnership(path);
+  const hold = await enterFirstRunWriter(path, store, owner.launchToken!());
+  const authority = desktopCarryover(hold, "0.9.0")!;
+  // Another reservation appears in the journal after the backup is published, just before the
+  // marker: the writer is no longer the journal's latest, so its fence no longer holds.
+  let checks = 0;
+  const fence = {
+    check: () => {
+      if (++checks === 5) mkdirSync(join(path, OWNERSHIP_DIRECTORY, nextAttempt(path)), { mode: 0o700 });
+      return hold!.check();
+    },
+  };
+  await expect(open(store, "0.9.0", { ...authority, fence })).rejects.toMatchObject({ reason: "FENCE_LOST" });
+  expect(checks).toBe(5);
+  expect(await readStoreFormat(store)).toBeUndefined();
+  expect((await readdir(store)).filter((name) => name.startsWith("store-format.json"))).toEqual([]);
 }, 30000);
 
 it("keeps refusing without the proof: another launch in between, or the version that was not installed", async () => {

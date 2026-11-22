@@ -23,7 +23,8 @@
  * them together. Changing the epoch means appending to {@link STORE_FORMAT_HISTORY}.
  */
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
+import { createDurable, syncDirectory, syncFile } from "./durable-file.js";
 import type { Stats } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -69,7 +70,15 @@ export type StoreFormatMarker = z.infer<typeof MarkerSchema>;
 
 /** NEWER, TOO_OLD and DAMAGED describe the marker; the rest are carryover refusals. */
 export type StoreFormatReason =
-  "NEWER" | "TOO_OLD" | "DAMAGED" | "CARRYOVER_REQUIRED" | "BUSY" | "UNREADABLE" | "BACKUPS_UNSAFE" | "FENCE_LOST";
+  | "NEWER"
+  | "TOO_OLD"
+  | "DAMAGED"
+  | "CARRYOVER_REQUIRED"
+  | "BUSY"
+  | "UNREADABLE"
+  | "BACKUPS_UNSAFE"
+  | "FENCE_LOST"
+  | "APP_OWNED";
 export class StoreFormatError extends OrcaError {
   override readonly name = "StoreFormatError";
   constructor(
@@ -227,7 +236,18 @@ const carryoverRequired = (storeDir: string, from: string) =>
     storeDir,
   );
 
-async function stamp(storeDir: string, appVersion: string, now: Date, backup: string | undefined): Promise<void> {
+/**
+ * Write the marker durably: flushed before the rename that makes it current, and the rename
+ * flushed before this returns, so no writer is admitted on a marker a crash could still undo.
+ * `guard` runs with no await between it and that rename; when it throws, nothing is changed.
+ */
+async function stamp(
+  storeDir: string,
+  appVersion: string,
+  now: Date,
+  backup: string | undefined,
+  guard: () => void = () => undefined,
+): Promise<void> {
   const value: StoreFormatMarker = {
     format: 1,
     epoch: STORE_FORMAT_EPOCH,
@@ -236,8 +256,16 @@ async function stamp(storeDir: string, appVersion: string, now: Date, backup: st
     ...(backup ? { backup } : {}),
   };
   const tmp = join(storeDir, `${STORE_FORMAT_FILE}.${randomUUID()}.tmp`);
-  await writeFile(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
+  await createDurable(tmp, JSON.stringify(value, null, 2) + "\n");
+  try {
+    guard();
+  } catch (error) {
+    await rm(tmp, { force: true });
+    throw error;
+  }
   await rename(tmp, join(storeDir, STORE_FORMAT_FILE));
+  if (process.platform === "win32") await syncFile(join(storeDir, STORE_FORMAT_FILE));
+  await syncDirectory(storeDir);
 }
 
 /**
@@ -364,13 +392,13 @@ async function carryLocked(
       privacy,
     });
     backup = await staged.commit();
-    // The backup is published; the marker is what changes the format. The fence must still hold.
-    fence();
+    // The backup is published and durable; the marker is what changes the format, and the fence
+    // is checked once more with no await between that check and the marker's rename.
+    await stamp(storeDir, options.appVersion, now, backup, fence);
   } catch (error) {
     if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
     throw error;
   }
-  await stamp(storeDir, options.appVersion, now, backup);
   await pruneFormatBackups(storeDir, backup, privacy);
   return { status: "carried", epoch: current, from, backup };
 }

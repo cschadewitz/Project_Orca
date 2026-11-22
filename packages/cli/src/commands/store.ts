@@ -11,7 +11,14 @@
  */
 import { resolve } from "node:path";
 import { OrcaError } from "@orca/core";
-import { carryStoreForward, enterStoreFormat, readStoreFormat, STORE_FORMAT_EPOCH } from "@orca/store";
+import {
+  carryStoreForward,
+  enterStoreFormat,
+  readStoreFormat,
+  STORE_FORMAT_EPOCH,
+  StoreFormatError,
+} from "@orca/store";
+import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
 import { loadConfig } from "../bootstrap.js";
 import { readOrcaVersion } from "../version.js";
 import { storePrivacy } from "../store-privacy.js";
@@ -39,6 +46,7 @@ export async function storeCommand(ctx: CommandContext): Promise<number> {
       return 0;
     }
     case "carry-forward": {
+      refuseAppOwned(configDir, storeDir);
       const privacy = storePrivacy();
       const outcome = await carryStoreForward(storeDir, {
         appVersion: readOrcaVersion(),
@@ -52,4 +60,23 @@ export async function storeCommand(ctx: CommandContext): Promise<number> {
     default:
       throw new OrcaError("CONFIG_INVALID", `unknown store subcommand '${sub}' (format | carry-forward)`);
   }
+}
+
+/**
+ * The desktop app's own workspaces are written only by the daemon the app launches, which holds
+ * the workspace's first-run writer fence. This command cannot hold that fence, and the format
+ * lock does not keep that daemon out, so it refuses there: the app carries its store forward
+ * itself on the first start after an update (#897).
+ */
+function refuseAppOwned(configDir: string, storeDir: string): void {
+  for (const path of [configDir, storeDir])
+    try {
+      assertNoUnownedFirstRunMutation(path);
+    } catch {
+      throw new StoreFormatError(
+        "APP_OWNED",
+        `${storeDir} belongs to the ORCA desktop app, which carries it forward itself after an update. This command cannot hold the app's write fence, so it changed nothing.`,
+        storeDir,
+      );
+    }
 }

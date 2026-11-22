@@ -24,10 +24,11 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { chmod, copyFile, lstat, mkdir, readdir, readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readdir, readFile, rename, rm, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { fileStores } from "./document-store.js";
+import { createCopy, createDurable, syncDirectory } from "./durable-file.js";
 import { FileLeaseStore, lapsed } from "./lease-store.js";
 
 export const STORE_FORMAT_BACKUP_DIR = "format-backups";
@@ -172,7 +173,7 @@ async function copyTree(source: string, target: string, entries: Snapshot, priva
   for (const [path, entry] of entries) if (entry.type === "dir") await privateDirectory(privacy, join(target, path));
   for (const [path, entry] of entries) {
     if (entry.type === "file") {
-      await copyFile(join(source, path), join(target, path));
+      await createCopy(join(source, path), join(target, path));
       if (!(await privacy.privateEntry(join(target, path), "file").catch(() => false)))
         throw unsafeCopy(join(target, path));
       if (process.platform !== "win32") await chmod(join(target, path), entry.mode);
@@ -183,6 +184,9 @@ async function copyTree(source: string, target: string, entries: Snapshot, priva
   if (process.platform !== "win32")
     for (const [path, entry] of [...entries].reverse())
       if (entry.type === "dir") await chmod(join(target, path), entry.mode);
+  // Every file is flushed already; flush each directory's entries, deepest first.
+  for (const [path, entry] of [...entries].reverse()) if (entry.type === "dir") await syncDirectory(join(target, path));
+  await syncDirectory(target);
 }
 
 async function verifyCopy(source: string, target: string, entries: Snapshot): Promise<boolean> {
@@ -307,27 +311,26 @@ export async function stageCarryover(
       files: [...before.values()].filter((e) => e.type === "file").length,
       signature: signatureOf(before),
     };
-    await writeFile(join(partial, STORE_FORMAT_BACKUP_MANIFEST), JSON.stringify(manifest, null, 2) + "\n", {
-      mode: 0o600,
-      flag: "wx",
-    });
+    // The copy is durable (createCopy, copyTree) before its manifest, and the manifest before
+    // the copy can be published.
+    await createDurable(join(partial, STORE_FORMAT_BACKUP_MANIFEST), JSON.stringify(manifest, null, 2) + "\n");
+    await syncDirectory(partial);
     return {
       async commit() {
         try {
+          if (!sameSnapshot(before, await snapshot(storeDir))) throw busy();
+          const name = `${now.toISOString().replace(/[:.]/g, "-")}-from-${from}`;
+          let target = join(root, name);
+          for (let n = 1; await present(target); n++) target = join(root, `${name}-${n}`);
+          // Checked with no await between it and the rename that publishes the backup.
           fence();
+          await rename(partial, target);
+          await syncDirectory(root);
+          return target;
         } catch (error) {
           await rm(partial, { recursive: true, force: true });
           throw error;
         }
-        if (!sameSnapshot(before, await snapshot(storeDir))) {
-          await rm(partial, { recursive: true, force: true });
-          throw busy();
-        }
-        const name = `${now.toISOString().replace(/[:.]/g, "-")}-from-${from}`;
-        let target = join(root, name);
-        for (let n = 1; await present(target); n++) target = join(root, `${name}-${n}`);
-        await rename(partial, target);
-        return target;
       },
     };
   } catch (error) {

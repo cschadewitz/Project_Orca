@@ -1,0 +1,117 @@
+# Native NTFS acceptance for store carryover's private copies (#897): on a real Windows volume,
+# as a standard (non-elevated) local user, carry a store forward through the packaged first-run
+# boundary and read every published entry's security descriptor back. A recording stand-in in
+# the unit tests cannot prove what Windows assigns at creation; this does
+# (packages/cli/native-probe/store-carryover-probe.ts says exactly what is checked).
+name: Windows store carryover (NTFS)
+
+on:
+  pull_request:
+    paths:
+      - packages/store/src/store-format*.ts
+      - packages/store/src/durable-file.ts
+      - packages/cli/src/store-privacy.ts
+      - packages/cli/native-probe/**
+      - packages/protocol/src/first-run-fence.ts
+      - packages/protocol/src/first-run-windows.ts
+      - packages/app/native/diagnostics/**
+      - packages/app/scripts/build-store-carryover-probe.js
+      - .github/workflows/windows-store-carryover.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-store-carryover-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ntfs:
+    name: private copies on NTFS as a standard user
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Build
+        run: pnpm exec tsc -b tsconfig.build.json
+
+      - name: Stage native addons for all requested Windows architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_version=$(node -p 'process.versions.node')
+          case "$node_version" in *[!0-9.]*|'') exit 1 ;; esac
+          headers_scratch=$(mktemp -d "$RUNNER_TEMP/orca-win-native-headers.XXXXXX")
+          trap 'rm -rf -- "$headers_scratch"' EXIT
+          archive="node-v${node_version}-headers.tar.gz"
+          base="https://nodejs.org/download/release/v${node_version}"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 30 --max-filesize 65536 \
+            "$base/SHASUMS256.txt" --output "$headers_scratch/SHASUMS256.txt"
+          for name in "$archive" win-x64/node.lib win-arm64/node.lib; do
+            mkdir -p "$headers_scratch/$(dirname "$name")"
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 60 --max-filesize 16777216 \
+              "$base/$name" --output "$headers_scratch/$name"
+            CHECKSUM_ROOT="$headers_scratch" CHECKSUM_NAME="$name" python - <<'PY'
+          import hashlib, os, pathlib, re
+          root, name = pathlib.Path(os.environ["CHECKSUM_ROOT"]), os.environ["CHECKSUM_NAME"]
+          entries = [line[:64] for line in (root / "SHASUMS256.txt").read_text().splitlines()
+                     if re.fullmatch(r"[0-9a-f]{64}  " + re.escape(name), line)]
+          if len(entries) != 1 or hashlib.sha256((root / name).read_bytes()).hexdigest() != entries[0]:
+              raise SystemExit("Exact Node input checksum unavailable or mismatched")
+          PY
+          done
+          # GNU tar in Git Bash reads a drive-letter archive path as host:path.
+          # Use the verified archive's basename from its directory instead.
+          (cd "$headers_scratch" && tar -xzf "$archive")
+          for arch in x64 arm64; do
+            mkdir -p "$headers_scratch/node-v${node_version}/$arch"
+            cp "$headers_scratch/win-$arch/node.lib" "$headers_scratch/node-v${node_version}/$arch/node.lib"
+          done
+          node tools/packaged-windows/stage-native-addons.js --headers "$headers_scratch/node-v${node_version}"
+
+      # The probe and node itself go into a folder the standard user can read; it never runs
+      # anything from the checkout or the elevated runner's tool cache.
+      - name: Bundle the probe beside the packaged first-run boundary
+        run: |
+          set -euo pipefail
+          node packages/app/scripts/build-store-carryover-probe.js 'C:\orca-probe'
+          cp "$(command -v node)" 'C:\orca-probe\bin\node.exe'
+
+      - name: Carry a store forward as a standard user and check every ACL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = 'orcaprobe'
+          $bytes = [byte[]]::new(24); [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+          $plain = 'Aa1!' + [Convert]::ToBase64String($bytes)
+          $secret = ConvertTo-SecureString $plain -AsPlainText -Force
+          New-LocalUser -Name $name -Password $secret -PasswordNeverExpires -UserMayNotChangePassword | Out-Null
+          # Users only: never Administrators.
+          if (Get-LocalGroupMember -Group Administrators | Where-Object { $_.Name -like "*\$name" }) { throw 'probe user is an administrator' }
+          icacls 'C:\orca-probe' /grant "${name}:(OI)(CI)RX" | Out-Null
+          $credential = [pscredential]::new($name, $secret)
+          $out = Join-Path $env:RUNNER_TEMP 'probe.out'; $err = Join-Path $env:RUNNER_TEMP 'probe.err'
+          $process = Start-Process -FilePath 'C:\orca-probe\bin\node.exe' -ArgumentList 'C:\orca-probe\bin\probe.mjs' `
+            -Credential $credential -LoadUserProfile -WorkingDirectory 'C:\orca-probe' -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $out -RedirectStandardError $err
+          Get-Content $out
+          Get-Content $err
+          if ($process.ExitCode -ne 0) { throw "probe failed with exit code $($process.ExitCode)" }
