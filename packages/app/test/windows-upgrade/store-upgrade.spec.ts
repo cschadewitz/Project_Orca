@@ -271,9 +271,14 @@ test("a marked store of the same format opens in place again, unchanged", async 
 
 test(`the previous release's daemon still reads the stamped store`, async () => {
   const { exe } = await installed();
-  const before = await readFile(join(STORE, "store-format.json"), "utf8");
+  const before = await readMarker(STORE);
   expect(await runIds(exe, fromBundle)).toEqual(fromRuns);
-  expect(await readFile(join(STORE, "store-format.json"), "utf8")).toBe(before);
+  // The format never moves. A previous release that already knows the marker (0.7.1 onward)
+  // records itself as the store's last writer when it opens it; an older one leaves it as is.
+  const after = await readMarker(STORE);
+  expect(after.epoch).toBe(before.epoch);
+  if (after.writtenBy !== before.writtenBy) expect(after.writtenBy).toBe(FROM);
+  else expect(after).toEqual(before);
 });
 
 test("the candidate refuses a store stamped by a newer format and changes nothing", async () => {
