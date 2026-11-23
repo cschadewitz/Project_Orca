@@ -5,7 +5,7 @@
  * Every refusal, and an interruption before the marker, leaves the store on SQLite as it was.
  */
 import { spawn } from "node:child_process";
-import { lstat, readdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -305,6 +305,65 @@ describe("switch back to files (#339)", () => {
     expect(await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).toMatchObject({ backend: "file" });
     await expectPlainFiles(dir);
     await expectReadsOnFiles(dir);
+  });
+
+  describe("after the marker, the next start drops the database only for this switch", () => {
+    /** A switch back whose marker is published, with the database and the journal still there. */
+    const published = async () => {
+      const dir = await onSqlite();
+      await expect(
+        switchStoreToFiles(dir, {
+          appVersion: "0.8.0",
+          afterMarker: async () => {
+            throw new Error("killed");
+          },
+        }),
+      ).rejects.toThrow("killed");
+      expect(await readStoreFormat(dir)).toMatchObject({ epoch: STORE_FORMAT_EPOCH });
+      expect(await readdir(dir)).toContain(SQLITE_METADATA_FILE);
+      expect(await readdir(join(dir, SQLITE_SWITCH_DIR))).toContain("journal.json");
+      return dir;
+    };
+    const keptForReview = async (dir: string) => {
+      await expect(enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).rejects.toMatchObject(
+        refusal("INTERRUPTED"),
+      );
+      expect(await readdir(dir)).toContain(SQLITE_METADATA_FILE);
+      expect(await readdir(join(dir, SQLITE_SWITCH_DIR))).toContain("journal.json");
+    };
+
+    it("finishes when the marker and the database are this switch's", async () => {
+      const dir = await published();
+      expect(await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).toMatchObject({ backend: "file" });
+      await expectPlainFiles(dir);
+      await expectReadsOnFiles(dir);
+    });
+
+    it("finishes when an earlier cleanup already removed the database", async () => {
+      const dir = await published();
+      await rm(join(dir, SQLITE_METADATA_FILE));
+      expect(await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).toMatchObject({ backend: "file" });
+      await expectPlainFiles(dir);
+      await expectReadsOnFiles(dir);
+    });
+
+    it("refuses, dropping nothing, when the marker is not this switch's", async () => {
+      const dir = await published();
+      const marker = JSON.parse(await readFile(join(dir, "store-format.json"), "utf8")) as Record<string, unknown>;
+      await writeFile(join(dir, "store-format.json"), JSON.stringify({ ...marker, backup: "/elsewhere/backup" }));
+      await keptForReview(dir);
+      const { backup: _backup, ...unnamed } = marker;
+      await writeFile(join(dir, "store-format.json"), JSON.stringify(unnamed));
+      await keptForReview(dir);
+    });
+
+    it("refuses, dropping nothing, when the database left behind is another store's", async () => {
+      const dir = await published();
+      const other = await onSqlite();
+      await rm(join(dir, SQLITE_METADATA_FILE));
+      await writeFile(join(dir, SQLITE_METADATA_FILE), await readFile(join(other, SQLITE_METADATA_FILE)));
+      await keptForReview(dir);
+    });
   });
 
   describe("interrupted by a kill", () => {

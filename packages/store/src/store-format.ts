@@ -1140,17 +1140,29 @@ async function switchToFilesLocked(
 
 /**
  * Finish or undo a switch back to files that was interrupted, from its journal. The marker
- * decides: on this ORCA's file format with no database id, the switch back happened (every path
- * was restored before it), and only the database and the journal are left to drop; on SQLite,
- * naming the journal's database, which is still bound to it, every marker goes back (what was
- * restored is set aside and dropped). Anything else is refused (`INTERRUPTED`).
+ * decides, and must be this switch's:
+ *
+ * - on this ORCA's file format, with no database id and naming the backup this journal records
+ *   (each switch back takes its own), the switch back happened (every path was restored before
+ *   the marker). Only the database and the journal are left to drop, and the database only if it
+ *   is still the one the journal names, or already gone (a cleanup that was interrupted after
+ *   removing it); a database bound to anything else is left alone and refused.
+ * - on SQLite, naming the journal's database, which is still bound to it: every marker goes back
+ *   (what was restored is set aside and dropped).
+ *
+ * Anything else is refused (`INTERRUPTED`) and left as it is.
  */
 async function settleFilesSwitch(
   storeDir: string,
   marker: StoreFormatMarker | undefined,
   journal: SqliteSwitchJournal,
 ): Promise<void> {
-  if (marker?.epoch === STORE_FORMAT_EPOCH && !marker.sqliteId) {
+  if (marker?.epoch === STORE_FORMAT_EPOCH && !marker.sqliteId && marker.backup === journal.backup) {
+    const database = await lstat(join(storeDir, SQLITE_METADATA_FILE)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (database && sqliteDatabaseBinding(storeDir) !== journal.sqliteId) throw switchInterrupted(storeDir);
     await syncMarker(storeDir);
     await dropSqliteDatabase(storeDir);
   } else if (
