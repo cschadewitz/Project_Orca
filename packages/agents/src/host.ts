@@ -11,6 +11,7 @@ import type { ChildProcess, ChildProcessByStdio } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgentSpec, HostSpec, SecretSource } from "@orca/core";
+import type { OwnedFsBinding } from "./owned-fs-io.js";
 
 /** A child spawned with `stdio: ["pipe", "pipe", "pipe"]`: all three streams present. */
 export type PipedChildProcess = ChildProcessByStdio<Writable, Readable, Readable>;
@@ -82,6 +83,18 @@ export interface HostFileSystem {
    */
   existsMany(paths: string[]): Promise<boolean[]>;
   mkdirp(path: string): Promise<void>;
+  /**
+   * Reads and writes bound to a file's identity (#703): only a host whose files are this
+   * machine's has them. ORCA's own file executor uses them for a local host and refuses a
+   * local `fs/*` request on a host without them, since the binding cannot be established.
+   */
+  readonly bound?: {
+    read(binding: OwnedFsBinding): Promise<string>;
+    /** Strict: an existing file, or a new one created bound to its checked directory. */
+    write(binding: OwnedFsBinding, content: string): Promise<void>;
+    /** Compatibility, best effort and outside the guarantee: a new file `write` cannot bind. */
+    writeCompatibility(binding: OwnedFsBinding, content: string): Promise<void>;
+  };
 }
 
 export interface SpawnAgentOptions {

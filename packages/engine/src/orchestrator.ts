@@ -3254,6 +3254,51 @@ export class Orchestrator {
               rc.logger.warn("permission audit append failed", { error: describeError(error) }),
             );
         },
+        // ORCA's own file executor records each operation it authorizes before the I/O, and
+        // its outcome after (#703). The authorization must be durable before the I/O starts:
+        // it is synced like a turn record (`RunContext.emitOwned`), and a store that cannot
+        // sync an exact event refuses the operation before anything is appended. The step and
+        // session are taken now and the outcome recorder is bound to them, so a pooled session
+        // moving to another step cannot move an operation's outcome with it.
+        recordFsOperation: async (record) => {
+          if (rc.abort.signal.aborted) throw new Error("the run is ending");
+          if (!this.stores.events.synchronizeEvent)
+            throw new OrcaError("NOT_SUPPORTED", "this event store cannot make a file authorization durable");
+          const bound = { stepRunId: current.step.id, sessionId: session.id, turnId: record.turnId };
+          await rc.emit({
+            type: "agent.fs.authorized",
+            payload: {
+              ...bound,
+              operationId: record.operationId,
+              access: record.access,
+              display: record.display,
+              ...(record.linked ? { linked: true as const } : {}),
+              io: record.io,
+              decision: record.decision,
+              ...(record.rule
+                ? {
+                    rule: {
+                      basis: record.rule.basis,
+                      ...(record.rule.layer !== undefined ? { layer: record.rule.layer } : {}),
+                      ...(record.rule.index !== undefined ? { index: record.rule.index } : {}),
+                      ...(record.rule.file !== undefined ? { file: record.rule.file } : {}),
+                      ...(record.rule.capped ? { capped: true } : {}),
+                    },
+                  }
+                : {}),
+            },
+          });
+          let recorded = false;
+          return async (outcome) => {
+            // One outcome per authorization.
+            if (recorded) return;
+            recorded = true;
+            await rc.emit({
+              type: "agent.fs.completed",
+              payload: { ...bound, operationId: record.operationId, outcome },
+            });
+          };
+        },
       });
     } catch (e) {
       if (!deniedAtDelivery) handshake.failed(e);

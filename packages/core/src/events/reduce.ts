@@ -230,6 +230,8 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       break;
     case "agent.update":
     case "agent.permission":
+    case "agent.fs.authorized":
+    case "agent.fs.completed":
     case "agent.turn.completed":
     case "agent.session.closed":
     case "artifact.rejected":
