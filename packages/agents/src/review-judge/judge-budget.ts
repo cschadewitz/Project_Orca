@@ -10,12 +10,12 @@
  * writes are serialized across processes with the policy files' strict-ownership lock; a lock left by a crashed
  * process is never taken over, so calls are refused (the person is asked) until it is removed.
  *
- * No silent recovery. The file is created only by `initialize`, an explicit owner step, and a fresh file starts
+ * No silent recovery. The file is created only by `initialize` or `replace`, explicit owner steps, and a fresh file starts
  * with today's budget fully spent for every key: the first calls are allowed on the next UTC day. A missing file is
  * not an empty budget (it refuses), and neither is one that cannot be read, parsed or trusted, nor one dated after
  * today (a clock moved back). `initialize` never overwrites an existing budget file.
  *
- * Rollback, across restarts. Every commit also writes a high-water mark (budget id and sequence) to an anchor file
+ * Rollback, across restarts. Every commit also writes a high-water mark (budget id, sequence and day) to an anchor file
  * in a separate directory that the daemon keeps outside its state directory, so restoring the state directory (or
  * the budget file alone) from a backup does not restore the anchor. Every reservation, including the first after a
  * restart, compares the two: a budget whose id differs from the anchor's, whose sequence is below it, or which has
@@ -35,7 +35,7 @@ import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { withPolicyLock } from "../permission-file.js";
 
-export const JUDGE_BUDGET_FILE_VERSION = 2;
+export const JUDGE_BUDGET_FILE_VERSION = 3;
 /** Where a daemon keeps its one budget, under its state directory. */
 export const JUDGE_BUDGET_FILENAME = join("review-judge", "budget.json");
 /** Where it keeps the budget's high-water mark, under its anchor directory (outside the state directory). */
@@ -55,7 +55,39 @@ export interface JudgeBudget {
 
 export type JudgeBudgetInitResult =
   | { readonly status: "initialized"; readonly day: string }
-  | { readonly status: "refused"; readonly reason: "exists" | "clock" | "write" };
+  /**
+   * Nothing was changed: a budget already exists (initialize only); the clock is unreadable or before the day floor;
+   * an anchor exists that cannot be read, so no floor can be trusted; the storage check; or a write failed before any
+   * rename.
+   */
+  | { readonly status: "refused"; readonly reason: "exists" | "clock" | "anchor" | "storage" | "write" }
+  /**
+   * A rename had begun when the step failed: the old budget, the new one, or the new budget without its anchor may be
+   * in place, and either may already be durable. Nothing is promised about which; `inspect` reads what is there, and
+   * `replace` starts again (never before the day floor).
+   */
+  | { readonly status: "uncertain" };
+
+/** What a budget's files say, read without the lock and without changing anything. */
+export type JudgeBudgetState =
+  /** No budget file: `initialize` creates one. */
+  | { readonly state: "uninitialized" }
+  /**
+   * A budget that agrees with its anchor and with the clock, as a reservation checks them: its current day, the day it
+   * was started, and whether that first day is today (and so already spent). Not checked: whether the budget lock is
+   * free, and how much of today's limit is left.
+   */
+  | {
+      readonly state: "ready";
+      readonly day: string;
+      readonly initializedDay: string;
+      readonly firstDaySpent: boolean;
+    }
+  /**
+   * A budget that reservations refuse: unreadable, no anchor or another budget's or behind it, or a clock before a
+   * recorded day (`clock`: wait for that day, or fix the clock). `replace` starts again, never before the day floor.
+   */
+  | { readonly state: "refused"; readonly reason: "unreadable" | "anchor" | "clock" };
 
 /** The key a judge reserves under: its destination and key reference, never a value. */
 export function judgeBudgetKey(destination: string, credentialRefId: string): string {
@@ -133,6 +165,8 @@ interface AnchorFile {
   readonly version: typeof JUDGE_BUDGET_FILE_VERSION;
   readonly budgetId: string;
   readonly sequence: number;
+  /** The budget's day at that commit: the trusted day floor, kept outside the state directory. */
+  readonly day: string;
 }
 
 function parseAnchor(text: string): AnchorFile | undefined {
@@ -144,10 +178,11 @@ function parseAnchor(text: string): AnchorFile | undefined {
   }
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const v = value as Record<string, unknown>;
-  if (Object.keys(v).length !== 3) return undefined;
+  if (Object.keys(v).length !== 4) return undefined;
   if (v.version !== JUDGE_BUDGET_FILE_VERSION) return undefined;
   if (typeof v.budgetId !== "string" || !/^[0-9a-f-]{36}$/.test(v.budgetId)) return undefined;
   if (!Number.isSafeInteger(v.sequence) || (v.sequence as number) < 0) return undefined;
+  if (typeof v.day !== "string" || !DAY.test(v.day)) return undefined;
   return v as unknown as AnchorFile;
 }
 
@@ -180,12 +215,22 @@ const NODE_IO: JudgeBudgetIo = {
   },
 };
 
-/** Write, sync, rename, sync the directory. Resolves only once the new contents are committed. */
-async function commit(io: JudgeBudgetIo, file: string, next: object, owned?: () => Promise<void>): Promise<void> {
+/**
+ * Write, sync, rename, sync the directory. Resolves only once the new contents are committed. `renaming` is called
+ * just before the rename: from then on the file may have been replaced.
+ */
+async function commit(
+  io: JudgeBudgetIo,
+  file: string,
+  next: object,
+  owned?: () => Promise<void>,
+  renaming?: () => void,
+): Promise<void> {
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await io.writeSynced(tmp, `${JSON.stringify(next)}\n`);
     await owned?.();
+    renaming?.();
     await io.rename(tmp, file);
   } catch (error) {
     await rm(tmp, { force: true });
@@ -206,30 +251,78 @@ async function commitBoth(
   anchor: string,
   next: BudgetFile,
   owned: () => Promise<void>,
+  renaming?: () => void,
 ): Promise<void> {
-  await commit(io, file, next, owned);
-  const mark: AnchorFile = { version: JUDGE_BUDGET_FILE_VERSION, budgetId: next.budgetId, sequence: next.sequence };
+  await commit(io, file, next, owned, renaming);
+  const mark: AnchorFile = {
+    version: JUDGE_BUDGET_FILE_VERSION,
+    budgetId: next.budgetId,
+    sequence: next.sequence,
+    day: next.day,
+  };
   await commit(io, anchor, mark, owned);
 }
 
-function makeFileBudget(file: string, anchor: string, now: () => number, io: JudgeBudgetIo, lockTimeoutMs: number) {
-  const locked = <T>(fn: (owned: () => Promise<void>) => Promise<T>) =>
-    withPolicyLock(file, { strictOwnership: true, timeoutMs: lockTimeoutMs }, fn);
+/**
+ * A check of the storage the budget lives in, supplied by a qualified integration (the daemon's). It runs before
+ * the directories are created, again once the lock is held, and again just before every rename, so the ledger is
+ * never read or replaced in a location that failed it. `false` refuses; it never throws.
+ */
+export type JudgeBudgetStorageCheck = () => Promise<boolean>;
 
-  const initialize = async (): Promise<JudgeBudgetInitResult> => {
+class StorageRefused extends Error {}
+
+function makeFileBudget(
+  file: string,
+  anchor: string,
+  now: () => number,
+  io: JudgeBudgetIo,
+  lockTimeoutMs: number,
+  check: JudgeBudgetStorageCheck = async () => true,
+) {
+  const verified = async () => {
+    let ok: boolean;
+    try {
+      ok = await check();
+    } catch {
+      ok = false;
+    }
+    if (!ok) throw new StorageRefused();
+  };
+  const locked = <T>(fn: (owned: () => Promise<void>) => Promise<T>) =>
+    withPolicyLock(file, { strictOwnership: true, timeoutMs: lockTimeoutMs }, async (owned) => {
+      await verified();
+      return fn(async () => {
+        await owned();
+        await verified();
+      });
+    });
+
+  /** Start a new budget whose first day is spent: only where none exists (`initialize`), or over any (`replace`). */
+  const start = async (over: boolean): Promise<JudgeBudgetInitResult> => {
     const today = utcDay(now());
     if (today === undefined) return { status: "refused", reason: "clock" };
+    let renamed = false;
     try {
+      await verified();
       await mkdir(dirname(file), { recursive: true, mode: 0o700 });
       await mkdir(dirname(anchor), { recursive: true, mode: 0o700 });
       return await locked(async (owned) => {
-        try {
-          await readFile(file);
-          return { status: "refused", reason: "exists" } as const;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-            return { status: "refused", reason: "write" } as const;
-        }
+        if (!over)
+          try {
+            await readFile(file);
+            return { status: "refused", reason: "exists" } as const;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+              return { status: "refused", reason: "write" } as const;
+          }
+        // The day floor: a new budget never starts before a day already recorded, so moving the clock back and
+        // starting again cannot make a spent day available. The anchor's day is trusted (it is outside the state
+        // directory); the budget's own day is honoured too when it can be read. An unreadable anchor that exists
+        // cannot vouch for any floor, so it refuses rather than guess.
+        const floor = await dayFloor();
+        if (floor === null) return { status: "refused", reason: "anchor" } as const;
+        if (floor !== undefined && today < floor) return { status: "refused", reason: "clock" } as const;
         const fresh: BudgetFile = {
           version: JUDGE_BUDGET_FILE_VERSION,
           budgetId: randomUUID(),
@@ -238,19 +331,81 @@ function makeFileBudget(file: string, anchor: string, now: () => number, io: Jud
           counts: {},
           initializedDay: today,
         };
-        // Replaces any earlier anchor: this explicit owner step starts a new budget.
-        await commitBoth(io, file, anchor, fresh, owned);
+        // Replaces any earlier anchor (and, for `replace`, the budget): this explicit owner step starts a new budget.
+        // Until the rename the earlier budget is untouched.
+        await commitBoth(io, file, anchor, fresh, owned, () => {
+          renamed = true;
+        });
         seen.set(file, { budgetId: fresh.budgetId, sequence: 0 });
         return { status: "initialized", day: today } as const;
       });
-    } catch {
-      return { status: "refused", reason: "write" };
+    } catch (error) {
+      if (renamed) return { status: "uncertain" };
+      return { status: "refused", reason: error instanceof StorageRefused ? "storage" : "write" };
     }
+  };
+  /** The latest day the anchor or the budget records; `undefined` when neither exists; `null` if the anchor is unreadable. */
+  const dayFloor = async (): Promise<string | undefined | null> => {
+    let floor: string | undefined;
+    try {
+      const mark = parseAnchor(await readFile(anchor, "utf8"));
+      if (mark === undefined) return null;
+      floor = mark.day;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+    }
+    try {
+      const current = parse(await readFile(file, "utf8"));
+      if (current && (floor === undefined || current.day > floor)) floor = current.day;
+    } catch {
+      // No budget, or an unreadable one: the anchor's day is the floor.
+    }
+    return floor;
+  };
+  const initialize = () => start(false);
+  const replace = () => start(true);
+
+  /**
+   * Read-only: what the files say, checked against the clock as a reservation would check them. No lock, no write,
+   * no directory created. Whether the lock is free and how much of today's limit is left are not part of it.
+   */
+  const inspect = async (): Promise<JudgeBudgetState> => {
+    let text: string;
+    try {
+      text = await readFile(file, "utf8");
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT"
+        ? { state: "uninitialized" }
+        : { state: "refused", reason: "unreadable" };
+    }
+    const current = parse(text);
+    if (current === undefined) return { state: "refused", reason: "unreadable" };
+    let mark: AnchorFile | undefined;
+    try {
+      mark = parseAnchor(await readFile(anchor, "utf8"));
+    } catch {
+      return { state: "refused", reason: "anchor" };
+    }
+    // The budget is committed first, so it may be one ahead of its anchor while a reservation is in flight.
+    if (mark === undefined || mark.budgetId !== current.budgetId || current.sequence < mark.sequence)
+      return { state: "refused", reason: "anchor" };
+    const last = seen.get(file);
+    if (last && (last.budgetId !== current.budgetId || current.sequence < last.sequence))
+      return { state: "refused", reason: "anchor" };
+    const today = utcDay(now());
+    if (today === undefined || current.day > today || mark.day > today) return { state: "refused", reason: "clock" };
+    return {
+      state: "ready",
+      day: current.day,
+      initializedDay: current.initializedDay,
+      firstDaySpent: current.initializedDay === today,
+    };
   };
 
   const reserve = async (key: string, limit: number): Promise<boolean> => {
     if (typeof key !== "string" || key === "" || !validLimit(limit)) return false;
     try {
+      await verified();
       return await locked(async (owned) => {
         const today = utcDay(now());
         if (today === undefined) return false;
@@ -269,6 +424,8 @@ function makeFileBudget(file: string, anchor: string, now: () => number, io: Jud
           return false; // No anchor: the budget cannot be trusted as current.
         }
         if (mark === undefined || mark.budgetId !== current.budgetId || current.sequence < mark.sequence) return false;
+        // The anchor's day floor: the clock moved back before a day already recorded outside the state directory.
+        if (mark.day > today) return false;
         // A rollback within this process's life (restored copy, replaced file): refuse from now on.
         const last = seen.get(file);
         if (last && (last.budgetId !== current.budgetId || current.sequence < last.sequence)) {
@@ -299,7 +456,19 @@ function makeFileBudget(file: string, anchor: string, now: () => number, io: Jud
   };
 
   // Unqualified: see the module comment. Never signals activation readiness on its own.
-  return Object.freeze({ durable: false as const, reserve, initialize });
+  return Object.freeze({ durable: false as const, reserve, initialize, replace, inspect });
+}
+
+export interface FileJudgeBudget extends JudgeBudget {
+  /** Create the budget where none exists; its first day counts as spent. Never over an existing file. */
+  readonly initialize: () => Promise<JudgeBudgetInitResult>;
+  /**
+   * Replace the budget, whatever it holds, with a new one whose first day counts as spent: the owner's way back from a
+   * refused budget. Under the lock; the earlier budget is left as it was on any failure before its replacement.
+   */
+  readonly replace: () => Promise<JudgeBudgetInitResult>;
+  /** Read-only: what the files say now. */
+  readonly inspect: () => Promise<JudgeBudgetState>;
 }
 
 /** Where the daemon keeps the budget and its anchor. The two must not contain one another. */
@@ -322,8 +491,8 @@ const within = (parent: string, child: string) =>
  */
 export function daemonJudgeBudget(
   dirs: DaemonJudgeBudgetDirs,
-  options: { now?: () => number; io?: JudgeBudgetIo; lockTimeoutMs?: number } = {},
-): JudgeBudget & { readonly initialize: () => Promise<JudgeBudgetInitResult> } {
+  options: { now?: () => number; io?: JudgeBudgetIo; lockTimeoutMs?: number; check?: JudgeBudgetStorageCheck } = {},
+): FileJudgeBudget {
   const stateDir = resolve(dirs.stateDir);
   const anchorDir = resolve(dirs.anchorDir);
   if (within(stateDir, anchorDir) || within(anchorDir, stateDir))
@@ -331,8 +500,8 @@ export function daemonJudgeBudget(
   const file = resolve(stateDir, JUDGE_BUDGET_FILENAME);
   const anchor = resolve(anchorDir, JUDGE_BUDGET_ANCHOR_FILENAME);
   const timeout = options.lockTimeoutMs ?? 5_000;
-  if (options.now || options.io)
-    return makeFileBudget(file, anchor, options.now ?? Date.now, options.io ?? NODE_IO, timeout);
+  if (options.now || options.io || options.check)
+    return makeFileBudget(file, anchor, options.now ?? Date.now, options.io ?? NODE_IO, timeout, options.check);
   const id = JSON.stringify([file, anchor]);
   let budget = budgets.get(id);
   if (!budget) {

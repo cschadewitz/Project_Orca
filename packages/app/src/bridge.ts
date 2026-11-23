@@ -54,6 +54,8 @@ import type {
   ConfigApplyResult,
   ConfigSetParams,
   ConfigSetResult,
+  PermissionsSaveJudgedRuleParams,
+  PermissionsSaveJudgedRuleResult,
   DaemonCapability,
   DecisionsDecideParams,
   DecisionsDecideResult,
@@ -540,6 +542,13 @@ export interface OrcaBridge {
     set: (params: ConfigSetParams) => Promise<BridgeResult<ConfigSetResult>>;
     /** Saved and active remain separate guarded operations. */
     apply?: (params: ConfigApplyParams) => Promise<BridgeResult<ConfigApplyResult>>;
+    /**
+     * Save a plain-language rule to the permission sidecar (protocol 2.12, #701). A write of
+     * standing policy: offered only when the daemon lists `permissions.saveJudgedRule`.
+     */
+    saveJudgedRule?: (
+      params: PermissionsSaveJudgedRuleParams,
+    ) => Promise<BridgeResult<PermissionsSaveJudgedRuleResult>>;
   };
   /** Optional until the integration owner registers the typed template IPC dispatcher. */
   templates?: TemplateBridge;

@@ -13,6 +13,10 @@
     "./review-judge": {
       "types": "./dist/review-judge/index.d.ts",
       "import": "./dist/review-judge/index.js"
+    },
+    "./judge-budget": {
+      "types": "./dist/review-judge/judge-budget.d.ts",
+      "import": "./dist/review-judge/judge-budget.js"
     }
   },
   "files": [

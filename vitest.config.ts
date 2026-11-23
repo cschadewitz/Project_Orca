@@ -16,6 +16,7 @@ export default defineConfig({
       "@orca/core": pkg("core"),
       "@orca/store": pkg("store"),
       "@orca/agents/review-judge": src("agents", "review-judge/index"),
+      "@orca/agents/judge-budget": src("agents", "review-judge/judge-budget"),
       "@orca/agents": pkg("agents"),
       "@orca/engine": pkg("engine"),
       "@orca/testing/child-bundle": src("testing", "child-bundle"),

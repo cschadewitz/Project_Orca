@@ -41,11 +41,12 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { parse as parseYaml, parseDocument, stringify as stringifyYaml } from "yaml";
-import { permissionOverlayFor, replacePermissionPolicyFile } from "@orca/agents";
+import { permissionOverlayFor, replacePermissionPolicyFile, saveJudgedRule } from "@orca/agents";
 import {
   effectivePermissionPolicy,
   isJudgedPermissionRule,
   isOrcaError,
+  isSidecarJudgedRule,
   isWildcardPermissionRule,
   permissionRuleExpired,
   OrcaError,
@@ -56,6 +57,7 @@ import {
   type Clock,
   type ValidationContext,
   type PermissionPolicyFile,
+  type RecordedPermissionRule,
 } from "@orca/core";
 import {
   ProtocolFault,
@@ -70,6 +72,8 @@ import {
   type ConfigSetResult,
   type ConfigValidationError,
   type EffectivePermissionRule,
+  type PermissionsSaveJudgedRuleParams,
+  type PermissionsSaveJudgedRuleResult,
 } from "@orca/protocol";
 import { withFileLock } from "@orca/store";
 import { describeConfigSchema, validationErrors } from "./config-schema.js";
@@ -313,6 +317,50 @@ export class ConfigModel {
     };
   }
 
+  /**
+   * `permissions.saveJudgedRule` (protocol 2.12, #701): save a plain-language rule a person
+   * wrote or accepted to the sidecar, through its own writer and under its own lock, like
+   * every other sidecar write. The rule must belong to an agent the active configuration
+   * declares: a rule for nobody would be saved and never consulted. The lifetime is stamped
+   * on the daemon's clock, as `inputs.answer`'s is, so the client's clock never decides when
+   * a rule ends. The authority check runs again under the lock and just before the rename.
+   */
+  async saveJudgedRule(
+    params: PermissionsSaveJudgedRuleParams,
+    authorize?: () => Promise<void>,
+  ): Promise<PermissionsSaveJudgedRuleResult> {
+    await authorize?.();
+    const config = await this.read("config");
+    const active = OrcaConfigSchema.safeParse(
+      this.generations ? this.generations.effectiveConfig() : configurationValue(config),
+    );
+    if (!active.success)
+      throw new OrcaError("CONFIG_INVALID", "the configuration does not parse: fix it before saving a rule");
+    if (!active.data.agents.some((agent) => agent.id === params.agentId))
+      throw new OrcaError("AGENT_NOT_FOUND", `no agent '${params.agentId}' in the active configuration`, {
+        agentId: params.agentId,
+      });
+    const at = this.clock.now();
+    const saved = await saveJudgedRule({
+      file: this.permissionsFile,
+      agentId: params.agentId,
+      match: params.match,
+      criterion: params.criterion,
+      ...(params.durationMs === undefined ? {} : { expiresAt: new Date(at + params.durationMs).toISOString() }),
+      // One instant stamps `addedAt` and the expiry, so the rule lasts exactly what was chosen.
+      now: () => new Date(at),
+      ...(authorize ? { authorize } : {}),
+    });
+    if (saved.outcome !== "already-present") await this.announce("permissions");
+    return {
+      agentId: saved.agentId,
+      ruleId: saved.ruleId,
+      outcome: saved.outcome,
+      ...(saved.rule.expiresAt === undefined ? {} : { expiresAt: saved.rule.expiresAt }),
+      asOf: this.clock.isoNow(),
+    };
+  }
+
   get canApply(): boolean {
     return this.generations !== undefined;
   }
@@ -526,8 +574,10 @@ export class ConfigModel {
     // One instant for both lists, so an expiring rule cannot be in one and not the other (#702).
     const now = Date.now();
     for (const agent of parsed.data.agents) {
+      // Saved judged rules are not typed rules either (#701): the overlay leaves them out.
       const recorded = (doc.agents[agent.id]?.rules ?? []).filter(
-        (rule) => !isWildcardPermissionRule(rule) && !permissionRuleExpired(rule, now),
+        (rule): rule is RecordedPermissionRule =>
+          !isSidecarJudgedRule(rule) && !isWildcardPermissionRule(rule) && !permissionRuleExpired(rule, now),
       );
       const layered = effectivePermissionPolicy(agent.permissions, permissionOverlayFor(doc, agent.id, undefined, now));
       // Judged rules are not in `layered.rules` (#702), so only typed ones are counted here.

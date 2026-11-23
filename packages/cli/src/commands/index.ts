@@ -108,6 +108,7 @@ import { leasesCommand } from "./leases.js";
 import { diagnosticsCommand } from "./diagnostics.js";
 import { recoveryCommand } from "./recovery.js";
 import { storeCommand } from "./store.js";
+import { judgeCommand } from "./judge.js";
 import { planCommand } from "./plan.js";
 import { requireTemplatePack, selectionOverrides } from "./selection.js";
 
@@ -611,6 +612,11 @@ export const commands: Record<string, Command> = {
   store: {
     help: "store [format | carry-forward | sqlite convert|switch|import|backup <file>|restore <file>|verify]  Show the store's format; convert an older-format store once, with every other ORCA stopped; convert the store into a SQLite store of its own, leaving the file store as it was; build, back up, restore or check the SQLite metadata.",
     run: storeCommand,
+  },
+
+  judge: {
+    help: "judge budget [status | init | reset]  Check that this machine can keep the plain-language rule judge's daily budget durably (Linux and macOS; not Windows); create it once (that UTC day counts as spent); or replace one that was refused after the store was restored.",
+    run: judgeCommand,
   },
 
   runs: {
