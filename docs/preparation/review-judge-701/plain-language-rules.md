@@ -370,9 +370,15 @@ and only does two metadata lookups. The first is the key's binding, which must b
 this destination and usable on this machine. The second is a disclosure grant for this destination,
 provider version and wire format. No key is read and nothing is sent until the judge is called.
 On each call:
-- the daily budget is reserved first, per UTC day, and never refunded. It counts within one prepared
-  judge only, so it is not a durable spending cap: a restart or re-preparation starts at zero.
-  Activation stays unwired until a durable cap exists;
+- the daily budget is reserved first, per UTC day, and never refunded, from the injected
+  `JudgeBudget`. `fileJudgeBudget` (`review-judge/judge-budget.ts`) is durable and shared: one
+  file holds the day's count for every judge using the same key and destination, so a restart, a
+  second session or a re-preparation does not start at zero. Reads and writes go through the policy
+  files' strict-ownership lock, and each write is atomic. It fails closed: a file that cannot be
+  read, parsed or written refuses the call, as does a clock moved back before the file's day. A lock
+  left by a crashed process is never taken over, so calls are refused (the person is asked) until
+  it is removed. `memoryJudgeBudget` is for tests and reports `durableBudget: false`, which
+  activation refuses;
 - the key is leased for that one request (purpose `review-judge`, the pinned destination);
 - the grant is rechecked as the lease's last awaited step. Then, synchronously at the dispatch, in
   the turn that calls the sender, the call's cancellation and the grant's current revision and
