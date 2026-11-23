@@ -178,7 +178,8 @@ describe("an agent cannot grant itself permissions through the session", () => {
     expect(outcomes[7]).toEqual({ result: { content: "version: 1\n" } });
     // With the sidecar untouched, an execute is still a question nobody here can answer.
     expect(outcomes[8]).toEqual({ result: { outcome: { outcome: "cancelled" } } });
-    expect(decisions).toEqual(["deny:protected", "ask:no-answerer"]);
+    // The two `fs/*` calls that passed the roots and protected checks were decided by the policy (#703).
+    expect(decisions).toEqual(["deny:protected", "fs:allow", "fs:allow", "ask:no-answerer"]);
 
     // Nothing reached the disk but the project's own file.
     await expect(readFile(sidecar, "utf8")).rejects.toMatchObject({ code: "ENOENT" });

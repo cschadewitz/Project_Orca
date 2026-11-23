@@ -32,6 +32,7 @@ import {
   redactingLogger,
   type AuthorizeSecretUse,
 } from "./secrets.js";
+import { decideFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
 import { processCleanup } from "./process-cleanup.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
@@ -243,6 +244,111 @@ async function openPlanned(
       },
     );
 
+  /** Rules ORCA writes are workspace-relative; ORCA's own files go ahead of every rule (C4-01). */
+  const evalScope = {
+    workspaceCwd: opts.cwd,
+    ...(opts.protectedPaths ? { protectedPaths: opts.protectedPaths } : {}),
+  };
+
+  /**
+   * The `ask` a permission decision puts to a person through the host, bound to one live
+   * turn. A host-side persistence or parking error fails the prompt unchanged; sending only
+   * a JSON-RPC error would let the agent continue or retry it.
+   */
+  const askThrough = (turn: ActiveTurn, invocation: PermissionInvocation) =>
+    opts.askPermission
+      ? {
+          ask: async (request: acp.RequestPermissionRequest) => {
+            try {
+              return await opts.askPermission!(request, invocation);
+            } catch (error) {
+              if (activeTurn !== turn || turn.abort.signal.aborted) return undefined;
+              const failure =
+                error instanceof Error
+                  ? error
+                  : new OrcaError("INTERNAL", "permission callback failed", {}, { cause: error });
+              turn.failure = failure;
+              turn.fail(failure);
+              requestCancel("permission callback failed");
+              throw error;
+            }
+          },
+        }
+      : {};
+
+  /**
+   * Decide one `fs/*` request by the policy, immediately before its I/O (#703). It proceeds on
+   * a rule's allow, or on a person's one-time allow for this exact operation that ORCA asks
+   * for on the agent's behalf; anything else throws before the I/O. An answer from the
+   * agent's own earlier ask is not reused: one answer covers one operation (#703 review).
+   *
+   * Every await is followed by a recheck: the turn must be the same live one, and after a
+   * person answers, the policy is read again and a deny that appeared meanwhile wins. It
+   * returns the dispatch check, which the handler runs in the same step that starts the I/O.
+   * Paths, the roots check and rule targets are lexical (as written, not resolved). Each
+   * decision is logged like an ask's, prefixed `fs:`; that log is not a durable authorization
+   * or execution record.
+   */
+  const authorizeFs = async (path: string, access: FsAccess): Promise<() => void> => {
+    const turn = activeTurn;
+    const record = (decision: string) => {
+      opts.onPermission?.({ title: fsToolCall(path, access).title ?? path, decision: `fs:${decision}` });
+      logger.debug("fs permission", { path, access, decision });
+    };
+    const refuse = (decision: string, reason: string): never => {
+      record(decision);
+      throw acp.RequestError.invalidParams({ path, reason });
+    };
+    // Outside a live prompt there is nobody to answer and no turn the operation belongs to.
+    if (!turn || turn.abort.signal.aborted)
+      return refuse("no-turn", "no live turn: ORCA answers file requests only in one");
+    const live = () => activeTurn === turn && !turn.abort.signal.aborted;
+    /**
+     * Returned to the handler, which calls it in the same synchronous step that starts the
+     * host I/O: returning from here is not the dispatch boundary (#703 review).
+     */
+    const dispatch = () => {
+      if (live()) return;
+      record("dispatch:turn-ended");
+      throw acp.RequestError.invalidParams({ path, reason: "the turn ended before the file I/O started" });
+    };
+    const policy = await policyForAsk();
+    if (!live()) return refuse("turn-ended", "the turn ended before the file request was decided");
+    const decision = decideFsCall(policy, path, access, evalScope);
+    if (decision === "allow") {
+      record("allow");
+      return dispatch;
+    }
+    if (decision !== "ask") return refuse(decision, `not allowed: ${decision}`);
+    const invocation: PermissionInvocation = {
+      sessionId: id,
+      turnId: turn.id,
+      invocationId: randomUUID(),
+      signal: turn.abort.signal,
+    };
+    const asked = await resolvePermission(policy, {
+      request: {
+        sessionId: acpSessionId,
+        toolCall: fsToolCall(path, access, `orca-fs-${randomUUID()}`),
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      },
+      signal: invocation.signal,
+      ...askThrough(turn, invocation),
+      scope: evalScope,
+    });
+    // Only a person's one-time allow for this very operation.
+    if (asked.decision !== "ask:allow_once") return refuse(asked.decision, `not allowed: ${asked.decision}`);
+    // The wait may have been long: read the policy again, and the turn must still be live.
+    const after = decideFsCall(await policyForAsk(), path, access, evalScope);
+    if (after === "deny") return refuse("ask:allow_once:denied-since", "not allowed: the policy denies it now");
+    if (!live()) return refuse("ask:allow_once:turn-ended", "the turn ended while the file request was asked");
+    record("ask:allow_once");
+    return dispatch;
+  };
+
   /**
    * Refuse an `fs/*` request for one of ORCA's own files. These handlers read and write with
    * no permission ask at all, so this is the only check ORCA makes on them.
@@ -294,32 +400,12 @@ async function openPlanned(
       const { response, decision } = await resolvePermission(await policyForAsk(), {
         request: ctx.params,
         signal: invocation.signal,
-        ...(opts.askPermission
-          ? {
-              ask: async (request: acp.RequestPermissionRequest) => {
-                try {
-                  return await opts.askPermission!(request, invocation);
-                } catch (error) {
-                  if (activeTurn !== turn || turn.abort.signal.aborted) return undefined;
-                  // A host-side persistence/parking error must reach the prompt unchanged;
-                  // sending only a JSON-RPC error would let the agent continue or retry it.
-                  const failure =
-                    error instanceof Error
-                      ? error
-                      : new OrcaError("INTERNAL", "permission callback failed", {}, { cause: error });
-                  turn.failure = failure;
-                  turn.fail(failure);
-                  requestCancel("permission callback failed");
-                  throw error;
-                }
-              },
-            }
-          : {}),
+        ...askThrough(turn, invocation),
         // Rules ORCA writes are workspace-relative, so that a grant made in one git worktree
         // still fires in the next one; without the workspace to resolve them against, none
         // of them could ever match the absolute paths an agent reports (ADR 0009).
         // ORCA's own files go ahead of every rule, so no policy can open them (C4-01).
-        scope: { workspaceCwd: opts.cwd, ...(opts.protectedPaths ? { protectedPaths: opts.protectedPaths } : {}) },
+        scope: evalScope,
       });
       opts.onPermission?.({
         ...(ctx.params.toolCall.toolCallId ? { toolCallId: ctx.params.toolCall.toolCallId } : {}),
@@ -331,8 +417,13 @@ async function openPlanned(
     })
     .onRequest(acp.methods.client.fs.readTextFile, async (ctx) => {
       const { path, line, limit } = ctx.params;
+      // Only this session's own agent session may ask ORCA for file I/O (#703 review).
+      if (ctx.params.sessionId !== acpSessionId)
+        throw acp.RequestError.invalidParams({ path, reason: "not this session" });
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       refuseProtected(path, "read");
+      const dispatch = await authorizeFs(path, "read");
+      dispatch();
       let content = await opts.host.fs.readFile(path);
       if (line !== undefined && line !== null) {
         const lines = content
@@ -347,8 +438,12 @@ async function openPlanned(
     })
     .onRequest(acp.methods.client.fs.writeTextFile, async (ctx) => {
       const { path, content } = ctx.params;
+      if (ctx.params.sessionId !== acpSessionId)
+        throw acp.RequestError.invalidParams({ path, reason: "not this session" });
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       refuseProtected(path, "write");
+      const dispatch = await authorizeFs(path, "write");
+      dispatch();
       await opts.host.fs.writeFile(path, content);
       return {};
     });
