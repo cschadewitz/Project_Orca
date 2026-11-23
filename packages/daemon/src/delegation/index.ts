@@ -23,7 +23,7 @@ import { readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { OrcaError, type AgentSpec, type OrcaConfig, type RemoteDaemonSpec } from "@orca/core";
-import type { AgentSession, OpenSessionOptions } from "@orca/agents";
+import { nativeToolHookUnavailable, type AgentSession, type OpenSessionOptions } from "@orca/agents";
 import {
   ConnectionProfileSchema,
   SshTunnel,
@@ -284,6 +284,9 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
   const receipts = new DelegationReceipts(options.receiptsDir);
   return async (open) => {
     if (open.agent.type !== "orca-daemon") return base(open);
+    // Config refuses this combination; a spec built another way is refused before any dispatch.
+    const refused = nativeToolHookUnavailable(open.agent);
+    if (refused) throw refused;
     const id = open.agent.profile!;
     // The remotes of the generation the parent run is bound to, not of whichever is current.
     const remote = (open.origin?.remotes ?? options.remotes()).find((r) => r.id === id);

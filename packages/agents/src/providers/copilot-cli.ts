@@ -390,6 +390,7 @@ export function guardCopilotSession(session: AgentSession): AgentSession {
   const guarded: AgentSession = Object.create(session) as AgentSession;
   Object.defineProperties(guarded, {
     prompt: {
+      writable: true,
       value: async (input: Parameters<AgentSession["prompt"]>[0], options?: Parameters<AgentSession["prompt"]>[1]) => {
         if (tripped.length) throw fail("turned on");
         if (startsWithSlashCommand(input))
@@ -404,6 +405,7 @@ export function guardCopilotSession(session: AgentSession): AgentSession {
       },
     },
     setConfigOption: {
+      writable: true,
       value: async (configId: string, value: string | boolean) => {
         if (grantingOption(configId, value))
           throw new OrcaError(
@@ -415,6 +417,7 @@ export function guardCopilotSession(session: AgentSession): AgentSession {
       },
     },
     close: {
+      writable: true,
       value: async () => {
         stop();
         return session.close();
