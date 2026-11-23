@@ -206,6 +206,9 @@ Requirements: key‑based auth (no prompts), the agent binary on the remote logi
 and the repository present on the remote (clone it there, or use a shared filesystem; ORCA
 does not sync code). Verify with `orca ping claude-remote`.
 
+For a machine that runs a daemon of its own, delegating steps to it is the alternative; see
+[running across machines](MULTI-MACHINE.md#ssh-host-or-delegation) for when to use which.
+
 ## Other ACP clients (Zed, JetBrains, …)
 
 Anything that can launch an ACP agent can launch `orca acp`. The facade advertises

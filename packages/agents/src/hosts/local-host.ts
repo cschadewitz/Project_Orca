@@ -54,7 +54,7 @@ export class LocalHost implements AgentHost {
     const values = new Map<string, string>();
     const secretEnv: Record<string, string> = {};
     for (const d of options.secrets ?? []) {
-      const value = await this.readSecret(d.id, d.source);
+      const value = await readLocalSecret(d.id, d.source, this.id);
       values.set(d.id, value);
       for (const name of d.env) secretEnv[name] = value;
     }
@@ -81,26 +81,6 @@ export class LocalHost implements AgentHost {
     return handle;
   }
 
-  /** The daemon's own environment, or a file on this machine (#336). */
-  private async readSecret(id: string, source: SecretSource): Promise<string> {
-    if (source.provider === "env") {
-      const value = process.env[source.name];
-      if (value === undefined || value === "") throw sourceMissing(id, source, this.id);
-      return value;
-    }
-    let bytes: Buffer;
-    try {
-      bytes = await readFile(source.path);
-    } catch {
-      throw sourceMissing(id, source, this.id);
-    }
-    const text = secretText(bytes);
-    if (text === undefined) throw sourceNotText(id, source, this.id);
-    const value = trimSecret(text);
-    if (value === "") throw sourceMissing(id, source, this.id);
-    return value;
-  }
-
   exec(command: string, options: { cwd?: string; stdin?: string; timeoutMs?: number } = {}): Promise<ExecResult> {
     const child = spawn(command, {
       ...(options.cwd ? { cwd: options.cwd } : {}),
@@ -109,4 +89,27 @@ export class LocalHost implements AgentHost {
     });
     return collectChildProcess(child, options);
   }
+}
+
+/**
+ * Read one secret on this machine (#336): the daemon's own environment, or a file. The error
+ * for a missing or non-text value names where it was looked for, never a value.
+ */
+export async function readLocalSecret(id: string, source: SecretSource, hostId: string): Promise<string> {
+  if (source.provider === "env") {
+    const value = process.env[source.name];
+    if (value === undefined || value === "") throw sourceMissing(id, source, hostId);
+    return value;
+  }
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(source.path);
+  } catch {
+    throw sourceMissing(id, source, hostId);
+  }
+  const text = secretText(bytes);
+  if (text === undefined) throw sourceNotText(id, source, hostId);
+  const value = trimSecret(text);
+  if (value === "") throw sourceMissing(id, source, hostId);
+  return value;
 }

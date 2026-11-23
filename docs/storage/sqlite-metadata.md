@@ -314,8 +314,49 @@ nothing it does reaches the new store. What it writes there afterwards is not in
 new store: `orca store format` on the new store compares the file store with the
 signature the conversion recorded and says `CHANGED since` when it differs. Stop
 every older ORCA before converting to avoid that; the conversion cannot check for
-them. To go back, point `storeDir` at the file store again: it was never changed by
-the conversion.
+them.
+
+**To go back**, stop every ORCA using either store, keep both stores, and point
+`storeDir` at the file store again: the conversion never changed it. That selects the
+file store as it is; work recorded only in the SQLite store after the conversion does
+not follow it back, and the two histories are never merged. Keep the SQLite store if
+that work matters.
+
+### The desktop app's own workspaces
+
+`packages/cli/src/desktop-sqlite-switch.ts`. The app's workspaces cannot be converted
+into a new store: the app always uses `.orca`, and its ownership claim pins the exact
+config. They are switched in place instead, under the workspace's kernel-lifetime
+writer fence, which only one writer holds at a time.
+
+**Supported boundary.** An app workspace is supported only with ORCA 0.7.0 and later,
+the versions that know app workspaces: their writable startup (the app's daemon and
+the CLI alike) enters the first-run writer fence, with a launch the app granted,
+before it opens the store (checked against released v0.7.0 and v0.7.1). Within that
+boundary, a daemon holding the fence knows no other ORCA writes the store. An ORCA
+from before 0.7 pointed at an app workspace by hand is outside it: the legacy fence
+turns one away if it starts after the switch, but one already running is not seen.
+
+The app asks for the switch on one daemon launch (`storeSwitch: "sqlite"` in
+`daemon-process.ts`, which sets `ORCA_STORE_SWITCH=sqlite` for that child only; never
+inherited, never on a closed update launch). The daemon, after its format check and
+before it registers as a writer or opens the store, runs the switch below with its
+writer hold as the `fence`. The fence is checked before anything changes, before the
+journal, before the marker is staged, and at the marker's rename (after the temporary
+marker was written and flushed).
+
+- A refusal while the launch still holds the fence is an outcome, not a failure: the
+  store stays on files, and the daemon starts on files, logs why and reports it
+  (`OrcaApp.storeSwitch`).
+- A lost fence (`FENCE_LOST`), or a refusal after which the launch no longer holds
+  it, undoes the switch and then **aborts the launch** before it opens the store: it
+  is no longer the workspace's writer.
+- A daemon outside an app workspace (no fence) refuses (`SWITCH_REFUSED`) and points
+  to `convert`. Windows is refused (#947).
+
+Before the app offers the switch to users, released-binary and native store
+acceptance of a switched app workspace is a separate gate. How the app offers it is a
+follow-up.
 
 ### The switch in place
 
@@ -323,7 +364,8 @@ the conversion.
 because it cannot make sure no released ORCA is still running against the store
 (above); it points to `convert`. The switch itself, `switchStoreToSqlite` in the store
 package, is what a conversion runs on its fresh copy (with `copyOf`: no backup, the
-source recorded). Under the store's format lock it:
+source recorded), and what the desktop app's daemon runs under its writer fence (with
+`fence`). Under the store's format lock it:
 
 1. Switches only a store in this ORCA's current file format. An older store is
    carried forward first; an unmarked one is opened once first. A store already on

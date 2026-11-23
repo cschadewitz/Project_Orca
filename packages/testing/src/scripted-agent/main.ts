@@ -33,6 +33,8 @@ async function main(): Promise<void> {
     ...(values.state ? { stateFile: values.state } : {}),
     ...(values.log ? { promptLog: values.log } : {}),
     ...(values.name ? { name: values.name } : {}),
+    ...(process.env.ORCA_SESSION_LOG ? { sessionLog: process.env.ORCA_SESSION_LOG } : {}),
+    ...(process.env.ORCA_EMBEDDED_CONTEXT === "1" ? { embeddedContext: true } : {}),
   });
   const stream = stdioAcpStream(process.stdin, process.stdout);
   const conn = agent.register(acp.agent({ name: "orca-scripted-agent" })).connect(stream);

@@ -27,6 +27,7 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
         ? { checkpoint: { runId: first.payload.checkpoint.runId, stepRunId: first.payload.checkpoint.stepRunId } }
         : {}),
       ...(first.payload.origin ? { origin: { ...first.payload.origin } } : {}),
+      ...(first.payload.dryRun ? { dryRun: { ...first.payload.dryRun } } : {}),
     },
     steps: {},
     stepOrder: [],
@@ -380,6 +381,7 @@ export function runSummary(state: RunState): RunSummary {
     ...(r.overrides ? { overrides: r.overrides } : {}),
     ...(r.checkpoint ? { checkpoint: r.checkpoint } : {}),
     ...(r.origin ? { origin: r.origin } : {}),
+    ...(r.dryRun ? { dryRun: r.dryRun } : {}),
     ...(r.startedAt ? { startedAt: r.startedAt } : {}),
     ...(r.completedAt ? { completedAt: r.completedAt } : {}),
   };
@@ -410,6 +412,7 @@ export function reduceRunSummary(events: readonly OrcaEvent[]): RunSummary {
       ? { checkpoint: { runId: first.payload.checkpoint.runId, stepRunId: first.payload.checkpoint.stepRunId } }
       : {}),
     ...(first.payload.origin ? { origin: { ...first.payload.origin } } : {}),
+    ...(first.payload.dryRun ? { dryRun: { ...first.payload.dryRun } } : {}),
   };
   for (let i = 1; i < events.length; i++) {
     const e = events[i]!;

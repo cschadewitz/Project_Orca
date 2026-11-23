@@ -34,6 +34,10 @@
  *   the active runs the filter shows, live, and choosing a card opens that run in the tree,
  *   which is where its steps, attempts, events and artifacts are. Its step counts are counts,
  *   and the host load and usage it cannot measure per run say "unavailable".
+ * - **History is paged (#340).** The tree holds the pages read so far, newest first; the count
+ *   says how much of the filter that is, and **Load older runs** beside it reads the next page
+ *   (`use-runs.ts` has the cursor, the fallback and the dropped-page rule). A link to a run no
+ *   page holds is read on its own and pinned, so a canonical link opens any run in the store.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { CHROME_GLYPHS, STATUS_PRESENTATION, type ConnectionState } from "@orca/design";
@@ -54,7 +58,7 @@ import { ALL_KINDS, Timeline } from "./timeline/timeline.js";
 import { useRunEvents } from "./timeline/use-run-events.js";
 import type { TimelineEntry } from "./timeline/timeline-entries.js";
 import { buildSelectionIndex, useRunSelection, EMPTY_INDEX, type SelectionIndex } from "./use-run-selection.js";
-import { runFiltersSupported, useRuns, type StatusFilter } from "./use-runs.js";
+import { runCursorSupported, runFiltersSupported, useRuns, type StatusFilter } from "./use-runs.js";
 import { RunBoard } from "./board/run-board.js";
 import { useRunBoard } from "./board/use-run-board.js";
 import { boardRuns } from "./board/board-model.js";
@@ -134,7 +138,11 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
   const filtersSupported = runFiltersSupported(daemonProtocol);
   const effectiveWorkflowId = filtersSupported ? workflowId : undefined;
   const effectiveFrom = filtersSupported ? since.from : undefined;
-  const { state, reload } = useRuns(status, { workflowId: effectiveWorkflowId, createdFrom: effectiveFrom });
+  const { state, reload, loadOlder, include, unresolved } = useRuns(
+    status,
+    { workflowId: effectiveWorkflowId, createdFrom: effectiveFrom },
+    { cursor: runCursorSupported(daemonProtocol) },
+  );
 
   const runs = state.phase === "ready" ? state.runs : EMPTY;
   const visible = useMemo(() => runs.filter((run) => matchesText(run, text)), [runs, text]);
@@ -171,10 +179,16 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
     // Wait for the run list: selection drops ids absent from it while it is loading.
     // Only a new navigation may claim selection, including an identical URL opened again.
     if (!open || state.phase !== "ready" || appliedOpen.current === open) return;
+    // A link to a run no page holds yet (#340: history is paged): pin it, and select it once
+    // it is in the list. One the daemon does not know is selected anyway, which clears.
+    if (!runs.some((run) => run.id === open.runId) && !unresolved.has(open.runId)) {
+      include(open.runId);
+      return;
+    }
     appliedOpen.current = open;
     pendingOpen.current = open;
     selectRun(open.runId);
-  }, [open, state.phase, selectRun]);
+  }, [open, state.phase, runs, unresolved, include, selectRun]);
   useEffect(() => setFollow(true), [selectedRunId]);
   const onHold = useCallback(() => setFollow(false), []);
 
@@ -410,6 +424,23 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
           <Text style="caption" className="orca-runs__count">
             {countLabel(visible.length, state.total)}
           </Text>
+        )}
+        {/* History is read a page at a time (#340); the count above already says how much of
+            it is held, so the way to the rest sits beside it rather than at the end of a
+            virtualised tree. Only the tree pages: the board follows what is live. */}
+        {state.phase === "ready" && view === "tree" && (state.more || state.olderError) && (
+          <Button
+            size="sm"
+            tone="ghost"
+            onClick={loadOlder}
+            disabled={state.loadingOlder}
+            disabledReason="Reading the next page of runs"
+            {...(state.olderError && !state.loadingOlder
+              ? { title: `${state.olderError.code}: ${state.olderError.message}` }
+              : {})}
+          >
+            {state.loadingOlder ? "Loading older runs" : state.olderError ? "Retry older runs" : "Load older runs"}
+          </Button>
         )}
       </div>
 

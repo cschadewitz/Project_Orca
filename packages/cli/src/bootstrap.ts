@@ -13,6 +13,7 @@ import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
 import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
 import { enterDaemonStoreFormat } from "./desktop-carryover.js";
+import { desktopSqliteSwitch, STORE_SWITCH_ENV, type DesktopSqliteSwitchOutcome } from "./desktop-sqlite-switch.js";
 import { readOrcaVersion } from "./version.js";
 import {
   CheckpointAdmissionService,
@@ -73,7 +74,7 @@ import {
   type PluginRestorationIdentityVerifier,
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
-import { delegatingSessionFactory, validateRemotes } from "@orca/daemon";
+import { delegatingSessionFactory, RemoteCapacity, validateRemotes } from "@orca/daemon";
 import {
   fileStores,
   holdStoreWriter,
@@ -87,7 +88,7 @@ import {
 } from "@orca/store";
 import { bindLocalAdmissionExecution } from "./admission-execution-authority.js";
 import { cliHumanInput } from "./human-input-cli.js";
-import { localSecretUse } from "./local-secret-use.js";
+import { localCapabilityUse, localSecretUse } from "./local-secret-use.js";
 import {
   captureRuntimeObjects,
   capturePluginRestoration,
@@ -170,6 +171,8 @@ export interface OrcaApp {
   logger: Logger;
   /** Existing store owners, read-only and conservative; no retry cursor or reconciliation. */
   closedWorkState(): Promise<"empty" | "parked" | "unsupported-generation">;
+  /** How the switch to SQLite the desktop app asked for on this launch ended (#339). */
+  storeSwitch?: DesktopSqliteSwitchOutcome | undefined;
 }
 
 export async function findConfig(cwd: string): Promise<string | undefined> {
@@ -374,6 +377,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     : await loadConfig(cwd, opts.configPath);
   const firstRunLaunch = process.env.ORCA_FIRST_RUN_LAUNCH;
   delete process.env.ORCA_FIRST_RUN_LAUNCH;
+  // The desktop app asks for its store's switch to SQLite on one launch (#339); never inherited.
+  const storeSwitch = process.env[STORE_SWITCH_ENV];
+  delete process.env[STORE_SWITCH_ENV];
   await enterConfiguredUpdateBootstrap(resolve(configDir), resolve(configDir, config.storeDir));
   if (isClosedUpdateBootstrap() && config.plugins.length)
     throw new OrcaError("CONFIG_INVALID", "Closed replacement cannot execute uncertified plugin initialization");
@@ -394,6 +400,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   // the format check, then the backend is read again: a switch that finished in between is seen
   // in the marker, one still running in its announcement.
   let writerHold: StoreWriterHold | undefined;
+  let storeSwitchOutcome: DesktopSqliteSwitchOutcome | undefined;
   if (!opts.ephemeral) {
     const storeDir = resolve(configDir, config.storeDir);
     ({ backend } = await enterDaemonStoreFormat(
@@ -402,6 +409,11 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       storeWriterVersion(),
       isClosedUpdateBootstrap() ? "read" : "write",
     ));
+    // Before this process registers as a writer: the switch refuses while any writer is alive.
+    if (storeSwitch === "sqlite" && !isClosedUpdateBootstrap() && backend === "file") {
+      storeSwitchOutcome = await desktopSqliteSwitch(storeDir, writer, storeWriterVersion());
+      backend = recordedStoreBackend(storeDir) ?? "file";
+    }
     if (!isClosedUpdateBootstrap()) {
       writerHold = holdStoreWriter(storeDir, { appVersion: storeWriterVersion(), purpose: "orca" });
       if ((recordedStoreBackend(storeDir) ?? "file") !== backend) {
@@ -415,6 +427,11 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     }
   }
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
+  if (storeSwitchOutcome?.status === "refused")
+    logger.warn(
+      `store stays on files, not switched to SQLite (${storeSwitchOutcome.reason}): ${storeSwitchOutcome.message}`,
+    );
+  else if (storeSwitchOutcome?.status === "switched") logger.info("store switched to SQLite metadata");
   const agents = AgentRegistry.fromConfig(config, { configDir: resolve(configDir) });
   const assets = await releaseAssets(config);
   const templates = await loadTemplates(assets.templates, configDir);
@@ -570,12 +587,15 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   // goes to the ACP factory unchanged. The remotes are read at each open, so an applied config
   // edit reaches the next session.
   let currentRemotes = () => config.remotes;
+  // Each remote daemon's session cap, as its hello reports it (#884), for the slot queue.
+  const remoteCapacity = new RemoteCapacity();
   const delegating = (base: SessionFactory): SessionFactory =>
     delegatingSessionFactory(base, {
       remotes: () => currentRemotes(),
       configDir,
       receiptsDir: resolve(configDir, config.storeDir, "delegations"),
       workspaceId: () => workspaceIdentity(resolve(configDir, config.storeDir)),
+      capacity: remoteCapacity,
     });
   const openSession = delegating(makeSessionFactory({ configDir, storeDir: config.storeDir, configFile }));
   const orchestrator = new Orchestrator({
@@ -589,6 +609,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     workspaceProvider,
     plan,
     logger,
+    remoteSessionCap: (remoteId) => remoteCapacity.cap(remoteId),
     // An ephemeral bootstrap deliberately gets none: it is a one-shot over in-memory stores
     // (`orca agent ping`), and standing grants a workspace recorded for its real runs are
     // durable workspace state of exactly the kind `ephemeral` means to leave alone.
@@ -608,6 +629,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
         }),
     ...(opts.lease ? { lease: opts.lease } : {}),
   });
+  remoteCapacity.onChange(() => orchestrator.sessionSlots.pump());
   const generations = new ConfigurationGenerations({
     store: stores.execution,
     workflows: stores.workflows,
@@ -678,12 +700,12 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   // Secret references (#336): every local path - run, submit, resume, answer - decides from
   // the root owner's durable record and current credentials. `orca serve` replaces it with
   // the daemon's own. An ephemeral orchestrator (`orca agent ping`) has none: it never delivers.
-  if (!opts.ephemeral)
-    orchestrator.secretUse = localSecretUse({
-      configDir,
-      storeDir: resolve(configDir, config.storeDir),
-      orchestrator,
-    });
+  // Catalog MCP servers (#337) are decided the same way, from the same files.
+  if (!opts.ephemeral) {
+    const local = { configDir, storeDir: resolve(configDir, config.storeDir), orchestrator };
+    orchestrator.secretUse = localSecretUse(local);
+    orchestrator.capabilityUse = localCapabilityUse(local);
+  }
   const provided = await opts.requestSubmission?.({ orchestrator, config, configDir });
   const authority = provided?.authority ?? (await opts.submissionAuthority?.({ orchestrator, config, configDir }));
   if (authority) bindLocalAdmissionExecution(orchestrator, "request", authority);
@@ -746,6 +768,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
         : undefined,
     configDir,
     ...(configFile ? { configFile } : {}),
+    ...(storeSwitchOutcome ? { storeSwitch: storeSwitchOutcome } : {}),
     orchestrator,
     program,
     plan,

@@ -42,6 +42,12 @@
  *   A slot already closing is never counted as stuck: it comes back on its own.
  *
  * A queue that is merely long is never cut off, unless the operator set that deadline.
+ *
+ * Remote daemons (#884). A session of a delegating agent (`type: orca-daemon`) is also subject
+ * to its remote's cap: the remote daemon's own `limits.maxAgentSessions`, as its `hello`
+ * reports it. This daemon counts the sessions it holds open to each remote and waits, like
+ * for any other cap, once that count reaches the remote's. The remote still enforces its cap
+ * itself, which is what bounds several parents sharing it.
  */
 import { OrcaError } from "@orca/core";
 
@@ -50,6 +56,8 @@ export interface SessionSlotCaps {
   daemon?: number | undefined;
   agent?: number | undefined;
   host?: number | undefined;
+  /** The cap of the remote daemon the session delegates to (`SessionSlotRequest.remoteId`). */
+  remote?: number | undefined;
 }
 
 /** What the daemon is configured with, for the read model. Only what is set appears. */
@@ -76,6 +84,8 @@ export interface SessionSlotsView {
 export interface SessionSlotRequest {
   agentId: string;
   hostId: string;
+  /** The remote daemon (its `remotes[]` id) a delegating agent's session goes to (#884). */
+  remoteId?: string | undefined;
   /**
    * The caps this open is subject to, asked again on every pass over the queue so a cap the
    * operator raised or lowered while the step waits takes effect for it too.
@@ -110,6 +120,7 @@ export interface SessionSlot {
 interface Held {
   agentId: string;
   hostId: string;
+  remoteId?: string | undefined;
   pinnedTo?: string | undefined;
   closing?: boolean;
   unconfirmed?: boolean;
@@ -121,6 +132,7 @@ type Key = string;
 const DAEMON: Key = "daemon";
 const agentKey = (id: string): Key => `agent:${id}`;
 const hostKey = (id: string): Key => `host:${id}`;
+const remoteKey = (id: string): Key => `remote:${id}`;
 
 interface Waiter {
   seq: number;
@@ -136,6 +148,7 @@ export class SessionSlots {
   private total = 0;
   private readonly byAgent = new Map<string, number>();
   private readonly byHost = new Map<string, number>();
+  private readonly byRemote = new Map<string, number>();
   private readonly held = new Set<Held>();
   private waiters: Waiter[] = [];
   private seq = 0;
@@ -282,6 +295,16 @@ export class SessionSlots {
         used: this.byHost.get(request.hostId) ?? 0,
         where: `on host ${request.hostId}`,
       },
+      ...(request.remoteId === undefined
+        ? []
+        : [
+            {
+              key: remoteKey(request.remoteId),
+              cap: caps.remote,
+              used: this.byRemote.get(request.remoteId) ?? 0,
+              where: `on remote ${request.remoteId} (its limits.maxAgentSessions)`,
+            },
+          ]),
     ];
     return all.flatMap((c) => (c.cap === undefined ? [] : [{ ...c, cap: c.cap }]));
   }
@@ -372,12 +395,18 @@ export class SessionSlots {
   }
 
   private take(request: SessionSlotRequest): SessionSlot {
-    const { agentId, hostId } = request;
-    const record: Held = { agentId, hostId, ...(request.pinnedTo ? { pinnedTo: request.pinnedTo } : {}) };
+    const { agentId, hostId, remoteId } = request;
+    const record: Held = {
+      agentId,
+      hostId,
+      ...(remoteId !== undefined ? { remoteId } : {}),
+      ...(request.pinnedTo ? { pinnedTo: request.pinnedTo } : {}),
+    };
     this.held.add(record);
     this.total++;
     this.byAgent.set(agentId, (this.byAgent.get(agentId) ?? 0) + 1);
     this.byHost.set(hostId, (this.byHost.get(hostId) ?? 0) + 1);
+    if (remoteId !== undefined) this.byRemote.set(remoteId, (this.byRemote.get(remoteId) ?? 0) + 1);
     let held = true;
     return {
       release: () => {
@@ -387,6 +416,7 @@ export class SessionSlots {
         this.total--;
         this.byAgent.set(agentId, (this.byAgent.get(agentId) ?? 1) - 1);
         this.byHost.set(hostId, (this.byHost.get(hostId) ?? 1) - 1);
+        if (remoteId !== undefined) this.byRemote.set(remoteId, (this.byRemote.get(remoteId) ?? 1) - 1);
         this.pump();
       },
       closing: () => {
@@ -402,5 +432,10 @@ export class SessionSlots {
 }
 
 function sameKey(key: Key, held: Held): boolean {
-  return key === DAEMON || key === agentKey(held.agentId) || key === hostKey(held.hostId);
+  return (
+    key === DAEMON ||
+    key === agentKey(held.agentId) ||
+    key === hostKey(held.hostId) ||
+    (held.remoteId !== undefined && key === remoteKey(held.remoteId))
+  );
 }

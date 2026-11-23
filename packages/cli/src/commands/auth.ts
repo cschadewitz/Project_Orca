@@ -1,7 +1,7 @@
 /** Local credential administration: only explicit issue/rotate output contains a bearer token. */
 import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
 import { resolve } from "node:path";
-import { OrcaError, type OrcaConfig } from "@orca/core";
+import { OrcaError, secretSource, type OrcaConfig } from "@orca/core";
 import {
   openAuthDirectory,
   PRESETS,
@@ -11,8 +11,11 @@ import {
   type ResourceScope,
   type SecretGrant,
   SecretGrantSchema,
+  type CapabilityGrant,
+  CapabilityGrantSchema,
 } from "@orca/daemon";
-import { secretHostBinding } from "@orca/agents";
+import { isAbsoluteCommand, mcpServerDefinitionDigest, secretHostBinding, secretSourceBinding } from "@orca/agents";
+import { skillDigest } from "@orca/engine";
 import { loadConfig } from "../bootstrap.js";
 import type { CommandContext } from "./index.js";
 
@@ -50,7 +53,22 @@ function secretGrant(ctx: CommandContext, config: OrcaConfig): SecretGrant | und
     const spec = config.hosts.find((h) => h.id === host);
     if (!spec)
       throw new OrcaError("CONFIG_INVALID", `--secret '${secret}' names host '${host}', which is not configured`);
-    return { secret, provider: bound.provider, host, binding: secretHostBinding(spec) };
+    // A secret pinned to a destination (#701) is only ever a review judge's key: its grant is
+    // for that purpose, that destination and that source, so a later re-pin or a change of
+    // variable is not covered, while rotating the value at the same variable is.
+    return {
+      secret,
+      provider: bound.provider,
+      host,
+      binding: secretHostBinding(spec),
+      ...(bound.destination !== undefined
+        ? {
+            purpose: "review-judge" as const,
+            destination: bound.destination,
+            source: secretSourceBinding(secretSource(bound)),
+          }
+        : {}),
+    };
   });
   const parsed = SecretGrantSchema.safeParse(grants);
   if (!parsed.success) throw new OrcaError("CONFIG_INVALID", "--secret ids use letters, digits, '.', '_' and '-'");
@@ -59,6 +77,92 @@ function secretGrant(ctx: CommandContext, config: OrcaConfig): SecretGrant | und
     const key = `${g.secret}@${g.host}`;
     return !seen.has(key) && (seen.add(key), true);
   });
+}
+
+/**
+ * `--mcp-server <id>@<host>` and `--skill <id>` (each repeatable), or `'*'` given to either
+ * alone: the catalog capabilities a credential's runs may be given (#337).
+ *
+ * - A server must be in the catalog now, with an absolute command; the grant records its
+ *   definition digest and the host's endpoint binding, so a server redefined to another
+ *   command, or a host pointed elsewhere, is not covered.
+ * - A skill must be in the catalog and readable now; the grant records its content digest,
+ *   so an edited skill is not covered until it is granted again.
+ * - `--mcp-server '*'` grants every catalog server and `--skill '*'` every catalog skill. Each
+ *   is its own explicit entry: one never grants the other kind, and each is given alone among
+ *   the flags of its own kind.
+ */
+function capabilityGrant(ctx: CommandContext, config: OrcaConfig, configDir: string): CapabilityGrant | undefined {
+  const servers = (ctx.flags["mcp-server"] as string[] | undefined) ?? [];
+  const skills = (ctx.flags.skill as string[] | undefined) ?? [];
+  if (!servers.length && !skills.length) return undefined;
+  for (const [flag, values] of [
+    ["--mcp-server", servers],
+    ["--skill", skills],
+  ] as const)
+    if (values.includes("*") && values.length > 1)
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `${flag} '*' grants every catalog ${flag === "--skill" ? "skill" : "MCP server"}; give it alone among the ${flag} flags`,
+      );
+  const serverGrants = servers.map((value) => {
+    if (value === "*") return { kind: "mcpServer" as const, any: true as const };
+    const at = value.lastIndexOf("@");
+    if (at <= 0 || at === value.length - 1)
+      throw new OrcaError("CONFIG_INVALID", `--mcp-server takes <id>@<host> or '*', not '${value}'`);
+    const id = value.slice(0, at);
+    const host = value.slice(at + 1);
+    const server = config.capabilities?.mcpServers[id];
+    if (!server) throw new OrcaError("CONFIG_INVALID", `--mcp-server names '${id}', which is not a catalog MCP server`);
+    const spec = config.hosts.find((h) => h.id === host);
+    if (!spec)
+      throw new OrcaError("CONFIG_INVALID", `--mcp-server '${id}' names host '${host}', which is not configured`);
+    if (!isAbsoluteCommand(server.command, spec.type))
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `--mcp-server '${id}' runs '${server.command}', which is not an absolute path: a grant for one server pins the executable itself, so give its command as an absolute path in the catalog, or grant '*'`,
+      );
+    // Delivery checks the executable's ownership and modes on that host; Windows has neither.
+    if (spec.type === "local" && process.platform === "win32")
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `--mcp-server '${id}' runs on this Windows machine, where ORCA cannot check that an executable is administrator-owned: only '*' covers a catalog server here`,
+      );
+    return {
+      kind: "mcpServer" as const,
+      id,
+      host,
+      binding: secretHostBinding(spec),
+      definition: mcpServerDefinitionDigest(server),
+    };
+  });
+  const skillGrants = skills.map((id) => {
+    if (id === "*") return { kind: "skill" as const, any: true as const };
+    const skill = config.capabilities?.skills[id];
+    if (!skill) throw new OrcaError("CONFIG_INVALID", `--skill names '${id}', which is not a catalog skill`);
+    const digest = skillDigest(skill, configDir);
+    if ("error" in digest) throw new OrcaError("CONFIG_INVALID", `--skill '${id}': ${digest.error}`);
+    if (skill.digest !== undefined && skill.digest !== digest.digest)
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `--skill '${id}' no longer matches the digest the catalog pins (found ${digest.digest}); review it and update the pin first`,
+      );
+    return { kind: "skill" as const, id, digest: digest.digest };
+  });
+  const parsed = CapabilityGrantSchema.safeParse([...serverGrants, ...skillGrants]);
+  if (!parsed.success)
+    throw new OrcaError("CONFIG_INVALID", "--mcp-server and --skill ids use letters, digits, '.', '_' and '-'");
+  const seen = new Set<string>();
+  return (parsed.data as Exclude<CapabilityGrant, "*">).filter((g) => {
+    const key = grantLabel(g);
+    return !seen.has(key) && (seen.add(key), true);
+  });
+}
+
+/** How `auth list` shows a capability grant entry. */
+function grantLabel(g: Exclude<CapabilityGrant, "*">[number]): string {
+  if ("any" in g) return g.kind === "skill" ? "skill:*" : "mcpServer:*";
+  return g.kind === "skill" ? `skill:${g.id}` : `${g.id}@${g.host}`;
 }
 
 function credentialId(value: string | undefined, sub: string): string {
@@ -98,13 +202,19 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
       if (workflowIds?.some((id) => !id || id === "*"))
         throw new OrcaError("CONFIG_INVALID", "--workflow-scope requires workflow ids; omit it for all workflows");
       const secrets = secretGrant(ctx, config);
+      const capabilities = capabilityGrant(ctx, config, configDir);
+      // A grant is only usable with `secrets.use` or `capabilities.use`, so naming one adds
+      // that permission to the preset's.
+      const added = [
+        ...(secrets !== undefined ? (["secrets.use"] as const) : []),
+        ...(capabilities !== undefined ? (["capabilities.use"] as const) : []),
+      ];
       const issued = await auth.credentials.issue({
         principal: value,
         preset,
-        // A grant is only usable with `secrets.use`, so naming one adds it to the preset's.
-        ...(secrets !== undefined
-          ? { secrets, permissions: [...new Set([...PRESETS[preset].permissions, "secrets.use" as const])] }
-          : {}),
+        ...(secrets !== undefined ? { secrets } : {}),
+        ...(capabilities !== undefined ? { capabilities } : {}),
+        ...(added.length ? { permissions: [...new Set([...PRESETS[preset].permissions, ...added])] } : {}),
         scope: { workflows: workflowIds ? [...new Set(workflowIds)] : PRESETS[preset].scope.workflows, runs },
         label: ctx.flags.label as string | undefined,
         expiresAt: expiry(ctx),
@@ -124,7 +234,7 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
               ? "expired"
               : "active";
           ctx.out(
-            `${c.id} ${c.principal} ${state} workflows=${c.scope.workflows === "*" ? "*" : c.scope.workflows.join(",")} runs=${c.scope.runs}${c.secrets === undefined ? "" : ` secrets=${c.secrets === "*" ? "*" : c.secrets.map((g) => `${g.secret}(${g.provider})@${g.host}`).join(",")}`}${c.expiresAt ? ` expires=${c.expiresAt}` : ""}${c.label ? ` label=${c.label}` : ""}`,
+            `${c.id} ${c.principal} ${state} workflows=${c.scope.workflows === "*" ? "*" : c.scope.workflows.join(",")} runs=${c.scope.runs}${c.secrets === undefined ? "" : ` secrets=${c.secrets === "*" ? "*" : c.secrets.map((g) => `${g.secret}(${g.provider})@${g.host}`).join(",")}`}${c.capabilities === undefined ? "" : ` capabilities=${c.capabilities === "*" ? "mcpServer:*" : c.capabilities.map(grantLabel).join(",")}`}${c.expiresAt ? ` expires=${c.expiresAt}` : ""}${c.label ? ` label=${c.label}` : ""}`,
           );
         }
       return 0;

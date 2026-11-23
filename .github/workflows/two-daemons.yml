@@ -4,15 +4,35 @@
 # against a stand-in updater. The main check runs the same files but skips the SSH cases where the
 # runner has no sshd; this job, on a GitHub-hosted Linux runner, installs it and sets
 # ORCA_REQUIRE_SSHD=1 so a missing or broken sshd fails instead of skipping.
+#
+# The machines job (#885 phase 2) runs the same delegation across separate machines: it builds
+# this checkout's server bundle, installs it in Ubuntu 24.04 containers on a private Docker
+# network, and has a parent daemon delegate to a worker over the worker's own sshd.
 name: Two daemons
 
 on:
   pull_request:
     branches: [main]
     paths:
-      - packages/testing/src/two-daemons.ts
+      - packages/testing/machine/**
       - packages/testing/test/two-daemons.test.ts
       - packages/cli/test/delegation-883.test.ts
+      - packages/cli/test/delegation-machines-885.test.ts
+      # What a daemon runs: shared schemas (agents, remotes), the store (admissions, receipts,
+      # locks) and the engine (slots, orchestrator), plus how the bundle is built and locked.
+      - packages/core/src/**
+      - packages/store/src/**
+      - packages/engine/src/**
+      - packages/testing/src/**
+      - packages/testing/package.json
+      - packages/app/scripts/build-daemon.js
+      - tools/deploy/server-bundle.py
+      - package.json
+      - pnpm-lock.yaml
+      - packages/*/package.json
+      - tsconfig.json
+      - tsconfig.build.json
+      - packages/*/tsconfig*.json
       - packages/app/test/server-update-ssh.test.ts
       - packages/app/src/server-update.ts
       - packages/app/src/main/server-update.ts
@@ -20,10 +40,11 @@ on:
       - packages/daemon/src/**
       - packages/cli/src/**
       - packages/protocol/src/**
-      - packages/agents/src/hosts/**
-      - packages/agents/src/acp-session.ts
-      - packages/agents/src/secrets.ts
+      - packages/agents/src/**
       - packages/agents/test/secrets-ssh-native-336.test.ts
+      - packages/agents/src/capability-use.ts
+      - packages/engine/src/capabilities.ts
+      - packages/engine/test/capabilities-ssh-native-337.test.ts
       - .github/workflows/two-daemons.yml
   workflow_dispatch:
 
@@ -57,10 +78,34 @@ jobs:
         env:
           ORCA_REQUIRE_SSHD: "1"
         # Also: secret references (#336) delivered over a real sshd, with every argv scanned, and
-        # a server update (#879) run over a profile's ssh.
-        run: pnpm exec vitest run packages/testing/test/two-daemons.test.ts packages/agents/test/secrets-ssh-native-336.test.ts packages/app/test/server-update-ssh.test.ts
+        # a server update (#879) run over a profile's ssh, and catalog MCP servers (#337) given to
+        # an agent on the SSH host only after their command is found there.
+        run: pnpm exec vitest run packages/testing/test/two-daemons.test.ts packages/agents/test/secrets-ssh-native-336.test.ts packages/app/test/server-update-ssh.test.ts packages/engine/test/capabilities-ssh-native-337.test.ts
       # A parent daemon delegating steps to the other over the same sshd (#883).
       - name: Delegation over loopback ssh
         env:
           ORCA_REQUIRE_SSHD: "1"
         run: pnpm exec vitest run packages/cli/test/delegation-883.test.ts
+
+  machines:
+    name: two machines in containers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      # The fixture bundles the daemon from the compiled packages, as the release does.
+      - run: pnpm run build
+      - name: A parent and a worker on separate machines, over the worker's sshd
+        env:
+          ORCA_TWO_MACHINES: "1"
+        run: pnpm exec vitest run packages/cli/test/delegation-machines-885.test.ts

@@ -190,7 +190,13 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * than run without it.
  */
 /**
- * 2.8 (#702) adds standing-rule lifetimes and previews, all optional fields: `durationMs` on
+ * 2.8 (#340) adds history paging to `runs.list`: an optional `cursor` param and an optional
+ * `nextCursor` on the result, a place in the list's order (creation time, then id) rather
+ * than a count, so a page back through history is not shifted by runs created meanwhile.
+ * A 2.7 daemon strips the unknown param and answers the first page again, so a client sends
+ * it only to a 2.8 daemon and pages a 2.7 one by `offset`.
+ *
+ * 2.8 also (#702) adds standing-rule lifetimes and previews, all optional fields: `durationMs` on
  * `inputs.answer`'s `always`, `standing` on `OpenInputView` (the rule each "always" direction
  * would write, shown before anybody saves it) and `expiresAt` on `EffectivePermissionRule`.
  * A 2.7 daemon sends no `standing`, so the app offers only one-time answers there rather

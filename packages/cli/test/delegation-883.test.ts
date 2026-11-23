@@ -820,6 +820,151 @@ edges:
   }, 120_000);
 });
 
+describe("a capped remote shared by two delegating parents (#884)", () => {
+  let sshd: LoopbackSshd | undefined;
+  let remote: TestDaemon;
+  const parents: TestDaemon[] = [];
+
+  beforeAll(async () => {
+    sshd = await loopbackSshd();
+    if (!sshd) return;
+    // The remote: `limits.maxAgentSessions: 2`, and a slow agent so that delegated work overlaps.
+    const wf = await mkdtemp(join(tmpdir(), "orca-884-remote-wf-"));
+    dirs.push(wf);
+    writeFileSync(
+      join(wf, "remote-slow.yaml"),
+      `
+id: remote-slow
+name: remote slow
+start: s
+nodes:
+  s: { type: start }
+  work:
+    type: agent
+    agent: { id: scripted }
+    prompt: "{{ vars.prompt }}"
+    produces:
+      - { kind: report, name: report, path: "out/report.md" }
+  done: { type: end }
+edges:
+  - { from: s, to: work }
+  - { from: work, to: done }
+`,
+    );
+    const playbook = { kinds: { report: [{ body: "Slow report for: {prompt}", delayMs: 1_500 }] } };
+    remote = await startTestDaemon({
+      name: "capped-remote",
+      config: JSON.stringify({
+        version: 1,
+        workflows: [join(wf, "*.yaml")],
+        templates: [],
+        limits: { maxAgentSessions: 2 },
+        agents: [
+          {
+            id: "scripted",
+            command: process.execPath,
+            args: [SCRIPTED],
+            env: { ORCA_PLAYBOOK_JSON: JSON.stringify(playbook) },
+            permissions: { default: "allow" },
+          },
+        ],
+      }),
+    });
+    const parentWf = await mkdtemp(join(tmpdir(), "orca-884-parent-wf-"));
+    dirs.push(parentWf);
+    writeFileSync(
+      join(parentWf, "fan.yaml"),
+      `
+id: fan
+name: fan
+start: s
+nodes:
+  s: { type: start }
+  hand:
+    type: agent
+    agent: { id: to-cap }
+    prompt: "Report on {{ vars.city }}"
+    produces:
+      - { kind: report, name: report, path: "delegated/report.md" }
+  done: { type: end }
+edges:
+  - { from: s, to: hand }
+  - { from: hand, to: done }
+`,
+    );
+    for (const name of ["parent-1", "parent-2"]) {
+      const parent = await startTestDaemon({
+        name,
+        config: JSON.stringify({
+          version: 1,
+          workflows: [join(parentWf, "*.yaml")],
+          templates: [],
+          remotes: [
+            {
+              id: "cap-box",
+              name: "Capped box",
+              destination: `${userInfo().username}@127.0.0.1`,
+              sshPort: sshd.port,
+              identityFile: sshd.identity,
+              remotePort: remote.port,
+            },
+          ],
+          agents: [{ id: "to-cap", type: "orca-daemon", profile: "cap-box", workflow: "remote-slow" }],
+        }),
+      });
+      parents.push(parent);
+      mkdirSync(join(parent.dir, "auth", "remotes"), { recursive: true });
+      writeFileSync(join(parent.dir, "auth", "remotes", "cap-box.token"), `${issueCredential(remote, name)}\n`, {
+        mode: 0o600,
+      });
+      const enrolled = cli(parent, ["remote", "enroll", "cap-box", "--host-key", sshd.hostKeyFingerprint]);
+      if (enrolled.status !== 0) throw new Error(`enroll failed: ${enrolled.stderr}`);
+    }
+  }, 120_000);
+
+  afterAll(async () => {
+    for (const parent of parents) await parent.close();
+    await remote?.close();
+    await sshd?.close();
+  });
+
+  it("never runs more than the remote's two sessions at once, holds the rest waiting, and finishes them all", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const [one, two] = parents as [TestDaemon, TestDaemon];
+    // Watch the remote's own sessions while the work overlaps.
+    let peak = 0;
+    let watching = true;
+    const watcher = (async () => {
+      while (watching) {
+        const slots = (await call(remote, "agents.list", {})).sessionSlots as { inUse: { total: number } };
+        peak = Math.max(peak, slots.inUse.total);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    })();
+    // Fan-out from one parent, and a second parent sharing the same remote at the same time.
+    const runs = await Promise.all([
+      ...["Oslo", "Bergen", "Tromsø"].map(async (city) => ({ daemon: one, runId: await admit(one, "fan", { city }) })),
+      ...["Alta", "Bodø"].map(async (city) => ({ daemon: two, runId: await admit(two, "fan", { city }) })),
+    ]);
+    const done = await Promise.all(runs.map(({ daemon, runId }) => finished(daemon, runId)));
+    watching = false;
+    await watcher;
+    expect(done.map((r) => r.status)).toEqual(Array(5).fill("succeeded"));
+    expect(peak).toBe(2);
+    // The fanning parent held its third step back itself, saying which remote was full.
+    const waits: string[] = [];
+    for (const { daemon, runId } of runs.filter((r) => r.daemon === one)) {
+      const { events } = (await call(daemon, "runs.events", { runId, limit: 200 })) as {
+        events: { type: string; payload: { on?: string; detail?: string } }[];
+      };
+      for (const e of events)
+        if (e.type === "step.waiting" && e.payload.on === "agent-slot") waits.push(e.payload.detail ?? "");
+    }
+    expect(waits.length).toBeGreaterThan(0);
+    expect(waits.every((w) => w.includes("on remote cap-box"))).toBe(true);
+  }, 180_000);
+});
+
 describe("delegation through a proxy the test controls (#883)", () => {
   let remote: TestDaemon;
   let token: string;
@@ -1010,6 +1155,18 @@ describe("delegation through a proxy the test controls (#883)", () => {
       binding: { ...(extra.binding ?? binding), workflowId: agent.workflow! },
     });
   }
+
+  it("reports the remote's session cap from its hello for the slot queue (#884)", async () => {
+    const proxy = await proxied();
+    const seen: (number | undefined)[] = [];
+    const session = await open(proxy.transport(), new DelegationReceipts(join(work, "receipts-capacity")), {
+      onCapacity: (max) => void seen.push(max),
+    });
+    // This remote sets no limits.maxAgentSessions: unlimited.
+    expect(seen).toEqual([undefined]);
+    await session.close();
+    await proxy.close();
+  }, 60_000);
 
   it("reattaches to the same remote run after the connection drops, without a second submission", async () => {
     const proxy = await proxied();
@@ -1342,10 +1499,14 @@ describe("delegation through a proxy the test controls (#883)", () => {
   it("refuses a daemon that names another principal than the enrolled one, before admitting", async () => {
     const proxy = await proxied();
     const before = (await runsOf("remote-task")).length;
+    const caps: (number | undefined)[] = [];
     const error = await open(proxy.transport(), new DelegationReceipts(join(work, "receipts-scope")), {
       binding: { ...binding, principalId: "someone-else" },
+      onCapacity: (max) => void caps.push(max),
     }).catch((e: unknown) => e);
     expect(isOrcaError(error, "DELEGATION_REFUSED")).toBe(true);
+    // A daemon that is not the enrolled one never sets the cap sessions are counted against.
+    expect(caps).toEqual([]);
     expect((error as { details: { reason: string } }).details.reason).toBe("scope-changed");
     expect(await runsOf("remote-task")).toHaveLength(before);
     await proxy.close();

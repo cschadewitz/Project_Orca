@@ -136,6 +136,33 @@ export const RunOriginSchema = z
   .strict();
 export type RunOrigin = z.infer<typeof RunOriginSchema>;
 
+/**
+ * A dry run (#183): a simulation of one exact definition with deterministic fixtures in place of
+ * agent turns, gate answers and every executor that could reach outside ORCA. Recorded on the
+ * `run.created` of the simulated run and of every child it spawns, so each of its events is
+ * known to be simulated from the run it belongs to, and nothing reads a dry run as work. A
+ * simulated success says the routing does what was meant with these fixtures; it says nothing
+ * about live agents or integrations.
+ *
+ * The identity it is bound to stays with it: a later edit to the draft makes the result stale,
+ * which a reader sees by comparing `definitionRevision` (and `draftRevision`) with the draft's.
+ */
+export const DryRunSchema = z
+  .object({
+    /** `workflowRevision` of the exact definition simulated. */
+    definitionRevision: z.string(),
+    /** The draft revision it was taken from (#180), when it was a draft. */
+    draftRevision: z.number().int().nonnegative().optional(),
+    /** The configuration generation its agents, templates and capabilities resolved under. */
+    configGeneration: z.string().optional(),
+    /** Digest of the fixtures and simulated choices it was given (empty ones included). */
+    fixtures: z.string(),
+    /** Digest of every agent step's resolved, redacted capability manifest (#335). */
+    capabilities: z.string(),
+  })
+  .strict();
+export type DryRun = z.infer<typeof DryRunSchema>;
+
 export const StepRunSchema = z.object({
   id: z.string(),
   runId: z.string(),
@@ -260,6 +287,8 @@ export const RunSchema = z.object({
   checkpoint: StepOriginSchema.optional(),
   /** A delegated run's parent workspace, run and step (#883). */
   origin: RunOriginSchema.optional(),
+  /** A simulated run (#183): never work, whatever its status says. */
+  dryRun: DryRunSchema.optional(),
   error: ErrorInfoSchema.optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
@@ -285,6 +314,7 @@ export const RunSummarySchema = RunSchema.pick({
   provenance: true,
   checkpoint: true,
   origin: true,
+  dryRun: true,
   createdAt: true,
   startedAt: true,
   completedAt: true,

@@ -598,6 +598,13 @@ export interface SwitchToSqliteOptions {
    * backup is taken (the original is left as it was), and the marker records where it came from.
    */
   copyOf?: { storeDir: string; signature: string };
+  /**
+   * The caller holds the store's exclusive writer fence (the desktop app's daemon, whose fence
+   * every supported ORCA that may write the app's workspace must hold first): checked before
+   * anything is changed, before the journal, before the marker is staged, and at the marker's
+   * rename. Once it no longer holds, the switch is refused (`FENCE_LOST`) and undone.
+   */
+  fence?: StoreWriteFence;
   /** Injected for tests: runs after the import and its verify, before the last checks. */
   afterImport?: () => Promise<void>;
   /** Injected for tests: runs after each path of the legacy fence is in place. */
@@ -719,7 +726,16 @@ async function switchLocked(
   const convertedFrom = options.copyOf
     ? { store: options.copyOf.storeDir, signature: options.copyOf.signature, at: now.toISOString() }
     : undefined;
+  const holdsFence = () => {
+    if (options.fence && !options.fence.check())
+      throw new StoreFormatError(
+        "FENCE_LOST",
+        `This ORCA no longer provably holds the only write access to ${storeDir}, so it was not switched to SQLite and stays on files. Close every ORCA app, daemon and command using this workspace, then start ORCA again.`,
+        storeDir,
+      );
+  };
   try {
+    holdsFence();
     const before = await fileMetadata();
     if (!options.copyOf) {
       const staged = await stageCarryover(storeDir, current, SQLITE_STORE_FORMAT_EPOCH, now, { privacy });
@@ -754,6 +770,7 @@ async function switchLocked(
       );
     const writers = liveStoreWriters(storeDir);
     if (writers.length) throw busyWriters(storeDir, writers);
+    holdsFence();
     // The legacy fence (sqlite/legacy-fence.ts): from the journal on, an interruption is undone
     // (or, once the marker is written, finished) by the next start, and a released ORCA that
     // never reads the marker finds every path it would open first replaced by a marker.
@@ -768,12 +785,14 @@ async function switchLocked(
           storeDir,
         );
       await options.beforeMarker?.();
+      holdsFence();
       await stamp(
         storeDir,
         options.appVersion,
         now,
         { backup, sqliteId, convertedFrom },
-        undefined,
+        // Checked again at the rename itself, after the temporary marker is written and flushed.
+        holdsFence,
         SQLITE_STORE_FORMAT_EPOCH,
         options.afterMarkerRename,
       );
