@@ -37,7 +37,8 @@
  * (`model/agent.ts`), which is node-free; the reading, writing, locking and the physical
  * path checks are here.
  */
-import { realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readlinkSync, realpathSync, statSync } from "node:fs";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { revisionOf, withPolicyLock } from "./permission-file.js";
@@ -46,6 +47,8 @@ import {
   commandCatches,
   unverifiedExecuteAllowed,
   commandTextOf,
+  mcpToolClaimOf,
+  mcpToolTitle,
   neutralPart,
   parseCommand,
   parseCommandPattern,
@@ -68,9 +71,11 @@ import type {
   ConfiguredPermissionPolicy,
   PermissionDecision,
   PermissionDeriveRefusal,
+  PermissionExplanation,
   PermissionPolicy,
   PermissionPolicyFile,
   PermissionRule,
+  PermissionRuleOrigin,
   RecordedPermissionRule,
 } from "@orca/core";
 
@@ -101,7 +106,56 @@ export function decidePermission(
   request: acp.RequestPermissionRequest,
   ctx?: PermissionEvalContext,
 ): PermissionDecision {
-  return protectedLocation(request, ctx) === undefined ? decideByRules(policy, request, ctx) : "deny";
+  return explainPermission(policy, request, ctx).decision;
+}
+
+/**
+ * `decidePermission`'s answer with what decided it (#702): ORCA's protected paths, the rule
+ * that matched (its index in `policy.rules` and, when the loader recorded one, its origin), the
+ * fallthrough, or the command restriction. This is the one evaluation; `decidePermission` is
+ * its decision.
+ */
+export function explainPermission(
+  policy: PermissionPolicy,
+  request: acp.RequestPermissionRequest,
+  ctx?: PermissionEvalContext,
+): PermissionExplanation {
+  if (protectedLocation(request, ctx) !== undefined) return { decision: "deny", basis: "protected" };
+  const found = decideByRules(policy, request, ctx);
+  if (found.ruleIndex === undefined) return found;
+  const origins = policy.origins;
+  const origin = origins && origins.length === policy.rules.length ? origins[found.ruleIndex] : undefined;
+  return origin ? { ...found, origin } : found;
+}
+
+/**
+ * The `rule` an `agent.permission` event records for an explanation (#702). It never includes
+ * the sidecar `revision`: that is a deterministic digest of the whole permission file, and an
+ * ordinary event would carry it into every reader and export of the run log, where it could
+ * correlate one workspace's policy across runs (#702 review). The layer and index say which
+ * rule decided without it; the exact revision stays in memory for owner-private audit data.
+ */
+export function permissionRuleRecord(explained: PermissionExplanation): PermissionRuleRecord {
+  const o = explained.origin;
+  return {
+    basis: explained.basis,
+    ...(o
+      ? {
+          layer: o.layer,
+          index: o.index,
+          ...(o.file !== undefined ? { file: o.file } : {}),
+          ...(o.capped ? { capped: true } : {}),
+        }
+      : {}),
+  };
+}
+
+export interface PermissionRuleRecord {
+  basis: PermissionExplanation["basis"];
+  layer?: PermissionRuleOrigin["layer"];
+  index?: number;
+  file?: number;
+  capped?: boolean;
 }
 
 /**
@@ -120,8 +174,17 @@ function decideByRules(
   policy: PermissionPolicy,
   request: acp.RequestPermissionRequest,
   ctx?: PermissionEvalContext,
-): PermissionDecision {
+): PermissionExplanation {
   const tc = request.toolCall;
+  // An MCP tool the call's own metadata names (#1021): Gemini CLI leaves the server out of its
+  // title and puts it only there. The agent wrote it and ORCA cannot check it, so it is a
+  // claim: a deny or ask rule is tested against the claimed `server: tool` as well as the
+  // agent's title, so a restriction written for either form holds, but no allow of any kind
+  // decides the call. It stays on the one-time path, asked each time unless something denies
+  // it, and a grant on one server cannot reach the same tool name on another. Matching by the
+  // claim may only add restrictions, never weaken one (#1021 review): see the end.
+  const claim = mcpToolClaimOf(tc);
+  const claimedTitle = claim?.identity ? mcpToolTitle(claim.identity) : undefined;
   const title = tc.title ?? "";
   const kind = tc.kind ?? "other";
   // A call the agent did not classify could be a command under another name, and so could one
@@ -136,13 +199,18 @@ function decideByRules(
   // Both are false for a call with no locations, so `scope` never matches one (#140).
   const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
   const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
-  const matchesCall = (m: PermissionRule["match"]): boolean => {
+  let byClaim = false;
+  const titleMatches = (pattern: string, decision: PermissionDecision): boolean => {
+    if (!byClaim) return new RegExp(pattern).test(title);
+    return decision !== "allow" && claimedTitle !== undefined && new RegExp(pattern).test(claimedTitle);
+  };
+  const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision): boolean => {
     // A command rule also reaches a command-like call of another kind, so its restriction is
     // not dodged by leaving the kind out or giving a wrong one.
     if (m.kind && m.kind !== kind && !(m.command !== undefined && commandLike)) return false;
     if (m.scope === "workspace" && !allInside) return false;
     if (m.scope === "outside-workspace" && !anyOutside) return false;
-    if (m.titlePattern && !new RegExp(m.titlePattern).test(title)) return false;
+    if (m.titlePattern && !titleMatches(m.titlePattern, decision)) return false;
     if (m.path !== undefined) {
       const wanted = permissionPathForms(m.path, cwd);
       if (!wanted.some((w) => paths.includes(w))) return false;
@@ -157,11 +225,11 @@ function decideByRules(
   // unclassified call or one whose input carries a command (#702 review): skipping them lets a restriction later in the list still
   // be reached, and nothing approves a call whose command ORCA cannot vouch for.
   const restricted = (kind === "execute" || commandLike) && !unverifiedExecuteAllowed(policy);
-  const decide = (part: CommandPart | undefined): PermissionDecision => {
-    for (const rule of policy.rules) {
+  const decide = (part: CommandPart | undefined): PermissionExplanation => {
+    for (const [ruleIndex, rule] of policy.rules.entries()) {
       const m = rule.match;
-      if (restricted && rule.decision === "allow") continue;
-      if (!matchesCall(m)) continue;
+      if ((restricted || claim !== undefined) && rule.decision === "allow") continue;
+      if (!matchesCall(m, rule.decision)) continue;
       if (m.command !== undefined) {
         // A command is only ever an `execute`'s, and a part that is not there matches no rule.
         // A command rule never allows (`COMMAND_ALLOW_REFUSED`): the loaders refuse or ignore
@@ -170,17 +238,45 @@ function decideByRules(
         const pattern = parseCommandPattern(m.command);
         if (pattern === undefined || !commandCatches(pattern, part)) continue;
       }
-      return rule.decision;
+      return { decision: rule.decision, basis: "rule", ruleIndex };
     }
-    return policy.default;
+    if (claim !== undefined && policy.default === "allow") return { decision: "ask", basis: "unverified-identity" };
+    return { decision: policy.default, basis: "default" };
   };
-  if (!restricted) return decide(undefined);
+  const evaluate = (): PermissionExplanation => (restricted ? decideParts() : decide(undefined));
   // A policy with command rules: decide each part, take the strictest, and never allow. An
   // allow from an older rule, a kindless rule or the fallthrough is unverified (#702 review).
-  const text = commandTextOf(tc);
-  const parts = text === undefined ? [] : parseCommand(text).parts.filter((p) => !neutralPart(p));
-  const decisions = parts.length === 0 ? [decide(undefined)] : parts.map(decide);
-  return decisions.includes("deny") ? "deny" : "ask";
+  const decideParts = (): PermissionExplanation => {
+    const text = commandTextOf(tc);
+    const parts = text === undefined ? [] : parseCommand(text).parts.filter((p) => !neutralPart(p));
+    const decisions = parts.length === 0 ? [decide(undefined)] : parts.map(decide);
+    // The first denied part is what denied the call. Otherwise it is asked, and the record cites
+    // the first part an explicit ask rule decided, ahead of any part that only fell through to
+    // an ask default; failing both, the restriction itself, when every part would have been
+    // allowed. Only the attribution depends on this order, never the outcome (#702 review).
+    const denied = decisions.find((d) => d.decision === "deny");
+    if (denied) return denied;
+    return (
+      decisions.find((d) => d.decision === "ask" && d.basis === "rule") ??
+      decisions.find((d) => d.decision === "ask") ?? { decision: "ask", basis: "command-restricted" }
+    );
+  };
+  const plain = evaluate();
+  if (claimedTitle === undefined) return plain;
+  // With first match wins, a rule one title form meets could shadow a stricter one later in the
+  // list that only the other form meets. So the call is decided once by the agent's title and
+  // once by the claimed `server: tool`, and the stricter answer stands. A call is never
+  // decided more loosely than its title alone would decide it, and a call with no claim is
+  // decided exactly as before (#1021 review).
+  byClaim = true;
+  const claimed = evaluate();
+  const stricter = strictness(claimed.decision) - strictness(plain.decision);
+  // On a tie only the attribution can differ: a rule the claim met is cited ahead of a fallthrough.
+  return stricter > 0 || (stricter === 0 && plain.basis !== "rule" && claimed.basis === "rule") ? claimed : plain;
+}
+
+function strictness(decision: PermissionDecision): number {
+  return decision === "deny" ? 2 : decision === "ask" ? 1 : 0;
 }
 
 function pick(options: acp.PermissionOption[], kinds: acp.PermissionOptionKind[]): acp.PermissionOption | undefined {
@@ -194,11 +290,20 @@ function pick(options: acp.PermissionOption[], kinds: acp.PermissionOptionKind[]
 export async function resolvePermission(
   policy: PermissionPolicy,
   ctx: PermissionContext,
-): Promise<{ response: acp.RequestPermissionResponse; decision: string }> {
+): Promise<{ response: acp.RequestPermissionResponse; decision: string; rule?: PermissionRuleRecord }> {
   if (ctx.signal?.aborted) return { response: { outcome: { outcome: "cancelled" } }, decision: "ask:expired" };
+  const explained = explainPermission(policy, ctx.request, ctx.scope);
+  // What decided it travels with the answer (#702), so the event says which rule it was.
+  return { ...(await answerPermission(explained, ctx)), rule: permissionRuleRecord(explained) };
+}
+
+async function answerPermission(
+  explained: PermissionExplanation,
+  ctx: PermissionContext,
+): Promise<{ response: acp.RequestPermissionResponse; decision: string }> {
   // `decidePermission`'s own check, kept apart here so the decision can say why it denied.
-  const guarded = protectedLocation(ctx.request, ctx.scope) !== undefined;
-  const decision = guarded ? "deny" : decideByRules(policy, ctx.request, ctx.scope);
+  const guarded = explained.basis === "protected";
+  const decision = explained.decision;
   const options = ctx.request.options;
   const select = (o: acp.PermissionOption | undefined, label: string) =>
     o
@@ -307,6 +412,27 @@ export interface ProtectedPaths {
  * would — and segment by segment. So a link to `auth/` is `auth/`,
  * `sub/../orca.permissions.json` is the sidecar, and `.orca-notes` is not `.orca`. A relative
  * path is taken against the workspace, as a rule's is; the ACP session always passes one.
+ *
+ * What a path *is* depends on the access (#706 review):
+ *
+ * - a **read** opens what the path leads to, links followed, a link whose target does not
+ *   exist yet included;
+ * - a **remove** (delete, move, rename) acts on the directory entry itself: its directory is
+ *   resolved, its last name is not. Removing a link to the sidecar removes the link; removing
+ *   or renaming over a sidecar that *is* a link replaces the sidecar's entry, whatever it
+ *   points at;
+ * - a **write** is both: an open follows the last link, and a write by temporary file and
+ *   rename replaces the entry. It is refused when either is protected.
+ *
+ * A protected root is held in both forms too, so neither a link standing at a protected name
+ * nor what it leads to is free.
+ *
+ * Only "not there yet" is an answer. Any other error resolving either side (no permission,
+ * a loop of links, a component that is a file) cannot be shown to be free, so the path is
+ * reported as protected: `path` itself is returned.
+ *
+ * This is a decision-time check on names. It is not an operating-system boundary: the files
+ * can change between this check and the agent's open, which is ADR 0009's to answer.
  */
 export function protectedPathFor(
   path: string,
@@ -317,24 +443,54 @@ export function protectedPathFor(
   if (!protectedPaths) return undefined;
   if (!isAbsolute(path) && !workspaceCwd) return undefined;
   // Joined as text, not with `join`: that would fold `sub/..` lexically before the links in it are followed.
-  const target = pathSegments(physicalPath(isAbsolute(path) ? path : `${workspaceCwd}${sep}${path}`));
-  const hit = (roots: readonly string[]) =>
-    roots.find((root) => {
-      const guard = pathSegments(physicalPath(root));
-      return within(target, guard) || (access === "remove" && within(guard, target));
-    });
-  const unreadable = hit(protectedPaths.noAccess);
-  if (unreadable !== undefined || access === "read") return unreadable;
-  const areas = (protectedPaths.agentAreas ?? []).map((area) =>
-    pathSegments(join(physicalPath(dirname(area)), basename(area))),
-  );
-  return protectedPaths.readOnly.find((root) => {
-    const guard = pathSegments(physicalPath(root));
-    if (!within(target, guard) && !(access === "remove" && within(guard, target))) return false;
-    // An area exempts its enclosing store, never an explicit authority path inside it.
-    // Config/sidecar paths may themselves live (or resolve through a link) under work/.
-    return !areas.some((area) => guard.length < area.length && within(area, guard) && within(target, area));
-  });
+  const full = isAbsolute(path) ? path : `${workspaceCwd}${sep}${path}`;
+  try {
+    const targets =
+      access === "read"
+        ? [pathSegments(physicalPath(full))]
+        : access === "remove"
+          ? [pathSegments(entryPath(full))]
+          : [pathSegments(physicalPath(full)), pathSegments(entryPath(full))];
+    const forms = (root: string) => [pathSegments(physicalPath(root)), pathSegments(entryPath(root))];
+    const covers = (guard: readonly string[], target: readonly string[]) =>
+      within(target, guard) || (access === "remove" && within(guard, target));
+    const unreadable = protectedPaths.noAccess.find((root) =>
+      forms(root).some((guard) => targets.some((target) => covers(guard, target))),
+    );
+    if (unreadable !== undefined || access === "read") return unreadable;
+    const areas = (protectedPaths.agentAreas ?? []).map((area) => pathSegments(entryPath(area)));
+    return protectedPaths.readOnly.find((root) =>
+      forms(root).some((guard) =>
+        targets.some(
+          (target) =>
+            covers(guard, target) &&
+            // An area exempts its enclosing store, never an explicit authority path inside it.
+            // Config/sidecar paths may themselves live (or resolve through a link) under work/.
+            !areas.some((area) => guard.length < area.length && within(area, guard) && within(target, area)),
+        ),
+      ),
+    );
+  } catch (error) {
+    if (error instanceof UnresolvablePathError) return path;
+    throw error;
+  }
+}
+
+/**
+ * Whether the existing directory `dir` is the existing directory `root` or below it, both
+ * resolved by the file system. False on any doubt: either missing, either not a directory, or
+ * any error resolving them. Unlike `protectedPathFor`, where "cannot tell" means protected,
+ * "cannot tell" here must mean no, because a yes grants something (a cwd inside the workspace).
+ * No prospective-file resolution: a directory that does not exist is not inside anything.
+ */
+export function existingDirectoryWithin(dir: string, root: string): boolean {
+  try {
+    const [d, r] = [realpathSync.native(dir), realpathSync.native(root)];
+    if (!statSync(d).isDirectory() || !statSync(r).isDirectory()) return false;
+    return within(pathSegments(d), pathSegments(r));
+  } catch {
+    return false;
+  }
 }
 
 /** Whether `inner` is `outer` or below it, segment by segment. */
@@ -360,21 +516,68 @@ function protectedLocation(
     .find((p) => protectedPathFor(p, access, ctx.protectedPaths, ctx.workspaceCwd) !== undefined);
 }
 
+/** How many links `physicalPath` follows before giving up, as the kernel's `ELOOP` does. */
+const MAX_LINK_HOPS = 40;
+
+/** A path that could not be resolved for a reason other than "not there yet". */
+class UnresolvablePathError extends Error {}
+
+const errorCode = (error: unknown): unknown =>
+  typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+
 /**
  * `path` as the file system resolves it. The part that does not exist yet — a file about to be
  * created — is appended to the deepest ancestor that does, which is what an open of it reaches.
+ *
+ * A link whose target does not exist yet is followed too (#706, B05): `realpath` fails on it,
+ * but an open that creates a file follows it and creates the target. Taking the link's own name
+ * as "a file about to be created" would let a write through `work/innocent.json ->
+ * ../orca.permissions.json` create the sidecar while being judged a write inside the workspace.
+ *
+ * Throws `UnresolvablePathError` for anything but absence: no permission, too many links, a
+ * component that is not a directory.
  */
-function physicalPath(path: string): string {
+function physicalPath(path: string, hops = 0): string {
   const missing: string[] = [];
   for (let head = path; ;) {
     try {
       return join(realpathSync.native(head), ...missing);
-    } catch {
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") throw new UnresolvablePathError(head, { cause: error });
+      const link = linkTarget(head);
+      if (link !== undefined) {
+        if (hops >= MAX_LINK_HOPS) throw new UnresolvablePathError(head);
+        // Joined as text, like the caller's path: the target's own `..` is resolved physically.
+        const target = isAbsolute(link) ? link : `${dirname(head)}${sep}${link}`;
+        return physicalPath(missing.length === 0 ? target : `${target}${sep}${missing.join(sep)}`, hops + 1);
+      }
       const parent = dirname(head);
       if (parent === head) return join(head, ...missing);
       missing.unshift(basename(head));
       head = parent;
     }
+  }
+}
+
+/**
+ * The directory entry `path` names: its directory resolved, its last name kept as written.
+ * A last name of `.` or `..` names no entry of its own, so the whole path is resolved.
+ */
+function entryPath(path: string): string {
+  const name = basename(path);
+  const parent = dirname(path);
+  if (name === "" || name === "." || name === ".." || parent === path) return physicalPath(path);
+  return join(physicalPath(parent), name);
+}
+
+/** Where the link at `path` points, or undefined when there is no link there. */
+function linkTarget(path: string): string | undefined {
+  try {
+    return readlinkSync(path);
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "ENOENT" || code === "EINVAL") return undefined;
+    throw new UnresolvablePathError(path, { cause: error });
   }
 }
 
@@ -403,13 +606,29 @@ export function permissionPolicyPath(configDir: string): string {
  * may do, and this is the one file where that is never an acceptable failure mode.
  */
 export async function readPermissionPolicyFile(file: string): Promise<PermissionPolicyFile> {
-  let text: string;
+  return (await readPermissionPolicyFileRevision(file)).doc;
+}
+
+/**
+ * `readPermissionPolicyFile` with the sha256 of the very bytes it parsed (#702), the same
+ * revision `revisionOf` gives, so a decision can name the file version its rule came from
+ * without a second read that could see a later write. A missing file's revision is "".
+ */
+export async function readPermissionPolicyFileRevision(
+  file: string,
+): Promise<{ doc: PermissionPolicyFile; revision: string }> {
+  let bytes: Buffer;
   try {
-    text = await readFile(file, "utf8");
+    bytes = await readFile(file);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return { ...EMPTY_POLICY_FILE };
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return { doc: { ...EMPTY_POLICY_FILE }, revision: "" };
     throw e;
   }
+  const revision = createHash("sha256").update(bytes).digest("hex");
+  return { doc: parsePolicyFileText(file, bytes.toString("utf8")), revision };
+}
+
+function parsePolicyFileText(file: string, text: string): PermissionPolicyFile {
   if (text.trim() === "") return { ...EMPTY_POLICY_FILE };
   let raw: unknown;
   try {
@@ -437,14 +656,24 @@ export function permissionOverlayFor(
   onIgnored?: (rule: PermissionRule) => void,
   now: number = Date.now(),
 ): PermissionRule[] {
-  const rules: PermissionRule[] = [];
-  for (const r of doc.agents[agentId]?.rules ?? []) {
+  return permissionOverlayEntries(doc, agentId, onIgnored, now).map((e) => e.rule);
+}
+
+/** `permissionOverlayFor`'s rules with each one's index in the file's list for the agent (#702). */
+function permissionOverlayEntries(
+  doc: PermissionPolicyFile,
+  agentId: string,
+  onIgnored?: (rule: PermissionRule) => void,
+  now: number = Date.now(),
+): { rule: PermissionRule; index: number }[] {
+  const rules: { rule: PermissionRule; index: number }[] = [];
+  for (const [index, r] of (doc.agents[agentId]?.rules ?? []).entries()) {
     // A rule whose lifetime has run out decides nothing (#702). It is not reported as
     // ignored: it was a scoped grant that ended, not a wildcard somebody slipped in.
     if (permissionRuleExpired(r, now)) continue;
     const rule: PermissionRule = { match: { ...r.match }, decision: r.decision };
     if (isWildcardPermissionRule(rule)) onIgnored?.(rule);
-    else rules.push(rule);
+    else rules.push({ rule, index });
   }
   return rules;
 }
@@ -493,27 +722,39 @@ export async function loadEffectivePermissionPolicy(
   now: () => number = Date.now,
 ): Promise<PermissionPolicy> {
   const overlays: PermissionRule[][] = [];
+  // Where each rule came from, in evaluation order (#702): config, each sidecar, defaults.
+  const origins: PermissionRuleOrigin[] = agent.permissions.rules.map((_, index) => ({ layer: "config", index }));
   /** How many rules come before the first sidecar that could not be read. */
   let readable: number | undefined;
-  for (const file of files) {
+  for (const [fileIndex, file] of files.entries()) {
     try {
-      const doc = await readPermissionPolicyFile(file);
-      overlays.push(
-        permissionOverlayFor(doc, agent.id, onIgnored ? (rule) => onIgnored(file, rule) : undefined, now()),
+      const { doc, revision } = await readPermissionPolicyFileRevision(file);
+      const entries = permissionOverlayEntries(
+        doc,
+        agent.id,
+        onIgnored ? (rule) => onIgnored(file, rule) : undefined,
+        now(),
       );
+      overlays.push(entries.map((e) => e.rule));
+      for (const e of entries) origins.push({ layer: "sidecar", index: e.index, file: fileIndex, revision });
     } catch (e) {
       if (!onUnreadable) throw e;
       onUnreadable(file, e);
       readable ??= overlays.reduce((n, overlay) => n + overlay.length, agent.permissions.rules.length);
     }
   }
-  const policy = effectivePermissionPolicy(agent.permissions, ...overlays);
+  const layered = effectivePermissionPolicy(agent.permissions, ...overlays);
+  for (let index = 0; origins.length < layered.rules.length; index++) origins.push({ layer: "default", index });
+  const policy: PermissionPolicy = { ...layered, origins };
   if (readable === undefined) return policy;
   const capFrom = readable;
   const cap = (decision: PermissionDecision): PermissionDecision => (decision === "allow" ? "ask" : decision);
   return {
     default: cap(policy.default),
     rules: policy.rules.map((rule, i) => (i < capFrom ? rule : { ...rule, decision: cap(rule.decision) })),
+    origins: origins.map((origin, i) =>
+      i >= capFrom && policy.rules[i]?.decision === "allow" ? { ...origin, capped: true } : origin,
+    ),
     // The file might have held a command restriction (#702 review), so commands and
     // unclassified calls are treated as restricted: not even the rules ahead of it allow one.
     commandsRestricted: true,
@@ -578,18 +819,27 @@ export interface RecordAlwaysResult {
  */
 export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<RecordAlwaysResult> {
   const tc = opts.request.toolCall;
-  const derived: ReturnType<typeof derivePermissionRules> = opts.rules
-    ? { ok: true, rules: opts.rules.map((rule) => ({ match: { ...rule.match }, decision: opts.decision })) }
-    : derivePermissionRules(
-        {
-          kind: tc.kind,
-          title: tc.title,
-          paths: (tc.locations ?? []).map((l) => l.path),
-          command: tc.kind === "execute" ? commandTextOf(tc) : undefined,
-          workspaceCwd: opts.workspaceCwd,
-        },
-        opts.decision,
-      );
+  // An MCP tool the agent claims but ORCA cannot verify is never granted standing (#1021),
+  // whichever way the rules arrive: derived here, or handed in already chosen.
+  const mcpClaim = mcpToolClaimOf(tc);
+  const unverified =
+    mcpClaim !== undefined && opts.decision === "allow" ? derivePermissionRules({ mcpClaim }, "allow") : undefined;
+  const derived: ReturnType<typeof derivePermissionRules> =
+    unverified ??
+    (opts.rules
+      ? { ok: true, rules: opts.rules.map((rule) => ({ match: { ...rule.match }, decision: opts.decision })) }
+      : derivePermissionRules(
+          {
+            kind: tc.kind,
+            title: tc.title,
+            // A standing deny for a claimed MCP tool names it as `server: tool` (#1021).
+            mcpClaim,
+            paths: (tc.locations ?? []).map((l) => l.path),
+            command: tc.kind === "execute" ? commandTextOf(tc) : undefined,
+            workspaceCwd: opts.workspaceCwd,
+          },
+          opts.decision,
+        ));
   if (!derived.ok)
     return {
       file: opts.file,

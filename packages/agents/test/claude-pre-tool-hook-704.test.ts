@@ -546,6 +546,8 @@ describe("the hook process's output guard", () => {
     const r = await run(name);
     expect(r.code).toBe(2);
     expect(r.stdout).toBe("");
+    // Codex blocks on exit 2 only when stderr says why.
+    expect(r.stderr.trim()).not.toBe("");
   });
 
   it("passes the hook's own answer through untouched", async () => {

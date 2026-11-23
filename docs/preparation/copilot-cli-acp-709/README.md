@@ -1,6 +1,8 @@
 # #709 GitHub Copilot CLI ACP — inactive, version-pinned preparation
 
 26 October 2026, ORCA baseline `890eb71847e4c38533ab8f5b2d35f14076b8f923`.
+**Superseded 2026-11-23:** Copilot CLI 1.0.114 is now a supported agent; see [docs/agents/copilot-cli.md](../../agents/copilot-cli.md) and [docs/agent-support.md](../../agent-support.md). This packet is kept as the historical offline preparation.
+
 **GO for offline preparation only. Nothing here is installed-tested, connectivity-qualified
 (support level A), approval-tested (B) or execution-guard certified (C).** Production
 registration and defaults are unchanged: the [launch profile](orca.copilot-acp.example.yaml)

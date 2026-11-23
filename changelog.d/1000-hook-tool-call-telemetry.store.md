@@ -1,0 +1,2 @@
+Tool-call records (#1000) go in a new `diagnostics/tool-calls/` directory of the store, only for agents that keep them. No existing file changes and the store's format epoch is the same; an earlier ORCA ignores the directory, and backups, carryover and SQLite conversion copy it with the rest of the store.
+The pre-tool hook's per-session files (`private-execution/tool-hooks`: each open session's hook context and telemetry spool) are transient and are left out of every store copy: backups, carryover and SQLite conversion.

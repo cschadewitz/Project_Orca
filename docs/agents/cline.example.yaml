@@ -1,0 +1,46 @@
+# Example (#711): a Cline CLI agent ORCA will start. Nothing in ORCA loads this file. Copy the
+# agent into your config, replace /REPLACE-WITH-ABSOLUTE-PREFIX, and follow docs/agents/cline.md.
+#
+# Target: Cline CLI's own ACP server (`cline --acp`), pinned to 3.0.75. ORCA's Cline provider
+# guard (packages/agents/src/providers/cline.ts) refuses a profile that differs from this one
+# in a way that matters: see docs/agent-support.md for each check and how it is known.
+version: 1
+
+hosts:
+  - id: local
+    type: local
+
+secrets:
+  # Only for a provider signed in with an API key. Leave out for a Cline account sign-in.
+  cline-key:
+    host: local
+    provider: file
+    path: /REPLACE-WITH-ABSOLUTE-PREFIX/cline/provider.key
+
+agents:
+  - id: cline
+    name: Cline CLI 3.0.75 (ACP)
+    # The platform binary from the pinned install in docs/agents/cline.md, by absolute path, so
+    # neither PATH order nor a later `npm install -g` can swap it. On macOS arm64 the package
+    # is @cline/cli-darwin-arm64; on Windows x64 @cline/cli-windows-x64 (bin\cline.exe).
+    command: /REPLACE-WITH-ABSOLUTE-PREFIX/cline/3.0.75/node_modules/@cline/cli-linux-x64/bin/cline
+    args:
+      - --acp
+      # Cline's own state for ORCA: sign-in, settings, sessions. Not ~/.cline, so another
+      # profile's hooks, plugins, MCP servers and credentials do not apply.
+      - --config
+      - /REPLACE-WITH-ABSOLUTE-PREFIX/cline/profile
+    env:
+      # Run sessions in the agent process ORCA starts, not in Cline's detached background hub.
+      CLINE_SESSION_BACKEND_MODE: local
+      # Keep the pinned version.
+      CLINE_NO_AUTO_UPDATE: "1"
+      # For an API-key provider set up with `cline auth` (docs/agents/cline.md): the provider,
+      # and the key as a secret reference. Never the key itself.
+      # CLINE_PROVIDER: openai-compatible
+      # CLINE_MODEL: your-model
+      # CLINE_API_KEY: { secret: cline-key }
+    hostId: local
+    roles: []
+    sessionMode: per-step
+    # No `permissions:` block: ORCA's defaults (in-workspace read/search/edit, `ask` for the rest).

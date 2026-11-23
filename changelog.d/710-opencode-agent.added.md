@@ -1,0 +1,1 @@
+- **agents:** OpenCode 1.19.4 as a supported agent (`opencode acp`), on Linux x64 and macOS arm64. ORCA starts only the exact published build in an isolated OpenCode profile, refuses a launch it cannot isolate, and answers OpenCode's "Always allow" as "Allow once" so every later call is asked again. See `docs/agent-support.md`.

@@ -87,6 +87,16 @@ it("reports a short file unavailable and an unknown executable route honestly", 
     evidence: { configuredRoute: "unverified", support: "unknown", architecture: "unknown", signIn: "unknown" },
   });
 });
+it("names a cline executable as a Cline ACP candidate, and nothing more (#711)", async () => {
+  const f = await fixture();
+  const cline = join(f.bin, "cline");
+  await writeFile(cline, "#!/bin/sh\nexit 0\n");
+  await chmod(cline, 0o700);
+  expect(await inspectLocalTool({ id: "cline", command: cline, env: {} })).toMatchObject({
+    state: "handshake-required",
+    evidence: { configuredRoute: "cline-acp-candidate", support: "unknown", version: "unknown", signIn: "unknown" },
+  });
+});
 function machO(cpu: number): Buffer {
   const bytes = Buffer.alloc(8);
   bytes.writeUInt32LE(0xfeedfacf, 0);
@@ -103,4 +113,32 @@ it("uses complete thin Mach-O CPU evidence only for a known host mismatch", () =
     expect(machOArchitectureMismatch(machO(0x1000007).subarray(0, length), "darwin", "arm64")).toBe(false);
   for (const bytes of [Buffer.from("#!/bin/sh"), Buffer.from("cafebabecafebabe", "hex"), Buffer.alloc(8)])
     expect(machOArchitectureMismatch(bytes, "darwin", "arm64")).toBe(false);
+});
+it("names a copilot executable as a Copilot CLI candidate without running it (#709)", async () => {
+  const f = await fixture();
+  for (const name of ["copilot", "copilot.exe", "Copilot.EXE"]) {
+    const command = join(f.bin, name);
+    const sentinel = join(f.root, `${name}-executed`);
+    await writeFile(command, `#!/bin/sh\nprintf 'executed' > '${sentinel}'\n`);
+    await chmod(command, 0o700);
+    const check = await inspectLocalTool({ id: "copilot", command, env: {} });
+    expect(check.evidence).toMatchObject({ configuredRoute: "copilot-cli-acp-candidate", version: "unknown" });
+    await expect(readFile(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+});
+it("names OpenCode's ACP route only for its acp subcommand (#710)", async () => {
+  const f = await fixture();
+  const opencode = join(f.bin, "opencode");
+  await writeFile(opencode, "synthetic file; not a provider");
+  await chmod(opencode, 0o700);
+  expect(await inspectLocalTool({ id: "oc", command: opencode, args: ["acp", "--pure"], env: {} })).toMatchObject({
+    state: "handshake-required",
+    evidence: { configuredRoute: "opencode-acp-candidate", support: "unknown", version: "unknown", signIn: "unknown" },
+  });
+  expect(
+    (await inspectLocalTool({ id: "oc", command: opencode, args: ["run"], env: {} })).evidence.configuredRoute,
+  ).toBe("unverified");
+  expect((await inspectLocalTool({ id: "oc", command: opencode, env: {} })).evidence.configuredRoute).toBe(
+    "unverified",
+  );
 });

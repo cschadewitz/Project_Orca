@@ -7,13 +7,18 @@
 # CLAUDE_ADAPTER_VERSION and the Claude Code it bundles (fixed by the adapter's exact SDK
 # dependency) are the one pair ORCA has verified; ORCA installs the hook with that pair only,
 # and only on Linux x64 (CLAUDE_HOOK_VERIFIED_PAIRS, with the pinned SHA-256 of that Claude
-# Code's image, and CLAUDE_HOOK_VERIFIED_PLATFORMS in packages/agents/src/claude-hook-session.ts;
+# Code's image, and CLAUDE_HOOK_VERIFIED_PLATFORMS in packages/agents/src/native-tool-hook-session.ts;
 # the suite fails if they disagree). ORCA hashes the image the session's runtime process
 # actually runs before giving it work, so the run also points the adapter at another Claude
 # Code (OTHER_CLAUDE_SDK_VERSION, Claude Code 2.1.329) and checks that session is refused.
 # Moving to another pair is a reviewed change to both. Weekly runs catch a change in
 # behaviour behind the same pin. Shipped builds refuse nativeToolHook: on until activation is
 # complete; this suite turns it on for itself only.
+#
+# The same job then runs the #706 connected proof: every enforcement-suite case the
+# claude-connected path can run, through this Claude Code with Claude's own settings allowing
+# every tool, and keeps the connected receipt it writes as an artifact for review. The support
+# matrix promotes nothing on that receipt while promotion is disabled.
 name: Claude hook acceptance
 
 on:
@@ -21,7 +26,7 @@ on:
     branches: [main]
     paths:
       - packages/agents/src/claude-pre-tool-hook.ts
-      - packages/agents/src/claude-hook-session.ts
+      - packages/agents/src/native-tool-hook-session.ts
       - packages/agents/src/bin/claude-pre-tool-hook.ts
       - packages/agents/src/bin/hook-output-guard.ts
       - packages/agents/test/fixtures/hook-output-guard/**
@@ -29,6 +34,8 @@ on:
       - packages/agents/src/permissions.ts
       - packages/cli/src/bootstrap.ts
       - packages/cli/test/claude-hook-acceptance-704.test.ts
+      - tools/guard-qualification/**
+      - tools/test/enforcement-connected-706.test.js
       - .github/workflows/claude-hook-acceptance.yml
   schedule:
     - cron: "17 6 * * 1"
@@ -44,12 +51,14 @@ concurrency:
 env:
   CLAUDE_ADAPTER_VERSION: 0.109.1
   OTHER_CLAUDE_SDK_VERSION: 0.3.329
+  # Temporary: see the adapter install step. Remove once npm serves @anthropic-ai/sdk 1.13.0.
+  ANTHROPIC_SDK_OVERRIDE: 1.12.0
 
 jobs:
   linux:
     name: claude hook acceptance (linux)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -71,6 +80,11 @@ jobs:
           mkdir -p "$d"
           cd "$d"
           npm init -y >/dev/null
+          # The adapter's Claude Agent SDK takes @anthropic-ai/sdk as a peer (>=0.93.0), so npm
+          # installs the newest one. The registry lists 1.13.0, but its tarball returns 404, so
+          # the install fails. Pin the last version that installs. Remove this override once
+          # npm serves the 1.13.0 tarball.
+          npm pkg set "overrides.@anthropic-ai/sdk=${ANTHROPIC_SDK_OVERRIDE}"
           npm install --no-audit --no-fund --ignore-scripts "@agentclientprotocol/claude-agent-acp@${CLAUDE_ADAPTER_VERSION}"
           entry="$d/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
           test -f "$entry"
@@ -101,3 +115,26 @@ jobs:
             if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
               throw new Error(`expected every acceptance test to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
           ' "$RUNNER_TEMP/acceptance.json"
+
+      - name: Run the enforcement suite through the live agent (#706)
+        shell: bash
+        env:
+          ORCA_ENFORCEMENT_RECEIPT_DIR: ${{ runner.temp }}/enforcement-receipts
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run tools/test/enforcement-connected-706.test.js \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/connected.json"
+          node -e '
+            const r = require(process.argv[1]);
+            if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
+              throw new Error(`expected every connected case to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
+          ' "$RUNNER_TEMP/connected.json"
+
+      - name: Keep the connected receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: enforcement-connected-receipt
+          path: ${{ runner.temp }}/enforcement-receipts/
+          if-no-files-found: warn
+          retention-days: 30

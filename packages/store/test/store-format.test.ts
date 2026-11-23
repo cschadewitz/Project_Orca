@@ -16,7 +16,9 @@ import {
   StoreFormatError,
   SUPPORTED_STORE_FORMATS,
   workspaceIdentity,
+  HOOK_SESSION_DIR,
 } from "../src/index.js";
+import { snapshotStore } from "../src/store-format-carryover.js";
 
 const store = async () => join(await mkdtemp(join(tmpdir(), "orca-store-format-")), ".orca");
 const marker = (dir: string, epoch: string, writtenBy = "9.9.9") =>
@@ -189,6 +191,29 @@ describe("store format marker (#566)", () => {
     expect((await enterStoreFormat(dir, { appVersion: "0.7.1", mode: "write" })).status).toBe("current");
     expect((await carryStoreForward(dir, { appVersion: "0.7.1" })).status).toBe("current");
     expect(await backups(dir)).toHaveLength(1);
+  });
+
+  it("leaves the hook's per-session files out of a backup, and does not count their changes as writes", async () => {
+    const dir = await store();
+    await mkdir(dir, { recursive: true });
+    await legacy(dir);
+    // A live session's hook context and its spool, whose lines are not yet redacted.
+    const hooks = join(dir, ...HOOK_SESSION_DIR.split("/"));
+    await mkdir(hooks, { recursive: true, mode: 0o700 });
+    await writeFile(join(hooks, "ctx.json"), '{"probeKey":"k"}', { mode: 0o600 });
+    const spool = join(hooks, "tool-calls-1-00000000-0000-4000-8000-000000000000.spool");
+    await writeFile(spool, '{"input":"unredacted"}\n', { mode: 0o600 });
+    const outcome = await carryStoreForward(dir, {
+      appVersion: "0.7.1",
+      now: clock("2026-11-22T01:02:03.004Z"),
+      // The hook appends while the store is copied: not a write to the store.
+      afterCopy: () => writeFile(spool, '{"input":"more"}\n', { flag: "a" }),
+    });
+    expect(outcome).toMatchObject({ status: "carried" });
+    if (outcome.status !== "carried" || !outcome.backup) throw new Error("no backup");
+    expect(await readdir(join(outcome.backup, "private-execution"))).toEqual(["payload"]);
+    expect((await snapshotStore(dir)).has(HOOK_SESSION_DIR)).toBe(false);
+    expect([...(await snapshotStore(dir)).keys()].some((p) => p.startsWith(HOOK_SESSION_DIR))).toBe(false);
   });
 
   it("refuses and keeps the prior format when another writer changes the store during the copy", async () => {

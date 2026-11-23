@@ -46,6 +46,11 @@ export function ConfigProvider({ children }: { children: ReactNode }): JSX.Eleme
  * The app's one configuration feed. It throws rather than falling back to a private one:
  * a second draft model that nobody can see is the bug this provider exists to prevent.
  */
+/** The feed when a provider is mounted, for a surface that only reads it as a hint (#335). */
+export function useOptionalConfig(): ConfigFeed | null {
+  return useContext(ConfigContext);
+}
+
 export function useConfig(): ConfigFeed {
   const feed = useContext(ConfigContext);
   if (!feed) throw new Error("useConfig needs a <ConfigProvider> above it");

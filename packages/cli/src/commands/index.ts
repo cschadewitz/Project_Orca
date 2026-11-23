@@ -29,7 +29,7 @@ import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { hostname, tmpdir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
-import { openAcpSession, permissionPolicyPath } from "@orca/agents";
+import { agentProfileFindings, openAcpSession, permissionPolicyPath, withProviderGuards } from "@orca/agents";
 import {
   AgentModel,
   ConfigModel,
@@ -105,6 +105,7 @@ import { authCommand } from "./auth.js";
 import { remoteCommand } from "./remote.js";
 import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
+import { diagnosticsCommand } from "./diagnostics.js";
 import { recoveryCommand } from "./recovery.js";
 import { storeCommand } from "./store.js";
 import { planCommand } from "./plan.js";
@@ -399,6 +400,10 @@ export const commands: Record<string, Command> = {
         );
         const found = discovered?.get(a.id);
         ctx.out(`    models discovered: ${found ? found.join(", ") || "none" : "not probed"}`);
+        // Settings of the agent's own that let tool calls run without asking ORCA (#705).
+        if (a.type === "acp")
+          for (const f of agentProfileFindings(a))
+            ctx.out(`    ${f.effect === "bypass" ? "runs without asking ORCA" : "outside ORCA"}: ${f.message}`);
       }
       if (Object.keys(config.roles).length)
         ctx.out(
@@ -436,7 +441,7 @@ export const commands: Record<string, Command> = {
       });
       const { agent, host } = app.agents.resolve(id);
       const started = Date.now();
-      const session = await openAcpSession({
+      const session = await withProviderGuards(openAcpSession)({
         host,
         agent,
         cwd:
@@ -591,6 +596,11 @@ export const commands: Record<string, Command> = {
   leases: {
     help: "leases [list | break <runId> [--force] [--keep]]  Show who is interpreting which run; free a run whose interpreter is gone.",
     run: leasesCommand,
+  },
+
+  diagnostics: {
+    help: "diagnostics tool-calls (runs | export <runId> [sessionId] | delete <runId> [sessionId] | prune) [--json]  List, export, delete or expire the tool-call records agents with diagnostics.toolCalls: keep reported.",
+    run: diagnosticsCommand,
   },
 
   recovery: {

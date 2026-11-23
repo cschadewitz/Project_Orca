@@ -314,13 +314,12 @@ An agent asks ORCA only when its own permission check has no answer. Once it rem
 grant (Claude's "always allow", a rule in its own settings), the same call never reaches ORCA
 again, so a grant you revoke in ORCA, or a rule you add, does not apply to it.
 
-For the Claude ACP adapter on the daemon's own machine, ORCA will close that gap with a
-`PreToolUse` hook it installs in the agent's sessions (#704).
+For the Claude and Codex ACP adapters on the daemon's own machine, ORCA will close that gap
+with a `PreToolUse` hook it installs in the agent's sessions (#704, #705).
 
-> **Not available yet.** The hook is built and tested against the real Claude Code, but this
-> build refuses every session with `nativeToolHook: on`. It is turned on once ORCA also holds
-> a session away from its host services until its runtime is admitted. What follows is how it
-> will work.
+> **Not available yet.** The hook is built and tested against the real Claude Code and the
+> real Codex, but this build refuses every session with `nativeToolHook: on`. It is turned on
+> once its activation is approved on its own. What follows is how it will work.
 
 It is opt-in, per agent:
 
@@ -330,44 +329,114 @@ It is opt-in, per agent:
     nativeToolHook: on
 ```
 
-Claude then runs the hook before **every** tool call, remembered or not, and it decides the
-call against the same three layers as above, read fresh each time:
+The agent then runs the hook before **every** tool call it hooks, remembered or not, and the
+hook decides the call against the same three layers as above, read fresh each time:
 
-| ORCA decides | What happens |
-| --- | --- |
-| `allow` | Nothing is added: Claude's own permission check runs as before, so ORCA never allows more than Claude would |
-| `ask` | Claude asks even if it remembers a grant, and the ask comes to ORCA like any other |
-| `deny` | The call does not run |
+| ORCA decides | Claude | Codex |
+| --- | --- | --- |
+| `allow` | Nothing is added: Claude's own permission check runs as before, so ORCA never allows more than Claude would | The same: Codex's own approval and sandbox still apply |
+| `ask` | Claude asks even if it remembers a grant, and the ask comes to ORCA like any other | **Blocked.** Codex cannot pause a call for a person from a hook, and letting it run would make the ask an allow. Give the agent `rules:` for what it should run |
+| `deny` | The call does not run | The call does not run |
 
-ORCA's own files, and the hook program itself, are refused to Claude's built-in tools as
-well, and a hook that cannot decide (it cannot start, crashes, times out, or prints anything
-but its answer) blocks the call. An allowed call whose working directory is outside the
-workspace is asked about.
+ORCA's own files, and the hook program itself, are refused to the agent's built-in tools as
+well (Codex's patches included), and a hook that cannot decide blocks the call. An allowed
+call whose working directory is outside the workspace is asked about (so, in Codex, blocked).
 
-With the hook on, calls Claude used to run by its own allow rules follow ORCA's instead, so
-an unattended run may meet asks it did not before; give the agent `rules:` for them.
+With the hook on, calls the agent used to run by its own allow rules follow ORCA's instead,
+so an unattended run may meet asks (or, in Codex, blocks) it did not before; give the agent
+`rules:` for them.
 
 `nativeToolHook: on` is a promise that the agent's calls are checked, so ORCA opens the
 session only where it has tested the hook and **refuses it everywhere else**, rather than run
 it unguarded:
 
-- the adapter must be `@agentclientprotocol/claude-agent-acp` at a version ORCA has verified,
-  and must say so when it starts;
-- the Claude Code the session actually runs must be the exact build verified with that
-  adapter. The adapter's word is not enough (an environment variable can point it at another
-  Claude Code), and so is anything the runtime says about itself: the hook only names the
-  runtime's process, and ORCA checks from its own side that the process runs under the agent
-  ORCA started and hashes the image it actually runs, accepting only the digest pinned for
-  the pair. Nothing the record names is executed. Today the one verified pair is **adapter
-  0.109.1 with Claude Code 2.1.330 (linux-x64)**, exactly;
-- the agent must run on the daemon's own machine, on Linux x64.
+- the adapter must be one ORCA has verified, at a verified version, and must say so when it
+  starts: `@agentclientprotocol/claude-agent-acp` or `@agentclientprotocol/codex-acp`;
+- the runtime the session actually runs (Claude Code, or Codex) must be the exact build
+  verified with that adapter. The adapter's word is not enough (an environment variable can
+  point it at another Claude Code or Codex), and so is anything the runtime says about
+  itself: ORCA only ever learns which **process** to look at, and then checks from its own
+  side that the process runs under the agent ORCA started and hashes the image it actually
+  runs, accepting only the digest pinned for the pair. Nothing ORCA is told to look at is
+  executed. The process is named differently per agent: for Claude, a session-start hook
+  records its own parent before `session/new` returns; for Codex, ORCA finds the Codex
+  `app-server` among the agent's own processes. Today the verified pairs are exactly
+  **adapter 0.109.1 with Claude Code 2.1.330 (linux-x64)** and **codex-acp 2.9.0 with Codex
+  0.171.0 (linux-x64)**;
+- the agent must run on the daemon's own machine, on Linux x64;
+- for Codex, ORCA also asks the adapter at startup and refuses unless Codex lists ORCA's hook
+  as trusted and enabled, and runs the hook once the way Codex will on a call it must block,
+  and refuses unless it blocks with a receipt only ORCA's hook can sign for that call: an exit
+  status alone is not proof. "The way Codex will" is exact: the probe runs in the shell Codex
+  runs hooks in (the account's login shell from the user database, with `-c`; not `$SHELL`,
+  and not as a login shell), with the environment ORCA reads off the running Codex process,
+  which is the one Codex gives its hooks, `codex-path` first on `PATH` included. A login shell
+  other than bash, zsh or sh is refused, since ORCA cannot say which shell Codex would use. A
+  refused probe says how it ended as a fixed reason code with bounded numbers (exit status,
+  signal, timeout, how many bytes it wrote, whether a receipt was there), never what the
+  command wrote: a login shell's profile writes there too. An agent whose own `CODEX_CONFIG`
+  already sets hooks is refused.
 
-Each is what ORCA's acceptance test runs against the real Claude Code, including a session
-pointed at another Claude Code, which is refused. Without
+Each is what ORCA's acceptance tests run against the real agent, including sessions pointed
+at another Claude Code or Codex, which are refused. Without
 `nativeToolHook: on` (or with `off`), no hook is installed and nothing is refused.
 
-Other agents (Codex, Gemini, pi) take no hook yet (#705): with `nativeToolHook: on` they are
+Until those checks have passed, the session is **held**: it is started, but ORCA answers none
+of its file reads or writes and puts none of its permission asks to anybody, and a session
+that fails a check is refused everything it asked for while it waited. Only the daemon's
+session factory will install the hook; `orca ping`, and an `orca-daemon` agent's delegation,
+refuse an agent with `nativeToolHook: on` instead of starting it unhooked.
+
+**MCP servers.** Claude Code would start a session's MCP servers itself, before ORCA has
+checked the Claude Code it runs, and would be handed their commands and environment, secrets
+included. With the hook on, ORCA runs a Claude agent's `mcpServers` instead and serves them to
+Claude Code over the ACP connection (MCP over ACP): Claude Code is told each server's name and
+nothing else, a server starts only for the first request after the session's checks pass, and
+its tools go through the hook like any other call. Passing the checks is not a standing
+permission: ORCA checks every request again when it sends it on. Listing a server's tools
+needs only a live session. A tool call needs the session's live prompt turn and ORCA's rules,
+read at that moment, deciding `<server>: <tool>` (kind `other`, the same call the hook decides):
+a deny never reaches the server, and an ask is put to a person as a one-time allow for that
+call. Each call is decided again on the policy as it is when it reaches the head of the line
+to the server, and a request's 10 minutes run from its arrival and bound everything it waits on: the session's
+admission, a person's
+answer (the ask is withdrawn when the request ends), its server's start and the policy read
+before it is sent. One that ran out while it was decided starts no server, and one that ends
+while its policy is being read does not hold up the requests behind it. Any other MCP request (resources, prompts) is refused. A request ends with
+its turn, or at that deadline, and the server is told it was cancelled; only a request ORCA
+has handed to the server can be answered; a server that has not
+answered `initialize` within 30 seconds, or is still starting when the session closes, or
+when the agent's connection is lost, is stopped, even if a write to it is stuck. A request
+still waiting in line for the server when its turn or deadline ends is never sent, and a
+server that answers in a way MCP does not allow fails that request at once; one whose answer
+matches no request is stopped and started again for the next. A server
+runs without the variables ORCA withholds from the agent, and its errors reach the agent as
+a code and a short message with secret values redacted, never anything else it attached. A
+Claude adapter that does not offer MCP over ACP is refused when the agent has servers. Codex keeps its servers as configured: its
+runtime is checked before `session/new` hands them over.
+
+**The agent's own secrets.** A `{ secret: … }` in the agent's own `env` reaches the agent as an
+environment variable, with or without the hook, since that is how agents read their keys. An
+agent can print its environment if a tool call asks it to; ORCA's logs and errors redact the
+values. How the value is delivered is one strategy in ORCA (`ENV_SECRET_DELIVERY`), so a key
+store or broker can replace it without changing anything else.
+
+What the hook does not see, said plainly (details in
+[agent-hook-coverage.md](agent-hook-coverage.md)): a hook is not an operating-system boundary;
+it sees one call's input, not every file a command goes on to touch. In Codex, text typed
+into a command that is already running (`write_stdin`) is never shown to it, and its
+hosted web search is not a local call at all; Codex's own hook runner, not ORCA, decides that
+a hook it cannot run (a broken shell, a timeout) lets the call through, which is why
+ORCA probes the hook when the session opens.
+
+Other agents (Gemini, pi) take no hook yet (#705): with `nativeToolHook: on` they are
 refused; without it, ORCA decides only what they ask about.
+[agent-hook-coverage.md](agent-hook-coverage.md) lists, for each qualified agent and
+version, which calls reach ORCA and which the agent runs on its own. `orca agents` shows an
+advisory, not a guard: the known settings it can see in an agent's command line and
+environment that let calls run without asking ORCA (for Gemini CLI today: YOLO or auto-edit
+in a trusted workspace, allowed-tools and policy flags, a trusted workspace, and the user's
+own Gemini home; for pi, always, because pi never asks). It reads no settings file, so an empty advisory is not proof.
 
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive
@@ -569,6 +638,32 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
   (and brings back the artifacts of one that already succeeded: a succeeded run stays the
   step's result across its retries), and starts new remote work only once the earlier run is
   known to have ended without success, or known never to have been admitted.
+- **A protected value stays protected on the remote (#363).** When the task holds a value
+  this run protects (a `sensitive` launch input, or a secret value read for the run), the
+  admission names the prompt variable in `sensitiveVars` and sends each original protected
+  value the task holds in `protectedValues`, on the same authenticated admission. The remote
+  keeps the prompt as it would a declared `sensitive` input, in its encrypted execution store,
+  and redacts each value on its own wherever it appears: run views, events, notifications,
+  logs and artifact bodies it serves. An agent there that repeats the value apart from the
+  rest of the task is redacted too. The value stays in the bytes the agent wrote (its checkout
+  and the stored artifact blob), as on this daemon.
+  - Only a remote whose `hello` lists both `sensitiveVars` and `protectedValues` in
+    `admitFields` (protocol 2.11) is sent such a task. Every admission opens a connection of
+    its own, asks `hello` on it, and goes on that same connection only if the answer
+    positively names the enrolled workspace and still lists both fields; a `hello` with no
+    workspace identity is not a match. A remote that no longer lists them (a restart onto an
+    older build) is refused the step (reason `protocol`), and another workspace or none is
+    refused with `scope-changed`. If the connection breaks after the check, the admission is
+    not sent on another one: the attempt starts again with a new connection and a new check.
+    A remote that does not know the fields refuses the admission outright, since its
+    parameters are strict.
+  - An artifact whose body held a protected value comes back redacted. The remote's
+    `maxBytes` limit applies to the body as sent, so one that redaction makes too long is not
+    sent. The copy is checked against the size and digest the remote reports for what it
+    sent: that proves the copy arrived intact, not that the redaction was complete.
+  - Detection matches the values as they appear in the task, so a value transformed by the
+    template (encoded, split) is not recognised; keep sensitive inputs out of delegated
+    prompts where you can.
 - **The work is the remote daemon's.** It appears in that daemon's run list, owned by the
   credential's principal, and its audit log names that principal on the admission.
 - **The remote run records where it came from.** A remote whose `hello` lists `origin` in
@@ -924,6 +1019,52 @@ agents:
   the host can read it (an environment variable of the daemon, or a file only the daemon's
   user can read), add a `secrets` entry bound to that host, and replace the literal with
   `{ secret: <id> }`.
+
+### Choosing the secret at launch
+
+A workflow can let whoever starts the run pick which configured secret a step uses (#363),
+for example the deploy token of the target environment. Declare a launch input of type
+`secret` and map it to an environment variable of the step's agent with `secretEnv`:
+
+```yaml
+inputSchema:
+  fields:
+    deployToken: { type: secret, required: true }
+nodes:
+  deploy:
+    type: agent
+    agent: { role: deployer }
+    prompt: "Deploy {{ vars.target }}; the token is in $DEPLOY_TOKEN."
+    secretEnv: { DEPLOY_TOKEN: deployToken }
+```
+
+- **The launcher names a secret, never a value.** The input's value is the id of an entry in
+  `secrets` (`orca run deploy --var deployToken=prod-deploy`). Anything else, an unknown id,
+  or a secret bound to another host than the step's agent is refused before the run is
+  written, with `reason` `not-found` or `wrong-host`.
+- **Agent environment only.** The step's session gets `{ secret: <id> }` under that variable
+  and reads it like any other reference: on the agent's host, at session open, under the run
+  owner's grant, redacted from everything the run writes. The value never enters the prompt,
+  the model's context or the store; `{{ vars.deployToken }}` renders the id.
+- **The secret the launch chose.** The id is read from the launch record in the private
+  execution store, never from the run's working vars, so nothing a step sets later can point
+  a step at another secret. Steps inside the workflow's own inline graphs (loop bodies,
+  parallel branches) get the same sealed choice, whatever the working vars or a loop or
+  branch overlay say by then. A registered child workflow is launched on its own inputs,
+  checked and sealed when it starts, like any launch.
+- **A process per step.** A step with `secretEnv` always gets an agent process of its own,
+  opened for that step and closed with it, even for a `per-run` agent: it neither takes the
+  pooled session nor leaves its own for the next step. Its agent slot is held for that step
+  only. The run's pooled session, if idle, is closed first so it does not keep the slot the
+  step needs under a cap (one still in a turn is closed when that turn ends, never under it),
+  and the steps after it pool again. Each step's open asks for the grant
+  again and reads the value again, so a revoked grant stops the next step before its process
+  starts, and a rotated value is what the next step gets.
+- **Checked when the workflow is validated.** Every `secretEnv` entry must name a top-level
+  input of type `secret`. A `secret` input nested inside an object or array is refused.
+- **Not across daemons.** A step whose agent delegates to another daemon cannot take a
+  `secretEnv` mapping, and the launch is refused with `reason: unsupported`. A daemon with
+  no use check refuses it with `reason: unauthorized`, as for any reference.
 
 ## Templates
 

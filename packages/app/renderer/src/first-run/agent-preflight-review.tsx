@@ -17,6 +17,12 @@ const route: Record<FirstRunAgentCheck["evidence"]["configuredRoute"], string> =
   "claude-code-acp-candidate":
     "Configured command name suggests a Claude Code ACP adapter; installed identity is unverified.",
   "codex-acp-candidate": "Configured command name suggests a Codex ACP bridge; installed identity is unverified.",
+  "cline-acp-candidate":
+    "Configured command name suggests Cline CLI. ORCA opens it only at a verified version, with --acp and its own --config directory, sessions in the agent process and auto-update off; sign in with `cline auth` yourself. See docs/agents/cline.md.",
+  "copilot-cli-acp-candidate":
+    "Configured command name suggests GitHub Copilot CLI. ORCA opens it only at a verified version, with --acp and --no-auto-update, its own COPILOT_HOME and no token in the config; sign in with `copilot login` yourself. See docs/agents/copilot-cli.md.",
+  "opencode-acp-candidate":
+    "Configured command suggests OpenCode's ACP server. ORCA opens only the exact OpenCode 1.19.4 build with an isolated profile and checks both when the agent starts; see the agent support guide.",
   unverified:
     "Configured agent route is unverified. Review the command and required ACP adapter in Config with an operator.",
 };

@@ -12,7 +12,7 @@ import {
 } from "./update-bootstrap.js";
 import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
-import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
+import { DIAGNOSTICS_DIR, FileRetryClaimStore, HOOK_SESSION_DIR, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
 import { enterDaemonStoreFormat } from "./desktop-carryover.js";
 import {
   desktopSqliteSwitch,
@@ -36,10 +36,13 @@ import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import {
   AgentRegistry,
-  claudeHookSession,
   claudePreToolHookScript,
+  CLAUDE_ADAPTER_NAMES,
+  nativeToolHookSession,
+  sweepHookTelemetrySpools,
   nativeToolHookUnavailable,
   openAcpSession,
+  withProviderGuards,
   permissionPolicyPath,
   type AgentSession,
   type OpenSessionOptions,
@@ -47,6 +50,7 @@ import {
 } from "@orca/agents";
 import {
   consoleLogger,
+  literalEnv,
   loadTemplates,
   loadWorkflows,
   OrcaError,
@@ -299,10 +303,13 @@ export function makeSessionFactory(
       ((pid: number, agentPid: number | undefined) => Promise<{ sha256: string } | { error: string }>) | undefined;
     /**
      * Whether `nativeToolHook: on` may install the hook at all. Off in every build ORCA ships
-     * until the session can be held from host services until its runtime is admitted (#704);
-     * only the hook's own tests turn it on.
+     * until activation is approved on its own (#704 review): the admission hold, the relay's
+     * per-dispatch checks and the probe are in place, but only the hook's own tests turn it on.
      */
     activation?: "acceptance-only" | undefined;
+    codexProcess?: ((agentPid: number | undefined) => Promise<{ pid: number } | { error: string }>) | undefined;
+    codexEnvironment?: ((pid: number) => Promise<NodeJS.ProcessEnv | { error: string }>) | undefined;
+    codexShell?: (() => { program: string; args: string[] } | { error: string }) | undefined;
   } = {
     runtime: process.execPath,
     script: claudePreToolHookScript(),
@@ -310,12 +317,25 @@ export function makeSessionFactory(
 ): SessionFactory {
   const permissionFiles = [permissionPolicyPath(layout.configDir)];
   const protectedPaths = orcaProtectedPaths(layout);
-  const contextDir = join(resolve(layout.configDir, layout.storeDir), "private-execution", "tool-hooks");
+  // Provider-specific launch checks and session guards (#709, #710, #711): Copilot CLI, OpenCode, Cline.
+  const guarded = withProviderGuards(open);
+  // Left out of every store copy (backups, carryover, conversion): see HOOK_SESSION_DIR.
+  const contextDir = join(resolve(layout.configDir, layout.storeDir), ...HOOK_SESSION_DIR.split("/"));
+  // Telemetry spools a stopped process left behind (#1000) are discarded, never ingested,
+  // once, before the first hooked session.
+  let swept: Promise<void> | undefined;
+  const sweep = () =>
+    (swept ??= sweepHookTelemetrySpools({ dir: contextDir, protectedPaths }).then(
+      () => undefined,
+      () => undefined,
+    ));
   return async (options: OpenSessionOptions) => {
     const bound = { ...options, permissionFiles, protectedPaths };
-    // ORCA's pre-tool hook (#704): decided per session, once the agent says who it is.
-    if (options.agent.nativeToolHook !== "on") return open(bound);
+    // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
+    // says who it is, and the session refused wherever it cannot be put in force.
+    if (options.agent.nativeToolHook !== "on") return guarded(bound);
     if (hook.activation !== "acceptance-only") throw nativeToolHookUnavailable(options.agent)!;
+    await sweep();
     // The hook runs where the agent does; ORCA installs it only on its own host.
     if (options.host.spec.type !== "local")
       throw new OrcaError(
@@ -324,7 +344,7 @@ export function makeSessionFactory(
           `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
         { agentId: options.agent.id, host: options.host.spec.id },
       );
-    const installed = claudeHookSession({
+    const installed = nativeToolHookSession({
       agentId: options.agent.id,
       permissions: options.agent.permissions,
       permissionFiles,
@@ -337,11 +357,47 @@ export function makeSessionFactory(
       platform: hook.platform,
       arch: hook.arch,
       imageDigest: hook.imageDigest,
+      codexProcess: hook.codexProcess,
+      codexEnvironment: hook.codexEnvironment,
+      codexShell: hook.codexShell,
+      agentEnv: { ...process.env, ...literalEnv(options.agent.env), ...(options.env ?? {}) },
+      toolCallTelemetry: options.agent.diagnostics?.toolCalls,
+      // In the desktop app ORCA's runtime is the Electron binary, which runs a script as Node
+      // only with this set; the hooks the agent starts inherit it from the agent.
+      runtimeEnv: process.versions["electron"] !== undefined ? { ELECTRON_RUN_AS_NODE: "1" } : undefined,
     });
+    let hookEnv: Record<string, string>;
+    try {
+      ({ env: hookEnv } = await installed.prepare());
+    } catch (error) {
+      await installed.cleanup();
+      throw error;
+    }
+    // ORCA's host services wait for this: settled once the session's runtime is admitted,
+    // and rejected, so that each held request is refused, on every way the open fails.
+    let admit!: () => void;
+    let refuseAdmission!: (reason: unknown) => void;
+    const admission = new Promise<void>((resolve, reject) => {
+      admit = resolve;
+      refuseAdmission = reject;
+    });
+    // A refusal is an answer to whoever waits on it; with nobody waiting it is not an error.
+    admission.catch(() => undefined);
     let session: AgentSession;
     try {
-      session = await open({ ...bound, sessionMeta: installed.sessionMeta });
+      session = await guarded({
+        ...bound,
+        env: { ...(options.env ?? {}), ...hookEnv },
+        sessionMeta: installed.sessionMeta,
+        admission,
+        // Claude Code would start its MCP servers itself, before ORCA has admitted the runtime
+        // it runs, and would hold their secrets; ORCA runs them instead and serves them over
+        // ACP. Codex keeps its servers: its runtime is admitted before `session/new` hands
+        // them over.
+        relayMcpServers: (agentInfo) => agentInfo !== undefined && CLAUDE_ADAPTER_NAMES.includes(agentInfo.name),
+      });
     } catch (error) {
+      refuseAdmission(error);
       await installed.cleanup();
       throw error;
     }
@@ -349,10 +405,12 @@ export function makeSessionFactory(
     try {
       await installed.verifyRuntime();
     } catch (error) {
+      refuseAdmission(error);
       await session.close().catch(() => undefined);
       await installed.cleanup();
       throw error;
     }
+    admit();
     void session.closed.then(installed.cleanup, installed.cleanup);
     const close = session.close.bind(session);
     session.close = async (...args: Parameters<AgentSession["close"]>) => {
@@ -362,6 +420,9 @@ export function makeSessionFactory(
         await installed.cleanup();
       }
     };
+    // The engine drains it while the session runs (#1000); `cleanup` reads it a last time.
+    const telemetry = installed.telemetry();
+    if (telemetry !== undefined) Object.defineProperty(session, "hookTelemetry", { value: telemetry });
     return session;
   };
 }
@@ -387,7 +448,8 @@ export interface OrcaFileLayout {
  * directory). Not even readable: `auth/`, where `orca serve` keeps the local owner token, and
  * the store's two private directories, which hold its encryption keys and the payloads they
  * protect (`private-execution` and `private-workflows` in `@orca/store`), and the whole-store
- * format backups, which copy them (`format-backups`).
+ * format backups, which copy them (`format-backups`), and the tool-call diagnostics ORCA keeps
+ * about the agent's own calls (`diagnostics`, #1000).
  */
 export function orcaProtectedPaths(layout: OrcaFileLayout): ProtectedPaths {
   const configDir = resolve(layout.configDir);
@@ -405,6 +467,8 @@ export function orcaProtectedPaths(layout: OrcaFileLayout): ProtectedPaths {
       join(storeDir, "private-workflows"),
       // Whole-store copies (#566), private directories included.
       join(storeDir, STORE_FORMAT_BACKUP_DIR),
+      // Tool-call telemetry (#1000): what hooks reported about the agent's own calls.
+      join(storeDir, DIAGNOSTICS_DIR),
     ],
     agentAreas: [join(storeDir, "work"), join(storeDir, "program")],
   };
@@ -495,8 +559,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       isClosedUpdateBootstrap() ? "read" : "write",
     ));
     // Before this process registers as a writer: the switch refuses while any writer is alive.
-    if (storeSwitch && !isClosedUpdateBootstrap() && backend === "file") {
-      storeSwitchOutcome = await desktopSqliteSwitch(storeDir, writer, storeWriterVersion(), storeSwitch.after);
+    // Only from the backend the store is on: a request for where it already is changes nothing.
+    if (storeSwitch && !isClosedUpdateBootstrap() && backend === (storeSwitch.to === "sqlite" ? "file" : "sqlite")) {
+      storeSwitchOutcome = await desktopSqliteSwitch(storeDir, writer, storeWriterVersion(), storeSwitch);
       backend = recordedStoreBackend(storeDir) ?? "file";
     }
     if (!isClosedUpdateBootstrap()) {
@@ -512,21 +577,28 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     }
   }
   // Only the app's own workspace (its writer fence held) may be switched in place, never on
-  // Windows (#947), and only while it is on files.
+  // Windows (#947): to SQLite while it is on files, back to files while it is on SQLite.
+  const switchable = Boolean(writer) && process.platform !== "win32";
   const storeStatus: StoreStatus | undefined =
     opts.ephemeral || isClosedUpdateBootstrap()
       ? undefined
       : {
           backend,
-          sqliteSwitch: writer && process.platform !== "win32" && backend === "file" ? "available" : "unavailable",
+          sqliteSwitch: switchable && backend === "file" ? "available" : "unavailable",
+          filesSwitch: switchable && backend === "sqlite" ? "available" : "unavailable",
           ...(storeSwitchOutcome ? { lastSwitch: storeSwitchOutcome } : {}),
         };
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   if (storeSwitchOutcome?.status === "refused")
     logger.warn(
-      `store stays on files, not switched to SQLite (${storeSwitchOutcome.reason}): ${storeSwitchOutcome.message}`,
+      storeSwitchOutcome.to === "sqlite"
+        ? `store stays on files, not switched to SQLite (${storeSwitchOutcome.reason}): ${storeSwitchOutcome.message}`
+        : `store stays on SQLite, not switched back to files (${storeSwitchOutcome.reason}): ${storeSwitchOutcome.message}`,
     );
-  else if (storeSwitchOutcome?.status === "switched") logger.info("store switched to SQLite metadata");
+  else if (storeSwitchOutcome?.status === "switched")
+    logger.info(
+      storeSwitchOutcome.to === "sqlite" ? "store switched to SQLite metadata" : "store switched back to files",
+    );
   const agents = AgentRegistry.fromConfig(config, { configDir: resolve(configDir) });
   const assets = await releaseAssets(config);
   const templates = await loadTemplates(assets.templates, configDir);

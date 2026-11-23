@@ -29,6 +29,7 @@ import {
   loadEffectivePermissionPolicy,
   permissionOverlayFor,
   permissionPolicyPath,
+  existingDirectoryWithin,
   protectedPathFor,
   readPermissionPolicyFile,
   recordAlwaysDecision,
@@ -354,7 +355,10 @@ describe("the default policy", () => {
     // chose a fallthrough, and so what opts this agent in to the default rules at all.
     expect(bare.permissions).toEqual({ rules: [] });
     expect(bare.permissions.default).toBeUndefined();
-    expect(bareEffective).toEqual(DEFAULT_PERMISSION_POLICY);
+    // The loader also records where each rule came from (#702): here, all from the defaults.
+    const { origins, ...evaluated } = bareEffective;
+    expect(evaluated).toEqual(DEFAULT_PERMISSION_POLICY);
+    expect(origins).toEqual(DEFAULT_PERMISSION_POLICY.rules.map((_, index) => ({ layer: "default", index })));
     expect(bareEffective.default).toBe("ask");
   });
 
@@ -368,7 +372,7 @@ describe("the default policy", () => {
     const policy = await loadEffectivePermissionPolicy(asked, []);
 
     // No rules at all: the default layer is not appended, so there is nothing to match.
-    expect(policy).toEqual({ default: "ask", rules: [] });
+    expect(policy).toEqual({ default: "ask", rules: [], origins: [] });
     expect(at(policy, "read", "Read src/a.ts", `${WS}/src/a.ts`)).toBe("ask");
     expect(at(policy, "edit", "Edit src/a.ts", `${WS}/src/a.ts`)).toBe("ask");
     expect(at(policy, "think", "Think")).toBe("ask");
@@ -943,6 +947,90 @@ describe("protected paths", () => {
     expect(at(bareEffective, f, "edit", join(f.dir, "src", "policy.json"))).toBe("deny");
   });
 
+  it.skipIf(process.platform === "win32")(
+    "cannot be created through a link whose target does not exist yet (#706 B05)",
+    async () => {
+      const f = await configDir();
+      const sidecar = permissionPolicyPath(f.dir);
+      await rm(sidecar);
+      // A write that creates a file follows a dangling link and creates its target, so the link
+      // is judged by where it leads, relative targets and chains of links included.
+      await symlink("../orca.permissions.json", join(f.dir, "src", "relative.json"));
+      await symlink(sidecar, join(f.dir, "src", "absolute.json"));
+      await symlink(join(f.dir, "src", "relative.json"), join(f.dir, "src", "chained.json"));
+      await symlink(join(f.dir, ".orca", "runs", "new", "log.jsonl"), join(f.dir, "src", "deep.jsonl"));
+      for (const name of ["relative.json", "absolute.json", "chained.json", "deep.jsonl"]) {
+        expect(at(bareEffective, f, "edit", join(f.dir, "src", name)), name).toBe("deny");
+        expect(protectedPathFor(join(f.dir, "src", name), "write", f.protectedPaths), name).toBeDefined();
+      }
+      // A dangling link to somewhere free is still free.
+      await symlink(join(f.dir, "src", "later.ts"), join(f.dir, "src", "free.ts"));
+      expect(at(bareEffective, f, "edit", join(f.dir, "src", "free.ts"))).toBe("allow");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "judges a removal by the directory entry, and a write by both the entry and where it leads (#706 review)",
+    async () => {
+      const f = await configDir();
+      const sidecar = permissionPolicyPath(f.dir);
+      // Removing a link to the sidecar removes the link, not the sidecar.
+      await symlink(sidecar, join(f.dir, "src", "to-sidecar.json"));
+      expect(protectedPathFor(join(f.dir, "src", "to-sidecar.json"), "remove", f.protectedPaths)).toBeUndefined();
+      expect(protectedPathFor(join(f.dir, "src", "to-sidecar.json"), "write", f.protectedPaths)).toBe(sidecar);
+
+      // A sidecar that is itself a link: its entry is protected for every mutation, and so is
+      // the file it leads to, however it is named.
+      const g = await configDir();
+      const real = join(g.dir, "src", "policy.json");
+      await writeFile(real, `{"version":1,"agents":{}}`, "utf8");
+      await rm(permissionPolicyPath(g.dir));
+      await symlink(real, permissionPolicyPath(g.dir));
+      for (const access of ["write", "remove"] as const) {
+        expect(protectedPathFor(permissionPolicyPath(g.dir), access, g.protectedPaths), access).toBeDefined();
+        expect(protectedPathFor(real, access, g.protectedPaths), access).toBeDefined();
+      }
+      expect(at(bareEffective, g, "move", permissionPolicyPath(g.dir), join(g.dir, "src", "x.json"))).toBe("deny");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("treats a path it cannot resolve as protected, absence aside", async () => {
+    const f = await configDir();
+    // A loop of links, and a path below a regular file: neither can be shown to be free.
+    await symlink(join(f.dir, "src", "loop-b"), join(f.dir, "src", "loop-a"));
+    await symlink(join(f.dir, "src", "loop-a"), join(f.dir, "src", "loop-b"));
+    const below = join(f.dir, "src", "a.ts", "x");
+    for (const path of [join(f.dir, "src", "loop-a"), below]) {
+      for (const access of ["read", "write"] as const)
+        expect(protectedPathFor(path, access, f.protectedPaths), `${access} ${path}`).toBe(path);
+      expect(at(bareEffective, f, "edit", path)).toBe("deny");
+    }
+    // Removing the looping link itself only removes that entry, which is free.
+    expect(protectedPathFor(join(f.dir, "src", "loop-a"), "remove", f.protectedPaths)).toBeUndefined();
+    // Plain absence is an answer: a new file in the workspace is free.
+    expect(protectedPathFor(join(f.dir, "src", "new", "file.ts"), "write", f.protectedPaths)).toBeUndefined();
+  });
+
+  it.skipIf(process.platform === "win32")("existingDirectoryWithin says no on any doubt", async () => {
+    const f = await configDir();
+    expect(existingDirectoryWithin(join(f.dir, "src"), f.dir)).toBe(true);
+    expect(existingDirectoryWithin(f.dir, f.dir)).toBe(true);
+    await symlink(join(f.dir, "src"), join(f.dir, "src-link"), "junction");
+    expect(existingDirectoryWithin(join(f.dir, "src-link"), f.dir)).toBe(true);
+    expect(existingDirectoryWithin(f.dir, join(f.dir, "src"))).toBe(false);
+    // A directory that does not exist yet is not inside anything, and neither is a file.
+    expect(existingDirectoryWithin(join(f.dir, "src", "not-yet"), f.dir)).toBe(false);
+    expect(existingDirectoryWithin(join(f.dir, "src", "a.ts"), f.dir)).toBe(false);
+    expect(existingDirectoryWithin(join(f.dir, "src"), join(f.dir, "missing"))).toBe(false);
+    await symlink(join(f.dir, "src", "loop-b"), join(f.dir, "src", "loop-a"));
+    await symlink(join(f.dir, "src", "loop-a"), join(f.dir, "src", "loop-b"));
+    expect(existingDirectoryWithin(join(f.dir, "src", "loop-a"), f.dir)).toBe(false);
+    // A link pointing outside is judged by where it leads.
+    const outside = await workspace();
+    await symlink(outside, join(f.dir, "src", "away"), "junction");
+    expect(existingDirectoryWithin(join(f.dir, "src", "away"), f.dir)).toBe(false);
+  });
+
   it("is not overridden by any rule: configured, written to the sidecar, or `default: allow`", async () => {
     const f = await configDir();
     const sidecar = permissionPolicyPath(f.dir);
@@ -1337,7 +1425,11 @@ describe("rule lifetimes and one-time selection (#702)", () => {
           { optionId: "once", kind: "allow_once" },
         ]),
       }),
-    ).toEqual({ response: { outcome: { outcome: "selected", optionId: "once" } }, decision: "allow" });
+    ).toEqual({
+      response: { outcome: { outcome: "selected", optionId: "once" } },
+      decision: "allow",
+      rule: { basis: "rule" },
+    });
     expect(
       await resolvePermission(policy, {
         request: request([
@@ -1345,6 +1437,10 @@ describe("rule lifetimes and one-time selection (#702)", () => {
           { optionId: "no", kind: "reject_once" },
         ]),
       }),
-    ).toEqual({ response: { outcome: { outcome: "cancelled" } }, decision: "allow:no-one-time-option" });
+    ).toEqual({
+      response: { outcome: { outcome: "cancelled" } },
+      decision: "allow:no-one-time-option",
+      rule: { basis: "rule" },
+    });
   });
 });

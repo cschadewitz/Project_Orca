@@ -34,9 +34,11 @@ access invite developer insight; they do not require code changes or host access
 | [Protected execution storage](protected-execution-storage.md) / [replay errors](protected-replay-error-contract.md) | inspect privacy, complete backup/key boundaries and fail-closed error behavior |
 | [File locks and shared volumes](storage/file-locks.md) | see why a store must live on one host's local disk, and when a lock may be removed by hand |
 | [Recovering interrupted work](recovery.md) | preview resume, new run and checkpoint attempts with uncertain-effect review before anything runs |
+| [Hook tool-call telemetry](hook-telemetry.md) | turn on per-agent tool-call records from native pre-tool hooks, and export, delete or expire them |
 | [Owned root worktrees](root-worktree-isolation.md) | understand opt-in local Linux isolation and retained-evidence recovery limits |
 | [Running across machines](MULTI-MACHINE.md) | choose between local only, SSH-hosted agents, the app watching several daemons and delegating steps to remote daemons |
 | [Integrations](INTEGRATIONS.md) | separate inbound MCP, ACP/Kepler, downstream servers, SSH and JEV; T3 Code transport is groundwork |
+| [Agent support](agent-support.md) | see which agent products, versions and platforms ORCA supports, how far each was tested, and what stays outside |
 | [MCP operator](mcp-operator.md) / [production acceptance](mcp-operator-production-acceptance.md) | inspect supported tools and reference-client evidence versus actual-Cal acceptance |
 | [Operator integration](runtime-operator-integration.md) | read the current source evidence map and dated integration/native checkpoints |
 | [Private MCP preparation](preparation/private-mcp-access/handoff.md) | review deployment/bridge contracts; use dated owner evidence before treating old recipes as current instructions |

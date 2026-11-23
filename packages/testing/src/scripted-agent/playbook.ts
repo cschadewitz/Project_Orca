@@ -10,14 +10,22 @@ import { z } from "zod";
 export const PlaybookEntrySchema = z.object({
   /** Front-matter data; merged into the artifact's YAML header. */
   data: z.record(z.string(), z.unknown()).optional(),
-  /** Markdown body. Supports {kind}, {path}, {n} (1-based occurrence) and {prompt} placeholders. */
+  /**
+   * Markdown body. Supports {kind}, {path}, {n} (1-based occurrence), {prompt} and {extract}
+   * placeholders, and {env:NAME}: the agent process's environment variable (empty when unset).
+   */
   body: z.string().optional(),
   /** Full raw content (overrides data/body). */
   content: z.string().optional(),
   /** Do not write the file (simulates a missing deliverable). */
   skip: z.boolean().default(false),
-  /** Text the agent "says" before writing. */
+  /** Text the agent "says" before writing; the same placeholders as `body`. */
   say: z.string().optional(),
+  /**
+   * A regular expression run on the prompt; `{extract}` is its first capture group (empty when
+   * it does not match). Lets a test have the agent repeat one part of its task on its own.
+   */
+  extract: z.string().optional(),
   /** Ask the client for permission before writing (exercises the permission path). */
   askPermission: z.boolean().default(false),
   /** Stable source path to ask about independently of the attempt-specific report path. */

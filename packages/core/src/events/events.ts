@@ -252,6 +252,23 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       toolCallId: z.string().optional(),
       title: z.string(),
       decision: z.string(),
+      /**
+       * What decided it (#702): the basis, and for a rule its layer and its index in that
+       * layer. Absent on events written before this existed and where the policy was not
+       * consulted. It deliberately has no sidecar revision: a digest of the whole permission
+       * file in an ordinary event would reach every reader and export of the run log and could
+       * correlate a workspace's policy across runs (#702 review). Parsing drops one if a
+       * writer sends it, so the public log never keeps it.
+       */
+      rule: z
+        .object({
+          basis: z.enum(["protected", "rule", "default", "command-restricted", "unverified-identity"]),
+          layer: z.enum(["config", "sidecar", "default"]).optional(),
+          index: z.number().int().nonnegative().optional(),
+          file: z.number().int().nonnegative().optional(),
+          capped: z.boolean().optional(),
+        })
+        .optional(),
       /** Explicit standing-rule Save acceptance; protected entry is never public or a callback answer. */
       scopedApprovalRef: z.string().optional(),
       entry: z.record(z.string(), z.unknown()).optional(),

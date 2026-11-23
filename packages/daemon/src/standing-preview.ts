@@ -15,6 +15,7 @@ import {
   broaderCommandPatterns,
   commandTextOf,
   derivePermissionRules,
+  mcpToolClaimOf,
   type HumanInputRequest,
   type PermissionRule,
   type RunState,
@@ -31,11 +32,14 @@ export function standingRulePreview(
   if (request.kind !== "permission") return undefined;
   const toolCall = request.context["toolCall"];
   if (!toolCall || typeof toolCall !== "object") return undefined;
-  const tc = toolCall as { kind?: unknown; title?: unknown; locations?: unknown; rawInput?: unknown };
+  const tc = toolCall as { kind?: unknown; title?: unknown; locations?: unknown; rawInput?: unknown; _meta?: unknown };
   const derived = derivePermissionRules(
     {
       kind: typeof tc.kind === "string" ? tc.kind : undefined,
       title: typeof tc.title === "string" ? tc.title : undefined,
+      // An MCP tool the agent claims is never offered as a standing allow (#1021), and a
+      // standing deny names it as `server: tool`.
+      mcpClaim: mcpToolClaimOf({ _meta: tc._meta }),
       paths: Array.isArray(tc.locations)
         ? tc.locations.flatMap((l: unknown) =>
             l && typeof l === "object" && typeof (l as { path?: unknown }).path === "string"

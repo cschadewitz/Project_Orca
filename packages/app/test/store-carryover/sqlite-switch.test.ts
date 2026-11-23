@@ -8,7 +8,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { enterFirstRunWriter } from "@orca/protocol/first-run-fence";
-import { recordedStoreBackend, SQLITE_SWITCH_DIR, StoreFormatError } from "@orca/store";
+import { fileStores, recordedStoreBackend, SQLITE_SWITCH_DIR, sqliteStores, StoreFormatError } from "@orca/store";
 import { desktopSqliteSwitch } from "../../../cli/src/desktop-sqlite-switch.js";
 import { OWNERSHIP_DIRECTORY, reserveFirstRunOwnership } from "../../src/main/first-run/ownership.js";
 import {
@@ -27,8 +27,10 @@ const nextAttempt = (path: string) => {
   return String(Number(last) + 1).padStart(6, "0");
 };
 
-/** The claim the daemon the app stopped for the switch wrote: the one this launch follows. */
-const after = (hold: { previous: string | null }) => hold.previous!;
+/** The switch to SQLite asked for after the daemon the app stopped for it: the claim this launch follows. */
+const after = (hold: { previous: string | null }) => toSqlite(hold.previous!);
+const toSqlite = (claim: string) => ({ to: "sqlite" as const, after: claim });
+const toFiles = (claim: string) => ({ to: "files" as const, after: claim });
 
 /** The app's workspace with a populated store on files, and its daemon entered as the writer. */
 async function appWorkspace() {
@@ -45,12 +47,12 @@ it.runIf(process.platform !== "win32")(
   "switches the app's own store in place while its daemon holds the fence",
   async () => {
     const { store, hold } = await appWorkspace();
-    expect(await desktopSqliteSwitch(store, hold, "0.8.0", after(hold))).toEqual({ status: "switched" });
+    expect(await desktopSqliteSwitch(store, hold, "0.8.0", after(hold))).toEqual({ to: "sqlite", status: "switched" });
     expect(recordedStoreBackend(store)).toBe("sqlite");
     await expectFenced(store);
     await expectReadsOnSqlite(store);
     // Asked again: nothing to do.
-    expect(await desktopSqliteSwitch(store, hold, "0.8.0", after(hold))).toEqual({ status: "current" });
+    expect(await desktopSqliteSwitch(store, hold, "0.8.0", after(hold))).toEqual({ to: "sqlite", status: "current" });
   },
   30000,
 );
@@ -110,7 +112,7 @@ it.runIf(process.platform !== "win32")(
     const { store, hold } = await appWorkspace();
     expect(hold.previous).toMatch(/^[a-f0-9]{64}$/);
     const before = await contents(store);
-    expect(await desktopSqliteSwitch(store, hold, "0.8.0", "c".repeat(64))).toMatchObject({
+    expect(await desktopSqliteSwitch(store, hold, "0.8.0", toSqlite("c".repeat(64)))).toMatchObject({
       status: "refused",
       reason: "SWITCH_REFUSED",
     });
@@ -128,7 +130,7 @@ it.runIf(process.platform !== "win32")(
     expect(hold.check()).toBe(false);
     const before = await contents(store);
     // Even with the right claim, and with a wrong one: a stale launch is never told to go on.
-    for (const named of [after(hold), "c".repeat(64)])
+    for (const named of [after(hold), toSqlite("c".repeat(64))])
       await expect(desktopSqliteSwitch(store, hold, "0.8.0", named)).rejects.toMatchObject({
         code: "STORE_FORMAT",
         details: expect.objectContaining({ reason: "FENCE_LOST" }),
@@ -143,7 +145,7 @@ it.runIf(process.platform !== "win32")(
 it("refuses, changing nothing, without the app's fence or on Windows", async () => {
   const plain = await populated();
   const before = await contents(plain);
-  expect(await desktopSqliteSwitch(plain, undefined, "0.8.0", "a".repeat(64))).toMatchObject({
+  expect(await desktopSqliteSwitch(plain, undefined, "0.8.0", toSqlite("a".repeat(64)))).toMatchObject({
     status: "refused",
     reason: "SWITCH_REFUSED",
     message: expect.stringContaining("orca store sqlite convert"),
@@ -156,9 +158,68 @@ it("refuses, changing nothing, without the app's fence or on Windows", async () 
       windows,
       { check: () => true, previous: "a".repeat(64) } as never,
       "0.8.0",
-      "a".repeat(64),
+      toSqlite("a".repeat(64)),
       { platform: "win32" },
     ),
   ).toMatchObject({ status: "refused", reason: "UNDURABLE" });
   expect(recordedStoreBackend(windows)).toBe("file");
 });
+
+it.runIf(process.platform !== "win32")(
+  "switches the app's own store back to files in place, keeping what was written on SQLite",
+  async () => {
+    const { store, hold } = await appWorkspace();
+    expect(await desktopSqliteSwitch(store, hold, "0.8.0", after(hold))).toMatchObject({ status: "switched" });
+    const sqlite = sqliteStores(store);
+    try {
+      await sqlite.events.append({ type: "run.started", runId: "run_a", payload: {} });
+    } finally {
+      sqlite.close?.();
+    }
+    expect(await desktopSqliteSwitch(store, hold, "0.8.0", toFiles(hold.previous!))).toEqual({
+      to: "files",
+      status: "switched",
+    });
+    expect(recordedStoreBackend(store)).toBe("file");
+    expect((await fileStores(store).events.read("run_a")).length).toBe(3);
+    expect(await desktopSqliteSwitch(store, hold, "0.8.0", toFiles(hold.previous!))).toEqual({
+      to: "files",
+      status: "current",
+    });
+  },
+  30000,
+);
+
+it.runIf(process.platform !== "win32")(
+  "leaves the store on SQLite and aborts the launch when the fence is lost during the switch back",
+  async () => {
+    const { path, store, hold } = await appWorkspace();
+    await desktopSqliteSwitch(store, hold, "0.8.0", after(hold));
+    const before = await contents(store);
+    await expect(
+      desktopSqliteSwitch(store, hold, "0.8.0", toFiles(hold.previous!), {
+        beforeMarker: async () => reserveAgain(path),
+      }),
+    ).rejects.toMatchObject({ code: "STORE_FORMAT", details: expect.objectContaining({ reason: "FENCE_LOST" }) });
+    expect(await contents(store)).toEqual(before);
+    expect(recordedStoreBackend(store)).toBe("sqlite");
+    await expectFenced(store);
+    await expectReadsOnSqlite(store);
+  },
+  30000,
+);
+
+it.runIf(process.platform !== "win32")(
+  "refuses a switch back that does not name the claim this launch follows, staying on SQLite",
+  async () => {
+    const { store, hold } = await appWorkspace();
+    await desktopSqliteSwitch(store, hold, "0.8.0", after(hold));
+    expect(await desktopSqliteSwitch(store, hold, "0.8.0", toFiles("c".repeat(64)))).toMatchObject({
+      to: "files",
+      status: "refused",
+      reason: "SWITCH_REFUSED",
+    });
+    expect(recordedStoreBackend(store)).toBe("sqlite");
+  },
+  30000,
+);

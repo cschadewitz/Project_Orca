@@ -63,22 +63,24 @@ files.
   does, while the writer's own process pages history:
   - **The daemon alone, or with other connections that let go between reads** (polling
     every 100 ms, short reads back to back, or 100 ms snapshots 10 ms apart), the log keeps
-    starting over: its file stays at about `autoPages` (4 to 8 MB) for the whole run, at
-    every scale, with no lost write and no failed read.
+    starting over: on the reference machine its file peaks at 4 to 16 MB for the whole run,
+    at every scale, with no lost write and no failed read.
   - **With a reader on another connection that keeps a snapshot open almost all the time**
     (100 ms snapshots with no pause between them), the log never starts over and grows
-    for as long as that lasts: about 15 to 20 MB a second at the container's append rate,
-    past `walLimitBytes`, to 150 to 250 MB in 8 to 12 s. Appends slow down by about a
-    third, and nothing fails. Once that reader stops, the idle checkpoint copies the whole
+    for as long as that lasts: on the reference machine to 0.4 to 1.1 GB in 8 to 20 s,
+    far past `walLimitBytes`. Appends slow down by about a third to a half, and nothing
+    fails. Once that reader stops, the idle checkpoint copies the whole
     log back, and the next write starts the log over and cuts the file back to
     `walLimitBytes`.
 
-  Nothing in ORCA reads that way today: the daemon's own reads never overlap a commit, and
-  `orca store sqlite backup` holds one snapshot only while `VACUUM INTO` runs. A long backup
-  or another tool reading continuously beside a busy daemon would grow the log for that
-  long. The size is measured on the reference machine in every benchmark run; whether to
-  bound it (a restart checkpoint once the log passes `walLimitBytes`, at the cost of waiting
-  for readers) is for the #341 budgets.
+  The daemon's own reads never overlap a commit. `orca store sqlite backup` does hold one
+  snapshot for as long as its `VACUUM INTO` runs, so a long backup during heavy writes grows
+  the log for that long, by an amount that depends on the backup's length and the write rate;
+  no workload measures that case yet, and the synthetic figures above are not a disk budget
+  for it. The benchmarked patterns are measured on the reference machine in every run, and
+  [ADR 0011](../adr/0011-sqlite-metadata-graph-and-kv-deferred.md) records it as an operating
+  limit with the trigger for bounding it (a restart checkpoint once the log passes
+  `walLimitBytes`, at the cost of waiting for readers).
 - **Writes:** every write is one `BEGIN IMMEDIATE ... COMMIT`. `node:sqlite` is
   synchronous, so no other operation in the process can interleave with a write.
   Contention with another connection is `SQLITE_BUSY`: the connection waits 50 ms,
@@ -398,6 +400,15 @@ An update recovery's launch never asks. A refusal before the stop reopens
 admission on the running daemon; after it, nothing restarts the old daemon, and
 reopening ORCA starts the workspace on files.
 
+**Switching back** goes the same way. A daemon on SQLite reports `filesSwitch:
+"available"` in `hello.store` on the same terms (an app workspace, its fence held, not
+Windows; a daemon from before the switch back sends nothing, which means unavailable),
+and the section then offers "Switch back to files". The request records `to: "files"`
+(a request without it is to SQLite), the daemon is started with
+`ORCA_STORE_SWITCH=files:<claim>`, and it runs `switchStoreToFiles` (below) only while
+its store is on SQLite, under the same claim and fence checks; a lost fence aborts the
+launch, a refusal starts it on SQLite. `lastSwitch.to` says which way the last ask went.
+
 **Not offered yet.** Released-binary and native signed/installed acceptance of the
 switch and of its rollback is a separate gate. Until it passes, the app offers the
 switch only when started with `ORCA_SQLITE_SWITCH=1`, which only that acceptance sets.
@@ -456,8 +467,54 @@ database naming another switch) is refused (`INTERRUPTED`) and left as it is.
 `sqlite-legacy-fence.test.ts` kills a switch at each of these points and checks
 both outcomes byte for byte. The desktop app's own workspaces
 are refused (`APP_OWNED`), as for `carry-forward`: the app's daemon holds their write
-fence, which this command cannot. There is no switch back to files yet: the backup
-from step 4 is the store as it was.
+fence, which this command cannot. The backup from step 4 is the store as it was; the
+way back that keeps what was written on SQLite is the switch back below.
+
+### The switch back to files
+
+`switchStoreToFiles` in the store package takes a store switched in place back to the
+file backend, with everything its database holds, including what was written after
+the switch. Like the switch, it changes a workspace only under its exclusive writer
+(the desktop app's daemon, under its fence); the CLI does not offer it. Under the
+store's format lock (an interrupted switch either way is first finished or undone by
+its journal) it:
+
+1. Switches back only a store on SQLite; one already on this ORCA's file format is
+   left as it is (`current`). **Refuses on Windows** (`UNDURABLE`), as the switch does.
+2. Announces itself and refuses while any registered writer is alive (`BUSY`).
+3. Runs `verify`, which must find nothing wrong, then reads everything the database
+   holds in one snapshot of a read-only connection bound to this store, parsing every
+   row with its schema. A row or a collection this ORCA cannot read refuses the switch
+   back (`UNREADABLE`) instead of being left behind.
+4. Takes a verified whole-store backup into `format-backups/`, exactly as the switch
+   does, with the database in the copy verified and read again.
+5. Writes the metadata out as the file backend's own files into
+   `<store>/.sqlite-switch/files/` (each flushed) and reads them back with the file
+   backend's readers, the import's own: they must return exactly what the database
+   holds (`EXPORT_MISMATCH` otherwise). The store must not have changed since step 3.
+6. Records a journal (`to: "files"`), then replaces every marker of the legacy fence
+   with what was written out, the keys last (`.execution-key.sqlite` renamed back over
+   its marker, `workflows.sqlite` back to `workflows`), and checks once more that
+   nothing else changed. Only then writes this ORCA's file format into the marker,
+   naming the new backup. That rename is the commit. Then the database is removed (the
+   backup holds it) and the journal dropped.
+
+A refusal at any step before the marker leaves the store on SQLite exactly as it was:
+every marker back, what was restored set aside and dropped, the database untouched.
+A kill before the marker is undone the same way by the next write-mode start (until
+then read-only opens refuse, `INTERRUPTED`); one after it is finished. A marker or a
+database naming another switch is refused and left as it is.
+
+Recovery acts on the store the switch left, not on whatever is bound to the same store
+by then. Either way, the journal records which database file the switch started from or
+built (its device and inode). Recovery keeps, fences or drops that file only. A copy or a
+restored backup put in its place is refused and left intact, even when it is bound to the
+same store. While a journal is pending, `orca store sqlite restore` and `import` refuse
+(`SWITCH_PENDING`) under the format lock. Start ORCA on the store first, so that the
+switch is finished or undone.
+`sqlite-switch-back.test.ts` covers the round trip (files, SQLite with new work,
+files, SQLite, files), a lost fence at each check, a failure at each restore step,
+kills before and after the marker, and the refusals.
 
 ## Operations
 
@@ -491,4 +548,4 @@ leaves only an unreferenced blob.
   macOS (the conversion runs there; the check runs on Linux).
 - Bringing writes a released ORCA made to the file store after a conversion into the
   new store; they are reported, not merged.
-- A switch back from SQLite to files.
+- Native signed/installed acceptance of both directions, which gates offering them.

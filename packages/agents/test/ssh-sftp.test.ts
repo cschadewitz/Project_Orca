@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostSpecSchema } from "@orca/core";
-import { SshHost, type SshHostOptions } from "@orca/agents";
+import { isHostFileMissing, SshHost, type SshHostOptions } from "@orca/agents";
 
 const server = fileURLToPath(new URL("./fixtures/fake-sftp-server.ts", import.meta.url));
 let root: string;
@@ -94,6 +94,46 @@ it("keeps the per-command error shape", async () => {
   await expect(h.fs.writeFile(p("file", "child"), "x")).rejects.toMatchObject({
     code: "AGENT_TRANSPORT",
     message: expect.stringContaining("ssh write failed for"),
+  });
+});
+
+describe("a read of a file that is not there (#703)", () => {
+  it("is marked missing only on the server's own no-such-file status, with the same error shape", async () => {
+    const h = host();
+    const error = await h.fs.readFile(p("missing")).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "AGENT_TRANSPORT", details: { path: p("missing") } });
+    expect(isHostFileMissing(error)).toBe(true);
+  });
+
+  it("is not claimed when the transport failed, even though ssh's own spawn said ENOENT", async () => {
+    const h = new SshHost(
+      HostSpecSchema.parse({
+        id: "remote",
+        type: "ssh",
+        host: "invalid",
+        sshBinary: "orca-no-such-ssh-binary",
+      }) as never,
+    );
+    hosts.push(h);
+    const error = await h.fs.readFile(p("missing")).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "AGENT_TRANSPORT" });
+    expect(isHostFileMissing(error)).toBe(false);
+  });
+
+  it("is not claimed for another status, or by the per-command fallback that cannot tell", async () => {
+    const h = host();
+    const directory = await h.fs.readFile(root.replace(/\\/g, "/")).catch((e: unknown) => e);
+    expect(isHostFileMissing(directory)).toBe(false);
+
+    const viaExec = host(() => ({ FAKE_SFTP_REFUSE: "1" }), { retryMs: 60_000 });
+    vi.spyOn(viaExec, "exec").mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr: "cat: /w/a: No such file or directory",
+    });
+    const fallback = await viaExec.fs.readFile("/w/a").catch((e: unknown) => e);
+    expect(fallback).toMatchObject({ code: "AGENT_TRANSPORT" });
+    expect(isHostFileMissing(fallback)).toBe(false);
   });
 });
 
@@ -232,7 +272,13 @@ it("stops writing on the first failed chunk and closes only after every write ha
     code: "AGENT_TRANSPORT",
     message: expect.stringContaining("ssh write failed for"),
   });
-  const lines = (await readFile(log, "utf8")).split("\n").filter(Boolean);
+  // The failed write closes the handle without awaiting it, so the server may log the
+  // close after the call has rejected: wait for it before reading the order.
+  const lines = await vi.waitFor(async () => {
+    const all = (await readFile(log, "utf8")).split("\n").filter(Boolean);
+    expect(all).toContain("close");
+    return all;
+  });
   const writes = lines.filter((l) => l.startsWith("write "));
   expect(writes.length).toBeLessThan(chunks / 2); // no new chunks after the failure
   expect(lines).not.toContain("write-after-close");
