@@ -192,6 +192,8 @@ function judgedRecord(j: NonNullable<PermissionExplanation["judged"]>): NonNulla
     ...(j.ruleId ? { ruleId: j.ruleId } : {}),
     ...(j.reasonCode ? { reasonCode: j.reasonCode } : {}),
     ...(j.judgeConfigRef ? { judgeConfigRef: j.judgeConfigRef } : {}),
+    ...(j.kind ? { kind: j.kind } : {}),
+    ...(j.advisory ? { advisory: true } : {}),
   };
 }
 
@@ -201,7 +203,14 @@ export interface PermissionRuleRecord {
   index?: number;
   file?: number;
   capped?: boolean;
-  judge?: { verdict: string; ruleId?: string; reasonCode?: string; judgeConfigRef?: string };
+  judge?: {
+    verdict: string;
+    ruleId?: string;
+    reasonCode?: string;
+    judgeConfigRef?: string;
+    kind?: "edit" | "mcp" | "command";
+    advisory?: boolean;
+  };
 }
 
 /**

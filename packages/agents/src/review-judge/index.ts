@@ -14,6 +14,6 @@ export {
   type PlainRuleDisclosureService,
 } from "./plain-rule-connection.js";
 export { JUDGE_DISCLOSURE_PURPOSE } from "./connection.js";
-export { PLAIN_RULE_REQUEST_SCHEMA } from "./plain-rule.js";
+export { PLAIN_RULE_ACTION_CLASSES, PLAIN_RULE_REQUEST_SCHEMA, PLAIN_RULE_REQUEST_SCHEMAS } from "./plain-rule.js";
 export { secretJudgeCredentials } from "./secret-credentials.js";
-export type { JudgePermission } from "./plain-rule.js";
+export type { JudgePermission, PlainRuleActionClass } from "./plain-rule.js";

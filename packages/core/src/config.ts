@@ -126,7 +126,39 @@ export const OrcaConfigSchema = z
      */
     review: z
       .object({
-        plainRules: z.object({ judge: z.unknown().optional() }).optional(),
+        plainRules: z
+          .object({
+            judge: z.unknown().optional(),
+            /**
+             * Experimental, each off by default (#701, Cal 2026-11-23): kinds of call beyond reads and
+             * searches a judge may be asked about. Each also needs its own owner disclosure grant
+             * (`orca auth issue --judge-disclosure --judge-disclosure-kind ...`).
+             *
+             * - `edits`: a write ORCA performs itself through its file gate, to an existing file it
+             *   resolved in the workspace; a covered verdict allows that one write once. Edits the
+             *   agent makes on its own still ask.
+             * - `mcpCalls`: a call to a tool on an MCP server ORCA runs, by a rule naming that exact
+             *   tool; a covered verdict allows that one call once. Agent-reported MCP calls still ask.
+             * - `commands`: advisory only. The judge's view is shown with the ask, and you answer it.
+             *
+             * A judge's answer is never saved as a standing grant, and typed deny and ask rules
+             * still decide first.
+             */
+            experimental: z
+              .object({
+                kinds: z
+                  .object({
+                    edits: z.boolean().optional(),
+                    mcpCalls: z.boolean().optional(),
+                    commands: z.boolean().optional(),
+                  })
+                  .strict()
+                  .optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .optional(),
       })
       .optional(),
     hosts: z.array(HostSpecSchema).default([{ id: LOCAL_HOST_ID, type: "local" }]),

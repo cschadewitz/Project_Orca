@@ -374,7 +374,7 @@ describe("#701 plain-rule provider: configuration", () => {
         resolvePlainRuleProvider({ kind: "anthropic", effort: "medium" })!,
         resolvePlainRuleProvider({ kind: "openai-compatible", model: "claude-haiku-5-5" })!,
         resolvePlainRuleProvider({ kind: "openai-compatible", model: "claude-haiku-5-5", tokenParam: "max_tokens" })!,
-      ].map(plainRuleProviderVersion),
+      ].map((provider) => plainRuleProviderVersion(provider)),
     );
     expect(versions.size).toBe(6);
   });

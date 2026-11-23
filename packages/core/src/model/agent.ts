@@ -442,6 +442,13 @@ export type JudgedDecision = {
   reasonCode?: string | undefined;
   /** Which judge, schema and limits decided; absent when no judge was called. */
   judgeConfigRef?: string | undefined;
+  /**
+   * The experimental class the judge was asked about (#701 per-kind switches); absent for a read
+   * or search. `edit` and `mcp` allows rest on ORCA's own facts about the operation.
+   */
+  kind?: "edit" | "mcp" | "command" | undefined;
+  /** True when the verdict is a recommendation shown to the person, never an allow (`command`). */
+  advisory?: boolean | undefined;
 };
 
 export type PermissionExplanation = {

@@ -34,14 +34,28 @@ const durable: QualifiedJudgeBudget = Object.freeze({
   anchorDir: "/a",
 });
 
-async function setup(over: Partial<PlainRuleJudgeSourceOptions> & { grant?: boolean; owned?: boolean } = {}) {
+async function setup(
+  over: Partial<PlainRuleJudgeSourceOptions> & {
+    grant?: boolean;
+    owned?: boolean;
+    /** Extra classes granted beyond reads (#701 per-kind switches). */
+    kindGrants?: ("edit" | "mcp" | "command")[];
+  } = {},
+) {
   const credentials = new CredentialStore();
   const ownership = new OwnershipStore();
   if (over.owned !== false) ownership.record("run-1", "casey");
   await credentials.issue({
     principal: "casey",
     preset: "owner",
-    ...(over.grant === false ? {} : { disclosures: [plainRuleDisclosureQuery(judge)!] }),
+    ...(over.grant === false
+      ? {}
+      : {
+          disclosures: [
+            plainRuleDisclosureQuery(judge)!,
+            ...(over.kindGrants ?? []).map((k) => plainRuleDisclosureQuery(judge, k)!),
+          ],
+        }),
   });
   const source = plainRuleJudgeSource({
     config: () => ({ review: { plainRules: { judge } } }),
@@ -118,5 +132,27 @@ describe("#701 daemon plain-rule judge wiring", () => {
     });
     expect(wrapped).toBe(open);
     expect(prepared).toBe(0);
+  });
+
+  it("prepares only the experimental kinds the config turns on, each needing its own grant", async () => {
+    const kinds = { edits: true, mcpCalls: true, commands: false };
+    let { source, session } = await setup({ kindGrants: ["edit", "mcp", "command"] });
+    let prepared = await source.prepare(session, signal);
+    expect(prepared).toMatchObject({ status: "prepared", kindsUnavailable: [] });
+    expect(prepared.status === "prepared" && Object.keys(prepared.kinds)).toEqual([]);
+
+    const config = () => ({ review: { plainRules: { judge, experimental: { kinds } } } });
+    ({ source, session } = await setup({ config, kindGrants: ["edit", "mcp", "command"] }));
+    prepared = await source.prepare(session, signal);
+    expect(prepared.status === "prepared" && Object.keys(prepared.kinds).sort()).toEqual(["edit", "mcp"]);
+
+    // A kind turned on without its grant is left out; the read judge still stands.
+    ({ source, session } = await setup({ config, kindGrants: ["mcp"] }));
+    prepared = await source.prepare(session, signal);
+    expect(prepared).toMatchObject({
+      status: "prepared",
+      kindsUnavailable: [{ kind: "edits", reason: "disclosure-grant-missing" }],
+    });
+    expect(prepared.status === "prepared" && Object.keys(prepared.kinds)).toEqual(["mcp"]);
   });
 });

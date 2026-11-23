@@ -17,7 +17,7 @@ import {
   DisclosureGrantSchema,
 } from "@orca/daemon";
 import { isAbsoluteCommand, mcpServerDefinitionDigest, secretHostBinding, secretSourceBinding } from "@orca/agents";
-import { plainRuleDisclosureQuery } from "@orca/agents/review-judge";
+import { plainRuleDisclosureQuery, type PlainRuleActionClass } from "@orca/agents/review-judge";
 import { skillDigest } from "@orca/engine";
 import { loadConfig } from "../bootstrap.js";
 import type { CommandContext } from "./index.js";
@@ -92,15 +92,41 @@ function secretGrant(ctx: CommandContext, config: OrcaConfig): SecretGrant | und
  * includes it.
  */
 function disclosureGrant(ctx: CommandContext, config: OrcaConfig): DisclosureGrant | undefined {
-  if (!ctx.flags["judge-disclosure"]) return undefined;
-  const query = plainRuleDisclosureQuery(config.review?.plainRules?.judge);
-  if (!query)
+  const kinds = (ctx.flags["judge-disclosure-kind"] as string[] | undefined) ?? [];
+  if (!ctx.flags["judge-disclosure"]) {
+    if (kinds.length > 0) throw new OrcaError("CONFIG_INVALID", "--judge-disclosure-kind needs --judge-disclosure");
+    return undefined;
+  }
+  // Reads and searches always; each experimental kind only when named, as its own entry (#701).
+  const classes: PlainRuleActionClass[] = ["read"];
+  for (const kind of kinds) {
+    const actionClass = JUDGE_DISCLOSURE_KINDS[kind as keyof typeof JUDGE_DISCLOSURE_KINDS];
+    if (actionClass === undefined)
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `--judge-disclosure-kind is one of ${Object.keys(JUDGE_DISCLOSURE_KINDS).join(", ")}`,
+      );
+    if (!classes.includes(actionClass)) classes.push(actionClass);
+  }
+  const queries = classes.map((actionClass) => plainRuleDisclosureQuery(config.review?.plainRules?.judge, actionClass));
+  if (queries.some((query) => query === undefined))
     throw new OrcaError(
       "CONFIG_INVALID",
       "--judge-disclosure needs a complete, valid review.plainRules.judge in the config (provider, credential, and an https destination the judge sender accepts)",
     );
-  return DisclosureGrantSchema.parse([{ ...query }]);
+  return DisclosureGrantSchema.parse(queries.map((query) => ({ ...query })));
 }
+
+/**
+ * `--judge-disclosure-kind` (repeatable): an experimental class the judge may also be shown, each
+ * its own grant entry and wire format (#701 per-kind switches). Edits are writes ORCA performs
+ * itself; MCP calls are to servers ORCA relays; commands are advisory only.
+ */
+const JUDGE_DISCLOSURE_KINDS = {
+  edits: "edit",
+  "mcp-calls": "mcp",
+  commands: "command",
+} as const satisfies Record<string, PlainRuleActionClass>;
 
 /**
  * `--mcp-server <id>@<host>` and `--skill <id>` (each repeatable), or `'*'` given to either

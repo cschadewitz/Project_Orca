@@ -78,4 +78,27 @@ describe("auth issue --judge-disclosure", () => {
     );
     expect(stored("casey")).toBeUndefined();
   });
+
+  it("adds each experimental kind named, as its own entry, and only with --judge-disclosure", async () => {
+    await writeConfig(true);
+    expect(
+      await issue("casey", {
+        preset: "owner",
+        "judge-disclosure": true,
+        "judge-disclosure-kind": ["edits", "mcp-calls", "edits"],
+      }),
+    ).toBe(0);
+    expect(stored("casey")!.disclosures).toEqual([
+      plainRuleDisclosureQuery(judge),
+      plainRuleDisclosureQuery(judge, "edit"),
+      plainRuleDisclosureQuery(judge, "mcp"),
+    ]);
+    await expect(issue("cal", { preset: "owner", "judge-disclosure-kind": ["edits"] })).rejects.toThrow(
+      /needs --judge-disclosure/,
+    );
+    await expect(
+      issue("cal", { preset: "owner", "judge-disclosure": true, "judge-disclosure-kind": ["everything"] }),
+    ).rejects.toThrow(/edits, mcp-calls, commands/);
+    expect(stored("cal")).toBeUndefined();
+  });
 });

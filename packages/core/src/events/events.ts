@@ -274,6 +274,10 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
               ruleId: z.string().optional(),
               reasonCode: z.string().optional(),
               judgeConfigRef: z.string().optional(),
+              /** The experimental class asked about (#701): absent for a read or search. */
+              kind: z.enum(["edit", "mcp", "command"]).optional(),
+              /** A command verdict: a recommendation shown to the person, never an allow. */
+              advisory: z.boolean().optional(),
             })
             .optional(),
         })
