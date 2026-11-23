@@ -1,0 +1,107 @@
+# The legacy fence of `orca store sqlite switch` (#339), against the released builds themselves.
+# v0.7.0 and v0.6.0 never read a store's format marker; a switched store keeps them out with
+# markers (packages/store/src/sqlite/legacy-fence.ts). This builds both releases from their
+# tags, makes workspaces with v0.7.0's demo, switches one with this commit's store build through
+# tools/legacy-fence/switch.js (the shipped CLI refuses the switch, which this also checks), and
+# runs every released store command against a baseline and then the switched store: each must
+# reach the store in the baseline, be refused by the store when switched, and change nothing
+# (tools/legacy-fence/run.js). Linux only. Runs on its own whenever the store, the CLI or the
+# check changes.
+name: Legacy fence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/store/src/**
+      - packages/cli/src/**
+      - tools/legacy-fence/**
+      - .github/workflows/legacy-fence.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/store/src/**
+      - packages/cli/src/**
+      - tools/legacy-fence/**
+      - .github/workflows/legacy-fence.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: legacy-fence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fence:
+    name: v0.7.0 and v0.6.0 kept out
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: v0.7.0
+          path: .legacy/v0.7.0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: v0.6.0
+          path: .legacy/v0.6.0
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.21.0"
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .legacy/v0.7.0/pnpm-lock.yaml
+            .legacy/v0.6.0/pnpm-lock.yaml
+
+      - name: Build this commit's CLI
+        run: |
+          pnpm install --frozen-lockfile
+          npx tsc -b tsconfig.build.json
+      - name: Build the released CLIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tag in v0.7.0 v0.6.0; do
+            (cd ".legacy/$tag" && pnpm install --frozen-lockfile --ignore-scripts && npx tsc -b tsconfig.build.json)
+          done
+
+      - name: Run the released CLIs against a switched store
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/legacy-fence/run.js --current packages/cli/dist/main.js \
+            --legacy v0.7.0=.legacy/v0.7.0/packages/cli/dist/main.js \
+            --legacy v0.6.0=.legacy/v0.6.0/packages/cli/dist/main.js \
+            --scratch "$RUNNER_TEMP" --output legacy-fence.json
+
+      - name: Summarize
+        if: always()
+        shell: bash
+        run: |
+          [[ -f legacy-fence.json ]] || exit 0
+          node -e '
+            const r = require("./legacy-fence.json");
+            const rows = r.legacy.flatMap((l) => [
+              ...l.commands.map((c) =>
+                `| ${l.tag} | \`${c.command}\` | ${c.baseline.code ?? c.baseline.signal} | ${c.outcome} | ${c.code ?? c.signal} | ${c.refusal ?? ""} | ${c.changes.length ? c.changes.length + " change(s)" : "none"} |`),
+              ...l.absent.map((name) => `| ${l.tag} | \`${name}\` | | not in this release | | | |`),
+            ]);
+            console.log(["## Legacy fence", "", r.failures.length ? `**${r.failures.length} failure(s)**` : "Every covered command reached the store in its baseline and was refused on the switched store, except the read-only answers listed; none changed it.", "",
+              "| Release | Command | Baseline exit | Outcome | Exit | Refusal | Store changes |", "|---|---|---|---|---|---|---|", ...rows].join("\n"));
+          ' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: legacy-fence
+          path: legacy-fence.json
+          retention-days: 90

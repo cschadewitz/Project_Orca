@@ -36,6 +36,7 @@ import { fileStores } from "./document-store.js";
 import { createCopy, createDurable, syncDirectory } from "./durable-file.js";
 import { FileLeaseStore, lapsed } from "./lease-store.js";
 import { STORE_SWITCH_FILE, STORE_WRITERS_DIR } from "./store-writers.js";
+import { SQLITE_SWITCH_DIR } from "./sqlite/legacy-fence.js";
 
 export const STORE_FORMAT_BACKUP_DIR = "format-backups";
 export const STORE_FORMAT_BACKUP_RETENTION = 2;
@@ -94,6 +95,7 @@ const skipped = (name: string, top: boolean) =>
     (name === STORE_FORMAT_BACKUP_DIR ||
       name === STORE_WRITERS_DIR ||
       name === STORE_SWITCH_FILE ||
+      name === SQLITE_SWITCH_DIR ||
       name.startsWith(".orca-update-window") ||
       name.startsWith("store-format.json") ||
       name.startsWith(STORE_UPDATE_HANDOFF_FILE)));
