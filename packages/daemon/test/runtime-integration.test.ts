@@ -291,7 +291,12 @@ describe("authorized typed launch admission", () => {
   });
 });
 
-async function permissionGate(h: Awaited<ReturnType<typeof fixture>>) {
+async function permissionGate(
+  h: Awaited<ReturnType<typeof fixture>>,
+  toolCall?: Parameters<
+    NonNullable<Parameters<NonNullable<typeof h.orchestrator.sessionFactory>>[0]["askPermission"]>
+  >[0]["toolCall"],
+) {
   h.workflows.register(
     WorkflowDefinitionSchema.parse({
       id: "permission",
@@ -329,7 +334,7 @@ async function permissionGate(h: Awaited<ReturnType<typeof fixture>>) {
         const answer = await options.askPermission!(
           {
             sessionId: id,
-            toolCall: {
+            toolCall: toolCall ?? {
               toolCallId: "tool",
               title: "Edit a.ts",
               kind: "edit",
@@ -368,7 +373,7 @@ async function permissionGate(h: Awaited<ReturnType<typeof fixture>>) {
     if (!preview || !("ref" in preview)) throw new Error(`no ${decision} preview`);
     return preview.ref;
   };
-  return { params: { runId, requestId: input.id, live: input.live!.target }, done, answers, ref };
+  return { params: { runId, requestId: input.id, live: input.live!.target }, done, answers, ref, input };
 }
 const sidecar = async (path: string) =>
   readFile(path, "utf8").catch((e: unknown) => {
@@ -406,6 +411,41 @@ describe("standing permission acceptance", () => {
     expect(rule!.match).toEqual({ kind: "edit", path: "a.ts" });
     expect(Date.parse(rule!.expiresAt) - Date.parse(rule!.addedAt)).toBe(60 * 60 * 1000);
     expect(Date.parse(rule!.addedAt)).toBeGreaterThanOrEqual(before - 1000);
+    await live.done;
+    expect(live.answers).toEqual(["allow"]);
+  });
+  it("offers wider command rules for one shell command and saves the one chosen (#702)", async () => {
+    const h = await fixture();
+    const live = await permissionGate(h, {
+      toolCallId: "tool",
+      title: "Run command",
+      kind: "execute",
+      rawInput: { command: "npm run build" },
+    });
+    const allow = live.input.standing?.allow;
+    if (!allow || !("rules" in allow)) throw new Error("no allow preview");
+    // The title is not the command, so the exact rule names the command, not the title.
+    expect(allow.rules).toEqual([{ match: { kind: "execute", command: "npm run build" }, decision: "allow" }]);
+    expect(allow.broader?.map((b) => b.rules)).toEqual([
+      [{ match: { kind: "execute", command: "npm run *" }, decision: "allow" }],
+      [{ match: { kind: "execute", command: "npm *" }, decision: "allow" }],
+    ]);
+    const reply = await h.rpc(h.owner, "inputs.answer", {
+      ...live.params,
+      optionId: "allow",
+      always: { decision: "allow", previewRef: allow.broader![1]!.ref },
+      resume: true,
+    });
+    expect(reply.ok).toBe(true);
+    const saved = JSON.parse((await sidecar(h.permissionsFile))!) as {
+      version: number;
+      agents: Record<string, { rules: { match: unknown; decision: string }[] }>;
+    };
+    // A command rule is version 3, so a release that would read it as every command refuses it.
+    expect(saved.version).toBe(3);
+    expect(Object.values(saved.agents)[0]!.rules.map((r) => [r.match, r.decision])).toEqual([
+      [{ kind: "execute", command: "npm *" }, "allow"],
+    ]);
     await live.done;
     expect(live.answers).toEqual(["allow"]);
   });

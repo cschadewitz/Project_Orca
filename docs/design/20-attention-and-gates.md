@@ -85,6 +85,11 @@ removing or expiring the rule takes effect on its next ask. **Save rule and allo
 saves the rule shown or refuses it as stale; **Cancel** closes it. When the preview
 says no rule can be scoped to this call, or the daemon sent none, the review says why in one
 `caption` line and the save is disabled with that reason; the one-time answers still work.
+For a single shell command the preview also carries wider command rules (`broader`), and the
+review shows a **Rule scope** row of toggle buttons above the rule: **Exactly this**, then each
+pattern by its command text (`npm run *`, `npm *`), narrowest first. Choosing a wider one adds
+a `caption` line saying an allow covers a compound command only when every part is allowed
+and that a tool like npm runs scripts the project defines. The save sends that rule's own `ref`.
 
 ## Request changes and recorded corrections
 

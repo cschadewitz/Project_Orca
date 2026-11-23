@@ -476,6 +476,7 @@ export function describeRule(rule: EffectivePermissionRule): string {
   if (match.pathPrefix !== undefined) parts.push(`under ${match.pathPrefix}`);
   if (match.scope !== undefined) parts.push(`in the ${match.scope}`);
   if (match.titlePattern !== undefined) parts.push(`matching ${match.titlePattern}`);
+  if (match.command !== undefined) parts.push(`running ${match.command}`);
   return `${rule.decision} ${parts.join(" ")}`;
 }
 

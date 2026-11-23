@@ -52,6 +52,9 @@ export interface StandingRuleReviewProps {
   agentId?: string | undefined;
   lifetime: string;
   onLifetime: (label: string) => void;
+  /** Which rule is chosen: 0 the exact one, then the preview's wider command rules in order. */
+  breadth?: number;
+  onBreadth?: (breadth: number) => void;
   /** Why nothing can be sent right now (the card's own blocked reason, or the option mismatch). */
   blocked?: string | undefined;
   onSave: () => void;
@@ -64,13 +67,17 @@ export function StandingRuleReview({
   agentId,
   lifetime,
   onLifetime,
+  breadth = 0,
+  onBreadth,
   blocked,
   onSave,
   onCancel,
 }: StandingRuleReviewProps): JSX.Element {
   const unavailable = standingUnavailable(standing, decision);
   const preview = standing?.[decision];
-  const rules = preview && "rules" in preview ? preview.rules : [];
+  const choices = preview && "rules" in preview ? [preview.rules, ...(preview.broader ?? []).map((b) => b.rules)] : [];
+  const rules = choices[breadth] ?? choices[0] ?? [];
+  const describe = (rule: (typeof rules)[number]) => describeRule({ ...rule, source: "permissions" });
   const verb = decision === "allow" ? "allow" : "deny";
   const saveBlocked = unavailable ?? blocked;
   return (
@@ -84,14 +91,37 @@ export function StandingRuleReview({
         </p>
       ) : (
         <>
+          {choices.length > 1 && onBreadth && (
+            // A single shell command can be saved wider: `npm run build` as `npm run *` or `npm *`.
+            <div className="orca-card__options" role="group" aria-label="Rule scope">
+              {choices.map((choice, i) => (
+                <Button
+                  key={choice.map(describe).join("\n")}
+                  size="sm"
+                  tone={i === breadth ? "primary" : "default"}
+                  aria-pressed={i === breadth}
+                  onClick={() => onBreadth(i)}
+                >
+                  {i === 0 ? "Exactly this" : (choice[0]?.match.command ?? describe(choice[0]!))}
+                </Button>
+              ))}
+            </div>
+          )}
           <ul className={`orca-attn__standing-rules ${textClass("mono-log")}`} aria-label="Rules to save">
             {rules
               // The Config surface's own words for a rule, so the card and the list it lands in agree.
-              .map((rule) => describeRule({ ...rule, source: "permissions" }))
+              .map(describe)
               .map((text) => (
                 <li key={text}>{text}</li>
               ))}
           </ul>
+          {breadth > 0 && (
+            <p className={`orca-card__hint ${textClass("caption")}`}>
+              A command rule allows each part of a compound command only when every part is allowed, and never covers
+              sudo, bash -c, a variable or a redirection. Tools like npm run scripts the project defines, so a wide rule
+              trusts those scripts too.
+            </p>
+          )}
           <div className="orca-card__options" role="group" aria-label="Rule lifetime">
             {RULE_LIFETIMES.map(({ label }) => (
               <Button
@@ -127,6 +157,12 @@ export function StandingRuleReview({
       </div>
     </section>
   );
+}
+
+/** The `previewRef` a save sends for the chosen breadth: the exact rule's, or a wider one's. */
+export function previewRefAt(preview: StandingRulePreview, breadth: number): string | undefined {
+  if (!("rules" in preview)) return undefined;
+  return breadth === 0 ? preview.ref : (preview.broader?.[breadth - 1]?.ref ?? preview.ref);
 }
 
 /** The duration an answer carries for a lifetime label; undefined for "until removed". */

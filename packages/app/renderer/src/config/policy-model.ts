@@ -73,6 +73,12 @@ export interface SidecarRule {
 export function sidecarRuleWarning(rule: SidecarRule): string | undefined {
   if (rule.decision !== "allow") return undefined;
   const match = rule.match;
+  if (match.command !== undefined)
+    return /^\s*(?:sudo|doas|su|env|command|builtin|exec|eval|source|\.|xargs|nohup|time|nice|ionice|timeout|stdbuf|chroot|watch|parallel|script|unbuffer|sh|bash|zsh|dash|ksh|fish|csh|tcsh|busybox|pwsh|powershell|cmd|npx|pnpx|bunx|nix-shell|ssh)\s+\*\s*$/i.test(
+      match.command,
+    )
+      ? "This sidecar allow is ignored by ORCA because it is a wildcard: a shell or wrapper followed by * runs any command. Name the command it may run instead."
+      : undefined;
   let byTitle = false;
   if (match.titlePattern !== undefined) {
     try {
@@ -163,9 +169,9 @@ export function parseSidecar(text: string): SidecarDocument | undefined {
     }
     out[id] = { rules: checked };
   }
-  const timed = Object.values(out).some((agent) => agent.rules.some((rule) => rule.expiresAt !== undefined));
-  if (timed && version !== SIDECAR_LIFETIME_VERSION) return undefined;
-  return { version: timed ? SIDECAR_LIFETIME_VERSION : 1, agents: out };
+  const v3 = Object.values(out).some((agent) => agent.rules.some(needsVersion3));
+  if (v3 && version !== SIDECAR_LIFETIME_VERSION) return undefined;
+  return { version: v3 ? SIDECAR_LIFETIME_VERSION : 1, agents: out };
 }
 
 /**
@@ -173,6 +179,15 @@ export function parseSidecar(text: string): SidecarDocument | undefined {
  * `@orca/core`, mirrored because the renderer cannot import core (ADR 0008).
  */
 export const SIDECAR_LIFETIME_VERSION = 3;
+
+/**
+ * Whether a rule needs version 3: a lifetime, or a `command` match (#702). A release that
+ * does not know `command` would drop it and keep `{kind: execute}`, which is every command.
+ * Mirrors `permissionPolicyFileVersion` in core.
+ */
+function needsVersion3(rule: SidecarRule): boolean {
+  return rule.expiresAt !== undefined || (rule.match as { command?: unknown }).command !== undefined;
+}
 
 /**
  * One row of `rules`, if it is one. The row is returned as it arrived — unknown keys and
@@ -242,7 +257,7 @@ export function withRules(doc: SidecarDocument, agentId: string, rules: readonly
 }
 
 /** The keys of a match, in the order `@orca/agents` writes them. */
-const MATCH_KEYS: readonly string[] = ["kind", "titlePattern", "path", "pathPrefix", "scope"];
+const MATCH_KEYS: readonly string[] = ["kind", "titlePattern", "path", "pathPrefix", "scope", "command"];
 
 /** The keys of a rule, in that same writer's order. */
 const RULE_KEYS: readonly string[] = ["match", "decision", "addedAt", "grantedFor", "expiresAt"];
@@ -297,8 +312,8 @@ export function serializeSidecar(doc: SidecarDocument): string {
   }
   // `version` and `agents`, and never a third key: the sidecar carries no `default`. The
   // version follows the content, as the daemon's writer stamps it (#702).
-  const timed = Object.keys(doc.agents).some((id) => rulesOf(doc, id).some((rule) => rule.expiresAt !== undefined));
-  return `${JSON.stringify({ version: timed ? SIDECAR_LIFETIME_VERSION : 1, agents }, null, 2)}\n`;
+  const v3 = Object.keys(doc.agents).some((id) => rulesOf(doc, id).some(needsVersion3));
+  return `${JSON.stringify({ version: v3 ? SIDECAR_LIFETIME_VERSION : 1, agents }, null, 2)}\n`;
 }
 
 /** A rule a person adds here: narrow, and saying so in its own provenance. */

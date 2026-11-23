@@ -8,6 +8,13 @@
 import { z } from "zod";
 import { AuthorityCapabilityScopeSchema } from "./capabilities.js";
 import { EnvSchema } from "./secrets.js";
+import {
+  commandPatternIsWildcard,
+  neutralPart,
+  parseCommand,
+  parseCommandPattern,
+  quoteWord,
+} from "./command-words.js";
 
 // Scoped capabilities (#335) belong with the agent model they select for.
 export * from "./capabilities.js";
@@ -137,6 +144,18 @@ export const PermissionRuleSchema = z.object({
      * the policy `default`. That is deliberate: a shell command is not a place.
      */
     scope: z.enum(["workspace", "outside-workspace"]).optional(),
+    /**
+     * A shell command by its words (#702), such as `npm *` or `git push`; a final bare `*` is
+     * "and any further words". Only an `execute` call has one. An `allow` is matched strictly,
+     * part by part of a compound command; a `deny` or `ask` leniently, so `git push` also
+     * catches `git -C repo push`. See `command-words.ts`.
+     */
+    command: z
+      .string()
+      .refine((c) => parseCommandPattern(c) !== undefined, {
+        message: "a command rule names a program, then words, with `*` only as the last word",
+      })
+      .optional(),
   }),
   decision: PermissionDecisionSchema,
 });
@@ -324,7 +343,7 @@ export const PermissionPolicyFileSchema = PermissionPolicyDocumentSchema.superRe
   if (doc.version === 1 && permissionPolicyFileVersion(doc) !== 1)
     ctx.addIssue({
       code: "custom",
-      message: `a version 1 permission sidecar cannot carry expiresAt: rules with a lifetime are version ${PERMISSION_LIFETIME_VERSION}, which releases before 0.8 refuse rather than read as permanent`,
+      message: `a version 1 permission sidecar cannot carry expiresAt or command: those rules are version ${PERMISSION_LIFETIME_VERSION}, which releases before 0.8 refuse rather than read wider than written`,
     });
 });
 export type PermissionPolicyFile = z.infer<typeof PermissionPolicyFileSchema>;
@@ -336,9 +355,18 @@ export type PermissionPolicyFile = z.infer<typeof PermissionPolicyFileSchema>;
  * older releases again.
  */
 export function permissionPolicyFileVersion(doc: {
-  agents: Readonly<Record<string, { rules: readonly { expiresAt?: string | undefined }[] } | undefined>>;
+  agents: Readonly<
+    Record<
+      string,
+      { rules: readonly { expiresAt?: string | undefined; match: { command?: string | undefined } }[] } | undefined
+    >
+  >;
 }): 1 | typeof PERMISSION_LIFETIME_VERSION {
-  return Object.values(doc.agents).some((agent) => agent?.rules.some((rule) => rule.expiresAt !== undefined))
+  // A command rule read by a release that does not know `command` would lose it and keep the
+  // rest, and `{kind: execute}` alone is every command: so it is version 3 too.
+  return Object.values(doc.agents).some((agent) =>
+    agent?.rules.some((rule) => rule.expiresAt !== undefined || rule.match.command !== undefined),
+  )
     ? PERMISSION_LIFETIME_VERSION
     : 1;
 }
@@ -427,7 +455,8 @@ export function samePermissionRule(a: PermissionRule, b: PermissionRule): boolea
     a.match.titlePattern === b.match.titlePattern &&
     a.match.path === b.match.path &&
     a.match.pathPrefix === b.match.pathPrefix &&
-    a.match.scope === b.match.scope
+    a.match.scope === b.match.scope &&
+    a.match.command === b.match.command
   );
 }
 
@@ -453,6 +482,12 @@ export function samePermissionRule(a: PermissionRule, b: PermissionRule): boolea
 export function isWildcardPermissionRule(rule: PermissionRule): boolean {
   if (rule.decision !== "allow") return false;
   const m = rule.match;
+  if (m.command !== undefined) {
+    // A command names its program, so it narrows by itself, unless that program is a shell or
+    // wrapper and the rule allows any words after it: `bash *` is every command there is.
+    const pattern = parseCommandPattern(m.command);
+    return pattern === undefined || commandPatternIsWildcard(pattern);
+  }
   if (m.kind === undefined) return true;
   const byTitle = m.titlePattern !== undefined && !matchesEveryTitle(m.titlePattern);
   if (m.kind === "execute") return !byTitle;
@@ -539,6 +574,11 @@ export interface PermissionRequestFacts {
   kind?: string | null | undefined;
   /** The tool call's human-readable title. */
   title?: string | null | undefined;
+  /**
+   * The command an `execute` call will run, when the agent sent it apart from the title
+   * (`rawInput.command`; see `commandTextOf`). Undefined when the title is all there is.
+   */
+  command?: string | undefined;
   /** The tool call's location paths, in order. */
   paths?: readonly string[] | undefined;
   /** Absolute path of the run's workspace. Without it no path rule can be scoped. */
@@ -634,7 +674,25 @@ export function derivePermissionRules(
   };
 
   // `execute` is a command, not a place. Scope it to the command.
-  if (kind === "execute") return byTitle();
+  if (kind === "execute") {
+    const command = facts.command?.trim();
+    // Where the title is not the command ("Run command"), anchoring the title would allow
+    // every command shown under it. The command's own words are the rule instead (#702).
+    if (command === undefined || command === "" || command === title) return byTitle();
+    const parsed = parseCommand(command);
+    const parts = parsed.parts.filter((p) => !neutralPart(p));
+    const part = parts.length === 1 ? parts[0] : undefined;
+    if (parsed.unreadable !== undefined || part === undefined || part.unsure !== undefined)
+      return {
+        ok: false,
+        reason: "unscopable",
+        detail: `the command is ${parsed.unreadable ?? part?.unsure ?? "more than one command"}, so no rule can name it exactly: ${command}`,
+      };
+    const exact = part.words.map(quoteWord).join(" ");
+    const v = volatileIn(exact);
+    if (v) return { ok: false, reason: "volatile", detail: `the command contains ${v}: ${exact}` };
+    return { ok: true, rules: [{ match: { kind, command: exact }, decision }] };
+  }
   if (paths.length === 0) return byTitle();
 
   const rules: PermissionRule[] = [];

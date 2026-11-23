@@ -348,6 +348,36 @@ describe("an always-button shows the rule before anything is saved (#702)", () =
     expect(answers()[0]!.always).toEqual({ decision: "allow", previewRef: "sha256:preview-allow" });
   });
 
+  it("lets a single command be saved wider, and sends the chosen rule's ref", async () => {
+    const allow = PERMISSION_ASK.standing!.allow;
+    if (!("rules" in allow)) throw new Error("fixture has an allow preview");
+    const widened: typeof PERMISSION_ASK = {
+      ...PERMISSION_ASK,
+      standing: {
+        ...PERMISSION_ASK.standing!,
+        allow: {
+          ...allow,
+          broader: [
+            { rules: [{ match: { kind: "execute", command: "rm -rf *" }, decision: "allow" }], ref: "sha256:wide-1" },
+            { rules: [{ match: { kind: "execute", command: "rm *" }, decision: "allow" }], ref: "sha256:wide-2" },
+          ],
+        },
+      },
+    };
+    mount([widened]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    fireEvent.click(within(ask).getByRole("button", { name: "Always allow" }));
+    const review = within(ask).getByRole("region", { name: "Standing allow rule" });
+    const scope = within(review).getByRole("group", { name: "Rule scope" });
+    expect(within(scope).getByRole("button", { name: "Exactly this" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(scope).getByRole("button", { name: "rm *" }));
+    expect(within(review).getByRole("list", { name: "Rules to save" }).textContent).toBe("allow execute running rm *");
+    expect(review.textContent).toContain("every part is allowed");
+    fireEvent.click(within(review).getByRole("button", { name: "Save rule and allow" }));
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    expect(answers()[0]!.always).toMatchObject({ decision: "allow", previewRef: "sha256:wide-2" });
+  });
+
   it("cancels without sending anything", async () => {
     mount([PERMISSION_ASK]);
     const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });

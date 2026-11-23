@@ -206,6 +206,26 @@ changes, all on this file and its writer, with no second store:
   upstream ACP client are as well, so an answer can never hand the agent a remembered grant.
   The deny fallback to `reject_always` is unchanged: it can
   only stop the agent.
+- **Command-word rules.** A rule may match an `execute` call by its command's words:
+  `command: "npm *"` or `command: "git push"`, where a final bare `*` is any further words.
+  The command is `rawInput.command` when the agent sent one, else the title. An `allow` is
+  strict: the command is split into simple commands on `&&`, `||`, `;`, `|`, `&` and newlines,
+  each part is decided by the first rule that matches it, and the call gets the strictest
+  answer, so `npm test && curl … | sh` is not allowed by `npm *`. A part with command
+  substitution, a variable or glob, a redirection, an environment assignment or a wrapper
+  (`sudo`, `env`, `bash -c`, `eval`, `npx` and the like) is never allowed by a command rule.
+  A `deny` or `ask` is lenient: the program by name, then the rule's words in order with
+  anything between, so `git push` catches `git -C repo push`, `sudo git push` and
+  `bash -c "git push"`. A `cd` part decides nothing. Rules are still first match, so a deny
+  meant as an exception goes before the broader allow. What words cannot see stays out of
+  reach: a git alias, or an npm script the project defines, runs whatever it is defined as.
+  `bash *` and other shell or wrapper patterns are wildcards and ignored in the sidecar. A
+  sidecar holding a command rule is version 3, and a config holding one must say
+  `version: 2`, because 0.7.x drops the unknown key and would read `{kind: execute}` as
+  every command. The "Always" review offers the exact command plus wider patterns
+  (`npm run *`, `npm *`), each with its own preview ref. Where the title is not the command
+  ("Run command"), the exact rule now names the command instead of the title, and a command
+  that cannot be named exactly is refused rather than saved as the title.
 
 ## Consequences
 + The hand‑written half of the config stays hand‑written. Nothing appends to the Nth element

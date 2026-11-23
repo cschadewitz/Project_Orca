@@ -43,6 +43,12 @@ import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { revisionOf, withPolicyLock } from "./permission-file.js";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
+  commandAllows,
+  commandCatches,
+  commandTextOf,
+  neutralPart,
+  parseCommand,
+  parseCommandPattern,
   derivePermissionRules,
   effectivePermissionPolicy,
   isWildcardPermissionRule,
@@ -58,6 +64,7 @@ import {
   WritablePermissionPolicyFileSchema,
 } from "@orca/core";
 import type {
+  CommandPart,
   ConfiguredPermissionPolicy,
   PermissionDecision,
   PermissionDeriveRefusal,
@@ -97,7 +104,15 @@ export function decidePermission(
   return protectedLocation(request, ctx) === undefined ? decideByRules(policy, request, ctx) : "deny";
 }
 
-/** The policy's answer, first match wins, with nothing ahead of it. */
+/**
+ * The policy's answer, first match wins, with nothing ahead of it.
+ *
+ * A `command` rule (#702) is matched per simple command: an `execute` call's command is split
+ * on `&&`, `;`, `|` and the like, each part is decided by the first rule that matches *it*,
+ * and the call gets the strictest of those answers — one denied part denies the call, one
+ * asked part asks. Every other kind of rule matches the call as a whole, as before, so a
+ * policy with no `command` rule decides exactly as it did.
+ */
 function decideByRules(
   policy: PermissionPolicy,
   request: acp.RequestPermissionRequest,
@@ -112,23 +127,44 @@ function decideByRules(
   // Both are false for a call with no locations, so `scope` never matches one (#140).
   const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
   const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
-  for (const rule of policy.rules) {
-    const m = rule.match;
-    if (m.kind && m.kind !== kind) continue;
-    if (m.scope === "workspace" && !allInside) continue;
-    if (m.scope === "outside-workspace" && !anyOutside) continue;
-    if (m.titlePattern && !new RegExp(m.titlePattern).test(title)) continue;
+  const matchesCall = (m: PermissionRule["match"]): boolean => {
+    if (m.kind && m.kind !== kind) return false;
+    if (m.scope === "workspace" && !allInside) return false;
+    if (m.scope === "outside-workspace" && !anyOutside) return false;
+    if (m.titlePattern && !new RegExp(m.titlePattern).test(title)) return false;
     if (m.path !== undefined) {
       const wanted = permissionPathForms(m.path, cwd);
-      if (!wanted.some((w) => paths.includes(w))) continue;
+      if (!wanted.some((w) => paths.includes(w))) return false;
     }
     if (m.pathPrefix) {
       const prefixes = permissionPathForms(m.pathPrefix, cwd).filter((p) => p !== "");
-      if (prefixes.length > 0 && !paths.some((p) => prefixes.some((prefix) => p.startsWith(prefix)))) continue;
+      if (prefixes.length > 0 && !paths.some((p) => prefixes.some((prefix) => p.startsWith(prefix)))) return false;
     }
-    return rule.decision;
-  }
-  return policy.default;
+    return true;
+  };
+  const decide = (part: CommandPart | undefined): PermissionDecision => {
+    for (const rule of policy.rules) {
+      const m = rule.match;
+      if (!matchesCall(m)) continue;
+      if (m.command !== undefined) {
+        // A command is only ever an `execute`'s, and a part that is not there matches no rule.
+        if (kind !== "execute" || part === undefined) continue;
+        const pattern = parseCommandPattern(m.command);
+        if (pattern === undefined) continue;
+        if (!(rule.decision === "allow" ? commandAllows(pattern, part) : commandCatches(pattern, part))) continue;
+      }
+      return rule.decision;
+    }
+    return policy.default;
+  };
+  if (kind !== "execute" || !policy.rules.some((r) => r.match.command !== undefined)) return decide(undefined);
+  const text = commandTextOf(tc);
+  const parts = text === undefined ? [] : parseCommand(text).parts.filter((p) => !neutralPart(p));
+  if (parts.length === 0) return decide(undefined);
+  const decisions = parts.map(decide);
+  if (decisions.includes("deny")) return "deny";
+  if (decisions.includes("ask")) return "ask";
+  return "allow";
 }
 
 function pick(options: acp.PermissionOption[], kinds: acp.PermissionOptionKind[]): acp.PermissionOption | undefined {
@@ -479,6 +515,11 @@ export interface RecordAlwaysOptions {
    * until somebody removes it, which is what "always" meant before rules had lifetimes.
    */
   expiresAt?: string | undefined;
+  /**
+   * Write these rules instead of deriving them from the request: a wider `command` rule the
+   * person chose in the review (#702). The caller has already shown exactly these.
+   */
+  rules?: readonly PermissionRule[] | undefined;
   /** Injectable clock, for tests. */
   now?: (() => Date) | undefined;
   /** Lock tuning; the defaults are fine. */
@@ -516,15 +557,18 @@ export interface RecordAlwaysResult {
  */
 export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<RecordAlwaysResult> {
   const tc = opts.request.toolCall;
-  const derived = derivePermissionRules(
-    {
-      kind: tc.kind,
-      title: tc.title,
-      paths: (tc.locations ?? []).map((l) => l.path),
-      workspaceCwd: opts.workspaceCwd,
-    },
-    opts.decision,
-  );
+  const derived: ReturnType<typeof derivePermissionRules> = opts.rules
+    ? { ok: true, rules: opts.rules.map((rule) => ({ match: { ...rule.match }, decision: opts.decision })) }
+    : derivePermissionRules(
+        {
+          kind: tc.kind,
+          title: tc.title,
+          paths: (tc.locations ?? []).map((l) => l.path),
+          command: tc.kind === "execute" ? commandTextOf(tc) : undefined,
+          workspaceCwd: opts.workspaceCwd,
+        },
+        opts.decision,
+      );
   if (!derived.ok)
     return {
       file: opts.file,
@@ -686,7 +730,7 @@ export function parsePermissionPolicyDocument(doc: unknown): PermissionPolicyFil
 function serialize(doc: PermissionPolicyFile): string {
   const rule = (r: RecordedPermissionRule): Record<string, unknown> => {
     const match: Record<string, unknown> = {};
-    for (const key of ["kind", "titlePattern", "path", "pathPrefix", "scope"] as const)
+    for (const key of ["kind", "titlePattern", "path", "pathPrefix", "scope", "command"] as const)
       if (r.match[key] !== undefined) match[key] = r.match[key];
     const out: Record<string, unknown> = { match, decision: r.decision };
     if (r.addedAt !== undefined) out["addedAt"] = r.addedAt;
