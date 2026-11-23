@@ -361,6 +361,19 @@ export class Authorizer {
                 },
               },
               executionResumeAuthority: this.executionResumeAuthority(principal),
+              dryRunAuthority: async (workflowId) => {
+                if (!this.currentPrincipal) throw authRequired();
+                const current = this.currentPrincipal(principal);
+                if (
+                  current.id !== principal.id ||
+                  current.credentialId !== principal.credentialId ||
+                  !holds(current, "config.read") ||
+                  !holds(current, "config.write") ||
+                  !holds(current, "runs.start")
+                )
+                  throw authForbidden();
+                if (!workflowAllowed(current.scope, workflowId)) throw workflowNotFound(workflowId);
+              },
               attributeStartedRun: async (runId) => {
                 this.attributeRun(runId, principal);
                 await this.runs.ownership.flush(runId);

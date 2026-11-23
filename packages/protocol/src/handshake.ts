@@ -13,6 +13,7 @@ import { CLAIMS_LIST_METHOD, CLAIMS_RELEASE_METHOD } from "./claims.js";
 import { CONFIG_GET_METHOD, CONFIG_SET_METHOD, CONFIG_APPLY_METHOD } from "./config.js";
 import { INPUTS_ANSWER_METHOD, RUNS_CANCEL_METHOD, RUNS_RESUME_METHOD, RUNS_START_METHOD } from "./control.js";
 import { RUNS_RECOVERY_METHOD, RUNS_REVIEW_EFFECT_METHOD } from "./recovery.js";
+import { RUNS_DRY_RUN_REPORT_METHOD } from "./dry-run.js";
 import { INPUTS_LIST_METHOD } from "./inputs.js";
 import {
   DECISIONS_DECIDE_METHOD,
@@ -74,6 +75,8 @@ export const READ_METHODS = [
    * the store. It writes nothing, so a `--read-only` daemon answers it like the reads above.
    */
   RUNS_RECOVERY_METHOD,
+  /** `runs.dryRunReport` (protocol 2.8, #183): what a dry run did, read from its tree's logs. */
+  RUNS_DRY_RUN_REPORT_METHOD,
 ] as const;
 
 /**

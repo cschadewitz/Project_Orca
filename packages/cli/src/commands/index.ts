@@ -1039,6 +1039,9 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
         // So an "always" answer's sidecar write pushes `config.changed` like any other.
         config,
       });
+  // A dry run left unfinished by a previous daemon can never finish (#183): end it, in the
+  // background, so it never counts as unfinished work.
+  void control?.settleInterruptedDryRuns().catch(() => undefined);
   // The plan's writes ride the same switch: `--read-only` omits them with the run
   // controls, and they are present together or not at all.
   const planControl =

@@ -36,6 +36,7 @@ import {
   OrcaError,
   parseOrcaConfig,
   parseWorkflow,
+  type WorkflowDefinition,
   sha256,
   systemClock,
   validateWorkflow,
@@ -231,6 +232,24 @@ export class WorkflowDraftService {
         future: record.future.slice(0, -1),
       };
     });
+  }
+
+  /**
+   * The exact definition this revision of the caller's own draft describes, for a dry run (#183).
+   * Refused while validation finds an error, as publish is; nothing is written.
+   */
+  async dryRunSource(
+    params: { workflowId: string; expectedRevision: number },
+    caller: DraftCaller,
+  ): Promise<{ definition: WorkflowDefinition; revision: number }> {
+    await caller.write();
+    const source = await this.editable(params.workflowId);
+    const record = await this.locked(source.path, params.workflowId, () => this.ownDraft(source, params, caller));
+    const errors = this.issues(record.text, record.workflowId).filter((issue) => issue.severity === "error").length;
+    if (errors) invalid(`${plural(errors, "validation error")} to fix before a dry run.`);
+    const definition = parseWorkflow(record.text, `${params.workflowId} (draft revision ${record.revision})`);
+    if (definition.id !== params.workflowId) invalid("The draft's id is not the workflow's.");
+    return { definition, revision: record.revision };
   }
 
   /** The exact bytes publish would write, and the token that binds a publish to them. */
