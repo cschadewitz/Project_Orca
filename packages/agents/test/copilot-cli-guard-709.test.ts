@@ -3,7 +3,7 @@
  * prompts, allow-all/autopilot options and bounded "always" answers. No Copilot runs here; the
  * same checks against the real Copilot CLI are in copilot-cli-acceptance-709.test.ts.
  */
-import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { chmod, chown, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -408,5 +408,130 @@ describe("session guard", () => {
     const s = guardCopilotSession(inner);
     expect(s.acpSessionId).toBe("a");
     expect(s.configOptions).toBe(inner.configOptions);
+  });
+});
+
+describe("the environment Copilot actually receives (#709 review)", () => {
+  const LINUX = COPILOT_CLI_VERIFIED_BUILDS.find((b) => b.platform === "linux-x64")!;
+  const guard = (environment: Record<string, string> = {}) =>
+    copilotCliGuard({ digest: async () => LINUX.sha256, platform: "linux-x64", environment: () => environment });
+  async function exe(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "orca-copilot-env-"));
+    await writeFile(join(dir, "copilot"), "x");
+    return join(dir, "copilot");
+  }
+  const opts = async (over: Partial<OpenSessionOptions> = {}, agent: Partial<Record<string, unknown>> = {}) => ({
+    host: new LocalHost({ id: "local", type: "local" }),
+    agent: good({ command: await exe(), ...agent }),
+    cwd: tmpdir(),
+    ...over,
+  });
+
+  it("checks the session's own env overrides, not only the agent's config", async () => {
+    const open = vi.fn(async () => fakeSession());
+    await expect(
+      withProviderGuards(open, [guard()])(await opts({ env: { COPILOT_ALLOW_ALL: "true" } })),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringContaining("COPILOT_ALLOW_ALL") });
+    await expect(
+      withProviderGuards(open, [guard()])(await opts({ env: { COPILOT_AUTO_UPDATE: "true" } })),
+    ).rejects.toMatchObject({ message: expect.stringContaining("COPILOT_AUTO_UPDATE") });
+    await expect(withProviderGuards(open, [guard()])(await opts({ env: { GH_TOKEN: "ghp_x" } }))).rejects.toMatchObject(
+      { message: expect.stringContaining("GH_TOKEN is written") },
+    );
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("inspects the COPILOT_HOME a session override points at", async () => {
+    const dirty = await mkdtemp(join(tmpdir(), "orca-copilot-dirty-"));
+    await chmod(dirty, 0o700);
+    await writeFile(join(dirty, "settings.json"), JSON.stringify({ allowedUrls: ["example.com"] }));
+    const open = vi.fn(async () => fakeSession());
+    await expect(
+      withProviderGuards(open, [guard()])(await opts({ env: { COPILOT_HOME: dirty } })),
+    ).rejects.toMatchObject({ message: expect.stringContaining("settings.json sets allowedUrls") });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("refuses control variables it cannot read because they come from a secret", () => {
+    for (const variable of ["COPILOT_HOME", "COPILOT_ALLOW_ALL", "COPILOT_AUTO_UPDATE"])
+      expect(
+        copilotCliProfileProblems(good({ env: { ...good().env, [variable]: { secret: "s" } } }), {}, "local").join(),
+      ).toContain(`${variable} comes from a secret`);
+  });
+
+  it("treats a daemon variable the host withholds as absent, exactly as the spawn does", async () => {
+    const open = vi.fn(async () => fakeSession());
+    const secrets = { gh: { host: "local", provider: "env" as const, name: "GITHUB_TOKEN" } };
+    await withProviderGuards(open, [guard({ GITHUB_TOKEN: "ghp_x" })])(await opts({ secrets }));
+    expect(open).toHaveBeenCalledOnce();
+    await expect(withProviderGuards(open, [guard({ GITHUB_TOKEN: "ghp_x" })])(await opts())).rejects.toMatchObject({
+      message: expect.stringContaining("GITHUB_TOKEN is inherited"),
+    });
+  });
+});
+
+describe("profile entries are checked for type, ownership and permissions (#709 review)", () => {
+  async function profile(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "orca-copilot-entries-"));
+    await chmod(root, 0o700);
+    return root;
+  }
+
+  it("treats only a confirmed absence as empty", async () => {
+    const root = await profile();
+    await writeFile(join(root, "file"), "x");
+    expect(await copilotHomeProblems(join(root, "missing"))).toEqual([]);
+    expect((await copilotHomeProblems(join(root, "file", "below")))[0]).toMatch(/cannot be inspected \(ENOTDIR\)/);
+    expect(await copilotHomeProblems(join(root, "file"))).toEqual([
+      `COPILOT_HOME ${join(root, "file")} is not a directory`,
+    ]);
+  });
+
+  it("refuses a recognised entry of the wrong type or behind a link", async () => {
+    const root = await profile();
+    await mkdir(join(root, "config.json"));
+    await writeFile(join(root, "logs"), "x");
+    const elsewhere = join(await profile(), "settings.json");
+    await writeFile(elsewhere, "{}");
+    await symlink(elsewhere, join(root, "settings.json"));
+    await symlink(await profile(), join(root, "session-state"));
+    expect(await copilotHomeProblems(root)).toEqual([
+      "COPILOT_HOME config.json is not a file",
+      "COPILOT_HOME logs is not a directory",
+      "COPILOT_HOME session-state is a symbolic link",
+      "COPILOT_HOME settings.json is a symbolic link",
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a recognised entry others can write", async () => {
+    const root = await profile();
+    await writeFile(join(root, "permissions-config.json"), "{}");
+    await chmod(join(root, "permissions-config.json"), 0o666);
+    await mkdir(join(root, "logs"));
+    await chmod(join(root, "logs"), 0o777);
+    expect(await copilotHomeProblems(root)).toEqual([
+      "COPILOT_HOME logs can be written by other users",
+      "COPILOT_HOME permissions-config.json can be written by other users",
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() !== 0)(
+    "refuses an entry that belongs to another user",
+    async () => {
+      const root = await profile();
+      await writeFile(join(root, "config.json"), "{}");
+      await chown(join(root, "config.json"), 65534, 65534);
+      expect(await copilotHomeProblems(root)).toEqual(["COPILOT_HOME config.json belongs to another user"]);
+    },
+  );
+
+  it("refuses JSON whose top level is not an object", async () => {
+    const root = await profile();
+    await writeFile(join(root, "config.json"), "[]");
+    await writeFile(join(root, "settings.json"), "null");
+    expect(await copilotHomeProblems(root)).toEqual([
+      "COPILOT_HOME config.json cannot be read",
+      "COPILOT_HOME settings.json cannot be read",
+    ]);
   });
 });

@@ -569,6 +569,32 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
   (and brings back the artifacts of one that already succeeded: a succeeded run stays the
   step's result across its retries), and starts new remote work only once the earlier run is
   known to have ended without success, or known never to have been admitted.
+- **A protected value stays protected on the remote (#363).** When the task holds a value
+  this run protects (a `sensitive` launch input, or a secret value read for the run), the
+  admission names the prompt variable in `sensitiveVars` and sends each original protected
+  value the task holds in `protectedValues`, on the same authenticated admission. The remote
+  keeps the prompt as it would a declared `sensitive` input, in its encrypted execution store,
+  and redacts each value on its own wherever it appears: run views, events, notifications,
+  logs and artifact bodies it serves. An agent there that repeats the value apart from the
+  rest of the task is redacted too. The value stays in the bytes the agent wrote (its checkout
+  and the stored artifact blob), as on this daemon.
+  - Only a remote whose `hello` lists both `sensitiveVars` and `protectedValues` in
+    `admitFields` (protocol 2.11) is sent such a task. Every admission opens a connection of
+    its own, asks `hello` on it, and goes on that same connection only if the answer
+    positively names the enrolled workspace and still lists both fields; a `hello` with no
+    workspace identity is not a match. A remote that no longer lists them (a restart onto an
+    older build) is refused the step (reason `protocol`), and another workspace or none is
+    refused with `scope-changed`. If the connection breaks after the check, the admission is
+    not sent on another one: the attempt starts again with a new connection and a new check.
+    A remote that does not know the fields refuses the admission outright, since its
+    parameters are strict.
+  - An artifact whose body held a protected value comes back redacted. The remote's
+    `maxBytes` limit applies to the body as sent, so one that redaction makes too long is not
+    sent. The copy is checked against the size and digest the remote reports for what it
+    sent: that proves the copy arrived intact, not that the redaction was complete.
+  - Detection matches the values as they appear in the task, so a value transformed by the
+    template (encoded, split) is not recognised; keep sensitive inputs out of delegated
+    prompts where you can.
 - **The work is the remote daemon's.** It appears in that daemon's run list, owned by the
   credential's principal, and its audit log names that principal on the admission.
 - **The remote run records where it came from.** A remote whose `hello` lists `origin` in
@@ -924,6 +950,52 @@ agents:
   the host can read it (an environment variable of the daemon, or a file only the daemon's
   user can read), add a `secrets` entry bound to that host, and replace the literal with
   `{ secret: <id> }`.
+
+### Choosing the secret at launch
+
+A workflow can let whoever starts the run pick which configured secret a step uses (#363),
+for example the deploy token of the target environment. Declare a launch input of type
+`secret` and map it to an environment variable of the step's agent with `secretEnv`:
+
+```yaml
+inputSchema:
+  fields:
+    deployToken: { type: secret, required: true }
+nodes:
+  deploy:
+    type: agent
+    agent: { role: deployer }
+    prompt: "Deploy {{ vars.target }}; the token is in $DEPLOY_TOKEN."
+    secretEnv: { DEPLOY_TOKEN: deployToken }
+```
+
+- **The launcher names a secret, never a value.** The input's value is the id of an entry in
+  `secrets` (`orca run deploy --var deployToken=prod-deploy`). Anything else, an unknown id,
+  or a secret bound to another host than the step's agent is refused before the run is
+  written, with `reason` `not-found` or `wrong-host`.
+- **Agent environment only.** The step's session gets `{ secret: <id> }` under that variable
+  and reads it like any other reference: on the agent's host, at session open, under the run
+  owner's grant, redacted from everything the run writes. The value never enters the prompt,
+  the model's context or the store; `{{ vars.deployToken }}` renders the id.
+- **The secret the launch chose.** The id is read from the launch record in the private
+  execution store, never from the run's working vars, so nothing a step sets later can point
+  a step at another secret. Steps inside the workflow's own inline graphs (loop bodies,
+  parallel branches) get the same sealed choice, whatever the working vars or a loop or
+  branch overlay say by then. A registered child workflow is launched on its own inputs,
+  checked and sealed when it starts, like any launch.
+- **A process per step.** A step with `secretEnv` always gets an agent process of its own,
+  opened for that step and closed with it, even for a `per-run` agent: it neither takes the
+  pooled session nor leaves its own for the next step. Its agent slot is held for that step
+  only. The run's pooled session, if idle, is closed first so it does not keep the slot the
+  step needs under a cap (one still in a turn is closed when that turn ends, never under it),
+  and the steps after it pool again. Each step's open asks for the grant
+  again and reads the value again, so a revoked grant stops the next step before its process
+  starts, and a rotated value is what the next step gets.
+- **Checked when the workflow is validated.** Every `secretEnv` entry must name a top-level
+  input of type `secret`. A `secret` input nested inside an object or array is refused.
+- **Not across daemons.** A step whose agent delegates to another daemon cannot take a
+  `secretEnv` mapping, and the launch is refused with `reason: unsupported`. A daemon with
+  no use check refuses it with `reason: unauthorized`, as for any reference.
 
 ## Templates
 

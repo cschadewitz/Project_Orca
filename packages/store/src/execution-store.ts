@@ -330,6 +330,26 @@ export function publicInputVars(inputs: ExecutionInputs): Record<string, unknown
  * Defense in depth for known literals copied into messages, agent updates and nested diagnostics.
  * This is not general taint tracking: encoding, transformations and fragments are not detected.
  */
+/**
+ * Every text redaction would replace for these protected values (#363): string leaves, the
+ * string form of numbers and booleans, and object keys, longest first.
+ */
+export function protectedNeedles(secrets: readonly unknown[]): string[] {
+  const strings = new Set<string>();
+  const gather = (item: unknown): void => {
+    if (typeof item === "string" && item.length) strings.add(item);
+    else if (typeof item === "number" || typeof item === "boolean") strings.add(String(item));
+    else if (Array.isArray(item)) item.forEach(gather);
+    else if (item && typeof item === "object")
+      for (const [key, nested] of Object.entries(item)) {
+        strings.add(key);
+        gather(nested);
+      }
+  };
+  secrets.forEach(gather);
+  return [...strings].sort((a, b) => b.length - a.length);
+}
+
 export function redactExecutionValue<T>(value: T, secrets: readonly unknown[], redactKeys = false): T {
   const strings = new Set<string>();
   const numbers = new Set<number>();

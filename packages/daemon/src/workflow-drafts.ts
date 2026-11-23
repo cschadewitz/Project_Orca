@@ -29,7 +29,19 @@
 import { readdir, lstat, mkdir, readFile, realpath, unlink } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { isMap, isScalar, isSeq, parseDocument, type Document, type Pair, type YAMLMap, type YAMLSeq } from "yaml";
+import {
+  isAlias,
+  isMap,
+  isNode,
+  isScalar,
+  isSeq,
+  parseDocument,
+  type Document,
+  type Node,
+  type Pair,
+  type YAMLMap,
+  type YAMLSeq,
+} from "yaml";
 import { z } from "zod";
 import {
   expandPatterns,
@@ -591,6 +603,11 @@ function applyOne(document: Document, graphs: DraftLayout["graphs"], op: DraftOp
     if (op.name !== undefined) document.set("name", op.name);
     if (op.description === null) document.delete("description");
     else if (op.description !== undefined) document.set("description", op.description);
+    // An empty scope is no scope: removing it keeps the file what a person would write.
+    if (op.capabilities === null || (op.capabilities && Object.keys(op.capabilities).length === 0))
+      deletePreserving(document, [], "capabilities", "The workflow's capabilities");
+    else if (op.capabilities !== undefined)
+      setPreserving(document, [], "capabilities", op.capabilities, "The workflow's capabilities");
     return;
   }
   const prefix = graphPrefix(document, op.graph);
@@ -621,15 +638,19 @@ function applyOne(document: Document, graphs: DraftLayout["graphs"], op: DraftOp
     }
     case "updateNode": {
       requireNode(op.id);
-      const node = mapAt(document, [...prefix, "nodes", op.id]);
+      const nodePath = [...prefix, "nodes", op.id];
+      const node = mapAt(document, nodePath);
       for (const [field, value] of Object.entries(op.set ?? {})) {
         if (field === "type") invalid("Change a node's type with changeType.");
         if (value === undefined) continue;
-        node.set(field, document.createNode(value));
+        // A capability scope is edited node by node, so comments and anchors beside the change survive.
+        if (field === "capabilities") setPreserving(document, nodePath, field, value, `${op.id}'s capabilities`);
+        else node.set(field, document.createNode(value));
       }
       for (const field of op.unset ?? []) {
         if (field === "type") invalid("A node keeps its type.");
-        node.delete(field);
+        if (field === "capabilities") deletePreserving(document, nodePath, field, `${op.id}'s capabilities`);
+        else node.delete(field);
       }
       return;
     }
@@ -807,6 +828,117 @@ function appendPair(document: Document, nodes: YAMLMap, id: string, value: Recor
   if (previous && isScalar(previous.key) && previous.key.spaceBefore && isScalar(pair.key)) pair.key.spaceBefore = true;
   nodes.items.push(pair);
 }
+
+/**
+ * Set `key` on `parent` to `value`, touching only the YAML nodes whose value changes (#335).
+ * Untouched keys and list items keep their comments, quoting and anchors; an alias whose value
+ * is unchanged stays an alias. A change that would rewrite an anchored or aliased node is
+ * refused rather than silently breaking the shared value: the person edits the YAML instead.
+ */
+function setPreserving(document: Document, path: Path, key: string, value: unknown, where: string): void {
+  const parent = path.length ? mapAt(document, path) : document.contents;
+  if (!isMap(parent)) invalid("Expected a mapping at the top of the workflow.");
+  const existing = parent.get(key, true) as unknown;
+  if (isNode(existing) && isDeepStrictEqual(resolved(document, existing), value)) return;
+  refuseSharedPath(document, path, where);
+  if (existing === undefined || existing === null) {
+    parent.set(key, document.createNode(value));
+    return;
+  }
+  const next = mergeNode(document, existing as Node, value, where);
+  if (next !== existing) parent.set(key, next);
+}
+
+function deletePreserving(document: Document, path: Path, key: string, where: string): void {
+  const parent = path.length ? mapAt(document, path) : document.contents;
+  if (!isMap(parent) || !parent.has(key)) return;
+  refuseSharedPath(document, path, where);
+  const existing = parent.get(key, true) as unknown;
+  if (isNode(existing)) refuseIfShared(existing, where);
+  parent.delete(key);
+}
+
+const resolved = (document: Document, node: Node): unknown =>
+  isAlias(node) ? node.resolve(document)?.toJS(document) : node.toJS(document);
+
+/**
+ * Refuse a capability edit when any YAML node enclosing the field is shared: an anchor on the
+ * workflow, a graph or the step means another scope reads the same mapping, so changing it here
+ * would change that scope too.
+ */
+function refuseSharedPath(document: Document, path: Path, where: string): void {
+  let node: unknown = document.contents;
+  for (let i = 0; ; i++) {
+    if (isAlias(node) || (isNode(node) && (node as { anchor?: string }).anchor))
+      invalid(
+        `${where} sit inside a YAML anchor or alias shared with another part of the file, so this change would alter that part too. Edit the workflow's YAML to change it.`,
+      );
+    if (i === path.length) return;
+    node = isMap(node) || isSeq(node) ? node.get(path[i], true) : undefined;
+  }
+}
+
+function mergeNode(document: Document, node: Node, value: unknown, where: string): Node {
+  if (isDeepStrictEqual(resolved(document, node), value)) return node;
+  refuseIfShared(node, where, true);
+  if (isMap(node) && isPlainObject(value)) {
+    for (const item of [...node.items]) {
+      const k = keyOf(item);
+      if (typeof k !== "string" || !(k in value) || value[k] === undefined) {
+        if (isNode(item.value)) refuseIfShared(item.value, where);
+        node.items.splice(node.items.indexOf(item), 1);
+      }
+    }
+    for (const [k, v] of Object.entries(value)) {
+      if (v === undefined) continue;
+      const child = node.get(k, true) as unknown;
+      if (isNode(child)) {
+        const merged = mergeNode(document, child, v, where);
+        if (merged !== child) node.set(k, merged);
+      } else node.set(k, document.createNode(v));
+    }
+    return node;
+  }
+  if (isSeq(node) && Array.isArray(value)) {
+    const unused = [...node.items];
+    const items = value.map((v) => {
+      const index = unused.findIndex(
+        (item) =>
+          isNode(item) &&
+          isDeepStrictEqual(isAlias(item) ? item.resolve(document)?.toJS(document) : item.toJS(document), v),
+      );
+      if (index >= 0) return unused.splice(index, 1)[0];
+      return document.createNode(v);
+    });
+    for (const item of unused) if (isNode(item)) refuseIfShared(item, where);
+    node.items = items;
+    return node;
+  }
+  if (isScalar(node) && (value === null || typeof value !== "object")) {
+    node.value = value;
+    return node;
+  }
+  return document.createNode(value);
+}
+
+/**
+ * Refuse to rewrite or drop a node another part of the file shares: an alias, or a subtree
+ * carrying an anchor. With `self`, only the node itself counts (its children are merged one by one).
+ */
+function refuseIfShared(node: Node, where: string, self = false): void {
+  const shared = (n: unknown): boolean =>
+    isAlias(n) ||
+    (isNode(n) && Boolean((n as { anchor?: string }).anchor)) ||
+    (!self && isMap(n) && n.items.some((item) => shared(item.key) || shared(item.value))) ||
+    (!self && isSeq(n) && n.items.some(shared));
+  if (shared(node))
+    invalid(
+      `${where} use a YAML anchor or alias, so this change would alter a value shared elsewhere in the file. Edit the workflow's YAML to change it.`,
+    );
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 function renameFromNode(value: unknown, from: string, to: string): void {
   if (isMap(value)) {

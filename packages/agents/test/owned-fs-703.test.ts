@@ -14,7 +14,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type * as acp from "@agentclientprotocol/sdk";
 import { AgentSpecSchema, type PermissionRule } from "@orca/core";
-import { LocalHost, decideFsCall, fsToolCall, openAcpSession, permissionPolicyPath } from "@orca/agents";
+import {
+  isHostFileMissing,
+  LocalHost,
+  decideFsCall,
+  fsToolCall,
+  openAcpSession,
+  permissionPolicyPath,
+} from "@orca/agents";
 
 /**
  * An ACP agent that performs the operations in `OPS` during each turn — `fs/*` requests and
@@ -56,7 +63,7 @@ rl.on("line", async (line) => {
   } else if (m.id !== undefined && waiting.has(m.id)) {
     const resolve = waiting.get(m.id);
     waiting.delete(m.id);
-    resolve(m.error ? { error: m.error.data } : { result: m.result });
+    resolve(m.error ? { error: m.error.data, code: m.error.code, message: m.error.message } : { result: m.result });
   }
 });
 setInterval(() => {}, 1000);
@@ -66,7 +73,7 @@ type Op =
   | { write: string; content: string; session?: string }
   | { read: string; session?: string }
   | { ask: string; title: string; paths?: string[] };
-type Outcome = { result?: unknown; error?: { path?: string; reason?: string } };
+type Outcome = { result?: unknown; error?: { path?: string; reason?: string }; code?: number; message?: string };
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -94,6 +101,7 @@ async function turn(
   policy: { default?: "allow" | "deny" | "ask"; rules?: PermissionRule[] },
   answer?: (request: acp.RequestPermissionRequest) => string | undefined,
   permissionFiles?: string[],
+  host: LocalHost = new LocalHost({ id: "local", type: "local" }),
 ): Promise<{ outcomes: Outcome[]; decisions: string[]; asked: acp.RequestPermissionRequest[] }> {
   const log = join(await temp("orca-owned-fs-log-"), "results.json");
   const agent = AgentSpecSchema.parse({
@@ -106,7 +114,7 @@ async function turn(
   const decisions: string[] = [];
   const asked: acp.RequestPermissionRequest[] = [];
   const session = await openAcpSession({
-    host: new LocalHost({ id: "local", type: "local" }),
+    host,
     agent,
     cwd: dir,
     ...(permissionFiles ? { permissionFiles } : {}),
@@ -261,6 +269,59 @@ describe("the policy decides ORCA's own file executor (#703)", () => {
     expect(outcomes[1]).toEqual({ result: { content: "ok" } });
     expect(asked).toEqual([]);
     expect(decisions).toEqual(["fs:allow", "fs:allow"]);
+  });
+});
+
+describe("a read of a file that is not there", () => {
+  it("is told apart from other failures by the local host itself", async () => {
+    const dir = await workspace();
+    const { fs } = new LocalHost({ id: "local", type: "local" });
+    expect(isHostFileMissing(await fs.readFile(join(dir, "src", "none.ts")).catch((e: unknown) => e))).toBe(true);
+    expect(isHostFileMissing(await fs.readFile(join(dir, "nope", "none.ts")).catch((e: unknown) => e))).toBe(true);
+    // A directory is there; reading it fails some other way.
+    expect(isHostFileMissing(await fs.readFile(join(dir, "src")).catch((e: unknown) => e))).toBe(false);
+  });
+
+  it("is reported as an error, not as missing, when the host cannot classify the failure", async () => {
+    const dir = await workspace();
+    const host = new LocalHost({ id: "local", type: "local" });
+    host.fs.readFile = () => Promise.reject(Object.assign(new Error("spawn ssh ENOENT"), { code: "ENOENT" }));
+    const { outcomes } = await turn(
+      dir,
+      [{ read: join(dir, "src", "new.ts") }],
+      { rules: [{ match: { kind: "read", scope: "workspace" }, decision: "allow" }] },
+      undefined,
+      undefined,
+      host,
+    );
+    expect(outcomes[0]?.code).toBe(-32603);
+    expect(outcomes[0]?.message).not.toMatch(/Resource not found/);
+  });
+
+  it("answers Resource not found once the policy allows it, so an agent can tell missing from broken", async () => {
+    const dir = await workspace();
+    const missing = join(dir, "src", "new.ts");
+    const { outcomes, decisions } = await turn(dir, [{ read: missing }], {
+      rules: [{ match: { kind: "read", scope: "workspace" }, decision: "allow" }],
+    });
+    expect(outcomes[0]).toMatchObject({
+      code: -32002,
+      message: `Resource not found: ${missing}`,
+      error: { uri: missing },
+    });
+    expect(decisions).toEqual(["fs:allow"]);
+  });
+
+  it("is refused by the policy exactly as an existing file is, before anything is looked up", async () => {
+    const dir = await workspace();
+    const missing = join(dir, "src", "new.ts");
+    const present = join(dir, "src", "a.ts");
+    const { outcomes } = await turn(dir, [{ read: missing }, { read: present }], {
+      rules: [{ match: { kind: "read" }, decision: "deny" }],
+    });
+    expect(outcomes[0]?.code).toBe(outcomes[1]?.code);
+    expect(refused(outcomes[0])).toBe("not allowed: deny");
+    expect(refused(outcomes[1])).toBe("not allowed: deny");
   });
 });
 

@@ -35,6 +35,10 @@ export const DirectAdmissionCommandSchema = z.strictObject({
   origin: RunOriginSchema.optional(),
   /** A named git ref the run works from (#883): checked before admission, fetched at creation. */
   gitRef: z.string().min(1).max(200).optional(),
+  /** Launch vars protected as if declared `sensitive` (#363). */
+  sensitiveVars: z.array(z.string().min(1).max(128)).min(1).max(64).optional(),
+  /** Values redacted wherever they appear in the run (#363). */
+  protectedValues: z.array(z.string().min(1).max(65_536)).min(1).max(256).optional(),
   fence: z.literal(true).optional(),
 });
 /** Reserved orchestrator/generation integration supplies this explicit capability. */
@@ -224,6 +228,8 @@ export class DirectAdmissionService {
       ...(command.origin ? { origin: command.origin } : {}),
       ...(command.gitRef !== undefined ? { gitRef: command.gitRef } : {}),
       ...(gitRefObject !== undefined ? { gitRefObject } : {}),
+      ...(command.sensitiveVars ? { sensitiveVars: command.sensitiveVars } : {}),
+      ...(command.protectedValues ? { protectedValues: command.protectedValues } : {}),
     };
   }
   private async recover(command: DirectAdmissionCommand, context: RetryContext): Promise<DirectAdmissionResult> {

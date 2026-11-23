@@ -33,11 +33,13 @@
  */
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
+import type { Stats } from "node:fs";
 import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, win32 } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import { OrcaError, isSecretRef, literalEnv, type AgentSpec, type SessionConfigOption } from "@orca/core";
 import type { OpenSessionOptions } from "../acp-session.js";
+import { planSessionSecrets } from "../secrets.js";
 import type { AgentSession } from "../session.js";
 import type { ProviderGuard } from "./guard.js";
 
@@ -118,6 +120,8 @@ export function copilotCliProfileProblems(
   agent: AgentSpec,
   ambient: Readonly<Record<string, string | undefined>>,
   hostType: "local" | "ssh" | undefined,
+  /** The session's own overrides (`OpenSessionOptions.env`), laid over the agent's env as the host does. */
+  sessionEnv: Readonly<Record<string, string>> = {},
 ): string[] {
   const problems: string[] = [];
   const name = win32
@@ -148,27 +152,30 @@ export function copilotCliProfileProblems(
     if (value !== "interactive") problems.push(`args: --mode ${value ?? ""} is not supported`.trim());
   }
 
-  const literal = literalEnv(agent.env);
-  const effective: Record<string, string | undefined> = { ...ambient, ...literal };
+  // What the host gives the process: the daemon's environment (less what is withheld), the
+  // agent's literal env, then the session's overrides. Secret values are not known here.
+  const configured: Record<string, string> = { ...literalEnv(agent.env), ...sessionEnv };
+  const effective: Record<string, string | undefined> = { ...ambient, ...configured };
+  const hidden = (variable: string) => isSecretRef(agent.env[variable]) && sessionEnv[variable] === undefined;
+  for (const variable of ["COPILOT_HOME", "COPILOT_AUTO_UPDATE", ...GRANTING_VARIABLES])
+    if (hidden(variable)) problems.push(`env: ${variable} comes from a secret, so ORCA cannot check it; write it out`);
   for (const variable of GRANTING_VARIABLES) {
     const value = effective[variable];
-    if (value !== undefined && !FALSEY.has(value.trim().toLowerCase()))
+    if (value !== undefined && !hidden(variable) && !FALSEY.has(value.trim().toLowerCase()))
       problems.push(
-        `env: ${variable} approves tools without asking ORCA${literal[variable] === undefined ? " (inherited from the daemon's environment)" : ""}`,
+        `env: ${variable} approves tools without asking ORCA${configured[variable] === undefined ? " (inherited from the daemon's environment)" : ""}`,
       );
   }
-  if (!FALSEY.has((effective.COPILOT_AUTO_UPDATE ?? "unset").trim().toLowerCase()))
+  if (!hidden("COPILOT_AUTO_UPDATE") && !FALSEY.has((effective.COPILOT_AUTO_UPDATE ?? "unset").trim().toLowerCase()))
     problems.push('env: set COPILOT_AUTO_UPDATE to "false"');
-  const home = literal.COPILOT_HOME;
-  if (!home || !(isAbsolute(home) || win32.isAbsolute(home)))
-    problems.push(
-      "env: set COPILOT_HOME to an absolute directory of its own, so approvals saved in another Copilot profile do not apply",
-    );
+  const home = configured.COPILOT_HOME;
+  if (!hidden("COPILOT_HOME") && (!home || !(isAbsolute(home) || win32.isAbsolute(home))))
+    problems.push("env: set COPILOT_HOME to an absolute directory that only this agent's Copilot uses");
   for (const variable of [...COPILOT_TOKEN_VARIABLES, "COPILOT_PROVIDER_API_KEY_COMMAND"]) {
-    const configured = agent.env[variable];
-    if (configured !== undefined && !isSecretRef(configured))
+    const fromConfig = agent.env[variable];
+    if (sessionEnv[variable] !== undefined || (fromConfig !== undefined && !isSecretRef(fromConfig)))
       problems.push(`env: ${variable} is written into ORCA's config; refer to it as a secret instead`);
-    else if (configured === undefined && (ambient[variable] ?? "") !== "")
+    else if (fromConfig === undefined && (ambient[variable] ?? "") !== "")
       problems.push(
         `env: ${variable} is inherited from the daemon's environment and would replace the Copilot sign-in; define it as a secret (which withholds it) or start ORCA without it`,
       );
@@ -242,19 +249,19 @@ async function checkExecutable(agent: AgentSpec, digest: FileDigest, platform: s
 /* ------------------------------ Copilot's own profile ------------------------------ */
 
 /** What may be at the top of `COPILOT_HOME`. Anything else is refused by name. */
-const PROFILE_ENTRIES = new Set([
-  "config.json",
-  "settings.json",
-  "settings.json.lock",
-  "permissions-config.json",
-  "logs",
-  "session-state",
-  "session-store.db",
-  "session-store.db-wal",
-  "session-store.db-shm",
-  "session-store.db-journal",
-  "installed-plugins",
-  "command-history-state.json",
+const PROFILE_ENTRIES = new Map<string, "file" | "directory">([
+  ["config.json", "file"],
+  ["settings.json", "file"],
+  ["settings.json.lock", "file"],
+  ["permissions-config.json", "file"],
+  ["logs", "directory"],
+  ["session-state", "directory"],
+  ["session-store.db", "file"],
+  ["session-store.db-wal", "file"],
+  ["session-store.db-shm", "file"],
+  ["session-store.db-journal", "file"],
+  ["installed-plugins", "directory"],
+  ["command-history-state.json", "file"],
 ]);
 /**
  * `config.json` is managed by Copilot: the first-launch time, and the sign-in when the person
@@ -300,40 +307,45 @@ function holdsGrant(value: unknown): boolean {
  * because it cannot tell whether it grants anything.
  */
 export async function copilotHomeProblems(home: string): Promise<string[]> {
-  const problems: string[] = [];
   let info;
   try {
     info = await lstat(home);
-  } catch {
-    // Copilot creates a missing home on first launch, empty.
-    return [];
+  } catch (error) {
+    // Only a confirmed absence is empty: Copilot creates the directory on first launch.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    return [`COPILOT_HOME ${home} cannot be inspected (${(error as NodeJS.ErrnoException).code ?? "error"})`];
   }
-  if (info.isSymbolicLink()) return [`COPILOT_HOME ${home} is a symbolic link; name the directory itself`];
-  if (!info.isDirectory()) return [`COPILOT_HOME ${home} is not a directory`];
-  if (process.platform !== "win32") {
-    if (typeof process.getuid === "function" && info.uid !== process.getuid())
-      problems.push(`COPILOT_HOME ${home} belongs to another user`);
-    if (info.mode & 0o022) problems.push(`COPILOT_HOME ${home} can be written by other users`);
+  const problems = ownership(`COPILOT_HOME ${home}`, info, "directory");
+  if (problems.length) return problems;
+  let names: string[];
+  try {
+    names = await readdir(home);
+  } catch (error) {
+    return [`COPILOT_HOME ${home} cannot be listed (${(error as NodeJS.ErrnoException).code ?? "error"})`];
   }
-  for (const name of await readdir(home)) {
-    const path = join(home, name);
-    if (!PROFILE_ENTRIES.has(name)) {
+  for (const name of names.sort()) {
+    const kind = PROFILE_ENTRIES.get(name);
+    if (!kind) {
       problems.push(`COPILOT_HOME holds ${name}, which ORCA cannot tell is harmless`);
       continue;
     }
+    const path = join(home, name);
     try {
+      const entry = ownership(`COPILOT_HOME ${name}`, await lstat(path), kind);
+      if (entry.length) {
+        problems.push(...entry);
+        continue;
+      }
       if (name === "installed-plugins") {
         if ((await readdir(path)).length) problems.push("COPILOT_HOME has installed plugins");
       } else if (name === "config.json") {
-        const config = parseCommentedJson(await readFile(path, "utf8")) as Record<string, unknown>;
-        for (const key of Object.keys(config ?? {}))
+        for (const key of Object.keys(await jsonObject(path)))
           if (!CONFIG_KEYS.has(key)) problems.push(`COPILOT_HOME config.json sets ${key}`);
       } else if (name === "settings.json") {
-        const settings = parseCommentedJson(await readFile(path, "utf8")) as Record<string, unknown>;
-        for (const key of Object.keys(settings ?? {}))
+        for (const key of Object.keys(await jsonObject(path)))
           if (!SETTINGS_KEYS.has(key)) problems.push(`COPILOT_HOME settings.json sets ${key}`);
       } else if (name === "permissions-config.json") {
-        if (holdsGrant(parseCommentedJson(await readFile(path, "utf8"))))
+        if (holdsGrant(await jsonObject(path)))
           problems.push("COPILOT_HOME permissions-config.json holds saved approvals");
       }
     } catch {
@@ -341,6 +353,26 @@ export async function copilotHomeProblems(home: string): Promise<string[]> {
     }
   }
   return problems;
+}
+
+/** Not a link, the expected type, the user's own and not writable by anybody else. */
+function ownership(what: string, info: Stats, kind: "file" | "directory"): string[] {
+  if (info.isSymbolicLink()) return [`${what} is a symbolic link`];
+  if (kind === "directory" ? !info.isDirectory() : !info.isFile()) return [`${what} is not a ${kind}`];
+  const problems: string[] = [];
+  if (process.platform !== "win32") {
+    if (typeof process.getuid === "function" && info.uid !== process.getuid())
+      problems.push(`${what} belongs to another user`);
+    if (info.mode & 0o022) problems.push(`${what} can be written by other users`);
+  }
+  return problems;
+}
+
+/** A Copilot JSON file whose top level is an object; anything else is refused as unreadable. */
+async function jsonObject(path: string): Promise<Record<string, unknown>> {
+  const value = parseCommentedJson(await readFile(path, "utf8"));
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("not a JSON object");
+  return value as Record<string, unknown>;
 }
 
 /** A prompt Copilot would run as one of its own commands: text whose first character is `/`. */
@@ -449,14 +481,12 @@ export function copilotCliGuard(guardOptions: CopilotCliGuardOptions = {}): Prov
     matches: (agent) => isCopilotCliAgent(agent),
     async prepare(options: OpenSessionOptions): Promise<OpenSessionOptions> {
       const { agent, host } = options;
-      const withheld = new Set(
-        Object.values(options.secrets ?? {})
-          .filter((d) => d.host === host.id && d.provider === "env")
-          .map((d) => (d.provider === "env" ? d.name : "")),
-      );
+      // Exactly what the host will withhold from the process (#336), so the check sees what it gets.
+      const withheld = new Set(planSessionSecrets(host, agent, options.secrets).withheldEnv);
       const ambient = Object.fromEntries(Object.entries(environment()).filter(([k]) => !withheld.has(k)));
-      const problems = copilotCliProfileProblems(agent, ambient, host.spec?.type);
-      const home = literalEnv(agent.env).COPILOT_HOME;
+      const sessionEnv = options.env ?? {};
+      const problems = copilotCliProfileProblems(agent, ambient, host.spec?.type, sessionEnv);
+      const home = { ...literalEnv(agent.env), ...sessionEnv }.COPILOT_HOME;
       if (!problems.length && home) problems.push(...(await copilotHomeProblems(home)));
       if (problems.length)
         throw new OrcaError("CONFIG_INVALID", `Copilot agent '${agent.id}' cannot start: ${problems.join("; ")}.`, {
