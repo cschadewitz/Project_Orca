@@ -2,7 +2,9 @@
 # (.github/workflows/two-daemons.yml) and pass it to the test as ORCA_MACHINE_BASE. Dockerfile in
 # this directory installs the same packages itself when its base lacks them: keep the two lists
 # the same.
-FROM ubuntu@sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289
+# BASE is ubuntu:24.04 pinned by digest; build-base.sh may pass the same digest from a mirror.
+ARG BASE=ubuntu@sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289
+FROM ${BASE}
 
 # The archive can be slow or drop connections; retry each download instead of hanging. The host
 # keys openssh-server makes on install are removed in this same layer, so the cached and shared

@@ -90,7 +90,8 @@ jobs:
   machines:
     name: two machines in containers
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # Room for the base image's bounded cold-build retries (build-base.sh) on a cache miss.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
