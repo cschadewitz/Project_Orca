@@ -283,6 +283,10 @@ describe("Cline's config directory, deny by default", () => {
     const inside = join(workspace, "cline-config");
     await mkdir(inside);
     expect(clineFileProblems(inside, workspace, home)[0]).toContain("is inside the workspace");
+    // A session in a subdirectory: the boundary is still the repository root.
+    const sub = join(workspace, "pkg", "app");
+    await mkdir(sub, { recursive: true });
+    expect(clineFileProblems(inside, sub, home)[0]).toContain("is inside the workspace");
     expect(clineFileProblems(configDir, workspace, home)).toEqual([]);
   });
 

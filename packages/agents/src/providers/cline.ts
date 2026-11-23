@@ -400,8 +400,12 @@ export function clineFileProblems(configDir: string, cwd: string, home: string):
     problems.push(
       `files: ${configDir} is Cline's own default directory (${join(home, ".cline")}), shared with Cline run outside ORCA; give ORCA's Cline a directory of its own`,
     );
-  if (within(dir, canonical(cwd)))
-    problems.push(`files: ${configDir} is inside the workspace; keep Cline's config directory outside it`);
+  // The workspace is Cline's: from the session directory up to the repository root that holds it.
+  const workspaceRoot = workspaceChain(canonical(cwd)).at(-1)!;
+  if (within(dir, workspaceRoot))
+    problems.push(
+      `files: ${configDir} is inside the workspace (${workspaceRoot}); keep Cline's config directory outside it`,
+    );
   problems.push(...clineConfigDirProblems(configDir));
   for (const hooks of paths.hookDirs) {
     const p = loadDirProblem(hooks, "hooks");
