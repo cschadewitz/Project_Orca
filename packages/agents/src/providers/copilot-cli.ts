@@ -35,11 +35,12 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import type { Stats } from "node:fs";
 import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
-import { isAbsolute, join, win32 } from "node:path";
+import { dirname, isAbsolute, join, resolve as resolvePath, win32 } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import { OrcaError, isSecretRef, literalEnv, type AgentSpec, type SessionConfigOption } from "@orca/core";
 import type { OpenSessionOptions } from "../acp-session.js";
-import { planSessionSecrets } from "../secrets.js";
+import type { AgentHost, SpawnAgentOptions } from "../host.js";
+import { planSessionSecrets, withoutWithheld } from "../secrets.js";
 import type { AgentSession } from "../session.js";
 import type { ProviderGuard } from "./guard.js";
 
@@ -122,6 +123,14 @@ export function copilotCliProfileProblems(
   hostType: "local" | "ssh" | undefined,
   /** The session's own overrides (`OpenSessionOptions.env`), laid over the agent's env as the host does. */
   sessionEnv: Readonly<Record<string, string>> = {},
+  /**
+   * The variables a secret fills. The host sets these last, over the session's overrides, so
+   * their values are never known here. By default, the names the agent's env refers to a
+   * secret for; a start passes its actual deliveries (`SpawnAgentOptions.secrets`).
+   */
+  fromSecrets: ReadonlySet<string> = new Set(
+    Object.entries(agent.env).flatMap(([k, v]) => (isSecretRef(v) ? [k] : [])),
+  ),
 ): string[] {
   const problems: string[] = [];
   const name = win32
@@ -153,10 +162,11 @@ export function copilotCliProfileProblems(
   }
 
   // What the host gives the process: the daemon's environment (less what is withheld), the
-  // agent's literal env, then the session's overrides. Secret values are not known here.
+  // agent's literal env, the session's overrides, and last the secrets, whose values are not
+  // known here. A variable a secret fills is opaque whatever was written before it.
   const configured: Record<string, string> = { ...literalEnv(agent.env), ...sessionEnv };
   const effective: Record<string, string | undefined> = { ...ambient, ...configured };
-  const hidden = (variable: string) => isSecretRef(agent.env[variable]) && sessionEnv[variable] === undefined;
+  const hidden = (variable: string) => fromSecrets.has(variable);
   for (const variable of ["COPILOT_HOME", "COPILOT_AUTO_UPDATE", ...GRANTING_VARIABLES])
     if (hidden(variable)) problems.push(`env: ${variable} comes from a secret, so ORCA cannot check it; write it out`);
   for (const variable of GRANTING_VARIABLES) {
@@ -175,7 +185,7 @@ export function copilotCliProfileProblems(
     const fromConfig = agent.env[variable];
     if (sessionEnv[variable] !== undefined || (fromConfig !== undefined && !isSecretRef(fromConfig)))
       problems.push(`env: ${variable} is written into ORCA's config; refer to it as a secret instead`);
-    else if (fromConfig === undefined && (ambient[variable] ?? "") !== "")
+    else if (!fromSecrets.has(variable) && (ambient[variable] ?? "") !== "")
       problems.push(
         `env: ${variable} is inherited from the daemon's environment and would replace the Copilot sign-in; define it as a secret (which withholds it) or start ORCA without it`,
       );
@@ -311,8 +321,9 @@ export async function copilotHomeProblems(home: string): Promise<string[]> {
   try {
     info = await lstat(home);
   } catch (error) {
-    // Only a confirmed absence is empty: Copilot creates the directory on first launch.
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    // Only a confirmed absence is empty, and only where no one else can put a profile in its
+    // place before Copilot creates it on first launch.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return enclosingCustodyProblems(home);
     return [`COPILOT_HOME ${home} cannot be inspected (${(error as NodeJS.ErrnoException).code ?? "error"})`];
   }
   const problems = ownership(`COPILOT_HOME ${home}`, info, "directory");
@@ -366,6 +377,56 @@ function ownership(what: string, info: Stats, kind: "file" | "directory"): strin
     if (info.mode & 0o022) problems.push(`${what} can be written by other users`);
   }
   return problems;
+}
+
+/**
+ * Problems with where a missing `COPILOT_HOME` would be created. The nearest existing ancestor,
+ * with its links resolved, must be a directory of the current user's that no one else can
+ * write to, and every directory above it must belong to the user or to root and be closed to
+ * other writers (a root-owned sticky directory such as /tmp counts as closed: no one else can
+ * replace an entry in it). Otherwise another user could create the profile, or swap the path,
+ * between this check and Copilot's first launch.
+ */
+async function enclosingCustodyProblems(home: string): Promise<string[]> {
+  let parent = dirname(resolvePath(home));
+  let real: string | undefined;
+  for (;;) {
+    try {
+      real = await realpath(parent);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === dirname(parent))
+        return [
+          `COPILOT_HOME ${home} does not exist, and ${parent}, where it would be created, cannot be inspected (${(error as NodeJS.ErrnoException).code ?? "error"})`,
+        ];
+      parent = dirname(parent);
+    }
+  }
+  const where = `${real}, where COPILOT_HOME ${home} would be created,`;
+  let info;
+  try {
+    info = await lstat(real);
+  } catch (error) {
+    return [`${where} cannot be inspected (${(error as NodeJS.ErrnoException).code ?? "error"})`];
+  }
+  const problems = ownership(where, info, "directory");
+  if (problems.length || process.platform === "win32") return problems;
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  for (let dir = dirname(real); ; dir = dirname(dir)) {
+    let above;
+    try {
+      above = await lstat(dir);
+    } catch (error) {
+      return [
+        `${dir}, above COPILOT_HOME ${home}, cannot be inspected (${(error as NodeJS.ErrnoException).code ?? "error"})`,
+      ];
+    }
+    const owner = above.uid === 0 || above.uid === uid;
+    const closed = !(above.mode & 0o022) || (above.uid === 0 && Boolean(above.mode & 0o1000));
+    if (!above.isDirectory() || !owner || !closed)
+      return [`${dir}, above COPILOT_HOME ${home}, can be changed by other users`];
+    if (dir === dirname(dir)) return [];
+  }
 }
 
 /** A Copilot JSON file whose top level is an object; anything else is refused as unreadable. */
@@ -472,35 +533,76 @@ export interface CopilotCliGuardOptions {
   environment?: () => Readonly<Record<string, string | undefined>>;
 }
 
+function refusal(agentId: string, problems: string[]): OrcaError {
+  return new OrcaError("CONFIG_INVALID", `Copilot agent '${agentId}' cannot start: ${problems.join("; ")}.`, {
+    agentId,
+    problems,
+  });
+}
+
 export function copilotCliGuard(guardOptions: CopilotCliGuardOptions = {}): ProviderGuard {
   const digest = guardOptions.digest ?? sha256File;
   const platform = guardOptions.platform ?? `${process.platform}-${process.arch}`;
   const environment = guardOptions.environment ?? (() => process.env);
+  /**
+   * The checks on one start, as `LocalHost.spawnAgent` builds its environment: the daemon's
+   * own less what is withheld, the agent's literal env, the session's overrides, then secrets.
+   */
+  const launchProblems = async (
+    agent: AgentSpec,
+    hostType: "local" | "ssh" | undefined,
+    spawn: Pick<SpawnAgentOptions, "env" | "secrets" | "withheldEnv">,
+  ): Promise<{ problems: string[]; home: string | undefined }> => {
+    const ambient = withoutWithheld(environment(), spawn.withheldEnv);
+    const sessionEnv = spawn.env ?? {};
+    const fromSecrets = new Set((spawn.secrets ?? []).flatMap((d) => d.env));
+    // A secret reference the plan did not deliver would reach the process unset; count it as
+    // secret-filled too, so it is refused rather than read as absent.
+    for (const [k, v] of Object.entries(agent.env)) if (isSecretRef(v)) fromSecrets.add(k);
+    const problems = copilotCliProfileProblems(agent, ambient, hostType, sessionEnv, fromSecrets);
+    const home = fromSecrets.has("COPILOT_HOME") ? undefined : { ...literalEnv(agent.env), ...sessionEnv }.COPILOT_HOME;
+    if (!problems.length && home) problems.push(...(await copilotHomeProblems(home)));
+    return { problems, home };
+  };
   return {
     id: "copilot-cli",
     matches: (agent) => isCopilotCliAgent(agent),
     async prepare(options: OpenSessionOptions): Promise<OpenSessionOptions> {
       const { agent, host } = options;
-      // Exactly what the host will withhold from the process (#336), so the check sees what it gets.
-      const withheld = new Set(planSessionSecrets(host, agent, options.secrets).withheldEnv);
-      const ambient = Object.fromEntries(Object.entries(environment()).filter(([k]) => !withheld.has(k)));
-      const sessionEnv = options.env ?? {};
-      const problems = copilotCliProfileProblems(agent, ambient, host.spec?.type, sessionEnv);
-      const home = { ...literalEnv(agent.env), ...sessionEnv }.COPILOT_HOME;
-      if (!problems.length && home) problems.push(...(await copilotHomeProblems(home)));
-      if (problems.length)
-        throw new OrcaError("CONFIG_INVALID", `Copilot agent '${agent.id}' cannot start: ${problems.join("; ")}.`, {
-          agentId: agent.id,
-          problems,
-        });
+      // Exactly what the host will withhold from the process and fill from secrets (#336), so
+      // the check sees what it gets.
+      const plan = planSessionSecrets(host, agent, options.secrets);
+      const prepared = await launchProblems(agent, host.spec?.type, {
+        ...(options.env ? { env: options.env } : {}),
+        secrets: plan.deliveries,
+        withheldEnv: plan.withheldEnv,
+      });
+      if (prepared.problems.length) throw refusal(agent.id, prepared.problems);
       await checkExecutable(agent, digest, platform);
+      // The check again on the start itself, with the arguments the host is given, so a change
+      // between this check and the spawn (another override, another secret) is refused too.
+      const spawning = Object.create(host) as AgentHost;
+      Object.defineProperty(spawning, "spawnAgent", {
+        value: async (...args: Parameters<AgentHost["spawnAgent"]>) => {
+          const [started, spawn] = args;
+          const check = await launchProblems(started, host.spec?.type, spawn);
+          if (check.home !== prepared.home)
+            check.problems.push("env: COPILOT_HOME changed between ORCA's check and the start");
+          if (started.command !== agent.command)
+            check.problems.push("command: the executable changed between ORCA's check and the start");
+          if (check.problems.length) throw refusal(agent.id, check.problems);
+          await checkExecutable(started, digest, platform);
+          return host.spawnAgent(...args);
+        },
+      });
       const ask = options.askPermission;
-      return ask
-        ? {
-            ...options,
-            askPermission: async (request, invocation) => boundedOptionId(request, await ask(request, invocation)),
-          }
-        : options;
+      return {
+        ...options,
+        host: spawning,
+        ...(ask
+          ? { askPermission: async (request, invocation) => boundedOptionId(request, await ask(request, invocation)) }
+          : {}),
+      };
     },
     guard: guardCopilotSession,
   };
