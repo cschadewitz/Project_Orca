@@ -6,9 +6,10 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   daemonJudgeBudget,
+  JUDGE_BUDGET_ANCHOR_FILENAME,
   JUDGE_BUDGET_FILENAME,
   judgeBudgetKey,
   memoryJudgeBudget,
@@ -16,7 +17,9 @@ import {
 } from "../src/review-judge/judge-budget.js";
 
 let dir: string;
+let anchorDir: string;
 let file: string;
+let anchorFile: string;
 let now: number;
 const clock = () => now;
 const KEY = judgeBudgetKey("https://judge.example/v1/messages", "secret:judge-key");
@@ -26,12 +29,22 @@ const DAY3 = Date.parse("2026-11-24T10:00:00Z");
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "orca-701-budget-"));
+  anchorDir = mkdtempSync(join(tmpdir(), "orca-701-anchor-"));
   file = join(dir, JUDGE_BUDGET_FILENAME);
+  anchorFile = join(anchorDir, JUDGE_BUDGET_ANCHOR_FILENAME);
   now = DAY1;
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+  rmSync(anchorDir, { recursive: true, force: true });
+});
 
-const budget = (io?: JudgeBudgetIo) => daemonJudgeBudget(dir, { now: clock, ...(io ? { io } : {}) });
+const dirs = () => ({ stateDir: dir, anchorDir });
+const elsewhere = () => ({
+  stateDir: mkdtempSync(join(tmpdir(), "orca-701-budget-other-")),
+  anchorDir: mkdtempSync(join(tmpdir(), "orca-701-anchor-other-")),
+});
+const budget = (io?: JudgeBudgetIo) => daemonJudgeBudget(dirs(), { now: clock, ...(io ? { io } : {}) });
 const read = () => JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
 async function initializedYesterday() {
   now = DAY1;
@@ -66,7 +79,7 @@ describe("#701 judge budget: no silent recovery", () => {
     expect(await a.reserve(KEY, 3)).toBe(false);
     expect(read()).toMatchObject({ day: "2026-11-23", counts: { [KEY]: 3 }, sequence: 3 });
     // Without injected options the daemon gets one object per file.
-    expect(daemonJudgeBudget(dir)).toBe(daemonJudgeBudget(dir));
+    expect(daemonJudgeBudget(dirs())).toBe(daemonJudgeBudget(dirs()));
   });
 
   it("counts keys apart, starts each UTC day afresh, and the key names no value", async () => {
@@ -105,7 +118,7 @@ describe("#701 judge budget: no silent recovery", () => {
     // A different budget put in its place is refused too.
     rmSync(file);
     now = DAY1;
-    const other = daemonJudgeBudget(mkdtempSync(join(tmpdir(), "orca-701-budget-other-")), { now: clock });
+    const other = daemonJudgeBudget(elsewhere(), { now: clock });
     await other.initialize();
     now = DAY2;
     expect(await b.reserve(KEY, 3)).toBe(false);
@@ -135,7 +148,7 @@ describe("#701 judge budget: no silent recovery", () => {
     ];
     for (const text of bad) {
       writeFileSync(file, text);
-      expect(await daemonJudgeBudget(mkdtempSync(join(tmpdir(), "x-")), { now: clock }).reserve(KEY, 3)).toBe(false);
+      expect(await daemonJudgeBudget(elsewhere(), { now: clock }).reserve(KEY, 3)).toBe(false);
       expect(await budget().reserve(KEY, 3)).toBe(false);
       expect(readFileSync(file, "utf8")).toBe(text);
     }
@@ -154,6 +167,78 @@ describe("#701 judge budget: no silent recovery", () => {
     ] as const) {
       expect(await budget().reserve(key, limit)).toBe(false);
     }
+  });
+});
+
+describe("#701 judge budget: rollback across restarts", () => {
+  /** A fresh copy of the module: what a restarted daemon sees, with no memory of this process. */
+  async function restarted() {
+    vi.resetModules();
+    const fresh = await import("../src/review-judge/judge-budget.js");
+    return fresh.daemonJudgeBudget(dirs(), { now: clock });
+  }
+
+  it("a budget file restored from a backup is refused after a restart, until initialized again", async () => {
+    await initializedYesterday();
+    const backup = join(dir, "backup.json");
+    copyFileSync(file, backup);
+    expect(await budget().reserve(KEY, 3)).toBe(true);
+    expect(await budget().reserve(KEY, 3)).toBe(true);
+    copyFileSync(backup, file);
+    const after = await restarted();
+    expect(await after.reserve(KEY, 3)).toBe(false);
+    expect(await (await restarted()).reserve(KEY, 3)).toBe(false);
+    rmSync(file);
+    expect(await after.initialize()).toMatchObject({ status: "initialized" });
+    expect(await after.reserve(KEY, 3)).toBe(false);
+    now = DAY3;
+    expect(await (await restarted()).reserve(KEY, 3)).toBe(true);
+  });
+
+  it("a whole state directory restored without its anchor is refused after a restart", async () => {
+    await initializedYesterday();
+    const saved = mkdtempSync(join(tmpdir(), "orca-701-saved-"));
+    try {
+      copyFileSync(file, join(saved, "budget.json"));
+      expect(await budget().reserve(KEY, 3)).toBe(true);
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(join(dir, "review-judge"), { recursive: true });
+      copyFileSync(join(saved, "budget.json"), file);
+      expect(await (await restarted()).reserve(KEY, 3)).toBe(false);
+    } finally {
+      rmSync(saved, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a budget with no anchor, an unreadable anchor, or another budget's anchor", async () => {
+    await initializedYesterday();
+    const good = readFileSync(anchorFile, "utf8");
+    rmSync(anchorFile);
+    expect(await (await restarted()).reserve(KEY, 3)).toBe(false);
+    for (const text of ["not json", JSON.stringify({ ...JSON.parse(good), extra: 1 })]) {
+      writeFileSync(anchorFile, text);
+      expect(await (await restarted()).reserve(KEY, 3)).toBe(false);
+    }
+    writeFileSync(
+      anchorFile,
+      JSON.stringify({ ...JSON.parse(good), budgetId: "00000000-0000-4000-8000-000000000000" }),
+    );
+    expect(await (await restarted()).reserve(KEY, 3)).toBe(false);
+    writeFileSync(anchorFile, good);
+    expect(await (await restarted()).reserve(KEY, 3)).toBe(true);
+    expect(JSON.parse(readFileSync(anchorFile, "utf8"))).toMatchObject({ sequence: 1 });
+  });
+
+  it("requires the anchor directory outside the state directory", () => {
+    expect(() => daemonJudgeBudget({ stateDir: dir, anchorDir: dir })).toThrow(/outside/);
+    expect(() => daemonJudgeBudget({ stateDir: dir, anchorDir: join(dir, "anchor") })).toThrow(/outside/);
+    expect(() => daemonJudgeBudget({ stateDir: join(anchorDir, "state"), anchorDir })).toThrow(/outside/);
+  });
+
+  it("reports Windows as not durable: its directory sync is not verified", () => {
+    expect(daemonJudgeBudget(dirs(), { platform: "win32" }).durable).toBe(false);
+    expect(daemonJudgeBudget(dirs(), { platform: "linux" }).durable).toBe(true);
+    expect(daemonJudgeBudget(dirs(), { platform: "darwin" }).durable).toBe(true);
   });
 });
 
@@ -195,7 +280,8 @@ describe("#701 judge budget: durable commit before acknowledgement", () => {
       });
     expect(await pending).toBe(true);
     expect(acknowledged).toBe(true);
-    expect(steps).toEqual(["write+sync", "rename", "sync-dir"]);
+    // The budget, then its anchor: each written, synced, renamed and its directory synced.
+    expect(steps).toEqual(["write+sync", "rename", "sync-dir", "write+sync", "rename", "sync-dir"]);
   });
 
   it.each(["write", "rename", "dir"] as const)("a failed %s step is not acknowledged", async (step) => {

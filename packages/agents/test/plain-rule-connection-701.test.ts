@@ -322,7 +322,8 @@ describe("#701 plain-rule judge from config", () => {
     const dir = mkdtempSync(join(tmpdir(), "orca-701-shared-budget-"));
     try {
       let now = Date.parse("2026-11-22T10:00:00Z");
-      const daemon = () => daemonJudgeBudget(dir, { now: () => now });
+      const daemon = () =>
+        daemonJudgeBudget({ stateDir: join(dir, "state"), anchorDir: join(dir, "anchor") }, { now: () => now });
       // The owner initializes the budget once; that day is spent, so calls start the next UTC day.
       expect(await daemon().initialize()).toMatchObject({ status: "initialized" });
       now = Date.parse("2026-11-23T10:00:00Z");

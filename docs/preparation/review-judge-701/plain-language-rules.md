@@ -372,23 +372,30 @@ provider version and wire format. No key is read and nothing is sent until the j
 On each call:
 - the daily budget is reserved first, per UTC day, and never refunded, from the injected
   `JudgeBudget`. `daemonJudgeBudget` (`review-judge/judge-budget.ts`) is the daemon's one budget, at
-  `<stateDir>/review-judge/budget.json`, one object per file in a process. It holds the day's count
-  for every judge using the same key and destination, so a restart, a second session or a
-  re-preparation does not start at zero.
+  `<stateDir>/review-judge/budget.json`, with its high-water mark at
+  `<anchorDir>/review-judge/budget-anchor.json`, one object per pair of files in a process. It holds
+  the day's count for every judge using the same key and destination, so a restart, a second session
+  or a re-preparation does not start at zero.
   - Durable before acknowledged: a reservation answers yes only after the new count is written to a
-    temporary file, that file is synced, renamed over the budget file and the directory is synced.
-    Any failure on that path refuses the call. (Node cannot sync a directory on Windows, so there
-    the file sync is the guarantee, as in the protected and artifact stores.) Reads and writes go
-    through the policy files' strict-ownership lock; a lock left by a crashed process is never taken
-    over, so calls are refused (the person is asked) until it is removed.
-  - No silent recovery: only `initialize`, an explicit owner step, creates the file, never over an
-    existing one, and the day it is initialized counts as fully spent, so calls start on the next
-    UTC day. A missing file refuses, as does one that cannot be read, parsed or trusted, or one dated
-    after today (a clock moved back). Within a process, a file whose budget id changes or whose
-    sequence goes backwards (rolled back, replaced, restored) is refused until initialized again.
-  - Backup and restore: the file cannot tell it was restored from a copy while the daemon was
-    stopped, so do not restore it. Exclude it from backups, or after restoring a state directory
-    delete it and run `initialize`, which spends the current day. A budget belongs to one daemon.
+    temporary file, that file is synced, renamed over the budget file and the directory is synced,
+    and then the same is done for the anchor. Any failure on that path refuses the call. Node cannot
+    sync a directory on Windows, so there the budget reports `durable: false`, which activation
+    refuses, until the replacement protocol is verified on Windows. Reads and writes go through the
+    policy files' strict-ownership lock; a lock left by a crashed process is never taken over, so
+    calls are refused (the person is asked) until it is removed.
+  - No silent recovery: only `initialize`, an explicit owner step, creates the budget file, never
+    over an existing one, and the day it is initialized counts as fully spent, so calls start on the
+    next UTC day. A missing file refuses, as does one that cannot be read, parsed or trusted, or one
+    dated after today (a clock moved back).
+  - Rollback across restarts: the anchor directory is a per-machine directory outside the state
+    directory (the two may not contain one another), so restoring the state directory, or the
+    budget file alone, does not restore the anchor. Every reservation, the first after a restart
+    included, compares the two: a budget with no anchor, another budget's anchor, or a sequence
+    below the anchor's is refused until the owner runs `initialize` again, which spends that day.
+    The anchor is written after the budget, so a crash between the two leaves it behind, never
+    ahead. A coordinated rollback of both directories to the same earlier pair is not detected;
+    like the engine's revision runtime, this claims no protection against rolling back every copy
+    of the evidence.
   - `memoryJudgeBudget` is for tests and reports `durableBudget: false`, which activation refuses.
     Nothing in this step wires the judge into activation;
 - the key is leased for that one request (purpose `review-judge`, the pinned destination);
