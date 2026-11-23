@@ -30,10 +30,8 @@
  * It sits under `runs.read` (it is listed in `READ_METHODS`), so a `--read-only` daemon
  * answers it, and it shows a caller only what `runs.events` and `artifacts.get` would: runs
  * the caller can see, and artifact hits only with `artifacts.read`. A caller whose scope is
- * limited to some runs searches either the one run it names in `runId` or, without one, its
- * own run catalog (#340, protocol 2.8): the runs `runs.list` shows it, fixed before the scan,
- * so its deadline is spent only on runs it can see. Before 2.8 such a search was refused
- * with `AUTH_FORBIDDEN`.
+ * limited to some runs must name one in `runId`; a search across the whole store is refused
+ * with `AUTH_FORBIDDEN` for it until there is an authorization-scoped run catalog.
  */
 import { z } from "zod";
 

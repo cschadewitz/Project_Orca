@@ -509,8 +509,16 @@ export function RunsSurface({ connection, onCrumbs, open, onOpen }: RunsSurfaceP
             board={
               view === "board" ? (
                 <RunBoard runs={board.runs} live={live} filtered={filtered} onOpen={openInTree} onRetry={board.retry} />
-              ) : view === "search" && searchable ? (
-                <RunSearch onOpen={openHit} />
+              ) : undefined
+            }
+            search={
+              view === "search" && searchable ? (
+                <RunSearch
+                  selectedRunId={selectedRunId}
+                  selectedRunName={selectedRun?.name}
+                  connection={connection}
+                  onOpen={openHit}
+                />
               ) : undefined
             }
           />
@@ -568,11 +576,18 @@ interface TreeBodyProps {
   onClearFilter: () => void;
   /** The board, in place of the tree, when that view is chosen. */
   board?: JSX.Element | undefined;
+  /**
+   * The search view, in place of the tree. It does not read the run list, so it stands
+   * whatever the list is doing: a list re-read on reconnect does not unmount a query.
+   */
+  search?: JSX.Element | undefined;
 }
 
 /** The tree, or the one state view that stands in for it. */
 function TreeBody(props: TreeBodyProps): JSX.Element {
   const { state, tree, visible, live, filtered, connection, onSelect, onRetry, onClearFilter } = props;
+
+  if (props.search) return props.search;
 
   if (state.phase === "loading") return <StateView kind="loading" title="Loading runs" />;
 

@@ -368,14 +368,21 @@ describe("resource isolation", () => {
   it("holds one boundary across the run list, snapshots, events, artifact previews and search (#340)", async () => {
     await putArtifact(h.stores, "art-alice", h.runs.alice, "zebrafish notes for alice\n");
     await putArtifact(h.stores, "art-bob", h.runs.bob, "zebrafish notes for bob\n");
+    const everyRun = [h.runs.alice, h.runs.bob, h.runs.legacy];
     const listed = async (token: string) => new Set(ids(await h.rpc(token, "runs.list", { limit: 500 })));
     const reachable = async (token: string, runId: string) =>
       (await h.rpc(token, "runs.get", { runId })).body.ok === true &&
       (await h.rpc(token, "runs.events", { runId })).body.ok === true;
+    /* Search, run by run as a scoped caller must ask it (a store-wide search stays the owner's
+       until there is a bounded, scope-aware run catalog), over every run in the store. */
     const searched = async (token: string) => {
-      const r = await h.rpc(token, "search", { query: "zebrafish" });
-      expect(r.body.ok).toBe(true);
-      return (r.body.result as { hits: { runId: string; kind: string }[] }).hits;
+      const hits: { runId: string; kind: string }[] = [];
+      for (const runId of everyRun) {
+        const r = await h.rpc(token, "search", { query: "zebrafish", runId });
+        expect(r.body.ok).toBe(true);
+        hits.push(...(r.body.result as { hits: { runId: string; kind: string }[] }).hits);
+      }
+      return hits;
     };
     const previews = async (token: string) => {
       const out: string[] = [];
@@ -383,7 +390,6 @@ describe("resource isolation", () => {
         if ((await h.rpc(token, "artifacts.get", { artifactId: id })).body.ok) out.push(id);
       return out;
     };
-    const everyRun = [h.runs.alice, h.runs.bob, h.runs.legacy];
 
     for (const [token, expected] of [
       [h.tokens.owner, everyRun],
@@ -394,8 +400,7 @@ describe("resource isolation", () => {
       expect([...visible].sort()).toEqual([...expected].sort());
       // A snapshot and its events are reachable exactly for the runs the list shows.
       for (const runId of everyRun) expect(await reachable(token, runId)).toBe(visible.has(runId));
-      // Search without a run - store-wide for the owner, the caller's catalog otherwise -
-      // finds content only in those runs, and so do artifact previews.
+      // Searching any run finds content only in the runs the list shows, and so do previews.
       const hits = await searched(token);
       expect(hits.length).toBeGreaterThan(0);
       expect(hits.every((hit) => visible.has(hit.runId))).toBe(true);
@@ -404,6 +409,9 @@ describe("resource isolation", () => {
       );
     }
 
+    // A scoped caller's store-wide search is refused, not answered from runs it cannot see.
+    const wide = await h.rpc(h.tokens.alice, "search", { query: "zebrafish" });
+    expect(wide.body.error?.code).toBe("AUTH_FORBIDDEN");
     // Without `artifacts.read`, no surface shows artifact content: no preview, no artifact hit.
     expect(await previews(h.tokens.runsOnly)).toEqual([]);
     const blind = await searched(h.tokens.runsOnly).catch(() => []);

@@ -121,6 +121,53 @@ describe("search in the Runs console", () => {
     expect(await screen.findByText(/More matches may exist/)).toBeTruthy();
   });
 
+  it("clears results on a connection change and drops a reply asked before it", async () => {
+    renderRuns();
+    await screen.findByRole("tree", { name: "Run tree" });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.change(field(), { target: { value: "connection" } });
+    await settle();
+    await screen.findByRole("list", { name: "Search results" });
+
+    // Another target or grant: the excerpts on screen belong to the old one and go at once.
+    const release = fake.hold("search");
+    act(() => fake.connect({ ...fake.connection, generation: 5, authority: 2 }));
+    expect(screen.queryByRole("list", { name: "Search results" })).toBeNull();
+    await settle();
+    const asked = searches().length;
+    expect(asked).toBe(2);
+
+    // A late reply to a query asked under the old scope is dropped, not drawn.
+    fake.script({ search: () => ({ ok: true, result: { ...RESULT, hits: [] } }) });
+    act(() => fake.connect({ ...fake.connection, generation: 6, authority: 3 }));
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole("list", { name: "Search results" })).toBeNull();
+    await settle();
+    await screen.findByText("No matches");
+  });
+
+  it("offers the selected run when the daemon refuses a store-wide search", async () => {
+    fake.script({
+      search: (p) =>
+        p.runId === undefined
+          ? { ok: false, error: { code: "AUTH_FORBIDDEN", message: "forbidden" } }
+          : { ok: true, result: { ...RESULT, hits: RESULT.hits.filter((h) => h.runId === p.runId) } },
+    });
+    renderRuns();
+    await screen.findByRole("tree", { name: "Run tree" });
+    fireEvent.click(screen.getByRole("treeitem", { name: /SSO rollout/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.change(field(), { target: { value: "connection" } });
+    await settle();
+    expect(await screen.findByText("Search one run at a time")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Search the selected run" }));
+    await settle();
+    expect(searches().at(-1)!.params).toEqual({ query: "connection", limit: 100, runId: "run-old" });
+  });
+
   it("is visibly unavailable on a daemon that does not answer search", async () => {
     fake.connect({ ...fake.connection, methods: (HELLO.methods ?? []).filter((m) => m !== SEARCH_METHOD) });
     renderRuns();
