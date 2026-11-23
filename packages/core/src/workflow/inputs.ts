@@ -22,6 +22,8 @@ export interface WorkflowInputsResult {
 }
 
 /** Validate `suppliedVars` against `definition.inputSchema`, resolving defaults and workflow vars beneath them. */
+
+const SECRET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export function validateWorkflowInputs(
   definition: Pick<WorkflowDefinition, "vars" | "inputSchema">,
   suppliedVars: Record<string, unknown> = {},
@@ -105,6 +107,11 @@ export function checkInputValue(
     }
     case "boolean":
       if (typeof value !== "boolean") return fail(`expected boolean, got ${actual}`);
+      break;
+    case "secret":
+      // The id of a configured secret (#363), never the credential itself.
+      if (typeof value !== "string") return fail(`expected the id of a configured secret, got ${actual}`);
+      if (!SECRET_ID.test(value)) return fail("is not a secret id (letters, digits, '.', '_' and '-')");
       break;
     case "array": {
       if (!Array.isArray(value)) return fail(`expected array, got ${actual}`);

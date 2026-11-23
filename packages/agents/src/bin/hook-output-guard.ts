@@ -7,9 +7,12 @@
  *   not JSON, with exit 0, as plain text and lets the call through, so text the hook did not
  *   mean to print must never get there.
  * - Leaving by any other road than `answer` (a `process.exit(0)` somewhere, an uncaught
- *   exception, an unhandled rejection, running out of work) exits 2, which blocks. An exit 0
- *   with nothing printed is an allow, so it must only ever come from `answer`.
+ *   exception, an unhandled rejection, running out of work) exits 2 with a reason on stderr,
+ *   which blocks. An exit 0 with nothing printed is an allow, so it must only ever come from
+ *   `answer`; and Codex lets an exit 2 with an empty stderr through, so a block always says why.
  */
+import { writeSync } from "node:fs";
+
 const writeStdout = process.stdout.write.bind(process.stdout);
 const writeStderr = process.stderr.write.bind(process.stderr);
 
@@ -29,7 +32,14 @@ for (const method of ["log", "info", "debug", "dir", "table", "trace"] as const)
   }) as never;
 
 process.on("exit", () => {
-  if (!answered) process.exitCode = 2;
+  if (answered) return;
+  process.exitCode = 2;
+  // Codex lets a call through on an exit 2 with nothing on stderr, so a block always says why.
+  try {
+    writeSync(2, "Blocked by ORCA: the hook stopped before it answered.\n");
+  } catch {
+    // Nothing more can be done from here; the exit code still blocks Claude.
+  }
 });
 
 /** Answer the agent and leave: the one road out that can exit 0. Called once. */

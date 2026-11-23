@@ -74,6 +74,14 @@ export const AgentNodeSchema = NodeBaseSchema.extend({
    * narrow them, or turn on only what the agent's config permits.
    */
   capabilities: CapabilityScopeSchema.optional(),
+  /**
+   * Environment variables this step's agent session gets from `secret` launch inputs (#363):
+   * variable name -> input name. The input names a configured secret, read on the agent's host
+   * when the session opens, under the run owner's grant. The value never reaches the prompt.
+   */
+  secretEnv: z
+    .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "an environment variable name"), z.string().min(1))
+    .optional(),
   /** Prompt template id (from the template registry) ... */
   template: z.string().optional(),
   /** ... or an inline template body. One of the two is required. */

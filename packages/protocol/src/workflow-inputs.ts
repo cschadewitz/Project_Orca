@@ -35,7 +35,7 @@ export type ValidationResultView = z.infer<typeof ValidationResultSchema>;
 
 /**
  * One declared input as discovery shows it. Loose on purpose: `type` is a string rather than
- * the six the daemon knows today and unknown keys survive parsing, so an older client draws a
+ * the types the daemon knows today (`secret` names a configured secret by id, #363) and unknown keys survive parsing, so an older client draws a
  * newer declaration as a plain field instead of failing to read the workflow. A `sensitive`
  * declaration arrives without its `default` and `enum`, at every depth.
  */

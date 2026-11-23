@@ -17,6 +17,7 @@ export const AdmissionExpectedScopeSchema = z.strictObject({
 });
 /** Protocol 2.6 (#883): the parent workspace, run and step a delegated run is started for. */
 export const RunOriginParamsSchema = RunOriginSchema;
+const SensitiveVarNameSchema = z.string().min(1).max(128);
 export const RunsAdmitParamsSchema = RunsStartParamsSchema.extend({
   expectedScope: AdmissionExpectedScopeSchema.optional(),
   idempotencyKey: RetryKeySchema.optional(),
@@ -27,6 +28,22 @@ export const RunsAdmitParamsSchema = RunsStartParamsSchema.extend({
    * daemon's workspace checks it before admitting and fetches it into the run's own checkout.
    */
   gitRef: z.string().min(1).max(200).optional(),
+  /**
+   * Protocol 2.11 (#363): launch vars to protect as if the workflow declared them `sensitive`:
+   * kept in the encrypted execution store and redacted from run views, notifications and logs.
+   * Listed in `hello.admitFields` as `sensitiveVars`. A delegating daemon names its prompt
+   * variable here when the task holds a value its own run protects.
+   */
+  sensitiveVars: z.array(SensitiveVarNameSchema).min(1).max(64).optional(),
+  /**
+   * Protocol 2.11 (#363): values the daemon redacts wherever they appear in the run, as it would
+   * a sensitive input's value, and keeps only in the encrypted execution store. A delegating
+   * daemon sends the original protected values its task holds, so each is redacted on its own
+   * and not only as part of the whole task. Listed in `hello.admitFields` as `protectedValues`.
+   * Strict like the rest of these params: a daemon that does not know the field refuses the
+   * admission rather than admitting the task as ordinary vars.
+   */
+  protectedValues: z.array(z.string().min(1).max(65_536)).min(1).max(256).optional(),
 }).strict();
 export const AdmissionsGetParamsSchema = z.strictObject({
   operationId: z.string().regex(/^retry_[a-f0-9-]{36}$/),

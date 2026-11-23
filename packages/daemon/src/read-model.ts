@@ -23,7 +23,10 @@
  * first read. Run logs were never affected - the event store re-reads them - so statuses
  * and trees stay current the same way.
  */
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+
+const sha256Hex = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex");
 import {
   OrcaError,
   RUN_SUMMARY_EVENT_TYPES,
@@ -960,7 +963,27 @@ export class ReadModel {
         },
         asOf,
       };
-    return { artifact: view, text: await this.protectedArtifactText(artifact), asOf };
+    const text = await this.protectedArtifactText(artifact);
+    const bytes = Buffer.from(text, "utf8");
+    // The limit holds for what is sent: redaction can make a body longer than the stored one.
+    if (bytes.length > params.maxBytes)
+      return {
+        artifact: view,
+        omitted: {
+          reason: "tooLarge",
+          detail: `${bytes.length} bytes as sent with protected values redacted, past the ${params.maxBytes} this call asked for`,
+        },
+        asOf,
+      };
+    // A body that held a protected value is sent redacted; say so, with this daemon's checksum
+    // of the bytes it sent. That checksum lets a copy be checked against what was sent; it is
+    // not evidence that the redaction was complete.
+    const digest = sha256Hex(bytes);
+    const redacted =
+      artifact.contentHash !== undefined && digest !== artifact.contentHash
+        ? { redacted: { size: bytes.length, contentHash: digest } }
+        : {};
+    return { artifact: view, text, ...redacted, asOf };
   }
 
   /**

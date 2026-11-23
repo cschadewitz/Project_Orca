@@ -893,18 +893,19 @@ export const AgentSpecSchema = z
      */
     permissions: PermissionPolicySchema.default(() => ({ rules: [] })),
     /**
-     * Whether ORCA installs its pre-tool hook in this agent (#704), so that `permissions`
-     * decides every tool call and not only the ones the agent asks about. **Not available
-     * yet**: every build ORCA ships refuses a session with `on` until activation is complete
-     * (the hook is exercised only by its acceptance suite). Opt-in: `on`
-     * installs it in an agent that takes one, today the Claude ACP adapter on the daemon's own
-     * host, with an adapter and Claude Code version pair and on a platform ORCA's acceptance
-     * test covers (`CLAUDE_HOOK_VERIFIED_PAIRS`, `CLAUDE_HOOK_VERIFIED_PLATFORMS`; the Claude
-     * Code image is hashed from the process the session actually runs). Anywhere else (an
-     * SSH host, another adapter, an untested version, runtime or platform) ORCA refuses the
+     * Whether ORCA installs its pre-tool hook in this agent (#704, #705), so that
+     * `permissions` decides every tool call it hooks and not only the ones the agent asks
+     * about. **Not available yet**: every build ORCA ships refuses a session with `on` until
+     * activation is complete (the hook is exercised only by its acceptance suites). Opt-in:
+     * `on` installs it in an agent that takes one, today the Claude and Codex ACP adapters on
+     * the daemon's own host, with an adapter and runtime pair and on a platform ORCA's
+     * acceptance tests cover (`CLAUDE_HOOK_VERIFIED_PAIRS`, `CODEX_HOOK_VERIFIED_PAIRS`,
+     * `*_HOOK_VERIFIED_PLATFORMS`; the runtime's image is hashed from the process the session
+     * actually runs). Anywhere else (an SSH host, another adapter, an untested version,
+     * runtime or platform, a Codex that does not list the hook as trusted) ORCA refuses the
      * session before giving it work, rather than run it unguarded. `off`, the meaning of
      * leaving it out, sends no hook, so calls the agent allows by its own settings or
-     * remembered grants never reach ORCA.
+     * remembered grants never reach ORCA. See `docs/agent-hook-coverage.md`.
      */
     nativeToolHook: z.enum(["on", "off"]).optional(),
     /**

@@ -34,7 +34,7 @@ import {
 } from "./secrets.js";
 import { explainFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
 import { processCleanup } from "./process-cleanup.js";
-import { nativeToolHookUnavailable } from "./claude-hook-session.js";
+import { nativeToolHookUnavailable } from "./native-tool-hook-session.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import { isHostFileMissing, type AgentHost, type AgentProcessHandle } from "./host.js";
 import {
@@ -81,12 +81,16 @@ export interface OpenSessionOptions {
   /**
    * The `_meta` for `session/new` and `session/load`, decided once the agent has said at
    * `initialize` who it is (#704). The CLI's session factory uses it to install ORCA's
-   * pre-tool hook in an agent that takes one (`claudeHookSessionMeta`). Undefined sends none.
-   * A throw fails the open, and startup cleanup stops the process.
+   * pre-tool hook in an agent that takes one (`nativeToolHookSession`), and to check through
+   * `ext` (one extension request to the agent, bounded by the handshake timeout) that an agent
+   * which took it at spawn has it in force (#705); `agentPid` is the agent process's id, so it
+   * can find the runtime the agent actually started. Undefined sends none. A throw fails the
+   * open, and startup cleanup stops the process.
    */
   sessionMeta?:
     | ((
         agentInfo: { name: string; version: string } | undefined,
+        ext: (method: string, params: Record<string, unknown>) => Promise<unknown>,
         /** The agent process's id, so the hook can tell its runtime's processes from others. */
         agentPid: number | undefined,
       ) => Promise<Record<string, unknown> | undefined>)
@@ -587,6 +591,7 @@ async function openPlanned(
     if (opts.additionalDirectories) newSession.additionalDirectories = opts.additionalDirectories;
     const meta = await opts.sessionMeta?.(
       init.agentInfo ? { name: init.agentInfo.name, version: init.agentInfo.version } : undefined,
+      (method, params) => withTimeout(conn.agent.request<unknown>(method, params), handshakeTimeout, method),
       proc.pid,
     );
     if (meta) newSession._meta = meta;
