@@ -63,8 +63,10 @@ jobs:
           npm init -y >/dev/null
           npm install --no-audit --no-fund --ignore-scripts \
             "pi-acp@${PI_ACP_VERSION}" "@earendil-works/pi-coding-agent@${PI_VERSION}"
-          test "$(node -p 'require("pi-acp/package.json").version')" = "$PI_ACP_VERSION"
-          test "$(node -p 'require("@earendil-works/pi-coding-agent/package.json").version')" = "$PI_VERSION"
+          # Read package.json from disk: pi's package "exports" do not include it.
+          v() { node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).version' "node_modules/$1/package.json"; }
+          test "$(v pi-acp)" = "$PI_ACP_VERSION"
+          test "$(v @earendil-works/pi-coding-agent)" = "$PI_VERSION"
           test -f "$d/node_modules/pi-acp/dist/index.js"
           test -x "$d/node_modules/.bin/pi"
           {
