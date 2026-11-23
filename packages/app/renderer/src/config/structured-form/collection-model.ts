@@ -30,11 +30,21 @@ export const pathLabel = (path: DocumentPath): string =>
     "",
   );
 
-export function recordKeyError(key: string, value: unknown): string | undefined {
+export function recordKeyError(key: string, value: unknown, pattern?: string): string | undefined {
   if (key === "" || !/^[A-Za-z0-9_-]+$/.test(key) || FORBIDDEN.has(key))
     return "Use a key without dots, brackets, spaces or reserved names.";
+  if (pattern !== undefined && !matches(pattern, key)) return "This key is not one this field accepts.";
   if (isObject(value) && Object.hasOwn(value, key)) return "This key already exists.";
   return undefined;
+}
+
+/** A daemon-described key pattern; one that does not compile refuses every key. */
+function matches(pattern: string, key: string): boolean {
+  try {
+    return new RegExp(pattern).test(key);
+  } catch {
+    return false;
+  }
 }
 
 export function atPath(value: unknown, path: DocumentPath): unknown {

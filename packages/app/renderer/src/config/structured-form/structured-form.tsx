@@ -400,9 +400,9 @@ function RecordEntries({
   const keyInput = useRef<HTMLInputElement>(null);
   const pendingFocus = useRef<string | null | undefined>(undefined);
   const { value, path, label } = form;
-  const issue = recordKeyError(key, value);
+  const issue = recordKeyError(key, value, shape.keyPattern);
   const editableKeys = Object.keys(isObject(value) ? value : {}).filter(
-    (entryKey) => recordKeyError(entryKey, {}) === undefined,
+    (entryKey) => recordKeyError(entryKey, {}, shape.keyPattern) === undefined,
   );
   const deletionForm: StructuredFormProps = {
     ...form,
@@ -431,12 +431,12 @@ function RecordEntries({
       {Object.entries(isObject(value) ? value : {}).map(([entryKey, entry]) => (
         <div key={entryKey} data-record-entry={entryKey}>
           <Card eyebrow={entryKey}>
-            {recordKeyError(entryKey, {}) === undefined ? (
+            {recordKeyError(entryKey, {}, shape.keyPattern) === undefined ? (
               <StructuredForm {...form} shape={shape.value} value={entry} path={[...path, entryKey]} label={entryKey} />
             ) : (
               <Text style="caption">This key requires authorized raw editing.</Text>
             )}
-            {recordKeyError(entryKey, {}) === undefined && (
+            {recordKeyError(entryKey, {}, shape.keyPattern) === undefined && (
               <Action
                 edits={[{ kind: "remove", path: [...path, entryKey] }]}
                 form={deletionForm}

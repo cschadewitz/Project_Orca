@@ -24,5 +24,26 @@ export function configurationReferenceChoices(
     if (isObject(agent) && Array.isArray(agent.models))
       choices = agent.models.flatMap((model) => (isObject(model) && typeof model.id === "string" ? [model.id] : []));
   }
+  // Capability selections (#335) name catalog entries; an agent's scope may also name its own
+  // inline MCP servers.
+  const selection =
+    /^(capabilities\.workspace|agents\.\[\]\.capabilities)\.(mcpServers|skills)\.(replace|enable|disable|available)\.\[\]$/.exec(
+      spelling,
+    );
+  if (selection) {
+    const kind = selection[2] as "mcpServers" | "skills";
+    const catalog = isObject(value.capabilities) ? value.capabilities[kind] : undefined;
+    choices = isObject(catalog) ? Object.keys(catalog) : [];
+    if (kind === "mcpServers" && path[0] === "agents") {
+      const agent = Array.isArray(value.agents) ? value.agents[Number(path[1])] : undefined;
+      if (isObject(agent) && Array.isArray(agent.mcpServers))
+        choices = [
+          ...choices,
+          ...agent.mcpServers.flatMap((server) =>
+            isObject(server) && typeof server.name === "string" ? [server.name] : [],
+          ),
+        ];
+    }
+  }
   return choices ? [...new Set(choices)].sort() : undefined;
 }

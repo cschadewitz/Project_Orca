@@ -159,7 +159,15 @@ export type ConfigFieldShape = ConfigFieldMetadata &
     | { kind: "scalar"; field: ConfigFieldDescription }
     | { kind: "object"; fields: Record<string, ConfigFieldShape> }
     | { kind: "array"; item: ConfigFieldShape }
-    | { kind: "record"; value: ConfigFieldShape }
+    | {
+        kind: "record";
+        value: ConfigFieldShape;
+        /**
+         * When keys are constrained (#335): an ECMAScript pattern every key must match, such
+         * as a catalog id's. Absent: any key the form's own safety rule allows.
+         */
+        keyPattern?: string | undefined;
+      }
     | { kind: "union"; discriminator: string; branches: Record<string, ConfigFieldShape> }
     | { kind: "unsupported"; reason: "opaque" | "metadata-unavailable" }
   );
@@ -183,7 +191,12 @@ export const ConfigFieldShapeSchema: z.ZodType<ConfigFieldShape> = z.lazy(() =>
       fields: z.record(z.string(), ConfigFieldShapeSchema),
     }),
     z.object({ ...FieldMetadataShape, kind: z.literal("array"), item: ConfigFieldShapeSchema }),
-    z.object({ ...FieldMetadataShape, kind: z.literal("record"), value: ConfigFieldShapeSchema }),
+    z.object({
+      ...FieldMetadataShape,
+      kind: z.literal("record"),
+      value: ConfigFieldShapeSchema,
+      keyPattern: z.string().optional(),
+    }),
     z.object({
       ...FieldMetadataShape,
       kind: z.literal("union"),

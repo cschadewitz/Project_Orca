@@ -54,6 +54,16 @@ function acceptance(node: Node, value: "absent" | "null", seen = new Set<Node>()
   return unknown;
 }
 
+/** The one regex a record's string keys must match; `false` when the checks are anything else. */
+function keyPattern(checks: readonly unknown[]): string | undefined | false {
+  if (checks.length === 0) return undefined;
+  if (checks.length !== 1) return false;
+  const def = (checks[0] as { _zod?: { def?: { check?: string; format?: string; pattern?: unknown } } })._zod?.def;
+  if (def?.check !== "string_format" || def.format !== "regex" || !(def.pattern instanceof RegExp)) return false;
+  // Only a plain pattern: flags would change what it means to a client.
+  return def.pattern.flags === "" ? def.pattern.source : false;
+}
+
 function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
   let node = source;
   let defaultState: ConfigFieldMetadata["default"] = { state: "none" };
@@ -100,14 +110,20 @@ function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
       };
     case "array":
       return node.def.element ? { ...meta, kind: "array", item: child(node.def.element, `${path}[]`) } : unsupported();
-    case "record":
-      // Constrained/enum/opaque key schemas cannot be described as arbitrary record keys.
-      return node.def.valueType &&
-        node.def.keyType?.def.type === "string" &&
-        !node.def.keyType.def.checks?.length &&
-        !node.def.keyType.def.coerce
-        ? { ...meta, kind: "record", value: child(node.def.valueType, `${path}.<key>`) }
-        : unsupported();
+    case "record": {
+      // Enum/opaque key schemas cannot be described as arbitrary record keys. A string key
+      // with one regex (a catalog id, #335) is described by that pattern; anything else is not.
+      const key = node.def.keyType;
+      if (!node.def.valueType || key?.def.type !== "string" || key.def.coerce) return unsupported();
+      const pattern = keyPattern(key.def.checks ?? []);
+      if (pattern === false) return unsupported();
+      return {
+        ...meta,
+        kind: "record",
+        value: child(node.def.valueType, `${path}.<key>`),
+        ...(pattern === undefined ? {} : { keyPattern: pattern }),
+      };
+    }
     case "union": {
       const discriminator = node.def.discriminator;
       if (!discriminator) return unsupported();

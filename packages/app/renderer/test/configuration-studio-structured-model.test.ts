@@ -60,6 +60,11 @@ describe("ordered display projection, never a serialization contract", () => {
   );
   it("refuses duplicates and prototype mutation while preserving original unsafe extension keys", () => {
     expect(recordKeyError("existing", { existing: false })).toBe("This key already exists.");
+    // A daemon-described key pattern (#335): a catalog id.
+    const id = "^[A-Za-z0-9][A-Za-z0-9._-]*$";
+    expect(recordKeyError("github", {}, id)).toBeUndefined();
+    expect(recordKeyError("-github", {}, id)).toBe("This key is not one this field accepts.");
+    expect(recordKeyError("anything", {}, "(")).toBe("This key is not one this field accepts.");
     expect(recordKeyError("safe-key_1", {})).toBeUndefined();
     expect(() => projectEdits({}, [{ kind: "set", path: ["__proto__", "polluted"], value: true }])).toThrow(
       "Unsupported edit path",

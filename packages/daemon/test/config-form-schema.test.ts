@@ -68,16 +68,41 @@ describe("authoritative rich configuration metadata", () => {
     expect(describeFormNode(z.enum(["private"]), "hosts[].sshArgs[]")).not.toHaveProperty("field.enum");
   });
 
-  it("reports ordinary unions/transforms/catch and constrained records unsupported", () => {
+  it("reports ordinary unions/transforms/catch and records with other key constraints unsupported", () => {
     for (const schema of [
       z.union([z.string(), z.number()]),
       z.string().transform((v) => v),
       z.string().catch("fallback"),
       z.record(z.enum(["x"]), z.string()),
-      z.record(z.string().regex(/^allowed$/), z.string()),
+      z.record(z.string().min(2), z.string()),
+      z.record(z.string().regex(/^a/).regex(/b$/), z.string()),
+      z.record(z.string().regex(/^allowed$/i), z.string()),
     ])
       expect(describeFormNode(schema)).toMatchObject({ kind: "unsupported", visibility: "metadata-unavailable" });
     expect(describeFormNode(z.string().catch("fallback")).acceptsAbsent).toBe("metadata-unavailable");
+  });
+
+  it("describes a record whose keys match one plain pattern, such as a catalog id (#335)", () => {
+    expect(describeFormNode(z.record(z.string().regex(/^allowed$/), z.string()))).toMatchObject({
+      kind: "record",
+      keyPattern: "^allowed$",
+    });
+    const root = describeConfigFormSchema().root;
+    if (root.kind !== "object") throw new Error("root");
+    const capabilities = root.fields.capabilities!;
+    if (capabilities.kind !== "object") throw new Error("capabilities");
+    for (const kind of ["skills", "mcpServers"] as const)
+      expect(capabilities.fields[kind]).toMatchObject({
+        kind: "record",
+        visibility: "non-secret",
+        keyPattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      });
+    // An MCP server's id and command are shown; its arguments and environment are withheld.
+    const server = (capabilities.fields.mcpServers as { value: { fields: Record<string, { visibility: string }> } })
+      .value.fields;
+    expect(server.command!.visibility).toBe("non-secret");
+    expect(server.args!.visibility).toBe("withheld");
+    expect(server.env!.visibility).toBe("withheld");
   });
 
   it("fails closed for prefault/coercion rather than guessing input acceptance", () => {
