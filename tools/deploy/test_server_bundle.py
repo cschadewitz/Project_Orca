@@ -37,6 +37,7 @@ class ServerBundleTests(unittest.TestCase):
         (daemon / "scripted-agent").mkdir(parents=True)
         (daemon / "orca-daemon.mjs").write_text("// daemon\n")
         (daemon / "native-io-worker.js").write_text("// worker\n")
+        (daemon / "claude-pre-tool-hook.mjs").write_text("// hook\n")
         (daemon / "scripted-agent" / "main.js").write_text("// agent\n")
         runtime = self.tmp / "node-runtime"
         (runtime / "bin").mkdir(parents=True)
@@ -90,7 +91,7 @@ class ServerBundleTests(unittest.TestCase):
         with tarfile.open(self.archive()) as tar:
             members = {member.name: member for member in tar.getmembers()}
         stem = "orca-server-0.8.0-linux-x64/"
-        for name in ("orca-daemon.mjs", "native-io-worker.js", "scripted-agent/main.js", "runtime/bin/node",
+        for name in ("orca-daemon.mjs", "native-io-worker.js", "claude-pre-tool-hook.mjs", "scripted-agent/main.js", "runtime/bin/node",
                      "runtime/LICENSE", "workflows/ai-sdlc.yaml", "release-compatibility.json", "package.json",
                      "orca-server.json", "LICENSE"):
             self.assertIn(stem + name, members)
