@@ -63,14 +63,15 @@ function conflict(what: string, details: Record<string, unknown>): OrcaError {
 }
 
 /** Everything the import moves, read from the file store at one point. */
-interface SourceSnapshot {
+export interface SourceSnapshot {
   collections: [name: string, docs: { id: string }[]][];
   runs: [runId: string, events: OrcaEvent[]][];
   plans: [planId: string, events: PlanEvent[]][];
   artifacts: Artifact[];
 }
 
-async function readSource(dir: string): Promise<SourceSnapshot> {
+/** The file store's metadata under `dir`, as the import reads it (and the switch back checks it). */
+export async function readFileMetadata(dir: string): Promise<SourceSnapshot> {
   const files = fileStores(dir);
   const collections: SourceSnapshot["collections"] = [];
   for (const [name, store] of [
@@ -108,9 +109,9 @@ export interface SqliteImportOptions extends SqliteOptions {
  */
 export async function importFileMetadata(dir: string, options: SqliteImportOptions = {}): Promise<SqliteImportReport> {
   const { betweenSourceReads, ...dbOptions } = options;
-  const source = await readSource(dir);
+  const source = await readFileMetadata(dir);
   await betweenSourceReads?.();
-  const again = await readSource(dir);
+  const again = await readFileMetadata(dir);
   if (sha256(JSON.stringify(again)) !== sha256(JSON.stringify(source)))
     throw new OrcaError("STORE_WRITE", "the file store changed while it was being imported; stop ORCA and rerun", {
       reason: "SOURCE_CHANGED",

@@ -458,8 +458,46 @@ database naming another switch) is refused (`INTERRUPTED`) and left as it is.
 `sqlite-legacy-fence.test.ts` kills a switch at each of these points and checks
 both outcomes byte for byte. The desktop app's own workspaces
 are refused (`APP_OWNED`), as for `carry-forward`: the app's daemon holds their write
-fence, which this command cannot. There is no switch back to files yet: the backup
-from step 4 is the store as it was.
+fence, which this command cannot. The backup from step 4 is the store as it was; the
+way back that keeps what was written on SQLite is the switch back below.
+
+### The switch back to files
+
+`switchStoreToFiles` in the store package takes a store switched in place back to the
+file backend, with everything its database holds, including what was written after
+the switch. Like the switch, it changes a workspace only under its exclusive writer
+(the desktop app's daemon, under its fence); the CLI does not offer it. Under the
+store's format lock (an interrupted switch either way is first finished or undone by
+its journal) it:
+
+1. Switches back only a store on SQLite; one already on this ORCA's file format is
+   left as it is (`current`). **Refuses on Windows** (`UNDURABLE`), as the switch does.
+2. Announces itself and refuses while any registered writer is alive (`BUSY`).
+3. Runs `verify`, which must find nothing wrong, then reads everything the database
+   holds in one snapshot of a read-only connection bound to this store, parsing every
+   row with its schema. A row or a collection this ORCA cannot read refuses the switch
+   back (`UNREADABLE`) instead of being left behind.
+4. Takes a verified whole-store backup into `format-backups/`, exactly as the switch
+   does, with the database in the copy verified and read again.
+5. Writes the metadata out as the file backend's own files into
+   `<store>/.sqlite-switch/files/` (each flushed) and reads them back with the file
+   backend's readers, the import's own: they must return exactly what the database
+   holds (`EXPORT_MISMATCH` otherwise). The store must not have changed since step 3.
+6. Records a journal (`to: "files"`), then replaces every marker of the legacy fence
+   with what was written out, the keys last (`.execution-key.sqlite` renamed back over
+   its marker, `workflows.sqlite` back to `workflows`), and checks once more that
+   nothing else changed. Only then writes this ORCA's file format into the marker,
+   naming the new backup. That rename is the commit. Then the database is removed (the
+   backup holds it) and the journal dropped.
+
+A refusal at any step before the marker leaves the store on SQLite exactly as it was:
+every marker back, what was restored set aside and dropped, the database untouched.
+A kill before the marker is undone the same way by the next write-mode start (until
+then read-only opens refuse, `INTERRUPTED`); one after it is finished. A marker or a
+database naming another switch is refused and left as it is.
+`sqlite-switch-back.test.ts` covers the round trip (files, SQLite with new work,
+files, SQLite, files), a lost fence at each check, a failure at each restore step,
+kills before and after the marker, and the refusals.
 
 ## Operations
 
@@ -493,4 +531,6 @@ leaves only an unreferenced blob.
   macOS (the conversion runs there; the check runs on Linux).
 - Bringing writes a released ORCA made to the file store after a conversion into the
   new store; they are reported, not merged.
-- A switch back from SQLite to files.
+- Asking for the switch back from the desktop app (the daemon and the app's
+  "Workspace storage" section), and native signed/installed acceptance of both
+  directions.
