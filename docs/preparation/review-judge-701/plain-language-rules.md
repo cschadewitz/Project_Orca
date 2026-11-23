@@ -95,6 +95,33 @@ envelope, and the person is asked otherwise (`outside-envelope`):
 - as a second, lexical line behind that check, every location is workspace-relative (not absolute,
   no `..`, no home or drive prefix).
 
+The check is `verifyPlainRuleTargets` (`packages/agents/src/verified-targets.ts`, beside `permissions.ts` so #703's fs gate can reuse it). It verifies only
+individual files, never a directory, because a directory root does not verify what a recursive read
+or search under it would reach (protected paths, links out). A trusted traversal that verifies every
+effective target is a later option; until then a search over a directory goes to the person. For
+each location:
+- it exists and is a single regular file; a file with more than one hard link is refused, since its
+  other name may be outside the workspace or under a protected path where no path check sees it;
+- containment holds both by file-system identity (one of the file's real ancestors is the workspace,
+  same device and inode) and by text (its real path is the workspace's real path plus more segments,
+  compared exactly). Case is never folded for containment: whether a file system ignores case is a
+  property of the mount, not the OS, so a real path that differs only by case is refused;
+- it is not under a protected path for reading: `protectedPathFor` (the same check that denies ahead
+  of every rule), plus no real ancestor that is a no-access path by identity, and no case-folded
+  match against one. Protection over-matches on purpose; containment under-matches on purpose.
+
+Only "no such file" while resolving a path counts as absence; a path that resolved and whose
+metadata then fails is incomplete evidence. A permission, I/O or identity failure anywhere the check
+needs evidence (the workspace, a target, any of its ancestors, an existing no-access path) refuses
+the call as `unverifiable`; the check never claims a verification it could not complete.
+
+The verified locations are the real, workspace-relative paths, and those are what the judge sees.
+
+**Decision-time limit.** The check runs when the slot decides. A file or link swapped after the
+slot's same-turn re-check and before the agent's own open is outside what any check on the request
+can see. That window closes only with ORCA-owned execution (#703), which is one more reason writes
+and commands stay with the person.
+
 `restrictions` and `targetsVerified` passed to `judgePermission` are the **output** of the slot's
 trusted checks, never a substitute for them. The helper refuses without them, but it cannot verify
 them itself.
@@ -351,7 +378,8 @@ change shows in the decision record. Wiring this to the sender and the connectio
 - **#703 (one-use enforcement):** a judged allow is an allow once, so it goes through the same
   one-use path when that lands.
 - **#704/#705 (hooks):** no change. Hooks still never answer allow themselves.
-- **Profile judge floor (option C, pending):** independent. The floor is about judging typed-rule
+- **Profile judge floor (option C, chosen 2026-11-23; opt-in per profile, unsure or unreachable
+  asks):** independent. The floor is about judging typed-rule
   allows. A judged rule's allow is already judged.
 
 ## 12. Proposed PR sequence

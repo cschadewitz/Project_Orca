@@ -1,12 +1,35 @@
 # Decision: rule-scoped review versus a mandatory execution judge (#701)
 
-Status: **proposal for owner decision. No production policy is changed.**
+Status: **decided 2026-11-23: option C, built in the inactive strict policy (see §0).** The rest of
+this document is the proposal as it was put to the owner.
 Baseline: `origin/main` at `4d5176c`. Related: [#701](https://github.com/cschadewitz/Project_Orca/issues/701)
 (primary), [#699](https://github.com/cschadewitz/Project_Orca/issues/699),
 [#702](https://github.com/cschadewitz/Project_Orca/issues/702). Inputs: the merged
 [#744](https://github.com/cschadewitz/Project_Orca/pull/744) and
 [#750](https://github.com/cschadewitz/Project_Orca/pull/750) findings and the
 [#701 contract-question comment](https://github.com/cschadewitz/Project_Orca/issues/701#issuecomment-6422342610).
+
+## 0. Decision and what was built
+
+The owner chose **C, the layered floor**, with these answers to §7:
+
+- (1) Yes, as an **opt-in profile setting, off by default** (`StrictActionProfile.judgeFloor`). Absent
+  means today's behaviour exactly.
+- (3) No opt-out: no rule, grant or Save can lower a profile's floor.
+- (6) An **unsure or unreachable judge asks the person** (`require-human`) under the floor. A rule
+  that itself holds the lane on an unreachable judge keeps its stricter answer.
+- (7) Per profile.
+- (5) Judge conflicts are refused (`judge-requirement-conflict`), never merged.
+
+So the floor has no `mode`, `onIndeterminate` or `allowWhenUnavailable`. It has the judge,
+projection and destination refs, a maximum duration, and `onNotFit` (`require-human` or `deny`).
+`evaluateStrictPermission` composes it after first-match rule selection and returns
+`StrictReviewTerms` (`requiredBy`, `onNotFit`, `onIndeterminate`, `onUnavailable`, each the stricter
+of rule and floor). The strict policy port completes reviews from those terms. A present but malformed
+floor holds the call (`invalid-judge-floor`) rather than meaning off. Tests:
+[`judge-floor-701.test.ts`](../../../packages/agents/test/judge-floor-701.test.ts). The strict
+policy stays unwired; turning it on is a separate, reviewed step. (2) newest-grant precedence and (4)
+a record-only advisory mode were not chosen and stay as they are.
 
 Executable companions, both run by the ordinary root Vitest configuration:
 

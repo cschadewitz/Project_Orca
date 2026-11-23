@@ -10,10 +10,16 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { NotificationMessage, RunsGetResult, RunOperationsView } from "@orca/protocol";
+import type {
+  NotificationMessage,
+  RecoveryAssessment,
+  RecoveryStep,
+  RunsGetResult,
+  RunOperationsView,
+} from "@orca/protocol";
 import { RunsSurface } from "../src/runs/runs-surface.js";
-import { boardRuns, ownerText, progressText, waitText } from "../src/runs/board/board-model.js";
-import { AS_OF, RUN_DETAILS, RUNS } from "./fixtures.js";
+import { boardRuns, ownerText, progressText, recoveryLines, waitText } from "../src/runs/board/board-model.js";
+import { AS_OF, HELLO, RUN_DETAILS, RUNS } from "./fixtures.js";
 import { installBridge, harness, type Harness } from "./harness.js";
 import type { FakeBridge } from "./fake-bridge.js";
 
@@ -335,7 +341,231 @@ describe("run filters and the daemon's protocol", () => {
   });
 });
 
+const step = (over: Partial<RecoveryStep>): RecoveryStep => ({
+  runId: "run-gate",
+  stepRunId: "s-deploy-1",
+  nodeId: "deploy",
+  nodeType: "agent",
+  attempt: 1,
+  status: "running",
+  effect: "uncertain",
+  asksAgain: false,
+  answerCarried: false,
+  artifactIds: [],
+  missingArtifactIds: [],
+  ...over,
+});
+
+/** A stopped run whose deploy may have acted: Resume waits on review, a checkpoint attempt does not. */
+const ASSESSMENT: RecoveryAssessment = {
+  runId: "run-gate",
+  workflowId: "sdlc",
+  workflowVersion: "2",
+  status: "stale",
+  options: [
+    { kind: "resume", readiness: "blocked", blockers: ["effect-unreviewed"], unverified: [], runsAgain: [step({})] },
+    {
+      kind: "checkpoint-attempt",
+      readiness: "available",
+      blockers: [],
+      unverified: [],
+      checkpointStepRunId: "s-write",
+      runsAgain: [step({ effect: "reviewed" })],
+    },
+    { kind: "new-run", readiness: "available", blockers: [], unverified: [], runsAgain: [] },
+  ],
+  checkpoints: [
+    {
+      stepRunId: "s-write",
+      nodeId: "write",
+      attempt: 1,
+      readiness: "available",
+      blockers: [],
+      unverified: [],
+      reused: [],
+      ranAfter: [],
+    },
+  ],
+  uncertain: [step({})],
+};
+
+describe("recovery previews on the board (#357)", () => {
+  /** `run-gate` has stopped (stale); everything else on the board is moving. */
+  function stopped(recovery: (runId: string) => Promise<unknown>, methods = ["runs.recovery"]) {
+    fake = installBridge({
+      connection: {
+        state: "live",
+        since: AS_OF,
+        orcaVersion: HELLO.orcaVersion,
+        capabilities: HELLO.capabilities,
+        methods: [...(HELLO.methods ?? []), ...methods],
+      },
+    });
+    fake.script({
+      "runs.get": ({ runId }) => {
+        const detail = withOperations(runId);
+        if (!detail)
+          return Promise.resolve({ ok: false as const, error: { code: "RUN_NOT_FOUND", message: "no run" } });
+        const run = runId === "run-gate" ? { ...detail.run, status: "stale" as const } : detail.run;
+        return Promise.resolve({ ok: true as const, result: { ...detail, run } });
+      },
+      "runs.recovery": (({ runId }: { runId: string }) => recovery(runId)) as never,
+    });
+  }
+  const asked = () => fake.calls.filter((c) => c.method === "runs.recovery").map((c) => c.params);
+  afterEach(() => {
+    cleanup();
+    while (teardown.length) teardown.pop()?.();
+  });
+
+  it("says what recovering a stopped run would do, and asks only about stopped runs", async () => {
+    stopped(() => Promise.resolve({ ok: true, result: { assessment: ASSESSMENT, asOf: AS_OF } }));
+    renderRuns();
+    await openBoard();
+    const preview = await within(card("Document the rollout")).findByRole("region", {
+      name: "Recovery for Document the rollout",
+    });
+    await waitFor(() => expect(preview.textContent).toContain("Checkpoint attempt after write"));
+    expect(preview.textContent).toContain("Review first: deploy may have acted outside ORCA");
+    expect(preview.textContent).toContain("Runs again: deploy");
+    // The running run is not asked about, and has no preview.
+    expect(within(card("Add the SSO callback")).queryByRole("region")).toBeNull();
+    expect(asked()).toEqual([{ runId: "run-gate" }]);
+
+    fireEvent.click(within(preview).getByRole("button", { name: "Open recovery" }));
+    const tree = await screen.findByRole("tree", { name: "Run tree" });
+    await waitFor(() => expect(within(tree).getByRole("treeitem", { selected: true }).id).toBe("tree-row-run-gate"));
+  });
+
+  it("is never asked of a daemon that does not list runs.recovery", async () => {
+    stopped(() => Promise.resolve({ ok: true, result: { assessment: ASSESSMENT, asOf: AS_OF } }), []);
+    renderRuns();
+    await openBoard();
+    await waitFor(() => expect(card("Document the rollout").getAttribute("aria-label")).toContain("Live"));
+    expect(within(card("Document the rollout")).queryByRole("region")).toBeNull();
+    expect(asked()).toEqual([]);
+  });
+
+  /** Each `runs.recovery` call waits until the test answers it, in any order. */
+  function deferredAnswers() {
+    const pending: ((assessment: RecoveryAssessment) => void)[] = [];
+    stopped(
+      () =>
+        new Promise((resolve) =>
+          pending.push((assessment) => resolve({ ok: true, result: { assessment, asOf: AS_OF } })),
+        ),
+    );
+    return {
+      /** Answer the request asked `index`-th. */
+      one: async (index: number, assessment: RecoveryAssessment) => {
+        await waitFor(() => expect(pending.length).toBeGreaterThan(index));
+        await act(async () => pending[index]!(assessment));
+      },
+      /** Answer every request asked so far (the current one among them). */
+      all: async (assessment: RecoveryAssessment) => {
+        await act(async () => {
+          for (const resolve of pending) resolve(assessment);
+        });
+      },
+    };
+  }
+  const newRunOnly: RecoveryAssessment = { ...ASSESSMENT, uncertain: [], options: ASSESSMENT.options.slice(2) };
+  const preview = () => screen.getByRole("region", { name: "Recovery for Document the rollout" });
+
+  it("never shows advice for a run state that has moved on, even when its answer arrives late", async () => {
+    const answer = deferredAnswers();
+    renderRuns();
+    await openBoard();
+    await within(card("Document the rollout")).findByText("Checking what recovery would do");
+    // The run moves before the first read answers: it is held now, at a newer point in its stream.
+    act(() =>
+      fake.notify({
+        kind: "notification",
+        method: "run.changed",
+        params: {
+          subscriptionId: "sub-1",
+          runId: "run-gate",
+          seq: RUN_DETAILS["run-gate"]!.lastSeq + 1,
+          at: AS_OF,
+          status: "held",
+          event: "step.failed",
+        },
+      }),
+    );
+    await waitFor(() => expect(asked().length).toBeGreaterThanOrEqual(2));
+    await answer.one(0, ASSESSMENT);
+    expect(preview().textContent).toContain("Checking what recovery would do");
+    expect(preview().textContent).not.toContain("deploy");
+    await answer.all(newRunOnly);
+    await waitFor(() => expect(preview().textContent).toContain("New run"));
+    expect(preview().textContent).not.toContain("deploy");
+  });
+
+  it("asks again for a run that left the board and came back, and never takes the first answer", async () => {
+    const answer = deferredAnswers();
+    renderRuns();
+    await openBoard();
+    await within(card("Document the rollout")).findByText("Checking what recovery would do");
+    // Off the board and back, in the same scope and the same run state: a new request.
+    fireEvent.click(screen.getByRole("button", { name: "Tree" }));
+    await screen.findByRole("tree", { name: "Run tree" });
+    fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    await waitFor(() => expect(asked().length).toBeGreaterThanOrEqual(2));
+    await answer.one(0, ASSESSMENT);
+    expect(preview().textContent).toContain("Checking what recovery would do");
+    await answer.all(newRunOnly);
+    await waitFor(() => expect(preview().textContent).toContain("New run"));
+    expect(preview().textContent).not.toContain("deploy");
+  });
+
+  it("drops a preview when the connection ends, and never draws an answer that arrives after", async () => {
+    let first: ((value: unknown) => void) | undefined;
+    const answers = [
+      new Promise((resolve) => (first = resolve)),
+      Promise.resolve({
+        ok: true,
+        result: { assessment: { ...ASSESSMENT, uncertain: [], options: ASSESSMENT.options.slice(2) }, asOf: AS_OF },
+      }),
+    ];
+    stopped(() => answers.shift() ?? new Promise(() => {}));
+    const rerender = renderRuns();
+    await openBoard();
+    await within(card("Document the rollout")).findByText("Checking what recovery would do");
+    rerender("disconnected");
+    await waitFor(() => expect(screen.queryByRole("region", { name: /Recovery for/ })).toBeNull());
+    rerender("live");
+    // A fresh read once the connection is back: the card shows the second answer.
+    const region = () => screen.getByRole("region", { name: "Recovery for Document the rollout" });
+    await waitFor(() => expect(region().textContent).toContain("New run"));
+    // The first answer, asked before the connection ended, arrives now: it is not drawn, though
+    // the scope reads the same as it did then.
+    await act(async () => first?.({ ok: true, result: { assessment: ASSESSMENT, asOf: AS_OF } }));
+    expect(region().textContent).not.toContain("deploy");
+    expect(asked()).toHaveLength(2);
+  });
+});
+
 describe("board words", () => {
+  it("previews recovery from the daemon's assessment, and says why when every way back is blocked", () => {
+    expect(recoveryLines(ASSESSMENT)).toEqual([
+      "Review first: deploy may have acted outside ORCA",
+      "Checkpoint attempt after write",
+      "Runs again: deploy",
+    ]);
+    const resume = { kind: "resume" as const, readiness: "unverified" as const, blockers: [], unverified: [] };
+    expect(recoveryLines({ ...ASSESSMENT, uncertain: [], options: [{ ...resume, runsAgain: [] }] })).toEqual([
+      "Resume (unverified)",
+      "Runs nothing again",
+    ]);
+    expect(
+      recoveryLines({
+        ...ASSESSMENT,
+        uncertain: [],
+        options: [{ ...resume, readiness: "blocked", blockers: ["workflow-missing"], runsAgain: [] }],
+      }),
+    ).toEqual(["No way back: The workflow version this run used is no longer readable. Start a new run instead."]);
+  });
+
   it("counts steps, names waits and owners, and leaves out what is not there", () => {
     const gate = RUNS.find((r) => r.id === "run-gate")!;
     expect(progressText(gate)).toBeUndefined();

@@ -12,6 +12,7 @@ The bundle holds one top-level directory, orca-server-X.Y.Z-linux-x64/, with:
 
   orca-daemon.mjs           the CLI, daemon and ACP facade, bundled (build-daemon.js --server)
   native-io-worker.js       the host-resources worker the daemon starts beside itself
+  claude-pre-tool-hook.mjs  ORCA's Claude tool-call hook, run by the agent beside the daemon (#704)
   scripted-agent/main.js    the scripted agent `orca demo` starts beside itself
   runtime/bin/node          the pinned Node runtime the release workflow built and tested with
   runtime/LICENSE           Node's licence
@@ -67,6 +68,7 @@ def collect(version, sha, node, daemon_dir, node_version):
 
     add(ENTRY, daemon_dir / "orca-daemon.mjs")
     add("native-io-worker.js", daemon_dir / "native-io-worker.js")
+    add("claude-pre-tool-hook.mjs", daemon_dir / "claude-pre-tool-hook.mjs")
     add("scripted-agent/main.js", daemon_dir / "scripted-agent" / "main.js")
     add(NODE, node, True)
     licence = node.resolve().parent.parent / "LICENSE"
