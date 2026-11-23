@@ -1,6 +1,6 @@
 # Updating ORCA (v0.6.0)
 
-Updates are explicit. Desktop and server installations are independent: updating the
+Updates never interrupt work. Desktop and server installations are independent: updating the
 Windows app never installs anything on an attached server. No installation command is
 exposed through daemon RPC. The additive protocol 1.8 `maintenance` method only closes
 or reopens admission; it accepts no URL, path, shell command or package name.
@@ -21,8 +21,9 @@ archives, not the supported installation/update path. A pre-v0.6.0 desktop has n
 control; install v0.6.0 manually once. Retain a known-good installer for recovery.
 
 The header and command palette offer **Check for updates**, **Download VERSION**, and
-**Restart to update to VERSION**. Checking does not download. Downloading does not install,
-and ordinary exit does not install a cached update. The download percentage describes
+**Restart to update to VERSION**. With [automatic updates](#automatic-desktop-updates) on (the
+default) the app takes these steps by itself at idle moments; turned off, checking does not
+download, downloading does not install, and ordinary exit does not install a cached update. The download percentage describes
 installer bytes, not run progress. Failed checks/downloads can be retried. Network and
 credential details never cross into the renderer.
 
@@ -35,6 +36,34 @@ survive restart. Once admission is closed, new calls cannot race with shutdown. 
 daemon is stopped before the installer launches. The installer runs silently, keeps the
 per-user install where it is and starts the updated app; it asks nothing. An external daemon
 is neither stopped nor installed by this path.
+
+### Automatic desktop updates
+
+From 0.8.0 the Windows app updates itself unless you turn it off (#566). It follows the same
+rule as [automatic server updates](#automatic-server-updates): it never stops, cancels or waits
+on work, and a busy app simply tries again later.
+
+- **Check and download.** Two minutes after start, then every four hours, the app checks its
+  feed and downloads whatever it is offered, in the background.
+- **Install when idle.** Once a download is ready, the app installs it after 15 minutes without
+  keyboard or mouse input, trying at most every five minutes. It goes through exactly the
+  restart above, with one more condition: the bundled daemon's runtime idle proof
+  (`maintenance.runtime`) must close admission, which it refuses while any request, run
+  execution, callback, renewal, dispatch, continuation or recovery is in progress. A refusal
+  holds nothing and stops nothing; unsaved drafts refuse the same way. The updated app starts
+  again by itself.
+- **Install on close.** Closing the last window with a ready download tries the same install,
+  without starting the app again. Refused, the window closes as it always did. It is tried
+  once per run of the app.
+- **Overdue.** A download that has waited three days for an idle moment turns the header's
+  **Restart to update** button into a highlighted "waiting 3 days" button. It still kills
+  nothing.
+- **Off switch.** The command palette's **Turn off automatic updates** (and **Turn on**) saves
+  `updates.automatic` in the app's preferences. Off, every step is manual, as above.
+- **Failures.** An unknown installer outcome is handled by the contract below; the app makes no
+  further automatic attempt in that run.
+
+An external daemon is never stopped or installed by this path, as for a manual restart.
 
 ### Windows failed-update recovery contract (#660, C5a-02)
 

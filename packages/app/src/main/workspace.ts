@@ -77,6 +77,11 @@ interface WindowsUpdateAttempt {
   storeDir: string | undefined;
   target: WorkspaceTarget;
   stopAttempted: boolean;
+  /**
+   * Which proof closed admission: the legacy RPC-only one (a person pressed Restart) or the
+   * runtime idle proof (an automatic install, #566). Resume must use the same method.
+   */
+  proof: "legacy" | "runtime";
   /** The store handoff written for the version being installed, once per attempt (#897). */
   handedOff: UpdateHandoff | undefined;
   recovering: boolean;
@@ -1145,6 +1150,23 @@ export class Workspace {
       throw new Error("Update attempt or target changed; admission remains closed");
   }
 
+  /** The runtime proof's target for this attempt's exact daemon, if its hello offered the method. */
+  private runtimeUpdateTarget(
+    attempt: WindowsUpdateAttempt,
+  ): { workspaceId: string; instanceId: string; processId: number } | undefined {
+    const identity = attempt.identity;
+    const processId = attempt.processId;
+    if (
+      !identity?.workspaceId ||
+      !identity.instanceId ||
+      !processId ||
+      !this.verifiedHello?.methods?.includes(MAINTENANCE_RUNTIME_METHOD) ||
+      this.verifiedHello.identity?.instanceId !== identity.instanceId
+    )
+      return undefined;
+    return { workspaceId: identity.workspaceId, instanceId: identity.instanceId, processId };
+  }
+
   async stopForUpdate(token: string): Promise<void> {
     const attempt = this.windowsUpdate;
     if (!attempt || attempt.token !== token) throw new Error("Update was not prepared for this token");
@@ -1230,7 +1252,7 @@ export class Workspace {
     }
   }
 
-  async prepareUpdate(token: string): Promise<void> {
+  async prepareUpdate(token: string, options: { idleProof?: boolean } = {}): Promise<void> {
     const refuseUnclaimed = (message: string): never => {
       // A duplicate exact-token caller cannot declare its existing reservation absent.
       if (this.windowsUpdate?.token === token) throw new Error("Update token already has a reservation");
@@ -1270,6 +1292,7 @@ export class Workspace {
       storeDir: this.verifiedHello?.storeDir,
       target: { ...this.target },
       stopAttempted: false,
+      proof: options.idleProof ? "runtime" : "legacy",
       handedOff: undefined,
       recovering: false,
       busy: true,
@@ -1280,7 +1303,32 @@ export class Workspace {
       attempt.ownership?.check();
       if (attempt.firstRun && (!attempt.ownership || !this.currentFirstRun(attempt.firstRun.path)))
         throw new FirstRunOwnershipRefusal();
-      if (daemon) {
+      if (daemon && attempt.proof === "runtime") {
+        const target = this.runtimeUpdateTarget(attempt);
+        if (!target) {
+          // Nothing was sent: an automatic install needs the runtime proof, so it never runs here.
+          this.windowsUpdate = undefined;
+          this.updating = false;
+          throw new UpdatePreflightRefusal(token, "Bundled daemon offers no runtime idle proof");
+        }
+        const result = await attempt.client.call(
+          MAINTENANCE_RUNTIME_METHOD,
+          { action: "prepare", token, target },
+          RuntimeMaintenanceResultSchema,
+          false,
+          undefined,
+          false,
+        );
+        this.checkWindowsUpdate(attempt);
+        if (!sameRuntimeTarget(result.target, target)) throw new Error("Runtime proof target changed");
+        if (result.outcome === "blocked") {
+          // Positive proof that the daemon held nothing: a blocked prepare never takes the token.
+          this.windowsUpdate = undefined;
+          this.updating = false;
+          throw new UpdatePreflightRefusal(token, `Bundled daemon busy: ${result.active.join(", ")}`);
+        }
+        if (result.outcome !== "held") throw new Error("Runtime idle proof is uncertain");
+      } else if (daemon) {
         const result = await attempt.client.maintenance({ action: "prepare", token });
         this.checkWindowsUpdate(attempt);
         if (!result.ready) throw new Error(`Bundled daemon busy: ${result.active.join(", ")}`);
@@ -1301,7 +1349,21 @@ export class Workspace {
     attempt.recovering = true;
     try {
       if (!attempt.stopAttempted) {
-        if (attempt.daemon) {
+        if (attempt.daemon && attempt.proof === "runtime") {
+          const target = this.runtimeUpdateTarget(attempt);
+          if (!target) throw new Error("Runtime proof target changed");
+          const result = await attempt.client.call(
+            MAINTENANCE_RUNTIME_METHOD,
+            { action: "resume", token, target },
+            RuntimeMaintenanceResultSchema,
+            false,
+            undefined,
+            false,
+          );
+          this.checkWindowsUpdate(attempt);
+          if (!sameRuntimeTarget(result.target, target) || result.outcome !== "released")
+            throw new Error("Bundled daemon admission is still held");
+        } else if (attempt.daemon) {
           const result = await attempt.client.maintenance({ action: "resume", token });
           this.checkWindowsUpdate(attempt);
           if (result.ready) throw new Error("Bundled daemon admission is still held");
@@ -1639,4 +1701,11 @@ export class Workspace {
 /** A failed probe through a working tunnel: ssh is fine, the daemon is not there. */
 function remoteDaemonMissing(lease: ProfileLease): string {
   return `SSH to ${lease.profile.destination} works, but no ORCA daemon is listening on its port ${lease.profile.remotePort}. Start it there with \`orca serve\` and try again.`;
+}
+
+function sameRuntimeTarget(
+  a: { workspaceId: string; instanceId: string; processId: number },
+  b: { workspaceId: string; instanceId: string; processId: number },
+): boolean {
+  return a.workspaceId === b.workspaceId && a.instanceId === b.instanceId && a.processId === b.processId;
 }

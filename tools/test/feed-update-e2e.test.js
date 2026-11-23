@@ -53,10 +53,14 @@ it("updates every architecture the feed serves, arm64 on a native arm64 runner (
   const { SERVED_ARCHES } = await import("../deploy/feed-worker/worker.js");
   const { include } = e2e.jobs.update.strategy.matrix;
   expect(include).toEqual([
-    { arch: "x64", runner: "windows-latest" },
-    { arch: "arm64", runner: "windows-11-arm" },
+    { arch: "x64", runner: "windows-latest", mode: "manual" },
+    { arch: "arm64", runner: "windows-11-arm", mode: "manual" },
+    // Automatic updates (#566) once, on x64: nothing pressed, closing the window installs.
+    { arch: "x64", runner: "windows-latest", mode: "automatic" },
   ]);
-  expect(include.map((entry) => entry.arch)).toEqual(SERVED_ARCHES);
+  const manual = include.filter((entry) => entry.mode === "manual");
+  expect(manual.map((entry) => entry.arch)).toEqual(SERVED_ARCHES);
+  expect(named("Update N to N+1 through the local feed").env.ORCA_UPDATE_MODE).toBe("${{ matrix.mode }}");
   expect(e2e.jobs.update.strategy["fail-fast"]).toBe(false);
   expect(e2e.jobs.update.env).toEqual({ ARCH: "${{ matrix.arch }}" });
   expect(named("Package N and N+1").run).toContain('--"$ARCH"');

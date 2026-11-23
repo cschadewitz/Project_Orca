@@ -24,19 +24,22 @@ describe("preferences", () => {
       // Opt-in per tier, and the one tier that holds an agent turn open is the one that is
       // on (#162, docs/design/20-attention-and-gates.md).
       alerts: { permission: true, gate: false, failure: false, unfocusedEscalationMs: 300_000 },
+      // Desktop updates install at a natural idle moment unless turned off (#566).
+      updates: { automatic: true },
     });
     expect(new PreferencesFile(join(dir, "missing", "preferences.json")).read()).toEqual(DEFAULT_PREFERENCES);
   });
 
   it("writes a patch over what is on disk and reads it back", () => {
     const file = new PreferencesFile(join(dir, "nested", "preferences.json"));
-    const alerts = DEFAULT_PREFERENCES.alerts;
-    expect(file.write({ theme: "dark" })).toEqual({ theme: "dark", density: {}, panes: {}, alerts });
+    const { alerts, updates } = DEFAULT_PREFERENCES;
+    expect(file.write({ theme: "dark" })).toEqual({ theme: "dark", density: {}, panes: {}, alerts, updates });
     expect(file.write({ density: { runs: "compact" } })).toEqual({
       theme: "dark",
       density: { runs: "compact" },
       panes: {},
       alerts,
+      updates,
     });
     expect(file.write({ density: { config: "comfortable" } }).density).toEqual({
       runs: "compact",
@@ -47,6 +50,7 @@ describe("preferences", () => {
       density: { runs: "compact", config: "comfortable" },
       panes: {},
       alerts,
+      updates,
     });
     expect(JSON.parse(readFileSync(file.path, "utf8"))).toEqual(file.read());
   });
@@ -64,6 +68,7 @@ describe("preferences", () => {
       density: {},
       panes: {},
       alerts: DEFAULT_PREFERENCES.alerts,
+      updates: DEFAULT_PREFERENCES.updates,
     });
   });
 
@@ -98,6 +103,7 @@ describe("preferences", () => {
       density: { runs: "compact", plan: "compact" },
       panes: {},
       alerts: DEFAULT_PREFERENCES.alerts,
+      updates: DEFAULT_PREFERENCES.updates,
     });
   });
 
@@ -151,5 +157,18 @@ describe("preferences", () => {
       unfocusedEscalationMs: 300_000,
     });
     expect(() => file.write({ alerts: { unfocusedEscalationMs: 0 } })).toThrow();
+  });
+
+  it("turns automatic updates off and on without touching anything else (#566)", () => {
+    const file = new PreferencesFile(join(dir, "updates", "preferences.json"));
+    file.write({ theme: "dark" });
+    expect(file.write({ updates: { automatic: false } })).toMatchObject({
+      theme: "dark",
+      updates: { automatic: false },
+    });
+    expect(new PreferencesFile(file.path).read().updates.automatic).toBe(false);
+    expect(file.write({ updates: {} }).updates.automatic).toBe(false);
+    expect(file.write({ updates: { automatic: true } }).updates.automatic).toBe(true);
+    expect(() => file.write({ updates: { automatic: "yes" } })).toThrow();
   });
 });

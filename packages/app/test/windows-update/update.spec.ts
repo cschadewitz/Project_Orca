@@ -7,6 +7,10 @@
  * - with an `internal` token, whose ring holds N+1, it is offered N+1, downloads it through
  *   the Worker and restarts into the installer, after which Windows reports N+1 installed.
  *
+ * With `ORCA_UPDATE_MODE=automatic` (#566) the internal run presses nothing: automatic updates
+ * are on, the app checks and downloads by itself, and closing its window installs N+1 without
+ * starting the app again. Otherwise automatic updates are turned off and every step is pressed.
+ *
  * That covers the Worker's ring choice and authorization, the app's update driver and
  * electron-updater on an unsigned per-user install, with nothing published. It does not
  * prove the updated app relaunches, that Range requests were used (a full download passes
@@ -16,7 +20,7 @@
  */
 import { test, expect, chromium, type Browser, type Page } from "@playwright/test";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -33,6 +37,7 @@ const EXECUTABLE = required("ORCA_UPDATE_EXECUTABLE");
 const FEED_URL = required("ORCA_UPDATE_URL");
 const FROM = required("ORCA_UPDATE_FROM");
 const TO = required("ORCA_UPDATE_TO");
+const MODE = process.env.ORCA_UPDATE_MODE === "automatic" ? "automatic" : "manual";
 const TOKEN_FILES = {
   internal: required("ORCA_UPDATE_TOKEN_INTERNAL"),
   preview: required("ORCA_UPDATE_TOKEN_PREVIEW"),
@@ -46,7 +51,7 @@ interface Snapshot {
 interface UpdatesWindow {
   orca: {
     connection: { read(): { state: string } };
-    updates: { act(action: string): Promise<{ ok: boolean; result?: Snapshot }> };
+    updates: { read(): Snapshot; act(action: string): Promise<{ ok: boolean; result?: Snapshot }> };
   };
 }
 
@@ -68,6 +73,12 @@ async function launch(ring: keyof typeof TOKEN_FILES): Promise<Launched> {
   const root = await mkdtemp(join(tmpdir(), `orca-update-${ring}-`));
   const workspace = join(root, "workspace");
   await mkdir(workspace, { recursive: true });
+  // The person's switch for automatic updates (#566), as the palette command writes it.
+  await mkdir(join(root, "profile"), { recursive: true });
+  await writeFile(
+    join(root, "profile", "preferences.json"),
+    `${JSON.stringify({ updates: { automatic: MODE === "automatic" } })}\n`,
+  );
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
   Object.assign(env, {
@@ -181,56 +192,102 @@ test("a preview token, whose ring holds the installed version, is not offered th
   }
 });
 
-test("an internal token is offered the next version, downloads it and installs it", async () => {
-  // Each step has its own bound, so a hang names the step; the feed's request log is in the
-  // workflow output.
-  test.setTimeout(1_200_000);
-  const launched = await launch("internal");
-  const { child, page } = launched;
-  let quit = false;
-  void launched.exited.then(() => (quit = true));
-  try {
-    await test.step(
-      "check",
-      async () => {
-        expect(await act(page, "check")).toMatchObject({ phase: "available", current: FROM, version: TO });
-      },
-      { timeout: 120_000 },
-    );
-    await test.step(
-      "download",
-      async () => {
-        expect(await act(page, "download")).toMatchObject({ phase: "ready" });
-      },
-      { timeout: 360_000 },
-    );
-    await test.step("restart into the installer", async () => {
-      // Restart hands over to the installer and quits, so a successful call never answers. An
-      // answer is a refusal or an unknown installer outcome: fail with it rather than wait.
-      let answer: unknown;
-      void page
-        .evaluate(() => (window as unknown as UpdatesWindow).orca.updates.act("restart"))
-        .then((reply) => (answer = reply))
-        .catch(() => undefined);
-      await expect.poll(() => quit || answer !== undefined, { timeout: 120_000 }).toBe(true);
-      expect(quit, `the app quits into the installer; restart answered ${JSON.stringify(answer)}`).toBe(true);
-      expect(child.exitCode, "the app's exit code").toBe(0);
-    });
-  } finally {
-    await stop(launched);
-  }
-  await test.step("installed version", async () => {
-    // What the update left running while Windows still reports the old version, in the log:
-    // an installer that never started reads differently from one that waits or fails.
-    const watch = setInterval(() => {
-      void installerProcesses().then((lines) => process.stdout.write(`[installer] ${lines || "none"}\n`));
-    }, 60_000);
+// The automatic run (#566) covers the internal ring with nothing pressed; one install per job.
+if (MODE === "manual")
+  test("an internal token is offered the next version, downloads it and installs it", async () => {
+    // Each step has its own bound, so a hang names the step; the feed's request log is in the
+    // workflow output.
+    test.setTimeout(1_200_000);
+    const launched = await launch("internal");
+    const { child, page } = launched;
+    let quit = false;
+    void launched.exited.then(() => (quit = true));
     try {
+      await test.step(
+        "check",
+        async () => {
+          expect(await act(page, "check")).toMatchObject({ phase: "available", current: FROM, version: TO });
+        },
+        { timeout: 120_000 },
+      );
+      await test.step(
+        "download",
+        async () => {
+          expect(await act(page, "download")).toMatchObject({ phase: "ready" });
+        },
+        { timeout: 360_000 },
+      );
+      await test.step("restart into the installer", async () => {
+        // Restart hands over to the installer and quits, so a successful call never answers. An
+        // answer is a refusal or an unknown installer outcome: fail with it rather than wait.
+        let answer: unknown;
+        void page
+          .evaluate(() => (window as unknown as UpdatesWindow).orca.updates.act("restart"))
+          .then((reply) => (answer = reply))
+          .catch(() => undefined);
+        await expect.poll(() => quit || answer !== undefined, { timeout: 120_000 }).toBe(true);
+        expect(quit, `the app quits into the installer; restart answered ${JSON.stringify(answer)}`).toBe(true);
+        expect(child.exitCode, "the app's exit code").toBe(0);
+      });
+    } finally {
+      await stop(launched);
+    }
+    await test.step("installed version", async () => {
+      // What the update left running while Windows still reports the old version, in the log:
+      // an installer that never started reads differently from one that waits or fails.
+      const watch = setInterval(() => {
+        void installerProcesses().then((lines) => process.stdout.write(`[installer] ${lines || "none"}\n`));
+      }, 60_000);
+      try {
+        await expect
+          .poll(installedVersion, { timeout: 480_000, intervals: [5_000], message: `Windows reports ${TO} installed` })
+          .toBe(TO);
+      } finally {
+        clearInterval(watch);
+      }
+    });
+  });
+
+if (MODE === "automatic")
+  test("automatic: with nothing pressed, it downloads by itself and closing the window installs (#566)", async () => {
+    test.setTimeout(1_200_000);
+    const launched = await launch("internal");
+    const { child, page } = launched;
+    let quit = false;
+    void launched.exited.then(() => (quit = true));
+    try {
+      await test.step(
+        "checks and downloads on its own",
+        async () => {
+          // The first automatic check is two minutes after start; nothing here calls act().
+          await expect
+            .poll(
+              async () => {
+                if (quit) return "quit";
+                return page
+                  .evaluate(() => (window as unknown as UpdatesWindow).orca.updates.read())
+                  .then((state) => `${state.phase} ${state.version ?? ""}`.trim())
+                  .catch(() => (quit ? "quit" : "unreadable"));
+              },
+              { timeout: 600_000, intervals: [5_000] },
+            )
+            .toMatch(new RegExp(`^(ready ${TO.replaceAll(".", "\\.")}|restarting ${TO.replaceAll(".", "\\.")}|quit)$`));
+        },
+        { timeout: 620_000 },
+      );
+      await test.step("closing the window installs instead of just closing", async () => {
+        // An idle install may already be under way on a runner nobody touches; either way the
+        // app leaves into the installer with a clean exit.
+        if (!quit) void page.evaluate(() => window.close()).catch(() => undefined);
+        await expect.poll(() => quit, { timeout: 180_000 }).toBe(true);
+        expect(child.exitCode, "the app's exit code").toBe(0);
+      });
+    } finally {
+      await stop(launched);
+    }
+    await test.step("installed version", async () => {
       await expect
         .poll(installedVersion, { timeout: 480_000, intervals: [5_000], message: `Windows reports ${TO} installed` })
         .toBe(TO);
-    } finally {
-      clearInterval(watch);
-    }
+    });
   });
-});

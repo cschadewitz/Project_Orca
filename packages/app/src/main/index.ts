@@ -40,6 +40,7 @@ import { RemoteProfiles } from "./remote-profiles.js";
 import { ServerUpdater } from "./server-update.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates, type UpdateGuards } from "./updates.js";
+import { AutoUpdates } from "./auto-updates.js";
 import { MacUpdateWindows } from "./mac-update-windows.js";
 import { MacUpdateGuards } from "./mac-update-guards.js";
 import { installMacUpdateIPC } from "./mac-update-application.js";
@@ -1542,7 +1543,7 @@ const updateGuards: UpdateGuards = {
       },
     });
   },
-  prepareDaemon: (token) => workspace.prepareUpdate(token),
+  prepareDaemon: (token, options) => workspace.prepareUpdate(token, options),
   stopDaemon: (token) => workspace.stopForUpdate(token),
   handOff: (token, from, to) => workspace.handOffForUpdate(token, from, to),
   resume: (token) => workspace.cancelUpdate(token),
@@ -1558,6 +1559,13 @@ const updates = new Updates(
 
   (state) => send("orca:update", state),
 );
+/* Check, download and install at a natural idle moment unless turned off (#566). */
+const autoUpdates = new AutoUpdates({
+  updates,
+  enabled: () => preferences.read().updates.automatic,
+  idleSeconds: () => powerMonitor.getSystemIdleTime(),
+  now: () => Date.now(),
+});
 const storeSwitch = new StoreSwitchRestart({
   guards: updateGuards,
   target: () => workspace.storeSwitchTarget,
@@ -1716,6 +1724,7 @@ ipcMain.handle("orca:preferences.write", (_event, patch: unknown): BridgeResult<
     assertOrdinaryStartup();
     const next = preferences.write(patch);
     applyTheme(next.theme);
+    autoUpdates.refresh();
     return { ok: true, result: next };
   } catch (e) {
     return { ok: false, error: { code: "PREFERENCES", message: e instanceof Error ? e.message : String(e) } };
@@ -1894,6 +1903,21 @@ function createWindow(): void {
     advanceDiagnosticDocument();
     diagnostics.rendererDisposed();
   });
+  // Closing the last window installs a downloaded update first, when automatic updates are on
+  // and the same guards as an idle install pass (#566). Refused, the window closes as usual.
+  win.on("close", (event) => {
+    if (BrowserWindow.getAllWindows().length !== 1 || !autoUpdates.installsOnClose) return;
+    event.preventDefault();
+    win.hide();
+    void autoUpdates.installOnClose().then(
+      (launched) => {
+        if (!launched && !win.isDestroyed()) win.close();
+      },
+      () => {
+        if (!win.isDestroyed()) win.close();
+      },
+    );
+  });
   win.on("closed", () => {
     diagnosticWindowGenerations.delete(diagnosticsWindowId);
     diagnostics.revokeExportAuthority();
@@ -1995,6 +2019,7 @@ if (!primary) {
     createWindow();
     linuxReleases?.start();
     linuxRestart?.start();
+    autoUpdates.start();
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
@@ -2011,6 +2036,7 @@ app.on("before-quit", () => {
   targets.cancel();
   linuxReleases?.stop();
   linuxRestart?.stop();
+  autoUpdates.stop();
   serverUpdater.stop();
   connection.close();
   alerts.close();
