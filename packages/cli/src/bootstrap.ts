@@ -290,6 +290,14 @@ export function makeWorkspaceProvider(
  * `open` exists so a test can read the options this builds without spawning an agent; it is
  * `openAcpSession` everywhere else.
  */
+/**
+ * What every hooked session logs when it opens. No agent is guard-qualified (the support
+ * matrix gives every one tier none), and the checks ORCA makes are made when the session opens.
+ */
+export const NATIVE_TOOL_HOOK_EXPERIMENTAL =
+  "nativeToolHook is experimental and not guard-qualified: ORCA checked the agent's runtime and hook when " +
+  "this session opened, not afterwards, and the calls outside the hook are listed in docs/agent-hook-coverage.md";
+
 export function makeSessionFactory(
   layout: OrcaFileLayout,
   open: SessionFactory = openAcpSession,
@@ -403,6 +411,8 @@ export function makeSessionFactory(
       throw error;
     }
     admit();
+    // Said on every hooked session: the hook is an experimental, unqualified layer (#704 review).
+    options.logger?.warn(NATIVE_TOOL_HOOK_EXPERIMENTAL, { agent: options.agent.id });
     void session.closed.then(installed.cleanup, installed.cleanup);
     const close = session.close.bind(session);
     session.close = async (...args: Parameters<AgentSession["close"]>) => {

@@ -314,10 +314,21 @@ An agent asks ORCA only when its own permission check has no answer. Once it rem
 grant (Claude's "always allow", a rule in its own settings), the same call never reaches ORCA
 again, so a grant you revoke in ORCA, or a rule you add, does not apply to it.
 
-For the Claude and Codex ACP adapters on the daemon's own machine, ORCA closes that gap with
-a `PreToolUse` hook it installs in the agent's sessions (#704, #705).
+For the Claude and Codex ACP adapters on the daemon's own machine, ORCA can narrow that gap
+with a `PreToolUse` hook it installs in the agent's sessions (#704, #705).
 
-It is opt-in, per agent, and off unless you turn it on:
+> **Experimental, not guard-qualified.** The hook is opt-in and off unless you turn it on. No
+> agent has qualified under ORCA's enforcement acceptance suite (#706): the support matrix
+> gives every agent tier `none`. What is known about it comes from acceptance runs against the
+> real agents driven by a scripted stand-in for the model, which show the behaviour below at
+> the pinned versions; they are diagnostic evidence, not a qualification, and say nothing about
+> an agent that tries to get around the hook. ORCA checks the adapter, the runtime and (for
+> Codex) the hook's installation **once, when the session opens**; that check is not evidence
+> that the hook keeps being run for the rest of the session, and ORCA does not check it again.
+> Calls the hook does not see, per agent, are listed in
+> [agent-hook-coverage.md](agent-hook-coverage.md). Treat it as an extra layer, not a sandbox.
+
+It is opt-in, per agent:
 
 ```yaml
   - id: claude

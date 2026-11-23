@@ -79,7 +79,7 @@
       "tier": "none",
       "routes": ["acp-ask"],
       "pendingRoutes": {
-        "claude-native-hook": "Available opt-in (nativeToolHook: on, off by default) since #704 activation; no tier until a trusted connected receipt exists"
+        "claude-native-hook": "Shipped as an experimental, unqualified opt-in (nativeToolHook: on, off by default). Admission checks run once at session open and are not evidence of later enforcement; connected and installed runs are diagnostic, not qualification. No tier until a trusted receipt exists"
       },
       "receipts": [],
       "unverified": [
@@ -105,7 +105,7 @@
       "tier": "none",
       "routes": ["acp-ask"],
       "pendingRoutes": {
-        "codex-native-hook": "#705 Codex adapter, after #980"
+        "codex-native-hook": "#705 Codex adapter, shipped as an experimental, unqualified opt-in (nativeToolHook: on, off by default). An ORCA ask blocks the call; the hook runner fails open after the session-open probe; typed stdin is outside. No tier"
       },
       "receipts": [],
       "unverified": [

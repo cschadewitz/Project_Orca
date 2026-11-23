@@ -15,6 +15,15 @@ which the agent runs on its own. Every entry says how it is known:
 
 An agent, version or platform not listed here is refused while `nativeToolHook: on`.
 
+**The hook is experimental and not guard-qualified.** "installed" below is diagnostic
+evidence from acceptance runs with a scripted model, at the pinned versions: it shows how the
+agent treats each answer, not that the hook holds against an agent trying to avoid it. The
+checks that admit a session (adapter, runtime image, and for Codex the hook's trust and a
+probe call) run once when it opens; nothing re-checks them during the session, so they are not
+evidence that the hook is still run later. No agent is execution-guard certified (#706), and
+the support matrix (`tools/guard-qualification/support-matrix.json`) gives every agent tier
+`none`.
+
 Support levels, lowest first: **source reviewed**; **connectivity tested** (an ORCA session
 opens, streams, is cancelled and closes on the installed agent); **approval tested** (on the
 installed agent, an ORCA allow runs once and asks again, a deny or a cancelled ask does not

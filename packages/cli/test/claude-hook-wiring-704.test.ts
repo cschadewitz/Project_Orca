@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { AgentSpecSchema, SshHostSchema } from "@orca/core";
+import { AgentSpecSchema, SshHostSchema, silentLogger, type Logger } from "@orca/core";
 import {
   CLAUDE_HOOK_VERIFIED_ADAPTERS,
   CLAUDE_HOOK_VERIFIED_PAIRS,
@@ -29,7 +29,7 @@ import {
   type OpenSessionOptions,
 } from "@orca/agents";
 import { childBundle } from "@orca/testing/child-bundle";
-import { makeSessionFactory, orcaProtectedPaths } from "../src/bootstrap.js";
+import { makeSessionFactory, NATIVE_TOOL_HOOK_EXPERIMENTAL, orcaProtectedPaths } from "../src/bootstrap.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -132,9 +132,18 @@ async function setup(
       codexShell: codexOpts.shell ?? (() => ({ program: "/bin/sh", args: ["-c"] })),
     },
   );
+  const warnings: { msg: string; fields?: Record<string, unknown> }[] = [];
+  const logger: Logger = {
+    ...silentLogger,
+    warn: (msg, fields) => {
+      warnings.push({ msg, ...(fields ? { fields } : {}) });
+    },
+    child: () => logger,
+  };
   const open = (host: AgentHost = new LocalHost({ id: "local", type: "local" })) =>
     factory({
       host,
+      logger,
       agent: AgentSpecSchema.parse({
         id: "claude",
         command: "claude-agent-acp",
@@ -157,6 +166,7 @@ async function setup(
     resolveClosed,
     opened: () => opened,
     closedByFactory: () => closedByFactory,
+    warnings,
   };
 }
 
@@ -164,6 +174,8 @@ describe("installing the hook", () => {
   it("writes a private context file and hands the adapter the settings that run the hook with it", async () => {
     const t = await setup(CLAUDE);
     const session = await t.open();
+    // Every hooked session says the hook is experimental and not guard-qualified.
+    expect(t.warnings).toEqual([{ msg: NATIVE_TOOL_HOOK_EXPERIMENTAL, fields: { agent: "claude" } }]);
     const files = (await readdir(t.hookDir)).filter((f) => !f.endsWith(".runtime.json"));
     expect(files).toHaveLength(1);
     const file = join(t.hookDir, files[0]!);
