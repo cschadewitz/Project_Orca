@@ -80,6 +80,7 @@ import {
   type WorkflowDefinition,
   type WorkflowGraph,
   type Workspace,
+  type SecretRef,
 } from "@orca/core";
 import { reduceRun } from "@orca/core";
 import {
@@ -129,6 +130,7 @@ import {
   deliveryIssues,
   nodeCapabilityScope,
   preflightCapabilities,
+  preflightSecretInputs,
   preflightSecretReferences,
   readSkillForDelivery,
   resolveNodeCapabilities,
@@ -692,6 +694,13 @@ export class Orchestrator {
         { errors, warnings },
       );
     }
+    // A step's `secretEnv` names a configured secret bound to its agent's host (#363).
+    preflightSecretInputs(
+      (generation?.agents ?? this.agents).withOverrides(opts.overrides),
+      def,
+      inputs.vars,
+      this.secretUse !== undefined,
+    );
     if (opts.gitRefObject !== undefined && (opts.gitRef === undefined || !/^[a-f0-9]{40,64}$/.test(opts.gitRefObject)))
       throw new OrcaError("RUN_STATE", "a pinned git ref object needs its ref");
     if (opts.gitRef !== undefined) {
@@ -2559,6 +2568,37 @@ export class Orchestrator {
    * the launch recorded, is refused before any process starts: a run is pinned to its config
    * generation, so only skill files on disk can change under it.
    */
+  /**
+   * The environment a step's `secretEnv` adds (#363): each variable as a reference to the
+   * secret its `secret` launch input names, sorted by variable. Never a value: the reference is
+   * read on the agent's host at session open, under the run owner's grant. A step whose input
+   * names no secret, or whose agent delegates to another daemon, is refused before anything starts.
+   */
+  private stepSecretEnv(rc: RunContext, step: StepRun, agent: AgentSpec): Record<string, SecretRef> | undefined {
+    const node = rc.definition.nodes[step.nodeId];
+    const mapping = node?.type === "agent" ? node.secretEnv : undefined;
+    if (!mapping || Object.keys(mapping).length === 0) return undefined;
+    if (agent.type === "orca-daemon")
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `step '${step.nodeId}' hands its agent secret environment variables, which a step delegated to another daemon cannot take`,
+        { nodeId: step.nodeId, reason: "unsupported" },
+      );
+    const env: Record<string, SecretRef> = {};
+    for (const name of Object.keys(mapping).sort()) {
+      const input = mapping[name]!;
+      const id = rc.state.run.vars[input];
+      if (typeof id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id))
+        throw new OrcaError(
+          "CONFIG_INVALID",
+          `step '${step.nodeId}' maps ${name} to launch input '${input}', which names no secret`,
+          { nodeId: step.nodeId, variable: name, input, reason: "missing" },
+        );
+      env[name] = { secret: id };
+    }
+    return env;
+  }
+
   private stepCapabilities(
     rc: RunContext,
     step: StepRun,
@@ -2843,11 +2883,15 @@ export class Orchestrator {
     const key = `${rc.id}:${agent.id}`;
     const model = selectedModel(rc.state.run.overrides, agent);
     const capabilities = this.stepCapabilities(rc, step, agent);
+    // `secret` launch inputs the step hands its agent as environment variables (#363).
+    const secretEnv = this.stepSecretEnv(rc, step, agent);
+    // A pooled session carries the servers and the secret references it was opened with.
+    const sessionShape = secretEnv ? `${capabilities.key}\0${JSON.stringify(secretEnv)}` : capabilities.key;
     // Asked at every open, pooled or not: a revoked grant stops the next step (#337).
     const delivered = await this.deliverCatalog(rc, step, agent, host, capabilities);
     const { mcpServers, authorize } = delivered;
     let pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
-    if (pooled && pooled.capabilities !== capabilities.key) {
+    if (pooled && pooled.capabilities !== sessionShape) {
       // A per-run session carries the MCP servers it was opened with. A step whose scope
       // differs gets its own session rather than a broader or narrower one (#335).
       rc.logger.info("pooled session has other capabilities; reopening it", { agent: agent.id });
@@ -2927,7 +2971,9 @@ export class Orchestrator {
       session = await this.sessionFactory({
         host,
         // Only the step's resolved MCP servers reach `session/new` (#335).
-        agent: { ...agent, mcpServers },
+        // Secret launch inputs join the agent's env as references, read on its host like any
+        // other (#336): the use decision, host binding, redaction and no fallback all apply.
+        agent: { ...agent, mcpServers, ...(secretEnv ? { env: { ...agent.env, ...secretEnv } } : {}) },
         // An agent that cannot take the step's skills is refused right after `initialize`,
         // before `session/new` configures its servers (#337).
         ...(delivered.skills.length
@@ -3132,7 +3178,7 @@ export class Orchestrator {
           .catch(() => undefined);
       };
       if (agent.sessionMode === "per-run") {
-        const pooled = { session, current, close: closeOnce, returnSlot, capabilities: capabilities.key };
+        const pooled = { session, current, close: closeOnce, returnSlot, capabilities: sessionShape };
         this.sessions.set(key, pooled);
         // A pooled session whose connection went away (wedged agent killed after a cancel, or a
         // crash) must not be handed to the next step; let that step open a fresh one instead.

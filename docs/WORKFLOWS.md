@@ -875,6 +875,39 @@ agents:
   user can read), add a `secrets` entry bound to that host, and replace the literal with
   `{ secret: <id> }`.
 
+### Choosing the secret at launch
+
+A workflow can let whoever starts the run pick which configured secret a step uses (#363),
+for example the deploy token of the target environment. Declare a launch input of type
+`secret` and map it to an environment variable of the step's agent with `secretEnv`:
+
+```yaml
+inputSchema:
+  fields:
+    deployToken: { type: secret, required: true }
+nodes:
+  deploy:
+    type: agent
+    agent: { role: deployer }
+    prompt: "Deploy {{ vars.target }}; the token is in $DEPLOY_TOKEN."
+    secretEnv: { DEPLOY_TOKEN: deployToken }
+```
+
+- **The launcher names a secret, never a value.** The input's value is the id of an entry in
+  `secrets` (`orca run deploy --var deployToken=prod-deploy`). Anything else, an unknown id,
+  or a secret bound to another host than the step's agent is refused before the run is
+  written, with `reason` `not-found` or `wrong-host`.
+- **Agent environment only.** The step's session gets `{ secret: <id> }` under that variable
+  and reads it like any other reference: on the agent's host, at session open, under the run
+  owner's grant, redacted from everything the run writes. The value never enters the prompt,
+  the model's context or the store; `{{ vars.deployToken }}` renders the id.
+- **Checked when the workflow is validated.** Every `secretEnv` entry must name a top-level
+  input of type `secret`. A `secret` input nested inside an object or array is refused.
+- **Not across daemons.** A step whose agent delegates to another daemon cannot take a
+  `secretEnv` mapping, and the launch is refused with `reason: unsupported`. A daemon with
+  no use check refuses it with `reason: unauthorized`, as for any reference.
+- A `per-run` session pool keeps steps that map different secrets in different sessions.
+
 ## Templates
 
 Markdown files with front matter (`id`, `name`, `description`, `version`, `requires`,
