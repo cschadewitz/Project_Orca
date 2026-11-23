@@ -165,7 +165,7 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
 
   const editRule = useCallback(
     (index: number, patch: Partial<TypedSidecarRule> | Partial<JudgedSidecarRule>) =>
-      write(rules.map((rule, at) => (at === index ? ({ ...rule, ...patch }) : rule))),
+      write(rules.map((rule, at) => (at === index ? { ...rule, ...patch } : rule))),
     [rules, write],
   );
   const editMatch = useCallback(
