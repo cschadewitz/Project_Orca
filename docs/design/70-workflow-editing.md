@@ -129,6 +129,14 @@ draft that validates clean is one activation will accept. Three severities:
   runtime's other warnings.
 - **Note**: a `gate` that approves itself, with its condition.
 
+Capabilities (#335, #337) and secret references (#336) are checked by the same resolver a
+launch and a session open use, against the active generation's agents, hosts, secrets and
+catalog: a step selecting an MCP server or skill the catalog does not have, one its agent may
+not use, one listed twice, a skill whose content no longer matches its pin, and a catalog MCP
+server whose secret is bound to a host other than the one the step's agent runs on. Rows name
+secrets by id; the panel never reads a value. Disabling something that is not on is a
+warning.
+
 A finding about the whole workflow (a missing start, no end node, two start nodes) has no
 node to jump to: it is a row without a button, and it stays on screen whatever graph is open.
 A missing start reports once, not once more for every node it leaves unreachable.

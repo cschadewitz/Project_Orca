@@ -334,7 +334,7 @@ export function App(): JSX.Element {
           ) : activeSurface.id === "runs" ? (
             /* A `run` route selects the row; an `artifact` route names the run that
                produced it, which is the run to land on while the panel opens over it. */
-            <RunsSurface connection={connection.state} onCrumbs={setCrumbs} open={openRunRoute} />
+            <RunsSurface connection={connection.state} onCrumbs={setCrumbs} open={openRunRoute} onOpen={navigate} />
           ) : activeSurface.id === "plan" ? (
             /* `orca://item/<slug-or-id>` lands here with the item selected and its
                explanation open, which is the information architecture's promise for that
