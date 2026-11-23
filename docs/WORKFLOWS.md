@@ -585,7 +585,10 @@ it rather than looking the ref up again. A ref that moved before the run was cre
 admission with the failure code `GIT_REF_MOVED`, naming the ref (#956). That is final: no run
 is ever created under that idempotency key, and replaying or reconciling it answers the same,
 even if the ref moves back. The delegating step fails at once with `DELEGATION_REFUSED`, reason
-`git-ref`, and a retry of the step admits again under a new key, from where the ref is now. The fetch leaves the rest of the
+`git-ref`, and a retry of the step admits again under a new key, from where the ref is now. The
+refusal is recorded as the reserved run's own write-once record, so an older worker started on
+the same store also never creates that run. If the worker cannot record the refusal, it answers
+the usual reconcilable failure instead, and the next reconcile decides again. The fetch leaves the rest of the
 repository alone: no remote-tracking refs, pruning, `FETCH_HEAD`, tags, submodules or automatic
 maintenance. Listing and fetching run
 with no prompts (no terminal, askpass or credential-manager prompt, and batch-mode SSH unless

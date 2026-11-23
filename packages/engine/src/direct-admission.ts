@@ -64,12 +64,17 @@ const MaterialSchema = z.object({
 });
 type Material = z.infer<typeof MaterialSchema>;
 /**
- * A final refusal recorded for an admission's reserved run (#956): the ref it pinned moved
- * before the run could be created. Kept beside the material, so a replay or reconcile under
- * the same key answers it again and never creates the run.
+ * A final refusal for an admission's reserved run (#956): the ref it pinned moved before the
+ * run could be created. It is recorded as the reserved run's private inputs record, under the
+ * workflow id below, with the refusal as its only vars. Every version of this service that
+ * reserves run ids already treats an inputs record without `run.created` as "never create this
+ * run here" (`recover` answers the reconcile failure, and `Orchestrator.startRun` refuses a
+ * reserved id that has one), so an older worker on the same store after a rollback still never
+ * creates the run; this version also reads it back as the final refusal. One write-once record:
+ * the refusal is durable exactly when it is reported.
  */
+const REFUSED_WORKFLOW = "orca:refused-admission";
 const RefusalSchema = z.strictObject({ code: z.literal("GIT_REF_MOVED"), message: z.string().min(1) });
-const refusalId = (binding: { materialId: string }) => `${binding.materialId}-refused`;
 const unavailable = () => new OrcaError("RUN_STATE", "Direct admission is unavailable");
 /** A fence's receipt, bound like any admission: stable for its operation, so a replay answers the same. */
 async function fenced(context: RetryContext): Promise<DirectAdmissionResult> {
@@ -315,14 +320,27 @@ export class DirectAdmissionService {
     if (await this.findRun(binding, reserved)) return undefined;
     const recorded = await this.refused(binding);
     if (recorded) return recorded;
+    const { execution } = this.options.orchestrator.stores;
+    // Anything else under the reserved id (an interrupted creation) is left to reconcile.
+    if (await execution.getInputs(binding.runId)) return undefined;
     const refusal = RefusalSchema.parse({ code: "GIT_REF_MOVED", message: message.slice(0, 500) });
-    await this.options.orchestrator.stores.execution.putGeneration(refusalId(binding), refusal);
+    await execution.putInputs({
+      runId: binding.runId,
+      workflowId: REFUSED_WORKFLOW,
+      workflowVersion: reserved.workflow.version,
+      vars: refusal,
+      sensitiveNames: [],
+      secrets: [],
+    });
+    // Reported as final only once it reads back durable; a failed write stays the transient,
+    // reconcilable failure, and the next reconcile decides again.
     return this.refused(binding);
   }
+  /** The recorded final refusal for this admission's reserved run, if there is one. */
   private async refused(binding: z.infer<typeof BindingSchema>): Promise<DirectAdmissionResult | undefined> {
-    const raw = await this.options.orchestrator.stores.execution.getGeneration(refusalId(binding));
-    if (raw === undefined || raw === null) return undefined;
-    const refusal = RefusalSchema.parse(raw);
+    const inputs = await this.options.orchestrator.stores.execution.getInputs(binding.runId);
+    if (!inputs || inputs.workflowId !== REFUSED_WORKFLOW) return undefined;
+    const refusal = RefusalSchema.parse(inputs.vars);
     return {
       state: "recoverable-failure",
       admissionId: binding.admissionId,
