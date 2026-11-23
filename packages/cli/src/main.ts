@@ -48,6 +48,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         secret: { type: "string", multiple: true },
         "mcp-server": { type: "string", multiple: true },
         skill: { type: "string", multiple: true },
+        "judge-disclosure": { type: "boolean" },
         "host-key": { type: "string", multiple: true },
         "jump-host-key": { type: "string", multiple: true },
         issue: { type: "boolean" },
