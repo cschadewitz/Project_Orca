@@ -15,6 +15,8 @@ const withheldRoots = [
   "hosts[].remoteShell",
   "hosts[].identityFile",
   "agents[].permissions.rules[].match.titlePattern",
+  // A command rule (#702) is command text, which can hold a credential the same way.
+  "agents[].permissions.rules[].match.command",
   "plugins",
 ];
 

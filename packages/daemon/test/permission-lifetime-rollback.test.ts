@@ -60,7 +60,7 @@ describe("a timed rule across a rollback to 0.7.x and back", () => {
     await recordAlwaysDecision({
       file,
       agentId: agent.id,
-      request: request(dir, "execute", "make"),
+      request: request(dir, "fetch", "build.out"),
       decision: "allow",
       workspaceCwd: dir,
       expiresAt: new Date(T0 + HOUR).toISOString(),
@@ -77,7 +77,7 @@ describe("a timed rule across a rollback to 0.7.x and back", () => {
     const released = await releasedLoadEffectivePermissionPolicy(agent, [file], (f) => skipped.push(f));
     expect(skipped).toEqual([file]);
     const scope = { workspaceCwd: dir };
-    expect(decidePermission(released, request(dir, "execute", "make"), scope)).toBe("ask");
+    expect(decidePermission(released, request(dir, "fetch", "build.out"), scope)).toBe("ask");
     expect(decidePermission(released, request(dir, "edit", "other.ts"), scope)).toBe("ask");
     // Its writers cannot erase the lifetime: the replace guard refuses, and its "always"
     // append reads the file first, which throws as above.
@@ -88,8 +88,8 @@ describe("a timed rule across a rollback to 0.7.x and back", () => {
     const doc = await readPermissionPolicyFile(file);
     expect(doc.agents[agent.id]?.rules.map((rule) => rule.expiresAt)).toEqual([undefined, "2026-11-23T11:00:00.000Z"]);
     const at = (ms: number) => loadEffectivePermissionPolicy(agent, [file], undefined, undefined, () => ms);
-    expect(decidePermission(await at(T0), request(dir, "execute", "make"), scope)).toBe("allow");
-    expect(decidePermission(await at(T0 + HOUR), request(dir, "execute", "make"), scope)).toBe("ask");
+    expect(decidePermission(await at(T0), request(dir, "fetch", "build.out"), scope)).toBe("allow");
+    expect(decidePermission(await at(T0 + HOUR), request(dir, "fetch", "build.out"), scope)).toBe("ask");
     expect(decidePermission(await at(T0), request(dir, "edit", "secret.ts"), scope)).toBe("deny");
   });
 
@@ -99,7 +99,7 @@ describe("a timed rule across a rollback to 0.7.x and back", () => {
     await recordAlwaysDecision({
       file,
       agentId: agent.id,
-      request: request(dir, "execute", "make"),
+      request: request(dir, "fetch", "build.out"),
       decision: "allow",
       workspaceCwd: dir,
       expiresAt: new Date(Date.now() + HOUR).toISOString(),

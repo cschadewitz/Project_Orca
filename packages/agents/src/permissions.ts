@@ -43,6 +43,12 @@ import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { revisionOf, withPolicyLock } from "./permission-file.js";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
+  commandCatches,
+  unverifiedExecuteAllowed,
+  commandTextOf,
+  neutralPart,
+  parseCommand,
+  parseCommandPattern,
   derivePermissionRules,
   effectivePermissionPolicy,
   isWildcardPermissionRule,
@@ -58,6 +64,7 @@ import {
   WritablePermissionPolicyFileSchema,
 } from "@orca/core";
 import type {
+  CommandPart,
   ConfiguredPermissionPolicy,
   PermissionDecision,
   PermissionDeriveRefusal,
@@ -97,7 +104,18 @@ export function decidePermission(
   return protectedLocation(request, ctx) === undefined ? decideByRules(policy, request, ctx) : "deny";
 }
 
-/** The policy's answer, first match wins, with nothing ahead of it. */
+/**
+ * The policy's answer, first match wins, with nothing ahead of it.
+ *
+ * A `command` rule (#702) is matched per simple command: an `execute` call's command is split
+ * on `&&`, `;`, `|` and the like, each part is decided by the first rule that matches *it*,
+ * and one denied part denies the call. Otherwise the call is asked: once any layer restricts
+ * commands by their words, no `execute` call is allowed without a person, whether the allow
+ * would have come from an older title rule, a kindless rule or the fallthrough, and whether or
+ * not the agent sent the command apart from its title (`unverifiedExecuteAllowed`, #702
+ * review). Every other kind of rule matches the call as a whole, as before, and a policy with
+ * no `command` rule decides exactly as it did.
+ */
 function decideByRules(
   policy: PermissionPolicy,
   request: acp.RequestPermissionRequest,
@@ -106,29 +124,63 @@ function decideByRules(
   const tc = request.toolCall;
   const title = tc.title ?? "";
   const kind = tc.kind ?? "other";
+  // A call the agent did not classify could be a command under another name, and so could one
+  // that carries a command in its input whatever kind it claims: the kind is the adapter's
+  // advice, not a fact ORCA checked (#702 review).
+  const raw = tc.rawInput;
+  const rawCommand = raw !== null && typeof raw === "object" ? (raw as { command?: unknown }).command : undefined;
+  const commandLike = kind === "other" || (rawCommand !== undefined && rawCommand !== null && rawCommand !== "");
   const cwd = ctx?.workspaceCwd;
   const locations = (tc.locations ?? []).map((l) => l.path);
   const paths = locations.flatMap((p) => permissionPathForms(p, cwd));
   // Both are false for a call with no locations, so `scope` never matches one (#140).
   const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
   const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
-  for (const rule of policy.rules) {
-    const m = rule.match;
-    if (m.kind && m.kind !== kind) continue;
-    if (m.scope === "workspace" && !allInside) continue;
-    if (m.scope === "outside-workspace" && !anyOutside) continue;
-    if (m.titlePattern && !new RegExp(m.titlePattern).test(title)) continue;
+  const matchesCall = (m: PermissionRule["match"]): boolean => {
+    // A command rule also reaches a command-like call of another kind, so its restriction is
+    // not dodged by leaving the kind out or giving a wrong one.
+    if (m.kind && m.kind !== kind && !(m.command !== undefined && commandLike)) return false;
+    if (m.scope === "workspace" && !allInside) return false;
+    if (m.scope === "outside-workspace" && !anyOutside) return false;
+    if (m.titlePattern && !new RegExp(m.titlePattern).test(title)) return false;
     if (m.path !== undefined) {
       const wanted = permissionPathForms(m.path, cwd);
-      if (!wanted.some((w) => paths.includes(w))) continue;
+      if (!wanted.some((w) => paths.includes(w))) return false;
     }
     if (m.pathPrefix) {
       const prefixes = permissionPathForms(m.pathPrefix, cwd).filter((p) => p !== "");
-      if (prefixes.length > 0 && !paths.some((p) => prefixes.some((prefix) => p.startsWith(prefix)))) continue;
+      if (prefixes.length > 0 && !paths.some((p) => prefixes.some((prefix) => p.startsWith(prefix)))) return false;
     }
-    return rule.decision;
-  }
-  return policy.default;
+    return true;
+  };
+  // Once commands are restricted by their words, no allow decides an `execute`, an
+  // unclassified call or one whose input carries a command (#702 review): skipping them lets a restriction later in the list still
+  // be reached, and nothing approves a call whose command ORCA cannot vouch for.
+  const restricted = (kind === "execute" || commandLike) && !unverifiedExecuteAllowed(policy);
+  const decide = (part: CommandPart | undefined): PermissionDecision => {
+    for (const rule of policy.rules) {
+      const m = rule.match;
+      if (restricted && rule.decision === "allow") continue;
+      if (!matchesCall(m)) continue;
+      if (m.command !== undefined) {
+        // A command is only ever an `execute`'s, and a part that is not there matches no rule.
+        // A command rule never allows (`COMMAND_ALLOW_REFUSED`): the loaders refuse or ignore
+        // one, and this skips any that got here another way.
+        if (!restricted || part === undefined || rule.decision === "allow") continue;
+        const pattern = parseCommandPattern(m.command);
+        if (pattern === undefined || !commandCatches(pattern, part)) continue;
+      }
+      return rule.decision;
+    }
+    return policy.default;
+  };
+  if (!restricted) return decide(undefined);
+  // A policy with command rules: decide each part, take the strictest, and never allow. An
+  // allow from an older rule, a kindless rule or the fallthrough is unverified (#702 review).
+  const text = commandTextOf(tc);
+  const parts = text === undefined ? [] : parseCommand(text).parts.filter((p) => !neutralPart(p));
+  const decisions = parts.length === 0 ? [decide(undefined)] : parts.map(decide);
+  return decisions.includes("deny") ? "deny" : "ask";
 }
 
 function pick(options: acp.PermissionOption[], kinds: acp.PermissionOptionKind[]): acp.PermissionOption | undefined {
@@ -423,9 +475,11 @@ export function permissionOverlayFor(
  * after it were written on the assumption that it was read first: drop it and a recorded
  * `deny` on an in-workspace edit falls through to the default `allow` (ADR 0009). So once a
  * file cannot be read, every `allow` decided *after* it — a later sidecar's, a default rule's,
- * the fallthrough's — becomes `ask`. The configured rules ahead of it decide exactly as
- * before, and what the unreadable file might have said is put to a person rather than
- * assumed, so what is lost is grants and never a restriction.
+ * the fallthrough's — becomes `ask`. The configured rules ahead of it decide as before, except
+ * that the file might have held a command restriction, so the policy is marked
+ * `commandsRestricted` and no `execute` or unclassified call is allowed at all (#702 review).
+ * What the unreadable file might have said is put to a person rather than assumed, so what is
+ * lost is grants and never a restriction.
  *
  * `onIgnored` hears each wildcard `allow` that `permissionOverlayFor` dropped from a sidecar
  * that could be read.
@@ -460,6 +514,9 @@ export async function loadEffectivePermissionPolicy(
   return {
     default: cap(policy.default),
     rules: policy.rules.map((rule, i) => (i < capFrom ? rule : { ...rule, decision: cap(rule.decision) })),
+    // The file might have held a command restriction (#702 review), so commands and
+    // unclassified calls are treated as restricted: not even the rules ahead of it allow one.
+    commandsRestricted: true,
   };
 }
 
@@ -479,6 +536,11 @@ export interface RecordAlwaysOptions {
    * until somebody removes it, which is what "always" meant before rules had lifetimes.
    */
   expiresAt?: string | undefined;
+  /**
+   * Write these rules instead of deriving them from the request: a wider `command` rule the
+   * person chose in the review (#702). The caller has already shown exactly these.
+   */
+  rules?: readonly PermissionRule[] | undefined;
   /** Injectable clock, for tests. */
   now?: (() => Date) | undefined;
   /** Lock tuning; the defaults are fine. */
@@ -516,15 +578,18 @@ export interface RecordAlwaysResult {
  */
 export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<RecordAlwaysResult> {
   const tc = opts.request.toolCall;
-  const derived = derivePermissionRules(
-    {
-      kind: tc.kind,
-      title: tc.title,
-      paths: (tc.locations ?? []).map((l) => l.path),
-      workspaceCwd: opts.workspaceCwd,
-    },
-    opts.decision,
-  );
+  const derived: ReturnType<typeof derivePermissionRules> = opts.rules
+    ? { ok: true, rules: opts.rules.map((rule) => ({ match: { ...rule.match }, decision: opts.decision })) }
+    : derivePermissionRules(
+        {
+          kind: tc.kind,
+          title: tc.title,
+          paths: (tc.locations ?? []).map((l) => l.path),
+          command: tc.kind === "execute" ? commandTextOf(tc) : undefined,
+          workspaceCwd: opts.workspaceCwd,
+        },
+        opts.decision,
+      );
   if (!derived.ok)
     return {
       file: opts.file,
@@ -686,7 +751,7 @@ export function parsePermissionPolicyDocument(doc: unknown): PermissionPolicyFil
 function serialize(doc: PermissionPolicyFile): string {
   const rule = (r: RecordedPermissionRule): Record<string, unknown> => {
     const match: Record<string, unknown> = {};
-    for (const key of ["kind", "titlePattern", "path", "pathPrefix", "scope"] as const)
+    for (const key of ["kind", "titlePattern", "path", "pathPrefix", "scope", "command"] as const)
       if (r.match[key] !== undefined) match[key] = r.match[key];
     const out: Record<string, unknown> = { match, decision: r.decision };
     if (r.addedAt !== undefined) out["addedAt"] = r.addedAt;

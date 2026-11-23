@@ -77,6 +77,10 @@ describe("the sidecar as a document", () => {
     { kind: "read", path: "./src/../" },
     { kind: "execute", scope: "workspace", path: "src/index.ts" },
     { kind: "execute", titlePattern: "^.*$" },
+    // Any execute allow: its title or words are not proof of what runs (#702 review).
+    { kind: "execute", scope: "outside-workspace", titlePattern: "^git status$" },
+    { kind: "execute", titlePattern: "^git status$" },
+    { kind: "execute", command: "git status" },
   ] satisfies SidecarRule["match"][])("explains an ignored wildcard allow: %j", (match) => {
     expect(sidecarRuleWarning({ match, decision: "allow" })).toContain("ignored");
     // Restrictions must remain effective, however broad their match is.
@@ -93,8 +97,6 @@ describe("the sidecar as a document", () => {
     { kind: "read", pathPrefix: "../src/.." },
     { kind: "read", path: "\\\\server\\share" },
     { kind: "read", path: "src/..", titlePattern: "^Read file$" },
-    { kind: "execute", scope: "outside-workspace", titlePattern: "^git status$" },
-    { kind: "execute", titlePattern: "^git status$" },
     { kind: "read", titlePattern: "[" }, // Invalid regex is not a wildcard; schema validation is separate.
   ] satisfies SidecarRule["match"][])("does not label a non-wildcard rule ignored: %j", (match) => {
     expect(sidecarRuleWarning({ match, decision: "allow" })).toBeUndefined();

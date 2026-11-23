@@ -33,7 +33,7 @@ import {
   type WorkflowDefinition,
 } from "@orca/core";
 import { recordAlwaysDecision, type RecordAlwaysResult } from "@orca/agents";
-import { standingRulePreview } from "./standing-preview.js";
+import { chosenStandingRules, standingRulePreview } from "./standing-preview.js";
 import { dryRunReport, startDryRun, type Orchestrator } from "@orca/engine";
 import {
   ProtocolFault,
@@ -720,7 +720,8 @@ export class ControlModel {
         "an always answer must name the standing rule preview it saves (protocol 2.8); review the rule and answer again",
         { requestId: params.requestId },
       );
-    if (params.always!.previewRef !== preview.ref)
+    const saved = chosenStandingRules(preview, params.always!.previewRef);
+    if (saved === undefined)
       throw new OrcaError("CONFIG_STALE", "the standing rule changed since it was shown; review it again", {
         requestId: params.requestId,
         previewRef: params.always!.previewRef,
@@ -733,6 +734,8 @@ export class ControlModel {
       request: asRequest,
       decision: params.always!.decision,
       workspaceCwd: state.run.workspace.cwd,
+      // A wider rule the person picked is written as shown; the exact one is derived again.
+      ...(saved.broader ? { rules: saved.rules } : {}),
       ...(durationMs === undefined
         ? {}
         : {

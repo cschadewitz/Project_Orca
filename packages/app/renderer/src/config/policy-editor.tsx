@@ -570,6 +570,14 @@ function Grant({
         help="A regular expression tested against the tool call's title, used exactly as written. The rules a run writes are anchored with ^ and $; one typed here is not anchored for you, so it matches anywhere in the title unless you anchor it. A title match does not establish trustworthy exact-command approval evidence; that support remains unavailable."
         onChange={(value) => onMatch("titlePattern", value)}
       />
+      <Entry
+        label="Command"
+        path={`${base}.match.command`}
+        value={rule.match.command}
+        editable={editable}
+        help="An execute call's command by its words, such as npm * or git push. A final * is any further words. A command rule can deny or ask, not allow: the words don't prove what runs. It also catches the words with options between them, inside a compound command or under sudo or bash -c, so git push catches git -C repo push."
+        onChange={(value) => onMatch("command", value)}
+      />
     </li>
   );
 }

@@ -85,6 +85,14 @@ removing or expiring the rule takes effect on its next ask. **Save rule and allo
 saves the rule shown or refuses it as stale; **Cancel** closes it. When the preview
 says no rule can be scoped to this call, or the daemon sent none, the review says why in one
 `caption` line and the save is disabled with that reason; the one-time answers still work.
+For a standing deny on a single shell command the preview also carries wider command rules
+(`broader`), and the review shows a **Rule scope** row of toggle buttons above the rule:
+**Exactly this**, then each pattern by its command text (`npm run *`, `npm *`), narrowest
+first. Choosing a wider one adds a `caption` line saying a family rule refuses the whole
+family, also inside a compound command or under `sudo` or `bash -c`, and can catch lookalikes.
+A standing allow for a shell command is not offered: the preview is refused
+(`unverified-command`), because the command's words do not prove what runs (ADR 0009).
+The save sends that rule's own `ref`.
 
 ## Request changes and recorded corrections
 
