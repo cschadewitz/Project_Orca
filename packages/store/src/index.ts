@@ -14,6 +14,8 @@ export * from "./protected-event-store.js";
 
 export { workspaceIdentity, renewWorkspaceIdentity } from "./workspace-identity.js";
 export * from "./store-format.js";
+export * from "./store-backend.js";
+export * from "./store-writers.js";
 export * from "./store-contracts.js";
 
 export * from "./admission-retry-store.js";

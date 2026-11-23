@@ -116,7 +116,8 @@ export async function importFileMetadata(dir: string, options: SqliteImportOptio
       dir,
     });
 
-  const target = sqliteStores(dir, dbOptions);
+  // A mirror beside the files: before a switch the store still records file metadata.
+  const target = sqliteStores(dir, { ...dbOptions, unselected: true });
   const collection = (store: unknown) => (store as { collection: SqliteCollection<never> }).collection;
   const db = collection(target.requests).db;
   const sinks = new Map(

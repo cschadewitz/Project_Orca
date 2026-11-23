@@ -22,6 +22,10 @@
  * - `plan_journals`, `plan_events`: the plan journal, the same shape.
  * - `artifacts`: the artifact index. Blob bytes stay content-addressed files on disk: SQLite
  *   holds no blob, so a database backup is small and blob durability is unchanged.
+ * - `store_binding` (one row at most): the id `orca store sqlite switch` gave this database when
+ *   it made it a store's metadata, also recorded in the store's format marker. A store on SQLite
+ *   opens only the database bound to it, so a lost, empty or swapped-in file is refused instead
+ *   of becoming the workspace's metadata (store-backend.ts).
  */
 export const SQLITE_MIGRATIONS: readonly string[] = [
   `
@@ -76,6 +80,13 @@ export const SQLITE_MIGRATIONS: readonly string[] = [
   CREATE INDEX artifacts_hash ON artifacts (content_hash);
 
   PRAGMA application_id = 1330791233;
+  `,
+  `
+  CREATE TABLE store_binding (
+    slot INTEGER PRIMARY KEY CHECK (slot = 1),
+    store_id TEXT NOT NULL,
+    bound_at TEXT NOT NULL
+  );
   `,
 ];
 
