@@ -59,10 +59,25 @@ it("ProgramService.runSubmitted shares live work, refuses a prior attempt, and p
       restoreLaunch: (recorded) => f.orc.generations!.restoreLaunch(recorded),
       authority,
     });
+    // The replay shares live work only while the first run is still live, so the effect is
+    // released only once the replay has reached the orchestrator. Releasing earlier lets the
+    // first run finish first, and the replay then sees a prior start and is refused.
+    const drive = f.orc.run.bind(f.orc);
+    let drives = 0;
+    let joined!: () => void;
+    const joining = new Promise<void>((resolve) => {
+      joined = resolve;
+    });
+    f.orc.run = (runId) => {
+      const p = drive(runId);
+      if (++drives === 2) joined();
+      return p;
+    };
     const admitted = await program.submit({ title: "Work", body: "Work" });
     const first = program.runSubmitted(admitted);
     await entering;
     const replay = program.runSubmitted(admitted);
+    await joining;
     release();
     expect((await first).run.status).toBe("paused");
     expect((await replay).run.status).toBe("paused");
