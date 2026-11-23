@@ -24,7 +24,17 @@ const codeOf = (error: unknown) => (error as NodeJS.ErrnoException).code;
 const sharing = (error: unknown) => process.platform === "win32" && ["EPERM", "EACCES"].includes(codeOf(error) ?? "");
 
 /** Legacy files, empty directories and unknown owners fail closed until explicitly recovered. */
-export async function withFileLock<T>(path: string, fn: () => Promise<T>, options: FileLockOptions = {}): Promise<T> {
+/**
+ * Run `fn` holding the lock. `fn` is given `stillHeld`, which throws `STORE_LOCK_LOST` unless this
+ * holder's own token is still in the lock directory: a writer calls it immediately before it
+ * commits, so a holder whose lock was recovered by another process fails closed rather than
+ * overwriting what that process wrote.
+ */
+export async function withFileLock<T>(
+  path: string,
+  fn: (stillHeld: () => Promise<void>) => Promise<T>,
+  options: FileLockOptions = {},
+): Promise<T> {
   const token = `owner.${tag()}.json`;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
@@ -51,8 +61,16 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T>, option
     await sleep(backoff + Math.random() * backoff);
     backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
   }
+  const stillHeld = async (): Promise<void> => {
+    try {
+      await stat(join(path, token));
+    } catch (error) {
+      if (codeOf(error) !== "ENOENT" && codeOf(error) !== "ENOTDIR") throw error;
+      throw new OrcaError("STORE_LOCK_LOST", `lock ${path} is no longer held by this writer`, { path });
+    }
+  };
   try {
-    return await fn();
+    return await fn(stillHeld);
   } finally {
     await removeToken(path, token);
   }

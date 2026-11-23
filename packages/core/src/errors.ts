@@ -77,6 +77,8 @@ export type OrcaErrorCode =
   | "PLAN_INVALID"
   | "DEPENDENCY_CYCLE"
   | "STORE_LOCK_TIMEOUT"
+  /** A lock holder found, just before committing, that its lock had been recovered by another process. */
+  | "STORE_LOCK_LOST"
   /** An append the step depended on failed: a torn log, a full disk, a store directory that went away. */
   | "STORE_WRITE"
   /**

@@ -278,4 +278,50 @@ describe("config.set and judged rules (#701 review: same authority on both route
       ),
     ).rejects.toThrow("permissions.grant");
   });
+
+  it("needs the grant to repair an unreadable sidecar into one with judged rules, not into one without", async () => {
+    const { model, sidecar } = await workspace();
+    // A judged row in a version-3 file: the reader refuses the file, so no judged rule is in force.
+    const unreadable = sidecarText([typed, judged], 3);
+    await writeFile(sidecar, unreadable, "utf8");
+    const before = await model.read("permissions");
+    const without = authority(false);
+    // Same row text, now readable: that brings a judged rule into force.
+    await expect(
+      model.set(
+        { document: "permissions", expectedRevision: before.revision, text: sidecarText([typed, judged]) },
+        without.plain,
+        without.judged,
+      ),
+    ).rejects.toThrow("permissions.grant");
+    expect(await readFile(sidecar, "utf8")).toBe(unreadable);
+    // Repaired to typed rules only: nothing judged comes into force, so config.write is enough.
+    await model.set(
+      { document: "permissions", expectedRevision: before.revision, text: sidecarText([typed], 1) },
+      without.plain,
+      without.judged,
+    );
+    expect(without.calls.judged).toBe(1);
+    expect(JSON.parse(await readFile(sidecar, "utf8")).agents.claude.rules).toEqual([typed]);
+  });
+
+  it("fences a config write against the file it replaces, so a stale ordinary edit cannot drop a judged change", async () => {
+    const { model, dir } = await workspace();
+    const configFile = join(dir, "orca.config.yaml");
+    const withJudged = `${CONFIG}      rules:\n        - match: { kind: read, scope: workspace }\n          judge: { criterion: "Reading the docs." }\n`;
+    const current = await model.read("config");
+    let calls = 0;
+    // A judged change lands after this write was decided under the lock and before its rename.
+    const plain = async () => {
+      if (++calls === 4) await writeFile(configFile, withJudged, "utf8");
+    };
+    await expect(
+      model.set(
+        { document: "config", expectedRevision: current.revision, text: `${CONFIG}# an ordinary edit\n` },
+        plain,
+        async () => {},
+      ),
+    ).rejects.toMatchObject({ code: "CONFIG_STALE" });
+    expect(await readFile(configFile, "utf8")).toBe(withJudged);
+  });
 });

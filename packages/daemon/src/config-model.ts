@@ -52,6 +52,7 @@ import {
   OrcaError,
   OrcaConfigSchema,
   PERMISSION_POLICY_FILENAME,
+  PermissionPolicyFileSchema,
   systemClock,
   WritablePermissionPolicyFileSchema,
   type Clock,
@@ -424,7 +425,7 @@ export class ConfigModel {
   ): Promise<ConfigDocumentView> {
     const path = this.pathOf("config");
     await mkdir(dirname(path), { recursive: true });
-    return withFileLock(`${path}.lock`, async () => {
+    return withFileLock(`${path}.lock`, async (stillHeld) => {
       await authorize?.();
       const current = await this.read("config");
       await authorize?.();
@@ -433,9 +434,22 @@ export class ConfigModel {
       const errors = this.validate("config", text);
       if (errors.length)
         throw new OrcaError("CONFIG_INVALID", `${path}: ${errors[0]?.message ?? "invalid"}`, { errors });
-      // Read under this lock: the bytes being replaced are these.
-      const commit = changesJudgedRules("config", current, text) ? (authorizeJudged ?? authorize) : authorize;
-      await commit?.();
+      // The commit fence (#701 review), run now and again just before the rename: this writer
+      // still holds the lock, the file is still the bytes this edit was made against, and the
+      // authority is decided by what those bytes and the new ones say about judged rules. A
+      // writer that lost its lock, or a file that moved, fails closed rather than overwriting.
+      const commit = async (): Promise<void> => {
+        await stillHeld();
+        const onDisk = await this.read("config");
+        if (onDisk.revision !== current.revision)
+          throw new ProtocolFault(
+            "CONFIG_STALE",
+            `${path} has changed since you read it: write again against the current revision`,
+            { document: "config", expectedRevision: current.revision, actualRevision: onDisk.revision },
+          );
+        await (changesJudgedRules("config", onDisk, text) ? (authorizeJudged ?? authorize) : authorize)?.();
+      };
+      await commit();
       await writeAtomically(path, text, commit);
       return this.read("config");
     });
@@ -686,48 +700,35 @@ function hash(text: string): string {
 
 /** `parsed` is best-effort: a file that does not parse still has `text`, which is what an editor shows. */
 /**
- * The judged (plain-language) rules a document holds, as one comparable string: each agent's
- * rows with a `judge`, in order, in the sidecar or the config. `undefined` when the text does not parse.
+ * The judged (plain-language) rules a document gives ORCA, as one comparable string (#701 review):
+ * the rules the authoritative reader accepts, each agent's in order, as that reader parses them -
+ * `PermissionPolicyFileSchema` for the sidecar, `OrcaConfigSchema` for the config. A document the
+ * reader refuses gives no judged rules at all, whatever rows its text holds, so repairing one
+ * into a readable document that has judged rules is a change to them.
  */
-function judgedRulesKey(document: ConfigDocument, text: string | undefined): string | undefined {
+function judgedRulesKey(document: ConfigDocument, text: string | undefined): string {
   if (text === undefined || text.trim() === "") return "[]";
-  const value = safeParse(document, text);
-  if (value === undefined) return undefined;
-  const judgedOf = (rules: unknown): unknown[] =>
-    Array.isArray(rules)
-      ? rules.filter((r) => r !== null && typeof r === "object" && (r as { judge?: unknown }).judge !== undefined)
-      : [];
-  const agents = value !== null && typeof value === "object" ? (value as { agents?: unknown }).agents : undefined;
-  // The sidecar keys its agents by id, `{ agents: { <id>: { rules } } }`; the config lists them.
-  const entries: [unknown, unknown][] =
-    document === "permissions"
-      ? agents !== null && typeof agents === "object" && !Array.isArray(agents)
-        ? Object.entries(agents).map(([id, a]) => [id, (a as { rules?: unknown } | null)?.rules])
-        : []
-      : Array.isArray(agents)
-        ? agents.map((a: unknown) => {
-            const agent = (a ?? {}) as { id?: unknown; permissions?: { rules?: unknown } };
-            return [agent.id, agent.permissions?.rules];
-          })
-        : [];
-  return JSON.stringify(
-    entries.flatMap(([id, list]) => {
-      const rules = judgedOf(list);
-      return rules.length ? [{ id, rules }] : [];
-    }),
-  );
+  const raw = safeParse(document, text);
+  if (raw === undefined) return "[]";
+  let entries: [string, readonly unknown[]][];
+  if (document === "permissions") {
+    const parsed = PermissionPolicyFileSchema.safeParse(raw ?? {});
+    if (!parsed.success) return "[]";
+    entries = Object.entries(parsed.data.agents).map(([id, agent]) => [id, agent.rules.filter(isSidecarJudgedRule)]);
+  } else {
+    const parsed = OrcaConfigSchema.safeParse(raw ?? {});
+    if (!parsed.success) return "[]";
+    entries = parsed.data.agents.map((agent) => [
+      agent.id,
+      (agent.permissions?.rules ?? []).filter(isJudgedPermissionRule),
+    ]);
+  }
+  return JSON.stringify(entries.filter(([, rules]) => rules.length > 0).map(([id, rules]) => ({ id, rules })));
 }
 
-/**
- * Whether writing `next` over `current` changes the judged rules: an add, an edit, a removal
- * or a move. A file that does not parse holds no judged rule ORCA would consult, so replacing it
- * with one that holds none changes nothing.
- */
+/** Whether writing `next` over `current` changes the judged rules ORCA reads: an add, edit, removal or move. */
 function changesJudgedRules(document: ConfigDocument, current: ConfigDocumentView, next: string): boolean {
-  const before = judgedRulesKey(document, current.exists ? current.text : undefined);
-  const after = judgedRulesKey(document, next);
-  if (before === after) return false;
-  return !(before === undefined && after === "[]");
+  return judgedRulesKey(document, current.exists ? current.text : undefined) !== judgedRulesKey(document, next);
 }
 
 function safeParse(document: ConfigDocument, text: string): unknown {
