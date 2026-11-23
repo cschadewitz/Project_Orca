@@ -11,7 +11,7 @@
  * the store was being converted.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { open, readFile, rename, rm, stat } from "node:fs/promises";
+import { link, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { parse as parseYaml, parseDocument } from "yaml";
 import { OrcaError, parseOrcaConfig } from "@orca/core";
@@ -37,6 +37,8 @@ export async function writeConfigStoreDir(
   configDir: string,
   value: string,
   expected: { revision: ConfigRevision; source: string },
+  /** Tests: runs just before a new config is created, where another writer could get in. */
+  hooks: { beforeCreate?: () => Promise<void> } = {},
 ): Promise<string> {
   const file = configFile ?? join(configDir, NEW_CONFIG_FILENAME);
   return withFileLock(`${file}.lock`, async () => {
@@ -52,31 +54,87 @@ export async function writeConfigStoreDir(
       );
     if (configRevision(saved) !== expected.revision) throw stale(saved === undefined ? "was removed" : "changed");
     // Without a config, the workspace is the directory with none of the names a config may have.
-    if (!configFile)
-      for (const name of CONFIG_FILENAMES)
-        if (
-          await stat(join(configDir, name)).then(
-            () => true,
-            () => false,
-          )
-        )
-          throw stale(`gained ${name}`);
+    if (!configFile) {
+      const present = await configsIn(configDir);
+      if (present.length) throw stale(`gained ${present[0]}`);
+    }
     const current = saved === undefined ? {} : file.endsWith(".json") ? JSON.parse(saved) : parseYaml(saved);
     if (resolve(configDir, parseOrcaConfig(current).storeDir) !== expected.source)
       throw stale(`names another store than ${expected.source}`);
-    return writeLocked(file, configFile, saved, value);
+    if (configFile) return writeLocked(file, configFile, saved, value);
+    // A new config: created only if absent (a link fails on an existing name, where a rename
+    // would replace it), and only while it is the one config the workspace has; otherwise the
+    // late arrival wins, ours goes, and nothing is published.
+    await hooks.beforeCreate?.();
+    await createNew(file, value, () => stale(`was created by someone else`));
+    const others = (await configsIn(configDir)).filter((name) => join(configDir, name) !== file);
+    if (others.length) {
+      await rm(file, { force: true });
+      await syncParent(file);
+      throw stale(`gained ${others[0]}`);
+    }
+    return file;
   });
+}
+
+/** The config file names present in `dir`; a stat failure other than absence is an error. */
+async function configsIn(dir: string): Promise<string[]> {
+  const present: string[] = [];
+  for (const name of CONFIG_FILENAMES)
+    try {
+      await stat(join(dir, name));
+      present.push(name);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  return present;
+}
+
+/** Create `file` holding a minimal config, atomically and only if absent. */
+async function createNew(file: string, value: string, conflict: () => Error): Promise<void> {
+  const text = `version: 1\nstoreDir: ${JSON.stringify(value)}\n`;
+  if (parseOrcaConfig(parseYaml(text)).storeDir !== value)
+    throw new OrcaError("CONFIG_INVALID", `${file}: the new config does not name ${value} as its store`);
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    const handle = await open(tmp, "wx", 0o644);
+    try {
+      await handle.writeFile(text, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    try {
+      await link(tmp, file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw conflict();
+      throw error;
+    }
+  } finally {
+    await rm(tmp, { force: true });
+  }
+  await syncParent(file);
+}
+
+async function syncParent(file: string): Promise<void> {
+  if (process.platform === "win32") return;
+  const dir = await open(dirname(file), "r");
+  try {
+    await dir.sync();
+  } finally {
+    await dir.close();
+  }
 }
 
 async function writeLocked(
   file: string,
-  configFile: string | undefined,
+  configFile: string,
   saved: string | undefined,
   value: string,
 ): Promise<string> {
   let text: string;
   let mode = 0o644;
-  if (configFile && saved !== undefined) {
+  if (saved !== undefined) {
     mode = (await stat(configFile)).mode & 0o777;
     if (configFile.endsWith(".json")) {
       const raw = JSON.parse(saved) as Record<string, unknown>;
@@ -105,13 +163,6 @@ async function writeLocked(
     await rm(tmp, { force: true });
     throw error;
   }
-  if (process.platform !== "win32") {
-    const dir = await open(dirname(file), "r");
-    try {
-      await dir.sync();
-    } finally {
-      await dir.close();
-    }
-  }
+  await syncParent(file);
   return file;
 }

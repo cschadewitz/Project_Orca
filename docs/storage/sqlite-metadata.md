@@ -278,21 +278,25 @@ leaves the file store exactly as it was. Under the file store's format lock:
 4. Switches the copy in place, as below, with no backup (the file store is the
    backup): import, verify, bind, the legacy fence, and the SQLite marker, which also
    records the file store and the signature of its files (`convertedFrom`).
-5. Checks the file store once more and renames the copy to `<store>-sqlite`. From then
-   on that store is never removed by ORCA: another config could already name it.
+5. Checks the file store once more and renames the copy to `<store>-sqlite`, then
+   flushes the new store and its parent directory. From then on that store is never
+   removed by ORCA: another config could already name it.
 6. Checks that it is a complete conversion of the file store as the file store is now,
    under its own format lock: its marker names this store and the signature; no switch
    of it is half done; the legacy fence is complete; its database is the one it is
    bound to and verifies. Anything else is refused (`SWITCH_REFUSED`, or
    `SOURCE_CHANGED` when the file store changed), leaving both stores and the config as
-   they are.
+   they are. The new store and its parent directory are flushed again (also when an
+   interrupted conversion is resumed), so the config never names a store whose rename
+   a power loss could still undo; a failed flush leaves the config as it is.
 7. Writes the config, under the config writer's lock (`<config>.lock`, the one
    `config.set` takes), and only if the config is still the revision read when the
    conversion began and still names the file store; otherwise `CONFIG_STALE`, and
    nothing is written. `storeDir` names the new store (relative if it was relative;
    YAML is edited in place, so comments stay; a workspace with no config gets
-   `orca.config.yaml`, if none has appeared meanwhile). The config's rename is the
-   commit: every ORCA started afterwards, released ones included, opens the new store.
+   `orca.config.yaml`, created only if absent, by a link that never replaces a file,
+   and removed again if a config under another name appeared meanwhile). The config's
+   rename (or link) is the commit: every ORCA started afterwards, released ones included, opens the new store.
 
 A refusal before step 5 publishes nothing and removes its own staging. Staging an
 interrupted conversion left is removed by the next one only when its record names

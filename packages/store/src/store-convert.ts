@@ -76,6 +76,8 @@ export interface ConvertToSqliteOptions {
   afterCopy?: () => Promise<void>;
   /** Injected for tests: runs after the converted store is in place, before it is published. */
   beforePublish?: () => Promise<void>;
+  /** Injected for tests: flushes a directory's entries (durable-file.ts `syncDirectory`). */
+  syncDirectory?: (dir: string) => Promise<void>;
 }
 
 export type ConvertToSqliteOutcome =
@@ -94,6 +96,7 @@ export async function convertStoreToSqlite(
   const target = convertedStoreDir(storeDir);
   const now = (options.now ?? (() => new Date()))();
   const privacy = options.privacy ?? posixPrivateCopy;
+  const sync = options.syncDirectory ?? syncDirectory;
   return withFileLock(join(storeDir, STORE_FORMAT_LOCK), async (): Promise<ConvertToSqliteOutcome> => {
     if (await readSqliteSwitchJournal(storeDir))
       throw new StoreFormatError(
@@ -136,6 +139,9 @@ export async function convertStoreToSqlite(
         // lost). It may already be in use, so it is never replaced or removed: it is published
         // only once it proves to be a complete conversion of this store as the store is now.
         await checkConverted(storeDir, target);
+        // Its rename may never have been flushed (the run that made it stopped, or the flush
+        // failed): made durable before any config names it, or the config stays as it is.
+        await promoted(target, sync);
         await options.publish(target);
         return { status: "finished", convertedDir: target };
       }
@@ -171,7 +177,6 @@ export async function convertStoreToSqlite(
         if (!sameStoreSnapshot(before, await snapshotStore(storeDir))) throw busy(storeDir);
         if (await present(target)) throw busy(storeDir);
         await rename(copy, target);
-        await syncDirectory(dirname(target));
       } catch (error) {
         await rm(staging, { recursive: true, force: true });
         throw error;
@@ -179,8 +184,10 @@ export async function convertStoreToSqlite(
       await rm(staging, { recursive: true, force: true });
       // From here a failure leaves the converted store where it is; the next conversion checks
       // it again and publishes it, or refuses and leaves it for the operator.
+      await promoted(target, sync);
       await options.beforePublish?.();
       await checkConverted(storeDir, target);
+      await promoted(target, sync);
       await options.publish(target);
       return { status: "converted", convertedDir: target };
     } catch (error) {
@@ -233,6 +240,16 @@ async function refuseActiveRuns(storeDir: string): Promise<void> {
       `Run ${live[0]!.resource} is still being interpreted by pid ${live[0]!.pid} on ${live[0]!.host}. Let it finish or stop it, then convert the store. Nothing was changed.`,
       storeDir,
     );
+}
+
+/**
+ * The converted store's own entries and its name in its parent, flushed: until then a crash can
+ * undo the rename that put it there, and a config naming it would name nothing. The parent may
+ * be anywhere (an absolute `storeDir`), so flushing the config's directory does not cover it.
+ */
+async function promoted(target: string, sync: (dir: string) => Promise<void>): Promise<void> {
+  await sync(target);
+  await sync(dirname(target));
 }
 
 const STAGING_INFIX = ".staging-";

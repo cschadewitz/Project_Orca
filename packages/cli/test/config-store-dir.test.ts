@@ -75,4 +75,23 @@ describe("writeConfigStoreDir", () => {
       expect(await readFile(join(other, name), "utf8")).toBe(text);
     }
   });
+
+  it("never replaces a config that arrives while the new one is created", async () => {
+    for (const name of ["orca.config.yaml", "orca.config.json"]) {
+      const dir = await workspace();
+      const late = name.endsWith(".json") ? '{"version":1}' : "version: 1\nagents: []\n";
+      await expect(
+        writeConfigStoreDir(
+          undefined,
+          dir,
+          ".orca-sqlite",
+          { revision: null, source: join(dir, ".orca") },
+          { beforeCreate: () => writeFile(join(dir, name), late) },
+        ),
+      ).rejects.toMatchObject(stale);
+      // The late arrival stands, alone.
+      expect(await readdir(dir), name).toEqual([name]);
+      expect(await readFile(join(dir, name), "utf8")).toBe(late);
+    }
+  });
 });

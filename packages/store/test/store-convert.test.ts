@@ -151,6 +151,45 @@ describe("converting a file store into a SQLite store of its own (#339)", () => 
     }
   });
 
+  it("makes the converted store's name durable before publishing it, on a resumed conversion too", async () => {
+    const dir = await populated();
+    const target = convertedStoreDir(dir);
+    const published: string[] = [];
+    // The flush of the new name fails: the store is kept, nothing is published.
+    await expect(
+      convertStoreToSqlite(dir, {
+        appVersion: "0.8.0",
+        publish: async (t) => void published.push(t),
+        syncDirectory: async (path) => {
+          if (path === dirname(target)) throw Object.assign(new Error("EIO: fsync"), { code: "EIO" });
+        },
+      }),
+    ).rejects.toThrow("EIO");
+    expect(published).toEqual([]);
+    expect(await readStoreFormat(target)).toMatchObject({ epoch: SQLITE_STORE_FORMAT_EPOCH });
+    // Resumed while it still fails: still nothing published.
+    await expect(
+      convertStoreToSqlite(dir, {
+        appVersion: "0.8.0",
+        publish: async (t) => void published.push(t),
+        syncDirectory: async (path) => {
+          if (path === dirname(target)) throw Object.assign(new Error("EIO: fsync"), { code: "EIO" });
+        },
+      }),
+    ).rejects.toThrow("EIO");
+    expect(published).toEqual([]);
+    // Resumed: the store and its name in its parent are flushed before the publication, whose
+    // directory (a config elsewhere) is not the store's.
+    const order: string[] = [];
+    const again = await convertStoreToSqlite(dir, {
+      appVersion: "0.8.0",
+      publish: async (t) => void order.push(`publish ${t}`),
+      syncDirectory: async (path) => void order.push(`sync ${path}`),
+    });
+    expect(again).toEqual({ status: "finished", convertedDir: target });
+    expect(order).toEqual([`sync ${target}`, `sync ${dirname(target)}`, `publish ${target}`]);
+  });
+
   it("never publishes a converted store that does not check out, and leaves it as it is", async () => {
     const broken: Record<string, (target: string) => Promise<void>> = {
       "database missing": async (target) => {
