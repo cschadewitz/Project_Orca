@@ -361,8 +361,9 @@ describe.skipIf(!BIN)("Cline CLI over ACP, installed (#711)", () => {
         const { asked, ask } = recorder(() => "allow_once");
         const session = await connect({ askPermission: ask, unguarded: true });
         await session.prompt("SCENARIO:subagent-unguarded Delegate.");
-        // One ask, for spawn_agent itself; the sub-agent's run_commands is never asked about.
-        expect(asked.map((r) => r.toolCall.title?.split(":")[0])).toEqual(["spawn_agent"]);
+        // Cline reports spawn_agent as kind think, which ORCA's default policy allows unasked,
+        // and the sub-agent's run_commands is never asked about at all.
+        expect(asked.filter((r) => r.toolCall.kind === "execute")).toHaveLength(0);
         expect(callsFor("sub-inner-unguarded").length).toBeGreaterThan(0);
         expect(existsSync(at("unguarded-subagent.txt"))).toBe(true);
         await session.close();
