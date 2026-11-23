@@ -51,7 +51,6 @@ import {
   openAcpSession,
   permissionPolicyPath,
   readPermissionPolicyFile,
-  recordAlwaysDecision,
   replacePermissionPolicyFile,
   type AgentSession,
   type OpenSessionOptions,
@@ -303,20 +302,13 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("the hook 
     expect(await readdir(join(configDir, ".orca", "private-execution", "tool-hooks")).catch(() => [])).toEqual([]);
   });
 
-  it("checks a remembered call every time, and asks through ORCA once the grant is revoked", async () => {
+  it("checks a remembered call every time, and asks through ORCA once a rule is added", async () => {
     asks.length = 0;
-    await recordAlwaysDecision({
-      file: permissionPolicyPath(configDir),
-      agentId: "claude",
-      request: {
-        sessionId: "s",
-        toolCall: { toolCallId: "t", title: COMMAND, kind: "execute" },
-        options: [{ optionId: "a", name: "Always", kind: "allow_always" }],
-      },
-      decision: "allow",
-      workspaceCwd: workspace,
+    // ORCA allows the command by a configured rule (it no longer keeps standing shell grants,
+    // #702); Claude Code allows it by its own remembered grant.
+    const session = await factorySession({
+      rules: [{ match: { kind: "execute", titlePattern: "^echo orca-704" }, decision: "allow" }],
     });
-    const session = await factorySession();
     try {
       await session.prompt(CALL);
       await session.prompt(CALL);
@@ -324,8 +316,12 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("the hook 
       // Claude remembered the grant, so neither call asked anybody.
       expect(asks).toEqual([]);
 
+      // A rule added to the live permission file mid-session applies to the very next call.
       const doc = await readPermissionPolicyFile(permissionPolicyPath(configDir));
-      await replacePermissionPolicyFile(permissionPolicyPath(configDir), { ...doc, agents: { claude: { rules: [] } } });
+      await replacePermissionPolicyFile(permissionPolicyPath(configDir), {
+        ...doc,
+        agents: { claude: { rules: [{ match: { kind: "execute", command: "echo" }, decision: "ask" }] } },
+      });
 
       await session.prompt(CALL);
       // The hook's "ask" arrived at ORCA as a permission request, was refused, and nothing ran.
