@@ -36,7 +36,7 @@ the token and takes the lock only when **all** of these are true:
 - its `host` is this machine's hostname;
 - its `pid` is not a live process here.
 
-Anything else fails closed. That covers a token from another host, whatever its pid
+Anything else fails closed. That covers a token recording a different hostname, whatever its pid
 and however old it is; a token with no `host` (written before hosts were recorded); an
 empty directory; a malformed token; and an older lock file. The contender keeps waiting
 with backoff and, at its deadline (60 s unless the caller sets `timeoutMs`), fails with

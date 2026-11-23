@@ -1,6 +1,6 @@
 /**
  * #103 (narrow scope): sharing one store's lock directories between hosts over a
- * shared volume is unsupported. A lock whose owner token names another host is never
+ * shared volume is unsupported. A lock whose owner token records a different hostname is never
  * judged dead, however old it is and whatever its pid looks like here: contenders wait
  * out their deadline and fail with STORE_LOCK_TIMEOUT, and the holder's token is kept
  * byte for byte. See docs/storage/file-locks.md.
@@ -82,7 +82,7 @@ describe("cross-host shared-volume locks fail closed", () => {
       const [name] = await readdir(lock);
       expect(JSON.parse(await readFile(join(lock, name!), "utf8"))).toMatchObject({ host: "host-b" });
 
-      // Host A sees a token from another host and refuses to judge it.
+      // Host A sees a token recording a different hostname and refuses to judge it.
       vi.mocked(hostname).mockReturnValue("host-a");
       await expect(withFileLock(lock, async () => wrote(), { staleMs: 1, timeoutMs: 50 })).rejects.toMatchObject({
         code: "STORE_LOCK_TIMEOUT",
