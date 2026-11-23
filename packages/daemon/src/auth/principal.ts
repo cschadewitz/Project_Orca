@@ -118,16 +118,49 @@ export const SecretGrantSchema = z.union([
         host: z.string().min(1),
         /** The host's endpoint binding when granted (`secretHostBinding`). */
         binding: z.string().regex(/^h1:[0-9a-f]{32}$/),
+        /**
+         * #701: a grant for a secret pinned to a destination is a review-judge grant for that
+         * one destination. It never covers delivery to an agent, and an entry without these
+         * (an agent grant) never covers a judge's use.
+         */
+        purpose: z.literal("review-judge").optional(),
+        destination: z.string().min(1).optional(),
+        /**
+         * A review-judge grant's source binding (`secretSourceBinding`): the variable the value
+         * is read from. Rotating the value there is covered; pointing the id elsewhere is not.
+         */
+        source: z
+          .string()
+          .regex(/^s1:[0-9a-f]{32}$/)
+          .optional(),
       })
-      .strict(),
+      .strict()
+      .refine(
+        (g) =>
+          (g.purpose === undefined) === (g.destination === undefined) &&
+          (g.purpose === undefined) === (g.source === undefined),
+        { message: "a review-judge grant names its destination and source, and only such a grant does" },
+      ),
   ),
 ]);
 export type SecretGrant = z.infer<typeof SecretGrantSchema>;
 
-/** Whether `grant` covers one use: that secret, read by that provider, on that host. */
+/**
+ * Whether `grant` covers one use: that secret, read by that provider, on that host, for that
+ * purpose. An agent use carries no purpose; a review-judge use (#701) carries its destination,
+ * and only an entry for the same purpose and destination covers it. `*` covers every use.
+ */
 export function grantCovers(
   grant: SecretGrant | undefined,
-  use: { secret: string; provider: string; hostId: string; hostBinding: string },
+  use: {
+    secret: string;
+    provider: string;
+    hostId: string;
+    hostBinding: string;
+    purpose?: "review-judge" | undefined;
+    destination?: string | undefined;
+    sourceBinding?: string | undefined;
+  },
 ): boolean {
   if (grant === undefined) return false;
   return (
@@ -137,7 +170,10 @@ export function grantCovers(
         g.secret === use.secret &&
         g.provider === use.provider &&
         g.host === use.hostId &&
-        g.binding === use.hostBinding,
+        g.binding === use.hostBinding &&
+        g.purpose === use.purpose &&
+        g.destination === use.destination &&
+        g.source === use.sourceBinding,
     )
   );
 }

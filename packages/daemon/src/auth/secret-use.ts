@@ -201,6 +201,31 @@ export function capabilityUseAuthority(opts: SecretUseAuthorityOptions): Capabil
 }
 
 /**
+ * A synchronous use decision for one run (#701), for a check that must sit in the same turn as
+ * the act it guards (a review judge's dispatch). Binding resolves the run's root and verifies its
+ * durable owner, which never change for a run, and refuses like `secretUseAuthority` when either
+ * fails. The returned check then reads that owner's credentials as they are at each call, so a
+ * revoked or expired credential is refused at the next call. It records no audit entry: the
+ * awaited `secretUseAuthority` decision made before the read records the use.
+ */
+export type BoundSecretUseCheck = (uses: SecretUse[]) => boolean;
+
+export async function bindSecretUse(opts: SecretUseAuthorityOptions, runId: string): Promise<BoundSecretUseCheck> {
+  const root = await opts.root(runId);
+  const owner = root === undefined ? undefined : opts.owner(root.rootRunId);
+  if (!root || !owner) throw refuse(undefined);
+  try {
+    await opts.verifyOwner(root.rootRunId, owner);
+  } catch {
+    throw refuse(undefined);
+  }
+  return (uses) => {
+    const principals = opts.principals(owner).filter((p) => p.id === owner);
+    return uses.every((use) => principals.some((p) => covers(p, root, use)));
+  };
+}
+
+/**
  * Loopback compatibility mode: every caller is `LOCAL_PRINCIPAL`, which holds every owner
  * permission, so every run may use every reference while the daemon runs in that mode. That
  * mode keeps no ownership records, so there is nothing to verify, and no audit log.

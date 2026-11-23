@@ -1,7 +1,7 @@
 /** Local credential administration: only explicit issue/rotate output contains a bearer token. */
 import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
 import { resolve } from "node:path";
-import { OrcaError, type OrcaConfig } from "@orca/core";
+import { OrcaError, secretSource, type OrcaConfig } from "@orca/core";
 import {
   openAuthDirectory,
   PRESETS,
@@ -14,7 +14,7 @@ import {
   type CapabilityGrant,
   CapabilityGrantSchema,
 } from "@orca/daemon";
-import { isAbsoluteCommand, mcpServerDefinitionDigest, secretHostBinding } from "@orca/agents";
+import { isAbsoluteCommand, mcpServerDefinitionDigest, secretHostBinding, secretSourceBinding } from "@orca/agents";
 import { skillDigest } from "@orca/engine";
 import { loadConfig } from "../bootstrap.js";
 import type { CommandContext } from "./index.js";
@@ -53,7 +53,22 @@ function secretGrant(ctx: CommandContext, config: OrcaConfig): SecretGrant | und
     const spec = config.hosts.find((h) => h.id === host);
     if (!spec)
       throw new OrcaError("CONFIG_INVALID", `--secret '${secret}' names host '${host}', which is not configured`);
-    return { secret, provider: bound.provider, host, binding: secretHostBinding(spec) };
+    // A secret pinned to a destination (#701) is only ever a review judge's key: its grant is
+    // for that purpose, that destination and that source, so a later re-pin or a change of
+    // variable is not covered, while rotating the value at the same variable is.
+    return {
+      secret,
+      provider: bound.provider,
+      host,
+      binding: secretHostBinding(spec),
+      ...(bound.destination !== undefined
+        ? {
+            purpose: "review-judge" as const,
+            destination: bound.destination,
+            source: secretSourceBinding(secretSource(bound)),
+          }
+        : {}),
+    };
   });
   const parsed = SecretGrantSchema.safeParse(grants);
   if (!parsed.success) throw new OrcaError("CONFIG_INVALID", "--secret ids use letters, digits, '.', '_' and '-'");
