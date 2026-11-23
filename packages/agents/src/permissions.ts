@@ -50,7 +50,9 @@ import {
   PERMISSION_POLICY_FILENAME,
   PermissionPolicyFileSchema,
   permissionPathForms,
+  permissionPolicyFileVersion,
   permissionRuleExpired,
+  PERMISSION_LIFETIME_VERSION,
   samePermissionRule,
   workspaceRelativePath,
   WritablePermissionPolicyFileSchema,
@@ -653,7 +655,14 @@ async function refuseUnsupportedPolicyReplacement(file: string): Promise<void> {
   } catch {
     return;
   }
-  if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && "version" in raw && raw.version !== 1)
+  if (
+    typeof raw === "object" &&
+    raw !== null &&
+    !Array.isArray(raw) &&
+    "version" in raw &&
+    raw.version !== 1 &&
+    raw.version !== PERMISSION_LIFETIME_VERSION
+  )
     throw new OrcaError("CONFIG_INVALID", `${file}: refusing to replace an unsupported permission document version`);
 }
 
@@ -687,7 +696,9 @@ function serialize(doc: PermissionPolicyFile): string {
   };
   const agents: Record<string, unknown> = {};
   for (const id of Object.keys(doc.agents).sort()) agents[id] = { rules: (doc.agents[id]?.rules ?? []).map(rule) };
-  return `${JSON.stringify({ version: doc.version, agents }, null, 2)}\n`;
+  // The version follows the content, never the input (#702): any lifetime moves the file to
+  // the version released 0.7.x readers refuse, and removing the last one moves it back.
+  return `${JSON.stringify({ version: permissionPolicyFileVersion(doc), agents }, null, 2)}\n`;
 }
 
 async function writePolicyFile(

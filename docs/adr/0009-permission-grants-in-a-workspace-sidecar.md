@@ -178,13 +178,24 @@ changes, all on this file and its writer, with no second store:
   recorded tool call and workspace the write uses. The app's **Always allow** / **Always
   deny** open that rule with its agent and lifetime, and only **Save rule and …** sends; the
   plain **Answer** never writes. Where the preview says nothing can be scoped, or a 2.7 daemon
-  sent none, there is nothing to save and the one-time answers still work.
+  sent none, there is nothing to save and the one-time answers still work. Each preview
+  carries a `ref` (sha256 over the run, step, request, agent, direction and normalised
+  rules); `inputs.answer` must echo it as `always.previewRef`, and the daemon derives the
+  rule again and refuses `CONFIG_STALE` before answering anything when it no longer matches,
+  so what is saved is what was shown or nothing.
 - **A lifetime.** A rule may carry `expiresAt`. `inputs.answer`'s `always.durationMs` (at most
   90 days) is stamped on the daemon's clock; absent, the rule stands until removed, as
   before. An expired rule stays in the file for the diff and decides nothing: it is skipped
   per ask, and `config.get` leaves it out of the effective policy. An answer for a grant
   already on file extends that line in place (never shortens it) rather than appending a
   twin. A value that is not an instant makes the file unreadable rather than "forever".
+  **A file holding any timed rule is version 3** (`PERMISSION_LIFETIME_VERSION`). Released
+  0.7.0 and 0.7.1 read version 1 and strip `expiresAt`, so in a version 1 file a timed allow
+  would be permanent to them; any other version they refuse, skipping the file with every
+  later `allow` turned to `ask`, refusing to replace it and refusing to edit it on the
+  Config surface. The writer stamps the version from the content, so removing the last
+  timed rule makes the file version 1 again, and a version 1 file that carries `expiresAt`
+  is refused. Version 2 is left to the inactive typed scoped-rule envelope.
   Removing a rule on the Config surface is how one is revoked; the next ask is decided
   without it.
 - **No remembered native grant.** An automatic allow selects only an agent's `allow_once`

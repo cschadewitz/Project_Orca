@@ -331,7 +331,11 @@ describe("an always-button shows the rule before anything is saved (#702)", () =
     fireEvent.click(within(review).getByRole("button", { name: "1 hour" }));
     fireEvent.click(within(review).getByRole("button", { name: "Save rule and allow" }));
     await waitFor(() => expect(answers()).toHaveLength(1));
-    expect(answers()[0]).toMatchObject({ optionId: "allow", always: { decision: "allow", durationMs: 3_600_000 } });
+    // The reviewed preview's ref travels with the save, so the daemon can refuse a changed rule.
+    expect(answers()[0]).toMatchObject({
+      optionId: "allow",
+      always: { decision: "allow", durationMs: 3_600_000, previewRef: "sha256:preview-allow" },
+    });
   });
 
   it("sends no duration for Until removed", async () => {
@@ -341,7 +345,7 @@ describe("an always-button shows the rule before anything is saved (#702)", () =
     fireEvent.click(within(ask).getByRole("button", { name: "Until removed" }));
     fireEvent.click(within(ask).getByRole("button", { name: "Save rule and allow" }));
     await waitFor(() => expect(answers()).toHaveLength(1));
-    expect(answers()[0]!.always).toEqual({ decision: "allow" });
+    expect(answers()[0]!.always).toEqual({ decision: "allow", previewRef: "sha256:preview-allow" });
   });
 
   it("cancels without sending anything", async () => {

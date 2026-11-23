@@ -49,6 +49,13 @@ export const AlwaysDecisionSchema = z.object({
    * rule's `expiresAt` from its own. Capped at `MAX_PERMISSION_RULE_LIFETIME_MS` (90 days).
    */
   durationMs: z.number().int().positive().max(MAX_PERMISSION_RULE_LIFETIME_MS).optional(),
+  /**
+   * The `ref` of the `OpenInputView.standing` preview the person reviewed for this direction
+   * (protocol 2.8, #702). Required by a 2.8 daemon: it saves the rule that preview showed or
+   * nothing, refusing with `CONFIG_STALE` when the rule changed so the person reviews again.
+   * Optional in the schema only so a 2.7 client's answer parses and is refused by name.
+   */
+  previewRef: z.string().min(1).optional(),
 });
 export type AlwaysDecision = z.infer<typeof AlwaysDecisionSchema>;
 

@@ -130,9 +130,10 @@ export const EMPTY_SIDECAR: SidecarDocument = { version: 1, agents: {} };
  * array whose rows are `null`, or carry no `match`, or name a decision the vocabulary does
  * not have, is a file this panel cannot edit: `describeRule` would throw on it and blank the
  * panel, which is a worse answer than the documented one. So each row is checked and one bad
- * row refuses the document. A `version` other than 1 is refused for the same reason — it is
- * a shape this app has not been taught, and rewriting it in the only shape it knows would
- * lose whatever the new version added.
+ * row refuses the document. A `version` other than 1 or 3 is refused for the same reason — it
+ * is a shape this app has not been taught, and rewriting it in a shape it knows would lose
+ * whatever the new version added. Version 3 is version 1 plus rule lifetimes (#702); a
+ * version 1 file carrying an `expiresAt` is refused, as the daemon's reader refuses it.
  */
 export function parseSidecar(text: string): SidecarDocument | undefined {
   if (text.trim() === "") return EMPTY_SIDECAR;
@@ -145,7 +146,7 @@ export function parseSidecar(text: string): SidecarDocument | undefined {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
   const record = parsed as Record<string, unknown>;
   const version = record["version"];
-  if (version !== undefined && version !== 1) return undefined;
+  if (version !== undefined && version !== 1 && version !== SIDECAR_LIFETIME_VERSION) return undefined;
   const agents = record["agents"];
   if (agents !== undefined && (typeof agents !== "object" || agents === null || Array.isArray(agents))) {
     return undefined;
@@ -162,8 +163,16 @@ export function parseSidecar(text: string): SidecarDocument | undefined {
     }
     out[id] = { rules: checked };
   }
-  return { version: 1, agents: out };
+  const timed = Object.values(out).some((agent) => agent.rules.some((rule) => rule.expiresAt !== undefined));
+  if (timed && version !== SIDECAR_LIFETIME_VERSION) return undefined;
+  return { version: timed ? SIDECAR_LIFETIME_VERSION : 1, agents: out };
 }
+
+/**
+ * The version a sidecar with any timed rule carries: `PERMISSION_LIFETIME_VERSION` in
+ * `@orca/core`, mirrored because the renderer cannot import core (ADR 0008).
+ */
+export const SIDECAR_LIFETIME_VERSION = 3;
 
 /**
  * One row of `rules`, if it is one. The row is returned as it arrived — unknown keys and
@@ -286,8 +295,10 @@ export function serializeSidecar(doc: SidecarDocument): string {
   for (const id of Object.keys(doc.agents).sort()) {
     agents[id] = { rules: rulesOf(doc, id).map(canonicalRule) };
   }
-  // `version` and `agents`, and never a third key: the sidecar carries no `default`.
-  return `${JSON.stringify({ version: doc.version, agents }, null, 2)}\n`;
+  // `version` and `agents`, and never a third key: the sidecar carries no `default`. The
+  // version follows the content, as the daemon's writer stamps it (#702).
+  const timed = Object.keys(doc.agents).some((id) => rulesOf(doc, id).some((rule) => rule.expiresAt !== undefined));
+  return `${JSON.stringify({ version: timed ? SIDECAR_LIFETIME_VERSION : 1, agents }, null, 2)}\n`;
 }
 
 /** A rule a person adds here: narrow, and saying so in its own provenance. */

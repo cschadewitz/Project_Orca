@@ -48,7 +48,7 @@ export interface AnswerRequest {
    * Only ever set from a reviewed standing rule (#702), and only on a permission ask.
    * `durationMs` absent is "until removed".
    */
-  always?: { decision: "allow" | "deny"; durationMs?: number };
+  always?: { decision: "allow" | "deny"; durationMs?: number; previewRef?: string };
 }
 
 export interface AnswerCardProps {
@@ -224,7 +224,8 @@ export function AnswerCard({
     onAnswer({
       optionId: target.option.id,
       ...(note.trim() ? { note: note.trim() } : {}),
-      always: { decision, ...(durationMs === undefined ? {} : { durationMs }) },
+      // The preview's ref binds the save to the rule shown; the daemon refuses a changed one.
+      always: { decision, ...(durationMs === undefined ? {} : { durationMs }), previewRef: preview.ref },
     });
     setReviewing(undefined);
   };

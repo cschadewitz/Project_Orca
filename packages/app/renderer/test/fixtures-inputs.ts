@@ -91,8 +91,14 @@ export const PERMISSION_ASK: OpenInputView = {
   context: { command: "rm -rf build/" },
   // The rule each "always" would write, previewed by the daemon (protocol 2.8, #702).
   standing: {
-    allow: { rules: [{ match: { kind: "execute", titlePattern: "^rm -rf build/$" }, decision: "allow" }] },
-    deny: { rules: [{ match: { kind: "execute", titlePattern: "^rm -rf build/$" }, decision: "deny" }] },
+    allow: {
+      rules: [{ match: { kind: "execute", titlePattern: "^rm -rf build/$" }, decision: "allow" }],
+      ref: "sha256:preview-allow",
+    },
+    deny: {
+      rules: [{ match: { kind: "execute", titlePattern: "^rm -rf build/$" }, decision: "deny" }],
+      ref: "sha256:preview-deny",
+    },
   },
   // Who is blocked, off the wire as of protocol 1.6 (#248) - the card names it rather than
   // the run, because "always allow" is not a decision a person can size without it.

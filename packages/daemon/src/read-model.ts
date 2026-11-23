@@ -25,7 +25,6 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import {
-  derivePermissionRules,
   OrcaError,
   RUN_SUMMARY_EVENT_TYPES,
   reduceRun,
@@ -95,6 +94,7 @@ import {
   type SearchResult,
 } from "@orca/protocol";
 import { PlanModel } from "./plan-model.js";
+import { standingRulePreview } from "./standing-preview.js";
 import { searchStore, type SearchScope } from "./search-model.js";
 import { workflowSummaryView, workflowView } from "./workflow-model.js";
 
@@ -1204,7 +1204,9 @@ export class ReadModel {
       artifacts,
       ...(step?.nodeId ? { nodeId: step.nodeId } : {}),
       ...(session ? { agent: { id: session.agentId, hostId: session.hostId, ...(hostType ? { hostType } : {}) } } : {}),
-      ...standingPreview(request, state),
+      // What each "always" would write, bound to this ask and agent (#702). Only with an
+      // agent: a rule is written for one, and a preview that named none could not be checked.
+      ...(session ? standingPreview(request, state, session.agentId) : {}),
       ...(workItem ? { workItem } : {}),
     };
   }
@@ -1238,31 +1240,12 @@ export class ReadModel {
   }
 }
 
-/**
- * The rule each "always" direction would write for this ask (#702), derived from the same
- * recorded tool call and workspace `inputs.answer` derives from, so the card can show it before
- * anybody saves it. Nothing for a gate, or for a permission ask that recorded no tool call.
- */
-function standingPreview(request: HumanInputRequest, state: RunState): Pick<OpenInputView, "standing"> {
-  if (request.kind !== "permission") return {};
-  const toolCall = request.context["toolCall"];
-  if (!toolCall || typeof toolCall !== "object") return {};
-  const tc = toolCall as { kind?: unknown; title?: unknown; locations?: unknown };
-  const facts = {
-    kind: typeof tc.kind === "string" ? tc.kind : undefined,
-    title: typeof tc.title === "string" ? tc.title : undefined,
-    paths: Array.isArray(tc.locations)
-      ? tc.locations.flatMap((l: unknown) =>
-          l && typeof l === "object" && typeof (l as { path?: unknown }).path === "string"
-            ? [(l as { path: string }).path]
-            : [],
-        )
-      : [],
-    workspaceCwd: state.run.workspace.cwd,
-  };
-  const preview = (decision: "allow" | "deny") => {
-    const derived = derivePermissionRules(facts, decision);
-    return derived.ok ? { rules: derived.rules } : { refused: { reason: derived.reason, detail: derived.detail } };
-  };
-  return { standing: { allow: preview("allow"), deny: preview("deny") } };
+function standingPreview(
+  request: HumanInputRequest,
+  state: RunState,
+  agentId: string,
+): Pick<OpenInputView, "standing"> {
+  const allow = standingRulePreview(request, state, agentId, "allow");
+  const deny = standingRulePreview(request, state, agentId, "deny");
+  return allow && deny ? { standing: { allow, deny } } : {};
 }

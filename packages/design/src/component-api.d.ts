@@ -543,8 +543,11 @@ export interface PermissionCardProps {
   onAnswer(request: {
     optionId: string;
     note?: string;
-    /** Sent only from the standing rule review (#702). `durationMs` absent: until removed. */
-    always?: { decision: "allow" | "deny"; durationMs?: number };
+    /**
+     * Sent only from the standing rule review (#702). `durationMs` absent: until removed.
+     * `previewRef` is the reviewed preview's `ref`, which the daemon checks before saving.
+     */
+    always?: { decision: "allow" | "deny"; durationMs?: number; previewRef?: string };
   }): void;
   goToRun?: () => void;
 }

@@ -156,6 +156,29 @@ describe("the sidecar as a document", () => {
     expect(parseSidecar('{"agents":{}}')).toEqual(EMPTY_SIDECAR);
   });
 
+  it("keeps a rule's lifetime, as version 3, and refuses a version 1 file that carries one (#702)", () => {
+    const doc = (version: number) => `{
+  "version": ${version},
+  "agents": { "claude": { "rules": [
+    { "match": { "kind": "read", "path": "a.ts" }, "decision": "allow", "expiresAt": "2027-01-01T00:00:00.000Z" }
+  ] } }
+}
+`;
+    // A released 0.7 reader would take a version 1 timed allow as permanent, so it is not a file this panel edits.
+    expect(parseSidecar(doc(1))).toBeUndefined();
+    const parsed = parseSidecar(doc(3));
+    expect(parsed?.version).toBe(3);
+    const written = JSON.parse(serializeSidecar(parsed!)) as {
+      version: number;
+      agents: { claude: { rules: object[] } };
+    };
+    expect(written.version).toBe(3);
+    expect(Object.keys(written.agents.claude.rules[0]!)).toEqual(["match", "decision", "expiresAt"]);
+    // Removing the last timed rule makes the file version 1 again, readable by older releases.
+    const untimed = withRules(parsed!, "claude", [{ match: { kind: "read", path: "a.ts" }, decision: "allow" }]);
+    expect((JSON.parse(serializeSidecar(untimed)) as { version: number }).version).toBe(1);
+  });
+
   it("carries a key it does not know through a save untouched", () => {
     /* ADR 0009's document may grow a field before this panel learns about it. Dropping one
        would make an edit to row one silent data loss in row two. */
@@ -167,7 +190,7 @@ describe("the sidecar as a document", () => {
         {
           "match": { "kind": "read", "unknownNarrowing": "x" },
           "decision": "allow",
-          "expiresAt": "2027-01-01T00:00:00.000Z"
+          "reviewNote": "kept"
         }
       ]
     }
@@ -180,10 +203,10 @@ describe("the sidecar as a document", () => {
       agents: { claude: { rules: Record<string, unknown>[] } };
     };
     const rule = written.agents.claude.rules[0]!;
-    expect(rule["expiresAt"]).toBe("2027-01-01T00:00:00.000Z");
+    expect(rule["reviewNote"]).toBe("kept");
     expect((rule["match"] as Record<string, unknown>)["unknownNarrowing"]).toBe("x");
     // The known keys keep the daemon's order and the unknown ones come after it.
-    expect(Object.keys(rule)).toEqual(["match", "decision", "expiresAt"]);
+    expect(Object.keys(rule)).toEqual(["match", "decision", "reviewNote"]);
     expect(Object.keys(rule["match"] as object)).toEqual(["kind", "unknownNarrowing"]);
   });
 

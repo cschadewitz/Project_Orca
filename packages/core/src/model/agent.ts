@@ -288,6 +288,19 @@ export function permissionRuleExpired(rule: { expiresAt?: string | undefined }, 
 export const MAX_PERMISSION_RULE_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000;
 
 /**
+ * The sidecar version a document with any timed rule is written as (#702).
+ *
+ * Releases 0.7.0 and 0.7.1 read version 1 and strip keys they do not know, so a timed allow
+ * in a version 1 file would be read there as a grant with no end. Those releases refuse any
+ * other version instead: their session skips the file and turns every later `allow` into an
+ * `ask`, their writers refuse to append to it or replace it, and their Config surface refuses
+ * to edit it. So a lifetime moves the whole file across that boundary, and an older binary
+ * reopening the workspace asks rather than grants. Version 2 is not used because the inactive
+ * typed scoped-rule envelope (`typed-sidecar.ts` in `@orca/agents`) already names it.
+ */
+export const PERMISSION_LIFETIME_VERSION = 3;
+
+/**
  * The sidecar document, keyed by agent id.
  *
  * There is deliberately no `default` here. A layer can only ever add rules: answering one
@@ -296,11 +309,39 @@ export const MAX_PERMISSION_RULE_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000;
  * document shape is therefore valid at any scope, which is how a user-scoped file can later
  * layer *under* the workspace one without this schema changing.
  */
-export const PermissionPolicyFileSchema = z.object({
-  version: z.literal(1).default(1),
+const PermissionPolicyDocumentSchema = z.object({
+  version: z.union([z.literal(1), z.literal(PERMISSION_LIFETIME_VERSION)]).default(1),
   agents: z.record(z.string(), z.object({ rules: z.array(RecordedPermissionRuleSchema).default([]) })).default({}),
 });
+
+/**
+ * The sidecar as read. A document is version 1 unless one of its rules has a lifetime, and
+ * then it is `PERMISSION_LIFETIME_VERSION` (#702) — see that constant for why. A version 1
+ * document carrying an `expiresAt` is refused: that is exactly the file a released reader
+ * would take as a grant with no end, so this reader will not pretend it is well formed either.
+ */
+export const PermissionPolicyFileSchema = PermissionPolicyDocumentSchema.superRefine((doc, ctx) => {
+  if (doc.version === 1 && permissionPolicyFileVersion(doc) !== 1)
+    ctx.addIssue({
+      code: "custom",
+      message: `a version 1 permission sidecar cannot carry expiresAt: rules with a lifetime are version ${PERMISSION_LIFETIME_VERSION}, which releases before 0.8 refuse rather than read as permanent`,
+    });
+});
 export type PermissionPolicyFile = z.infer<typeof PermissionPolicyFileSchema>;
+
+/**
+ * The version a sidecar is written as, from what it holds (#702): 1 when no rule has a
+ * lifetime, `PERMISSION_LIFETIME_VERSION` when any does. Writers stamp this and never copy
+ * a version from their input, so removing the last timed rule makes the file readable by
+ * older releases again.
+ */
+export function permissionPolicyFileVersion(doc: {
+  agents: Readonly<Record<string, { rules: readonly { expiresAt?: string | undefined }[] } | undefined>>;
+}): 1 | typeof PERMISSION_LIFETIME_VERSION {
+  return Object.values(doc.agents).some((agent) => agent?.rules.some((rule) => rule.expiresAt !== undefined))
+    ? PERMISSION_LIFETIME_VERSION
+    : 1;
+}
 
 /**
  * The same document, for a writer rather than a reader: it *refuses* a `default` instead of
@@ -314,7 +355,7 @@ export type PermissionPolicyFile = z.infer<typeof PermissionPolicyFileSchema>;
  * and dropping the field would report success for an edit that did nothing. Naming the key
  * and rejecting it says what ADR 0009 decided, at the moment somebody tries the opposite.
  */
-export const WritablePermissionPolicyFileSchema = PermissionPolicyFileSchema.extend({
+export const WritablePermissionPolicyFileSchema = PermissionPolicyDocumentSchema.extend({
   default: z
     .undefined({
       error:

@@ -61,7 +61,15 @@ export type InputAgent = z.infer<typeof InputAgentSchema>;
  * write re-derives from the same recorded tool call and reports what it actually wrote.
  */
 export const StandingRulePreviewSchema = z.union([
-  z.object({ rules: z.array(PermissionRuleSchema).min(1) }),
+  z.object({
+    rules: z.array(PermissionRuleSchema).min(1),
+    /**
+     * Binds a save to this preview: `inputs.answer`'s `always.previewRef` must echo it, and
+     * the daemon refuses (`CONFIG_STALE`) when the rule it would now write differs from the
+     * one shown. Opaque to clients.
+     */
+    ref: z.string().min(1),
+  }),
   z.object({ refused: z.object({ reason: z.string(), detail: z.string() }) }),
 ]);
 export type StandingRulePreview = z.infer<typeof StandingRulePreviewSchema>;

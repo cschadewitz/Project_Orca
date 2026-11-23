@@ -81,7 +81,8 @@ surface's words ("allow edit at src/a.ts"), taken from the daemon's preview on t
 as a row of toggle buttons (1 hour, 1 day, **7 days** by default, 30 days, Until removed). One
 `caption` line says what the rule will do and that ORCA answers the agent once each time, so
 removing or expiring the rule takes effect on its next ask. **Save rule and allow** /
-**Save rule and deny** sends the answer with the rule; **Cancel** closes it. When the preview
+**Save rule and deny** sends the answer with the rule and the preview's `ref`, so the daemon
+saves the rule shown or refuses it as stale; **Cancel** closes it. When the preview
 says no rule can be scoped to this call, or the daemon sent none, the review says why in one
 `caption` line and the save is disabled with that reason; the one-time answers still work.
 
