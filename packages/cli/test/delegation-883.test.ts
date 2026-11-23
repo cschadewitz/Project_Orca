@@ -195,11 +195,25 @@ async function runOf(
   return (await call(daemon, "runs.get", { runId })) as never;
 }
 
-/** Start a run on a daemon without waiting for it to park or finish, as the app does. */
+/**
+ * Start a run on a daemon without waiting for it to park or finish, as the app does. Admissions
+ * that arrive together contend for the daemon's admission catalog, and one that cannot have it
+ * at once is refused with `STORE_LOCK_TIMEOUT`; the client sends the same idempotency key again,
+ * which can only ever admit the one run (#1018, as in delegation-machines-885).
+ */
 async function admit(daemon: TestDaemon, workflowId: string, vars: Record<string, unknown>): Promise<string> {
-  const receipt = await call(daemon, "runs.admit", { workflowId, vars, idempotencyKey: randomUUID() });
-  if (receipt.state !== "accepted") throw new Error(`not admitted: ${JSON.stringify(receipt)}`);
-  return receipt.runId as string;
+  const params = { workflowId, vars, idempotencyKey: randomUUID() };
+  for (let attempt = 1; ; attempt++) {
+    const answer = await daemon.call("runs.admit", params);
+    if (!answer.ok && answer.error.code === "STORE_LOCK_TIMEOUT" && attempt < 20) {
+      await new Promise((r) => setTimeout(r, 100 * attempt));
+      continue;
+    }
+    if (!answer.ok) throw new Error(`runs.admit: ${answer.error.code}: ${answer.error.message}`);
+    const receipt = answer.result as Record<string, unknown>;
+    if (receipt.state !== "accepted") throw new Error(`not admitted: ${JSON.stringify(receipt)}`);
+    return receipt.runId as string;
+  }
 }
 
 async function until<T>(what: string, read: () => Promise<T | undefined>, ms = 60_000): Promise<T> {

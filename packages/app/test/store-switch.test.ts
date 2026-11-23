@@ -1,5 +1,5 @@
-/** "Switch to SQLite" for the app's own workspace (#339): the restart, and the one-shot request. */
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+/** "Switch to SQLite" and back for the app's own workspace (#339): the restart, and the one-shot request. */
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -18,7 +18,7 @@ function rig(
     platform?: NodeJS.Platform;
     guards?: Partial<UpdateGuards>;
     settle?: (token: string) => Promise<{ path: string; claimHash: string }>;
-    request?: (workspace: string, after: string) => void;
+    request?: (workspace: string, after: string, to: "sqlite" | "files") => void;
   } = {},
 ) {
   const calls: string[] = [];
@@ -44,8 +44,8 @@ function rig(
       }),
     request:
       options.request ??
-      ((workspace, after) => {
-        calls.push(`request:${workspace}:${after === CLAIM}`);
+      ((workspace, after, to) => {
+        calls.push(`request:${workspace}:${after === CLAIM}:${to}`);
       }),
     relaunch,
     changed: (state) => states.push(state),
@@ -58,7 +58,7 @@ function rig(
 
 describe("StoreSwitchRestart", () => {
   it("offers the switch only for the app's own workspace on files, outside Windows, once enabled", () => {
-    expect(rig().restart.state).toEqual({ phase: "ready", backend: "file" });
+    expect(rig().restart.state).toEqual({ phase: "ready", backend: "file", to: "sqlite" });
     expect(rig({ enabled: false }).restart.state.phase).toBe("unavailable");
     expect(rig({ platform: "win32" }).restart.state.phase).toBe("unavailable");
     expect(rig({ store: { backend: "file", sqliteSwitch: "unavailable" } }).restart.state.phase).toBe("unavailable");
@@ -69,10 +69,41 @@ describe("StoreSwitchRestart", () => {
     expect(switched.restart.state).toEqual({ phase: "unavailable", backend: "sqlite", last: { status: "switched" } });
   });
 
+  it("offers the switch back to files only for the app's own workspace on SQLite whose daemon can switch back", async () => {
+    const back: StoreStatus = { backend: "sqlite", sqliteSwitch: "unavailable", filesSwitch: "available" };
+    expect(rig({ store: back }).restart.state).toEqual({ phase: "ready", backend: "sqlite", to: "files" });
+    expect(rig({ store: back, enabled: false }).restart.state.phase).toBe("unavailable");
+    expect(rig({ store: back, platform: "win32" }).restart.state.phase).toBe("unavailable");
+    // A daemon from before the switch back reports nothing for it.
+    expect(rig({ store: { backend: "sqlite", sqliteSwitch: "unavailable" } }).restart.state.phase).toBe("unavailable");
+    expect(rig({ store: { ...back, filesSwitch: "unavailable" } }).restart.state.phase).toBe("unavailable");
+  });
+
+  it("records a switch back to files the same way, through the same guards", async () => {
+    const r = rig({ store: { backend: "sqlite", sqliteSwitch: "unavailable", filesSwitch: "available" } });
+    const state = await r.restart.restart();
+    expect(r.calls).toEqual([
+      "prepareDrafts",
+      "prepareDaemon",
+      "stopDaemon",
+      "settle",
+      "request:/w:true:files",
+      "relaunch",
+    ]);
+    expect(state).toMatchObject({ phase: "restarting", to: "files", message: "Restarting ORCA to switch to files" });
+  });
+
   it("drains and stops the daemon exactly, settles it, records the request, then restarts ORCA", async () => {
     const r = rig();
     const state = await r.restart.restart();
-    expect(r.calls).toEqual(["prepareDrafts", "prepareDaemon", "stopDaemon", "settle", "request:/w:true", "relaunch"]);
+    expect(r.calls).toEqual([
+      "prepareDrafts",
+      "prepareDaemon",
+      "stopDaemon",
+      "settle",
+      "request:/w:true:sqlite",
+      "relaunch",
+    ]);
     expect(state.phase).toBe("restarting");
     // Held until ORCA restarts: a second ask does nothing.
     await r.restart.restart();
@@ -162,9 +193,9 @@ describe("store switch request", () => {
     workspace: dir(workspace, inode),
     store: dir(join(workspace, ".orca"), `${inode}1`),
   });
-  const write = (path: string, workspace = "/w", after = CLAIM) => {
+  const write = (path: string, workspace = "/w", after = CLAIM, to: "sqlite" | "files" = "sqlite") => {
     inode = "10";
-    writeStoreSwitchRequest(path, workspace, after, directories);
+    writeStoreSwitchRequest(path, workspace, after, to, directories);
   };
   const take = (path: string, previous: string | null = CLAIM, enabled = true, workspace = "/w") =>
     takeStoreSwitchRequest(path, workspace, { previous }, enabled, directories);
@@ -173,9 +204,19 @@ describe("store switch request", () => {
     const path = file();
     expect(take(path)).toBeUndefined();
     write(path);
-    expect(take(path)).toEqual({ after: CLAIM });
+    expect(take(path)).toEqual({ to: "sqlite", after: CLAIM });
     expect(take(path)).toBeUndefined();
     expect(readdirSync(join(path, ".."))).toEqual([]);
+  });
+
+  it("carries which way the switch goes, and reads a request from before the switch back as to SQLite", () => {
+    const path = file();
+    write(path, "/w", CLAIM, "files");
+    expect(take(path)).toEqual({ to: "files", after: CLAIM });
+    write(path);
+    const { to: _to, ...older } = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    writeFileSync(path, JSON.stringify(older));
+    expect(take(path)).toEqual({ to: "sqlite", after: CLAIM });
   });
 
   it("is spent, never acted on, while the switch is disabled: enabling it later finds nothing", () => {

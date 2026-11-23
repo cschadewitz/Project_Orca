@@ -1,8 +1,8 @@
 # #706 enforcement acceptance suite
 
-Owner: #706, under #699. This page covers the suite's synthetic half and the support-matrix
-tiers. The connected proof, which shows that what an agent ran is what ORCA approved, comes
-after #703 (PR #993) and #704 (PR #980) merge, and runs against these same cases.
+Owner: #706, under #699. This page covers the suite's synthetic half, the support-matrix
+tiers, and the connected proof, which runs these same cases through a live Claude Code and
+judges each call by what it did, not by what ORCA said.
 
 | File | What it is |
 | --- | --- |
@@ -13,12 +13,22 @@ after #703 (PR #993) and #704 (PR #980) merge, and runs against these same cases
 | [support-matrix.json](../../../tools/guard-qualification/support-matrix.json) | Per path: what it verifies, what it leaves unverified, capabilities and reasoned exclusions. Per agent: pinned tuple, tier, routes, receipts, unverified statements, uncovered routes, residual risks |
 | [check-support-matrix.js](../../../tools/guard-qualification/check-support-matrix.js) | Refuses a tier not backed by passing installed or connected receipts for the exact pinned tuple, and a case neither run nor excluded |
 | [enforcement-acceptance-706.test.js](../../../tools/test/enforcement-acceptance-706.test.js) | Runs every case on every path that can run it, in ordinary CI |
+| [connected/](../../../tools/guard-qualification/connected/) | The connected path for Claude (`claude.js`), the model stand-in and the MCP recorder it runs against, and the committed inventory of each case's assertions (`assertions.json`) |
+| [enforcement-connected-706.test.js](../../../tools/test/enforcement-connected-706.test.js) | Runs every case the connected path can run, in `claude-hook-acceptance.yml`, and writes the connected receipt |
 
 ```sh
 pnpm vitest run tools/test/enforcement-acceptance-706.test.js
 node tools/guard-qualification/check-support-matrix.js
 # Receipts, one JSON file per path: cases run, results, exclusions
 ORCA_ENFORCEMENT_RECEIPT_DIR=/tmp/receipts pnpm vitest run tools/test/enforcement-acceptance-706.test.js
+```
+
+The connected proof needs the pinned Claude ACP adapter and a Claude Code that is not the
+pinned one, installed the way the workflow installs them:
+
+```sh
+ORCA_CLAUDE_ADAPTER=…/claude-agent-acp/dist/index.js ORCA_CLAUDE_OTHER_RUNTIME=…/claude \
+  ORCA_ENFORCEMENT_RECEIPT_DIR=/tmp/receipts pnpm vitest run tools/test/enforcement-connected-706.test.js
 ```
 
 ## What a pass means
@@ -35,10 +45,89 @@ wrote, and checks ORCA's answer at decision time. It does **not** show:
 - physical confinement: the files can change between the check and the agent's open, and
   the path tests do not run on Windows.
 
-Each path lists these as `unverified` in the matrix. The connected proof (#706 scope bullets
-3, 5 and 6) and installed runs are where they get verified. A path that cannot be asked a
+Each path lists these as `unverified` in the matrix. The connected proof (below) and
+installed runs are where they get verified. A path that cannot be asked a
 case says so in the matrix, with a reason; absence of a case is never counted as coverage, and
 synthetic results never count toward a tier.
+
+## The connected proof
+
+`claude-connected` runs a real Claude Code (the pinned pair in `CLAUDE_HOOK_VERIFIED_PAIRS`)
+through the real Claude ACP adapter, in a session opened by ORCA's own session factory with
+the pre-tool hook installed, exactly as the daemon would open it. Claude Code's own settings
+allow every tool without asking, the worst case of natively remembered grants, so anything
+that stops a call is ORCA. A local stand-in for the model makes each case's tool calls, so no
+account, key or model spend is involved. MCP calls go to recorder servers.
+
+Every call is recorded with three things kept apart, and its outcome follows from them:
+
+- **Refusal**: what the tool result handed back to the model said: ORCA's denial or block,
+  the agent's own refusal text, no result, or nothing.
+- **Approvals**: the asks that reached ORCA's human channel for this exact call, matched by
+  the ACP tool call id (the model's `tool_use` id), and how each was answered. An ask that
+  matches no call of its turn is recorded as stray and fails the receipt.
+- **Effect**: `observed`, `none` or `indeterminate`, from evidence neither the agent nor ORCA
+  writes, bound to this call and kept in the receipt as `effectRef`:
+
+| Tool | Evidence for this call |
+| --- | --- |
+| Write, Edit | Digests of the file before and after, and of what a write wrote |
+| MCP | Each call carries its own id (`orca706Call`), which the recorder logs before answering; a line with that id is this call running. No line with it, and no line of the turn without a call id of the turn, is this call not running |
+| Shell | `CLAUDE_CODE_SHELL_PREFIX` points at a recorder that logs each Bash command before it runs: a line with this call's own command, or none and no line of the turn left unaccounted for |
+| Read | A token (the file's content, or one written into a file that did not exist yet) in this call's own tool result, or absent from it while the result exists and no other result of the turn holds it |
+| A tool not offered | The tool list of the request the call was made in |
+
+| Outcome | Needs |
+| --- | --- |
+| `allow` | Effect observed |
+| `deny`, `block` | Effect none, and ORCA's denial or block in this call's result |
+| `ask` | Effect none, and an approval bound to this call |
+| `indeterminate` | Anything without proof; fails the case |
+
+A refusal text or an absent result never shows on its own that nothing ran. Each call is also
+bound to the assertion it serves. What a case must assert is not taken from the receipt: the
+committed inventory [`connected/assertions.json`](../../../tools/guard-qualification/connected/assertions.json)
+lists, per connected path and case, every call in order with its tool and the outcomes its
+assertion accepts. The receipt's own `expected` must match it. A case the inventory does not
+list, or whose calls are missing, extra, out of order, for another tool or bound to other
+outcomes, does not qualify, and the matrix check fails if a case the path runs has no
+inventory entry. The checker does not trust the recorded effect or outcome either:
+`connectedEvidenceProblems` re-derives the effect from each call's `effectRef`
+(`connected/evidence.js`), requires every `tool_use` id to belong to one call only across the
+receipt, every approval's tool call id to be the call's own, the outcome to follow from the
+evidence, and the outcome to be one the inventory's assertion accepts. Missing or
+inconsistent evidence leaves the case nonqualifying. A change to a scenario's assertions
+changes the inventory in the same review. The privacy
+cases search the tool results handed back to the model.
+
+Claude Code refuses some calls itself before any hook runs: a tool it does not offer, an Edit
+of a file that does not exist, a change to a file it has not read. For a change to an existing
+file the path first reads it, as an agent would, with a person allowing that one read if ORCA
+asks. Where Claude refuses anyway and no effect is proven (the tool is not offered; Edit cannot
+create a file; ORCA denied the read), the case goes on, but the call is recorded as
+`orcaDecision: "unobserved"`: it is diagnostic only and never counts as evidence of
+enforcement. A case qualifies only if ORCA's decision was observed for **every** call its
+assertions need: a passing call elsewhere in the case, such as a positive control, cannot
+stand in for an unobserved refusal. The cases where Claude refuses a required call itself are
+listed under the path's `unobserved` cases with the reason: F05 (tools Claude does not
+offer), A02 and B01 (Edits, or changes after a denied read, that Claude refuses before the
+hook) and P03 (a long unknown tool name Claude does not offer). They run as diagnostics and do not count toward a
+tier, and for tier C an unobserved lifecycle or bypass case, such as B01, blocks the claim like
+an exclusion.
+
+Cases that run on this path include the concurrency case (16 identical calls in one model
+message), the timed grant (a real one-minute grant, waited out) and the unanswered,
+cancelled and wrongly-answered asks. The cases it cannot run (raw hook input, the context
+file, the installed settings, ACP options, a call from another working directory) are
+excluded with reasons and run on the synthetic paths. The run also checks that a session
+pointed at a Claude Code other than the pinned one is refused before any work
+(`checks.unpinnedRuntimeRefused`), and a connected receipt must carry it passing. That check
+proves that one case only, not that every uncovered route is refused, so a connected receipt
+neither claims nor is asked for `checks.uncoveredRoutesRefused`. Route coverage is the
+installed receipts' requirement, and tier C still needs it through the tiers below it.
+
+`claude-hook-acceptance.yml` runs it after the #704 acceptance tests and keeps the receipt as
+an artifact. It is evidence for review: promotion stays disabled, so no tier changes on it.
 
 ## Support tiers
 
@@ -53,7 +142,9 @@ refuses every tier above `none`, whatever receipts a row lists (`PROMOTION_ENABL
 What a receipt must show once promotion is enabled: the row pins agent version, adapter
 version, host and the exact 40-hex ORCA build. For **each route**, a committed
 `orca-enforcement-receipt/1` must match that pin and route, list no case twice, pass every case
-it lists, and carry `checks.connects` and `checks.uncoveredRoutesRefused` passing. Tiers are
+it lists, and carry `checks.connects` passing. An installed receipt also needs
+`checks.uncoveredRoutesRefused`; a connected one needs `checks.unpinnedRuntimeRefused` and
+per-call evidence matching the assertion inventory instead. Tiers are
 cumulative: each needs the receipts of every tier below it. A file path, a workflow's existence
 or a named residual risk is not proof.
 
@@ -62,7 +153,7 @@ or a named residual risk is not proof.
 | none | Nothing verified about policy coverage | — |
 | A | Connects and fails closed | `installed`, with the two connectivity checks passing |
 | B | Approvals validated | A, plus `installed` with every case the route can run passing against the real agent |
-| C | Execution guard certified | B, plus `connected` with every case the route can run passing; and no lifecycle or bypass case excluded on any of the agent's routes |
+| C | Execution guard certified | B, plus `connected` from a connected path that proves the route (`proves` in the matrix), with every case that path can run passing; and that path excludes no lifecycle or bypass case |
 
 Today every agent is `none`. Claude and Codex connect and are recognised by first-run
 preflight, but no receipt backs that, so the matrix lists it as unverified. Each stream edits
@@ -75,6 +166,10 @@ Write an adapter in `paths.js` with `id`, `capabilities` and `decide(world, acti
 `PATHS`, and add the same id and capabilities to the matrix's `paths`. The suite then runs
 every case the path can run. Any case it cannot run must be excluded with a reason a reader
 can check, or the checker fails.
+
+A connected path runs a live agent instead. It is listed in the matrix with `connected: true`
+and `proves: <route>`, is never itself an agent's route, and is checked by its own test file
+rather than added to `PATHS`.
 
 ## Cases
 
@@ -136,7 +231,7 @@ answers no on any doubt.
 | --- | --- |
 | 1. Cached approvals, revocation, concurrency, changed arguments, epochs, expiry, owner death, missing hook, timeout, malformed replies | Synthetic here (L*, F*, A*). Restart and lost acknowledgement need #703's durable authorization record. Hook timeout and a hook that cannot start are installed evidence in #980's workflow |
 | 2. Bypass attempts | Synthetic here (B*, F05). Interactive stdin, subagents and alternate MCP routes are per-agent installed evidence, listed as uncovered routes in the matrix |
-| 3. Approval, delivery, dispatch and observed effect, separately | Connected proof, after #703 and #704 |
+| 3. Approval, delivery, dispatch and observed effect, separately | Connected proof for Claude (`claude-connected`): ORCA's answer, the ask reaching ORCA and the observed effect, per call. Other agents add their own connected paths |
 | 4. Sensitive handling, safe projections, logging and retention | Synthetic here for what ORCA hands back (P*). Store-side redaction is #363 and #1000's |
 | 5. Coverage tier, matched rule and revision on the existing Attention surfaces | #702 follow-up (rule and revision on `agent.permission`); the tier comes from this matrix |
 | 6. Exact tested scope, receipts, residual risks | The matrix and the receipts here; latency measured only under an approved plan |

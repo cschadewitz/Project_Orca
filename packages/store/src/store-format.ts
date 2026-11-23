@@ -30,7 +30,8 @@ import { join } from "node:path";
 import { z } from "zod";
 import { OrcaError } from "@orca/core";
 import { withFileLock } from "./file-lock.js";
-import { boundStoreId, importFileMetadata, verifySqliteMetadata } from "./sqlite/maintenance.js";
+import { STORE_FORMAT_LOCK } from "./store-format-lock.js";
+import { boundStoreId, importFileMetadataUnderFormatLock, verifySqliteMetadata } from "./sqlite/maintenance.js";
 import { SQLITE_METADATA_FILE } from "./sqlite/stores.js";
 import { bindSqliteMetadata, SqliteDatabase } from "./sqlite/database.js";
 import { beginStoreSwitch, clearDeadStoreSwitch, liveStoreWriters, type StoreWriterEntry } from "./store-writers.js";
@@ -40,11 +41,23 @@ import {
   fenceLegacyMetadata,
   LEGACY_FENCES,
   legacyFenceComplete,
+  prepareSqliteSwitchDir,
+  recordSqliteSwitchJournal,
+  restoreLegacyMetadata,
   SQLITE_LEGACY_WORKFLOWS_DIR,
+  SQLITE_SWITCH_DIR,
   readSqliteSwitchJournal,
+  stagedFilesDir,
   unfenceLegacyMetadata,
   unfencedPaths,
+  type SqliteSwitchJournal,
 } from "./sqlite/legacy-fence.js";
+import {
+  checkFileMetadata,
+  readSqliteMetadataExport,
+  writeFileMetadata,
+  type SqliteMetadataExport,
+} from "./sqlite/export.js";
 import { SQLITE_KEY_FILE } from "./protected-file.js";
 import { backendOfEpoch, SQLITE_STORE_FORMAT_EPOCH, STORE_FORMAT_FILE, type StoreBackend } from "./store-backend.js";
 import {
@@ -95,8 +108,7 @@ export const STORE_FORMAT_HISTORY: readonly { epoch: string; release: string }[]
 export const STORE_FORMAT_EPOCH = STORE_FORMAT_HISTORY.at(-1)!.epoch;
 /** This format and the one before it are read in place. */
 export const SUPPORTED_STORE_FORMATS: readonly string[] = STORE_FORMAT_HISTORY.slice(-2).map((f) => f.epoch);
-/** The format lock: opening, stamping, carrying forward and converting a store take it. */
-export const STORE_FORMAT_LOCK = ".store-format.lock";
+export { STORE_FORMAT_LOCK };
 const LOCK = STORE_FORMAT_LOCK;
 
 const MarkerSchema = z.object({
@@ -741,7 +753,7 @@ async function switchLocked(
       const staged = await stageCarryover(storeDir, current, SQLITE_STORE_FORMAT_EPOCH, now, { privacy });
       backup = await staged.commit();
     }
-    await importFileMetadata(storeDir);
+    await importFileMetadataUnderFormatLock(storeDir);
     const verified = await verifySqliteMetadata(storeDir);
     if (!verified.ok)
       throw new StoreFormatError(
@@ -774,7 +786,12 @@ async function switchLocked(
     // The legacy fence (sqlite/legacy-fence.ts): from the journal on, an interruption is undone
     // (or, once the marker is written, finished) by the next start, and a released ORCA that
     // never reads the marker finds every path it would open first replaced by a marker.
-    await beginSqliteSwitchJournal(storeDir, { format: 1, sqliteId, backup: backup ?? options.copyOf?.storeDir ?? "" });
+    await beginSqliteSwitchJournal(storeDir, {
+      format: 1,
+      sqliteId,
+      backup: backup ?? options.copyOf?.storeDir ?? "",
+      database: (await sqliteDatabaseIdentity(storeDir))!,
+    });
     try {
       await fenceLegacyMetadata(storeDir, options.afterFenceStep);
       // A write that landed while the fence went in shows up in what was set aside.
@@ -835,7 +852,7 @@ function sqliteDatabaseBinding(storeDir: string): string | undefined {
 const switchInterrupted = (storeDir: string) =>
   new StoreFormatError(
     "INTERRUPTED",
-    "A switch of this store to SQLite was interrupted. Start ORCA (or run `orca store sqlite switch`) once to finish or undo it; nothing reads the store until then.",
+    "A switch of this store between files and SQLite was interrupted. Start ORCA once to finish or undo it; nothing reads the store until then.",
     storeDir,
   );
 
@@ -848,11 +865,20 @@ const switchInterrupted = (storeDir: string) =>
 async function settleSqliteSwitch(storeDir: string, marker: StoreFormatMarker | undefined): Promise<void> {
   clearDeadStoreSwitch(storeDir);
   const journal = await readSqliteSwitchJournal(storeDir);
-  if (!journal) return;
+  if (!journal) {
+    // What a switch left before its journal (the files a switch back wrote out) changed nothing.
+    await rm(join(storeDir, SQLITE_SWITCH_DIR), { recursive: true, force: true });
+    return;
+  }
+  if (journal.to === "files") return settleFilesSwitch(storeDir, marker, journal);
   if (marker?.epoch === SQLITE_STORE_FORMAT_EPOCH) {
     // Published: the marker and the database must both name the journal's switch, and the
     // marker is flushed again (its first flush may be what failed) before the journal goes.
-    if (marker.sqliteId !== journal.sqliteId || sqliteDatabaseBinding(storeDir) !== journal.sqliteId)
+    if (
+      marker.sqliteId !== journal.sqliteId ||
+      sqliteDatabaseBinding(storeDir) !== journal.sqliteId ||
+      (journal.database !== undefined && (await sqliteDatabaseIdentity(storeDir)) !== journal.database)
+    )
       throw switchInterrupted(storeDir);
     if (!(await legacyFenceComplete(storeDir))) await fenceLegacyMetadata(storeDir);
     await syncMarker(storeDir);
@@ -887,4 +913,297 @@ async function fencedFileMetadata(storeDir: string): Promise<StoreSnapshot> {
       });
   }
   return out;
+}
+
+export interface SwitchToFilesOptions {
+  appVersion: string;
+  now?: () => Date;
+  /** Where private copies may go; defaults to the POSIX owner-only backups directory. */
+  privacy?: PrivateCopyBackend;
+  /** Injected for tests; defaults to this process's platform. */
+  platform?: NodeJS.Platform;
+  /**
+   * The caller holds the store's exclusive writer fence (the desktop app's daemon): checked
+   * before anything is changed, before the journal, before the marker is staged, and at the
+   * marker's rename. Once it no longer holds, the switch back is refused (`FENCE_LOST`) and undone.
+   */
+  fence?: StoreWriteFence;
+  /** Injected for tests: runs after the file metadata is written and checked, before the journal. */
+  afterExport?: () => Promise<void>;
+  /** Injected for tests: runs after each path is restored. */
+  afterRestoreStep?: (path: string) => Promise<void>;
+  /** Injected for tests: runs after every path is restored, just before the marker is written. */
+  beforeMarker?: () => Promise<void>;
+  /** Tests: runs between the marker's rename and its flush; a throw stands for a failed flush. */
+  afterMarkerRename?: () => Promise<void>;
+  /** Injected for tests: runs after the marker, before the database and the journal are dropped. */
+  afterMarker?: () => Promise<void>;
+}
+
+export type SwitchToFilesOutcome =
+  { status: "switched"; epoch: string; backup: string } | { status: "current"; epoch: string };
+
+/** The database's files: the database, and SQLite's own WAL, shared-memory and journal files. */
+const SQLITE_DATABASE_FILES = ["", "-wal", "-shm", "-journal"].map((suffix) => `${SQLITE_METADATA_FILE}${suffix}`);
+
+/** Remove a store's database once its marker records files again; the switch's backup keeps it. */
+/**
+ * Which file `<storeDir>/metadata.sqlite` is (`<dev>:<ino>`), or undefined when there is none. A
+ * switch journals it, so recovery acts on that file only: a backup restored or copied in its place
+ * is another file, even when it is bound to the same store.
+ */
+async function sqliteDatabaseIdentity(storeDir: string): Promise<string | undefined> {
+  const info = await lstat(join(storeDir, SQLITE_METADATA_FILE), { bigint: true }).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    },
+  );
+  return info && `${info.dev}:${info.ino}`;
+}
+
+async function dropSqliteDatabase(storeDir: string): Promise<void> {
+  for (const name of SQLITE_DATABASE_FILES) await rm(join(storeDir, name), { force: true });
+  await syncDirectory(storeDir);
+}
+
+/**
+ * The store's files as the switch back compares them: everything but the paths it restores (the
+ * fenced paths, the relocated workflows, the keys' links), so the database and every file that
+ * stays where it is must not change while the switch back runs.
+ */
+async function unrestoredFiles(storeDir: string): Promise<StoreSnapshot> {
+  const fenced = [...LEGACY_FENCES.map((f) => f.path), SQLITE_LEGACY_WORKFLOWS_DIR];
+  const under = (path: string, root: string) => path === root || path.startsWith(`${root}/`);
+  const out: StoreSnapshot = new Map();
+  for (const [path, entry] of await snapshotStore(storeDir)) {
+    if (fenced.some((root) => under(path, root)) || path.endsWith(`/${SQLITE_KEY_FILE}`)) continue;
+    // Directories the restore may create (artifacts/) are compared through their files.
+    if (entry.type !== "file") continue;
+    out.set(path, entry);
+  }
+  return out;
+}
+
+/**
+ * Switch a store's metadata back from SQLite to files (#339): the way back after
+ * {@link switchStoreToSqlite}, run by the desktop app's daemon under its writer fence. Under the
+ * format lock (an earlier switch either way that was interrupted is first finished or undone by
+ * its journal):
+ *
+ * 1. Only a store on SQLite is switched back; one already on this ORCA's file format is left as it
+ *    is. Not on Windows yet (#947), exactly as the switch to SQLite.
+ * 2. No other writer: announced as the switch to SQLite is, and refused while any registered
+ *    writer is alive.
+ * 3. `verifySqliteMetadata` must find nothing wrong, and everything the database holds is read in
+ *    one snapshot, every row parsed with its schema (`readSqliteMetadataExport`): a row or
+ *    collection this ORCA cannot read refuses the switch back, rather than leave it behind.
+ * 4. A verified whole-store backup into `format-backups/`, the database in it checked again.
+ * 5. The file metadata written out into `.sqlite-switch/files/` and read back with the file
+ *    backend's readers, which must return exactly what the database holds (`checkFileMetadata`).
+ *    The store must not have changed since step 3.
+ * 6. A durable journal (`to: "files"`), then every marker of the legacy fence replaced by what
+ *    was written out (`restoreLegacyMetadata`), the keys last, and the store checked unchanged
+ *    once more. Only then the marker: this ORCA's file format, naming the backup. That rename is
+ *    the commit. Then the database is removed (the backup holds it) and the journal dropped.
+ *
+ * Any refusal before the marker leaves the store on SQLite exactly as it was: every marker back
+ * (what was restored set aside and dropped), the database untouched. A crash before the marker is
+ * undone the same way by the next start; one after it is finished. Throws {@link StoreFormatError}.
+ */
+export async function switchStoreToFiles(
+  storeDir: string,
+  options: SwitchToFilesOptions,
+): Promise<SwitchToFilesOutcome> {
+  const current = STORE_FORMAT_EPOCH;
+  return withFileLock(join(storeDir, LOCK), async (): Promise<SwitchToFilesOutcome> => {
+    await settleSqliteSwitch(storeDir, await readStoreFormat(storeDir));
+    const marker = await readStoreFormat(storeDir);
+    if (marker) judge(storeDir, marker, current);
+    if (marker?.epoch === current) return { status: "current", epoch: current };
+    if (marker?.epoch !== SQLITE_STORE_FORMAT_EPOCH)
+      throw new StoreFormatError(
+        "SWITCH_REFUSED",
+        marker
+          ? `This store is in store format ${marker.epoch}, not on SQLite, so there is nothing to switch back. Nothing was changed.`
+          : "This store has no format marker, so it is not on SQLite. Nothing was changed.",
+        storeDir,
+      );
+    if ((options.platform ?? process.platform) === "win32")
+      throw new StoreFormatError(
+        "UNDURABLE",
+        "This ORCA does not yet change a store's format on Windows, because it cannot yet prove that the backup it takes first survives a power cut. Switching back to files is such a change, so nothing was changed and the store stays on SQLite.",
+        storeDir,
+      );
+    const announcement = beginStoreSwitch(storeDir, options.appVersion);
+    try {
+      const writers = liveStoreWriters(storeDir);
+      if (writers.length) throw busyWritersOnSqlite(storeDir, writers);
+      return await switchToFilesLocked(storeDir, marker, options);
+    } finally {
+      announcement.end();
+    }
+  });
+}
+
+const busyWritersOnSqlite = (storeDir: string, writers: StoreWriterEntry[]) =>
+  new StoreFormatError(
+    "BUSY",
+    busyWriters(storeDir, writers).message.replace("so it stays on files", "so it stays on SQLite"),
+    storeDir,
+  );
+
+async function switchToFilesLocked(
+  storeDir: string,
+  marker: StoreFormatMarker,
+  options: SwitchToFilesOptions,
+): Promise<SwitchToFilesOutcome> {
+  const current = STORE_FORMAT_EPOCH;
+  const privacy = options.privacy ?? posixPrivateCopy;
+  const now = (options.now ?? (() => new Date()))();
+  const sqliteId = marker.sqliteId;
+  const holdsFence = () => {
+    if (options.fence && !options.fence.check())
+      throw new StoreFormatError(
+        "FENCE_LOST",
+        `This ORCA no longer provably holds the only write access to ${storeDir}, so it was not switched back to files and stays on SQLite. Close every ORCA app, daemon and command using this workspace, then start ORCA again.`,
+        storeDir,
+      );
+  };
+  const unreadable = (error: unknown) =>
+    error instanceof OrcaError && !(error instanceof StoreFormatError) && error.code === "STORE_FORMAT"
+      ? new StoreFormatError("UNREADABLE", `${error.message} Nothing was changed.`, storeDir)
+      : error;
+  const changed = () =>
+    new StoreFormatError(
+      "BUSY",
+      "The store changed while it was being switched back to files, so the files may not hold everything and the store stays on SQLite. Stop every ORCA app, daemon and command using it, then switch it again.",
+      storeDir,
+    );
+  let journaled = false;
+  let backup: string;
+  try {
+    holdsFence();
+    const verified = await verifySqliteMetadata(storeDir).catch((error: unknown) => {
+      throw unreadable(error);
+    });
+    if (!verified.ok)
+      throw new StoreFormatError(
+        "UNREADABLE",
+        `This store's SQLite metadata did not verify (${verified.problems
+          .slice(0, 3)
+          .map((p) => p.kind)
+          .join(
+            ", ",
+          )}), so it was not switched back to files and stays on SQLite. Run \`orca store sqlite verify\` for the details.`,
+        storeDir,
+      );
+    let exported: SqliteMetadataExport;
+    try {
+      exported = readSqliteMetadataExport(storeDir, sqliteId);
+    } catch (error) {
+      throw unreadable(error);
+    }
+    const before = await unrestoredFiles(storeDir);
+    const staged = await stageCarryover(storeDir, SQLITE_STORE_FORMAT_EPOCH, current, now, {
+      privacy,
+      reads: async (copy) => {
+        const report = await verifySqliteMetadata(copy);
+        if (!report.ok) throw new Error("the SQLite metadata in the copy did not verify");
+        readSqliteMetadataExport(copy, sqliteId);
+      },
+    });
+    backup = await staged.commit();
+    holdsFence();
+    await prepareSqliteSwitchDir(storeDir);
+    const files = stagedFilesDir(storeDir);
+    try {
+      await writeFileMetadata(files, exported);
+      await checkFileMetadata(files, exported);
+    } catch (error) {
+      throw unreadable(error);
+    }
+    await options.afterExport?.();
+    if (!sameStoreSnapshot(before, await unrestoredFiles(storeDir))) throw changed();
+    const writers = liveStoreWriters(storeDir);
+    if (writers.length) throw busyWritersOnSqlite(storeDir, writers);
+    holdsFence();
+    const database = await sqliteDatabaseIdentity(storeDir);
+    if (!database) throw changed();
+    const journal: SqliteSwitchJournal = { format: 1, sqliteId: sqliteId!, backup, to: "files", database };
+    await recordSqliteSwitchJournal(storeDir, journal);
+    journaled = true;
+    await restoreLegacyMetadata(storeDir, files, options.afterRestoreStep);
+    if (!sameStoreSnapshot(before, await unrestoredFiles(storeDir))) throw changed();
+    await options.beforeMarker?.();
+    holdsFence();
+    await stamp(storeDir, options.appVersion, now, { backup }, holdsFence, current, options.afterMarkerRename);
+  } catch (error) {
+    if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
+    if (!journaled) {
+      await rm(join(storeDir, SQLITE_SWITCH_DIR), { recursive: true, force: true });
+      throw error;
+    }
+    // As for the switch to SQLite: only a store whose marker provably still records SQLite is
+    // put back here. A failure after the marker's rename may have published it, and an unreadable
+    // marker decides nothing; either keeps the journal for the next start (settleFilesSwitch).
+    const now = await readStoreFormat(storeDir).then(
+      (value) => value ?? null,
+      () => undefined,
+    );
+    const journal = await readSqliteSwitchJournal(storeDir).catch(() => undefined);
+    if (
+      now?.epoch === SQLITE_STORE_FORMAT_EPOCH &&
+      now.sqliteId === sqliteId &&
+      journal?.database !== undefined &&
+      (await sqliteDatabaseIdentity(storeDir)) === journal.database
+    ) {
+      await fenceLegacyMetadata(storeDir);
+      await endSqliteSwitchJournal(storeDir);
+    }
+    throw error;
+  }
+  await options.afterMarker?.();
+  await dropSqliteDatabase(storeDir);
+  await endSqliteSwitchJournal(storeDir);
+  await pruneFormatBackups(storeDir, backup, privacy);
+  return { status: "switched", epoch: current, backup };
+}
+
+/**
+ * Finish or undo a switch back to files that was interrupted, from its journal. The marker
+ * decides, and must be this switch's:
+ *
+ * - on this ORCA's file format, with no database id and naming the backup this journal records
+ *   (each switch back takes its own), the switch back happened (every path was restored before
+ *   the marker). Only the database and the journal are left to drop, and the database only if it
+ *   is still the one the journal names, or already gone (a cleanup that was interrupted after
+ *   removing it); a database bound to anything else is left alone and refused.
+ * - on SQLite, naming the journal's database, which is still bound to it: every marker goes back
+ *   (what was restored is set aside and dropped).
+ *
+ * Anything else is refused (`INTERRUPTED`) and left as it is.
+ */
+async function settleFilesSwitch(
+  storeDir: string,
+  marker: StoreFormatMarker | undefined,
+  journal: SqliteSwitchJournal,
+): Promise<void> {
+  if (marker?.epoch === STORE_FORMAT_EPOCH && !marker.sqliteId && marker.backup === journal.backup) {
+    // The database left behind must be the very file this switch started from (or already gone):
+    // a replacement bound to the same store, restored or copied in meanwhile, is not dropped.
+    const database = await sqliteDatabaseIdentity(storeDir);
+    if (database && (database !== journal.database || sqliteDatabaseBinding(storeDir) !== journal.sqliteId))
+      throw switchInterrupted(storeDir);
+    await syncMarker(storeDir);
+    await dropSqliteDatabase(storeDir);
+  } else if (
+    marker?.epoch === SQLITE_STORE_FORMAT_EPOCH &&
+    marker.sqliteId === journal.sqliteId &&
+    sqliteDatabaseBinding(storeDir) === journal.sqliteId &&
+    (await sqliteDatabaseIdentity(storeDir)) === journal.database
+  )
+    await fenceLegacyMetadata(storeDir);
+  else throw switchInterrupted(storeDir);
+  await endSqliteSwitchJournal(storeDir);
 }

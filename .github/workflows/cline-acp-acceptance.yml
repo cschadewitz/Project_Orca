@@ -1,0 +1,83 @@
+# Cline CLI over ACP, on the real binary (#711 tiers A and B).
+#
+# Installs the pinned Cline CLI, checks the Linux binary's SHA-256 against the pin, and runs
+# packages/agents/test/cline-acp-711.acceptance.test.ts against it. Cline's openai-compatible
+# provider points at a scripted local stand-in model inside the test, so no account, key or
+# paid request is involved and the job runs unattended. Moving the pin is a reviewed change to
+# PINNED_CLINE_VERSION and PINNED_CLINE_LINUX_X64_SHA256 here and CLINE_CLI_VERIFIED_VERSIONS in
+# packages/agents/src/providers/cline.ts together.
+name: Cline ACP acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/agents/src/**
+      - packages/core/src/**
+      - packages/agents/test/cline-acp-711*.ts
+      - packages/agents/test/fixtures/cline-*.ts
+      - package.json
+      - pnpm-lock.yaml
+      - packages/*/package.json
+      - .github/workflows/cline-acp-acceptance.yml
+  push:
+    branches: [main]
+    paths:
+      - packages/agents/src/**
+      - .github/workflows/cline-acp-acceptance.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cline-acp-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PINNED_CLINE_VERSION: "3.0.75"
+  # sha256 of bin/cline in @cline/cli-linux-x64@3.0.75 (npm integrity
+  # sha512-I9uEOAmfphHjr6Bwvq+hzCx9bHAtjH8r7M0KyF4iS6SdzDAIcZxlaLWduAOu8vZ6ws3xkd4vqDU0StpznNmrHw==).
+  PINNED_CLINE_LINUX_X64_SHA256: f63e3073dcd3b5d045cca6a78a65250b9baecf7d599a1206276255a5fc4f58fe
+
+jobs:
+  acceptance:
+    name: cline 3.0.75 over ACP (linux x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Install the pinned Cline CLI
+        # Only the platform package is needed: ORCA starts the binary itself, not the npm
+        # wrapper, and no install script runs.
+        run: |
+          prefix="$RUNNER_TEMP/cline"
+          npm install --prefix "$prefix" --no-save --ignore-scripts --no-audit --no-fund \
+            "@cline/cli-linux-x64@${PINNED_CLINE_VERSION}"
+          bin="$prefix/node_modules/@cline/cli-linux-x64/bin/cline"
+          echo "${PINNED_CLINE_LINUX_X64_SHA256}  $bin" | sha256sum -c -
+          echo "ORCA_CLINE_BIN=$bin" >> "$GITHUB_ENV"
+      - name: Cline acceptance (tiers A and B)
+        shell: bash
+        env:
+          CLINE_NO_AUTO_UPDATE: "1"
+        # Every test must run and pass: a skip here would be a silent loss of evidence.
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run packages/agents/test/cline-acp-711.acceptance.test.ts \
+            --reporter=verbose --reporter=json --outputFile="$RUNNER_TEMP/acceptance.json"
+          node -e '
+            const r = require(process.argv[1]);
+            if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
+              throw new Error(`expected every acceptance test to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
+          ' "$RUNNER_TEMP/acceptance.json"
