@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { silentLogger } from "@orca/core";
+import { switchStoreToSqlite } from "@orca/store";
 import { bootstrap } from "../src/bootstrap.js";
 import { storeCommand } from "../src/commands/store.js";
 import type { CommandContext } from "../src/commands/index.js";
@@ -98,7 +99,25 @@ describe("orca store", () => {
     await expect(storeCommand(ctx(dir, ["sqlite", "nope"]))).rejects.toMatchObject({ code: "CONFIG_INVALID" });
   });
 
-  it("sqlite switch moves a workspace onto SQLite, and the daemon opens it there from then on", async () => {
+  it("sqlite switch is refused for now, changing nothing, because released ORCA versions ignore the marker", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-store-sqlite-switch-"));
+    dirs.push(dir);
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
+    (await bootstrap({ cwd: dir, logger: silentLogger })).orchestrator.stores.close?.();
+    await mkdir(join(dir, ".orca", "runs"), { recursive: true });
+    await writeFile(join(dir, ".orca", "runs", "run_old.jsonl"), LOG);
+    const before = await readdir(join(dir, ".orca"));
+    await expect(storeCommand(ctx(dir, ["sqlite", "switch"]))).rejects.toMatchObject({
+      code: "STORE_FORMAT",
+      details: { reason: "LEGACY_UNFENCED" },
+    });
+    expect(await readdir(join(dir, ".orca"))).toEqual(before);
+    const format = ctx(dir, ["format"]);
+    expect(await storeCommand(format)).toBe(0);
+    expect(format.lines).toContain("metadata         files");
+  });
+
+  it("a store switched to SQLite (library, in place) is opened there by the daemon and shown by format", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-store-sqlite-switch-"));
     dirs.push(dir);
     await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
@@ -106,15 +125,9 @@ describe("orca store", () => {
     (await bootstrap({ cwd: dir, logger: silentLogger })).orchestrator.stores.close?.();
     await mkdir(join(dir, ".orca", "runs"), { recursive: true });
     await writeFile(join(dir, ".orca", "runs", "run_old.jsonl"), LOG);
-
-    const before = ctx(dir, ["format"]);
-    expect(await storeCommand(before)).toBe(0);
-    expect(before.lines).toContain("metadata         files");
-
-    const switched = ctx(dir, ["sqlite", "switch"]);
-    expect(await storeCommand(switched)).toBe(0);
-    expect(switched.lines[0]).toMatch(/^switched .* to SQLite metadata \(store format .*-sqlite\)$/);
-    expect(switched.lines[1]).toMatch(/format-backups/);
+    expect(await switchStoreToSqlite(join(dir, ".orca"), { appVersion: "0.8.0", inPlace: true })).toMatchObject({
+      status: "switched",
+    });
     const after = ctx(dir, ["format"]);
     expect(await storeCommand(after)).toBe(0);
     expect(after.lines).toContain("metadata         SQLite (metadata.sqlite)");
@@ -133,6 +146,15 @@ describe("orca store", () => {
     const again = ctx(dir, ["sqlite", "switch"]);
     expect(await storeCommand(again)).toBe(0);
     expect(again.lines[0]).toContain("nothing to do");
+
+    // Its database lost: startup refuses instead of starting on an empty one.
+    for (const name of await readdir(join(dir, ".orca")))
+      if (name.startsWith("metadata.sqlite")) await rm(join(dir, ".orca", name));
+    await expect(bootstrap({ cwd: dir, logger: silentLogger })).rejects.toMatchObject({
+      code: "STORE_FORMAT",
+      details: { reason: "METADATA_MISSING" },
+    });
+    expect((await readdir(join(dir, ".orca"))).filter((n) => n.startsWith("metadata.sqlite"))).toEqual([]);
   });
 
   it("refuses to switch a desktop app's own store, whose write fence it cannot hold", async () => {

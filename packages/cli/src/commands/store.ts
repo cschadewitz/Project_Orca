@@ -3,8 +3,8 @@
  *
  *   store format                 print the store's recorded format and what this ORCA would do
  *   store carry-forward          convert an older-format store, with every other ORCA stopped
- *   store sqlite switch          move the store's metadata from files to SQLite, with every other ORCA stopped (#339);
- *                                --older-orca-stopped once an ORCA from before the writer registry has opened it
+ *   store sqlite switch          move the store's metadata from files to SQLite in place (#339); refused for now
+ *                                (LEGACY_UNFENCED): released 0.7.0 and earlier never read the format marker
  *   store sqlite import          mirror the file-backed metadata into <store>/metadata.sqlite (#339)
  *   store sqlite backup <file>   a consistent copy of the SQLite metadata, taken while it is in use
  *   store sqlite restore <file>  put a backup in place in a store that has no SQLite metadata
@@ -17,8 +17,9 @@
  *
  * A store runs on the backend its format marker records (store-backend.ts). `import` builds a
  * SQLite database beside the files, as often as wanted, and the files stay the authority;
- * `switch` makes SQLite the authority, after a verified backup, an import and a verify, and is
- * refused on Windows while store format changes are (#910, #947).
+ * `switch` would make SQLite the authority, after a verified backup, an import and a verify; it
+ * is refused until released ORCA versions that ignore the format marker can be kept out
+ * (IN_PLACE_SQLITE_SWITCH), and on Windows while store format changes are (#910, #947).
  */
 import { resolve } from "node:path";
 import { OrcaError } from "@orca/core";
@@ -96,12 +97,11 @@ async function sqliteCommand(ctx: CommandContext, configDir: string, storeDir: s
       const outcome = await switchStoreToSqlite(storeDir, {
         appVersion: readOrcaVersion(),
         ...(privacy ? { privacy } : {}),
-        ...(ctx.flags["older-orca-stopped"] === true ? { olderWritersStopped: true } : {}),
       });
       if (outcome.status === "switched") {
         ctx.out(`switched ${storeDir} to SQLite metadata (store format ${outcome.epoch})`);
         ctx.out(`backup of the store as it was on files: ${outcome.backup}`);
-        ctx.out("ORCA versions from before this one now refuse this store as newer than they can open");
+        ctx.out("ORCA 0.7.1 and later refuse this store unless they know its format; 0.7.0 and earlier do not check");
       } else ctx.out(`${storeDir} already keeps its metadata in SQLite; nothing to do`);
       return 0;
     }

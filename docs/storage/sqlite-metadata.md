@@ -7,9 +7,10 @@ contracts and passes the same conformance suite as the memory and file backends
 (`packages/store/test/conformance/`), with the capability matrix in
 `docs/contracts/store-contracts-v1.md`.
 
-It is **not the default**. A workspace runs on it only after `orca store sqlite
-switch` has moved that workspace's store onto it (see [Choosing SQLite for a
-workspace](#choosing-sqlite-for-a-workspace)); every other store stays on files.
+It is **not the default**, and **no workspace can be moved onto it yet**: `orca
+store sqlite switch` is refused (`LEGACY_UNFENCED`) until released ORCA versions
+that never read the store's format marker can be kept out (see [Choosing SQLite for
+a workspace](#choosing-sqlite-for-a-workspace)). Every store stays on files.
 
 ## What is where
 
@@ -168,11 +169,15 @@ A store records which metadata backend it runs on in its format marker
 - **SQLite**: the marker carries `operator-journals-v4-sqlite`, a store format of its
   own. ORCA opens such a store on SQLite only.
 
-That keeps one populated workspace from ever being opened by both backends:
+Within this ORCA, that keeps one populated workspace from ever being opened by both
+backends:
 
-- An ORCA from before this one does not know the SQLite format, so it refuses the
-  store as newer than it can open (naming the backup below), instead of reading the
-  file metadata the switch left behind, which no longer keeps up.
+- ORCA 0.7.1 and later read the marker before opening a store, so one that does not
+  know the SQLite format refuses the store as newer than it can open (naming the
+  backup below), instead of reading the file metadata the switch left behind.
+  **ORCA 0.7.0 and earlier never read the marker.** Nothing in the store stops them
+  from opening that file metadata, which no longer keeps up, and writing to it. This
+  is why the in-place switch below is refused for now.
 - This ORCA's file backend refuses a store recorded for SQLite, and its SQLite backend
   refuses a store recorded for files (`STORE_FORMAT`, `reason: "OTHER_BACKEND"`). Only
   maintenance that builds or checks a database beside the files (`import`, `backup`,
@@ -202,13 +207,18 @@ sees the other. Registrations and announcements of processes that are gone are
 ignored. ORCA versions from before the registry do not register: the marker
 records whether one has opened the store (`writerRegistry` is set on a fresh store
 and dropped by any older ORCA that rewrites the marker), and the switch refuses
-such a store (`OLDER_WRITER`) until it is run as `orca store sqlite switch
---older-orca-stopped`, the operator's statement that every older ORCA using it is
-stopped.
+such a store (`OLDER_WRITER`) unless the caller states that every older ORCA using
+it is stopped. That statement is the operator's word, not a fence, and it says
+nothing about an older ORCA started *after* the switch.
 
-**`orca store sqlite switch`** is the one way from files to SQLite. Stop every ORCA
-app, daemon and command using the workspace; the switch checks that it can see none.
-Under the store's format lock it:
+**`orca store sqlite switch`** will be the one way from files to SQLite. **It is
+refused for now** (`LEGACY_UNFENCED`, `IN_PLACE_SQLITE_SWITCH` in
+`store-format.ts`), changing nothing: a store switched in place keeps its file
+metadata beside the database, and a released v0.7.0 or v0.6.0 opens that without
+looking at the marker. It stays refused until an enforced boundary keeps those
+releases out (or the switch moves the metadata to a separately provisioned store),
+proven against a real released build. The steps below are implemented and tested
+with the gate off. Under the store's format lock it:
 
 1. Switches only a store in this ORCA's current file format. An older store is
    carried forward first; an unmarked one is opened once first. A store already on
@@ -264,6 +274,9 @@ leaves only an unreferenced blob.
 - Reference numbers for the #341 baseline come from the store workload workflow on a
   GitHub-hosted runner (`docs/performance/store-workloads/README.md`); the numbers
   above are from a cloud container.
+- Turning the switch on: an enforced boundary against released ORCA versions that
+  ignore the marker (v0.7.0, v0.6.0), with coverage against a real released build,
+  or a migration into a separately provisioned store.
 - Switching from the desktop app, which holds its workspaces' write fence, and on
   Windows once store format changes are allowed there (#947).
 - A switch back from SQLite to files.

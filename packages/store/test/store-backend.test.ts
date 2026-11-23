@@ -12,6 +12,7 @@ import {
   backupSqliteMetadata,
   enterStoreFormat,
   holdStoreWriter,
+  IN_PLACE_SQLITE_SWITCH,
   restoreSqliteMetadata,
   SQLITE_METADATA_FILE,
   STORE_SWITCH_FILE,
@@ -80,7 +81,10 @@ describe("store metadata backend (#339)", () => {
   it("switches a populated store to SQLite after a backup, and opens it on SQLite from then on", async () => {
     const dir = await populated();
     const before = await fileStores(dir).events.read("run_a");
-    const outcome = await switchStoreToSqlite(dir, { appVersion: "0.8.0" });
+    const outcome = await switchStoreToSqlite(dir, {
+      inPlace: true,
+      appVersion: "0.8.0",
+    });
     expect(outcome).toMatchObject({ status: "switched", epoch: SQLITE_STORE_FORMAT_EPOCH });
     if (outcome.status !== "switched") throw new Error("not switched");
     // The backup is the whole store as it was on files.
@@ -112,7 +116,12 @@ describe("store metadata backend (#339)", () => {
     // The file metadata left beside the database is no longer current, and is never opened.
     expect(() => fileStores(dir)).toThrow(expect.objectContaining(refusal("OTHER_BACKEND")));
     // A second switch has nothing to do.
-    expect(await switchStoreToSqlite(dir, { appVersion: "0.8.1" })).toEqual({
+    expect(
+      await switchStoreToSqlite(dir, {
+        inPlace: true,
+        appVersion: "0.8.1",
+      }),
+    ).toEqual({
       status: "current",
       epoch: SQLITE_STORE_FORMAT_EPOCH,
     });
@@ -129,7 +138,10 @@ describe("store metadata backend (#339)", () => {
 
   it("opens a switched store read-only for checks that must change nothing", async () => {
     const dir = await populated();
-    await switchStoreToSqlite(dir, { appVersion: "0.8.0" });
+    await switchStoreToSqlite(dir, {
+      inPlace: true,
+      appVersion: "0.8.0",
+    });
     const readOnly = sqliteStores(dir, { readOnly: true });
     try {
       expect((await readOnly.events.read("run_a")).length).toBe(6);
@@ -139,12 +151,25 @@ describe("store metadata backend (#339)", () => {
     }
   });
 
+  it("is refused in place for now, changing nothing: released ORCA versions never read the marker", async () => {
+    expect(IN_PLACE_SQLITE_SWITCH).toBe(false);
+    const dir = await populated();
+    const before = await contents(dir);
+    await expect(switchStoreToSqlite(dir, { appVersion: "0.8.0" })).rejects.toMatchObject(refusal("LEGACY_UNFENCED"));
+    expect(await contents(dir)).toEqual(before);
+    expect(recordedStoreBackend(dir)).toBe("file");
+  });
+
   it("refuses on Windows while store format changes are refused there, changing nothing", async () => {
     const dir = await populated();
     const before = await contents(dir);
-    await expect(switchStoreToSqlite(dir, { appVersion: "0.8.0", platform: "win32" })).rejects.toMatchObject(
-      refusal("UNDURABLE"),
-    );
+    await expect(
+      switchStoreToSqlite(dir, {
+        inPlace: true,
+        appVersion: "0.8.0",
+        platform: "win32",
+      }),
+    ).rejects.toMatchObject(refusal("UNDURABLE"));
     expect(await contents(dir)).toEqual(before);
     expect(recordedStoreBackend(dir)).toBe("file");
   });
@@ -156,7 +181,12 @@ describe("store metadata backend (#339)", () => {
       JSON.stringify({ format: 1, epoch: STORE_FORMAT_HISTORY[0]!.epoch, writtenBy: "0.6.0", updatedAt: "x" }),
     );
     const before = await contents(old);
-    await expect(switchStoreToSqlite(old, { appVersion: "0.8.0" })).rejects.toMatchObject(refusal("SWITCH_REFUSED"));
+    await expect(
+      switchStoreToSqlite(old, {
+        inPlace: true,
+        appVersion: "0.8.0",
+      }),
+    ).rejects.toMatchObject(refusal("SWITCH_REFUSED"));
     expect(await contents(old)).toEqual(before);
 
     const unmarked = await store();
@@ -166,9 +196,12 @@ describe("store metadata backend (#339)", () => {
       runId: "run_a",
       payload: { workflowId: "review", workflowVersion: "1", workspace: { hostId: "local", cwd: "/w" }, vars: {} },
     });
-    await expect(switchStoreToSqlite(unmarked, { appVersion: "0.8.0" })).rejects.toMatchObject(
-      refusal("SWITCH_REFUSED"),
-    );
+    await expect(
+      switchStoreToSqlite(unmarked, {
+        inPlace: true,
+        appVersion: "0.8.0",
+      }),
+    ).rejects.toMatchObject(refusal("SWITCH_REFUSED"));
     expect(await readStoreFormat(unmarked)).toBeUndefined();
   });
 
@@ -176,6 +209,7 @@ describe("store metadata backend (#339)", () => {
     const dir = await populated();
     await expect(
       switchStoreToSqlite(dir, {
+        inPlace: true,
         appVersion: "0.8.0",
         // Another writer lands after the import: the database would be missing it.
         afterImport: async () => {
@@ -198,22 +232,42 @@ describe("store metadata backend (#339)", () => {
       // Open and idle: no run, no lease, nothing written since it opened.
       const idle = holdStoreWriter(dir, { appVersion: "0.8.0", purpose: "orca serve" });
       const before = await contents(dir);
-      await expect(switchStoreToSqlite(dir, { appVersion: "0.8.0" })).rejects.toMatchObject(refusal("BUSY"));
+      await expect(
+        switchStoreToSqlite(dir, {
+          inPlace: true,
+          appVersion: "0.8.0",
+        }),
+      ).rejects.toMatchObject(refusal("BUSY"));
       expect(await contents(dir)).toEqual(before);
       expect(recordedStoreBackend(dir)).toBe("file");
       // Once it lets go, the switch goes ahead.
       idle.release();
-      expect(await switchStoreToSqlite(dir, { appVersion: "0.8.0" })).toMatchObject({ status: "switched" });
+      expect(
+        await switchStoreToSqlite(dir, {
+          inPlace: true,
+          appVersion: "0.8.0",
+        }),
+      ).toMatchObject({ status: "switched" });
     });
 
     it("is refused for a writer it cannot check (another host), and ignores one whose process is gone", async () => {
       const dir = await populated();
       await mkdir(join(dir, STORE_WRITERS_DIR), { recursive: true });
       await writeFile(join(dir, STORE_WRITERS_DIR, "1.remote.json"), entry(1, "another-host"));
-      await expect(switchStoreToSqlite(dir, { appVersion: "0.8.0" })).rejects.toMatchObject(refusal("BUSY"));
+      await expect(
+        switchStoreToSqlite(dir, {
+          inPlace: true,
+          appVersion: "0.8.0",
+        }),
+      ).rejects.toMatchObject(refusal("BUSY"));
       await rm(join(dir, STORE_WRITERS_DIR, "1.remote.json"));
       await writeFile(join(dir, STORE_WRITERS_DIR, "dead.json"), entry(deadPid()));
-      expect(await switchStoreToSqlite(dir, { appVersion: "0.8.0" })).toMatchObject({ status: "switched" });
+      expect(
+        await switchStoreToSqlite(dir, {
+          inPlace: true,
+          appVersion: "0.8.0",
+        }),
+      ).toMatchObject({ status: "switched" });
       expect(await readdir(join(dir, STORE_WRITERS_DIR))).toEqual([]);
     });
 
@@ -228,6 +282,7 @@ describe("store metadata backend (#339)", () => {
       };
       const attempts: unknown[] = [];
       const outcome = await switchStoreToSqlite(dir, {
+        inPlace: true,
         appVersion: "0.8.0",
         afterImport: async () => void attempts.push(late()),
         // The last moment before the marker: after the final checks.
@@ -252,7 +307,12 @@ describe("store metadata backend (#339)", () => {
       await writeFile(join(dir, STORE_SWITCH_FILE), entry(deadPid()));
       holdStoreWriter(dir, { appVersion: "0.8.0", purpose: "orca" }).release();
       // A dead switch's file is replaced by the next switch, which removes it when done.
-      expect(await switchStoreToSqlite(dir, { appVersion: "0.8.0" })).toMatchObject({ status: "switched" });
+      expect(
+        await switchStoreToSqlite(dir, {
+          inPlace: true,
+          appVersion: "0.8.0",
+        }),
+      ).toMatchObject({ status: "switched" });
       expect(await readdir(dir)).not.toContain(STORE_SWITCH_FILE);
     });
 
@@ -267,9 +327,20 @@ describe("store metadata backend (#339)", () => {
       await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" });
       expect((await readStoreFormat(dir))?.writerRegistry).toBeUndefined();
       const before = await contents(dir);
-      await expect(switchStoreToSqlite(dir, { appVersion: "0.8.0" })).rejects.toMatchObject(refusal("OLDER_WRITER"));
+      await expect(
+        switchStoreToSqlite(dir, {
+          inPlace: true,
+          appVersion: "0.8.0",
+        }),
+      ).rejects.toMatchObject(refusal("OLDER_WRITER"));
       expect(await contents(dir)).toEqual(before);
-      expect(await switchStoreToSqlite(dir, { appVersion: "0.8.0", olderWritersStopped: true })).toMatchObject({
+      expect(
+        await switchStoreToSqlite(dir, {
+          inPlace: true,
+          appVersion: "0.8.0",
+          olderWritersStopped: true,
+        }),
+      ).toMatchObject({
         status: "switched",
       });
       expect(await readStoreFormat(dir)).toMatchObject({ writerRegistry: 1 });
@@ -279,7 +350,10 @@ describe("store metadata backend (#339)", () => {
   describe("a store on SQLite opens only its own database", () => {
     const switched = async () => {
       const dir = await populated();
-      await switchStoreToSqlite(dir, { appVersion: "0.8.0" });
+      await switchStoreToSqlite(dir, {
+        inPlace: true,
+        appVersion: "0.8.0",
+      });
       return dir;
     };
 

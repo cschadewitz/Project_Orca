@@ -908,10 +908,10 @@ converts a store:
 `orca store format` prints the recorded format, whether the store's metadata is in files or
 SQLite, and what startup would do.
 
-A store switched to SQLite with `orca store sqlite switch` (#339) records a format of its own,
-`operator-journals-v4-sqlite`. This ORCA opens it in place, on SQLite; an ORCA from before
-it treats it as a format it does not know (the row above) and refuses it, naming the backup
-the switch took. See [the SQLite metadata backend](storage/sqlite-metadata.md#choosing-sqlite-for-a-workspace).
+A store on SQLite (#339) would record a format of its own, `operator-journals-v4-sqlite`,
+which ORCA 0.7.1 and later refuse unless they know it. No store can be switched yet:
+`orca store sqlite switch` is refused, changing nothing, because ORCA 0.7.0 and earlier
+never read the marker and could still open the file metadata a switch leaves behind. See [the SQLite metadata backend](storage/sqlite-metadata.md#choosing-sqlite-for-a-workspace).
 
 **`orca store carry-forward`** is the explicit, offline conversion. Stop every ORCA app,
 daemon and command using the workspace first. Writers from before 0.7.1 take no lock the

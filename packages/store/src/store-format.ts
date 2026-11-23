@@ -75,6 +75,17 @@ export {
  */
 export const WINDOWS_STORE_CARRYOVER = false;
 
+/**
+ * Switching a store's metadata to SQLite in place (#339) stays refused (`LEGACY_UNFENCED`) until
+ * released ORCA versions that never read the format marker can be kept out. v0.7.0 and v0.6.0
+ * open a standalone file store without looking at `store-format.json`, so neither the SQLite
+ * epoch nor the writer registry stops them from reopening the file metadata a switch leaves
+ * behind, and `olderWritersStopped` is only the operator's word. The switch below is complete and
+ * tested with this on (`inPlace`); turning it on needs an enforced boundary against those
+ * releases, proven against a real released build.
+ */
+export const IN_PLACE_SQLITE_SWITCH = false;
+
 /** Oldest first. `release` is the first release line that wrote the format. */
 export const STORE_FORMAT_HISTORY: readonly { epoch: string; release: string }[] = [
   { epoch: "ownership-fences-v1", release: "0.6" },
@@ -111,6 +122,7 @@ export type StoreFormatReason =
   | "NEWER"
   | "SWITCH_REFUSED"
   | "OLDER_WRITER"
+  | "LEGACY_UNFENCED"
   | "TOO_OLD"
   | "DAMAGED"
   | "CARRYOVER_REQUIRED"
@@ -576,6 +588,8 @@ export interface SwitchToSqliteOptions {
    * cannot see whether it is still running.
    */
   olderWritersStopped?: boolean;
+  /** Tests only: switch in place despite {@link IN_PLACE_SQLITE_SWITCH}. */
+  inPlace?: boolean;
   /** Injected for tests: runs after the import and its verify, before the last checks. */
   afterImport?: () => Promise<void>;
   /** Injected for tests: runs after the last checks, just before the marker is written. */
@@ -599,7 +613,8 @@ const busyWriters = (storeDir: string, writers: StoreWriterEntry[]) =>
 
 /**
  * Switch a store's metadata from files to SQLite (#339): `orca store sqlite switch`, run with
- * every other ORCA process using the store stopped. Under the format lock:
+ * every other ORCA process using the store stopped. Refused for now (`LEGACY_UNFENCED`, see
+ * {@link IN_PLACE_SQLITE_SWITCH}). Under the format lock:
  *
  * 1. Only a store in this ORCA's current file format is switched (an older one is carried
  *    forward first; an unmarked one is opened once first). A store already on SQLite is left as
@@ -647,6 +662,12 @@ export async function switchStoreToSqlite(
       throw new StoreFormatError(
         "UNDURABLE",
         "This ORCA does not yet change a store's format on Windows, because it cannot yet prove that the backup it takes first survives a power cut. Switching to SQLite is such a change, so nothing was changed and the store stays on files.",
+        storeDir,
+      );
+    if (!(options.inPlace ?? IN_PLACE_SQLITE_SWITCH))
+      throw new StoreFormatError(
+        "LEGACY_UNFENCED",
+        "Switching a store to SQLite in place is not available yet: ORCA 0.7.0 and earlier open a store without reading its format marker, so they could still open the file metadata a switch leaves behind, and nothing can keep them out yet. Nothing was changed and the store stays on files.",
         storeDir,
       );
     if (marker.writerRegistry !== 1 && !options.olderWritersStopped)
