@@ -146,10 +146,16 @@ export async function createWorld(clock = {}) {
       await rm(sidecar, { force: true });
     },
 
-    /** Move the clock both routes judge rule lifetimes by. */
+    /** Move the clock both routes judge rule lifetimes by. Await it: a real clock waits. */
     advance(ms) {
       if (!clock.setNow) throw new Error("this world has no movable clock");
-      clock.setNow(world.now() + ms);
+      // A fake clock moves at once; a real one (a live agent's hook reads real time) waits.
+      return clock.setNow(world.now() + ms);
+    },
+
+    /** Move the clock to `ms` since the epoch; never backwards. */
+    advanceTo(ms) {
+      return world.advance(Math.max(0, ms - world.now()));
     },
 
     /** A link inside the workspace that points at `target`. */

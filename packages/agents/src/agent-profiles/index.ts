@@ -4,8 +4,10 @@
  * run without reaching ORCA. One module per agent; this one only gathers them.
  */
 import { geminiCliFindings, type AgentProfileFinding } from "./gemini-cli.js";
+import { piFindings } from "./pi.js";
 
 export * from "./gemini-cli.js";
+export * from "./pi.js";
 
 /** Every finding the per-agent modules report for an agent's configuration. */
 export function agentProfileFindings(agent: {
@@ -13,5 +15,5 @@ export function agentProfileFindings(agent: {
   args: readonly string[];
   env: Readonly<Record<string, unknown>>;
 }): AgentProfileFinding[] {
-  return [...geminiCliFindings(agent)];
+  return [...geminiCliFindings(agent), ...piFindings(agent)];
 }
