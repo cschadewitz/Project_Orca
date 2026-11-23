@@ -61,7 +61,7 @@ async function setup() {
       agent: AgentSpecSchema.parse({
         id: "claude",
         command: "claude-agent-acp",
-        nativeToolHook: "on",
+        nativeToolHook: "experimental",
         ...(diagnostics ? { diagnostics } : {}),
       }),
       cwd: join(dir, "work"),

@@ -228,7 +228,7 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Codex (#705)", () =
         ...env,
       },
       permissions,
-      ...(hook ? { nativeToolHook: "on" } : {}),
+      ...(hook ? { nativeToolHook: "experimental" } : {}),
     });
 
   const exists = (name: string) =>
@@ -446,7 +446,7 @@ createInterface({ input: process.stdin }).on("line", (l) => {
       expect(pinned).not.toContain(await sha256(OTHER_RUNTIME!));
       await expect(factorySession(undefined, { CODEX_PATH: OTHER_RUNTIME! })).rejects.toMatchObject({
         code: "NOT_SUPPORTED",
-        message: expect.stringMatching(/is not the one ORCA verified[\s\S]*nativeToolHook: on/),
+        message: expect.stringMatching(/is not the one ORCA verified[\s\S]*remove nativeToolHook/),
       });
       expect(await readdir(join(configDir, ".orca", "private-execution", "tool-hooks")).catch(() => [])).toEqual([]);
     },

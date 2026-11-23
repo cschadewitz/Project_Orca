@@ -1,5 +1,7 @@
 - **agents:** ORCA's `PreToolUse` hook for local Claude agents, **experimental and not
-  guard-qualified**: opt-in per agent with `nativeToolHook: on`, off by default, and no agent
+  guard-qualified**: opt-in per agent with the explicit `nativeToolHook: experimental`, off by
+  default (`nativeToolHook: on` is kept for a qualified hook and is still refused, so a config
+  that set it earlier stays inactive), and no agent
   qualified by the #706 support matrix. In acceptance runs with a scripted model it puts every
   tool call Claude hooks, including calls Claude
   remembers as "always allowed", through ORCA's rules, so a revoked grant applies to the very

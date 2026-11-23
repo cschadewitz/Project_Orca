@@ -2,7 +2,8 @@
  * Installing ORCA's pre-tool hook (`claude-pre-tool-hook.ts`) in an opted-in agent's session:
  * the Claude ACP adapter (#704) or the Codex ACP adapter (#705).
  *
- * `nativeToolHook: on` is a promise that the agent's tool calls are checked, so every session
+ * `nativeToolHook: experimental` (the hook is not guard-qualified; `on` is refused until it is,
+ * `nativeToolHookNotQualified`) is a promise that the agent's tool calls are checked, so every session
  * this cannot guard is refused, never opened without the hook. Only ORCA's session factory
  * installs it; any other way of opening such an agent is refused (`nativeToolHookRefused`).
  * When installed, the session factory holds the session away
@@ -73,17 +74,44 @@ import {
 import { openHookTelemetrySpool, type HookTelemetrySpool } from "./hook-telemetry.js";
 import type { ProtectedPaths } from "./permissions.js";
 
+/** Whether the agent asks for ORCA's hook at all: `experimental`, or `on`, which is refused. */
+export function nativeToolHookRequested(agent: {
+  nativeToolHook?: "on" | "off" | "experimental" | undefined;
+}): boolean {
+  return agent.nativeToolHook === "on" || agent.nativeToolHook === "experimental";
+}
+
 /**
- * The refusal for `nativeToolHook: on` wherever ORCA would open the agent without installing
+ * The refusal for `nativeToolHook: on` (#704 review). `on` is kept for a guard-qualified hook,
+ * which no agent has yet, so a config that set it before the hook shipped stays inactive until
+ * its owner opts in again with `experimental`, explicitly accepting an unqualified hook.
+ */
+export function nativeToolHookNotQualified(agent: {
+  id: string;
+  nativeToolHook?: "on" | "off" | "experimental" | undefined;
+}): OrcaError | undefined {
+  if (agent.nativeToolHook !== "on") return undefined;
+  return new OrcaError(
+    "NOT_SUPPORTED",
+    `agent ${agent.id} has nativeToolHook: on, which is kept for a guard-qualified hook, and no agent is qualified yet. ` +
+      `ORCA refuses the session rather than run it with less than that. To use ORCA's experimental, unqualified hook, ` +
+      `set nativeToolHook: experimental (see docs/agent-hook-coverage.md for what it does not cover); ` +
+      `to run the agent without a hook, remove nativeToolHook.`,
+    { agentId: agent.id },
+  );
+}
+
+/**
+ * The refusal for `nativeToolHook` wherever ORCA would open the agent without installing
  * its hook (#704): `openAcpSession` called directly rather than through the session factory
  * (`orca ping` with no daemon answering, an ephemeral bootstrap), and remote delegation, whose
  * agents run on another daemon. Each refuses such an agent before anything starts.
  */
 export function nativeToolHookRefused(
-  agent: { id: string; nativeToolHook?: "on" | "off" | undefined },
+  agent: { id: string; nativeToolHook?: "on" | "off" | "experimental" | undefined },
   where: "outside-factory" | "remote-delegation",
 ): OrcaError | undefined {
-  if (agent.nativeToolHook !== "on") return undefined;
+  if (!nativeToolHookRequested(agent)) return undefined;
   const why =
     where === "remote-delegation"
       ? `it is an orca-daemon agent, and ORCA's tool hook does not apply to a remote daemon's agents`
@@ -91,8 +119,8 @@ export function nativeToolHookRefused(
         `(to check this agent, ping it through a running daemon)`;
   return new OrcaError(
     "NOT_SUPPORTED",
-    `agent ${agent.id} has nativeToolHook: on, but ${why}. ` +
-      `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
+    `agent ${agent.id} has nativeToolHook: ${agent.nativeToolHook}, but ${why}. ` +
+      `ORCA refuses the session rather than run it unguarded; remove nativeToolHook to run it without the hook.`,
     { agentId: agent.id },
   );
 }
@@ -675,8 +703,8 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
   const refuse = (why: string, details: Record<string, unknown> = {}) =>
     new OrcaError(
       "NOT_SUPPORTED",
-      `agent ${opts.agentId} has nativeToolHook: on, but ${why}, so ORCA cannot check its tool calls. ` +
-        `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
+      `agent ${opts.agentId} has nativeToolHook: experimental, but ${why}, so ORCA cannot check its tool calls. ` +
+        `ORCA refuses the session rather than run it unguarded; remove nativeToolHook to run it without the hook.`,
       { agentId: opts.agentId, ...details },
     );
   const verified = (

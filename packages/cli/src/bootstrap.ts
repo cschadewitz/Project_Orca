@@ -38,6 +38,8 @@ import {
   AgentRegistry,
   claudePreToolHookScript,
   CLAUDE_ADAPTER_NAMES,
+  nativeToolHookNotQualified,
+  nativeToolHookRequested,
   nativeToolHookSession,
   sweepHookTelemetrySpools,
   openAcpSession,
@@ -295,7 +297,7 @@ export function makeWorkspaceProvider(
  * matrix gives every one tier none), and the checks ORCA makes are made when the session opens.
  */
 export const NATIVE_TOOL_HOOK_EXPERIMENTAL =
-  "nativeToolHook is experimental and not guard-qualified: ORCA checked the agent's runtime and hook when " +
+  "nativeToolHook: experimental is not guard-qualified: ORCA checked the agent's runtime and hook when " +
   "this session opened, not afterwards, and the calls outside the hook are listed in docs/agent-hook-coverage.md";
 
 export function makeSessionFactory(
@@ -334,14 +336,17 @@ export function makeSessionFactory(
     const bound = { ...options, permissionFiles, protectedPaths };
     // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
     // says who it is, and the session refused wherever it cannot be put in force.
-    if (options.agent.nativeToolHook !== "on") return guarded(bound);
+    if (!nativeToolHookRequested(options.agent)) return guarded(bound);
+    // `on` waits for a guard-qualified hook; only the explicit `experimental` installs this one.
+    const unqualified = nativeToolHookNotQualified(options.agent);
+    if (unqualified) throw unqualified;
     await sweep();
     // The hook runs where the agent does; ORCA installs it only on its own host.
     if (options.host.spec.type !== "local")
       throw new OrcaError(
         "NOT_SUPPORTED",
-        `agent ${options.agent.id} has nativeToolHook: on, but it runs on ${options.host.spec.type} host ${options.host.spec.id}, where ORCA cannot install its hook. ` +
-          `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
+        `agent ${options.agent.id} has nativeToolHook: experimental, but it runs on ${options.host.spec.type} host ${options.host.spec.id}, where ORCA cannot install its hook. ` +
+          `ORCA refuses the session rather than run it unguarded; remove nativeToolHook to run it without the hook.`,
         { agentId: options.agent.id, host: options.host.spec.id },
       );
     const installed = nativeToolHookSession({

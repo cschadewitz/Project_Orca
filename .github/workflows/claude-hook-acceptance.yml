@@ -13,7 +13,7 @@
 # Code (OTHER_CLAUDE_SDK_VERSION, Claude Code 2.1.329) and checks that session is refused.
 # Moving to another pair is a reviewed change to both. Weekly runs catch a change in
 # behaviour behind the same pin. The suite opens sessions through the same session factory
-# shipped builds use for an agent with nativeToolHook: on.
+# shipped builds use for an agent with nativeToolHook: experimental.
 #
 # The same job then runs the #706 connected proof: every enforcement-suite case the
 # claude-connected path can run, through this Claude Code with Claude's own settings allowing

@@ -925,9 +925,13 @@ export const AgentSpecSchema = z
     /**
      * Whether ORCA installs its pre-tool hook in this agent (#704, #705), so that
      * `permissions` decides every tool call it hooks and not only the ones the agent asks
-     * about. **Experimental and not guard-qualified**: opt-in and off by default, with no
-     * agent qualified by the #706 support matrix; what it covers, and what stays outside, is
-     * in `docs/agent-hook-coverage.md`. `on` installs it in an agent that takes one, today the Claude and Codex ACP adapters on
+     * about. **Experimental and not guard-qualified**: off by default, with no agent qualified
+     * by the #706 support matrix; what it covers, and what stays outside, is in
+     * `docs/agent-hook-coverage.md`. Turning it on takes the explicit `experimental`, which
+     * acknowledges that. `on` is kept for a guard-qualified hook, which no agent has yet: ORCA
+     * refuses a session with `on`, so a config that set it before the hook shipped stays
+     * inactive (#704 review). `experimental` installs it in an agent that takes one, today the
+     * Claude and Codex ACP adapters on
      * the daemon's own host, with an adapter and runtime pair and on a platform ORCA's
      * acceptance tests cover (`CLAUDE_HOOK_VERIFIED_PAIRS`, `CODEX_HOOK_VERIFIED_PAIRS`,
      * `*_HOOK_VERIFIED_PLATFORMS`; the runtime's image is hashed from the process the session
@@ -937,7 +941,7 @@ export const AgentSpecSchema = z
      * leaving it out, sends no hook, so calls the agent allows by its own settings or
      * remembered grants never reach ORCA. See `docs/agent-hook-coverage.md`.
      */
-    nativeToolHook: z.enum(["on", "off"]).optional(),
+    nativeToolHook: z.enum(["on", "off", "experimental"]).optional(),
     /**
      * MCP servers passed in `session/new`. The legacy inline form: each one is on for this
      * agent, as if it were in the catalog and enabled here. `capabilities` below selects from
@@ -1001,7 +1005,7 @@ export const AgentSpecSchema = z
         path: ["workflow"],
         message: "an orca-daemon agent needs the remote workflow it runs",
       });
-    if (agent.nativeToolHook === "on")
+    if (agent.nativeToolHook === "on" || agent.nativeToolHook === "experimental")
       ctx.addIssue({
         code: "custom",
         path: ["nativeToolHook"],

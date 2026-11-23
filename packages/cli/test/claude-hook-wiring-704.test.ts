@@ -147,7 +147,7 @@ async function setup(
       agent: AgentSpecSchema.parse({
         id: "claude",
         command: "claude-agent-acp",
-        nativeToolHook: "on",
+        nativeToolHook: "experimental",
         permissions: { rules: [{ match: { kind: "execute", titlePattern: "^ls$" }, decision: "allow" }] },
         ...agent,
       }),
@@ -278,7 +278,7 @@ describe("installing the hook", () => {
     const t = await setup(info);
     await expect(t.open()).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      message: expect.stringMatching(new RegExp(`${why}[\\s\\S]*nativeToolHook: on`)),
+      message: expect.stringMatching(new RegExp(`${why}[\\s\\S]*remove nativeToolHook`)),
     });
     expect(await t.left()).toEqual([]);
   });
@@ -318,8 +318,26 @@ describe("installing the hook", () => {
     const remote = await setup(CLAUDE);
     await expect(
       remote.open(new SshHost(SshHostSchema.parse({ id: "box", type: "ssh", host: "box.example" }))),
-    ).rejects.toMatchObject({ code: "NOT_SUPPORTED", message: expect.stringContaining("nativeToolHook: on") });
+    ).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringContaining("nativeToolHook: experimental"),
+    });
     expect(remote.opened()).toBe(0);
+  });
+
+  it("leaves a config that set nativeToolHook: on inactive until it opts in again with experimental", async () => {
+    // `on` predates the shipped hook and is kept for a guard-qualified one (#704 review): a
+    // config written while it was refused must not start running the unqualified hook.
+    const old = await setup(CLAUDE, { nativeToolHook: "on" });
+    await expect(old.open()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringMatching(
+        /nativeToolHook: on, which is kept for a guard-qualified hook[\s\S]*set nativeToolHook: experimental/,
+      ),
+    });
+    expect(old.opened()).toBe(0);
+    expect(await old.left()).toEqual([]);
+    expect(old.warnings).toEqual([]);
   });
 
   it("installs nothing and refuses nothing unless the agent opts in", async () => {
@@ -435,7 +453,7 @@ describe("installing the hook in Codex (#705)", () => {
         const t = await codexSetup(change);
         await expect(t.open()).rejects.toMatchObject({
           code: "NOT_SUPPORTED",
-          message: expect.stringContaining("nativeToolHook: on"),
+          message: expect.stringContaining("nativeToolHook: experimental"),
         });
         expect(await t.left()).toEqual([]);
       }
@@ -485,7 +503,7 @@ describe("installing the hook in Codex (#705)", () => {
     const t = await codexSetup({}, { shell: () => ({ error: "this account's login shell is /usr/bin/fish" }) });
     await expect(t.open()).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      message: expect.stringMatching(/could not run its startup check[\s\S]*fish[\s\S]*nativeToolHook: on/),
+      message: expect.stringMatching(/could not run its startup check[\s\S]*fish[\s\S]*remove nativeToolHook/),
     });
     expect(await t.left()).toEqual([]);
   });
@@ -497,7 +515,7 @@ describe("installing the hook in Codex (#705)", () => {
     );
     await expect(t.open()).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      message: expect.stringMatching(/could not run its startup check[\s\S]*EACCES[\s\S]*nativeToolHook: on/),
+      message: expect.stringMatching(/could not run its startup check[\s\S]*EACCES[\s\S]*remove nativeToolHook/),
     });
     expect(await t.left()).toEqual([]);
   });
@@ -536,7 +554,7 @@ describe("installing the hook in Codex (#705)", () => {
     const t = await codexSetup({}, { codex });
     await expect(t.open()).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      message: expect.stringMatching(new RegExp(`${why}[\\s\\S]*nativeToolHook: on`)),
+      message: expect.stringMatching(new RegExp(`${why}[\\s\\S]*remove nativeToolHook`)),
     });
     expect(await t.left()).toEqual([]);
   });

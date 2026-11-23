@@ -1,5 +1,5 @@
 /**
- * `nativeToolHook: on` (#704) is installed only by the session factory the daemon and runs
+ * `nativeToolHook: experimental` (#704) is installed only by the session factory the daemon and runs
  * use, which shipped builds build with no extra option. Every other entry point that starts
  * agent work refuses such an agent before anything starts, rather than run it unhooked:
  * `openAcpSession` called directly (as `orca ping` does with no daemon answering) and remote
@@ -40,12 +40,14 @@ async function closedPort(): Promise<number> {
 const refusal = {
   code: "NOT_SUPPORTED",
   message: expect.stringMatching(
-    /nativeToolHook: on, but ORCA installs its hook only in sessions its daemon or a workflow run opens[\s\S]*ping it through a running daemon/,
+    /nativeToolHook: experimental, but ORCA installs its hook only in sessions its daemon or a workflow run opens[\s\S]*ping it through a running daemon/,
   ),
 };
 const delegationRefusal = {
   code: "NOT_SUPPORTED",
-  message: expect.stringMatching(/nativeToolHook: on, but it is an orca-daemon agent[\s\S]*remove nativeToolHook: on/),
+  message: expect.stringMatching(
+    /nativeToolHook: experimental, but it is an orca-daemon agent[\s\S]*remove nativeToolHook/,
+  ),
 };
 
 /** A host that records whether anything asked it to start an agent. */
@@ -58,7 +60,7 @@ function watchedHost(): { host: AgentHost; spawned: ReturnType<typeof vi.fn> } {
   return { host, spawned };
 }
 
-describe("nativeToolHook: on is installed by the session factory and refused everywhere else (#704)", () => {
+describe("nativeToolHook: experimental is installed by the session factory and refused everywhere else (#704)", () => {
   it("orca ping: refused, and the agent's program never runs", async () => {
     const dir = await tempDir();
     const marker = join(dir, "started");
@@ -77,7 +79,7 @@ describe("nativeToolHook: on is installed by the session factory and refused eve
         "  - id: claude",
         `    command: ${JSON.stringify(process.execPath)}`,
         `    args: [${JSON.stringify(join(dir, "agent.mjs"))}]`,
-        "    nativeToolHook: on",
+        "    nativeToolHook: experimental",
         "",
       ].join("\n"),
       "utf8",
@@ -95,7 +97,7 @@ describe("nativeToolHook: on is installed by the session factory and refused eve
 
   it("openAcpSession without the factory's hook: refused before the host starts anything", async () => {
     const { host, spawned } = watchedHost();
-    const agent = AgentSpecSchema.parse({ id: "claude", command: "claude-agent-acp", nativeToolHook: "on" });
+    const agent = AgentSpecSchema.parse({ id: "claude", command: "claude-agent-acp", nativeToolHook: "experimental" });
     await expect(openAcpSession({ host, agent, cwd: tmpdir() })).rejects.toMatchObject(refusal);
     expect(spawned).not.toHaveBeenCalled();
   });
@@ -111,7 +113,7 @@ describe("nativeToolHook: on is installed by the session factory and refused eve
       runtime: process.execPath,
       script: join(dir, "claude-pre-tool-hook.mjs"),
     });
-    const agent = AgentSpecSchema.parse({ id: "claude", command: "claude-agent-acp", nativeToolHook: "on" });
+    const agent = AgentSpecSchema.parse({ id: "claude", command: "claude-agent-acp", nativeToolHook: "experimental" });
     await expect(factory({ host: watchedHost().host, agent, cwd: dir })).rejects.toThrow("stop after the open");
     expect(open).toHaveBeenCalledTimes(1);
     const opened = open.mock.calls[0]![0];
@@ -122,8 +124,9 @@ describe("nativeToolHook: on is installed by the session factory and refused eve
   });
 
   it("remote delegation: config refuses it, and a spec built another way is refused before any dispatch", async () => {
-    const remote = { id: "box", type: "orca-daemon", profile: "box", workflow: "w", nativeToolHook: "on" };
+    const remote = { id: "box", type: "orca-daemon", profile: "box", workflow: "w", nativeToolHook: "experimental" };
     expect(AgentSpecSchema.safeParse(remote).success).toBe(false);
+    expect(AgentSpecSchema.safeParse({ ...remote, nativeToolHook: "on" }).success).toBe(false);
     const base = vi.fn();
     const remotes = vi.fn(() => []);
     const factory = delegatingSessionFactory(base, {
@@ -132,7 +135,10 @@ describe("nativeToolHook: on is installed by the session factory and refused eve
       receiptsDir: await tempDir(),
     });
     // Bypassing the schema, as an internal caller could.
-    const agent = { ...AgentSpecSchema.parse({ ...remote, nativeToolHook: "off" }), nativeToolHook: "on" } as AgentSpec;
+    const agent = {
+      ...AgentSpecSchema.parse({ ...remote, nativeToolHook: "off" }),
+      nativeToolHook: "experimental",
+    } as AgentSpec;
     await expect(factory({ host: watchedHost().host, agent, cwd: tmpdir() })).rejects.toMatchObject(delegationRefusal);
     expect(remotes).not.toHaveBeenCalled();
     expect(base).not.toHaveBeenCalled();

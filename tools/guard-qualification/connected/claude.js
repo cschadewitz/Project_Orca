@@ -85,7 +85,7 @@ export function claudeConnected(env) {
           env: { ORCA_706_MCP_LOG: logs(world).mcp },
         })),
         permissions: world.configured,
-        nativeToolHook: "on",
+        nativeToolHook: "experimental",
       });
     },
 
