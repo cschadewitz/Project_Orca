@@ -57,9 +57,17 @@ export async function desktopSqliteSwitch(
       reason: "SWITCH_REFUSED",
       message: `${storeDir} is not one of the desktop app's own workspaces, so it is not switched in place. Use \`orca store sqlite convert\`, which converts into a new store and leaves this one as it is.`,
     };
+  // A launch that no longer holds the fence must not open the store at all, whatever it was asked.
+  if (!writer.check())
+    throw new StoreFormatError(
+      "FENCE_LOST",
+      `This ORCA no longer provably holds the only write access to ${storeDir}, so it does not open the store. The switch to SQLite was not started and the store stays on files. Start ORCA again.`,
+      storeDir,
+    );
   // Only the launch directly after the exact stop the app made for the switch: a request that
-  // outlived that stop (another launch came between, the workspace was replaced) is refused.
-  if (writer.previous !== after || !writer.check())
+  // outlived that stop (another launch came between, the workspace was replaced) is refused,
+  // and this launch, still the writer, starts on files.
+  if (writer.previous !== after)
     return {
       status: "refused",
       reason: "SWITCH_REFUSED",

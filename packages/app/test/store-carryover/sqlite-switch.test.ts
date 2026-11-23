@@ -105,7 +105,7 @@ it.runIf(process.platform !== "win32")(
 );
 
 it.runIf(process.platform !== "win32")(
-  "refuses a request that does not name the claim this launch follows, changing nothing",
+  "refuses a request that does not name the claim this launch follows while the fence holds, changing nothing",
   async () => {
     const { store, hold } = await appWorkspace();
     expect(hold.previous).toMatch(/^[a-f0-9]{64}$/);
@@ -116,6 +116,26 @@ it.runIf(process.platform !== "win32")(
     });
     expect(await contents(store)).toEqual(before);
     expect(recordedStoreBackend(store)).toBe("file");
+  },
+  30000,
+);
+
+it.runIf(process.platform !== "win32")(
+  "aborts the launch, changing nothing, when the fence is already lost at entry",
+  async () => {
+    const { path, store, hold } = await appWorkspace();
+    reserveAgain(path);
+    expect(hold.check()).toBe(false);
+    const before = await contents(store);
+    // Even with the right claim, and with a wrong one: a stale launch is never told to go on.
+    for (const named of [after(hold), "c".repeat(64)])
+      await expect(desktopSqliteSwitch(store, hold, "0.8.0", named)).rejects.toMatchObject({
+        code: "STORE_FORMAT",
+        details: expect.objectContaining({ reason: "FENCE_LOST" }),
+      });
+    expect(await contents(store)).toEqual(before);
+    expect(recordedStoreBackend(store)).toBe("file");
+    expect(await readdir(store)).not.toContain(SQLITE_SWITCH_DIR);
   },
   30000,
 );
