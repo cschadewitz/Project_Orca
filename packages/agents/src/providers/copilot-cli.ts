@@ -383,70 +383,47 @@ function ownership(what: string, info: Stats, kind: "file" | "directory"): strin
 const errorCode = (error: unknown) => (error as NodeJS.ErrnoException).code ?? "error";
 
 /**
- * Problems with the path to `COPILOT_HOME`: whether anyone but the user (or root) could replace
- * a directory or link on it, and so swap the profile Copilot opens for another. Every directory
- * on the path as written, and on the real path of each link on it, must belong to the user or
- * to root and be closed to other writers; a root-owned sticky directory such as /tmp counts as
- * closed, because no one else can replace an entry in it. Each link must belong to the user or
- * root. `dir` is the directory that holds the profile, or would hold it, and must exist.
+ * Problems with the path to `COPILOT_HOME`: it must be canonical, with no link anywhere on it,
+ * so the path checked is the path opened, and no one but the user or root may be able to
+ * replace a directory on it and so swap the profile Copilot opens for another. Every directory
+ * from the root down to `dir` must belong to the user or to root and be closed to other
+ * writers; a root-owned sticky directory such as /tmp counts as closed, because no one else can
+ * replace an entry in it. `dir` is the directory that holds the profile, or would hold it, and
+ * must exist.
  */
 async function pathCustodyProblems(dir: string, home: string): Promise<string[]> {
   if (process.platform === "win32") return [];
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const checked = new Set<string>();
-  const check = async (path: string): Promise<string | undefined> => {
-    if (checked.has(path)) return undefined;
-    checked.add(path);
+  const on = `on the path to COPILOT_HOME ${home}`;
+  for (let path = resolvePath(dir); ; path = dirname(path)) {
     let info;
     try {
       info = await lstat(path);
     } catch (error) {
-      return `${path}, on the path to COPILOT_HOME ${home}, cannot be inspected (${errorCode(error)})`;
+      return [`${path}, ${on}, cannot be inspected (${errorCode(error)})`];
     }
-    if (info.uid !== 0 && info.uid !== uid)
-      return `${path}, on the path to COPILOT_HOME ${home}, belongs to another user`;
-    if (info.isSymbolicLink()) return undefined;
-    if (!info.isDirectory()) return `${path}, on the path to COPILOT_HOME ${home}, is not a directory`;
+    if (info.isSymbolicLink()) return [`${path}, ${on}, is a symbolic link; give COPILOT_HOME as a path without links`];
+    if (!info.isDirectory()) return [`${path}, ${on}, is not a directory`];
+    if (info.uid !== 0 && info.uid !== uid) return [`${path}, ${on}, belongs to another user`];
     if (info.mode & 0o022 && !(info.uid === 0 && info.mode & 0o1000))
-      return `${path}, on the path to COPILOT_HOME ${home}, can be changed by other users`;
-    return undefined;
-  };
-  const prefixes = (path: string): string[] => {
-    const out: string[] = [];
-    for (let p = path; ; p = dirname(p)) {
-      out.unshift(p);
-      if (p === dirname(p)) return out;
-    }
-  };
-  for (const prefix of prefixes(resolvePath(dir))) {
-    const problem = await check(prefix);
-    if (problem) return [problem];
-    let real;
-    try {
-      real = await realpath(prefix);
-    } catch (error) {
-      return [`${prefix}, on the path to COPILOT_HOME ${home}, cannot be resolved (${errorCode(error)})`];
-    }
-    for (const step of prefixes(real)) {
-      const problem = await check(step);
-      if (problem) return [problem];
-    }
+      return [`${path}, ${on}, can be changed by other users`];
+    if (path === dirname(path)) return [];
   }
-  return [];
 }
 
 /**
- * Problems with where a missing `COPILOT_HOME` would be created. The nearest existing ancestor,
- * with its links resolved, must be a directory of the current user's that no one else can
- * write to, and the path to it must pass `pathCustodyProblems`. Otherwise another user could
- * create the profile, or swap the path, between this check and Copilot's first launch.
+ * Problems with where a missing `COPILOT_HOME` would be created. Each missing component must be
+ * genuinely absent (a dangling link is refused, since Copilot would follow it), the nearest
+ * existing ancestor must be a directory of the current user's that no one else can write to,
+ * and the path to it must pass `pathCustodyProblems`. Otherwise another user could create the
+ * profile, or swap the path, between this check and Copilot's first launch.
  */
 async function enclosingCustodyProblems(home: string): Promise<string[]> {
   let parent = dirname(resolvePath(home));
-  let real: string | undefined;
+  let info;
   for (;;) {
     try {
-      real = await realpath(parent);
+      info = await lstat(parent);
       break;
     } catch (error) {
       if (errorCode(error) !== "ENOENT" || parent === dirname(parent))
@@ -456,14 +433,7 @@ async function enclosingCustodyProblems(home: string): Promise<string[]> {
       parent = dirname(parent);
     }
   }
-  const where = `${real}, where COPILOT_HOME ${home} would be created,`;
-  let info;
-  try {
-    info = await lstat(real);
-  } catch (error) {
-    return [`${where} cannot be inspected (${errorCode(error)})`];
-  }
-  const problems = ownership(where, info, "directory");
+  const problems = ownership(`${parent}, where COPILOT_HOME ${home} would be created,`, info, "directory");
   return problems.length ? problems : pathCustodyProblems(parent, home);
 }
 
