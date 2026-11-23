@@ -71,6 +71,7 @@ const generations: ConfigGenerationProvider = {
   status: () => STATUS,
   apply: async () => ({ outcome: "unchanged", status: STATUS, validation: { errors: [] } }),
   onChange: () => () => {},
+  validationContext: () => ({}),
 };
 
 async function workspace() {
