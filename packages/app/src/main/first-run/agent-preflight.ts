@@ -12,6 +12,7 @@ function configuredRoute(
   if (name === "claude-code-acp") return "claude-code-acp-candidate";
   if (name === "codex-acp") return "codex-acp-candidate";
   if (name.toLowerCase() === "copilot") return "copilot-cli-acp-candidate";
+  if (name.toLowerCase() === "cline") return "cline-acp-candidate";
   // OpenCode is one executable; only its `acp` subcommand speaks ACP (#710).
   if (name === "opencode" && args[0] === "acp") return "opencode-acp-candidate";
   return "unverified";

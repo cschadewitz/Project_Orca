@@ -24,6 +24,7 @@ Every entry says how it is known, as in the hook coverage page:
 | --- | --- | --- | --- | --- |
 | GitHub Copilot CLI 1.0.114, the npm builds for Linux x64 and macOS arm64 only (pinned by SHA-256), on the daemon's own computer, with a profile ORCA has inspected | **Yes** (installed) | **Yes, for the routes marked installed below** | No, after #706 | None yet: refused |
 | OpenCode 1.19.4 (`opencode acp`), the npm builds for Linux x64 and macOS arm64 only (pinned by SHA-256), on the daemon's own computer, with an isolated profile ORCA has inspected | **Yes** (installed) | **Yes, with the limits listed** (installed) | No, after #706 | None: no supported hook, refused |
+| Cline CLI 3.0.75, the npm build for Linux x64 (pinned by SHA-256 per platform), on the daemon's own computer, with a config directory ORCA has inspected | **Yes** (installed) | **Yes, for the routes marked installed below** | No, after #706 | None: no Cline hook adapter |
 
 ## GitHub Copilot CLI
 
@@ -182,3 +183,52 @@ release, and tier C is not claimed.
   outside ORCA). Every other backend, local models included, is unverified. With no credentials
   at all OpenCode would enable its own hosted free tier, which is why the profile pins
   `enabled_providers`.
+## Cline CLI
+
+`cline --acp` 3.0.75. Tiers **A** and **B**. "Installed" below means one route only: the
+`@cline/cli-linux-x64` 3.0.75 binary (SHA-256 checked), a fresh config directory signed in to
+the `openai-compatible` provider, a scripted stand-in model, on GitHub's Ubuntu 24.04 runner
+(`cline-acp-acceptance.yml`). macOS, Windows, arm64, Cline-account sign-in, other providers
+and a config directory reused across many sessions are by source only. Setup: [agents/cline.md](agents/cline.md).
+Acceptance: `packages/agents/test/cline-acp-711.acceptance.test.ts`, run by
+`cline-acp-acceptance.yml`. Code: `packages/agents/src/providers/cline.ts`.
+
+Cline runs every tool itself, after asking ORCA with `session/request_permission`. It never
+uses ACP's `fs/*` or `terminal/*`, so the ask is ORCA's only point of control, and everything
+below is about that ask being made, being decided on the right facts, and holding.
+
+| What | Behaviour | Known by |
+| --- | --- | --- |
+| Version | `initialize` must report `cline` 3.0.75; anything else fails the handshake | installed (3.0.75 accepted); offline (others refused) |
+| Executable | ORCA hashes the command before every start and opens only the published 3.0.75 build for this platform (SHA-256 per platform). The hash names the published build; it does not cover a file swapped between the hash and the start, or code the build fetches later (auto-update is off) | installed (Linux x64); offline (others refused); other platforms' pins from the npm artifacts, not run |
+| Launch flags | Only `--acp`, `--config <absolute dir>`, `--thinking`, `--reasoning-effort`. `--yolo` and `--auto-approve` (which approve every tool) are refused by name | source; offline |
+| Cline's state | Must be in its own `--config` directory: not Cline's default `~/.cline` (shared with Cline run outside ORCA) and not inside the workspace, up to its repository root, compared by real path. ORCA refuses agent reads and writes there (Cline keeps sign-ins in plain files). Deny by default: only `data`, and in `data/settings` only Cline's three settings files; `toolAutoApprove` on is refused | source; installed (edit refusal shown for hooks) |
+| Background hub | Cline runs sessions in a detached hub process by default, which outlives the agent ORCA stops. `CLINE_SESSION_BACKEND_MODE=local` is required; no Cline process remains after ORCA closes its sessions | source; installed |
+| Auto-update | `CLINE_NO_AUTO_UPDATE=1` is required | source |
+| Other `CLINE_*` variables | Refused from the profile, the session's overlay and ORCA's environment (they move state, settings or MCP servers) | source; offline |
+| Launch environment | Checked as the host builds it: ORCA's environment less withheld secrets, the profile's `env`, the session overlay, then secret-filled names. Checked again at the moment of start; a start whose `HOME`, `--config` or directory differ from the ones checked is refused | offline |
+| File checks | Fail closed: only a missing entry counts as absent; anything ORCA cannot read is refused. `--config`, `HOME` and the session directory must each be given as its real path (no link on it, no other spelling), so ORCA inspects exactly the paths Cline uses; anything else is refused before inspection. On Linux and macOS the config directory, `data`, `data/settings` and its files must belong to the user ORCA runs as and be writable by no one else | offline |
+| Sign-in | A Cline account via `cline auth --config <dir>`, or a provider key as a secret reference in `CLINE_API_KEY`. No sign-in: `session/new` fails and ORCA stops the agent | installed |
+| Streaming, turn identity | Text streams as `agent_message_chunk`; turns end `end_turn` | installed |
+| Model error | The turn fails with `AGENT_PROTOCOL`; the session stays usable | installed |
+| Cancel | A turn waiting on the model ends `cancelled` | installed |
+| Hooks and plugins | Cline runs hook scripts and plugin modules without asking, and a plugin can approve tools. A launch where the workspace (up to the repository root), the config directory or the home (`Documents/Cline`, `.agents/plugins`) has any is refused; edits into `.cline`, `.clinerules`, `Documents/Cline` and `.agents` are refused by ORCA's protected paths | source; installed (refusal before start, planted hook refused) |
+| MCP servers | Cline ignores MCP servers in `session/new`; an agent with any is refused. Cline's own MCP settings must list none | source; offline |
+| Skills (#337) | Cline does not accept embedded context, so ORCA's existing check refuses a session that carries skills | source |
+| Permission options | `allow_once`, `allow_always`, `reject_once` | installed |
+| "Allow always" | Approves that one call in this version. ORCA answers "Allow once" anyway; the next identical call is asked again | installed |
+| Answers | Only one-time answers reach Cline: "always" becomes "once"; with no one-time option offered, or an answer that is not one of the offered options, the ask is cancelled | offline |
+| What an ask carries | Cline sends the tool's input and no `locations`. ORCA reads the paths an edit, read or patch touches, and a command's text, from the input, as Cline's tool will use them, before its policy decides | source; installed |
+| Path rules, protected paths | Apply to Cline edits, reads and patches through those paths | installed |
+| Command rules | A command's words are matched (`run_commands` input, joined with `;`) | installed (rule-matched deny, no ask, file untouched) |
+| ORCA deny, person rejects | Cline does not run the call and tells the model it was rejected | installed |
+| ORCA allow | Cline runs exactly the call asked about | installed |
+| Cancel while asked | The ask is answered `cancelled`, the call does not run | installed |
+| Sub-agents and delegation | Cline runs a sub-agent's tools without asking anyone (3.0.75 gives the sub-agent no approval callback). ORCA answers every ask about a tool outside Cline's own nine (`spawn_agent`, team tools, configured agents, `ux_verifier`) with Cline's reject option itself, before any rule or person sees it | source; installed (the unasked sub-agent command shown without the guard, refused with it) |
+| File changes | Cline 3.0.75 offers OpenAI-compatible models `apply_patch` for edits; ORCA reads its paths from the patch | installed |
+| A call ORCA cannot read the target of | Reported as `other`, which no default rule allows | offline |
+| `auto_approve` session option | ORCA never sets it on, refuses a session that opens with it on, and ends one that reports it turned on | installed (refused); offline (open and mid-session) |
+| Plan mode | Cline's `mode: plan` is its own read-only preset; it changes nothing ORCA relies on | source |
+| Outside ORCA's ask | What an allowed shell command does beyond its own text. Cline has no shell sandbox in ACP mode | source |
+| Execution guard (C) | Not claimed; after #706 | unknown |
+| `nativeToolHook: on` | Not offered: no Cline hook adapter | by design |

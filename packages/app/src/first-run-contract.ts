@@ -11,6 +11,7 @@ export interface FirstRunAgentCheck {
       | "codex-acp-candidate"
       | "copilot-cli-acp-candidate"
       | "opencode-acp-candidate"
+      | "cline-acp-candidate"
       | "unverified";
     readonly support: "unknown";
     readonly version: "unknown";

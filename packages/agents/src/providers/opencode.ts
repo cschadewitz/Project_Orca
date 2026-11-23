@@ -392,9 +392,9 @@ export function openCodePolicyProblems(agent: AgentSpec): string[] {
       ];
 }
 
-export type ImageDigest = (path: string) => Promise<string>;
+export type OpenCodeDigest = (path: string) => Promise<string>;
 
-export const openCodeImageDigest: ImageDigest = (path) =>
+export const openCodeImageDigest: OpenCodeDigest = (path) =>
   new Promise((resolve, reject) => {
     const hash = createHash("sha256");
     createReadStream(path)
@@ -406,7 +406,7 @@ export const openCodeImageDigest: ImageDigest = (path) =>
 /** Digests already taken, by real path and file identity (device, inode, size, times). */
 const digestCache = new Map<string, string>();
 
-async function checkImage(agent: AgentSpec, digest: ImageDigest, platform: string, arch: string): Promise<void> {
+async function checkImage(agent: AgentSpec, digest: OpenCodeDigest, platform: string, arch: string): Promise<void> {
   const expected = OPENCODE_IMAGES[`${platform}-${arch}`]!.sha256;
   let path: string;
   let key: string;
@@ -690,7 +690,7 @@ export function guardOpenCodeSession(session: AgentSession): AgentSession {
 }
 
 export interface OpenCodeGuardOptions {
-  digest?: ImageDigest;
+  digest?: OpenCodeDigest;
   platform?: string;
   arch?: string;
   /** Machine-wide configuration found; the real check by default. */
