@@ -16,7 +16,8 @@ import { chmodSync, closeSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Principal } from "./principal.js";
 
-export type AuditEvent = "authn.denied" | "authz.denied" | "operation" | "connection.closed" | "secret.use";
+export type AuditEvent =
+  "authn.denied" | "authz.denied" | "operation" | "connection.closed" | "secret.use" | "capability.use";
 
 export interface AuditActor {
   principal: string;

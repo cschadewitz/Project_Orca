@@ -314,8 +314,13 @@ nothing it does reaches the new store. What it writes there afterwards is not in
 new store: `orca store format` on the new store compares the file store with the
 signature the conversion recorded and says `CHANGED since` when it differs. Stop
 every older ORCA before converting to avoid that; the conversion cannot check for
-them. To go back, point `storeDir` at the file store again: it was never changed by
-the conversion.
+them.
+
+**To go back**, stop every ORCA using either store, keep both stores, and point
+`storeDir` at the file store again: the conversion never changed it. That selects the
+file store as it is; work recorded only in the SQLite store after the conversion does
+not follow it back, and the two histories are never merged. Keep the SQLite store if
+that work matters.
 
 ### The switch in place
 

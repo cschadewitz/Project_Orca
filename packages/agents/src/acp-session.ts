@@ -62,6 +62,12 @@ export interface OpenSessionOptions {
    * anything is read. Without one, a session whose agent uses a reference is refused.
    */
   authorizeSecretUse?: AuthorizeSecretUse | undefined;
+  /**
+   * The use decision for this session's catalog MCP servers (#337), asked again immediately
+   * before `session/new` (or `session/load`) hands the agent its servers, after the process
+   * is up and initialized. A denial fails the open, and startup cleanup stops the process.
+   */
+  authorizeCapabilityDelivery?: (() => Promise<void>) | undefined;
   /** Handed every resolved secret value, before anything else happens, so the caller can redact it. */
   onSecretValues?: (values: readonly string[]) => void;
   host: AgentHost;
@@ -434,6 +440,9 @@ async function openPlanned(
       continuity = { mode: "fresh", reason: "load-unsupported" };
       if (init.agentCapabilities?.loadSession) {
         const timeoutFailure = opts.requireContextRecovery ? contextRecoveryFailure("load-timeout") : undefined;
+        // Outside the `try`: a denial is the open's failure, never a failed load to fall back from.
+        // Nothing waits between this and the request that delivers the servers.
+        await opts.authorizeCapabilityDelivery?.();
         try {
           const restored = await withTimeout(
             conn.agent.request(acp.methods.agent.session.load, { ...newSession, sessionId: opts.resumeSessionId }),
@@ -455,6 +464,8 @@ async function openPlanned(
       } else if (opts.requireContextRecovery) throw contextRecoveryFailure("load-unsupported");
     }
     if (!loaded) {
+      // Asked again here: a `session/load` that failed or timed out may have taken a while.
+      await opts.authorizeCapabilityDelivery?.();
       const created = await withTimeout(
         conn.agent.request(acp.methods.agent.session.new, newSession),
         handshakeTimeout,
