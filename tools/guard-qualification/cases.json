@@ -1,0 +1,222 @@
+{
+  "format": "orca-enforcement-cases/1",
+  "issue": 706,
+  "note": "Synthetic acceptance cases. Each runs ORCA's real decision code for one enforcement path. A pass says what ORCA answers on that path; it does not say what the agent then ran. That is the connected proof's job.",
+  "categories": {
+    "lifecycle": "A grant, revocation, expiry or edit decides the very next call, and repeats are decided one by one",
+    "failure": "Anything ORCA cannot read or decide ends in a block or an ask, never in a run",
+    "arguments": "A changed tool, resource, command or directory is a new decision",
+    "bypass": "Routes around the policy: ORCA's own files, links, shell grants, slipped-in wildcards",
+    "privacy": "What ORCA hands back to the agent or a log never carries the call's input"
+  },
+  "cases": [
+    {
+      "id": "L01",
+      "category": "lifecycle",
+      "contract": ["C04"],
+      "bullet": 1,
+      "needs": [],
+      "title": "A remembered grant is decided again on every identical call, and the call after a revocation is not allowed"
+    },
+    {
+      "id": "L02",
+      "category": "lifecycle",
+      "contract": ["C04"],
+      "bullet": 1,
+      "needs": [],
+      "title": "A timed grant stops allowing the moment it expires"
+    },
+    {
+      "id": "L03",
+      "category": "lifecycle",
+      "contract": ["C01"],
+      "bullet": 1,
+      "needs": [],
+      "title": "A recorded \"always reject\" denies the next identical call, ahead of the default allow, and nothing else"
+    },
+    {
+      "id": "L04",
+      "category": "lifecycle",
+      "contract": ["C04", "C15"],
+      "bullet": 1,
+      "needs": [],
+      "title": "An operator's policy edit between two identical calls decides the second"
+    },
+    {
+      "id": "L05",
+      "category": "lifecycle",
+      "contract": ["C14"],
+      "bullet": 1,
+      "needs": [],
+      "title": "Identical concurrent calls are each decided, and every call started after a revocation asks"
+    },
+    {
+      "id": "L06",
+      "category": "lifecycle",
+      "contract": ["C06"],
+      "bullet": 1,
+      "needs": [],
+      "title": "An unreadable sidecar turns its grants and later allows into asks, and configured denials still deny"
+    },
+    {
+      "id": "L07",
+      "category": "lifecycle",
+      "contract": ["C06"],
+      "bullet": 1,
+      "needs": [],
+      "title": "A deleted sidecar takes its grants with it"
+    },
+    {
+      "id": "L08",
+      "category": "lifecycle",
+      "contract": ["C22"],
+      "bullet": 1,
+      "needs": ["answerer"],
+      "title": "An ask with nobody to answer, or whose turn ends while waiting, runs nothing"
+    },
+    {
+      "id": "F01",
+      "category": "failure",
+      "contract": ["C09"],
+      "bullet": 1,
+      "needs": ["raw-input"],
+      "title": "Malformed, mistyped or oversized tool-call input blocks"
+    },
+    {
+      "id": "F02",
+      "category": "failure",
+      "contract": ["C09"],
+      "bullet": 1,
+      "needs": ["context-file"],
+      "title": "A missing, unreadable, unknown-version or oversized session context blocks every call"
+    },
+    {
+      "id": "F03",
+      "category": "failure",
+      "contract": ["C09"],
+      "bullet": 2,
+      "needs": ["hook-settings"],
+      "title": "The hook is installed for every tool, without a shell, with a bounded timeout and block-on-failure"
+    },
+    {
+      "id": "F04",
+      "category": "failure",
+      "contract": ["C05"],
+      "bullet": 1,
+      "needs": ["offered-options"],
+      "title": "A rule allow is delivered as a one-time answer only; an ask offering no one-time allow is refused, not widened"
+    },
+    {
+      "id": "F05",
+      "category": "failure",
+      "contract": ["C19"],
+      "bullet": 2,
+      "needs": [],
+      "title": "Tools ORCA does not know, and malformed MCP names, are asked about"
+    },
+    {
+      "id": "A01",
+      "category": "arguments",
+      "contract": ["C13"],
+      "bullet": 1,
+      "needs": [],
+      "title": "A grant for one MCP tool covers neither another tool nor the same tool on another server"
+    },
+    {
+      "id": "A02",
+      "category": "arguments",
+      "contract": ["C13"],
+      "bullet": 1,
+      "needs": [],
+      "title": "A changed target outside the workspace, including through .., is a new decision"
+    },
+    {
+      "id": "A03",
+      "category": "arguments",
+      "contract": ["C13"],
+      "bullet": 1,
+      "needs": [],
+      "title": "A denied command is denied in every spelling ORCA parses, and no other command is allowed"
+    },
+    {
+      "id": "A04",
+      "category": "arguments",
+      "contract": ["C07", "C13"],
+      "bullet": 1,
+      "needs": ["cwd"],
+      "title": "A granted call running outside the workspace asks"
+    },
+    {
+      "id": "B01",
+      "category": "bypass",
+      "contract": ["C09"],
+      "bullet": 2,
+      "needs": [],
+      "title": "Writes to ORCA's own files (config, sidecar, session state) are denied even under default allow"
+    },
+    {
+      "id": "B02",
+      "category": "bypass",
+      "contract": ["C18"],
+      "bullet": 2,
+      "needs": [],
+      "title": "A link inside the workspace does not open ORCA's files"
+    },
+    {
+      "id": "B03",
+      "category": "bypass",
+      "contract": ["C19"],
+      "bullet": 2,
+      "needs": [],
+      "title": "No shell command is allowed by a standing grant, recorded or hand-written"
+    },
+    {
+      "id": "B04",
+      "category": "bypass",
+      "contract": ["C09"],
+      "bullet": 2,
+      "needs": [],
+      "title": "A wildcard allow slipped into the sidecar allows nothing"
+    },
+    {
+      "id": "B05",
+      "category": "bypass",
+      "contract": ["C18"],
+      "bullet": 2,
+      "needs": [],
+      "title": "A dangling link inside the workspace does not let a write create one of ORCA's files"
+    },
+    {
+      "id": "P01",
+      "category": "privacy",
+      "contract": ["C20"],
+      "bullet": 4,
+      "needs": [],
+      "title": "Ask and deny answers never carry the call's command, content, arguments or path"
+    },
+    {
+      "id": "P02",
+      "category": "privacy",
+      "contract": ["C20"],
+      "bullet": 4,
+      "needs": ["raw-input", "context-file"],
+      "title": "Failure answers never echo the input or the session context"
+    },
+    {
+      "id": "P03",
+      "category": "privacy",
+      "contract": ["C20"],
+      "bullet": 4,
+      "needs": [],
+      "title": "Every answer is short and fixed-form, whatever the input's size"
+    },
+    {
+      "id": "P04",
+      "category": "privacy",
+      "contract": ["C20"],
+      "bullet": 4,
+      "needs": [],
+      "title": "Credentials are unreadable under default allow, directly or through a link"
+    }
+  ]
+}

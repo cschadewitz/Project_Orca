@@ -1,0 +1,137 @@
+{
+  "format": "orca-enforcement-support-matrix/1",
+  "issue": 706,
+  "tiers": {
+    "none": "Nothing is claimed. The agent may work, but ORCA says nothing about what its policy covers.",
+    "A": "Connects and fails closed: the agent connects, first-run preflight recognises it, its docs exist, and every route ORCA does not cover is listed and refused or asked about, never silently allowed.",
+    "B": "Approvals validated: tier A, plus every synthetic case runs on each of the agent's enforcement paths (or is excluded with a reason), and an unattended installed acceptance run against the pinned real agent proves ORCA's answers take effect there.",
+    "C": "Execution guard certified: tier B, plus a connected proof receipt for this exact agent, version and host shows that what ran is what was approved, with no lifecycle or bypass case excluded unless it is listed as a residual risk."
+  },
+  "paths": [
+    {
+      "id": "acp-ask",
+      "what": "ORCA's answer to an ACP session/request_permission ask (resolvePermission, read fresh per ask by acp-session.ts)",
+      "capabilities": ["answerer", "offered-options"],
+      "excluded": {
+        "F01": "The ask arrives as an ACP request the SDK has already parsed; there are no raw bytes for ORCA to refuse.",
+        "F02": "Decided in the session's own process; there is no separate context file to lose.",
+        "F03": "Nothing is installed in the agent for this route.",
+        "P02": "No raw input or context file on this route (see F01 and F02).",
+        "A04": "An ACP ask carries no working directory; the session's directory is fixed when the session opens."
+      }
+    },
+    {
+      "id": "claude-native-hook",
+      "what": "ORCA's Claude Code PreToolUse hook (#704), run as its process runs it (runClaudePreToolHook)",
+      "capabilities": ["raw-input", "context-file", "cwd", "hook-settings"],
+      "excluded": {
+        "L08": "The hook's ask is handed to Claude, which sends it to ORCA as an ACP ask: covered on acp-ask.",
+        "F04": "The hook never answers allow and offers no options; Claude's own options reach ORCA on acp-ask."
+      }
+    }
+  ],
+  "agents": [
+    {
+      "id": "claude",
+      "tuple": "Claude ACP adapter with Claude Code, Linux; no version pinned on main yet (#980 pins adapter 0.109.1 with Claude Code 2.1.330)",
+      "tier": "A",
+      "routes": ["acp-ask"],
+      "pendingRoutes": {
+        "claude-native-hook": "Turned on per agent by #980 (nativeToolHook: on); until it merges the hook is not reachable from a run"
+      },
+      "evidence": {
+        "connectivity": [
+          "packages/app/src/main/first-run/agent-preflight.ts",
+          "packages/app/test/agent-preflight.test.ts",
+          "docs/INTEGRATIONS.md"
+        ],
+        "installed": null,
+        "connected": null
+      },
+      "unsupportedRoutes": [
+        "Tool calls Claude does not ask about (remembered grants, its own allow rules) until the hook is on",
+        "What a shell command touches beyond its own text",
+        "Remote sessions over SSH while the hook is on"
+      ],
+      "residualRisks": [
+        "A hook is not an operating-system boundary; Claude's sandbox and ORCA's protected-path rules stay in force beside it"
+      ],
+      "next": "B once #980 merges: its claude-hook-acceptance.yml is the installed run. C after the #706 connected proof."
+    },
+    {
+      "id": "codex",
+      "tuple": "Codex ACP adapter with Codex, Linux; #705 pins codex-acp 2.9.0 with Codex 0.171.0",
+      "tier": "A",
+      "routes": ["acp-ask"],
+      "pendingRoutes": { "codex-native-hook": "#705 Codex adapter, after #980" },
+      "evidence": {
+        "connectivity": [
+          "packages/app/src/main/first-run/agent-preflight.ts",
+          "packages/app/test/agent-preflight.test.ts",
+          "docs/INTEGRATIONS.md"
+        ],
+        "installed": null,
+        "connected": null
+      },
+      "unsupportedRoutes": [
+        "Tool calls Codex does not ask about until the #705 hook is on",
+        "Text typed into a running command (write_stdin) is never hooked",
+        "Hosted web search runs at the provider"
+      ],
+      "residualRisks": [
+        "Codex lets a call through when its hook runner fails; #705 must prove its probe before claiming B"
+      ],
+      "next": "#705 Codex adds its path adapter here and an installed workflow for B."
+    },
+    {
+      "id": "gemini",
+      "tuple": "Gemini CLI (native ACP)",
+      "tier": "none",
+      "routes": [],
+      "evidence": { "connectivity": [], "installed": null, "connected": null },
+      "unsupportedRoutes": [],
+      "residualRisks": [],
+      "next": "#705 Gemini (stream 7): tiers A and B"
+    },
+    {
+      "id": "pi",
+      "tuple": "pi with pi-acp",
+      "tier": "none",
+      "routes": [],
+      "evidence": { "connectivity": [], "installed": null, "connected": null },
+      "unsupportedRoutes": [],
+      "residualRisks": [],
+      "next": "#705 pi (stream 7): tiers A and B"
+    },
+    {
+      "id": "copilot",
+      "tuple": "GitHub Copilot CLI, copilot --acp --stdio",
+      "tier": "none",
+      "routes": [],
+      "evidence": { "connectivity": [], "installed": null, "connected": null },
+      "unsupportedRoutes": [],
+      "residualRisks": [],
+      "next": "#709 tiers A and B; docs/preparation/copilot-cli-acp-709 holds the offline preparation"
+    },
+    {
+      "id": "opencode",
+      "tuple": "OpenCode (ACP)",
+      "tier": "none",
+      "routes": [],
+      "evidence": { "connectivity": [], "installed": null, "connected": null },
+      "unsupportedRoutes": [],
+      "residualRisks": [],
+      "next": "#710 tiers A and B"
+    },
+    {
+      "id": "cline",
+      "tuple": "Cline (ACP)",
+      "tier": "none",
+      "routes": [],
+      "evidence": { "connectivity": [], "installed": null, "connected": null },
+      "unsupportedRoutes": [],
+      "residualRisks": [],
+      "next": "#711 tiers A and B"
+    }
+  ]
+}

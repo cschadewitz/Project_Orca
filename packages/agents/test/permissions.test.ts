@@ -943,6 +943,31 @@ describe("protected paths", () => {
     expect(at(bareEffective, f, "edit", join(f.dir, "src", "policy.json"))).toBe("deny");
   });
 
+  it.skipIf(process.platform === "win32")(
+    "cannot be created through a link whose target does not exist yet (#706 B05)",
+    async () => {
+      const f = await configDir();
+      const sidecar = permissionPolicyPath(f.dir);
+      await rm(sidecar);
+      // A write that creates a file follows a dangling link and creates its target, so the link
+      // is judged by where it leads, relative targets and chains of links included.
+      await symlink("../orca.permissions.json", join(f.dir, "src", "relative.json"));
+      await symlink(sidecar, join(f.dir, "src", "absolute.json"));
+      await symlink(join(f.dir, "src", "relative.json"), join(f.dir, "src", "chained.json"));
+      await symlink(join(f.dir, ".orca", "runs", "new", "log.jsonl"), join(f.dir, "src", "deep.jsonl"));
+      for (const name of ["relative.json", "absolute.json", "chained.json", "deep.jsonl"]) {
+        expect(at(bareEffective, f, "edit", join(f.dir, "src", name)), name).toBe("deny");
+        expect(protectedPathFor(join(f.dir, "src", name), "write", f.protectedPaths), name).toBeDefined();
+      }
+      // A dangling link to somewhere free is still free, and a loop of links ends.
+      await symlink(join(f.dir, "src", "later.ts"), join(f.dir, "src", "free.ts"));
+      expect(at(bareEffective, f, "edit", join(f.dir, "src", "free.ts"))).toBe("allow");
+      await symlink(join(f.dir, "src", "loop-b"), join(f.dir, "src", "loop-a"));
+      await symlink(join(f.dir, "src", "loop-a"), join(f.dir, "src", "loop-b"));
+      expect(protectedPathFor(join(f.dir, "src", "loop-a"), "write", f.protectedPaths)).toBeUndefined();
+    },
+  );
+
   it("is not overridden by any rule: configured, written to the sidecar, or `default: allow`", async () => {
     const f = await configDir();
     const sidecar = permissionPolicyPath(f.dir);

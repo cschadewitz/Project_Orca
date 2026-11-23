@@ -1,0 +1,1 @@
+- **agents:** a write through a link whose target does not exist yet is now judged by where the link leads. Before, a link in the workspace pointing at ORCA's not-yet-created permission sidecar (or another file under ORCA's protected paths) was treated as a new file in the workspace, so a default-allowed edit could create it (#706).

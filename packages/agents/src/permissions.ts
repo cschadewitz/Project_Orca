@@ -37,7 +37,7 @@
  * (`model/agent.ts`), which is node-free; the reading, writing, locking and the physical
  * path checks are here.
  */
-import { realpathSync } from "node:fs";
+import { readlinkSync, realpathSync } from "node:fs";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { revisionOf, withPolicyLock } from "./permission-file.js";
@@ -360,21 +360,44 @@ function protectedLocation(
     .find((p) => protectedPathFor(p, access, ctx.protectedPaths, ctx.workspaceCwd) !== undefined);
 }
 
+/** How many links `physicalPath` follows before giving up, as the kernel's `ELOOP` does. */
+const MAX_LINK_HOPS = 40;
+
 /**
  * `path` as the file system resolves it. The part that does not exist yet — a file about to be
  * created — is appended to the deepest ancestor that does, which is what an open of it reaches.
+ *
+ * A link whose target does not exist yet is followed too (#706, B05): `realpath` fails on it,
+ * but an open that creates a file follows it and creates the target. Taking the link's own name
+ * as "a file about to be created" would let a write through `work/innocent.json ->
+ * ../orca.permissions.json` create the sidecar while being judged a write inside the workspace.
  */
-function physicalPath(path: string): string {
+function physicalPath(path: string, hops = 0): string {
   const missing: string[] = [];
   for (let head = path; ;) {
     try {
       return join(realpathSync.native(head), ...missing);
     } catch {
+      const link = hops < MAX_LINK_HOPS ? linkTarget(head) : undefined;
+      if (link !== undefined) {
+        // Joined as text, like the caller's path: the target's own `..` is resolved physically.
+        const target = isAbsolute(link) ? link : `${dirname(head)}${sep}${link}`;
+        return physicalPath(missing.length === 0 ? target : `${target}${sep}${missing.join(sep)}`, hops + 1);
+      }
       const parent = dirname(head);
       if (parent === head) return join(head, ...missing);
       missing.unshift(basename(head));
       head = parent;
     }
+  }
+}
+
+/** Where the link at `path` points, or undefined when `path` is not a link. */
+function linkTarget(path: string): string | undefined {
+  try {
+    return readlinkSync(path);
+  } catch {
+    return undefined;
   }
 }
 
