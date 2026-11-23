@@ -54,6 +54,8 @@ export {
   type OpenDaemonSessionOptions,
 } from "./daemon-session.js";
 export { RemoteDaemonClient, RemoteFault, RemoteUnreachable } from "./remote-client.js";
+export { RemoteCapacity } from "./capacity.js";
+import type { RemoteCapacity } from "./capacity.js";
 export {
   delegationKey,
   DelegationReceipts,
@@ -262,6 +264,8 @@ export interface DelegationOptions {
   enrollmentWaitMs?: number;
   /** This daemon's workspace id, stated as each delegated run's origin (#883). */
   workspaceId?: () => Promise<string>;
+  /** Told each remote's session cap at every open (#884), for the engine's slot queue. */
+  capacity?: RemoteCapacity;
 }
 
 /** What the engine says a session is opened for (`SessionOrigin` in `@orca/engine`). */
@@ -369,6 +373,7 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
       ...(open.logger ? { logger: open.logger } : {}),
       ...(open.clock ? { clock: open.clock } : {}),
       ...(options.pollMs ? { pollMs: options.pollMs } : {}),
+      ...(options.capacity ? { onCapacity: (max) => options.capacity!.learn(id, max) } : {}),
     });
   };
 }
