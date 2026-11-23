@@ -27,14 +27,17 @@
  * the run's lock, which lives outside the run's directory so that removing the directory never
  * removes a lock somebody holds.
  *
- * **Deletion is final for the scope, from the moment its marker is durable.** Deleting a run's
+ * **Deletion is final for the scope, from the moment its marker is written.** Deleting a run's
  * (or a session's) records first writes a small marker (a new file, flushed, renamed into
- * place, its directory flushed), then removes the records. The marker is authoritative: from
+ * place, then on POSIX its directory flushed), then removes the records. What that buys is
+ * bounded: Windows does not flush the directory, and the first marker or record under a new
+ * directory does not flush every ancestor that was just made, so a power cut right after a
+ * first write can lose the marker on either. An ORCA crash cannot. The marker is authoritative: from
  * then on the scope's records are never listed, exported or counted, and an append for it is
  * refused and dropped, so a live session's late records do not bring deleted diagnostics back.
  * If deletion stops after the marker (a crash, an error), the records still on disk stay
  * hidden and the next {@link ToolTelemetryStore.prune} removes them. If it stops before the
- * marker is durable, nothing was deleted, and deleting again is the remedy. Markers are kept
+ * marker is written, nothing was deleted, and deleting again is the remedy. Markers are kept
  * for good: the store cannot know that no producer for the run is still alive (a resumed run
  * can open sessions much later), and a marker is a few bytes.
  *
@@ -59,7 +62,11 @@ export const DIAGNOSTICS_DIR = "diagnostics";
 export const TOOL_TELEMETRY_DIR = join(DIAGNOSTICS_DIR, "tool-calls");
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
-/** A FIFO or device put where a file should be opens without waiting, then fails the type check. */
+/**
+ * So that a FIFO or device put where a file should be does not hold the open: it opens at
+ * once and then fails the type check. It changes nothing for a regular file, whose reads and
+ * writes are ordinary file I/O.
+ */
 const NONBLOCK = constants.O_NONBLOCK ?? 0;
 const POSIX = process.platform !== "win32";
 
@@ -252,7 +259,7 @@ async function writeNew(path: string, text: string): Promise<void> {
   }
 }
 
-/** A deletion marker, durable before it returns: present means hidden and refused. */
+/** A deletion marker, flushed (and on POSIX its directory) before it returns: present means hidden and refused. */
 async function writeMarker(path: string, dir: string, at: Date): Promise<void> {
   const temp = `${path}.${randomUUID()}.tmp`;
   await writeNew(temp, `${JSON.stringify({ deletedAt: at.toISOString() })}\n`);
@@ -366,12 +373,23 @@ export class FileToolTelemetryStore implements ToolTelemetryStore {
     const ids = new Set<string>();
     for (const name of await listDir(this.root)) {
       if (name.startsWith(".")) continue;
+      // Markers are checked before anything they hide is opened: what an interrupted deletion
+      // left behind is never read, so it cannot stop other runs being listed.
+      if (await exists(join(this.root, ".deleted", name))) continue;
       const dir = join(this.root, name);
       if (!(await existingDir(dir))) continue;
-      for (const file of (await listDir(dir)).filter((n) => n.endsWith(".jsonl"))) {
-        const live = parseLines((await readChecked(join(dir, file))) ?? "").find((r) => !expired(r, now));
-        // A marked run or session is not listed, whatever is still on disk.
-        if (live && (await this.visibleFiles(live.runId, live.sessionId)).length) ids.add(live.runId);
+      const names = await listDir(dir);
+      const marked = new Set(names.filter((n) => n.endsWith(".deleted")).map((n) => n.slice(0, -".deleted".length)));
+      for (const file of names.filter((n) => n.endsWith(".jsonl"))) {
+        const session = file.slice(0, -".jsonl".length);
+        if (marked.has(session)) continue;
+        // Only a record that belongs where it was found names the run: a run's directory and
+        // file are named for its own ids.
+        const live = parseLines((await readChecked(join(dir, file))) ?? "").find(
+          (r) =>
+            !expired(r, now) && toolTelemetrySegment(r.runId) === name && toolTelemetrySegment(r.sessionId) === session,
+        );
+        if (live) ids.add(live.runId);
       }
     }
     return [...ids].sort();

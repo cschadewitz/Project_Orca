@@ -253,6 +253,33 @@ describe("tool telemetry files", () => {
     expect(await readdir(join(root, ".deleted"))).toEqual(["run_b"]);
   });
 
+  it("lists runs without opening what a marker hides, so a leftover cannot block the listing", async () => {
+    if (process.platform === "win32") return;
+    const dir = await tmp();
+    const store = new FileToolTelemetryStore(dir);
+    await store.append([record("run_a", "sess_1", 0)]);
+    await store.append([record("run_a", "sess_2", 0)]);
+    await store.append([record("run_b", "sess_3", 0)]);
+    await store.append([record("run_c", "sess_4", 0)]);
+    const root = join(dir, TOOL_TELEMETRY_DIR);
+    // Interrupted deletions whose leftovers can no longer be read: one shared, one a FIFO.
+    await writeFile(join(root, ".deleted", "run_b"), "{}\n", { mode: 0o600 });
+    await chmod(join(root, "run_b", "sess_3.jsonl"), 0o644);
+    await writeFile(join(root, "run_a", "sess_1.deleted"), "{}\n", { mode: 0o600 });
+    await rm(join(root, "run_a", "sess_1.jsonl"));
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("mkfifo", ["-m", "600", join(root, "run_a", "sess_1.jsonl")]);
+    expect(await store.runs()).toEqual(["run_a", "run_c"]);
+    // A record filed where it does not belong does not name its run.
+    await writeFile(join(root, "run_c", "sess_9.jsonl"), `${JSON.stringify(record("run_z", "sess_9", 0))}\n`, {
+      mode: 0o600,
+    });
+    expect(await store.runs()).toEqual(["run_a", "run_c"]);
+    // prune finishes both and the listing stays the same.
+    await store.prune(new Date());
+    expect(await store.runs()).toEqual(["run_a", "run_c"]);
+  });
+
   it("refuses to read or write through a link, a shared mode, a foreign file or a second name", async () => {
     if (process.platform === "win32") return;
     const dir = await tmp();

@@ -53,7 +53,11 @@ export const HOOK_TELEMETRY_SESSION_LINES = 20_000;
 const DRAIN_CHUNK = 256 * 1024;
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
-/** A FIFO or device put where a file should be opens without waiting, then fails the type check. */
+/**
+ * So that a FIFO or device put where the spool should be does not hold the open: it opens at
+ * once and then fails the type check. It changes nothing for the spool itself, a regular file,
+ * whose reads and writes are ordinary file I/O.
+ */
 const NONBLOCK = constants.O_NONBLOCK ?? 0;
 
 /**
@@ -72,7 +76,7 @@ export interface HookTelemetryTarget {
  * Returns whether the line was written; a hook must not act on the answer.
  *
  * The spool must be exactly the file ORCA made: opened without following a link and without
- * blocking (a FIFO or device in its place cannot hold the hook), and on the open handle a
+ * waiting on a FIFO or device in its place (`O_NONBLOCK`, which only affects the open), and on the open handle a
  * regular file with ORCA's recorded device and inode, this user's, owner-only, with one name.
  * A missing or different spool, one past {@link HOOK_TELEMETRY_SPOOL_LIMIT}, or a line over
  * {@link HOOK_TELEMETRY_LINE_LIMIT} skips the record. It never creates a file.

@@ -86,9 +86,10 @@ backup, carryover or SQLite conversion copies it with the rest of the store.
 `diagnostics/` is in the store's agent-denied set, beside `private-execution`: no agent tool
 may read or write it. Owner-only modes do not stop a process of the same user, so every open
 is checked as well: directories must be real, owner-only directories of ORCA's user, and
-files are opened without following links and without blocking (a FIFO or device in a file's
-place cannot hold a reader or writer), and must be regular, owner-only files of ORCA's user
-with one name. Anything else is refused, not read or written through. (Windows has no
+files are opened without following links and with `O_NONBLOCK`, so that a FIFO or device
+put in a file's place cannot hold the open; it then fails the check. (That flag only affects
+the open: reading and writing a real file is ordinary file I/O.) Files must be regular,
+owner-only files of ORCA's user with one name. Anything else is refused, not read or written through. (Windows has no
 POSIX modes; there the protected directory and the link refusal are the boundary.)
 
 Every change to a run (appending, deleting, expiring) holds that run's lock, which is kept
@@ -106,11 +107,15 @@ orca diagnostics tool-calls prune                        # remove every expired 
 An expired record is never listed or exported, whether or not a sweep has removed it yet.
 Expired records are also removed while ORCA ingests new ones, at most once an hour.
 
-Deleting is final for what was deleted, from the moment its marker is durable. A deletion
-first writes a small marker (a new file, flushed, renamed into place, its directory flushed)
-and only then removes the records. From then on the marker decides: the run's (or session's)
+Deleting is final for what was deleted, from the moment its marker is written. A deletion
+first writes a small marker (a new file, flushed, renamed into place, then on Linux and macOS
+its directory flushed) and only then removes the records. That holds across an ORCA crash.
+Across a power cut it holds only as far as the flushes reach: Windows does not flush the
+directory, and the first write under a newly made directory does not flush every ancestor
+made with it, so a power cut just after such a write can lose the marker. From then on the marker decides: the run's (or session's)
 records are never listed, exported or counted, and records that arrive later, from a session
-still running, are refused and dropped. If the deletion stops after the marker, the records
+still running, are refused and dropped. Listing runs checks markers before opening anything
+they hide, so a leftover file cannot stop other runs being listed. If the deletion stops after the marker, the records
 left on disk stay hidden and the next `prune` removes them; if it stops before, nothing was
 deleted, and deleting again is the remedy. Markers are kept for good: the store cannot know
 that no session of the run will ever run again (a resumed run opens new ones), and a marker
