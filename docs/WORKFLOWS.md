@@ -385,6 +385,15 @@ agents:
   `limits.agentSlotWaitMs`, when you set it, fails any wait longer than that with
   `STEP_TIMEOUT`. With no deadline set, a long queue is never cut off. A session already
   being torn down never counts as stuck.
+- A delegating agent (`type: orca-daemon`) is also held to its **remote daemon's** cap
+  (#884): that daemon's own `limits.maxAgentSessions`, as its `hello` reports it at each
+  delegated session. This daemon never holds more delegated sessions open to one remote than
+  that cap; the rest wait here with a detail such as
+  `waiting for an agent slot: 2 of 2 in use on remote build-box (its limits.maxAgentSessions)`.
+  A remote with no cap is unlimited. Until a remote has answered once since this daemon
+  started, its cap is taken to be 1, so a fan-out never runs ahead of a limit nobody has read
+  yet. The remote enforces its cap itself too, which is what bounds several parents that
+  share it: their steps beyond it wait there.
 - A slot whose agent process exit cannot be confirmed stays held - the process may still be
   running - and `agents.list` reports it as `teardownUnconfirmed`, with a warning in the log.
 - A cancel always wins: a step cancelled while waiting, or after its slot was granted but

@@ -189,6 +189,8 @@ export interface OpenDaemonSessionOptions {
     /** The active record is still the one `binding` names. */
     current(): boolean;
   };
+  /** Told the remote's daemon-wide session cap from its `hello` (#884); undefined is none. */
+  onCapacity?: (maxAgentSessions: number | undefined) => void;
 }
 
 /** The turn in flight: its remote run, and what its forwarded questions are bound to. */
@@ -324,6 +326,8 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
     );
     if (discovery.target.workspaceId !== options.binding.workspaceId) throw changed("workspace");
     if (discovery.principalId !== options.binding.principalId) throw changed("principal");
+    // Only the enrolled daemon, proven above, may set the cap its sessions are counted against.
+    options.onCapacity?.(hello.sessionSlots?.maxAgentSessions);
     if (!discovery.operations.includes("runs.admit"))
       throw refuse(
         "auth",

@@ -22,6 +22,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
+import { request } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { connect, createServer } from "node:net";
 import { tmpdir, userInfo } from "node:os";
@@ -151,16 +152,44 @@ export async function startTwoDaemons(
   };
 }
 
-/** A JSON-RPC call over HTTP, the way the CLI and the app make one. */
+/**
+ * A JSON-RPC call over HTTP, the way the CLI and the app make one. Each call has a connection
+ * of its own (no keep-alive pool): a pooled socket the daemon has just closed as idle would
+ * fail a call with "other side closed", and a call that may mutate cannot simply be retried.
+ */
 export async function rpc(url: string, method: string, params: unknown, token: string | null): Promise<RpcAnswer> {
-  const response = await fetch(new URL("/rpc", url), {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify({ kind: "request", id: 1, method, params }),
-    signal: AbortSignal.timeout(10_000),
+  const payload = JSON.stringify({ kind: "request", id: 1, method, params });
+  const { status, text } = await new Promise<{ status: number; text: string }>((resolve, reject) => {
+    const req = request(
+      new URL("/rpc", url),
+      {
+        method: "POST",
+        agent: false,
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(payload),
+          connection: "close",
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        signal: AbortSignal.timeout(10_000),
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
+        res.on("error", reject);
+      },
+    );
+    req.on("error", reject);
+    req.end(payload);
   });
-  const body = (await response.json().catch(() => undefined)) as RpcAnswer | undefined;
-  if (!body || typeof body.ok !== "boolean") throw new Error(`${method}: HTTP ${response.status} with no ORCA answer`);
+  let body: RpcAnswer | undefined;
+  try {
+    body = JSON.parse(text) as RpcAnswer;
+  } catch {
+    body = undefined;
+  }
+  if (!body || typeof body.ok !== "boolean") throw new Error(`${method}: HTTP ${status} with no ORCA answer`);
   return body;
 }
 

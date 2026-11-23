@@ -181,6 +181,12 @@ export interface OrchestratorOptions {
   workspaceProvider?: WorkspaceProvider;
   sessionFactory?: SessionFactory;
   /**
+   * The session cap of the remote daemon a delegating agent (`type: orca-daemon`) goes to,
+   * by its `remotes[]` id (#884): undefined is unlimited. Asked on every pass over the slot
+   * queue; call `sessionSlots.pump()` when an answer changes.
+   */
+  remoteSessionCap?: (remoteId: string) => number | undefined;
+  /**
    * The server-verified use check for secret references (#336): resolves when the run may use
    * every one of `uses` now, throws when not. Asked at every session open, immediately before
    * the host reads anything. Without it, a launch whose agent steps use a secret reference is
@@ -500,6 +506,7 @@ export class Orchestrator {
   liveInput: OrchestratorOptions["liveInput"];
   workspaceProvider: WorkspaceProvider;
   sessionFactory: SessionFactory;
+  remoteSessionCap: ((remoteId: string) => number | undefined) | undefined;
   /**
    * The use check for secret references (#336). Settable so an embedder can wire its
    * authority once it exists (the daemon builds it after the orchestrator); a launch that
@@ -572,6 +579,7 @@ export class Orchestrator {
     this.humanInput = o.humanInput ?? o.liveInput?.port ?? autoHumanInput();
     this.workspaceProvider = o.workspaceProvider ?? new LocalWorkspaceProvider(process.cwd());
     this.sessionFactory = o.sessionFactory ?? openAcpSession;
+    this.remoteSessionCap = o.remoteSessionCap;
     this.secretUse = o.secretUse;
     this.capabilityUse = o.capabilityUse;
     this.maxAgentSessions = o.maxAgentSessions;
@@ -3090,10 +3098,12 @@ export class Orchestrator {
     agent: { id: string; maxSessions?: number | undefined; sessionMode: "per-step" | "per-run" },
     host: AgentHost,
   ): Promise<SessionSlot> {
+    const remoteId = this.delegatedRemote(agent);
     const request = {
       agentId: agent.id,
       hostId: host.id,
-      caps: () => this.sessionSlotCaps(agent, host),
+      ...(remoteId !== undefined ? { remoteId } : {}),
+      caps: () => this.sessionSlotCaps(agent, host, remoteId),
       signal: rc.abort.signal,
       runs: this.runAncestry(rc),
       deadlineMs: this.sessionSlotWaitMs(),
@@ -3133,15 +3143,28 @@ export class Orchestrator {
    * pinned to an older generation; the run's own specs answer only for an agent or host the
    * current configuration no longer has.
    */
-  private sessionSlotCaps(agent: { id: string; maxSessions?: number | undefined }, host: AgentHost): SessionSlotCaps {
+  private sessionSlotCaps(
+    agent: { id: string; maxSessions?: number | undefined },
+    host: AgentHost,
+    remoteId: string | undefined,
+  ): SessionSlotCaps {
     const registry = this.generations?.current.agents ?? this.agents;
     const currentAgent = registry.listAgents().find((a) => a.id === agent.id);
     const currentHost = registry.hasHost(host.id) ? registry.host(host.id) : undefined;
+    // The remote is the one this open will actually go to: the run's own agent spec names it,
+    // and the slot is counted under it. Only its cap is re-read, never which remote it is.
     return {
       daemon: this.daemonSessionCap(),
       agent: (currentAgent ?? agent).maxSessions,
       host: hostCap(currentHost ?? host),
+      ...(remoteId !== undefined ? { remote: this.remoteSessionCap?.(remoteId) } : {}),
     };
+  }
+
+  /** The remote daemon a delegating agent's sessions go to (#884), else undefined. */
+  private delegatedRemote(agent: { id: string }): string | undefined {
+    const spec = agent as { type?: string; profile?: string };
+    return spec.type === "orca-daemon" && spec.profile ? spec.profile : undefined;
   }
 
   private sessionSlotWaitMs(): number | undefined {

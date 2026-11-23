@@ -73,7 +73,7 @@ import {
   type PluginRestorationIdentityVerifier,
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
-import { delegatingSessionFactory, validateRemotes } from "@orca/daemon";
+import { delegatingSessionFactory, RemoteCapacity, validateRemotes } from "@orca/daemon";
 import {
   fileStores,
   holdStoreWriter,
@@ -570,12 +570,15 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   // goes to the ACP factory unchanged. The remotes are read at each open, so an applied config
   // edit reaches the next session.
   let currentRemotes = () => config.remotes;
+  // Each remote daemon's session cap, as its hello reports it (#884), for the slot queue.
+  const remoteCapacity = new RemoteCapacity();
   const delegating = (base: SessionFactory): SessionFactory =>
     delegatingSessionFactory(base, {
       remotes: () => currentRemotes(),
       configDir,
       receiptsDir: resolve(configDir, config.storeDir, "delegations"),
       workspaceId: () => workspaceIdentity(resolve(configDir, config.storeDir)),
+      capacity: remoteCapacity,
     });
   const openSession = delegating(makeSessionFactory({ configDir, storeDir: config.storeDir, configFile }));
   const orchestrator = new Orchestrator({
@@ -589,6 +592,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     workspaceProvider,
     plan,
     logger,
+    remoteSessionCap: (remoteId) => remoteCapacity.cap(remoteId),
     // An ephemeral bootstrap deliberately gets none: it is a one-shot over in-memory stores
     // (`orca agent ping`), and standing grants a workspace recorded for its real runs are
     // durable workspace state of exactly the kind `ephemeral` means to leave alone.
@@ -608,6 +612,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
         }),
     ...(opts.lease ? { lease: opts.lease } : {}),
   });
+  remoteCapacity.onChange(() => orchestrator.sessionSlots.pump());
   const generations = new ConfigurationGenerations({
     store: stores.execution,
     workflows: stores.workflows,
