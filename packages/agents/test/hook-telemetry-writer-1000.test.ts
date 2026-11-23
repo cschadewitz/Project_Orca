@@ -182,6 +182,43 @@ describe.runIf(process.platform !== "win32")("what the hook records", () => {
   });
 });
 
+describe.runIf(process.platform !== "win32")("recording never changes the answer", () => {
+  const broken = () => {
+    throw new Error("line could not be built");
+  };
+  const cases = [
+    ["Claude, allow", [() => contextFile], { command: "ls" }, { exitCode: 0, stdout: "", stderr: "" }],
+    ["Claude, ask", [() => contextFile], { command: "rm -rf x" }, { exitCode: 0 }],
+    ["Codex, allow", [() => "--codex", () => contextFile], { command: "ls" }, { exitCode: 0, stdout: "", stderr: "" }],
+    ["Codex, ask (blocked)", [() => "--codex", () => contextFile], { command: "rm -rf x" }, { exitCode: 2 }],
+  ] as const;
+  it.each(cases)(
+    "%s: a line that cannot be built leaves the answer exactly as without telemetry",
+    async (_what, argv, input, expected) => {
+      const args = argv.map((a) => a());
+      const call = frame("Bash", input, "toolu_same");
+      await writeContext(context({ telemetry: undefined }));
+      const plain = await runClaudePreToolHook(args, call);
+      await writeContext(context());
+      const failing = await runClaudePreToolHook(args, call, { telemetryLine: broken });
+      expect(plain).toMatchObject(expected);
+      expect(failing).toEqual(plain);
+      expect(failing.telemetry).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["Claude", [] as string[]],
+    ["Codex", ["--codex"]],
+  ])("%s: a hook failure stays a block when its line cannot be built", async (_what, prefix) => {
+    const plain = await runClaudePreToolHook([...prefix, contextFile], "not json");
+    const failing = await runClaudePreToolHook([...prefix, contextFile], "not json", { telemetryLine: broken });
+    expect(plain.exitCode).toBe(2);
+    expect({ ...failing, telemetry: undefined }).toEqual({ ...plain, telemetry: undefined });
+    expect(failing.telemetry).toBeUndefined();
+  });
+});
+
 describe.runIf(process.platform !== "win32")("fitting a line", () => {
   const base: HookTelemetryLine = {
     v: 1,
@@ -254,6 +291,20 @@ describe.runIf(process.platform !== "win32")("the hook process", () => {
       ["ls", "allow"],
     ]);
   });
+
+  it.each([[[] as string[]], [["--codex"]]])(
+    "answers as before and exits at once when a FIFO stands where the spool was (%j)",
+    async (prefix) => {
+      await rm(spool.file);
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("mkfifo", ["-m", "600", spool.file]);
+      const startedAt = Date.now();
+      const allowed = await run([...prefix, contextFile], frame("Bash", { command: "ls" }));
+      expect(allowed).toEqual({ code: 0, stdout: "", stderr: "" });
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+      await rm(spool.file);
+    },
+  );
 
   it("answers the same when the spool is gone", async () => {
     await rm(spool.file);

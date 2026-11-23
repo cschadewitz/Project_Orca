@@ -13,8 +13,8 @@
  * the answer off stdout, and makes every way out other than the answer exit 2.
  *
  * When the agent keeps tool-call telemetry (#1000), the line that records the answer is
- * written after the answer, with one synchronous append that never throws; whether it was
- * written changes nothing about the answer or the exit code.
+ * written after the answer and its exit code are final, without blocking, and for at most
+ * `TELEMETRY_DEADLINE_MS`; whether it was written changes nothing about the answer.
  */
 import { answer } from "./hook-output-guard.js";
 import {
@@ -23,7 +23,10 @@ import {
   runClaudePreToolHook,
   runClaudeRuntimeAttestation,
 } from "../claude-pre-tool-hook.js";
-import { recordHookTelemetry } from "../hook-telemetry.js";
+import { recordHookTelemetryAsync } from "../hook-telemetry.js";
+
+/** The longest the telemetry line may keep the hook process after its answer. */
+const TELEMETRY_DEADLINE_MS = 50;
 
 class InputTooLarge extends Error {
   constructor() {
@@ -57,9 +60,12 @@ const result = await readInput().then(
       : claudePreToolHookFailure(error),
 );
 answer(result);
-if ("telemetry" in result && result.telemetry !== undefined)
-  try {
-    recordHookTelemetry(result.telemetry.target, result.telemetry.line);
-  } catch {
-    // Recording never changes the answer, which is already out.
-  }
+// The answer and the exit code are final. The telemetry line goes after, without blocking, and
+// the process leaves when it is written or after TELEMETRY_DEADLINE_MS, whichever is first:
+// however the spool's file system behaves, it can hold the hook at most that long, and
+// nothing it does reaches the answer.
+const telemetry = "telemetry" in result ? result.telemetry : undefined;
+if (telemetry !== undefined) {
+  const deadline = setTimeout(() => process.exit(), TELEMETRY_DEADLINE_MS);
+  void recordHookTelemetryAsync(telemetry.target, telemetry.line).finally(() => clearTimeout(deadline));
+}

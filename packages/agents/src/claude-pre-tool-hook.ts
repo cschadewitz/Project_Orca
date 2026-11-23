@@ -515,54 +515,85 @@ export function claudePreToolHookFailure(error: unknown): ClaudePreToolHookResul
  * agents block on). This is the whole of the hook process (`bin/claude-pre-tool-hook.ts`),
  * kept here so it is tested without spawning anything.
  */
-export async function runClaudePreToolHook(args: readonly string[], input: string): Promise<ClaudePreToolHookResult> {
+export async function runClaudePreToolHook(
+  args: readonly string[],
+  input: string,
+  /** For tests only: how the telemetry line is built. */
+  testing: { telemetryLine?: typeof preToolTelemetryLine } = {},
+): Promise<ClaudePreToolHookResult> {
   const started = performance.now();
   const at = new Date().toISOString();
-  let target: HookTelemetryTarget | undefined;
-  let frame: ClaudePreToolFrame | undefined;
-  /** The answer, with the line that records it when the context asks for one. */
-  const recorded = (
-    out: ClaudePreToolHookResult,
-    decided: { verdict: ClaudePreToolVerdict } | { error: unknown },
-  ): ClaudePreToolHookResult => {
-    if (target === undefined) return out;
-    // ORCA's own startup probe of a Codex hook is not one of the agent's calls.
-    if (frame?.toolUseId !== undefined && CODEX_PROBE_TOOL_USE_ID.test(frame.toolUseId)) return out;
-    const line = fitHookTelemetryLine(
-      preToolTelemetryLine(frame, decided, at, Math.max(0, performance.now() - started)),
-    );
-    return line === undefined ? out : { ...out, telemetry: { target, line } };
-  };
+  const seen: { target?: HookTelemetryTarget; frame?: ClaudePreToolFrame } = {};
+  let out: ClaudePreToolHookResult;
+  /** What the line records; undefined for ORCA's own Codex probe, which records nothing. */
+  let decided: { verdict: ClaudePreToolVerdict } | { error: unknown } | undefined;
   try {
-    const dialect: PreToolHookDialect = args.length === 2 && args[0] === "--codex" ? "codex" : "claude";
-    const file = dialect === "codex" ? args[1] : args[0];
-    if (args.length !== (dialect === "codex" ? 2 : 1) || file === undefined || !isAbsolute(file))
-      throw new HookInputError("the hook takes the absolute path of its context file, after --codex for Codex");
-    const text = await readFile(file, "utf8").catch(() => {
-      throw new HookInputError("hook context file cannot be read");
-    });
-    if (Buffer.byteLength(text, "utf8") > CONTEXT_LIMIT) throw new HookInputError("hook context file is too large");
-    let raw: unknown;
-    try {
-      raw = JSON.parse(text);
-    } catch {
-      throw new HookInputError("hook context file is not JSON");
-    }
-    const context = parseClaudeHookContext(raw);
-    // The spool must be the one ORCA made beside this context; any other path records nothing.
-    if (context.telemetry !== undefined && dirname(context.telemetry.file) === dirname(file))
-      target = context.telemetry;
-    frame = parseClaudePreToolFrame(input);
-    const verdict = await checkClaudePreTool(context, frame);
-    if (dialect === "claude") return recorded(claudePreToolHookOutput(verdict), { verdict });
-    const out = codexPreToolHookOutput(verdict);
-    const nonce = frame.toolUseId === undefined ? undefined : CODEX_PROBE_TOOL_USE_ID.exec(frame.toolUseId)?.[1];
-    if (out.exitCode === 2 && context.probeKey !== undefined && nonce !== undefined)
-      return { ...out, stderr: `${out.stderr}${codexProbeReceipt(context.probeKey, nonce)}\n` };
-    return recorded(out, { verdict });
+    const result = await decideClaudePreTool(args, input, seen);
+    out = result.out;
+    decided = result.verdict === undefined ? undefined : { verdict: result.verdict };
   } catch (error) {
-    return recorded(claudePreToolHookFailure(error), { error });
+    out = claudePreToolHookFailure(error);
+    decided = { error };
   }
+  // The answer is settled. Recording is added beside it and can never replace it: anything
+  // that goes wrong while building the line drops the line, never the answer.
+  if (seen.target === undefined || decided === undefined) return out;
+  try {
+    const line = fitHookTelemetryLine(
+      (testing.telemetryLine ?? preToolTelemetryLine)(
+        seen.frame,
+        decided,
+        at,
+        Math.max(0, performance.now() - started),
+      ),
+    );
+    return line === undefined ? out : { ...out, telemetry: { target: seen.target, line } };
+  } catch {
+    return out;
+  }
+}
+
+/**
+ * Decide one call; `seen` collects the spool target and the frame as they are read, for the
+ * telemetry line. `verdict` is undefined for ORCA's own Codex startup probe, which is not one
+ * of the agent's calls and is not recorded.
+ */
+async function decideClaudePreTool(
+  args: readonly string[],
+  input: string,
+  seen: { target?: HookTelemetryTarget; frame?: ClaudePreToolFrame },
+): Promise<{ out: ClaudePreToolHookResult; verdict: ClaudePreToolVerdict | undefined }> {
+  const dialect: PreToolHookDialect = args.length === 2 && args[0] === "--codex" ? "codex" : "claude";
+  const file = dialect === "codex" ? args[1] : args[0];
+  if (args.length !== (dialect === "codex" ? 2 : 1) || file === undefined || !isAbsolute(file))
+    throw new HookInputError("the hook takes the absolute path of its context file, after --codex for Codex");
+  const text = await readFile(file, "utf8").catch(() => {
+    throw new HookInputError("hook context file cannot be read");
+  });
+  if (Buffer.byteLength(text, "utf8") > CONTEXT_LIMIT) throw new HookInputError("hook context file is too large");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new HookInputError("hook context file is not JSON");
+  }
+  const context = parseClaudeHookContext(raw);
+  // The spool must be the one ORCA made beside this context; any other path records nothing.
+  if (context.telemetry !== undefined && dirname(context.telemetry.file) === dirname(file))
+    seen.target = context.telemetry;
+  const frame = parseClaudePreToolFrame(input);
+  seen.frame = frame;
+  const probe = frame.toolUseId !== undefined && CODEX_PROBE_TOOL_USE_ID.test(frame.toolUseId);
+  const verdict = await checkClaudePreTool(context, frame);
+  if (dialect === "claude") return { out: claudePreToolHookOutput(verdict), verdict: probe ? undefined : verdict };
+  const out = codexPreToolHookOutput(verdict);
+  const nonce = frame.toolUseId === undefined ? undefined : CODEX_PROBE_TOOL_USE_ID.exec(frame.toolUseId)?.[1];
+  if (out.exitCode === 2 && context.probeKey !== undefined && nonce !== undefined)
+    return {
+      out: { ...out, stderr: `${out.stderr}${codexProbeReceipt(context.probeKey, nonce)}\n` },
+      verdict: undefined,
+    };
+  return { out, verdict: probe ? undefined : verdict };
 }
 
 /**
@@ -571,7 +602,7 @@ export async function runClaudePreToolHook(args: readonly string[], input: strin
  * because Codex cannot pause for it; `block` is the hook's own failure. `rule` is the reason
  * the hook decided for. A frame the hook could not read is recorded as `(unreadable)`.
  */
-function preToolTelemetryLine(
+export function preToolTelemetryLine(
   frame: ClaudePreToolFrame | undefined,
   decided: { verdict: ClaudePreToolVerdict } | { error: unknown },
   at: string,

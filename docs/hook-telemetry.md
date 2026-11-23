@@ -57,7 +57,8 @@ The hook runs under the agent's runtime and has no access to ORCA's store.
    `private-execution`), and be a real, owner-only directory of ORCA's user; otherwise no
    spool is made. The path goes into the hook's context.
 2. After the hook has decided a call and written its answer, it appends one JSON line to the
-   spool (`recordHookTelemetry`): a single synchronous append to a file that must already
+   spool (`recordHookTelemetryAsync` in the hook program, `recordHookTelemetry` where a
+   synchronous call is wanted): a single append to a file that must already
    exist, never creating one and never following a link, at most 8 KiB per
    line and 4 MiB per spool. The hook's context carries the spool's path and the device and
    inode ORCA made it with; the hook writes only if the open file is that one, a regular,
@@ -81,7 +82,9 @@ sets up the hook directory, before any session opens.
 
 `<store>/diagnostics/tool-calls/<run>/<session>.jsonl`, on either metadata backend. It is a
 new directory: the store's format epoch does not change, an earlier ORCA ignores it, and a
-backup, carryover or SQLite conversion copies it with the rest of the store.
+backup, carryover or SQLite conversion copies it with the rest of the store. The hook's
+per-session files (`private-execution/tool-hooks`: each session's context and spool, whose
+lines are not redacted yet) are not: every store copy leaves that directory out.
 
 `diagnostics/` is in the store's agent-denied set, beside `private-execution`: no agent tool
 may read or write it. Owner-only modes do not stop a process of the same user, so every open
@@ -142,8 +145,11 @@ on nothing is recorded, whatever `diagnostics.toolCalls` says. When it is on:
   long it took. For Codex the answer recorded is the policy's, though the hook blocks an
   `ask` there. A call it could not decide is `block`, with `rule: "hook-error"` and the reason
   in `hookError`; a frame it could not read is recorded as tool `(unreadable)`.
-- It writes the line after its answer is out, with `recordHookTelemetry`, and ignores the
-  result. A context `telemetry` that is not an absolute path, decimal device and inode is an
+- Recording is kept apart from the decision. The answer and exit code are settled first; a
+  line that cannot be built is dropped, never the answer. The hook program writes the line
+  after its answer is out, without blocking, and leaves when the write is done or after
+  50 ms, whichever comes first, so a slow spool can hold the hook at most that long. It
+  ignores whether the line was written. A context `telemetry` that is not an absolute path, decimal device and inode is an
   unreadable context, which blocks the call as any unreadable context does; a spool anywhere
   but the context's own directory records nothing.
 - A line too long for the 8 KiB limit leaves things out whole, never cut, because a cut could

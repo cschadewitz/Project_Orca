@@ -12,7 +12,7 @@ import {
 } from "./update-bootstrap.js";
 import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
-import { DIAGNOSTICS_DIR, FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
+import { DIAGNOSTICS_DIR, FileRetryClaimStore, HOOK_SESSION_DIR, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
 import { enterDaemonStoreFormat } from "./desktop-carryover.js";
 import {
   desktopSqliteSwitch,
@@ -313,7 +313,8 @@ export function makeSessionFactory(
 ): SessionFactory {
   const permissionFiles = [permissionPolicyPath(layout.configDir)];
   const protectedPaths = orcaProtectedPaths(layout);
-  const contextDir = join(resolve(layout.configDir, layout.storeDir), "private-execution", "tool-hooks");
+  // Left out of every store copy (backups, carryover, conversion): see HOOK_SESSION_DIR.
+  const contextDir = join(resolve(layout.configDir, layout.storeDir), ...HOOK_SESSION_DIR.split("/"));
   // Telemetry spools a stopped process left behind (#1000) are discarded, never ingested,
   // once, before the first hooked session.
   let swept: Promise<void> | undefined;

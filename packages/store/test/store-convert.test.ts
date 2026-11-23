@@ -15,6 +15,7 @@ import {
   convertStoreToSqlite,
   enterStoreFormat,
   FileLeaseStore,
+  HOOK_SESSION_DIR,
   holdStoreWriter,
   readStoreFormat,
   recordedStoreBackend,
@@ -74,6 +75,18 @@ describe("converting a file store into a SQLite store of its own (#339)", () => 
     });
     expect(await siblings(dir)).toEqual([".orca", ".orca-sqlite"]);
     expect(await convertedSourceChanged(target)).toEqual({ source: dir, changed: false, present: true });
+  });
+
+  it("leaves the hook's per-session files out of the converted store", async () => {
+    const dir = await populated();
+    const hooks = join(dir, ...HOOK_SESSION_DIR.split("/"));
+    await mkdir(hooks, { recursive: true, mode: 0o700 });
+    await writeFile(join(hooks, "ctx.json"), "{}", { mode: 0o600 });
+    await writeFile(join(hooks, "tool-calls-1-00000000-0000-4000-8000-000000000000.spool"), "{}\n", { mode: 0o600 });
+    const { outcome } = await convert(dir);
+    expect(outcome).toMatchObject({ status: "converted" });
+    const target = convertedStoreDir(dir);
+    expect(await readdir(join(target, "private-execution"))).not.toContain("tool-hooks");
   });
 
   it("reports a write that reached the source after the conversion (a released ORCA still running there)", async () => {

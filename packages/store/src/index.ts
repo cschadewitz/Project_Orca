@@ -52,3 +52,4 @@ export {
   type SqliteImportReport,
   type SqliteVerifyReport,
 } from "./sqlite/maintenance.js";
+export { HOOK_SESSION_DIR } from "./store-format-carryover.js";
