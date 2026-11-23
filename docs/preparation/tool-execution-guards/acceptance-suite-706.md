@@ -167,6 +167,11 @@ Write an adapter in `paths.js` with `id`, `capabilities` and `decide(world, acti
 every case the path can run. Any case it cannot run must be excluded with a reason a reader
 can check, or the checker fails.
 
+`mcp-grant-allows` is the capability for cases whose MCP grant must allow a later call (L01,
+L02, L04 to L07, A01). A route where ORCA cannot verify which MCP server a call is for, such as
+Gemini's (#1021), never allows an MCP call without asking, so it lacks this capability and
+excludes those cases.
+
 A connected path runs a live agent instead. It is listed in the matrix with `connected: true`
 and `proves: <route>`, is never itself an agent's route, and is checked by its own test file
 rather than added to `PATHS`.

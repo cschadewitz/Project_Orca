@@ -78,8 +78,12 @@ export const DEFAULT_OPTIONS = Object.freeze([
 /**
  * @param {{ setNow?: (ms: number) => void, now?: () => number }} clock How a case moves time:
  *   the harness passes its fake clock so both routes, which read `Date.now`, see the move.
+ * @param {{ request?: typeof permissionRequest }} [route] The path under test, when its agent
+ *   reports a call differently from the Claude ACP adapter (`request`): an "always" answer is
+ *   then recorded from the ask that agent would have sent, as the daemon records it.
  */
-export async function createWorld(clock = {}) {
+export async function createWorld(clock = {}, route = {}) {
+  const askFor = route.request ?? permissionRequest;
   const root = await mkdtemp(join(tmpdir(), "orca-706-"));
   const configDir = join(root, "config");
   const workspace = join(root, "work");
@@ -117,7 +121,7 @@ export async function createWorld(clock = {}) {
       return recordAlwaysDecision({
         file: sidecar,
         agentId: AGENT_ID,
-        request: permissionRequest(world, action),
+        request: askFor(world, action),
         decision,
         workspaceCwd: workspace,
         ...(extra.expiresAt ? { expiresAt: extra.expiresAt } : {}),

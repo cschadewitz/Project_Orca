@@ -11,7 +11,7 @@
     {
       "id": "acp-ask",
       "what": "ORCA's answer to an ACP session/request_permission ask (resolvePermission, read fresh per ask by acp-session.ts)",
-      "capabilities": ["answerer", "offered-options"],
+      "capabilities": ["answerer", "offered-options", "mcp-grant-allows"],
       "excluded": {
         "F01": "The ask arrives as an ACP request the SDK has already parsed; there are no raw bytes for ORCA to refuse.",
         "F02": "Decided in the session's own process; there is no separate context file to lose.",
@@ -29,7 +29,7 @@
     {
       "id": "claude-native-hook",
       "what": "ORCA's Claude Code PreToolUse hook (#704), run as its process runs it (runClaudePreToolHook)",
-      "capabilities": ["raw-input", "context-file", "cwd", "hook-settings"],
+      "capabilities": ["raw-input", "context-file", "cwd", "hook-settings", "mcp-grant-allows"],
       "excluded": {
         "L08": "The hook only hands an ask back to Claude. Whether that ask reaches ORCA's answerer for the same call is unverified until an installed receipt shows it; the answerer cases run on acp-ask.",
         "F04": "The hook never answers allow and offers no options, so there is no option for ORCA to pick on this route."
@@ -43,11 +43,55 @@
       ]
     },
     {
+      "id": "gemini-acp-ask",
+      "what": "ORCA's answer to a session/request_permission ask shaped as Gemini CLI 0.70.0 sends it (resolvePermission, read fresh per ask): no rawInput, Gemini's display title, its locations, MCP server and tool only in _meta",
+      "capabilities": ["answerer"],
+      "excluded": {
+        "F01": "The ask arrives as an ACP request the SDK has already parsed; there are no raw bytes for ORCA to refuse.",
+        "F02": "Decided in the session's own process; there is no separate context file to lose.",
+        "F03": "ORCA installs nothing in Gemini CLI: nativeToolHook: on is refused for it.",
+        "F04": "F04 names the Claude adapter's option ids. Gemini's one-time answer (proceed_once, never proceed_always or an unoffered id) is checked on the installed CLI by gemini-acp-acceptance-705.test.ts.",
+        "P02": "No raw input or context file on this route (see F01 and F02).",
+        "A04": "An ACP ask carries no working directory; the session's directory is fixed when the session opens.",
+        "L01": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied.",
+        "L02": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied.",
+        "L04": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied.",
+        "L05": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied.",
+        "L06": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied.",
+        "L07": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied.",
+        "A01": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied."
+      },
+      "verifies": "ORCA's answer to an ask in Gemini CLI 0.70.0's shape, from the policy read at that ask, with grants recorded from that shape",
+      "unverified": [
+        "That Gemini asks: its read-only tools (list_directory, glob, read_file) were observed to run without asking, so the read cases here show only what ORCA would answer",
+        "Calls Gemini decides itself: its own session and saved grants, YOLO in a trusted workspace, its settings and policy files",
+        "That the request shape matches Gemini beyond the calls its acceptance test records (shell and edit); the rest is read in its source at 0.70.0",
+        "That events, logs and stored records about the ask are redacted"
+      ]
+    },
+    {
+      "id": "codex-native-hook",
+      "what": "ORCA's Codex PreToolUse hook (#705), run as its process runs it (runClaudePreToolHook after --codex), with Codex 0.171.0's frames (Bash, apply_patch, view_image, mcp__server__tool)",
+      "capabilities": ["raw-input", "context-file", "cwd", "mcp-grant-allows"],
+      "excluded": {
+        "L08": "Codex cannot pause a call for a person from a hook: an ask is answered with a block (exit 2), so there is no answerer on this route.",
+        "F03": "Codex's hook config is session flags with a trust hash, not Claude settings, and Codex lets a call through when its hook runner fails; ORCA's startup probe covers that and is tested by the #705 Codex acceptance, not here.",
+        "F04": "The hook offers no options, so there is no option for ORCA to pick on this route."
+      },
+      "verifies": "The hook program's exit code and output for a Codex frame, with the context ORCA wrote: an allow is exit 0 with nothing on stdout or stderr; a deny, an ask and a block are each exactly exit 2, nothing on stdout, and a fixed reason on stderr whose first words name the decision. Anything else fails the case",
+      "unverified": [
+        "That Codex runs the hook on every call: text typed into a running command (write_stdin) and hosted web search are never hooked",
+        "That Codex trusts and blocks on the hook; ORCA's startup probe is not run here",
+        "Reads through the shell; only view_image is hooked by name",
+        "That events, logs and stored records about the call are redacted"
+      ]
+    },
+    {
       "id": "claude-connected",
       "connected": true,
       "proves": "claude-native-hook",
       "what": "A real Claude Code through the real Claude ACP adapter, in a session opened by ORCA's session factory with the pre-tool hook installed, Claude's own settings allowing every tool, and a model stand-in making each case's tool calls (tools/guard-qualification/connected/)",
-      "capabilities": ["answerer", "agent-turn"],
+      "capabilities": ["answerer", "agent-turn", "mcp-grant-allows"],
       "excluded": {
         "F01": "The agent builds the hook's input itself; a live run cannot hand the hook malformed bytes. Run on claude-native-hook.",
         "F02": "The session's context file is written by ORCA's factory; damaging it mid-session is a hook-program case. Run on claude-native-hook.",
@@ -100,7 +144,7 @@
     },
     {
       "id": "codex",
-      "tuple": "Codex ACP adapter with Codex, Linux; #705 pins codex-acp 2.9.0 with Codex 0.171.0",
+      "tuple": "Codex ACP adapter 2.9.0 with Codex 0.171.0, linux-x64 (CODEX_HOOK_VERIFIED_PAIRS); not pinned here until a trusted receipt exists",
       "pin": null,
       "tier": "none",
       "routes": ["acp-ask"],
@@ -110,41 +154,67 @@
       "receipts": [],
       "unverified": [
         "Connects and first-run preflight recognises it; no installed receipt",
-        "The uncovered routes below are refused or asked about"
+        "The uncovered routes below are refused or asked about",
+        "That Codex runs, trusts and blocks on the hook: shown by codex-hook-acceptance.yml on the installed pair, not yet as a trusted receipt",
+        "Events and logs about its calls are redacted"
       ],
       "unsupportedRoutes": [
-        "Tool calls Codex does not ask about until the #705 hook is on",
+        "Tool calls Codex does not ask about until the hook is on",
         "Text typed into a running command (write_stdin) is never hooked",
-        "Hosted web search runs at the provider"
+        "Hosted web search runs at the provider (ORCA turns it off)",
+        "Files a shell command reads; only view_image is hooked as a read",
+        "ORCA's ask: Codex cannot pause a call for a person from a hook, so the hook blocks it"
       ],
       "residualRisks": [
-        "Codex lets a call through when its hook runner fails; #705 must prove its probe before claiming B"
+        "Codex lets a call through when its hook runner fails (exit 1, quiet exit 2, timeout); ORCA's startup probe refuses the session unless the hook blocks with a receipt, but cannot watch later calls",
+        "A hook is not an operating-system boundary; Codex's sandbox and ORCA's protected-path rules stay in force beside it"
       ],
-      "next": "#705 Codex adds its path adapter and an installed receipt per route."
+      "next": "Tier C, receipts and promotion move to 0.9.0 (#1026): pin the tuple and commit installed receipts per route there. No connected proof exists for Codex (#1016 is diagnostic and Claude-only)."
     },
     {
       "id": "gemini",
-      "tuple": "Gemini CLI (native ACP)",
+      "tuple": "Gemini CLI 0.70.0 (gemini --acp), linux-x64 (GEMINI_CLI_SUPPORT, approval-tested); not pinned here until a trusted receipt exists",
       "pin": null,
       "tier": "none",
-      "routes": [],
+      "routes": ["gemini-acp-ask"],
       "receipts": [],
-      "unverified": [],
-      "unsupportedRoutes": [],
-      "residualRisks": [],
-      "next": "#705 Gemini (stream 7): tiers A and B"
+      "unverified": [
+        "Connects and first-run preflight recognises it; no installed receipt here (gemini-acp-acceptance.yml runs the installed CLI)",
+        "The uncovered routes below are refused or asked about",
+        "Events and logs about its calls are redacted"
+      ],
+      "unsupportedRoutes": [
+        "nativeToolHook: on is refused: ORCA installs no hook in Gemini",
+        "Read-only tools that never ask (list_directory, glob and read_file observed)",
+        "Gemini's own session and saved grants (proceed_always covers a whole command prefix)",
+        "YOLO, auto-edit, --allowed-tools and policy files in a trusted workspace, and settings in a Gemini home ORCA does not control"
+      ],
+      "residualRisks": [
+        "ORCA decides only the calls Gemini asks about; an OS sandbox is the boundary for the rest",
+        "Gemini's MCP server and tool are its own unverified claim: ORCA never allows a Gemini MCP call without asking, and refuses to record an \"always allow\" for one (#1021)"
+      ],
+      "next": "Tier C, receipts and promotion move to 0.9.0 (#1026)."
     },
     {
       "id": "pi",
-      "tuple": "pi with pi-acp",
+      "tuple": "pi 1.6.0 through pi-acp 0.0.35, linux-x64 (PI_ACP_SUPPORT, connectivity-tested); not pinned here",
       "pin": null,
       "tier": "none",
       "routes": [],
       "receipts": [],
-      "unverified": [],
-      "unsupportedRoutes": [],
-      "residualRisks": [],
-      "next": "#705 pi (stream 7): tiers A and B"
+      "unverified": [
+        "Connects: shown by pi-acp-acceptance.yml on the installed pair, not as a trusted receipt",
+        "Events and logs about its calls are redacted"
+      ],
+      "unsupportedRoutes": [
+        "Every pi tool call: pi never asks before a tool runs, and pi-acp serves no file operation through ORCA, so no route of this suite reaches ORCA",
+        "nativeToolHook: on is refused; pi's extension tool_call hook can block or rewrite a call, but later command-prefix and spawn hooks can still change what runs (#747)",
+        "An extension's ctx.ui dialog reaches ORCA as a kind other ask; it is the extension's question, not an ORCA tool approval"
+      ],
+      "residualRisks": [
+        "ORCA's rules and protected files do not apply to pi: run it only inside an operating-system sandbox, which ORCA neither creates nor checks"
+      ],
+      "next": "No route to add until pi has a hook ORCA can install and verify; tier none stands. Tier C work is tracked in #1026 (0.9.0)."
     },
     {
       "id": "copilot",

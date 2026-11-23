@@ -47,6 +47,8 @@ import {
   commandCatches,
   unverifiedExecuteAllowed,
   commandTextOf,
+  mcpToolClaimOf,
+  mcpToolTitle,
   neutralPart,
   parseCommand,
   parseCommandPattern,
@@ -174,6 +176,15 @@ function decideByRules(
   ctx?: PermissionEvalContext,
 ): PermissionExplanation {
   const tc = request.toolCall;
+  // An MCP tool the call's own metadata names (#1021): Gemini CLI leaves the server out of its
+  // title and puts it only there. The agent wrote it and ORCA cannot check it, so it is a
+  // claim: a deny or ask rule is tested against the claimed `server: tool` as well as the
+  // agent's title, so a restriction written for either form holds, but no allow of any kind
+  // decides the call. It stays on the one-time path, asked each time unless something denies
+  // it, and a grant on one server cannot reach the same tool name on another. Matching by the
+  // claim may only add restrictions, never weaken one (#1021 review): see the end.
+  const claim = mcpToolClaimOf(tc);
+  const claimedTitle = claim?.identity ? mcpToolTitle(claim.identity) : undefined;
   const title = tc.title ?? "";
   const kind = tc.kind ?? "other";
   // A call the agent did not classify could be a command under another name, and so could one
@@ -188,13 +199,18 @@ function decideByRules(
   // Both are false for a call with no locations, so `scope` never matches one (#140).
   const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
   const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
-  const matchesCall = (m: PermissionRule["match"]): boolean => {
+  let byClaim = false;
+  const titleMatches = (pattern: string, decision: PermissionDecision): boolean => {
+    if (!byClaim) return new RegExp(pattern).test(title);
+    return decision !== "allow" && claimedTitle !== undefined && new RegExp(pattern).test(claimedTitle);
+  };
+  const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision): boolean => {
     // A command rule also reaches a command-like call of another kind, so its restriction is
     // not dodged by leaving the kind out or giving a wrong one.
     if (m.kind && m.kind !== kind && !(m.command !== undefined && commandLike)) return false;
     if (m.scope === "workspace" && !allInside) return false;
     if (m.scope === "outside-workspace" && !anyOutside) return false;
-    if (m.titlePattern && !new RegExp(m.titlePattern).test(title)) return false;
+    if (m.titlePattern && !titleMatches(m.titlePattern, decision)) return false;
     if (m.path !== undefined) {
       const wanted = permissionPathForms(m.path, cwd);
       if (!wanted.some((w) => paths.includes(w))) return false;
@@ -212,8 +228,8 @@ function decideByRules(
   const decide = (part: CommandPart | undefined): PermissionExplanation => {
     for (const [ruleIndex, rule] of policy.rules.entries()) {
       const m = rule.match;
-      if (restricted && rule.decision === "allow") continue;
-      if (!matchesCall(m)) continue;
+      if ((restricted || claim !== undefined) && rule.decision === "allow") continue;
+      if (!matchesCall(m, rule.decision)) continue;
       if (m.command !== undefined) {
         // A command is only ever an `execute`'s, and a part that is not there matches no rule.
         // A command rule never allows (`COMMAND_ALLOW_REFUSED`): the loaders refuse or ignore
@@ -224,24 +240,43 @@ function decideByRules(
       }
       return { decision: rule.decision, basis: "rule", ruleIndex };
     }
+    if (claim !== undefined && policy.default === "allow") return { decision: "ask", basis: "unverified-identity" };
     return { decision: policy.default, basis: "default" };
   };
-  if (!restricted) return decide(undefined);
+  const evaluate = (): PermissionExplanation => (restricted ? decideParts() : decide(undefined));
   // A policy with command rules: decide each part, take the strictest, and never allow. An
   // allow from an older rule, a kindless rule or the fallthrough is unverified (#702 review).
-  const text = commandTextOf(tc);
-  const parts = text === undefined ? [] : parseCommand(text).parts.filter((p) => !neutralPart(p));
-  const decisions = parts.length === 0 ? [decide(undefined)] : parts.map(decide);
-  // The first denied part is what denied the call. Otherwise it is asked, and the record cites
-  // the first part an explicit ask rule decided, ahead of any part that only fell through to
-  // an ask default; failing both, the restriction itself, when every part would have been
-  // allowed. Only the attribution depends on this order, never the outcome (#702 review).
-  const denied = decisions.find((d) => d.decision === "deny");
-  if (denied) return denied;
-  return (
-    decisions.find((d) => d.decision === "ask" && d.basis === "rule") ??
-    decisions.find((d) => d.decision === "ask") ?? { decision: "ask", basis: "command-restricted" }
-  );
+  const decideParts = (): PermissionExplanation => {
+    const text = commandTextOf(tc);
+    const parts = text === undefined ? [] : parseCommand(text).parts.filter((p) => !neutralPart(p));
+    const decisions = parts.length === 0 ? [decide(undefined)] : parts.map(decide);
+    // The first denied part is what denied the call. Otherwise it is asked, and the record cites
+    // the first part an explicit ask rule decided, ahead of any part that only fell through to
+    // an ask default; failing both, the restriction itself, when every part would have been
+    // allowed. Only the attribution depends on this order, never the outcome (#702 review).
+    const denied = decisions.find((d) => d.decision === "deny");
+    if (denied) return denied;
+    return (
+      decisions.find((d) => d.decision === "ask" && d.basis === "rule") ??
+      decisions.find((d) => d.decision === "ask") ?? { decision: "ask", basis: "command-restricted" }
+    );
+  };
+  const plain = evaluate();
+  if (claimedTitle === undefined) return plain;
+  // With first match wins, a rule one title form meets could shadow a stricter one later in the
+  // list that only the other form meets. So the call is decided once by the agent's title and
+  // once by the claimed `server: tool`, and the stricter answer stands. A call is never
+  // decided more loosely than its title alone would decide it, and a call with no claim is
+  // decided exactly as before (#1021 review).
+  byClaim = true;
+  const claimed = evaluate();
+  const stricter = strictness(claimed.decision) - strictness(plain.decision);
+  // On a tie only the attribution can differ: a rule the claim met is cited ahead of a fallthrough.
+  return stricter > 0 || (stricter === 0 && plain.basis !== "rule" && claimed.basis === "rule") ? claimed : plain;
+}
+
+function strictness(decision: PermissionDecision): number {
+  return decision === "deny" ? 2 : decision === "ask" ? 1 : 0;
 }
 
 function pick(options: acp.PermissionOption[], kinds: acp.PermissionOptionKind[]): acp.PermissionOption | undefined {
@@ -784,18 +819,27 @@ export interface RecordAlwaysResult {
  */
 export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<RecordAlwaysResult> {
   const tc = opts.request.toolCall;
-  const derived: ReturnType<typeof derivePermissionRules> = opts.rules
-    ? { ok: true, rules: opts.rules.map((rule) => ({ match: { ...rule.match }, decision: opts.decision })) }
-    : derivePermissionRules(
-        {
-          kind: tc.kind,
-          title: tc.title,
-          paths: (tc.locations ?? []).map((l) => l.path),
-          command: tc.kind === "execute" ? commandTextOf(tc) : undefined,
-          workspaceCwd: opts.workspaceCwd,
-        },
-        opts.decision,
-      );
+  // An MCP tool the agent claims but ORCA cannot verify is never granted standing (#1021),
+  // whichever way the rules arrive: derived here, or handed in already chosen.
+  const mcpClaim = mcpToolClaimOf(tc);
+  const unverified =
+    mcpClaim !== undefined && opts.decision === "allow" ? derivePermissionRules({ mcpClaim }, "allow") : undefined;
+  const derived: ReturnType<typeof derivePermissionRules> =
+    unverified ??
+    (opts.rules
+      ? { ok: true, rules: opts.rules.map((rule) => ({ match: { ...rule.match }, decision: opts.decision })) }
+      : derivePermissionRules(
+          {
+            kind: tc.kind,
+            title: tc.title,
+            // A standing deny for a claimed MCP tool names it as `server: tool` (#1021).
+            mcpClaim,
+            paths: (tc.locations ?? []).map((l) => l.path),
+            command: tc.kind === "execute" ? commandTextOf(tc) : undefined,
+            workspaceCwd: opts.workspaceCwd,
+          },
+          opts.decision,
+        ));
   if (!derived.ok)
     return {
       file: opts.file,

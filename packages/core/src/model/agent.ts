@@ -9,7 +9,14 @@ import { z } from "zod";
 import { AuthorityCapabilityScopeSchema } from "./capabilities.js";
 import { EnvSchema } from "./secrets.js";
 import { AgentDiagnosticsSchema } from "./tool-telemetry.js";
-import { neutralPart, parseCommand, parseCommandPattern, quoteWord } from "./command-words.js";
+import {
+  mcpToolTitle,
+  neutralPart,
+  parseCommand,
+  parseCommandPattern,
+  quoteWord,
+  type McpToolClaim,
+} from "./command-words.js";
 
 // Scoped capabilities (#335) belong with the agent model they select for.
 export * from "./capabilities.js";
@@ -336,9 +343,11 @@ export type PermissionRuleOrigin = {
  * - `rule`: the rule at `ruleIndex` in the evaluated policy decided it;
  * - `default`: no rule matched and the policy's fallthrough decided it;
  * - `command-restricted`: commands are restricted by their words and nothing denied it, so
- *   it is asked whatever an allow would have said.
+ *   it is asked whatever an allow would have said;
+ * - `unverified-identity`: the call claims an MCP tool ORCA cannot verify (#1021) and nothing
+ *   denied or asked it, so it is asked whatever an allow would have said.
  */
-export type PermissionBasis = "protected" | "rule" | "default" | "command-restricted";
+export type PermissionBasis = "protected" | "rule" | "default" | "command-restricted" | "unverified-identity";
 
 export type PermissionExplanation = {
   decision: PermissionDecision;
@@ -683,6 +692,11 @@ export interface PermissionRequestFacts {
   paths?: readonly string[] | undefined;
   /** Absolute path of the run's workspace. Without it no path rule can be scoped. */
   workspaceCwd?: string | undefined;
+  /**
+   * The MCP tool the call's metadata claims (`mcpToolClaimOf`, #1021). Unverified, so it is
+   * never the scope of a standing allow; a standing deny names it as `server: tool`.
+   */
+  mcpClaim?: McpToolClaim | undefined;
 }
 
 /**
@@ -690,7 +704,13 @@ export interface PermissionRequestFacts {
  * than writing nothing: the caller falls back to allowing this one call.
  */
 export type PermissionDeriveRefusal =
-  "outside-workspace" | "whole-workspace" | "volatile" | "unscopable" | "not-recordable" | "unverified-command";
+  | "outside-workspace"
+  | "whole-workspace"
+  | "volatile"
+  | "unscopable"
+  | "not-recordable"
+  | "unverified-command"
+  | "unverified-identity";
 
 export type PermissionDeriveResult =
   { ok: true; rules: PermissionRule[] } | { ok: false; reason: PermissionDeriveRefusal; detail: string };
@@ -762,7 +782,16 @@ export function derivePermissionRules(
 
   const parsedKind = ToolKindSchema.safeParse(facts.kind ?? "other");
   const kind: ToolKind = parsedKind.success ? parsedKind.data : "other";
-  const title = (facts.title ?? "").trim();
+  // A claimed MCP tool is the agent's word, not a fact ORCA checked (#1021 review): it never
+  // becomes a standing allow, by title, path or any other scope. A standing deny is only ever
+  // stricter, so it may name the claimed `server: tool`.
+  if (facts.mcpClaim !== undefined && decision === "allow")
+    return {
+      ok: false,
+      reason: "unverified-identity",
+      detail: "ORCA cannot verify which MCP server and tool the agent says this call runs, so it asks each time",
+    };
+  const title = (facts.mcpClaim?.identity ? mcpToolTitle(facts.mcpClaim.identity) : (facts.title ?? "")).trim();
   const paths = (facts.paths ?? []).filter((p) => p.trim() !== "");
 
   const byTitle = (): PermissionDeriveResult => {
