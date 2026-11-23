@@ -22,6 +22,7 @@ import {
   type AgentSpec,
   type Clock,
   type Logger,
+  type PermissionPolicy,
   type SecretsConfig,
   type SessionConfigOption,
 } from "@orca/core";
@@ -35,13 +36,27 @@ import {
   type AgentSecretDelivery,
   type AuthorizeSecretUse,
 } from "./secrets.js";
-import { explainFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
+import {
+  explainFsCall,
+  fsToolCall,
+  resolveOwnedFsTarget,
+  stricterExplanation,
+  type FsAccess,
+} from "./owned-fs-gate.js";
 import { judgedLane } from "./judged-lane.js";
+import {
+  bindOwnedFs,
+  newFileMode,
+  OwnedFsFailedWithoutEffect,
+  OwnedFsNotDispatched,
+  stillBound,
+  type OwnedFsBinding,
+} from "./owned-fs-io.js";
 import type { JudgePermission } from "./review-judge/plain-rule.js";
 import { processCleanup } from "./process-cleanup.js";
 import * as acpUnstable from "@agentclientprotocol/sdk/unstable";
 import { createMcpRelay, type McpRelay, type McpRelayCall, type McpRelayDispatch } from "./mcp-relay.js";
-import { nativeToolHookUnavailable } from "./native-tool-hook-session.js";
+import { nativeToolHookRefused } from "./native-tool-hook-session.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import { isHostFileMissing, type AgentHost, type AgentProcessHandle } from "./host.js";
 import {
@@ -178,6 +193,15 @@ export interface OpenSessionOptions {
    * known, its layer, index and sidecar revision. `rule` is absent where no policy was read.
    */
   onPermission?: (info: { toolCallId?: string; title: string; decision: string; rule?: PermissionRuleRecord }) => void;
+  /**
+   * The durable record of ORCA's own file executor (#703): called with each `fs/*`
+   * operation's authorization, and awaited before its I/O can start (a rejection refuses the
+   * operation). It must resolve only once the record is durable, and refuse where it cannot
+   * be. It returns the one function that records that operation's outcome, so the outcome
+   * stays bound to the step, turn and operation it was authorized for. Omitted, nothing is
+   * recorded.
+   */
+  recordFsOperation?: (record: FsAuthorizationRecord) => Promise<FsOutcomeRecorder>;
   handshakeTimeoutMs?: number;
   /**
    * How long closing the session waits, after each of SIGTERM and SIGKILL, for the agent
@@ -235,6 +259,71 @@ function contextRecoveryFailure(reason: "missing-session-id" | "load-unsupported
   return new OrcaError(code, message, { contextRecoveryReason: reason });
 }
 
+/**
+ * One authorization of ORCA's own file executor (#703). It names the file only by a bounded,
+ * root-relative display reference: the path the agent asked for and the physical file it
+ * resolved to stay in this process.
+ */
+export interface FsAuthorizationRecord {
+  operationId: string;
+  /** The live turn the operation belongs to. */
+  turnId: string;
+  access: FsAccess;
+  /** The path as asked for, relative to the session root it is in, and bounded. */
+  display: string;
+  /** Whether it reached a different file once links were followed (local hosts). */
+  linked?: true;
+  /** How the I/O is carried out: bound to the checked file or directory, compatibility, or unbound (remote). */
+  io: FsIoMode;
+  /** `allow` by the policy, or `ask:allow_once` by a person's one-time answer. */
+  decision: string;
+  rule?: PermissionRuleRecord;
+}
+
+/**
+ * How ORCA carries out an `fs/*` operation (#703): `bound` to the checked file or directory
+ * (local), `compatibility` for a new file the strict path cannot bind (best effort, outside the
+ * identity-bound guarantee, #1034), `unbound` on a remote host, whose paths are compared as
+ * written (#1032).
+ */
+export type FsIoMode = "bound" | "compatibility" | "unbound";
+
+/**
+ * What happened to an authorized operation. `effect-unknown` is a write that failed once it
+ * may have changed something: not `failed`, and not safe to retry as if it had not run.
+ */
+export type FsOperationOutcome = "completed" | "failed" | "not-dispatched" | "effect-unknown";
+
+/** Records the outcome of the one operation it was returned for. */
+export type FsOutcomeRecorder = (outcome: FsOperationOutcome) => Promise<void>;
+
+/** Longest display reference recorded for a file operation; longer ones keep their end. */
+const FS_DISPLAY_MAX = 200;
+
+/** `path` relative to the session root it is in, bounded: what a run's record shows of it. */
+function fsDisplay(path: string, roots: readonly string[]): string {
+  let shown = path;
+  for (const root of roots) {
+    const rel = relative(root, path);
+    if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
+      shown = rel === "" ? "." : rel;
+      break;
+    }
+  }
+  return shown.length <= FS_DISPLAY_MAX ? shown : `…${shown.slice(shown.length - (FS_DISPLAY_MAX - 1))}`;
+}
+
+/** What `authorizeFs` hands the executor: the dispatch check, and what allowed it. */
+interface FsAuthorization {
+  dispatch: () => void;
+  /** The live turn it was authorized in. */
+  turnId: string;
+  decision: string;
+  rule: PermissionRuleRecord;
+  /** Whether `policy`, read again just before the I/O, still lets this operation through. */
+  stillAllowed: (policy: PermissionPolicy) => boolean;
+}
+
 function withinRoots(path: string, roots: string[]): boolean {
   if (!isAbsolute(path)) return false;
   return roots.some((root) => {
@@ -247,7 +336,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   // An agent that asked for ORCA's tool hook is opened only by the session factory that
   // installs it (`sessionMeta`); any other caller (a probe, a tool) would run it unguarded.
   if (opts.sessionMeta === undefined) {
-    const refused = nativeToolHookUnavailable(opts.agent);
+    const refused = nativeToolHookRefused(opts.agent, "outside-factory");
     if (refused) throw refused;
   }
   if (opts.requireContextRecovery && !opts.resumeSessionId?.trim()) throw contextRecoveryFailure("missing-session-id");
@@ -382,11 +471,19 @@ async function openPlanned(
    * Every await is followed by a recheck: the turn must be the same live one, and after a
    * person answers, the policy is read again and a deny that appeared meanwhile wins. It
    * returns the dispatch check, which the handler runs in the same step that starts the I/O.
-   * Paths, the roots check and rule targets are lexical (as written, not resolved). Each
-   * decision is logged like an ask's, prefixed `fs:`; that log is not a durable authorization
-   * or execution record.
+   * `resolved` is the file the path reaches on a local host, named under its session root
+   * (`resolveOwnedFsTarget`): when it differs from the path as written, both are decided and
+   * the stricter answer stands, so a link cannot carry a write past a rule on the file it
+   * leads to. Each decision is logged like an ask's, prefixed `fs:`; that log is not a
+   * durable authorization or execution record.
    */
-  const authorizeFs = async (path: string, access: FsAccess): Promise<() => void> => {
+  const authorizeFs = async (path: string, access: FsAccess, resolved?: string): Promise<FsAuthorization> => {
+    const explain = (policy: PermissionPolicy) => {
+      const written = explainFsCall(policy, path, access, evalScope);
+      return resolved === undefined || resolved === path
+        ? written
+        : stricterExplanation(written, explainFsCall(policy, resolved, access, evalScope));
+    };
     const turn = activeTurn;
     const record = (decision: string, rule?: PermissionRuleRecord) => {
       opts.onPermission?.({
@@ -415,12 +512,19 @@ async function openPlanned(
     };
     const policy = await policyForAsk();
     if (!live()) return refuse("turn-ended", "the turn ended before the file request was decided");
-    const explained = explainFsCall(policy, path, access, evalScope);
+    const explained = explain(policy);
     const decision = explained.decision;
     const rule = permissionRuleRecord(explained);
     if (decision === "allow") {
       record("allow", rule);
-      return dispatch;
+      // A rule's allow holds only while the policy still allows it.
+      return {
+        dispatch,
+        turnId: turn.id,
+        decision: "allow",
+        rule,
+        stillAllowed: (now) => explain(now).decision === "allow",
+      };
     }
     if (decision !== "ask") return refuse(decision, `not allowed: ${decision}`, rule);
     const invocation: PermissionInvocation = {
@@ -432,7 +536,7 @@ async function openPlanned(
     const asked = await resolvePermission(policy, {
       request: {
         sessionId: acpSessionId,
-        toolCall: fsToolCall(path, access, `orca-fs-${randomUUID()}`),
+        toolCall: fsToolCall(resolved ?? path, access, `orca-fs-${randomUUID()}`),
         options: [
           { optionId: "allow", name: "Allow once", kind: "allow_once" },
           { optionId: "reject", name: "Reject", kind: "reject_once" },
@@ -445,7 +549,7 @@ async function openPlanned(
     // Only a person's one-time allow for this very operation.
     if (asked.decision !== "ask:allow_once") return refuse(asked.decision, `not allowed: ${asked.decision}`, rule);
     // The wait may have been long: read the policy again, and the turn must still be live.
-    const after = explainFsCall(await policyForAsk(), path, access, evalScope);
+    const after = explain(await policyForAsk());
     if (after.decision === "deny")
       return refuse(
         "ask:allow_once:denied-since",
@@ -454,7 +558,112 @@ async function openPlanned(
       );
     if (!live()) return refuse("ask:allow_once:turn-ended", "the turn ended while the file request was asked", rule);
     record("ask:allow_once", rule);
-    return dispatch;
+    // A person's one-time answer holds unless the policy now denies it.
+    return {
+      dispatch,
+      turnId: turn.id,
+      decision: "ask:allow_once",
+      rule,
+      stillAllowed: (now) => explain(now).decision !== "deny",
+    };
+  };
+
+  /**
+   * Run one authorized `fs/*` operation (#703). When the session is given
+   * `recordFsOperation`, the authorization is recorded and that record awaited before the
+   * I/O can start, and a record that cannot be written refuses the operation: nothing is done
+   * that was not first recorded. The dispatch checks (the turn is the same live one, the path
+   * still resolves to the same file) then run in the step that starts the I/O, and the
+   * outcome is recorded after it: `completed`, `failed`, or `not-dispatched` when a dispatch
+   * check refused. A crash between the two records leaves an authorization with no outcome,
+   * which reads as execution-unknown (`ownedFsExecutions` in `@orca/core`): ORCA never
+   * repeats the operation itself, and the agent decides what to do next.
+   */
+  const executeOwnedFs = async <T>(
+    path: string,
+    access: FsAccess,
+    target: { io: string; mode: FsIoMode; unchanged: () => void },
+    authorized: FsAuthorization,
+    io: (file: string) => Promise<T>,
+  ): Promise<T> => {
+    let recordOutcome: FsOutcomeRecorder | undefined;
+    if (opts.recordFsOperation) {
+      try {
+        recordOutcome = await opts.recordFsOperation({
+          operationId: randomUUID(),
+          turnId: authorized.turnId,
+          access,
+          display: fsDisplay(path, roots),
+          ...(target.io !== path ? { linked: true as const } : {}),
+          io: target.mode,
+          decision: authorized.decision,
+          ...(authorized.rule ? { rule: authorized.rule } : {}),
+        });
+      } catch (error) {
+        logger.warn("fs authorization could not be recorded; refusing the operation", {
+          path,
+          access,
+          error: describeError(error),
+        });
+        throw acp.RequestError.invalidParams({
+          path,
+          reason: "the authorization could not be recorded, so the file I/O did not start",
+        });
+      }
+    }
+    const outcome = async (result: FsOperationOutcome) => {
+      if (!recordOutcome) return;
+      await recordOutcome(result).catch((error: unknown) =>
+        logger.warn("fs outcome could not be recorded", { path, access, error: describeError(error) }),
+      );
+    };
+    // Recording took time: authority is checked again, from the policy as it is now, and the
+    // target must still be the very file authorized. Both in the step that starts the I/O.
+    const refusedNow = async (reason: string): Promise<never> => {
+      await outcome("not-dispatched");
+      throw acp.RequestError.invalidParams({ path, reason });
+    };
+    let current: PermissionPolicy;
+    try {
+      current = await policyForAsk();
+    } catch {
+      return refusedNow("the policy could not be read again before the file I/O");
+    }
+    try {
+      authorized.dispatch();
+    } catch (error) {
+      await outcome("not-dispatched");
+      throw error;
+    }
+    if (!authorized.stillAllowed(current)) return refusedNow("not allowed now: the policy changed before the file I/O");
+    try {
+      target.unchanged();
+    } catch (error) {
+      await outcome("not-dispatched");
+      throw error;
+    }
+    let result: T;
+    try {
+      result = await io(target.io);
+    } catch (error) {
+      if (error instanceof OwnedFsNotDispatched) return refusedNow(error.message);
+      // A read changes nothing, and a write that failed before changing anything says so.
+      // Any other write failure may have changed the file: its effect is unknown, and the
+      // agent is told not to take it as a write that never happened (#703 review).
+      if (access === "read" || error instanceof OwnedFsFailedWithoutEffect) {
+        await outcome("failed");
+        throw error instanceof OwnedFsFailedWithoutEffect ? error.original : error;
+      }
+      await outcome("effect-unknown");
+      logger.warn("fs write failed after it may have started", { path, error: describeError(error) });
+      throw acp.RequestError.internalError({
+        path,
+        reason:
+          "the write failed after it may have started: whether the file changed is unknown, so it is not safe to retry as if it had not run",
+      });
+    }
+    await outcome("completed");
+    return result;
   };
 
   /** Aborted when the session ends, however it ends: what a relayed listing request lives by. */
@@ -578,6 +787,65 @@ async function openPlanned(
     throw acp.RequestError.invalidParams({ path, reason: "the session was not admitted" });
   };
 
+  /**
+   * Where a local `fs/*` request really lands (#703): links followed, and inside a session
+   * root once they are. A remote host's paths are compared as written. The returned check
+   * runs in the dispatch step and refuses when the path no longer resolves to the same file.
+   */
+  const localHost = opts.host.spec.type === "local";
+  const ownedTarget = (
+    path: string,
+    access: FsAccess,
+  ): {
+    io: string;
+    resolved?: string;
+    binding?: OwnedFsBinding;
+    /** How the I/O is carried out, decided before it is authorized and recorded with it. */
+    mode: FsIoMode;
+    unchanged: () => void;
+  } => {
+    if (!localHost) return { io: path, mode: "unbound", unchanged: () => undefined };
+    const target = resolveOwnedFsTarget(path, roots);
+    if (!target.ok)
+      throw acp.RequestError.invalidParams({
+        path,
+        reason:
+          target.reason === "outside" ? "outside session roots once links are followed" : "the path cannot be resolved",
+      });
+    // The file it reaches, or the directory it would be created under, by identity: a path
+    // string alone does not show the object behind it stayed the same (#703 review).
+    if (!opts.host.fs.bound)
+      throw acp.RequestError.invalidParams({ path, reason: "the file's identity cannot be established" });
+    // Only an ordinary file is read or written; a directory, FIFO or device is refused here.
+    const binding = bindOwnedFs(target.io);
+    if (!binding)
+      throw acp.RequestError.invalidParams({
+        path,
+        reason: "not an ordinary file, or the file's identity cannot be established",
+      });
+    // A new file the strict path cannot bind goes the compatibility way, as its own dispatch,
+    // recorded as such; one neither can carry out is refused before anything (#1034).
+    const mode = access === "read" ? "bound" : newFileMode(binding);
+    if (mode === "refused")
+      throw acp.RequestError.invalidParams({
+        path,
+        reason: "this new file cannot be created bound to the checked directory on this host",
+      });
+    return {
+      io: target.io,
+      resolved: target.asWritten,
+      binding,
+      mode,
+      unchanged: () => {
+        if (!stillBound(path, binding))
+          throw acp.RequestError.invalidParams({ path, reason: "the path changed before the file I/O started" });
+      },
+    };
+  };
+
+  // Present whenever a binding was made: `ownedTarget` binds only on a host that has it.
+  const bound = () => opts.host.fs.bound!;
+
   const refuseProtected = (path: string, access: "read" | "write"): void => {
     if (protectedPathFor(path, access, opts.protectedPaths) === undefined) return;
     logger.warn("agent file request refused: the path is ORCA's own", { path, access });
@@ -669,11 +937,13 @@ async function openPlanned(
         throw acp.RequestError.invalidParams({ path, reason: "not this session" });
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       refuseProtected(path, "read");
-      const dispatch = await authorizeFs(path, "read");
-      dispatch();
+      const target = ownedTarget(path, "read");
+      const authorized = await authorizeFs(path, "read", target.resolved);
       let content: string;
       try {
-        content = await opts.host.fs.readFile(path);
+        content = await executeOwnedFs(path, "read", target, authorized, (file) =>
+          target.binding ? bound().read(target.binding) : opts.host.fs.readFile(file),
+        );
       } catch (e) {
         // A missing file is an answer, not a failure: agents (Gemini CLI among them) find out
         // whether a file exists by reading it, and only "Resource not found" reads as missing.
@@ -699,9 +969,15 @@ async function openPlanned(
         throw acp.RequestError.invalidParams({ path, reason: "not this session" });
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       refuseProtected(path, "write");
-      const dispatch = await authorizeFs(path, "write");
-      dispatch();
-      await opts.host.fs.writeFile(path, content);
+      const target = ownedTarget(path, "write");
+      const authorized = await authorizeFs(path, "write", target.resolved);
+      await executeOwnedFs(path, "write", target, authorized, (file) =>
+        !target.binding
+          ? opts.host.fs.writeFile(file, content)
+          : target.mode === "compatibility"
+            ? bound().writeCompatibility(target.binding, content)
+            : bound().write(target.binding, content),
+      );
       return {};
     });
 

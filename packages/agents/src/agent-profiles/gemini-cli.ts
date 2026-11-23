@@ -2,7 +2,7 @@
  * Gemini CLI as an ACP agent (`gemini --acp`): what ORCA knows about it, at which version, and
  * which of its own settings let a tool call run without ever reaching ORCA (#705, tiers A and B).
  *
- * ORCA installs no hook in Gemini CLI: `nativeToolHook: on` is refused for it. ORCA decides
+ * ORCA installs no hook in Gemini CLI: `nativeToolHook: experimental` is refused for it. ORCA decides
  * only the calls Gemini asks about (`session/request_permission`), and answers those with a
  * one-time option (`permissions.ts`, `orchestrator.ts`). Everything here is about the calls
  * Gemini decides alone, observed on the installed CLI by `gemini-acp-acceptance-705.test.ts`

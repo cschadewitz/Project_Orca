@@ -423,12 +423,16 @@ none is built.
 The disclosure grants come from the run's root owner (`auth/judge-disclosure.ts` in the daemon).
 An owner approves disclosure by issuing a credential with `orca auth issue --judge-disclosure`.
 That records, on the credential, exactly the query the configured judge will ask for
-(`plainRuleDisclosureQuery`): the destination, the provider version (kind, model, limits, prompt,
-schema and API version) and the wire format. No preset includes one and there is no wildcard, so
-changing any of those needs a new grant. `bindJudgeDisclosure` resolves the run's root and its
-durable owner once, then answers `find`, `current` and the synchronous `currentNow` from that
-owner's credentials as they are at that moment, counting only credentials whose workflow scope
-includes the run's root workflow. Revoking or expiring the credential, or rotating it, stops the
+(`plainRuleDisclosureQuery`): the destination, which must pass the HTTPS sender's endpoint rules
+before it is granted or shown, the provider version (kind, model, the provider's request settings,
+prompt, output schema and API version) and the wire format. No preset includes one and there is no
+wildcard, so changing any of those needs a new grant. The judge's own `limits` (per-call timeout and
+calls per day) are not part of it: they change neither what is sent nor where, so changing them
+needs no new grant. `bindJudgeDisclosure` resolves the run's root and its durable owner, then
+answers `find`, `current` and the synchronous `currentNow` from that owner's credentials as they
+are at that moment, counting only credentials whose workflow scope includes the run's root
+workflow. Each answer first re-reads the ownership record synchronously: if it no longer names
+that owner durably (lost, changed or unreadable), there is no grant, as for a revoked credential. Revoking or expiring the credential, or rotating it, stops the
 next send; a rotated credential needs a new `find`, which a new preparation does. `find` is
 audited as `judge.disclosure`. Loopback compatibility mode keeps no credentials, so it has no
 grants and the judge is unavailable there.

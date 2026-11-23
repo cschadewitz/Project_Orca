@@ -1,6 +1,6 @@
 # Tool-call telemetry from native pre-tool hooks
 
-Issue #1000. An agent whose native pre-tool hook ORCA installs (`nativeToolHook: on`, #704
+Issue #1000. An agent whose native pre-tool hook ORCA installs (`nativeToolHook: experimental`, #704
 for Claude Code and #705 for the rest) runs that hook on every tool call the hook covers,
 including calls the agent never asks ORCA about. With telemetry on, the hook also leaves a
 record of each call it decided, and ORCA keeps those records in the store with the run.
@@ -16,7 +16,7 @@ Off by default, per agent:
 agents:
   - id: claude
     command: claude-agent-acp
-    nativeToolHook: on
+    nativeToolHook: experimental
     diagnostics:
       toolCalls: keep   # default off: nothing is recorded
       retainDays: 30    # 1 to 365, default 30

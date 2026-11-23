@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { plainRuleDisclosureQuery } from "@orca/agents";
+import { plainRuleDisclosureQuery } from "@orca/agents/review-judge";
 import { openAuthDirectory } from "@orca/daemon";
 import { authCommand } from "../src/commands/auth.js";
 import type { CommandContext } from "../src/commands/index.js";

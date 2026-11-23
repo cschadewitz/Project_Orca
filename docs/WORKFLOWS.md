@@ -314,20 +314,33 @@ An agent asks ORCA only when its own permission check has no answer. Once it rem
 grant (Claude's "always allow", a rule in its own settings), the same call never reaches ORCA
 again, so a grant you revoke in ORCA, or a rule you add, does not apply to it.
 
-For the Claude and Codex ACP adapters on the daemon's own machine, ORCA will close that gap
+For the Claude and Codex ACP adapters on the daemon's own machine, ORCA can narrow that gap
 with a `PreToolUse` hook it installs in the agent's sessions (#704, #705).
 
-> **Not available yet.** The hook is built and tested against the real Claude Code and the
-> real Codex, but this build refuses every session with `nativeToolHook: on`. It is turned on
-> once its activation is approved on its own. What follows is how it will work.
+> **Experimental, not guard-qualified.** The hook is opt-in per agent: with `nativeToolHook`
+> omitted or `off` it is not installed, `on` is refused, and only `experimental` installs it. No
+> agent has qualified under ORCA's enforcement acceptance suite (#706): the support matrix
+> gives every agent tier `none`. What is known about it comes from acceptance runs against the
+> real agents driven by a scripted stand-in for the model, which show the behaviour below at
+> the pinned versions; they are diagnostic evidence, not a qualification, and say nothing about
+> an agent that tries to get around the hook. ORCA checks the adapter, the runtime and (for
+> Codex) the hook's installation **once, when the session opens**; that check is not evidence
+> that the hook keeps being run for the rest of the session, and ORCA does not check it again.
+> Calls the hook does not see, per agent, are listed in
+> [agent-hook-coverage.md](agent-hook-coverage.md). Treat it as an extra layer, not a sandbox.
 
-It is opt-in, per agent:
+It is opt-in, per agent, with the explicit value `experimental`, which is your acknowledgement
+of the above:
 
 ```yaml
   - id: claude
     command: claude-agent-acp
-    nativeToolHook: on
+    nativeToolHook: experimental
 ```
+
+`nativeToolHook: on` is kept for a hook that has qualified, which none has yet, so ORCA
+refuses a session with `on` and says to use `experimental`. A config that set `on` while the
+hook was not available therefore stays inactive until you opt in again.
 
 The agent then runs the hook before **every** tool call it hooks, remembered or not, and the
 hook decides the call against the same three layers as above, read fresh each time:
@@ -346,7 +359,7 @@ With the hook on, calls the agent used to run by its own allow rules follow ORCA
 so an unattended run may meet asks (or, in Codex, blocks) it did not before; give the agent
 `rules:` for them.
 
-`nativeToolHook: on` is a promise that the agent's calls are checked, so ORCA opens the
+`nativeToolHook: experimental` is a promise that the agent's calls are checked, so ORCA opens the
 session only where it has tested the hook and **refuses it everywhere else**, rather than run
 it unguarded:
 
@@ -379,13 +392,14 @@ it unguarded:
 
 Each is what ORCA's acceptance tests run against the real agent, including sessions pointed
 at another Claude Code or Codex, which are refused. Without
-`nativeToolHook: on` (or with `off`), no hook is installed and nothing is refused.
+`nativeToolHook: experimental` (or with `off`), no hook is installed and nothing is refused.
 
 Until those checks have passed, the session is **held**: it is started, but ORCA answers none
 of its file reads or writes and puts none of its permission asks to anybody, and a session
 that fails a check is refused everything it asked for while it waited. Only the daemon's
-session factory will install the hook; `orca ping`, and an `orca-daemon` agent's delegation,
-refuse an agent with `nativeToolHook: on` instead of starting it unhooked.
+session factory installs the hook; `orca ping` with no daemon answering, and an `orca-daemon`
+agent's delegation, refuse an agent with `nativeToolHook: experimental` instead of starting it unhooked.
+Ping it through a running daemon instead.
 
 **MCP servers.** Claude Code would start a session's MCP servers itself, before ORCA has
 checked the Claude Code it runs, and would be handed their commands and environment, secrets
@@ -429,7 +443,7 @@ hosted web search is not a local call at all; Codex's own hook runner, not ORCA,
 a hook it cannot run (a broken shell, a timeout) lets the call through, which is why
 ORCA probes the hook when the session opens.
 
-Other agents (Gemini, pi) take no hook yet (#705): with `nativeToolHook: on` they are
+Other agents (Gemini, pi) take no hook yet (#705): with `nativeToolHook: experimental` they are
 refused; without it, ORCA decides only what they ask about.
 [agent-hook-coverage.md](agent-hook-coverage.md) lists, for each qualified agent and
 version, which calls reach ORCA and which the agent runs on its own. `orca agents` shows an

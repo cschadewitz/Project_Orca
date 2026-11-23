@@ -51,7 +51,6 @@ async function setup() {
       script: "/opt/orca/claude-pre-tool-hook.mjs",
       platform: "linux",
       arch: "x64",
-      activation: "acceptance-only",
       imageDigest: async (pid, agentPid) =>
         agentPid === AGENT_PID && pid === RUNTIME_PID ? { sha256: PINNED } : { error: "not under the agent" },
     },
@@ -62,7 +61,7 @@ async function setup() {
       agent: AgentSpecSchema.parse({
         id: "claude",
         command: "claude-agent-acp",
-        nativeToolHook: "on",
+        nativeToolHook: "experimental",
         ...(diagnostics ? { diagnostics } : {}),
       }),
       cwd: join(dir, "work"),

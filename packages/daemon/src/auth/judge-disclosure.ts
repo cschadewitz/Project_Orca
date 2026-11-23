@@ -12,9 +12,12 @@
  *   that moment (the store re-reads its file), so revoking or expiring the credential, or
  *   reissuing it without the entry, stops the next send. `currentNow` is synchronous, for the
  *   check at the dispatch itself.
- * - Bound: the run's root and its durable owner are resolved once, when the service is bound, and
- *   refused like a secret use when either fails. Loopback compatibility mode keeps no credential
- *   records, so it has no grants and a judge there is always unavailable.
+ * - Bound: the run's root and its durable owner are resolved when the service is bound, and refused
+ *   like a secret use when either fails. Every later answer (`find`, `current`, `currentNow`)
+ *   checks again, synchronously, that the ownership record still names that owner durably; a lost,
+ *   changed or unreadable record answers no grant, just as a revoked credential does. Loopback
+ *   compatibility mode keeps no credential records, so it has no grants and a judge there is
+ *   always unavailable.
  *
  * A grant reference names the credential and the entry; the revision also covers the credential's
  * expiry. Neither names a value. `find` is audited (`judge.disclosure`); the per-call rechecks
@@ -22,7 +25,11 @@
  */
 import { createHash } from "node:crypto";
 import { OrcaError } from "@orca/core";
-import type { PlainRuleDisclosureGrant, PlainRuleDisclosureQuery, PlainRuleDisclosureService } from "@orca/agents";
+import type {
+  PlainRuleDisclosureGrant,
+  PlainRuleDisclosureQuery,
+  PlainRuleDisclosureService,
+} from "@orca/agents/review-judge";
 import type { AuditSink } from "./audit.js";
 import type { CredentialStore } from "./credentials.js";
 import type { OwnershipStore } from "./ownership.js";
@@ -84,7 +91,10 @@ function held(principals: readonly Principal[], owner: string, root: RunRoot): H
  * root or its durable owner cannot be established.
  */
 export async function bindJudgeDisclosure(
-  opts: Pick<SecretUseAuthorityOptions, "root" | "owner" | "verifyOwner" | "principals" | "audit">,
+  opts: Pick<SecretUseAuthorityOptions, "root" | "owner" | "verifyOwner" | "principals" | "audit"> & {
+    /** Synchronously, whether the root's durable ownership record names this principal now. */
+    readonly ownerNow: (rootRunId: string, principalId: string) => boolean;
+  },
   runId: string,
 ): Promise<PlainRuleDisclosureService> {
   const root = await opts.root(runId);
@@ -96,7 +106,11 @@ export async function bindJudgeDisclosure(
     throw refuse();
   }
   const principals = opts.principals;
-  const now = () => held(principals(owner), owner, root);
+  const ownerNow = opts.ownerNow;
+  if (typeof ownerNow !== "function" || !ownerNow(root.rootRunId, owner)) throw refuse();
+  // Ownership first, then the owner's credentials: losing either answers no grant.
+  const owned = () => ownerNow(root.rootRunId, owner);
+  const now = () => (owned() ? held(principals(owner), owner, root) : []);
   const lookup = (grantRef: unknown) => {
     if (typeof grantRef !== "string") return null;
     const found = now().find((h) => h.grantRef === grantRef);
@@ -118,7 +132,11 @@ export async function bindJudgeDisclosure(
       if (!isQuery(query)) return null;
       const match = now().find((h) => disclosureGrantEntry([h.entry], query) !== undefined);
       if (!match) {
-        audit("denied", query.destination, "no current disclosure grant for this destination and provider");
+        audit(
+          "denied",
+          query.destination,
+          owned() ? "no current disclosure grant for this destination and provider" : "run ownership is not durable",
+        );
         return null;
       }
       audit("succeeded", query.destination);
@@ -151,6 +169,7 @@ export function credentialJudgeDisclosure(opts: {
         root: (id) => access.root(id),
         owner: (root) => opts.ownership.owner(root),
         verifyOwner: (root, principalId) => opts.ownership.verify(root, principalId),
+        ownerNow: (root, principalId) => opts.ownership.isDurableOwnerNow(root, principalId),
         principals: (id) => opts.credentials.currentForPrincipal(id),
         audit: opts.audit,
       },

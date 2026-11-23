@@ -21,11 +21,4 @@ export * from "./native-tool-hook-session.js";
 export * from "./providers/index.js";
 export * from "./agent-profiles/index.js";
 export * from "./judged-lane.js";
-export {
-  plainRuleDisclosureQuery,
-  type PlainRuleDisclosureGrant,
-  type PlainRuleDisclosureQuery,
-  type PlainRuleDisclosureService,
-} from "./review-judge/plain-rule-connection.js";
-export { JUDGE_DISCLOSURE_PURPOSE } from "./review-judge/connection.js";
-export { PLAIN_RULE_REQUEST_SCHEMA } from "./review-judge/plain-rule.js";
+export * from "./owned-fs-io.js";

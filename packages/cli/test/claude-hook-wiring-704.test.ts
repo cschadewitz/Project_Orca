@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { AgentSpecSchema, SshHostSchema } from "@orca/core";
+import { AgentSpecSchema, SshHostSchema, silentLogger, type Logger } from "@orca/core";
 import {
   CLAUDE_HOOK_VERIFIED_ADAPTERS,
   CLAUDE_HOOK_VERIFIED_PAIRS,
@@ -29,7 +29,7 @@ import {
   type OpenSessionOptions,
 } from "@orca/agents";
 import { childBundle } from "@orca/testing/child-bundle";
-import { makeSessionFactory, orcaProtectedPaths } from "../src/bootstrap.js";
+import { makeSessionFactory, NATIVE_TOOL_HOOK_EXPERIMENTAL, orcaProtectedPaths } from "../src/bootstrap.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -59,8 +59,6 @@ async function setup(
     pid: RUNTIME_PID,
     image: { sha256: PINNED },
   },
-  /** `off`: a shipped build, where activation is unavailable. */
-  activation: "acceptance-only" | "off" = "acceptance-only",
   codexOpts: {
     /** The adapter's ACP extension method, which the Codex path asks for its hook listing. */
     ext?: (method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -119,7 +117,6 @@ async function setup(
       script: script ?? undefined,
       platform,
       arch: "x64",
-      activation: activation === "off" ? undefined : activation,
       // ORCA's own evidence, faked: only the attested process under the agent ORCA started.
       imageDigest: async (pid, agentPid) => {
         if (agentPid !== AGENT_PID) return { error: "not under the agent" };
@@ -135,13 +132,22 @@ async function setup(
       codexShell: codexOpts.shell ?? (() => ({ program: "/bin/sh", args: ["-c"] })),
     },
   );
+  const warnings: { msg: string; fields?: Record<string, unknown> }[] = [];
+  const logger: Logger = {
+    ...silentLogger,
+    warn: (msg, fields) => {
+      warnings.push({ msg, ...(fields ? { fields } : {}) });
+    },
+    child: () => logger,
+  };
   const open = (host: AgentHost = new LocalHost({ id: "local", type: "local" })) =>
     factory({
       host,
+      logger,
       agent: AgentSpecSchema.parse({
         id: "claude",
         command: "claude-agent-acp",
-        nativeToolHook: "on",
+        nativeToolHook: "experimental",
         permissions: { rules: [{ match: { kind: "execute", titlePattern: "^ls$" }, decision: "allow" }] },
         ...agent,
       }),
@@ -160,6 +166,7 @@ async function setup(
     resolveClosed,
     opened: () => opened,
     closedByFactory: () => closedByFactory,
+    warnings,
   };
 }
 
@@ -167,6 +174,8 @@ describe("installing the hook", () => {
   it("writes a private context file and hands the adapter the settings that run the hook with it", async () => {
     const t = await setup(CLAUDE);
     const session = await t.open();
+    // Every hooked session says the hook is experimental and not guard-qualified.
+    expect(t.warnings).toEqual([{ msg: NATIVE_TOOL_HOOK_EXPERIMENTAL, fields: { agent: "claude" } }]);
     const files = (await readdir(t.hookDir)).filter((f) => !f.endsWith(".runtime.json"));
     expect(files).toHaveLength(1);
     const file = join(t.hookDir, files[0]!);
@@ -269,7 +278,7 @@ describe("installing the hook", () => {
     const t = await setup(info);
     await expect(t.open()).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      message: expect.stringMatching(new RegExp(`${why}[\\s\\S]*nativeToolHook: on`)),
+      message: expect.stringMatching(new RegExp(`${why}[\\s\\S]*remove nativeToolHook`)),
     });
     expect(await t.left()).toEqual([]);
   });
@@ -288,15 +297,6 @@ describe("installing the hook", () => {
     expect(t.opened()).toBe(1);
     expect(t.closedByFactory()).toBe(1);
     expect(await readdir(t.hookDir)).toEqual([]);
-  });
-
-  it("refuses every opted-in session while activation is unavailable, before anything starts", async () => {
-    const t = await setup(CLAUDE, {}, "/opt/orca/claude-pre-tool-hook.mjs", "linux", undefined, "off");
-    await expect(t.open()).rejects.toMatchObject({
-      code: "NOT_SUPPORTED",
-      message: expect.stringMatching(/not available in this build yet[\s\S]*nativeToolHook: on/),
-    });
-    expect(t.opened()).toBe(0);
   });
 
   it("refuses a platform the acceptance test does not cover", async () => {
@@ -318,8 +318,26 @@ describe("installing the hook", () => {
     const remote = await setup(CLAUDE);
     await expect(
       remote.open(new SshHost(SshHostSchema.parse({ id: "box", type: "ssh", host: "box.example" }))),
-    ).rejects.toMatchObject({ code: "NOT_SUPPORTED", message: expect.stringContaining("nativeToolHook: on") });
+    ).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringContaining("nativeToolHook: experimental"),
+    });
     expect(remote.opened()).toBe(0);
+  });
+
+  it("leaves a config that set nativeToolHook: on inactive until it opts in again with experimental", async () => {
+    // `on` predates the shipped hook and is kept for a guard-qualified one (#704 review): a
+    // config written while it was refused must not start running the unqualified hook.
+    const old = await setup(CLAUDE, { nativeToolHook: "on" });
+    await expect(old.open()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringMatching(
+        /nativeToolHook: on, which is kept for a guard-qualified hook[\s\S]*set nativeToolHook: experimental/,
+      ),
+    });
+    expect(old.opened()).toBe(0);
+    expect(await old.left()).toEqual([]);
+    expect(old.warnings).toEqual([]);
   });
 
   it("installs nothing and refuses nothing unless the agent opts in", async () => {
@@ -383,7 +401,6 @@ describe("installing the hook in Codex (#705)", () => {
       "linux",
       // Codex has no session-start hook: nothing reports a runtime process in.
       null,
-      "acceptance-only",
       {
         ext: (method, params) => {
           if (t.seen.options) seen.options = t.seen.options;
@@ -436,7 +453,7 @@ describe("installing the hook in Codex (#705)", () => {
         const t = await codexSetup(change);
         await expect(t.open()).rejects.toMatchObject({
           code: "NOT_SUPPORTED",
-          message: expect.stringContaining("nativeToolHook: on"),
+          message: expect.stringContaining("nativeToolHook: experimental"),
         });
         expect(await t.left()).toEqual([]);
       }
@@ -486,7 +503,7 @@ describe("installing the hook in Codex (#705)", () => {
     const t = await codexSetup({}, { shell: () => ({ error: "this account's login shell is /usr/bin/fish" }) });
     await expect(t.open()).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      message: expect.stringMatching(/could not run its startup check[\s\S]*fish[\s\S]*nativeToolHook: on/),
+      message: expect.stringMatching(/could not run its startup check[\s\S]*fish[\s\S]*remove nativeToolHook/),
     });
     expect(await t.left()).toEqual([]);
   });
@@ -498,7 +515,7 @@ describe("installing the hook in Codex (#705)", () => {
     );
     await expect(t.open()).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      message: expect.stringMatching(/could not run its startup check[\s\S]*EACCES[\s\S]*nativeToolHook: on/),
+      message: expect.stringMatching(/could not run its startup check[\s\S]*EACCES[\s\S]*remove nativeToolHook/),
     });
     expect(await t.left()).toEqual([]);
   });
@@ -537,7 +554,7 @@ describe("installing the hook in Codex (#705)", () => {
     const t = await codexSetup({}, { codex });
     await expect(t.open()).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      message: expect.stringMatching(new RegExp(`${why}[\\s\\S]*nativeToolHook: on`)),
+      message: expect.stringMatching(new RegExp(`${why}[\\s\\S]*remove nativeToolHook`)),
     });
     expect(await t.left()).toEqual([]);
   });

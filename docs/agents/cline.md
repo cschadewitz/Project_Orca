@@ -104,5 +104,5 @@ every tool in its own process (never ACP `fs/*` or `terminal/*`), and ignores MC
 ## Not yet
 
 Tier C (execution-guard certification) waits for #706's acceptance suite; until then the
-matrix says what a shell command Cline was allowed to run can still do. `nativeToolHook: on` is
+matrix says what a shell command Cline was allowed to run can still do. `nativeToolHook: experimental` is
 not offered for Cline: ORCA has no Cline hook adapter, so the asks above are the only point of control.

@@ -255,9 +255,16 @@ export class RunContext {
     // let a step that acted look as if it never had (#357). A store that cannot sync an exact
     // event cannot carry that evidence, so the prompt is not sent. The record is applied first:
     // it is in the log either way, so a failed sync never lets this attempt look undispatched.
-    if (e.type === "agent.turn.started") {
+    // The same holds for ORCA's own file executor (#703): an authorization is the evidence
+    // that a file may have been read or written, and the I/O starts right after it.
+    if (e.type === "agent.turn.started" || e.type === "agent.fs.authorized") {
       if (!this.deps.stores.events.synchronizeEvent)
-        throw new OrcaError("NOT_SUPPORTED", "this event store cannot make an agent turn durable before it is sent");
+        throw new OrcaError(
+          "NOT_SUPPORTED",
+          e.type === "agent.turn.started"
+            ? "this event store cannot make an agent turn durable before it is sent"
+            : "this event store cannot make a file authorization durable before its I/O",
+        );
       await this.deps.stores.events.synchronizeEvent(e);
     }
     if (BRANCH_EVENTS.has(e.type)) await this.syncWorkItemsOwned();

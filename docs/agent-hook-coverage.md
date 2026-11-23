@@ -1,6 +1,6 @@
 # What ORCA's pre-tool hook covers, per agent
 
-`nativeToolHook: on` (see [WORKFLOWS.md](WORKFLOWS.md#calls-the-agent-does-not-ask-about))
+`nativeToolHook: experimental` (see [WORKFLOWS.md](WORKFLOWS.md#calls-the-agent-does-not-ask-about))
 puts ORCA's permission policy in front of every tool call an agent hooks, not only the calls
 the agent asks about (#704, #705). This page lists, per agent and pinned version, which calls
 the hook sees, how the agent treats each answer and failure, and what stays outside. For an
@@ -13,7 +13,16 @@ which the agent runs on its own. Every entry says how it is known:
 - **source**: read in the agent's source at the pinned version, not exercised;
 - **unknown**: not established, and treated as not covered.
 
-An agent, version or platform not listed here is refused while `nativeToolHook: on`.
+An agent, version or platform not listed here is refused while `nativeToolHook: experimental`.
+
+**The hook is experimental and not guard-qualified.** "installed" below is diagnostic
+evidence from acceptance runs with a scripted model, at the pinned versions: it shows how the
+agent treats each answer, not that the hook holds against an agent trying to avoid it. The
+checks that admit a session (adapter, runtime image, and for Codex the hook's trust and a
+probe call) run once when it opens; nothing re-checks them during the session, so they are not
+evidence that the hook is still run later. No agent is execution-guard certified (#706), and
+the support matrix (`tools/guard-qualification/support-matrix.json`) gives every agent tier
+`none`.
 
 Support levels, lowest first: **source reviewed**; **connectivity tested** (an ORCA session
 opens, streams, is cancelled and closes on the installed agent); **approval tested** (on the
@@ -27,8 +36,8 @@ acceptance suite passes; none yet).
 | --- | --- | --- |
 | Claude ACP adapter 0.109.1 running Claude Code 2.1.330 (the image the session's runtime process runs), Linux x64 | **Fail-closed** | Every built-in tool and MCP tool is hooked; a hook that cannot start, crashes, times out or answers garbage blocks. ORCA's `ask` reaches ORCA as a permission request. |
 | Codex ACP adapter 2.9.0 running Codex 0.171.0 (the image the process the adapter started runs), Linux x64 | **Deny-enforced, opened only after a probe** | Shell, patches, MCP tools and image reads are hooked; ORCA's deny and ask both block. Codex lets a call through when its hook runner fails, so ORCA checks the hook is trusted and blocks before the session opens. Typed stdin and hosted search are outside. |
-| Gemini CLI 0.70.0 (`gemini --acp`), Linux | **No hook; approval tested** | `nativeToolHook: on` is refused. Shell calls and edits ask ORCA, answered with Gemini's one-time option. The read-only tools the suite ran (`list_directory`, `glob`, `read_file`), Gemini's own session and saved grants, and YOLO in a trusted workspace ran without asking ORCA; other routes are listed as unverified. |
-| pi 1.6.0 through `pi-acp` 0.0.35, Linux | **No hook; connectivity tested; outside ORCA policy** | `nativeToolHook: on` is refused. pi runs every tool call without asking ORCA, so ORCA's rules and protected files do not apply. A pi extension's own dialogs reach ORCA, but they are not ORCA tool approvals. **Requires an OS sandbox.** |
+| Gemini CLI 0.70.0 (`gemini --acp`), Linux | **No hook; approval tested** | `nativeToolHook: experimental` is refused. Shell calls and edits ask ORCA, answered with Gemini's one-time option. The read-only tools the suite ran (`list_directory`, `glob`, `read_file`), Gemini's own session and saved grants, and YOLO in a trusted workspace ran without asking ORCA; other routes are listed as unverified. |
+| pi 1.6.0 through `pi-acp` 0.0.35, Linux | **No hook; connectivity tested; outside ORCA policy** | `nativeToolHook: experimental` is refused. pi runs every tool call without asking ORCA, so ORCA's rules and protected files do not apply. A pi extension's own dialogs reach ORCA, but they are not ORCA tool approvals. **Requires an OS sandbox.** |
 
 ## Claude (`@agentclientprotocol/claude-agent-acp` 0.109.1)
 
@@ -114,7 +123,7 @@ extension or a trusted-folders list allows. An empty advisory does not mean noth
 | Trusted workspace | Its `.gemini/settings.json`, policies and hooks apply, so a repository can carry them | source |
 | What is already in the Gemini home the profile names, system settings (`/etc/gemini-cli`), installed extensions, the trusted-folders list | Not inspected by ORCA or by the advisory; the suite starts each run from an empty home. Treated as able to allow calls ORCA never sees | unknown |
 | MCP tools | Ask ORCA with Gemini's server and tool in `_meta`; their session options cover the server or the tool | source |
-| `nativeToolHook: on` | Refused before the session starts. Gemini's `BeforeTool` hook (exit 2 blocks, exit 1 lets the call run, 60 s timeout) is the candidate for tier C, after #706 | source |
+| `nativeToolHook: experimental` | Refused before the session starts. Gemini's `BeforeTool` hook (exit 2 blocks, exit 1 lets the call run, 60 s timeout) is the candidate for tier C, after #706 | source |
 
 ## pi (`pi-acp` 0.0.35 with `@earendil-works/pi-coding-agent` 1.6.0)
 
@@ -149,4 +158,4 @@ own and pins the pi that `pi-acp` starts:
 | Settings outside ORCA | Without `PI_CODING_AGENT_DIR`, the user's `~/.pi/agent` applies: settings, extensions, saved project trust, credentials. A trusted project loads its own `.pi` extensions | source |
 | What is already in the agent directory the profile names, installed extensions and packages, saved project trust | Not inspected by ORCA or by the advisory; the suite starts each run from an agent directory holding only the stand-in's model settings | unknown |
 | Which pi runs | `pi-acp` reports only its own version; it starts `PI_ACP_PI_COMMAND`, else `pi` on `PATH` | source |
-| `nativeToolHook: on` | Refused before the session starts. pi's extension `tool_call` hook can block or rewrite a call, but later command-prefix and spawn hooks can still change what runs (#747); the candidate for tier C, after #706 | source |
+| `nativeToolHook: experimental` | Refused before the session starts. pi's extension `tool_call` hook can block or rewrite a call, but later command-prefix and spawn hooks can still change what runs (#747); the candidate for tier C, after #706 | source |

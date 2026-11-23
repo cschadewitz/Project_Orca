@@ -183,7 +183,8 @@ function openCodePeer(steps: Step[] = [], opts: { promptError?: { code: number; 
 function fixtureHost(peer: ReturnType<typeof openCodePeer>, files: Map<string, string>): AgentHost {
   return {
     id: "local",
-    spec: { id: "local", type: "local" },
+    // A stand-in file system: a local host would read and write this machine's files (#703).
+    spec: { id: "fixture", type: "ssh", host: "fixture" } as unknown as AgentHost["spec"],
     fs: {
       readFile: (p) => {
         const content = files.get(p);

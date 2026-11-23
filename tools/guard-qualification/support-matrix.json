@@ -49,7 +49,7 @@
       "excluded": {
         "F01": "The ask arrives as an ACP request the SDK has already parsed; there are no raw bytes for ORCA to refuse.",
         "F02": "Decided in the session's own process; there is no separate context file to lose.",
-        "F03": "ORCA installs nothing in Gemini CLI: nativeToolHook: on is refused for it.",
+        "F03": "ORCA installs nothing in Gemini CLI: nativeToolHook: experimental is refused for it.",
         "F04": "F04 names the Claude adapter's option ids. Gemini's one-time answer (proceed_once, never proceed_always or an unoffered id) is checked on the installed CLI by gemini-acp-acceptance-705.test.ts.",
         "P02": "No raw input or context file on this route (see F01 and F02).",
         "A04": "An ACP ask carries no working directory; the session's directory is fixed when the session opens.",
@@ -123,7 +123,7 @@
       "tier": "none",
       "routes": ["acp-ask"],
       "pendingRoutes": {
-        "claude-native-hook": "Merged (#980) but off in every shipped build until session admission is complete (activation acceptance-only); the connected proof runs it under acceptance only"
+        "claude-native-hook": "Shipped as an experimental, unqualified opt-in (nativeToolHook: experimental, off by default). Admission checks run once at session open and are not evidence of later enforcement; connected and installed runs are diagnostic, not qualification. No tier until a trusted receipt exists"
       },
       "receipts": [],
       "unverified": [
@@ -149,7 +149,7 @@
       "tier": "none",
       "routes": ["acp-ask"],
       "pendingRoutes": {
-        "codex-native-hook": "Merged (#1009) with its synthetic cases passing here, but off in every shipped build until activation is approved (acceptance-only, as for Claude)"
+        "codex-native-hook": "#705 Codex adapter, shipped as an experimental, unqualified opt-in (nativeToolHook: experimental, off by default). An ORCA ask blocks the call; the hook runner fails open after the session-open probe; typed stdin is outside. No tier"
       },
       "receipts": [],
       "unverified": [
@@ -184,7 +184,7 @@
         "Events and logs about its calls are redacted"
       ],
       "unsupportedRoutes": [
-        "nativeToolHook: on is refused: ORCA installs no hook in Gemini",
+        "nativeToolHook: experimental is refused: ORCA installs no hook in Gemini",
         "Read-only tools that never ask (list_directory, glob and read_file observed)",
         "Gemini's own session and saved grants (proceed_always covers a whole command prefix)",
         "YOLO, auto-edit, --allowed-tools and policy files in a trusted workspace, and settings in a Gemini home ORCA does not control"
@@ -208,7 +208,7 @@
       ],
       "unsupportedRoutes": [
         "Every pi tool call: pi never asks before a tool runs, and pi-acp serves no file operation through ORCA, so no route of this suite reaches ORCA",
-        "nativeToolHook: on is refused; pi's extension tool_call hook can block or rewrite a call, but later command-prefix and spawn hooks can still change what runs (#747)",
+        "nativeToolHook: experimental is refused; pi's extension tool_call hook can block or rewrite a call, but later command-prefix and spawn hooks can still change what runs (#747)",
         "An extension's ctx.ui dialog reaches ORCA as a kind other ask; it is the extension's question, not an ORCA tool approval"
       ],
       "residualRisks": [

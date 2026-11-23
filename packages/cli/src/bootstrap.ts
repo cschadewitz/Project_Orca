@@ -38,9 +38,10 @@ import {
   AgentRegistry,
   claudePreToolHookScript,
   CLAUDE_ADAPTER_NAMES,
+  nativeToolHookNotQualified,
+  nativeToolHookRequested,
   nativeToolHookSession,
   sweepHookTelemetrySpools,
-  nativeToolHookUnavailable,
   openAcpSession,
   withProviderGuards,
   permissionPolicyPath,
@@ -291,6 +292,14 @@ export function makeWorkspaceProvider(
  * `open` exists so a test can read the options this builds without spawning an agent; it is
  * `openAcpSession` everywhere else.
  */
+/**
+ * What every hooked session logs when it opens. No agent is guard-qualified (the support
+ * matrix gives every one tier none), and the checks ORCA makes are made when the session opens.
+ */
+export const NATIVE_TOOL_HOOK_EXPERIMENTAL =
+  "nativeToolHook: experimental is not guard-qualified: ORCA checked the agent's runtime and hook when " +
+  "this session opened, not afterwards, and the calls outside the hook are listed in docs/agent-hook-coverage.md";
+
 export function makeSessionFactory(
   layout: OrcaFileLayout,
   open: SessionFactory = openAcpSession,
@@ -301,12 +310,6 @@ export function makeSessionFactory(
     arch?: string | undefined;
     imageDigest?:
       ((pid: number, agentPid: number | undefined) => Promise<{ sha256: string } | { error: string }>) | undefined;
-    /**
-     * Whether `nativeToolHook: on` may install the hook at all. Off in every build ORCA ships
-     * until activation is approved on its own (#704 review): the admission hold, the relay's
-     * per-dispatch checks and the probe are in place, but only the hook's own tests turn it on.
-     */
-    activation?: "acceptance-only" | undefined;
     codexProcess?: ((agentPid: number | undefined) => Promise<{ pid: number } | { error: string }>) | undefined;
     codexEnvironment?: ((pid: number) => Promise<NodeJS.ProcessEnv | { error: string }>) | undefined;
     codexShell?: (() => { program: string; args: string[] } | { error: string }) | undefined;
@@ -333,15 +336,17 @@ export function makeSessionFactory(
     const bound = { ...options, permissionFiles, protectedPaths };
     // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
     // says who it is, and the session refused wherever it cannot be put in force.
-    if (options.agent.nativeToolHook !== "on") return guarded(bound);
-    if (hook.activation !== "acceptance-only") throw nativeToolHookUnavailable(options.agent)!;
+    if (!nativeToolHookRequested(options.agent)) return guarded(bound);
+    // `on` waits for a guard-qualified hook; only the explicit `experimental` installs this one.
+    const unqualified = nativeToolHookNotQualified(options.agent);
+    if (unqualified) throw unqualified;
     await sweep();
     // The hook runs where the agent does; ORCA installs it only on its own host.
     if (options.host.spec.type !== "local")
       throw new OrcaError(
         "NOT_SUPPORTED",
-        `agent ${options.agent.id} has nativeToolHook: on, but it runs on ${options.host.spec.type} host ${options.host.spec.id}, where ORCA cannot install its hook. ` +
-          `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
+        `agent ${options.agent.id} has nativeToolHook: experimental, but it runs on ${options.host.spec.type} host ${options.host.spec.id}, where ORCA cannot install its hook. ` +
+          `ORCA refuses the session rather than run it unguarded; remove nativeToolHook to run it without the hook.`,
         { agentId: options.agent.id, host: options.host.spec.id },
       );
     const installed = nativeToolHookSession({
@@ -411,6 +416,8 @@ export function makeSessionFactory(
       throw error;
     }
     admit();
+    // Said on every hooked session: the hook is an experimental, unqualified layer (#704 review).
+    options.logger?.warn(NATIVE_TOOL_HOOK_EXPERIMENTAL, { agent: options.agent.id });
     void session.closed.then(installed.cleanup, installed.cleanup);
     const close = session.close.bind(session);
     session.close = async (...args: Parameters<AgentSession["close"]>) => {

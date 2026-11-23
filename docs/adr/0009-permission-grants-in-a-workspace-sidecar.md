@@ -160,10 +160,50 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   the same live one, and after the answer the policy is read again and a deny that appeared
   meanwhile wins. A call outside a live turn is refused. Each decision is recorded like an
   ask's, prefixed `fs:`. Both handlers serve only this session's own ACP session id, and the
-  live-turn check runs again in the same step that starts the host I/O. The roots check and
-  rule targets are lexical, compared as written and not resolved, so a reusable permit waits
-  for physical target verification; and the `fs:` log is not a durable authorization or
-  execution record. This is the
+  live-turn check runs again in the same step that starts the host I/O. On a local host the
+  target is resolved physically, links followed (a dangling one too) (`resolveOwnedFsTarget`):
+  a path that leads outside every session root once resolved is refused; when the file it
+  reaches is not the path as written, the policy decides both and the stricter answer stands;
+  and the I/O goes to the resolved file (`owned-fs-io.ts`). Only an ordinary file is read or
+  written. An existing file is bound to the identity (device and inode) the decision saw: just
+  before the open it must still be an ordinary file with that identity, the open follows no
+  final link and neither waits nor takes a terminal (`O_NOFOLLOW`, `O_NONBLOCK`, `O_NOCTTY`
+  where the platform has them), and the descriptor's identity and type are compared before a
+  byte is read or written. A new file is bound only on Linux and only when its parent
+  directory exists: the parent is opened as a directory and checked by identity on the
+  descriptor, and the file is created exclusively through `/proc/self/fd/N/name`, which
+  resolves through that open directory as `openat` would; Linux without a usable
+  `/proc/self/fd` refuses a new file. Every other new file is best effort and outside the
+  identity-bound guarantee (#1034): one whose directories must be made first, and any new file
+  on macOS and Windows, where Node has no directory-bound creation. There each directory an
+  effect happens in is checked by identity and physical path just before the effect; a change
+  found before the first effect refuses the operation, and one in the instant between a check
+  and its effect is found only afterwards, if at all, and then reported as an unknown effect.
+  Nothing is removed afterwards. The two are separate dispatches, decided before the operation is
+  authorized: the strict write never falls back, and refuses before any change what it cannot
+  bind, and the authorization records which way the I/O goes (`io`: `bound`, `compatibility`,
+  or `unbound` on a remote host), so the evidence never presents a compatibility write as a
+  bound one. A write is complete only when all of its content was written. A
+  path whose identity cannot be established, or that is not an ordinary file, is
+  refused. This is still not an operating-system boundary. Remote (SSH) hosts are explicitly
+  outside this: their paths are compared as written and their I/O is not identity-bound, as
+  before; verifying them is tracked separately (#1032). A reusable permit still waits for
+  physical target verification. Each operation's authorization is recorded
+  (`agent.fs.authorized`) and made durable before its I/O can start: it is synced through the
+  event store's exact-event barrier (`synchronizeEvent`), as a turn record is, and a store
+  without that barrier, or a record that cannot be written, refuses the operation. The record
+  names the file only by a bounded, root-relative display reference; the absolute path and the
+  file it resolved to stay in the daemon. After the record the policy is read again and must
+  still allow the operation (an `allow` must still be `allow`; an operation a person allowed
+  once must not have become `deny`), the turn must still be live and the target unchanged, or
+  the operation is refused. Its outcome follows (`agent.fs.completed`), through a recorder
+  bound when the authorization was made to its step, session and turn: completed; failed (a
+  read, or a write that failed before changing anything); not dispatched when a check after
+  the record refused; or effect-unknown, a write that failed once it may have changed the
+  file, which the agent is told is not safe to retry as if it had not run. An authorization
+  with no outcome, as after a crash, or with an effect-unknown one, is execution-unknown
+  (`ownedFsExecutions`): ORCA never repeats the operation, and no transaction spans the file
+  and the record. The `fs:` decision log is written alongside and not awaited. This is the
   client-owned ACP file path only: an agent's native tools and its own MCP connections do not
   pass through it, and keeping an agent on this path is an operating-system boundary's job.
 - **A plain-language rule allows one call at most, inside hard boundaries (#702).** A config

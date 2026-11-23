@@ -27,6 +27,17 @@ export class OwnershipStore {
     if (pending?.remove && durable === pending.principalId) return undefined;
     return durable ?? (pending && !pending.remove ? pending.principalId : undefined);
   }
+  /**
+   * Synchronously, whether `principalId` is the root's durable owner right now: the file is read again, and a
+   * missing or unreadable record is `false`. For a check that must sit in the same turn as the act it guards (#701).
+   */
+  isDurableOwnerNow(rootRunId: string, principalId: string): boolean {
+    try {
+      return this.readDisk(true).get(rootRunId) === principalId;
+    } catch {
+      return false;
+    }
+  }
   /** Only durable ownership is evidence. Verification never records or repairs attribution. */
   async verify(rootRunId: string, principalId: string): Promise<void> {
     const check = () => {

@@ -4,8 +4,9 @@
  * judge asks for; revoking, expiring or reissuing without it stops the next send.
  */
 import { describe, expect, it } from "vitest";
-import { plainRuleDisclosureQuery, type PlainRuleDisclosureQuery } from "@orca/agents";
+import { plainRuleDisclosureQuery, type PlainRuleDisclosureQuery } from "@orca/agents/review-judge";
 import { CredentialStore } from "../src/auth/credentials.js";
+import { OwnershipStore } from "../src/auth/ownership.js";
 import { DisclosureGrantSchema, PRESETS } from "../src/auth/principal.js";
 import { bindJudgeDisclosure, NO_EXPIRY } from "../src/auth/judge-disclosure.js";
 import type { AuditRecord } from "../src/auth/audit.js";
@@ -22,18 +23,20 @@ function setup(opts: { owner?: string; workflowId?: string } = {}) {
   let clock = Date.parse("2026-11-23T10:00:00Z");
   const store = new CredentialStore({ now: () => new Date(clock) });
   const audit: AuditRecord[] = [];
+  const ownership = { durable: true };
   const bind = (runId = "run-1") =>
     bindJudgeDisclosure(
       {
         root: async (id) => ({ rootRunId: id, workflowId: opts.workflowId ?? "w" }),
         owner: () => opts.owner ?? "casey",
         verifyOwner: async () => {},
+        ownerNow: (_root, principal) => ownership.durable && principal === (opts.owner ?? "casey"),
         principals: (id) => store.currentForPrincipal(id),
         audit: { record: (r) => void audit.push(r) },
       },
       runId,
     );
-  return { store, audit, bind, advance: (ms: number) => (clock += ms) };
+  return { store, audit, bind, ownership, advance: (ms: number) => (clock += ms) };
 }
 
 const issue = (store: CredentialStore, extra: Record<string, unknown> = {}) =>
@@ -108,6 +111,28 @@ describe("#701 judge disclosure grants", () => {
     expect(await service.find(query, signal)).toBeNull();
   });
 
+  it("stops at once when the run's durable ownership is lost, and stays stopped", async () => {
+    const { store, bind, ownership, audit } = setup();
+    await issue(store);
+    const service = await bind();
+    const grant = (await service.find(query, signal))!;
+    ownership.durable = false;
+    expect(service.currentNow(grant.grantRef)).toBeNull();
+    expect(await service.current(grant.grantRef, signal)).toBeNull();
+    expect(await service.find(query, signal)).toBeNull();
+    expect(audit.at(-1)).toMatchObject({ outcome: "denied", reason: "run ownership is not durable" });
+  });
+
+  it("refuses a destination the judge sender would refuse, and ignores the judge's own limits", () => {
+    for (const destination of [
+      "http://judge.invalid/v1",
+      "https://user:pw@judge.invalid/v1",
+      "https://judge.invalid/v1?x=1",
+    ])
+      expect(plainRuleDisclosureQuery({ ...config, destination })).toBeUndefined();
+    expect(plainRuleDisclosureQuery({ ...config, limits: { timeoutMs: 1000, maxCallsPerDay: 5 } })).toEqual(query);
+  });
+
   it("a rotated credential is a new grant: the old reference stops, a new find covers it", async () => {
     const { store, bind } = setup();
     const { credential } = await issue(store);
@@ -146,8 +171,10 @@ describe("#701 judge disclosure grants", () => {
       root: async (id: string) => ({ rootRunId: id, workflowId: "w" }),
       owner: () => "casey",
       verifyOwner: async () => {},
+      ownerNow: () => true,
       principals: () => [],
     };
+    await expect(bindJudgeDisclosure({ ...base, ownerNow: () => false }, "r")).rejects.toThrow(/not granted/);
     await expect(bindJudgeDisclosure({ ...base, root: async () => undefined }, "r")).rejects.toThrow(/not granted/);
     await expect(bindJudgeDisclosure({ ...base, owner: () => undefined }, "r")).rejects.toThrow(/not granted/);
     await expect(
@@ -169,5 +196,26 @@ describe("#701 judge disclosure grants", () => {
     expect(credential.disclosures).toEqual([query]);
     const rotated = await store.rotate(credential.id);
     expect(rotated.credential.disclosures).toEqual([query]);
+  });
+
+  it("the ownership store's synchronous check reads the durable record, and an unreadable one is false", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(join(tmpdir(), "orca-701-owner-"));
+    try {
+      const file = join(dir, "ownership.json");
+      const store = new OwnershipStore(file);
+      store.record("root-1", "casey");
+      await store.flush();
+      expect(store.isDurableOwnerNow("root-1", "casey")).toBe(true);
+      expect(store.isDurableOwnerNow("root-1", "someone")).toBe(false);
+      writeFileSync(file, "not json");
+      expect(store.isDurableOwnerNow("root-1", "casey")).toBe(false);
+      rmSync(file);
+      expect(store.isDurableOwnerNow("root-1", "casey")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

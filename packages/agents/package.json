@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./review-judge": {
+      "types": "./dist/review-judge/index.d.ts",
+      "import": "./dist/review-judge/index.js"
     }
   },
   "files": [

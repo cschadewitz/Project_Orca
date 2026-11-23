@@ -16,13 +16,8 @@ import {
   type DisclosureGrant,
   DisclosureGrantSchema,
 } from "@orca/daemon";
-import {
-  isAbsoluteCommand,
-  mcpServerDefinitionDigest,
-  plainRuleDisclosureQuery,
-  secretHostBinding,
-  secretSourceBinding,
-} from "@orca/agents";
+import { isAbsoluteCommand, mcpServerDefinitionDigest, secretHostBinding, secretSourceBinding } from "@orca/agents";
+import { plainRuleDisclosureQuery } from "@orca/agents/review-judge";
 import { skillDigest } from "@orca/engine";
 import { loadConfig } from "../bootstrap.js";
 import type { CommandContext } from "./index.js";
@@ -90,9 +85,11 @@ function secretGrant(ctx: CommandContext, config: OrcaConfig): SecretGrant | und
 /**
  * `--judge-disclosure`: the owner's approval that this credential's runs may send action evidence
  * to the plain-rule review judge configured now (#701). The grant is exactly the disclosure the
- * judge asks for: `review.plainRules.judge`'s destination, provider configuration (kind, model,
- * limits, prompt and API versions) and wire format. Changing any of them later is not covered
- * until a credential is issued again with this flag. No preset includes it.
+ * judge asks for: `review.plainRules.judge`'s destination (which must pass the sender's endpoint
+ * rules), provider version (kind, model, the provider's request settings, prompt, output schema and
+ * API version) and wire format. Changing any of those needs a new grant; the judge's own `limits`
+ * (timeout, calls per day) change neither what is sent nor where, so they do not. No preset
+ * includes it.
  */
 function disclosureGrant(ctx: CommandContext, config: OrcaConfig): DisclosureGrant | undefined {
   if (!ctx.flags["judge-disclosure"]) return undefined;
@@ -100,7 +97,7 @@ function disclosureGrant(ctx: CommandContext, config: OrcaConfig): DisclosureGra
   if (!query)
     throw new OrcaError(
       "CONFIG_INVALID",
-      "--judge-disclosure needs a complete, valid review.plainRules.judge in the config (provider, destination, credential)",
+      "--judge-disclosure needs a complete, valid review.plainRules.judge in the config (provider, credential, and an https destination the judge sender accepts)",
     );
   return DisclosureGrantSchema.parse([{ ...query }]);
 }
