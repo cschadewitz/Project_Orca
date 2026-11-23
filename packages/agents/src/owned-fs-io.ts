@@ -14,18 +14,25 @@
  *
  * Limits, stated rather than papered over:
  * - Only the final component is opened without following links (`O_NOFOLLOW`, where the
- *   platform has it; elsewhere the identity comparison alone binds). A directory above it
- *   swapped after the anchor check and before the open is caught for an existing file by the
- *   identity comparison, and for a new file by the directory check after creation, which
- *   removes the file it just created; its effect is then reported as unknown.
+ *   platform has it; elsewhere the identity comparison alone binds). An existing file is bound:
+ *   whatever the name leads to at the open, its identity is compared on the open descriptor
+ *   before a byte is read or written.
+ * - A new file is verified, not bound. Node has no `openat`/`mkdirat`, so a directory cannot be
+ *   held open and created in. Instead, before each effect (each directory made, the exclusive
+ *   create) the directory it happens in is checked to be the authorized one by identity and
+ *   physical path; a change found before the first effect refuses it as `not-dispatched`. A
+ *   change in the instant between a check and its effect is caught only afterwards: the new
+ *   file is taken away, and the outcome is unknown, never `not-dispatched`.
  * - A write that fails once it may have changed something (a truncate, a write, a directory
  *   made) is not "failed": its effect is unknown, and it is not safe to retry as if nothing
  *   happened. Only `OwnedFsFailedWithoutEffect` and `OwnedFsNotDispatched` say nothing changed.
- * - Remote hosts are not bound: their files are not on this machine. Their paths are
- *   compared as written, as `owned-fs-gate.ts` says.
+ *   A write is completed only when every byte of the content was written.
+ * - Remote (SSH) hosts are outside this binding: their files are not on this machine. Their
+ *   paths are compared as written, as `owned-fs-gate.ts` says; verifying them is tracked
+ *   separately (#1032).
  */
-import { constants, statSync } from "node:fs";
-import { lstat, mkdir, open, unlink } from "node:fs/promises";
+import { constants, lstatSync, statSync } from "node:fs";
+import { lstat, mkdir, open, unlink, type FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";
 import { markHostFileMissing } from "./host.js";
 import { physicalPathOf } from "./permissions.js";
@@ -135,36 +142,59 @@ export async function writeBound(binding: OwnedFsBinding, content: string): Prom
       if (!stats.isFile() || idOf(stats) !== binding.identity)
         throw new OwnedFsNotDispatched("the file changed before it was written");
       await handle.truncate(0);
-      await handle.write(content, 0, "utf8");
+      await writeAll(handle, content);
     } finally {
       await handle.close();
     }
     return;
   }
   const parent = dirname(binding.io);
-  if (identityNow(binding.anchor) !== binding.identity)
-    throw new OwnedFsNotDispatched("the directory changed before the file was created");
-  // A directory made here is a change: once one is, no later failure is "no effect".
-  const made = await mkdir(parent, { recursive: true });
+  // Every directory between the anchor and the new file, nearest the anchor first.
+  const missing: string[] = [];
+  for (let dir = parent; dir !== binding.anchor; dir = dirname(dir)) {
+    if (dirname(dir) === dir)
+      throw new OwnedFsNotDispatched("the file is not under the directory it was authorized for");
+    missing.unshift(dir);
+  }
+  // Nothing is changed until the directory it goes in is shown to be the authorized one, and
+  // each directory made is checked the same way before anything is made in it. Once one is
+  // made, no later failure is "no effect".
+  let made = false;
+  const refuse = (reason: string): never => {
+    if (made) throw new Error(`${reason}, after a directory was made for it`);
+    throw new OwnedFsNotDispatched(reason);
+  };
+  let expected = binding.identity;
+  for (const dir of missing) {
+    if (!directoryIs(dirname(dir), expected)) refuse("the directory changed before the file was created");
+    try {
+      await mkdir(dir);
+    } catch (error) {
+      if (errorCode(error) === "EEXIST") refuse("a directory appeared before the file was created");
+      if (made) throw error;
+      throw new OwnedFsFailedWithoutEffect(error);
+    }
+    made = true;
+    const id = directoryIdentity(dir);
+    if (id === undefined) throw new Error("a directory made for the file cannot be identified");
+    expected = id;
+  }
+  if (!directoryIs(parent, expected)) refuse("the directory changed before the file was created");
   let handle;
   try {
     handle = await open(binding.io, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o666);
   } catch (error) {
     // An exclusive create that failed made nothing.
-    if (made !== undefined) throw error;
-    if (errorCode(error) === "EEXIST" || errorCode(error) === "ELOOP")
-      throw new OwnedFsNotDispatched("a file appeared before it was created");
+    if (errorCode(error) === "EEXIST" || errorCode(error) === "ELOOP") refuse("a file appeared before it was created");
+    if (made) throw error;
     throw new OwnedFsFailedWithoutEffect(error);
   }
   try {
     const created = idOf(await handle.stat({ bigint: true }));
-    // The file was created where it was authorized: the directory it is in is the one the name
-    // resolves to, under the same anchor. Otherwise the new, empty file is taken away again.
-    const placed =
-      created !== undefined &&
-      physicalPathOf(parent) === parent &&
-      identityNow(binding.anchor) === binding.identity &&
-      identityNow(binding.io) === created;
+    // The file was created where it was checked: the directory it is in is still that one.
+    // Otherwise the new, empty file is taken away again; that is cleanup, not "not dispatched":
+    // the outcome is unknown.
+    const placed = created !== undefined && directoryIs(parent, expected) && identityNow(binding.io) === created;
     if (!placed) {
       await handle.close();
       handle = undefined;
@@ -172,8 +202,33 @@ export async function writeBound(binding: OwnedFsBinding, content: string): Prom
       if (now && created !== undefined && idOf(now) === created) await unlink(binding.io).catch(() => undefined);
       throw new Error("the directory changed while the file was created; the new file was taken away");
     }
-    await handle.write(content, 0, "utf8");
+    await writeAll(handle, content);
   } finally {
     await handle?.close();
+  }
+}
+
+/** The identity of the directory `dir` itself (a link is not one), or undefined. */
+function directoryIdentity(dir: string): string | undefined {
+  try {
+    const stats = lstatSync(dir, { bigint: true });
+    return stats.isDirectory() ? idOf(stats) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether `dir` is, right now, the directory `identity` names, reached by its own physical path. */
+function directoryIs(dir: string, identity: string): boolean {
+  return directoryIdentity(dir) === identity && physicalPathOf(dir) === dir;
+}
+
+/** Write all of `content` from the start of the file: a short write is continued, never taken as done. */
+export async function writeAll(handle: Pick<FileHandle, "write">, content: string): Promise<void> {
+  const bytes = Buffer.from(content, "utf8");
+  for (let at = 0; at < bytes.length;) {
+    const { bytesWritten } = await handle.write(bytes, at, bytes.length - at, at);
+    if (bytesWritten <= 0) throw new Error("the write stopped before all of the content was written");
+    at += bytesWritten;
   }
 }

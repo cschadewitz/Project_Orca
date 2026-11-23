@@ -164,15 +164,19 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   target is resolved physically, links followed (a dangling one too) (`resolveOwnedFsTarget`):
   a path that leads outside every session root once resolved is refused; when the file it
   reaches is not the path as written, the policy decides both and the stricter answer stands;
-  and the I/O goes to the resolved file, bound to the identity (device and inode) the decision
-  saw (`owned-fs-io.ts`): the file itself, or for a new file its nearest existing ancestor. The
-  I/O opens the file without following a final link (`O_NOFOLLOW` where the platform has it)
-  and compares the opened file's identity before reading or writing; a new file is created
-  exclusively and its parent checked after. A path whose identity cannot be established is
-  refused. Only the final component is opened without following links, so a directory swapped
-  higher up between the dispatch check and the open is caught only by the checks after it,
-  and this is still not an operating-system boundary. A remote host's paths are still
-  compared as written and its I/O is not identity-bound. A reusable permit still waits for
+  and the I/O goes to the resolved file (`owned-fs-io.ts`). An existing file is bound to the
+  identity (device and inode) the decision saw: it is opened without following a final link
+  (`O_NOFOLLOW` where the platform has it) and the open descriptor's identity is compared
+  before a byte is read or written. A new file is verified, not bound, since Node has no
+  `openat`/`mkdirat`: before each effect (each directory made for it, then its exclusive
+  create) the directory that effect happens in is checked, by identity and physical path, to
+  be the one authorized under its nearest existing ancestor; a change found before the first
+  effect refuses the operation, and one found only after (the instant between a check and its
+  effect) takes the new file away and leaves the outcome unknown. A write is complete only
+  when all of its content was written. A path whose identity cannot be established is
+  refused. This is still not an operating-system boundary. Remote (SSH) hosts are explicitly
+  outside this: their paths are compared as written and their I/O is not identity-bound, as
+  before; verifying them is tracked separately (#1032). A reusable permit still waits for
   physical target verification. Each operation's authorization is recorded
   (`agent.fs.authorized`) and made durable before its I/O can start: it is synced through the
   event store's exact-event barrier (`synchronizeEvent`), as a turn record is, and a store

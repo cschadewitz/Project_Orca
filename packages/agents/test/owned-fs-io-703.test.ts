@@ -1,10 +1,18 @@
 /** The local I/O of ORCA's own file executor is bound to the file it was authorized for (#703 review). */
-import { mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import { bindOwnedFs, isHostFileMissing, OwnedFsNotDispatched, readBound, stillBound, writeBound } from "@orca/agents";
+import {
+  bindOwnedFs,
+  isHostFileMissing,
+  OwnedFsNotDispatched,
+  readBound,
+  stillBound,
+  writeAll,
+  writeBound,
+} from "@orca/agents";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -73,5 +81,56 @@ describe("bound I/O", () => {
     const d = await dir();
     const error = await readBound(bindOwnedFs(join(d, "gone"))!).catch((e: unknown) => e);
     expect(isHostFileMissing(error)).toBe(true);
+  });
+
+  it("makes no directory for a new file when the directory it goes under was replaced", async () => {
+    const d = await dir();
+    const under = join(d, "under");
+    await mkdir(under);
+    const binding = bindOwnedFs(join(under, "x", "y", "new"))!;
+    await rename(under, join(d, "moved"));
+    await mkdir(under);
+    await expect(writeBound(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    expect(existsSync(join(under, "x"))).toBe(false);
+    expect(existsSync(join(d, "moved", "x"))).toBe(false);
+  });
+
+  it("makes no directory for a new file when the directory it goes under became a link", async () => {
+    const d = await dir();
+    const under = join(d, "under");
+    const elsewhere = join(d, "elsewhere");
+    await mkdir(under);
+    await mkdir(elsewhere);
+    const binding = bindOwnedFs(join(under, "x", "new"))!;
+    await rm(under, { recursive: true });
+    await symlink(elsewhere, under);
+    await expect(writeBound(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    expect(existsSync(join(elsewhere, "x"))).toBe(false);
+  });
+
+  it("refuses, as not dispatched, a directory that appeared before any was made", async () => {
+    const d = await dir();
+    const binding = bindOwnedFs(join(d, "x", "new"))!;
+    await mkdir(join(d, "x"));
+    await expect(writeBound(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    expect(existsSync(join(d, "x", "new"))).toBe(false);
+  });
+
+  it("continues a short write until all of the content is written", async () => {
+    const written: Buffer[] = [];
+    const handle = {
+      write: (bytes: Buffer, offset: number, length: number) => {
+        const n = Math.min(3, length);
+        written.push(Buffer.from(bytes.subarray(offset, offset + n)));
+        return Promise.resolve({ bytesWritten: n, buffer: bytes });
+      },
+    };
+    await writeAll(handle as never, "hello, world");
+    expect(Buffer.concat(written).toString("utf8")).toBe("hello, world");
+  });
+
+  it("does not take a write that stopped as done", async () => {
+    const handle = { write: (bytes: Buffer) => Promise.resolve({ bytesWritten: 0, buffer: bytes }) };
+    await expect(writeAll(handle as never, "x")).rejects.toThrow(/stopped before all of the content/);
   });
 });
