@@ -63,22 +63,23 @@ files.
   does, while the writer's own process pages history:
   - **The daemon alone, or with other connections that let go between reads** (polling
     every 100 ms, short reads back to back, or 100 ms snapshots 10 ms apart), the log keeps
-    starting over: its file stays at about `autoPages` (4 to 8 MB) for the whole run, at
-    every scale, with no lost write and no failed read.
+    starting over: on the reference machine its file peaks at 4 to 17 MB for the whole run,
+    at every scale, with no lost write and no failed read.
   - **With a reader on another connection that keeps a snapshot open almost all the time**
     (100 ms snapshots with no pause between them), the log never starts over and grows
-    for as long as that lasts: about 15 to 20 MB a second at the container's append rate,
-    past `walLimitBytes`, to 150 to 250 MB in 8 to 12 s. Appends slow down by about a
-    third, and nothing fails. Once that reader stops, the idle checkpoint copies the whole
+    for as long as that lasts: on the reference machine to 0.3 to 1.2 GB in 8 to 20 s,
+    far past `walLimitBytes`. Appends slow down by about a third to a half, and nothing
+    fails. Once that reader stops, the idle checkpoint copies the whole
     log back, and the next write starts the log over and cuts the file back to
     `walLimitBytes`.
 
   Nothing in ORCA reads that way today: the daemon's own reads never overlap a commit, and
   `orca store sqlite backup` holds one snapshot only while `VACUUM INTO` runs. A long backup
   or another tool reading continuously beside a busy daemon would grow the log for that
-  long. The size is measured on the reference machine in every benchmark run; whether to
-  bound it (a restart checkpoint once the log passes `walLimitBytes`, at the cost of waiting
-  for readers) is for the #341 budgets.
+  long. The size is measured on the reference machine in every benchmark run, and
+  [ADR 0011](../adr/0011-sqlite-metadata-no-graph-or-kv-store.md) records it as an operating
+  limit with the trigger for bounding it (a restart checkpoint once the log passes
+  `walLimitBytes`, at the cost of waiting for readers).
 - **Writes:** every write is one `BEGIN IMMEDIATE ... COMMIT`. `node:sqlite` is
   synchronous, so no other operation in the process can interleave with a write.
   Contention with another connection is `SQLITE_BUSY`: the connection waits 50 ms,
