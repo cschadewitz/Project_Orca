@@ -605,15 +605,9 @@ function applyOne(document: Document, graphs: DraftLayout["graphs"], op: DraftOp
     else if (op.description !== undefined) document.set("description", op.description);
     // An empty scope is no scope: removing it keeps the file what a person would write.
     if (op.capabilities === null || (op.capabilities && Object.keys(op.capabilities).length === 0))
-      deletePreserving(document, document.contents as YAMLMap, "capabilities", "The workflow's capabilities");
+      deletePreserving(document, [], "capabilities", "The workflow's capabilities");
     else if (op.capabilities !== undefined)
-      setPreserving(
-        document,
-        document.contents as YAMLMap,
-        "capabilities",
-        op.capabilities,
-        "The workflow's capabilities",
-      );
+      setPreserving(document, [], "capabilities", op.capabilities, "The workflow's capabilities");
     return;
   }
   const prefix = graphPrefix(document, op.graph);
@@ -644,17 +638,18 @@ function applyOne(document: Document, graphs: DraftLayout["graphs"], op: DraftOp
     }
     case "updateNode": {
       requireNode(op.id);
-      const node = mapAt(document, [...prefix, "nodes", op.id]);
+      const nodePath = [...prefix, "nodes", op.id];
+      const node = mapAt(document, nodePath);
       for (const [field, value] of Object.entries(op.set ?? {})) {
         if (field === "type") invalid("Change a node's type with changeType.");
         if (value === undefined) continue;
         // A capability scope is edited node by node, so comments and anchors beside the change survive.
-        if (field === "capabilities") setPreserving(document, node, field, value, `${op.id}'s capabilities`);
+        if (field === "capabilities") setPreserving(document, nodePath, field, value, `${op.id}'s capabilities`);
         else node.set(field, document.createNode(value));
       }
       for (const field of op.unset ?? []) {
         if (field === "type") invalid("A node keeps its type.");
-        if (field === "capabilities") deletePreserving(document, node, field, `${op.id}'s capabilities`);
+        if (field === "capabilities") deletePreserving(document, nodePath, field, `${op.id}'s capabilities`);
         else node.delete(field);
       }
       return;
@@ -840,9 +835,12 @@ function appendPair(document: Document, nodes: YAMLMap, id: string, value: Recor
  * is unchanged stays an alias. A change that would rewrite an anchored or aliased node is
  * refused rather than silently breaking the shared value: the person edits the YAML instead.
  */
-function setPreserving(document: Document, parent: YAMLMap, key: string, value: unknown, where: string): void {
+function setPreserving(document: Document, path: Path, key: string, value: unknown, where: string): void {
+  const parent = path.length ? mapAt(document, path) : document.contents;
   if (!isMap(parent)) invalid("Expected a mapping at the top of the workflow.");
   const existing = parent.get(key, true) as unknown;
+  if (isNode(existing) && isDeepStrictEqual(resolved(document, existing), value)) return;
+  refuseSharedPath(document, path, where);
   if (existing === undefined || existing === null) {
     parent.set(key, document.createNode(value));
     return;
@@ -851,16 +849,37 @@ function setPreserving(document: Document, parent: YAMLMap, key: string, value: 
   if (next !== existing) parent.set(key, next);
 }
 
-function deletePreserving(document: Document, parent: YAMLMap, key: string, where: string): void {
-  if (!isMap(parent)) return;
+function deletePreserving(document: Document, path: Path, key: string, where: string): void {
+  const parent = path.length ? mapAt(document, path) : document.contents;
+  if (!isMap(parent) || !parent.has(key)) return;
+  refuseSharedPath(document, path, where);
   const existing = parent.get(key, true) as unknown;
-  if (existing !== undefined && existing !== null) refuseIfShared(existing as Node, where);
+  if (isNode(existing)) refuseIfShared(existing, where);
   parent.delete(key);
 }
 
+const resolved = (document: Document, node: Node): unknown =>
+  isAlias(node) ? node.resolve(document)?.toJS(document) : node.toJS(document);
+
+/**
+ * Refuse a capability edit when any YAML node enclosing the field is shared: an anchor on the
+ * workflow, a graph or the step means another scope reads the same mapping, so changing it here
+ * would change that scope too.
+ */
+function refuseSharedPath(document: Document, path: Path, where: string): void {
+  let node: unknown = document.contents;
+  for (let i = 0; ; i++) {
+    if (isAlias(node) || (isNode(node) && (node as { anchor?: string }).anchor))
+      invalid(
+        `${where} sit inside a YAML anchor or alias shared with another part of the file, so this change would alter that part too. Edit the workflow's YAML to change it.`,
+      );
+    if (i === path.length) return;
+    node = isMap(node) || isSeq(node) ? node.get(path[i], true) : undefined;
+  }
+}
+
 function mergeNode(document: Document, node: Node, value: unknown, where: string): Node {
-  const current = isAlias(node) ? node.resolve(document)?.toJS(document) : node.toJS(document);
-  if (isDeepStrictEqual(current, value)) return node;
+  if (isDeepStrictEqual(resolved(document, node), value)) return node;
   refuseIfShared(node, where, true);
   if (isMap(node) && isPlainObject(value)) {
     for (const item of [...node.items]) {

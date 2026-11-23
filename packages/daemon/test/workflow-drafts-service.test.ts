@@ -370,6 +370,43 @@ capabilities:
     ).rejects.toThrow(/anchor or alias/);
   });
 
+  it("refuses a capability edit whose step is shared with another step through an anchor (#335)", async () => {
+    const f = await fixture();
+    const shared = TINY.replace(
+      "  work:\n    type: set\n    vars: { done: true }\n",
+      `  work: &step
+    type: set
+    vars: { done: true }
+    capabilities:
+      skills: { disable: [review] }
+  twin: *step
+`,
+    ).replace("  - { from: work, to: done }\n", "  - { from: work, to: twin }\n  - { from: twin, to: done }\n");
+    await writeFile(f.file, shared);
+    const opened = await f.service.open("tiny", casey);
+    expect(opened.text).toBe(shared);
+    for (const op of [
+      { op: "updateNode", id: "work", set: { capabilities: { skills: { disable: ["review", "deploy"] } } } },
+      { op: "updateNode", id: "work", unset: ["capabilities"] },
+    ] as const)
+      await expect(f.service.apply({ workflowId: "tiny", expectedRevision: 0, ops: [op] }, casey)).rejects.toThrow(
+        /anchor or alias shared with another part.*Edit the workflow's YAML/,
+      );
+    // The twin's scope is untouched, and an edit that changes nothing is still accepted.
+    const same = await f.service.apply(
+      {
+        workflowId: "tiny",
+        expectedRevision: 0,
+        ops: [{ op: "updateNode", id: "work", set: { capabilities: { skills: { disable: ["review"] } } } }],
+      },
+      casey,
+    );
+    expect(parse(same.text)).toEqual(parse(shared));
+    expect(same.text).toContain("work: &step");
+    expect(same.text).toContain("twin: *step");
+    expect(parse(same.text).nodes.twin.capabilities).toEqual({ skills: { disable: ["review"] } });
+  });
+
   it("keeps a drag in the layout and out of the workflow text", async () => {
     const f = await fixture();
     await f.service.open("tiny", casey);
