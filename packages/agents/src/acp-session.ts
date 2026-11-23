@@ -33,6 +33,7 @@ import {
   type AuthorizeSecretUse,
 } from "./secrets.js";
 import { processCleanup } from "./process-cleanup.js";
+import { nativeToolHookUnavailable } from "./claude-hook-session.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
 import {
@@ -176,6 +177,12 @@ function withinRoots(path: string, roots: string[]): boolean {
 }
 
 export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSession> {
+  // An agent that asked for ORCA's tool hook is opened only by the session factory that
+  // installs it (`sessionMeta`); any other caller (a probe, a tool) would run it unguarded.
+  if (opts.sessionMeta === undefined) {
+    const refused = nativeToolHookUnavailable(opts.agent);
+    if (refused) throw refused;
+  }
   if (opts.requireContextRecovery && !opts.resumeSessionId?.trim()) throw contextRecoveryFailure("missing-session-id");
   // Secret references (#336) are checked before anything starts; the host reads them as part
   // of starting the agent. From then on every error this session throws, the handshake's

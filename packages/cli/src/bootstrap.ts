@@ -38,6 +38,7 @@ import {
   AgentRegistry,
   claudeHookSession,
   claudePreToolHookScript,
+  nativeToolHookUnavailable,
   openAcpSession,
   permissionPolicyPath,
   type AgentSession,
@@ -314,13 +315,7 @@ export function makeSessionFactory(
     const bound = { ...options, permissionFiles, protectedPaths };
     // ORCA's pre-tool hook (#704): decided per session, once the agent says who it is.
     if (options.agent.nativeToolHook !== "on") return open(bound);
-    if (hook.activation !== "acceptance-only")
-      throw new OrcaError(
-        "NOT_SUPPORTED",
-        `agent ${options.agent.id} has nativeToolHook: on, but ORCA's native tool hook is not available in this build yet (#704). ` +
-          `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
-        { agentId: options.agent.id },
-      );
+    if (hook.activation !== "acceptance-only") throw nativeToolHookUnavailable(options.agent)!;
     // The hook runs where the agent does; ORCA installs it only on its own host.
     if (options.host.spec.type !== "local")
       throw new OrcaError(

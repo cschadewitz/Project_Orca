@@ -46,6 +46,26 @@ import {
 } from "./claude-pre-tool-hook.js";
 import type { ProtectedPaths } from "./permissions.js";
 
+/**
+ * Whether `nativeToolHook: on` can be used at all. It cannot, in any build ORCA ships, until a
+ * session can be held away from host services until its runtime is admitted (#704): every
+ * entry point that starts agent work refuses such an agent before anything starts, the
+ * session factory, `openAcpSession` itself, and remote delegation. Only the hook's own test
+ * suites turn it on, through the session factory's `activation`, which no config reaches.
+ */
+export function nativeToolHookUnavailable(agent: {
+  id: string;
+  nativeToolHook?: "on" | "off" | undefined;
+}): OrcaError | undefined {
+  if (agent.nativeToolHook !== "on") return undefined;
+  return new OrcaError(
+    "NOT_SUPPORTED",
+    `agent ${agent.id} has nativeToolHook: on, but ORCA's native tool hook is not available in this build yet (#704). ` +
+      `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
+    { agentId: agent.id },
+  );
+}
+
 /** The names the Claude ACP adapter reports in `initialize`'s `agentInfo`. */
 export const CLAUDE_ADAPTER_NAMES: readonly string[] = [
   "@agentclientprotocol/claude-agent-acp",

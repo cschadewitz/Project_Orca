@@ -730,6 +730,12 @@ export const AgentSpecSchema = z
         path: ["workflow"],
         message: "an orca-daemon agent needs the remote workflow it runs",
       });
+    if (agent.nativeToolHook === "on")
+      ctx.addIssue({
+        code: "custom",
+        path: ["nativeToolHook"],
+        message: "an orca-daemon agent runs the remote daemon's own agents; ORCA's tool hook does not apply to it",
+      });
     if (agent.mcpServers.length > 0 || agent.capabilities !== undefined)
       ctx.addIssue({
         code: "custom",
