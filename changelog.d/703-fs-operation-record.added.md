@@ -4,3 +4,5 @@
   If the authorization cannot be recorded, the operation does not start. If the daemon stops
   between the two, the operation is shown as execution-unknown rather than assumed done or
   repeated.
+  After the record is written, the permission policy is read again and must still allow the
+  operation; a deny saved meanwhile refuses it.

@@ -44,6 +44,7 @@ import {
   type FsAccess,
 } from "./owned-fs-gate.js";
 import { judgedLane } from "./judged-lane.js";
+import { bindOwnedFs, OwnedFsNotDispatched, stillBound, type OwnedFsBinding } from "./owned-fs-io.js";
 import type { JudgePermission } from "./review-judge/plain-rule.js";
 import { processCleanup } from "./process-cleanup.js";
 import * as acpUnstable from "@agentclientprotocol/sdk/unstable";
@@ -54,7 +55,6 @@ import { isHostFileMissing, type AgentHost, type AgentProcessHandle } from "./ho
 import {
   decidePermission,
   loadEffectivePermissionPolicy,
-  physicalPathOf,
   protectedPathFor,
   permissionRuleRecord,
   resolvePermission,
@@ -270,6 +270,8 @@ interface FsAuthorization {
   dispatch: () => void;
   decision: string;
   rule: PermissionRuleRecord;
+  /** Whether `policy`, read again just before the I/O, still lets this operation through. */
+  stillAllowed: (policy: PermissionPolicy) => boolean;
 }
 
 function withinRoots(path: string, roots: string[]): boolean {
@@ -465,7 +467,8 @@ async function openPlanned(
     const rule = permissionRuleRecord(explained);
     if (decision === "allow") {
       record("allow", rule);
-      return { dispatch, decision: "allow", rule };
+      // A rule's allow holds only while the policy still allows it.
+      return { dispatch, decision: "allow", rule, stillAllowed: (now) => explain(now).decision === "allow" };
     }
     if (decision !== "ask") return refuse(decision, `not allowed: ${decision}`, rule);
     const invocation: PermissionInvocation = {
@@ -499,7 +502,8 @@ async function openPlanned(
       );
     if (!live()) return refuse("ask:allow_once:turn-ended", "the turn ended while the file request was asked", rule);
     record("ask:allow_once", rule);
-    return { dispatch, decision: "ask:allow_once", rule };
+    // A person's one-time answer holds unless the policy now denies it.
+    return { dispatch, decision: "ask:allow_once", rule, stillAllowed: (now) => explain(now).decision !== "deny" };
   };
 
   /**
@@ -551,8 +555,26 @@ async function openPlanned(
         logger.warn("fs outcome could not be recorded", { path, access, error: describeError(error) }),
       );
     };
+    // Recording took time: authority is checked again, from the policy as it is now, and the
+    // target must still be the very file authorized. Both in the step that starts the I/O.
+    const refusedNow = async (reason: string): Promise<never> => {
+      await outcome("not-dispatched");
+      throw acp.RequestError.invalidParams({ path, reason });
+    };
+    let current: PermissionPolicy;
+    try {
+      current = await policyForAsk();
+    } catch {
+      return refusedNow("the policy could not be read again before the file I/O");
+    }
     try {
       authorized.dispatch();
+    } catch (error) {
+      await outcome("not-dispatched");
+      throw error;
+    }
+    if (!authorized.stillAllowed(current)) return refusedNow("not allowed now: the policy changed before the file I/O");
+    try {
       target.unchanged();
     } catch (error) {
       await outcome("not-dispatched");
@@ -562,6 +584,7 @@ async function openPlanned(
     try {
       result = await io(target.io);
     } catch (error) {
+      if (error instanceof OwnedFsNotDispatched) return refusedNow(error.message);
       await outcome("failed");
       throw error;
     }
@@ -696,7 +719,9 @@ async function openPlanned(
    * runs in the dispatch step and refuses when the path no longer resolves to the same file.
    */
   const localHost = opts.host.spec.type === "local";
-  const ownedTarget = (path: string): { io: string; resolved?: string; unchanged: () => void } => {
+  const ownedTarget = (
+    path: string,
+  ): { io: string; resolved?: string; binding?: OwnedFsBinding; unchanged: () => void } => {
     if (!localHost) return { io: path, unchanged: () => undefined };
     const target = resolveOwnedFsTarget(path, roots);
     if (!target.ok)
@@ -705,15 +730,23 @@ async function openPlanned(
         reason:
           target.reason === "outside" ? "outside session roots once links are followed" : "the path cannot be resolved",
       });
+    // The file it reaches, or the directory it would be created under, by identity: a path
+    // string alone does not show the object behind it stayed the same (#703 review).
+    const binding = opts.host.fs.bound ? bindOwnedFs(target.io) : undefined;
+    if (!binding) throw acp.RequestError.invalidParams({ path, reason: "the file's identity cannot be established" });
     return {
       io: target.io,
       resolved: target.asWritten,
+      binding,
       unchanged: () => {
-        if (physicalPathOf(path) !== target.io)
+        if (!stillBound(path, binding))
           throw acp.RequestError.invalidParams({ path, reason: "the path changed before the file I/O started" });
       },
     };
   };
+
+  // Present whenever a binding was made: `ownedTarget` binds only on a host that has it.
+  const bound = () => opts.host.fs.bound!;
 
   const refuseProtected = (path: string, access: "read" | "write"): void => {
     if (protectedPathFor(path, access, opts.protectedPaths) === undefined) return;
@@ -810,7 +843,9 @@ async function openPlanned(
       const authorized = await authorizeFs(path, "read", target.resolved);
       let content: string;
       try {
-        content = await executeOwnedFs(path, "read", target, authorized, (file) => opts.host.fs.readFile(file));
+        content = await executeOwnedFs(path, "read", target, authorized, (file) =>
+          target.binding ? bound().read(target.binding) : opts.host.fs.readFile(file),
+        );
       } catch (e) {
         // A missing file is an answer, not a failure: agents (Gemini CLI among them) find out
         // whether a file exists by reading it, and only "Resource not found" reads as missing.
@@ -838,7 +873,9 @@ async function openPlanned(
       refuseProtected(path, "write");
       const target = ownedTarget(path);
       const authorized = await authorizeFs(path, "write", target.resolved);
-      await executeOwnedFs(path, "write", target, authorized, (file) => opts.host.fs.writeFile(file, content));
+      await executeOwnedFs(path, "write", target, authorized, (file) =>
+        target.binding ? bound().write(target.binding, content) : opts.host.fs.writeFile(file, content),
+      );
       return {};
     });
 

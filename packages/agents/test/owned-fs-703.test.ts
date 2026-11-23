@@ -8,7 +8,7 @@
  * the I/O: a deny refuses, an ask needs a one-time allow, and that allow is good once.
  */
 import { existsSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -299,7 +299,10 @@ describe("a read of a file that is not there", () => {
 
   it("is reported as an error, not as missing, when the host cannot classify the failure", async () => {
     const dir = await workspace();
+    // A host whose I/O goes through its own file system (any but the local one, whose
+    // operations ORCA binds itself), standing in for an SSH host's `cat` fallback.
     const host = new LocalHost({ id: "local", type: "local" });
+    Object.defineProperty(host, "spec", { value: { id: "remote", type: "ssh" } });
     host.fs.readFile = () => Promise.reject(Object.assign(new Error("spawn ssh ENOENT"), { code: "ENOENT" }));
     const { outcomes } = await turn(
       dir,
@@ -596,5 +599,123 @@ describe("ORCA's own file executor records each operation before its I/O (#703)"
     );
     expect(outcomes[0]?.code).toBe(-32002);
     expect(records.map((r) => (r.phase === "completed" ? r.outcome : r.phase))).toEqual(["authorized", "failed"]);
+  });
+});
+
+describe("authority and identity survive the wait for the record (#703 review)", () => {
+  const local = () => new LocalHost({ id: "local", type: "local" });
+  const phases = (records: FsOperationRecord[]) => records.map((r) => (r.phase === "completed" ? r.outcome : r.phase));
+
+  it("reads the policy again after recording, and a deny that appeared meanwhile refuses the I/O", async () => {
+    const dir = await workspace();
+    const file = join(dir, "src", "a.ts");
+    const sidecar = permissionPolicyPath(dir);
+    const records: FsOperationRecord[] = [];
+    const { outcomes } = await turn(
+      dir,
+      [{ write: file, content: "new" }],
+      { default: "allow" },
+      undefined,
+      [sidecar],
+      local(),
+      {
+        recordFsOperation: async (record) => {
+          records.push(record);
+          if (record.phase === "authorized")
+            await writeFile(
+              sidecar,
+              JSON.stringify({
+                version: 1,
+                agents: { prober: { rules: [{ match: { kind: "edit", path: "src/a.ts" }, decision: "deny" }] } },
+              }),
+              "utf8",
+            );
+        },
+      },
+    );
+    expect(refused(outcomes[0])).toBe("not allowed now: the policy changed before the file I/O");
+    expect(phases(records)).toEqual(["authorized", "not-dispatched"]);
+    expect(await readFile(file, "utf8")).toBe("export {};\n");
+  });
+
+  it("writes only the very file authorized: one put in its place under the same name is left alone", async () => {
+    const dir = await workspace();
+    const file = join(dir, "src", "a.ts");
+    const records: FsOperationRecord[] = [];
+    const { outcomes } = await turn(
+      dir,
+      [{ write: file, content: "new" }],
+      { default: "allow" },
+      undefined,
+      undefined,
+      local(),
+      {
+        recordFsOperation: async (record) => {
+          records.push(record);
+          if (record.phase === "authorized") {
+            await writeFile(join(dir, "src", "swap.ts"), "swapped", "utf8");
+            await rename(join(dir, "src", "swap.ts"), file);
+          }
+        },
+      },
+    );
+    expect(refused(outcomes[0])).toBe("the path changed before the file I/O started");
+    expect(phases(records)).toEqual(["authorized", "not-dispatched"]);
+    expect(await readFile(file, "utf8")).toBe("swapped");
+  });
+
+  it("creates a new file only where it was authorized, not where a file appeared meanwhile", async () => {
+    const dir = await workspace();
+    const file = join(dir, "src", "new.ts");
+    const records: FsOperationRecord[] = [];
+    const { outcomes } = await turn(
+      dir,
+      [{ write: file, content: "new" }],
+      { default: "allow" },
+      undefined,
+      undefined,
+      local(),
+      {
+        recordFsOperation: async (record) => {
+          records.push(record);
+          if (record.phase === "authorized") await writeFile(file, "someone else's", "utf8");
+        },
+      },
+    );
+    expect(refused(outcomes[0])).toBe("the path changed before the file I/O started");
+    expect(phases(records)).toEqual(["authorized", "not-dispatched"]);
+    expect(await readFile(file, "utf8")).toBe("someone else's");
+  });
+
+  it("creates a new file, directories and all, under the directory it was authorized for", async () => {
+    const dir = await workspace();
+    const file = join(dir, "src", "deep", "er", "new.ts");
+    const { outcomes } = await turn(
+      dir,
+      [{ write: file, content: "new" }],
+      { default: "allow" },
+      undefined,
+      undefined,
+      local(),
+    );
+    expect(outcomes[0]?.result).toEqual({});
+    expect(await readFile(file, "utf8")).toBe("new");
+  });
+
+  it("refuses a local request on a host that cannot bind its I/O to the file, and leaves the file alone", async () => {
+    const dir = await workspace();
+    const file = join(dir, "src", "a.ts");
+    const host = local();
+    Object.defineProperty(host, "fs", { value: { ...host.fs, bound: undefined } });
+    const { outcomes } = await turn(
+      dir,
+      [{ write: file, content: "x" }],
+      { default: "allow" },
+      undefined,
+      undefined,
+      host,
+    );
+    expect(refused(outcomes[0])).toBe("the file's identity cannot be established");
+    expect(await readFile(file, "utf8")).not.toBe("x");
   });
 });

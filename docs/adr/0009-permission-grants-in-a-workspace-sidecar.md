@@ -164,14 +164,22 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   target is resolved physically, links followed (a dangling one too) (`resolveOwnedFsTarget`):
   a path that leads outside every session root once resolved is refused; when the file it
   reaches is not the path as written, the policy decides both and the stricter answer stands;
-  the resolution is checked again in the dispatch step; and the I/O goes to the resolved file.
-  That is a check on names at decision and dispatch time, not an operating-system boundary: a
-  directory swapped between the check and the open is not caught. A remote host's paths are
-  still compared as written. A reusable permit still waits for physical target verification.
-  Each operation's authorization is recorded (`agent.fs.authorized`) and that record awaited
-  before its I/O can start; a record that cannot be written refuses the operation. Its outcome
-  follows (`agent.fs.completed`: completed, failed, or not dispatched when a dispatch check
-  refused). An authorization with no outcome, as after a crash, is execution-unknown
+  and the I/O goes to the resolved file, bound to the identity (device and inode) the decision
+  saw (`owned-fs-io.ts`): the file itself, or for a new file its nearest existing ancestor. The
+  I/O opens the file without following a final link (`O_NOFOLLOW` where the platform has it)
+  and compares the opened file's identity before reading or writing; a new file is created
+  exclusively and its parent checked after. A path whose identity cannot be established is
+  refused. Only the final component is opened without following links, so a directory swapped
+  higher up between the dispatch check and the open is caught only by the checks after it,
+  and this is still not an operating-system boundary. A remote host's paths are still
+  compared as written and its I/O is not identity-bound. A reusable permit still waits for
+  physical target verification. Each operation's authorization is recorded
+  (`agent.fs.authorized`) and that record awaited before its I/O can start; a record that
+  cannot be written refuses the operation. After the record the policy is read again and must
+  still allow the operation (an `allow` must still be `allow`; an operation a person allowed
+  once must not have become `deny`), the turn must still be live and the target unchanged, or
+  the operation is refused. Its outcome follows (`agent.fs.completed`: completed, failed, or
+  not dispatched when a check after the record refused). An authorization with no outcome, as after a crash, is execution-unknown
   (`ownedFsExecutions`): ORCA never repeats the operation, and no transaction spans the file
   and the record. The `fs:` decision log is written alongside and not awaited. This is the
   client-owned ACP file path only: an agent's native tools and its own MCP connections do not

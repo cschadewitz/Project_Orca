@@ -27,14 +27,18 @@
  * operating-system boundary's job (ADR 0009). On a local host the target is resolved
  * physically (`resolveOwnedFsTarget`): a link inside the roots that leads outside them is
  * refused, the policy decides both the path as written and the file it reaches (the stricter
- * answer stands), the resolution is checked again in the dispatch step, and the I/O goes to the
- * resolved file. That is a decision-time and dispatch-time check on names, not an
- * operating-system boundary: a directory swapped between the check and the open is not caught,
- * and a remote host's paths are still compared as written.
+ * answer stands), and the I/O goes to the resolved file bound to the identity the decision saw
+ * (`owned-fs-io.ts`: device and inode of the file, or of a new file's nearest existing
+ * ancestor; opened without following a final link and compared after the open; a new file
+ * created exclusively). A path whose identity cannot be established is refused. Only the final
+ * component is opened without following links, so this is still not an operating-system
+ * boundary, and a remote host's paths are compared as written with no identity binding.
  *
  * The durable record is separate (`recordFsOperation`, `agent.fs.authorized` and
  * `agent.fs.completed`): each authorized operation is recorded, and that record awaited,
- * before its I/O can start, and its outcome after. An authorization with no outcome is
+ * before its I/O can start, and its outcome after. After the record the policy is read again
+ * and must still allow the operation, the turn must be live and the target unchanged;
+ * otherwise the outcome is `not-dispatched`. An authorization with no outcome is
  * execution-unknown (`ownedFsExecutions`), never replayed. The `fs:` decisions logged through
  * `onPermission` remain the decision log, written alongside and not awaited.
  */
