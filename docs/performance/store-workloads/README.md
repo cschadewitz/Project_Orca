@@ -4,7 +4,7 @@ A reproducible benchmark of the four storage workloads #341 names, plus a checkp
 run through the #338 store contracts so the same code measures every backend: memory, file
 and SQLite (#339). The comparison that decides whether a graph projection or a key-value
 cache improves on SQLite is recorded in
-[ADR 0011](../../adr/0011-sqlite-metadata-no-graph-or-kv-store.md), with its budgets and the
+[ADR 0011](../../adr/0011-sqlite-metadata-graph-and-kv-deferred.md), with its budgets and the
 reference machine.
 
 Code: `tools/benchmarks/store-workloads/`. Reference runs: `.github/workflows/store-workloads-bench.yml`. Self-test: `tools/test/store-workloads.test.js`

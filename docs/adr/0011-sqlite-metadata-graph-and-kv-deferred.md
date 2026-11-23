@@ -1,9 +1,12 @@
-# ADR 0011: SQLite is the durable metadata store; no graph database or key-value store
+# ADR 0011: SQLite is the durable metadata store; graph and key-value stores deferred
 
-- Status: Proposed (#341)
+- Status: Proposed (#341). Settles SQLite as the store and defers both alternatives on measured
+  SQLite headroom. It does **not** meet #341's criterion of comparing equivalent graph and
+  key-value prototypes against budgets recorded beforehand (see "What this does not show").
 - Date: 2026-11-23
 - Inspected baseline: main `9413feac7fdd9abea8f9b76af1344c6ee115fbcc` (workloads, run
-  45084792624) and the checkpoint-under-load workload merged in #989 (`095c156b`, run 45136569819)
+  45084792624) and the final reviewed head of #989 (`b046a57d`, run 45139685534) for checkpoints
+  under load
 
 ## Context
 
@@ -20,6 +23,10 @@ contracts only, at three seeded dataset scales, on three backends, with invarian
 run. It runs on every push to `main` that touches the store, and on benchmark pull requests.
 
 ### Why these budgets
+
+These budgets were written **after** the SQLite and file baselines below were measured, so they
+are not budgets recorded before a comparison in the sense #341 asks for. They are derived from
+ORCA's needs, not from what a backend achieved, and are the line future runs are judged against.
 
 ORCA's metadata is read by people through the desktop app and CLI, and written by the daemon
 on behalf of agents. The budgets follow from that, not from what any backend happens to achieve:
@@ -64,19 +71,20 @@ backends in one run carry more weight than any single figure.
 
 Store workload benchmark, Actions run
 [45084792624](https://github.com/cschadewitz/Project_Orca/actions/runs/45084792624)
-(three repeats per sample), and the checkpoint-under-load workload from #989's run
-[45136569819](https://github.com/cschadewitz/Project_Orca/actions/runs/45136569819). The
-`memory` backend is not a deployment option: it is the **in-RAM ceiling** that any embedded
-graph or key-value engine could at best approach, since it has no I/O, serialisation or
-durability cost at all.
+(three repeats per sample), and the checkpoint-under-load workload from the final reviewed head
+of #989, run [45139685534](https://github.com/cschadewitz/Project_Orca/actions/runs/45139685534).
+The `memory` backend is not a deployment option. It runs ORCA's existing projections and queries
+over storage held in RAM: it shows how much of a workload's time is storage I/O and how much is
+ORCA's own computation. It is **not** an upper bound for a graph or key-value design, which could
+use a different traversal or indexing strategy altogether.
 
-| Workload (large scale) | file | SQLite | memory (ceiling) | Budget |
+| Workload (large scale) | file | SQLite | memory (RAM storage) | Budget |
 |---|---|---|---|---|
 | History tail page, warm / cold | 0.9 / 4.5 ms | 0.4 / 6.3 ms | 19.5 ms / — | 50 / 100 ms |
 | History backward page | 9.9 ms | 0.3 ms | 15.6 ms | 50 ms |
 | Dependency traversal, warm / cold | 146 / 261 ms | 160 / 156 ms | 166 ms / — | 250 ms |
 | Metadata writes, 16 writers | 43 ops/s, 1,064 ms | 8,391 ops/s, 3.8 ms | 84,148 ops/s, 0.5 ms | 500 ops/s, 50 ms |
-| Streamed appends (burst / sustained, daemon) | 6,068 / — | 9,391 / 5,969 per s, max 3.4 ms | 269,886 / — | 1,000/s, 250 ms |
+| Streamed appends (burst / sustained, daemon) | 6,068 / — | 9,391 / 5,747 per s, max 7.0 ms | 269,886 / — | 1,000/s, 250 ms |
 | Projection rebuild after loss | 21.5 s | 0.52 s | 2.7 s | 5 s |
 | Store on disk | 118 MB | 211 MB | — | — |
 
@@ -88,13 +96,16 @@ appending without pause for 20 s at large scale, with the daemon paging history 
 
 | Readers on other connections | Log file peak | Appends/s | Max append |
 |---|---|---|---|
-| none (the daemon alone) | 4.2 MB | 5,969 | 3.4 ms |
-| polling every 100 ms | 4.2 MB | 5,840 | 4.7 ms |
-| short reads back to back | 7.2 MB | 5,420 | 8.8 ms |
-| 100 ms snapshots, 10 ms apart | 16.5 MB | 5,822 | 11.7 ms |
-| 100 ms snapshots, no pause | **1,212 MB** | 3,108 | 9.0 ms |
+| none (the daemon alone) | 4.2 MB | 5,747 | 7.0 ms |
+| polling every 100 ms | 4.2 MB | 5,824 | 6.6 ms |
+| short reads back to back | 6.7 MB | 5,613 | 8.8 ms |
+| 100 ms snapshots, 10 ms apart | 16.0 MB | 5,454 | 12.3 ms |
+| 100 ms snapshots, no pause | **1,079 MB** | 2,764 | 9.0 ms |
 
-Every append committed and every read succeeded in every phase. Only a reader that holds a
+Every append committed and every read succeeded in every phase, at every scale, and after each
+phase the store's idle checkpoint reported copying the whole log back. The slowest single append
+in any phase at any scale was 201 ms (small scale, short reads back to back), inside the 250 ms
+budget but close enough to watch. Only a reader that holds a
 snapshot open essentially all the time keeps the log from ever starting over; once it stops, the
 idle checkpoint copies everything back and the next write cuts the file to `walLimitBytes`. No
 ORCA component reads that way: the daemon's reads are synchronous and never overlap a commit.
@@ -114,14 +125,15 @@ Metadata, run event logs, plan journals and the artifact index stay in SQLite; a
 and encrypted records stay as files (`docs/storage/sqlite-metadata.md`). No second durable store
 is added.
 
-### Graph database: rejected for now
+### Graph database: deferred, not adopted
 
-- **Measured rationale.** Dependency traversal costs the same on all three backends at every
-  scale (160 ms SQLite, 146 ms file, 166 ms in RAM at large). The time is spent building and
-  walking the in-memory dependency projection, not reading from the store, so even a graph
-  engine with zero storage cost could not meet the budget by a wider margin than SQLite already
-  does. Multi-hop questions over plans and causal history are answered by that projection, which
-  is rebuilt from the authoritative store in 0.5 s at large scale.
+- **Measured rationale.** SQLite meets the traversal budget (160 ms p95 at large against 250 ms,
+  11.5 ms at medium against 50 ms). With ORCA's current projection, traversal costs about the same
+  whatever the storage (146 ms file, 166 ms RAM), so the time is in the projection, not the store.
+  That headroom is the reason to defer; it is not evidence that a graph design would be no
+  faster, since a graph engine could traverse differently. Multi-hop questions over plans and
+  causal history are answered by that projection, rebuilt from the authoritative store in
+  0.5 s at large scale.
 - **Cost it would add.** A new engine and dependency to install, upgrade, back up and keep
   consistent with SQLite, with a second recovery path, for no measured gain.
 - **Reconsider when** any of these holds on the reference machine: warm dependency traversal
@@ -131,12 +143,12 @@ is added.
   causal history spanning many runs) that the in-memory projection cannot answer within the
   traversal budget.
 
-### Key-value store: rejected as an authority or a coordination mechanism; deferred as a cache
+### Key-value store: not adopted as an authority or a coordination mechanism; deferred as a cache
 
 - **Measured rationale.** Every read and write budget is met by SQLite with at least an order
   of magnitude of headroom on writes (8,391 committed ops/s against 500) and history paging
-  (0.3 to 0.4 ms against 50 ms). The in-RAM ceiling is faster still, but no ORCA workload needs
-  that speed. Projection rebuild after loss, the main case for a disposable cache, takes 0.52 s
+  (0.3 to 0.4 ms against 50 ms). RAM storage is faster still, but no budget needs that speed.
+  Projection rebuild after loss, the main case for a disposable cache, takes 0.52 s
   from SQLite at large scale, against a 5 s budget, and the existing on-disk projection cache is
   already disposable and rebuilt from authoritative data (checked byte-identical after loss on
   every benchmark run).
@@ -151,7 +163,7 @@ is added.
 ### SQLite's write-ahead log under a pinned outside reader: a recorded limit
 
 The log stays within `walLimitBytes` under every read pattern ORCA produces. A reader in another
-process holding a snapshot open without pause can grow it without bound (1.2 GB in 20 s on the
+process holding a snapshot open without pause can grow it without bound (1.1 GB in 20 s on the
 reference machine) until it stops. This is SQLite's documented behaviour, not a defect, and no
 ORCA command reads that way. It is recorded here as an operating limit. **Reconsider when** an
 ORCA component or supported tool reads the store from another process for longer than the idle
@@ -175,6 +187,17 @@ window at a time; the remedy then is a restart checkpoint once the log passes `w
   tests, not timed.
 - Recovery time after a kill is not timed yet; the 5 s budget is checked only by the #339 tests
   completing. A timed reopen-after-kill workload is a follow-up for the benchmark.
-- No graph or key-value engine was benchmarked directly. The in-RAM `memory` backend stands in
-  as the ceiling any such engine could reach; that is enough to reject them where SQLite already
-  meets the budget, but not to rank engines against each other if a trigger fires.
+
+## What this does not show
+
+- **No equivalent graph or key-value prototype was compared.** The `memory` backend runs ORCA's
+  existing projection over RAM storage; it is not a graph or key-value design and not an upper
+  bound on one.
+- **The budgets postdate the baseline.** They were written after the SQLite and file numbers were
+  seen.
+
+So this ADR supports keeping SQLite and **deferring** the alternatives on measured headroom. It
+does not show that equivalent prototypes were compared under budgets recorded beforehand. That
+part of #341 stays open unless it is explicitly narrowed to "defer on measured SQLite headroom";
+completing it means building graph and key-value prototypes that use their own traversal and
+indexing, and comparing them against these budgets, now recorded.

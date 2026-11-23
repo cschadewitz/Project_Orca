@@ -63,11 +63,11 @@ files.
   does, while the writer's own process pages history:
   - **The daemon alone, or with other connections that let go between reads** (polling
     every 100 ms, short reads back to back, or 100 ms snapshots 10 ms apart), the log keeps
-    starting over: on the reference machine its file peaks at 4 to 17 MB for the whole run,
+    starting over: on the reference machine its file peaks at 4 to 16 MB for the whole run,
     at every scale, with no lost write and no failed read.
   - **With a reader on another connection that keeps a snapshot open almost all the time**
     (100 ms snapshots with no pause between them), the log never starts over and grows
-    for as long as that lasts: on the reference machine to 0.3 to 1.2 GB in 8 to 20 s,
+    for as long as that lasts: on the reference machine to 0.4 to 1.1 GB in 8 to 20 s,
     far past `walLimitBytes`. Appends slow down by about a third to a half, and nothing
     fails. Once that reader stops, the idle checkpoint copies the whole
     log back, and the next write starts the log over and cuts the file back to
@@ -77,7 +77,7 @@ files.
   `orca store sqlite backup` holds one snapshot only while `VACUUM INTO` runs. A long backup
   or another tool reading continuously beside a busy daemon would grow the log for that
   long. The size is measured on the reference machine in every benchmark run, and
-  [ADR 0011](../adr/0011-sqlite-metadata-no-graph-or-kv-store.md) records it as an operating
+  [ADR 0011](../adr/0011-sqlite-metadata-graph-and-kv-deferred.md) records it as an operating
   limit with the trigger for bounding it (a restart checkpoint once the log passes
   `walLimitBytes`, at the cost of waiting for readers).
 - **Writes:** every write is one `BEGIN IMMEDIATE ... COMMIT`. `node:sqlite` is
