@@ -66,10 +66,47 @@ async function succeededRuns(page: Page, count: number): Promise<string[]> {
   return (await runs(page)).map((run) => run.id).sort();
 }
 
+/**
+ * Keep every refused bridge call from now on in the main process, so a launch that the app shows
+ * only as "unavailable" can be diagnosed from the report: the app's own window keeps no reason.
+ */
+async function recordRefusals(): Promise<void> {
+  await open!.app.evaluate(({ ipcMain }) => {
+    const store = globalThis as unknown as { orcaRefusals?: unknown[] };
+    if (store.orcaRefusals) return;
+    const refusals: unknown[] = (store.orcaRefusals = []);
+    const handlers = (ipcMain as unknown as { _invokeHandlers?: Map<string, (...args: unknown[]) => unknown> })
+      ._invokeHandlers;
+    for (const [channel, handler] of handlers ?? [])
+      handlers!.set(channel, async (...args: unknown[]) => {
+        try {
+          const out = (await handler(...args)) as { ok?: boolean; error?: unknown } | undefined;
+          if (out && out.ok === false) refusals.push({ channel, error: out.error });
+          return out;
+        } catch (error) {
+          refusals.push({ channel, thrown: String(error) });
+          throw error;
+        }
+      });
+  });
+}
+
 async function runSample(page: Page, count: number): Promise<string[]> {
   await openLaunchWork(page);
+  await recordRefusals();
   await launchSample(page);
-  return succeededRuns(page, count);
+  try {
+    return await succeededRuns(page, count);
+  } catch (error) {
+    const refusals = await open!.app.evaluate(
+      () => (globalThis as unknown as { orcaRefusals?: unknown[] }).orcaRefusals ?? [],
+    );
+    await test.info().attach("bridge-refusals.json", {
+      body: JSON.stringify({ refusals, runs: await runs(page).catch(String) }, null, 2),
+      contentType: "application/json",
+    });
+    throw error;
+  }
 }
 
 /**
