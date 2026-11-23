@@ -36,8 +36,11 @@ import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import {
   AgentRegistry,
+  claudeHookSession,
+  claudePreToolHookScript,
   openAcpSession,
   permissionPolicyPath,
+  type AgentSession,
   type OpenSessionOptions,
   type ProtectedPaths,
 } from "@orca/agents";
@@ -283,10 +286,50 @@ export function makeWorkspaceProvider(
  * `open` exists so a test can read the options this builds without spawning an agent; it is
  * `openAcpSession` everywhere else.
  */
-export function makeSessionFactory(layout: OrcaFileLayout, open: SessionFactory = openAcpSession): SessionFactory {
+export function makeSessionFactory(
+  layout: OrcaFileLayout,
+  open: SessionFactory = openAcpSession,
+  hook: { runtime: string; script: string | undefined } = {
+    runtime: process.execPath,
+    script: claudePreToolHookScript(),
+  },
+): SessionFactory {
   const permissionFiles = [permissionPolicyPath(layout.configDir)];
   const protectedPaths = orcaProtectedPaths(layout);
-  return (options: OpenSessionOptions) => open({ ...options, permissionFiles, protectedPaths });
+  const contextDir = join(resolve(layout.configDir, layout.storeDir), "private-execution", "tool-hooks");
+  return async (options: OpenSessionOptions) => {
+    const bound = { ...options, permissionFiles, protectedPaths };
+    // ORCA's pre-tool hook (#704): decided per session, once the agent says who it is.
+    if (options.agent.nativeToolHook === "off" || options.host.spec.type !== "local") return open(bound);
+    const installed = claudeHookSession({
+      agentId: options.agent.id,
+      permissions: options.agent.permissions,
+      permissionFiles,
+      workspaceCwd: options.cwd,
+      additionalDirectories: options.additionalDirectories,
+      protectedPaths,
+      contextDir,
+      runtime: hook.runtime,
+      script: hook.script,
+    });
+    let session: AgentSession;
+    try {
+      session = await open({ ...bound, sessionMeta: installed.sessionMeta });
+    } catch (error) {
+      await installed.cleanup();
+      throw error;
+    }
+    void session.closed.then(installed.cleanup, installed.cleanup);
+    const close = session.close.bind(session);
+    session.close = async (...args: Parameters<AgentSession["close"]>) => {
+      try {
+        return await close(...args);
+      } finally {
+        await installed.cleanup();
+      }
+    };
+    return session;
+  };
 }
 
 /** Where one config directory keeps ORCA's own files. */

@@ -308,6 +308,41 @@ workspace holds the store — so a deliverable you put under `.orca/` belongs in
 agent's own built‑in tools do not ask ORCA at all, so in a hardened setup keep the config
 directory out of the workspace (ADR 0009).
 
+### Calls the agent does not ask about
+
+An agent asks ORCA only when its own permission check has no answer. Once it remembers a
+grant (Claude's "always allow", a rule in its own settings), the same call never reaches ORCA
+again, so a grant you revoke in ORCA, or a rule you add, does not apply to it.
+
+For the Claude ACP adapter on the daemon's own machine, ORCA closes that gap with a
+`PreToolUse` hook it installs in every session (#704). Claude runs it before **every** tool
+call, remembered or not, and it decides the call against the same three layers as above,
+read fresh each time:
+
+| ORCA decides | What happens |
+| --- | --- |
+| `allow` | Nothing is added: Claude's own permission check runs as before, so ORCA never allows more than Claude would |
+| `ask` | Claude asks even if it remembers a grant, and the ask comes to ORCA like any other |
+| `deny` | The call does not run |
+
+ORCA's own files are refused to Claude's built-in tools as well, and a hook that cannot
+decide (it cannot start, crashes, times out or answers garbage) blocks the call. An allowed
+call whose working directory is outside the workspace is asked about.
+
+The hook needs `@agentclientprotocol/claude-agent-acp` **0.109.1** or later: ORCA refuses to
+open a session with an older adapter rather than run it looking guarded. To run an agent
+without the hook (an old adapter, or one that relies on Claude's own allow rules for commands
+ORCA would ask about), set it off for that agent:
+
+```yaml
+  - id: claude
+    command: claude-agent-acp
+    nativeToolHook: off
+```
+
+Other agents (Codex, Gemini, pi) and agents on SSH hosts get no hook yet: ORCA decides only
+what they ask about (#705).
+
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive
 the agent session that raised it, so `pause` cancels it, `auto` refuses it, and either way

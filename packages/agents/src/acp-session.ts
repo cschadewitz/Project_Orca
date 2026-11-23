@@ -74,6 +74,15 @@ export interface OpenSessionOptions {
    * with the error this returns, before `session/new` or `session/load` configures anything.
    */
   requireEmbeddedContext?: (() => Error) | undefined;
+  /**
+   * The `_meta` for `session/new` and `session/load`, decided once the agent has said at
+   * `initialize` who it is (#704). The CLI's session factory uses it to install ORCA's
+   * pre-tool hook in an agent that takes one (`claudeHookSessionMeta`). Undefined sends none.
+   * A throw fails the open, and startup cleanup stops the process.
+   */
+  sessionMeta?:
+    | ((agentInfo: { name: string; version: string } | undefined) => Promise<Record<string, unknown> | undefined>)
+    | undefined;
   /** Handed every resolved secret value, before anything else happens, so the caller can redact it. */
   onSecretValues?: (values: readonly string[]) => void;
   host: AgentHost;
@@ -443,6 +452,10 @@ async function openPlanned(
       })),
     };
     if (opts.additionalDirectories) newSession.additionalDirectories = opts.additionalDirectories;
+    const meta = await opts.sessionMeta?.(
+      init.agentInfo ? { name: init.agentInfo.name, version: init.agentInfo.version } : undefined,
+    );
+    if (meta) newSession._meta = meta;
     let loaded = false;
     let continuity: SessionContinuity = { mode: "fresh", reason: "new" };
     if (opts.resumeSessionId) {
