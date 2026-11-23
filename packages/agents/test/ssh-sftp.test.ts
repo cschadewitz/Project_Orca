@@ -272,7 +272,13 @@ it("stops writing on the first failed chunk and closes only after every write ha
     code: "AGENT_TRANSPORT",
     message: expect.stringContaining("ssh write failed for"),
   });
-  const lines = (await readFile(log, "utf8")).split("\n").filter(Boolean);
+  // The failed write closes the handle without awaiting it, so the server may log the
+  // close after the call has rejected: wait for it before reading the order.
+  const lines = await vi.waitFor(async () => {
+    const all = (await readFile(log, "utf8")).split("\n").filter(Boolean);
+    expect(all).toContain("close");
+    return all;
+  });
   const writes = lines.filter((l) => l.startsWith("write "));
   expect(writes.length).toBeLessThan(chunks / 2); // no new chunks after the failure
   expect(lines).not.toContain("write-after-close");
