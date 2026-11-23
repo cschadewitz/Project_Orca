@@ -11,7 +11,7 @@
     {
       "id": "acp-ask",
       "what": "ORCA's answer to an ACP session/request_permission ask (resolvePermission, read fresh per ask by acp-session.ts)",
-      "capabilities": ["answerer", "offered-options"],
+      "capabilities": ["answerer", "offered-options", "mcp-grant-allows"],
       "excluded": {
         "F01": "The ask arrives as an ACP request the SDK has already parsed; there are no raw bytes for ORCA to refuse.",
         "F02": "Decided in the session's own process; there is no separate context file to lose.",
@@ -29,7 +29,7 @@
     {
       "id": "claude-native-hook",
       "what": "ORCA's Claude Code PreToolUse hook (#704), run as its process runs it (runClaudePreToolHook)",
-      "capabilities": ["raw-input", "context-file", "cwd", "hook-settings"],
+      "capabilities": ["raw-input", "context-file", "cwd", "hook-settings", "mcp-grant-allows"],
       "excluded": {
         "L08": "The hook only hands an ask back to Claude. Whether that ask reaches ORCA's answerer for the same call is unverified until an installed receipt shows it; the answerer cases run on acp-ask.",
         "F04": "The hook never answers allow and offers no options, so there is no option for ORCA to pick on this route."
@@ -43,9 +43,36 @@
       ]
     },
     {
+      "id": "gemini-acp-ask",
+      "what": "ORCA's answer to a session/request_permission ask shaped as Gemini CLI 0.70.0 sends it (resolvePermission, read fresh per ask): no rawInput, Gemini's display title, its locations, MCP server and tool only in _meta",
+      "capabilities": ["answerer"],
+      "excluded": {
+        "F01": "The ask arrives as an ACP request the SDK has already parsed; there are no raw bytes for ORCA to refuse.",
+        "F02": "Decided in the session's own process; there is no separate context file to lose.",
+        "F03": "ORCA installs nothing in Gemini CLI: nativeToolHook: on is refused for it.",
+        "F04": "F04 names the Claude adapter's option ids. Gemini's one-time answer (proceed_once, never proceed_always or an unoffered id) is checked on the installed CLI by gemini-acp-acceptance-705.test.ts.",
+        "P02": "No raw input or context file on this route (see F01 and F02).",
+        "A04": "An ACP ask carries no working directory; the session's directory is fixed when the session opens.",
+        "L01": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied.",
+        "L02": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied.",
+        "L04": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied.",
+        "L05": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied.",
+        "L06": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied.",
+        "L07": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied.",
+        "A01": "On Gemini, ORCA cannot verify which MCP server a call is for (the server is only Gemini's own _meta claim), so no allow decides a Gemini MCP call and an \"always allow\" for one is refused (#1021, #1024). The case's MCP grant cannot allow here; Gemini MCP calls are asked each time unless denied."
+      },
+      "verifies": "ORCA's answer to an ask in Gemini CLI 0.70.0's shape, from the policy read at that ask, with grants recorded from that shape",
+      "unverified": [
+        "That Gemini asks: its read-only tools (list_directory, glob, read_file) were observed to run without asking, so the read cases here show only what ORCA would answer",
+        "Calls Gemini decides itself: its own session and saved grants, YOLO in a trusted workspace, its settings and policy files",
+        "That the request shape matches Gemini beyond the calls its acceptance test records (shell and edit); the rest is read in its source at 0.70.0",
+        "That events, logs and stored records about the ask are redacted"
+      ]
+    },
+    {
       "id": "codex-native-hook",
       "what": "ORCA's Codex PreToolUse hook (#705), run as its process runs it (runClaudePreToolHook after --codex), with Codex 0.171.0's frames (Bash, apply_patch, view_image, mcp__server__tool)",
-      "capabilities": ["raw-input", "context-file", "cwd"],
+      "capabilities": ["raw-input", "context-file", "cwd", "mcp-grant-allows"],
       "excluded": {
         "L08": "Codex cannot pause a call for a person from a hook: an ask is answered with a block (exit 2), so there is no answerer on this route.",
         "F03": "Codex's hook config is session flags with a trust hash, not Claude settings, and Codex lets a call through when its hook runner fails; ORCA's startup probe covers that and is tested by the #705 Codex acceptance, not here.",
@@ -64,7 +91,7 @@
       "connected": true,
       "proves": "claude-native-hook",
       "what": "A real Claude Code through the real Claude ACP adapter, in a session opened by ORCA's session factory with the pre-tool hook installed, Claude's own settings allowing every tool, and a model stand-in making each case's tool calls (tools/guard-qualification/connected/)",
-      "capabilities": ["answerer", "agent-turn"],
+      "capabilities": ["answerer", "agent-turn", "mcp-grant-allows"],
       "excluded": {
         "F01": "The agent builds the hook's input itself; a live run cannot hand the hook malformed bytes. Run on claude-native-hook.",
         "F02": "The session's context file is written by ORCA's factory; damaging it mid-session is a hook-program case. Run on claude-native-hook.",
@@ -149,7 +176,7 @@
       "tuple": "Gemini CLI 0.70.0 (gemini --acp), linux-x64 (GEMINI_CLI_SUPPORT, approval-tested); not pinned here until a trusted receipt exists",
       "pin": null,
       "tier": "none",
-      "routes": [],
+      "routes": ["gemini-acp-ask"],
       "receipts": [],
       "unverified": [
         "Connects and first-run preflight recognises it; no installed receipt here (gemini-acp-acceptance.yml runs the installed CLI)",
@@ -164,12 +191,9 @@
       ],
       "residualRisks": [
         "ORCA decides only the calls Gemini asks about; an OS sandbox is the boundary for the rest",
-        "MCP rules and grants: Gemini names an MCP call by tool and arguments, without its server, unless the call has no arguments (#1021)"
+        "Gemini's MCP server and tool are its own unverified claim: ORCA never allows a Gemini MCP call without asking, and refuses to record an \"always allow\" for one (#1021)"
       ],
-      "next": "Add gemini-acp-ask once #1021's fix (#1024) lands; tier C, receipts and promotion move to 0.9.0 (#1026).",
-      "pendingRoutes": {
-        "gemini-acp-ask": "ORCA's answer to Gemini-shaped asks. Held: run against this suite it shows that rules and grants for MCP tools do not match Gemini's asks as they match Claude's (#1021); added once that is fixed"
-      }
+      "next": "Tier C, receipts and promotion move to 0.9.0 (#1026)."
     },
     {
       "id": "pi",
