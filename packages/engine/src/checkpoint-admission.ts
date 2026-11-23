@@ -24,6 +24,7 @@ import {
   reserveAdmissionExecutionPolicy,
   type AdmissionExecutionBinding,
 } from "./admission-execution.js";
+import { checkpointBlocked } from "./checkpoint-attempt.js";
 import { previewRecovery } from "./recovery-preview.js";
 
 export const CheckpointAdmissionCommandSchema = z.strictObject({
@@ -171,11 +172,7 @@ export class CheckpointAdmissionService {
       principalId: this.authority().actor.principalId,
     });
     const option = assessment.options.find((o) => o.kind === "checkpoint-attempt");
-    if (!option || option.readiness === "blocked")
-      throw new OrcaError("RECOVERY_BLOCKED", `run ${command.runId} cannot be recovered from a checkpoint`, {
-        runId: command.runId,
-        blockers: option?.blockers ?? [],
-      });
+    if (!option || option.readiness === "blocked") throw checkpointBlocked(command.runId, option);
     const state = await this.options.orchestrator.getState(command.runId);
     const provenance = state.run.provenance;
     if (!provenance)
