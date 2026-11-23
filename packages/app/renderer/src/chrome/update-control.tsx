@@ -36,7 +36,9 @@ export function UpdateControl(): JSX.Element | null {
   const busy = ["checking", "downloading", "restarting"].includes(state.phase);
   const label =
     state.phase === "ready"
-      ? `Restart to update to ${state.version ?? "downloaded version"}`
+      ? state.overdue
+        ? `Restart to update to ${state.version ?? "downloaded version"} · waiting 3 days`
+        : `Restart to update to ${state.version ?? "downloaded version"}`
       : state.phase === "available"
         ? `Download ${state.version ?? "update"}`
         : state.phase === "downloading"
@@ -63,6 +65,20 @@ export function UpdateControl(): JSX.Element | null {
   useEffect(() => {
     if (!["idle", "unavailable", "downloading"].includes(state.phase)) announce(state.message ?? label);
   }, [state.phase, state.message, label, announce]);
+  // Automatic updates (#566) are on unless turned off here; the palette holds the switch.
+  const automatic = state.automatic;
+  useEffect(() => {
+    if (state.phase === "unavailable" || automatic === undefined) return undefined;
+    return keyboard.register({
+      scope: "global",
+      label: automatic ? "Turn off automatic updates" : "Turn on automatic updates",
+      action: () =>
+        void window.orca.preferences.write({ updates: { automatic: !automatic } }).then((result) => {
+          if (!result.ok) announce(result.error.message);
+          else announce(automatic ? "Automatic updates are off" : "Automatic updates are on");
+        }),
+    });
+  }, [keyboard, automatic, announce, state.phase]);
   if (state.phase === "unavailable")
     return window.orca.platform === "darwin" ? (
       <MacUpdateControl />
@@ -70,7 +86,14 @@ export function UpdateControl(): JSX.Element | null {
       <LinuxUpdateNotice />
     ) : null;
   return (
-    <Button tone="ghost" size="sm" data-app-region="no-drag" disabled={busy} title={state.message} onClick={act}>
+    <Button
+      tone={state.phase === "ready" && state.overdue ? "primary" : "ghost"}
+      size="sm"
+      data-app-region="no-drag"
+      disabled={busy}
+      title={state.message}
+      onClick={act}
+    >
       {label}
     </Button>
   );

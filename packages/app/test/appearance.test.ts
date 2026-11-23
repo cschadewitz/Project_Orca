@@ -200,6 +200,7 @@ describe("density", () => {
       density: { config: "comfortable", runs: "compact" },
       panes: {},
       alerts: DEFAULT_PREFERENCES.alerts,
+      updates: DEFAULT_PREFERENCES.updates,
     });
   });
 

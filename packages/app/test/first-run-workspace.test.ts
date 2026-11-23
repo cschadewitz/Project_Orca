@@ -5,8 +5,8 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it, vi } from "vitest";
-import { PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAINTENANCE_RUNTIME_METHOD, PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
 import { DaemonClient } from "../src/client/daemon-client.js";
 import { LocalDaemonToken } from "../src/client/auth.js";
 import type { DaemonSubscription } from "../src/client/subscription.js";
@@ -659,4 +659,93 @@ it("reports the app's own store, and settles the stopped daemon for a store swit
   await expect(f.workspace.settleForStoreSwitch("other")).rejects.toThrow("not prepared");
   expect(await f.workspace.settleForStoreSwitch("owner")).toEqual({ path: selectedPath, claimHash: STOPPED.claimHash });
   await f.workspace.close();
+});
+
+describe("automatic installs need the runtime idle proof (#566)", () => {
+  const runtimeHello = (): HelloResult => ({ ...hello(), methods: [MAINTENANCE_RUNTIME_METHOD] });
+  const target = { ...identity, processId: 123 };
+  const proof = (outcome: "held" | "blocked" | "released", active: string[] = []) => ({
+    proof: "runtime-v1",
+    target,
+    outcome,
+    active,
+  });
+
+  it("refuses without sending anything when the daemon offers no runtime proof, and holds nothing", async () => {
+    const f = rig();
+    (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
+    const call = vi.spyOn(f.workspace.client, "call");
+    const maintenance = vi.spyOn(f.workspace.client, "maintenance").mockResolvedValue({ ready: true, active: [] });
+    await expect(f.workspace.prepareUpdate("auto", { idleProof: true })).rejects.toMatchObject({ token: "auto" });
+    expect(call).not.toHaveBeenCalled();
+    expect(maintenance).not.toHaveBeenCalled();
+    await f.workspace.ready();
+    // A person's restart still uses the legacy proof afterwards.
+    await f.workspace.prepareUpdate("manual");
+    expect(maintenance).toHaveBeenCalledExactlyOnceWith({ action: "prepare", token: "manual" });
+    await f.workspace.close();
+  });
+
+  it("a busy daemon is a preflight refusal that leaves admission open and the workspace free", async () => {
+    const f = rig();
+    (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(runtimeHello());
+    const call = vi.spyOn(f.workspace.client, "call").mockResolvedValueOnce(proof("blocked", ["execution"]));
+    const maintenance = vi.spyOn(f.workspace.client, "maintenance");
+    const refusal = await f.workspace.prepareUpdate("auto", { idleProof: true }).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(UpdatePreflightRefusal);
+    expect(refusal).toMatchObject({ token: "auto", message: expect.stringContaining("execution") });
+    expect(call.mock.calls[0]!.slice(0, 2)).toEqual([
+      MAINTENANCE_RUNTIME_METHOD,
+      { action: "prepare", token: "auto", target },
+    ]);
+    expect(maintenance).not.toHaveBeenCalled();
+    await f.workspace.ready();
+    await expect(f.workspace.cancelUpdate("auto")).rejects.toThrow("stale");
+    expect(f.stop).not.toHaveBeenCalled();
+    await f.workspace.close();
+  });
+
+  it("a held proof closes admission and only the runtime resume reopens it", async () => {
+    const f = rig();
+    (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(runtimeHello());
+    const call = vi
+      .spyOn(f.workspace.client, "call")
+      .mockResolvedValueOnce(proof("held"))
+      .mockResolvedValueOnce(proof("released"));
+    const maintenance = vi.spyOn(f.workspace.client, "maintenance");
+    await f.workspace.prepareUpdate("auto", { idleProof: true });
+    await expect(f.workspace.ready()).rejects.toThrow("admission is closed");
+    await f.workspace.cancelUpdate("auto");
+    expect(call.mock.calls[1]!.slice(0, 2)).toEqual([
+      MAINTENANCE_RUNTIME_METHOD,
+      { action: "resume", token: "auto", target },
+    ]);
+    expect(maintenance).not.toHaveBeenCalled();
+    await f.workspace.ready();
+    await f.workspace.close();
+  });
+
+  it("a lost or mismatched proof keeps the attempt held for exact-token recovery", async () => {
+    const f = rig();
+    (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(runtimeHello());
+    vi.spyOn(f.workspace.client, "call")
+      .mockResolvedValueOnce({ ...proof("held"), target: { ...target, processId: 999 } })
+      .mockResolvedValueOnce(proof("blocked"));
+    const refusal = await f.workspace.prepareUpdate("auto", { idleProof: true }).catch((error: unknown) => error);
+    expect(refusal).not.toBeInstanceOf(UpdatePreflightRefusal);
+    await expect(f.workspace.ready()).rejects.toThrow("admission is closed");
+    // A resume that does not come back released is not proof the daemon let go.
+    await expect(f.workspace.cancelUpdate("auto")).rejects.toThrow("still held");
+    await f.workspace.close();
+  });
+
+  it("a held proof lets the exact stop proceed as for a manual restart", async () => {
+    const f = rig();
+    (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(runtimeHello());
+    vi.spyOn(f.workspace.client, "call").mockResolvedValueOnce(proof("held"));
+    await f.workspace.prepareUpdate("auto", { idleProof: true });
+    await f.workspace.stopForUpdate("auto");
+    expect(f.stop).toHaveBeenCalledOnce();
+    await f.workspace.close();
+  });
 });
