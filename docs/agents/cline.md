@@ -31,6 +31,10 @@ plain files, so ORCA refuses any agent access to it. Keep nothing else in it: OR
 only Cline's `data` directory there, and in `data/settings` only `providers.json`,
 `global-settings.json` and `cline_mcp_settings.json`.
 
+Do not use Cline's default `~/.cline`, which Cline run outside ORCA shares, or a directory
+inside the workspace: ORCA refuses both. ORCA checks what the directory holds before every
+start; it cannot tell whether something other than ORCA also uses it, so keep it for ORCA.
+
 ## 3. Sign in
 
 Choose one:

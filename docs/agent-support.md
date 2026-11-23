@@ -57,8 +57,11 @@ Code: `packages/agents/src/providers/copilot-cli.ts`.
 
 ## Cline CLI
 
-`cline --acp` 3.0.75, Linux x64 installed-tested (`cline-acp-acceptance.yml`); macOS arm64 and
-Windows x64 by source only. Tiers **A** and **B**. Setup: [agents/cline.md](agents/cline.md).
+`cline --acp` 3.0.75. Tiers **A** and **B**. "Installed" below means one route only: the
+`@cline/cli-linux-x64` 3.0.75 binary (SHA-256 checked), a fresh config directory signed in to
+the `openai-compatible` provider, a scripted stand-in model, on GitHub's Ubuntu 24.04 runner
+(`cline-acp-acceptance.yml`). macOS, Windows, arm64, Cline-account sign-in, other providers
+and a config directory reused across many sessions are by source only. Setup: [agents/cline.md](agents/cline.md).
 Acceptance: `packages/agents/test/cline-acp-711.acceptance.test.ts`, run by
 `cline-acp-acceptance.yml`. Code: `packages/agents/src/providers/cline.ts`.
 
@@ -69,9 +72,9 @@ below is about that ask being made, being decided on the right facts, and holdin
 | What | Behaviour | Known by |
 | --- | --- | --- |
 | Version | `initialize` must report `cline` 3.0.75; anything else fails the handshake | installed (3.0.75 accepted); offline (others refused) |
-| Executable | ORCA hashes the command before every start and opens only the published 3.0.75 build for this platform (SHA-256 per platform) | installed (Linux x64); offline (others refused) |
+| Executable | ORCA hashes the command before every start and opens only the published 3.0.75 build for this platform (SHA-256 per platform). The hash names the published build; it does not cover a file swapped between the hash and the start, or code the build fetches later (auto-update is off) | installed (Linux x64); offline (others refused); other platforms' pins from the npm artifacts, not run |
 | Launch flags | Only `--acp`, `--config <absolute dir>`, `--thinking`, `--reasoning-effort`. `--yolo` and `--auto-approve` (which approve every tool) are refused by name | source; offline |
-| Cline's state | Must be in its own `--config` directory. ORCA refuses agent reads and writes there (Cline keeps sign-ins in plain files). Deny by default: only `data`, and in `data/settings` only Cline's three settings files; `toolAutoApprove` on is refused | source; installed (edit refusal shown for hooks) |
+| Cline's state | Must be in its own `--config` directory: not Cline's default `~/.cline` (shared with Cline run outside ORCA) and not inside the workspace. ORCA refuses agent reads and writes there (Cline keeps sign-ins in plain files). Deny by default: only `data`, and in `data/settings` only Cline's three settings files; `toolAutoApprove` on is refused | source; installed (edit refusal shown for hooks) |
 | Background hub | Cline runs sessions in a detached hub process by default, which outlives the agent ORCA stops. `CLINE_SESSION_BACKEND_MODE=local` is required; no Cline process remains after ORCA closes its sessions | source; installed |
 | Auto-update | `CLINE_NO_AUTO_UPDATE=1` is required | source |
 | Other `CLINE_*` variables | Refused from the profile and from ORCA's environment (they move state, settings or MCP servers) | source; offline |

@@ -49,7 +49,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve as resolvePath, win32 } from "node:path";
+import { dirname, isAbsolute, join, resolve as resolvePath, sep, win32 } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import { OrcaError, isSecretRef, literalEnv, quoteWord, type AgentSpec, type SessionConfigOption } from "@orca/core";
 import type { OpenSessionOptions } from "../acp-session.js";
@@ -298,7 +298,17 @@ function nonEmptyDir(path: string): boolean {
 /** Hooks, plugins and Cline-configured MCP servers present for this launch. */
 export function clineFileProblems(configDir: string, cwd: string, home: string): string[] {
   const paths = clineLoadPaths(configDir, cwd, home);
-  const problems: string[] = [...clineConfigDirProblems(configDir)];
+  const problems: string[] = [];
+  const dir = resolvePath(configDir);
+  const shared = resolvePath(home, ".cline");
+  const within = (a: string, b: string) => a === b || a.startsWith(b.endsWith(sep) ? b : b + sep);
+  if (within(dir, shared) || within(shared, dir))
+    problems.push(
+      `files: ${configDir} is Cline's own default directory (${shared}), shared with Cline run outside ORCA; give ORCA's Cline a directory of its own`,
+    );
+  if (within(dir, resolvePath(cwd)))
+    problems.push(`files: ${configDir} is inside the workspace; keep Cline's config directory outside it`);
+  problems.push(...clineConfigDirProblems(configDir));
   for (const dir of paths.hookDirs)
     if (nonEmptyDir(dir)) problems.push(`files: ${dir} holds Cline hooks, which run without asking ORCA`);
   for (const dir of paths.pluginDirs)

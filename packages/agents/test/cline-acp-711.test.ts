@@ -271,6 +271,17 @@ describe("Cline's config directory, deny by default", () => {
     ]);
   });
 
+  it("refuses Cline's default directory and one inside the workspace", async () => {
+    const shared = join(home, ".cline");
+    await mkdir(join(shared, "data"), { recursive: true });
+    expect(clineFileProblems(shared, workspace, home)[0]).toContain("is Cline's own default directory");
+    expect(clineFileProblems(home, workspace, home)[0]).toContain("is Cline's own default directory");
+    const inside = join(workspace, "cline-config");
+    await mkdir(inside);
+    expect(clineFileProblems(inside, workspace, home)[0]).toContain("is inside the workspace");
+    expect(clineFileProblems(configDir, workspace, home)).toEqual([]);
+  });
+
   it("refuses a config directory that is not there", () => {
     expect(clineFileProblems(join(root, "missing"), workspace, home)[0]).toContain("cannot be read");
   });
