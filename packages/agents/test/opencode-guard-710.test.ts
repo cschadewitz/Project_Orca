@@ -11,7 +11,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import { AgentSpecSchema, OrcaError, type AgentSpec } from "@orca/core";
 import {
   OPENCODE_IMAGES,
-  boundedOptionId,
+  openCodeBoundedAnswer,
   guardOpenCodeSession,
   isOpenCodeAgent,
   openCodeConfigProblems,
@@ -19,7 +19,7 @@ import {
   openCodePolicyProblems,
   openCodeProfileProblems,
   providerGuardFor,
-  startsWithSlashCommand,
+  openCodeSlashCommand,
   withProviderGuards,
   type AgentHost,
   type AgentSession,
@@ -296,15 +296,15 @@ describe("session", () => {
   }
 
   it("recognises a prompt OpenCode would run as a command, as OpenCode joins it", () => {
-    expect(startsWithSlashCommand("/init")).toBe(true);
-    expect(startsWithSlashCommand("  /review x")).toBe(true);
+    expect(openCodeSlashCommand("/init")).toBe(true);
+    expect(openCodeSlashCommand("  /review x")).toBe(true);
     expect(
-      startsWithSlashCommand([
+      openCodeSlashCommand([
         { type: "text", text: " " },
         { type: "text", text: "/compact" },
       ]),
     ).toBe(true);
-    expect(startsWithSlashCommand("fix /etc/hosts parsing")).toBe(false);
+    expect(openCodeSlashCommand("fix /etc/hosts parsing")).toBe(false);
   });
 
   it("refuses slash prompts and other modes, and passes everything else through", async () => {
@@ -331,8 +331,8 @@ describe("session", () => {
       toolCall: { toolCallId: "t" },
       options: kinds.map((kind) => ({ optionId: kind, kind, name: kind })),
     });
-    expect(boundedOptionId(req(["allow_always", "reject_once"]), "allow_always")).toBeUndefined();
-    expect(boundedOptionId(req(["allow_once", "reject_once"]), "reject_once")).toBe("reject_once");
-    expect(boundedOptionId(req(["allow_once"]), undefined)).toBeUndefined();
+    expect(openCodeBoundedAnswer(req(["allow_always", "reject_once"]), "allow_always")).toBeUndefined();
+    expect(openCodeBoundedAnswer(req(["allow_once", "reject_once"]), "reject_once")).toBe("reject_once");
+    expect(openCodeBoundedAnswer(req(["allow_once"]), undefined)).toBeUndefined();
   });
 });

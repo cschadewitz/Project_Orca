@@ -336,7 +336,7 @@ async function managedConfigPresent(platform: string): Promise<string[]> {
 }
 
 /** The joined text of a prompt, as OpenCode reads it to look for a command. */
-export function startsWithSlashCommand(input: string | readonly acp.ContentBlock[]): boolean {
+export function openCodeSlashCommand(input: string | readonly acp.ContentBlock[]): boolean {
   const blocks: readonly acp.ContentBlock[] = typeof input === "string" ? [{ type: "text", text: input }] : input;
   const text = blocks
     .filter((b): b is Extract<acp.ContentBlock, { type: "text" }> => b.type === "text")
@@ -347,7 +347,10 @@ export function startsWithSlashCommand(input: string | readonly acp.ContentBlock
 }
 
 /** "Always allow" becomes "Allow once"; with no once option offered, nothing is chosen. */
-export function boundedOptionId(request: acp.RequestPermissionRequest, chosen: string | undefined): string | undefined {
+export function openCodeBoundedAnswer(
+  request: acp.RequestPermissionRequest,
+  chosen: string | undefined,
+): string | undefined {
   if (chosen === undefined) return undefined;
   const option = request.options.find((o) => o.optionId === chosen);
   if (!option) return chosen;
@@ -383,7 +386,7 @@ export function guardOpenCodeSession(session: AgentSession): AgentSession {
   Object.defineProperties(guarded, {
     prompt: {
       value: async (input: Parameters<AgentSession["prompt"]>[0], options?: Parameters<AgentSession["prompt"]>[1]) => {
-        if (startsWithSlashCommand(input))
+        if (openCodeSlashCommand(input))
           throw new OrcaError(
             "NOT_SUPPORTED",
             "OpenCode runs a prompt that starts with '/' as one of its own commands; ORCA does not send one. Reword the prompt so it does not start with '/'.",
@@ -458,7 +461,8 @@ export function openCodeGuard(opts: OpenCodeGuardOptions = {}): ProviderGuard {
       return ask
         ? {
             ...options,
-            askPermission: async (request, invocation) => boundedOptionId(request, await ask(request, invocation)),
+            askPermission: async (request, invocation) =>
+              openCodeBoundedAnswer(request, await ask(request, invocation)),
           }
         : options;
     },

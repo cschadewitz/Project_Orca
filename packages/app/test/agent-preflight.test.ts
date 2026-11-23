@@ -104,6 +104,18 @@ it("uses complete thin Mach-O CPU evidence only for a known host mismatch", () =
   for (const bytes of [Buffer.from("#!/bin/sh"), Buffer.from("cafebabecafebabe", "hex"), Buffer.alloc(8)])
     expect(machOArchitectureMismatch(bytes, "darwin", "arm64")).toBe(false);
 });
+it("names a copilot executable as a Copilot CLI candidate without running it (#709)", async () => {
+  const f = await fixture();
+  for (const name of ["copilot", "copilot.exe", "Copilot.EXE"]) {
+    const command = join(f.bin, name);
+    const sentinel = join(f.root, `${name}-executed`);
+    await writeFile(command, `#!/bin/sh\nprintf 'executed' > '${sentinel}'\n`);
+    await chmod(command, 0o700);
+    const check = await inspectLocalTool({ id: "copilot", command, env: {} });
+    expect(check.evidence).toMatchObject({ configuredRoute: "copilot-cli-acp-candidate", version: "unknown" });
+    await expect(readFile(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+});
 it("names OpenCode's ACP route only for its acp subcommand (#710)", async () => {
   const f = await fixture();
   const opencode = join(f.bin, "opencode");

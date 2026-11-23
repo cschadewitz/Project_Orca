@@ -1,43 +1,59 @@
-# Which agents ORCA supports, and how far
+# Agent support
 
-ORCA speaks ACP, so in principle any ACP agent connects. That is not the same as ORCA being
-able to say what the agent will and will not do. This page is the honest version, one section
-per agent product, at a pinned version.
+What ORCA has checked about each agent product beyond the generic ACP session, by support
+level (#709, #710, #711, alongside #705's hook coverage page, `agent-hook-coverage.md`, once it lands):
 
-A section here says what was observed, by what means, and what is outside. Nothing here is a
-promise about a version, platform or backend it does not name: **an agent, version or platform
-with no row is unsupported**, and the provider guard refuses it rather than opening a session
-whose limits nobody has written down.
+- **A, connectivity**: ORCA starts the agent from a pinned launch profile, opens a session,
+  streams a turn, handles its errors and cancels it, and refuses launches it cannot vouch for.
+- **B, controlled approval**: the agent's permission asks reach ORCA's policy, the options it
+  offers are known, an ORCA refusal stops the action, and what the agent would remember or run
+  without asking is listed.
+- **C, certified execution guard**: every execution path is bound to ORCA's decision, proven by
+  the #706 acceptance suite. Nothing is certified yet.
 
-## Tiers
-
-The tiers come from the first-wave agent stories (#705, #709–#711). They are cumulative and a
-lower one never implies a higher one.
-
-| Tier | Name | What it means |
-| --- | --- | --- |
-| **A** | Connectivity | The launch profile is pinned and reproducible; handshake, streaming, session and turn identity, errors and cancellation were exercised; the supported OS, runtime and authentication combinations are written down, and everything else fails closed. |
-| **B** | Controlled approval | The agent's real offered options and their native effect were tested, and whether a denied action ran was observed independently of what the agent reported — on disk, or at a canary — rather than taken from the agent's own account. |
-| **C** | Execution-guard certified | The #700 action contract and the #706 acceptance suite, for one exact provider, tool, version and host: final-action binding, policy and revocation checks, one-use consumption, outage behaviour and tamper limits. |
-
-How a claim is known:
+Every entry says how it is known, as in the hook coverage page:
 
 - **installed**: observed on the real agent by ORCA's acceptance tests, which run unattended in
-  CI against a scripted stand-in for the model — no account, key or spend;
-- **source**: read in the agent's source at the pinned revision, not exercised;
-- **by design**: a property of ORCA's own code, covered by unit tests;
-- **unknown**: not established, and therefore treated as not covered.
+  CI against a scripted stand-in for the model;
+- **source**: read in the agent's documentation or source at the pinned version, not exercised;
+- **unknown**: not established, and treated as not covered.
 
-Tier B is a statement about the calls the agent asks about. It is **not** a sandbox and not
-every-execution enforcement. The separate opt-in native tool hook (`nativeToolHook: on`,
-#704/#705) is what puts ORCA's policy in front of calls the agent never asks about, and
-[what ORCA's pre-tool hook covers](agent-hook-coverage.md) says for which agents that exists.
+## Support levels
 
-## Summary
+| Agent (pinned) | A | B | C | Hook (`nativeToolHook: on`) |
+| --- | --- | --- | --- | --- |
+| GitHub Copilot CLI 1.0.114, Linux x64 and macOS arm64 | **Yes** (installed) | **Yes, with the gaps listed** (installed) | No, after #706 | None yet: refused |
+| OpenCode 1.19.4 (`opencode acp`), Linux x64 and macOS arm64 | **Yes** (installed) | **Yes, with the limits listed** (installed) | No, after #706 | None: no supported hook, refused |
 
-| Agent (pinned) | Platforms | Tier | Notes |
-| --- | --- | --- | --- |
-| OpenCode 1.19.4 (`opencode acp`) | Linux x64, macOS arm64 | **A + B** | Build hashed per session, isolated profile required. No tier C; no native tool hook. |
+## GitHub Copilot CLI
+
+Setup: [agents/copilot-cli.md](agents/copilot-cli.md). Acceptance:
+`packages/agents/test/copilot-cli-acceptance-709.test.ts`, run by `copilot-cli-acceptance.yml`.
+Code: `packages/agents/src/providers/copilot-cli.ts`.
+
+| What | Behaviour | Known by |
+| --- | --- | --- |
+| Launch | Profile checked before start (flags, variables, `COPILOT_HOME`, tokens, host); version read from the executable and only 1.0.114 opens | unit-tested; version installed |
+| Handshake | ACP protocol 1; advertises `loadSession`, session `list` and `close`, one auth method (`copilot login` in a terminal). ORCA never calls `authenticate` | installed |
+| Sign-in | Copilot's own `copilot login`, or a model provider with its key as a secret reference. A token in the config or the daemon's environment is refused | source; refusal unit-tested |
+| Streaming | Message chunks, tool calls and their updates, usage, plan and command lists arrive on the session's own id | installed |
+| Model errors | Reported as message text; the turn ends with `end_turn` and the session takes the next prompt | installed |
+| Cancel | `session/cancel` ends the turn with `cancelled` and stops a running shell command before its effect | installed |
+| Options offered on an ask | `allow_once`, `allow_always`, `reject_once` (no `reject_always`) | installed |
+| ORCA deny (rule or person) | `reject_once`: the command does not run | installed |
+| ORCA allow | `allow_once`: the command runs | installed |
+| "Always" answers | Sent as `allow_once`; the next call with the same command name is asked again; Copilot saves nothing (`permissions-config.json` absent) | installed |
+| File writes (`create`, `edit`) | Asked about as `edit`; denied, no file. Written by Copilot itself, not through ACP `fs/*`, so ORCA's protected-path check applies only through the policy | installed |
+| Subagents (`task`) | Their commands are asked about on the parent session; denied, they do not run | installed |
+| `/allow-all on`, `/yolo`, `/permissions allow-all`, `/autopilot on` in a prompt | Copilot runs them over ACP and stops asking, with no option update for allow-all. ORCA refuses any prompt that starts with `/` | installed (unguarded run pinned) |
+| `allow_all` option, autopilot mode | ORCA never sets them; a session opening with or reporting either is ended | unit-tested |
+| Commands Copilot calls read-only (`cat`, `ls`, …) | **Run without an ask.** Not seen by ORCA's policy | installed |
+| File reads and searches inside the workspace | **Run without an ask** | installed (reads) |
+| Reads outside the workspace | Asked about as `read` ("Access paths outside trusted directories") | installed (manually) |
+| Text typed into a running shell (`write_bash`) | **Not asked about**: a command ORCA allowed can be fed further input | unknown, treated as not covered |
+| MCP servers, URL fetches, memory writes, background shells after the turn | Not exercised | unknown |
+| Hooks, plugins, skills in the workspace or `COPILOT_HOME` | Run commands of their own. ORCA's fresh `COPILOT_HOME` starts with none; the workspace's are the workspace's | source |
+| Windows | Not run | unknown |
 
 ## OpenCode 1.19.4
 
@@ -105,9 +121,9 @@ wrapper's postinstall.
 | Cancellation | A cancel while an ask is pending ends the turn `cancelled`, and a late answer runs nothing | installed |
 | A command with a `workdir` outside the workspace | Nothing lands outside: OpenCode's `external_directory` is denied natively. ORCA could not have decided it — an `execute` ask carries the command text only, with no location and no cwd, so an ORCA title rule matches the same command in any directory | installed |
 | A prompt starting with `/` | Refused before it is sent: OpenCode would run it as one of its own commands | installed |
-| Switching the session's agent ("mode") | Refused, and a session that opens in another mode is closed: another agent brings its own native permissions | by design |
+| Switching the session's agent ("mode") | Refused, and a session that opens in another mode is closed: another agent brings its own native permissions | unit-tested |
 | Another build of the executable | Refused before anything starts | installed |
-| Stale, duplicate and wrong-session asks; a failed human-input callback | Answered `cancelled`, which OpenCode maps to a rejection; a failed callback fails the turn | fixture (`opencode-acp-fixture-710.test.ts`) |
+| Stale, duplicate and wrong-session asks; a failed human-input callback | Answered `cancelled`, which OpenCode maps to a rejection; a failed callback fails the turn | unit-tested (`opencode-acp-fixture-710.test.ts`) |
 
 ### What is outside, and stays outside
 
