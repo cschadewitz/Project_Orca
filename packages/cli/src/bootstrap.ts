@@ -289,7 +289,12 @@ export function makeWorkspaceProvider(
 export function makeSessionFactory(
   layout: OrcaFileLayout,
   open: SessionFactory = openAcpSession,
-  hook: { runtime: string; script: string | undefined; platform?: NodeJS.Platform | undefined } = {
+  hook: {
+    runtime: string;
+    script: string | undefined;
+    platform?: NodeJS.Platform | undefined;
+    runtimeVersion?: ((executable: string) => Promise<{ version: string } | { error: string }>) | undefined;
+  } = {
     runtime: process.execPath,
     script: claudePreToolHookScript(),
   },
@@ -320,11 +325,20 @@ export function makeSessionFactory(
       runtime: hook.runtime,
       script: hook.script,
       platform: hook.platform,
+      runtimeVersion: hook.runtimeVersion,
     });
     let session: AgentSession;
     try {
       session = await open({ ...bound, sessionMeta: installed.sessionMeta });
     } catch (error) {
+      await installed.cleanup();
+      throw error;
+    }
+    // The session has started but has no work yet: the Claude Code it runs must be verified.
+    try {
+      await installed.verifyRuntime();
+    } catch (error) {
+      await session.close().catch(() => undefined);
       await installed.cleanup();
       throw error;
     }

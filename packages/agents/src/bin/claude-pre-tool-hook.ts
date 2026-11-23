@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * The process Claude Code runs as ORCA's `PreToolUse` hook (#704):
- * `node claude-pre-tool-hook.js <context file>`, with the tool call on stdin.
+ * `node claude-pre-tool-hook.js <context file>`, with the tool call on stdin; and, when the
+ * session starts, as its runtime attestation: `node claude-pre-tool-hook.js --attest <context file>`.
  *
  * Everything it decides is in `runClaudePreToolHook`; this only moves bytes. Every way it can
  * go wrong ends in exit 2, which Claude Code treats as a block: stdin larger than the limit
@@ -12,10 +13,12 @@
  * the answer off stdout, and makes every way out other than the answer exit 2.
  */
 import { answer } from "./hook-output-guard.js";
+import { readlink } from "node:fs/promises";
 import {
   CLAUDE_PRE_TOOL_FRAME_LIMIT,
   claudePreToolHookFailure,
   runClaudePreToolHook,
+  runClaudeRuntimeAttestation,
 } from "../claude-pre-tool-hook.js";
 
 class InputTooLarge extends Error {
@@ -37,8 +40,16 @@ async function readInput(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+const args = process.argv.slice(2);
 const result = await readInput().then(
-  (input) => runClaudePreToolHook(process.argv.slice(2), input),
+  (input) =>
+    args[0] === "--attest"
+      ? runClaudeRuntimeAttestation(args, input, {
+          pid: process.ppid,
+          // Linux: the hook's parent is the Claude Code process that ran it.
+          executable: () => readlink(`/proc/${process.ppid}/exe`),
+        })
+      : runClaudePreToolHook(args, input),
   (error: unknown) =>
     error instanceof InputTooLarge
       ? { exitCode: 2 as const, stdout: "", stderr: `Blocked by ORCA: ${error.message}.\n` }

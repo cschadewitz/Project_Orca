@@ -661,10 +661,11 @@ export const AgentSpecSchema = z
      * Whether ORCA installs its pre-tool hook in this agent (#704), so that `permissions`
      * decides every tool call and not only the ones the agent asks about. Opt-in: `on`
      * installs it in an agent that takes one, today the Claude ACP adapter on the daemon's own
-     * host at a version and on a platform ORCA's acceptance test covers
-     * (`CLAUDE_HOOK_VERIFIED_ADAPTERS`, `CLAUDE_HOOK_VERIFIED_PLATFORMS`). Anywhere else (an SSH
-     * host, another adapter, an untested version or platform) ORCA refuses to open the session
-     * rather than run it unguarded. `off`, the meaning of
+     * host, with an adapter and Claude Code version pair and on a platform ORCA's acceptance
+     * test covers (`CLAUDE_HOOK_VERIFIED_PAIRS`, `CLAUDE_HOOK_VERIFIED_PLATFORMS`; the Claude
+     * Code version is read from the executable the session actually runs). Anywhere else (an
+     * SSH host, another adapter, an untested version, runtime or platform) ORCA refuses the
+     * session before giving it work, rather than run it unguarded. `off`, the meaning of
      * leaving it out, sends no hook, so calls the agent allows by its own settings or
      * remembered grants never reach ORCA.
      */

@@ -9,7 +9,7 @@
  * every failure it can see.
  */
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,7 +25,9 @@ import {
   readPermissionPolicyFile,
   recordAlwaysDecision,
   replacePermissionPolicyFile,
+  claudeRuntimeAttestationFile,
   runClaudePreToolHook,
+  runClaudeRuntimeAttestation,
   type ClaudeHookContext,
   type ClaudePreToolFrame,
 } from "@orca/agents";
@@ -368,6 +370,44 @@ describe("settings", () => {
       },
     );
     expect(() => claudePreToolHookSettings({ command: "node", args: [] })).toThrow(/absolute/);
+  });
+});
+
+describe("the runtime attestation", () => {
+  const start = JSON.stringify({ hook_event_name: "SessionStart", source: "startup" });
+  const parent = (executable: string) => ({ pid: 42, executable: async () => executable });
+
+  it("records, owner-only, the executable that ran it when the session starts", async () => {
+    const r = await runClaudeRuntimeAttestation(["--attest", contextFile], start, parent("/opt/claude/claude"));
+    expect(r).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+    const file = claudeRuntimeAttestationFile(contextFile);
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ version: 1, executable: "/opt/claude/claude", pid: 42 });
+    if (process.platform !== "win32") expect((await stat(file)).mode & 0o777).toBe(0o600);
+  });
+
+  it("keeps the first record when the session starts again, and fails under another runtime", async () => {
+    await runClaudeRuntimeAttestation(["--attest", contextFile], start, parent("/opt/claude/claude"));
+    const resume = JSON.stringify({ hook_event_name: "SessionStart", source: "resume" });
+    expect(
+      (await runClaudeRuntimeAttestation(["--attest", contextFile], resume, parent("/opt/claude/claude"))).exitCode,
+    ).toBe(0);
+    expect(
+      (await runClaudeRuntimeAttestation(["--attest", contextFile], resume, parent("/opt/other/claude"))).exitCode,
+    ).toBe(2);
+    expect(JSON.parse(await readFile(claudeRuntimeAttestationFile(contextFile), "utf8"))).toMatchObject({
+      executable: "/opt/claude/claude",
+    });
+  });
+
+  it.each([
+    ["a relative context file", ["--attest", "ctx.json"], start],
+    ["extra arguments", ["--attest", "/x/ctx.json", "more"], start],
+    ["input that is not JSON", ["--attest", "/x/ctx.json"], "not json"],
+    ["another event", ["--attest", "/x/ctx.json"], JSON.stringify({ hook_event_name: "PreToolUse" })],
+  ])("records nothing for %s", async (_what, args, input) => {
+    const r = await runClaudeRuntimeAttestation(args, input, parent("/opt/claude/claude"));
+    expect(r.exitCode).toBe(2);
+    await expect(readFile(claudeRuntimeAttestationFile("/x/ctx.json"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 

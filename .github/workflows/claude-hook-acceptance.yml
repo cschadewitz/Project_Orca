@@ -4,12 +4,14 @@
 # the unit tests cannot: a natively remembered call still reaches ORCA's policy, a revoked
 # grant becomes a permission ask, and a failing hook blocks the call.
 #
-# CLAUDE_ADAPTER_VERSION is the adapter ORCA has verified; ORCA installs the hook with that
-# version only, and only on Linux (CLAUDE_HOOK_VERIFIED_ADAPTERS and
-# CLAUDE_HOOK_VERIFIED_PLATFORMS in packages/agents/src/claude-hook-session.ts; the suite
-# fails if the two disagree). Moving to another version is a reviewed change to both. Weekly
-# runs catch a change in behaviour behind the same pin (its Claude Code is fixed by the
-# adapter's exact SDK dependency).
+# CLAUDE_ADAPTER_VERSION and the Claude Code it bundles (fixed by the adapter's exact SDK
+# dependency) are the one pair ORCA has verified; ORCA installs the hook with that pair only,
+# and only on Linux (CLAUDE_HOOK_VERIFIED_PAIRS and CLAUDE_HOOK_VERIFIED_PLATFORMS in
+# packages/agents/src/claude-hook-session.ts; the suite fails if they disagree). ORCA reads
+# the version of the Claude Code a session actually runs before giving it work, so the run
+# also points the adapter at another Claude Code (OTHER_CLAUDE_SDK_VERSION, Claude Code
+# 2.1.329) and checks that session is refused. Moving to another pair is a reviewed change to
+# both. Weekly runs catch a change in behaviour behind the same pin.
 name: Claude hook acceptance
 
 on:
@@ -39,6 +41,7 @@ concurrency:
 
 env:
   CLAUDE_ADAPTER_VERSION: 0.109.1
+  OTHER_CLAUDE_SDK_VERSION: 0.3.329
 
 jobs:
   linux:
@@ -70,6 +73,19 @@ jobs:
           entry="$d/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
           test -f "$entry"
           echo "ORCA_CLAUDE_ADAPTER=$entry" >> "$GITHUB_ENV"
+
+      - name: Install a Claude Code the adapter is not paired with
+        shell: bash
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/claude-other"
+          mkdir -p "$d"
+          cd "$d"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --ignore-scripts "@anthropic-ai/claude-agent-sdk-linux-x64@${OTHER_CLAUDE_SDK_VERSION}"
+          bin="$d/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude"
+          "$bin" --version
+          echo "ORCA_CLAUDE_OTHER_RUNTIME=$bin" >> "$GITHUB_ENV"
 
       - name: Run the acceptance tests
         shell: bash

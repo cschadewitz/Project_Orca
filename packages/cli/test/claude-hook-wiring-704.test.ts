@@ -14,6 +14,7 @@ import { AgentSpecSchema, SshHostSchema } from "@orca/core";
 import {
   CLAUDE_HOOK_VERIFIED_ADAPTERS,
   LocalHost,
+  runClaudeRuntimeAttestation,
   SshHost,
   permissionPolicyPath,
   type AgentHost,
@@ -36,10 +37,16 @@ async function setup(
   /** `null`: a build with no hook program. */
   script: string | null = "/opt/orca/claude-pre-tool-hook.mjs",
   platform: NodeJS.Platform = "linux",
+  /**
+   * What the runtime reports when the session starts: the executable that ran the
+   * attestation and the version it says it is; `null`, nothing (the attestation never ran).
+   */
+  runtime: { executable: string; version: string } | null = { executable: "/opt/claude/claude", version: "2.1.330" },
 ) {
   const dir = await mkdtemp(join(tmpdir(), "orca-704-wiring-"));
   dirs.push(dir);
   let opened = 0;
+  let closedByFactory = 0;
   let resolveClosed!: () => void;
   const closed = new Promise<void>((r) => (resolveClosed = r));
   const seen: { options?: OpenSessionOptions; meta?: Record<string, unknown> | undefined } = {};
@@ -49,9 +56,39 @@ async function setup(
       opened++;
       seen.options = options;
       seen.meta = await options.sessionMeta?.(agentInfo);
-      return { closed, close: async () => undefined } as unknown as AgentSession;
+      // Claude Code runs the session-start attestation before `session/new` returns.
+      const attest = (
+        seen.meta as {
+          claudeCode?: { options?: { settings?: { hooks?: { SessionStart?: { hooks: { args: string[] }[] }[] } } } };
+        }
+      )?.claudeCode?.options?.settings?.hooks?.SessionStart?.[0]?.hooks[0]?.args;
+      if (attest && runtime) {
+        const r = await runClaudeRuntimeAttestation(
+          attest.slice(1),
+          JSON.stringify({ hook_event_name: "SessionStart" }),
+          {
+            pid: 1,
+            executable: async () => runtime.executable,
+          },
+        );
+        expect(r.exitCode).toBe(0);
+      }
+      return {
+        closed,
+        close: async () => {
+          closedByFactory++;
+        },
+      } as unknown as AgentSession;
     },
-    { runtime: "/usr/bin/node", script: script ?? undefined, platform },
+    {
+      runtime: "/usr/bin/node",
+      script: script ?? undefined,
+      platform,
+      runtimeVersion: async (executable) =>
+        runtime && executable === runtime.executable && !executable.startsWith("/opt/other/")
+          ? { version: runtime.version }
+          : { error: "no such program" },
+    },
   );
   const open = (host: AgentHost = new LocalHost({ id: "local", type: "local" })) =>
     factory({
@@ -66,16 +103,17 @@ async function setup(
       cwd: join(dir, "work"),
     });
   const hookDir = join(dir, ".orca", "private-execution", "tool-hooks");
-  return { dir, open, seen, hookDir, resolveClosed, opened: () => opened };
+  return { dir, open, seen, hookDir, resolveClosed, opened: () => opened, closedByFactory: () => closedByFactory };
 }
 
 describe("installing the hook", () => {
   it("writes a private context file and hands the adapter the settings that run the hook with it", async () => {
     const t = await setup(CLAUDE);
     const session = await t.open();
-    const files = await readdir(t.hookDir);
+    const files = (await readdir(t.hookDir)).filter((f) => !f.endsWith(".runtime.json"));
     expect(files).toHaveLength(1);
     const file = join(t.hookDir, files[0]!);
+    expect(await readdir(t.hookDir)).toContain(`${files[0]!}.runtime.json`);
     if (process.platform !== "win32") expect((await stat(file)).mode & 0o777).toBe(0o600);
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual({
       version: 1,
@@ -101,6 +139,18 @@ describe("installing the hook", () => {
         options: {
           settings: {
             hooks: {
+              SessionStart: [
+                {
+                  hooks: [
+                    {
+                      type: "command",
+                      command: "/usr/bin/node",
+                      args: ["/opt/orca/claude-pre-tool-hook.mjs", "--attest", file],
+                      timeout: 10,
+                    },
+                  ],
+                },
+              ],
               PreToolUse: [
                 {
                   matcher: "*",
@@ -127,7 +177,7 @@ describe("installing the hook", () => {
   it("removes the context file when the agent's connection ends without a close", async () => {
     const t = await setup(CLAUDE);
     await t.open();
-    expect(await readdir(t.hookDir)).toHaveLength(1);
+    expect(await readdir(t.hookDir)).toHaveLength(2);
     t.resolveClosed();
     await new Promise((r) => setTimeout(r, 20));
     expect(await readdir(t.hookDir)).toEqual([]);
@@ -153,6 +203,22 @@ describe("installing the hook", () => {
       message: expect.stringMatching(new RegExp(`${why}[\\s\\S]*nativeToolHook: on`)),
     });
     await expect(readdir(t.hookDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([
+    ["did not report itself", null, "did not report itself"],
+    [
+      "is another Claude Code",
+      { executable: "/opt/claude/claude", version: "2.1.329" },
+      "Claude Code 2.1.329 under adapter",
+    ],
+    ["cannot say its version", { executable: "/opt/other/claude", version: "2.1.330" }, "could not read the version"],
+  ] as const)("refuses the started session, before any work, when the runtime %s", async (_what, runtime, why) => {
+    const t = await setup(CLAUDE, {}, "/opt/orca/claude-pre-tool-hook.mjs", "linux", runtime);
+    await expect(t.open()).rejects.toMatchObject({ code: "NOT_SUPPORTED", message: expect.stringContaining(why) });
+    expect(t.opened()).toBe(1);
+    expect(t.closedByFactory()).toBe(1);
+    expect(await readdir(t.hookDir)).toEqual([]);
   });
 
   it("refuses a platform the acceptance test does not cover", async () => {

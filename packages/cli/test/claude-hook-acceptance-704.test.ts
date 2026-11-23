@@ -22,11 +22,17 @@
  *   hook program cannot produce it: its output guard keeps anything but its answer off stdout
  *   and blocks instead, which is observed here too, through the real Claude Code.
  *
- * It runs on Linux against each adapter version in `CLAUDE_HOOK_VERIFIED_ADAPTERS`, which are
- * the only versions and the only platform ORCA installs the hook on.
+ * - the session's Claude Code reports itself at session start, and ORCA accepts the session
+ *   only when that executable's version and the adapter's are a pair in
+ *   `CLAUDE_HOOK_VERIFIED_PAIRS`; pointed at another Claude Code (`CLAUDE_CODE_EXECUTABLE`,
+ *   `ORCA_CLAUDE_OTHER_RUNTIME`), the session is refused before it is given any work.
+ *
+ * It runs on Linux against the pairs in `CLAUDE_HOOK_VERIFIED_PAIRS`, which are the only
+ * adapter and Claude Code versions, and the only platform, ORCA installs the hook with.
  */
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -36,7 +42,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AgentSpecSchema, silentLogger } from "@orca/core";
 import {
   CLAUDE_HOOK_VERIFIED_ADAPTERS,
+  CLAUDE_HOOK_VERIFIED_PAIRS,
   CLAUDE_HOOK_VERIFIED_PLATFORMS,
+  claudeRuntimeVersion,
   LocalHost,
   claudePreToolHookSettings,
   openAcpSession,
@@ -51,8 +59,19 @@ import { childBundle } from "@orca/testing/child-bundle";
 import { makeSessionFactory } from "../src/bootstrap.js";
 
 const ADAPTER = process.env["ORCA_CLAUDE_ADAPTER"];
+/** A Claude Code executable that is not the one paired with the adapter (the workflow installs 2.1.329). */
+const OTHER_RUNTIME = process.env["ORCA_CLAUDE_OTHER_RUNTIME"];
 const COMMAND = "echo orca-704 >> marker.txt";
 const CALL = `CALL:${JSON.stringify({ name: "Bash", input: { command: COMMAND, description: "mark" } })}`;
+
+/** The Claude Code the adapter runs by default: the binary of the SDK it depends on exactly. */
+function bundledRuntime(adapterPkg: string): string {
+  const req = createRequire(join(adapterPkg, "package.json"));
+  const sdk = join(req.resolve("@anthropic-ai/claude-agent-sdk"), "..");
+  return createRequire(join(sdk, "package.json")).resolve(
+    `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`,
+  );
+}
 
 /* ------------------------------ the model stand-in ------------------------------ */
 
@@ -204,12 +223,13 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Claude Code (#704)"
     return () => rm(root, { recursive: true, force: true });
   });
 
-  const agent = (permissions: unknown = { rules: [] }) =>
+  const agent = (permissions: unknown = { rules: [] }, env: Record<string, string> = {}) =>
     AgentSpecSchema.parse({
       id: "claude",
       command: process.execPath,
       args: [ADAPTER],
       env: {
+        ...env,
         ANTHROPIC_BASE_URL: model.url,
         ANTHROPIC_API_KEY: "sk-orca-704-test",
         CLAUDE_CONFIG_DIR: claudeConfig,
@@ -229,13 +249,13 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Claude Code (#704)"
     return req.options.find((o) => o.kind === "reject_once")?.optionId;
   };
 
-  const factorySession = (permissions?: unknown): Promise<AgentSession> =>
+  const factorySession = (permissions?: unknown, env?: Record<string, string>): Promise<AgentSession> =>
     makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
       runtime: process.execPath,
       script: hookScript,
     })({
       host: new LocalHost({ id: "local", type: "local" }),
-      agent: agent(permissions),
+      agent: agent(permissions, env),
       cwd: workspace,
       askPermission,
       logger: silentLogger,
@@ -249,6 +269,40 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Claude Code (#704)"
     expect(CLAUDE_HOOK_VERIFIED_ADAPTERS).toContain(pkg.version);
     expect(CLAUDE_HOOK_VERIFIED_PLATFORMS).toContain(process.platform);
   });
+
+  it("runs the verified adapter with the Claude Code it is paired with", async () => {
+    const adapterPkg = join(ADAPTER!, "..", "..");
+    const pkg = JSON.parse(await readFile(join(adapterPkg, "package.json"), "utf8")) as { version: string };
+    const runtime = await claudeRuntimeVersion(bundledRuntime(adapterPkg));
+    expect(runtime).toHaveProperty("version");
+    expect(CLAUDE_HOOK_VERIFIED_PAIRS).toContainEqual({
+      adapter: pkg.version,
+      runtime: (runtime as { version: string }).version,
+    });
+    // The factory reads the session's runtime itself and accepts it.
+    const session = await factorySession();
+    await session.close();
+  });
+
+  it.skipIf(OTHER_RUNTIME === undefined)(
+    "refuses the session, before any work, when the adapter runs another Claude Code",
+    async () => {
+      const other = await claudeRuntimeVersion(OTHER_RUNTIME!);
+      expect(other).toHaveProperty("version");
+      expect(CLAUDE_HOOK_VERIFIED_PAIRS.map((p) => p.runtime)).not.toContain((other as { version: string }).version);
+      await expect(factorySession(undefined, { CLAUDE_CODE_EXECUTABLE: OTHER_RUNTIME! })).rejects.toMatchObject({
+        code: "NOT_SUPPORTED",
+        message: expect.stringMatching(
+          new RegExp(
+            `Claude Code ${(other as { version: string }).version.replaceAll(".", "\\.")} under adapter[\\s\\S]*nativeToolHook: on`,
+          ),
+        ),
+      });
+      expect(await marks()).toBe(0);
+      // Nothing of the refused session is left in ORCA's private directory.
+      expect(await readdir(join(configDir, ".orca", "private-execution", "tool-hooks")).catch(() => [])).toEqual([]);
+    },
+  );
 
   it("checks a remembered call every time, and asks through ORCA once the grant is revoked", async () => {
     asks.length = 0;

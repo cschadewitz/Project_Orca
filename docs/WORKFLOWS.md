@@ -344,11 +344,17 @@ an unattended run may meet asks it did not before; give the agent `rules:` for t
 session only where it has tested the hook and **refuses it everywhere else**, rather than run
 it unguarded:
 
-- the adapter must be `@agentclientprotocol/claude-agent-acp` at a version ORCA has verified
-  (today **0.109.1** exactly), and must say so when it starts;
+- the adapter must be `@agentclientprotocol/claude-agent-acp` at a version ORCA has verified,
+  and must say so when it starts;
+- the Claude Code the session actually runs must be the one verified with that adapter. The
+  adapter's word is not enough (an environment variable can point it at another Claude Code),
+  so the hook records which executable started the session, and ORCA reads that executable's
+  version before giving the session any work. Today the one verified pair is **adapter
+  0.109.1 with Claude Code 2.1.330**, exactly;
 - the agent must run on the daemon's own machine, on Linux.
 
-Each is what ORCA's acceptance test runs against the real Claude Code. Without
+Each is what ORCA's acceptance test runs against the real Claude Code, including a session
+pointed at another Claude Code, which is refused. Without
 `nativeToolHook: on` (or with `off`), no hook is installed and nothing is refused.
 
 Other agents (Codex, Gemini, pi) take no hook yet (#705): with `nativeToolHook: on` they are
