@@ -9,6 +9,7 @@ transport seam with a fake provider; it is not a hosted/BYOK implementation.
 [Connection preparation](connection-preparation.md) records the inactive seam between that
 adapter and proposed disclosure-grant/credential-reference contracts, with fake services only.
 [BYOK credentials](byok-credentials.md) implements the credential half on the merged #336 secret references.
+[Plain-language rules](plain-language-rules.md) designs judged permission rules; `plain-rule.ts` is their judge.
 This directory is standalone preparation for [#701](https://github.com/cschadewitz/Project_Orca/issues/701),
 coordinated under [#699](https://github.com/cschadewitz/Project_Orca/issues/699).
 It does not complete either issue or define a parallel canonical action schema.

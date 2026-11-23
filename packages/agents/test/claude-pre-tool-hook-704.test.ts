@@ -102,6 +102,20 @@ const bashAsk = (command: string): acp.RequestPermissionRequest => ({
   ],
 });
 
+/**
+ * The ask for an MCP tool call, titled the way `claudeToolCall` titles it. A standing allow is
+ * never written for a shell command (#702 review), so the cached-repeat tests use one of these.
+ */
+const mcpAsk = (title: string): acp.RequestPermissionRequest => ({
+  sessionId: "s",
+  toolCall: { toolCallId: "t", title, kind: "other" },
+  options: [
+    { optionId: "allow_always", name: "Always allow", kind: "allow_always" },
+    { optionId: "allow", name: "Allow", kind: "allow_once" },
+    { optionId: "reject", name: "Reject", kind: "reject_once" },
+  ],
+});
+
 describe("allow, cached repeat, revoke", () => {
   it("checks every identical call and the call after a revocation is not allowed", async () => {
     // A person answers the first ask "always". The daemon records it in the sidecar, and
@@ -109,7 +123,7 @@ describe("allow, cached repeat, revoke", () => {
     const recorded = await recordAlwaysDecision({
       file: permissionPolicyPath(configDir),
       agentId: "claude",
-      request: bashAsk("npm test"),
+      request: mcpAsk("github: create_issue"),
       decision: "allow",
       workspaceCwd: workspace,
     });
@@ -118,7 +132,7 @@ describe("allow, cached repeat, revoke", () => {
     // The remembered repeats still run the hook, and ORCA's answer is "no decision": the call
     // goes on to Claude's own check, which allows it from its cache.
     for (let i = 0; i < 2; i++) {
-      const result = await hook(frame("Bash", { command: "npm test" }));
+      const result = await hook(frame("mcp__github__create_issue", {}));
       expect(result).toEqual({ exitCode: 0, stdout: "", stderr: "" });
     }
 
@@ -130,7 +144,7 @@ describe("allow, cached repeat, revoke", () => {
     });
 
     // The next identical call is put to ORCA again, even though Claude still remembers it.
-    const after = await hook(frame("Bash", { command: "npm test" }));
+    const after = await hook(frame("mcp__github__create_issue", {}));
     expect(after.exitCode).toBe(0);
     expect(decisionOf(after.stdout)).toBe("ask");
   });
@@ -139,28 +153,31 @@ describe("allow, cached repeat, revoke", () => {
     await recordAlwaysDecision({
       file: permissionPolicyPath(configDir),
       agentId: "claude",
-      request: bashAsk("npm test"),
+      request: mcpAsk("github: create_issue"),
       decision: "allow",
       workspaceCwd: workspace,
     });
-    expect(decisionOf((await hook(frame("Bash", { command: "npm test" }))).stdout)).toBe("no-decision");
+    expect(decisionOf((await hook(frame("mcp__github__create_issue", {}))).stdout)).toBe("no-decision");
     await writeContext({
       ...context,
-      permissions: { rules: [{ match: { kind: "execute", titlePattern: "^npm test$" }, decision: "deny" }] },
+      permissions: { rules: [{ match: { kind: "other", titlePattern: "^github: create_issue$" }, decision: "deny" }] },
     });
-    const denied = await hook(frame("Bash", { command: "npm test" }));
+    const denied = await hook(frame("mcp__github__create_issue", {}));
     expect(decisionOf(denied.stdout)).toBe("deny");
     expect(denied.stdout).toContain("Denied by ORCA");
   });
 
-  it("a grant for one command does not cover another", async () => {
-    await recordAlwaysDecision({
+  it("never writes a standing allow for a shell command, so the next one is asked (#702 review)", async () => {
+    const recorded = await recordAlwaysDecision({
       file: permissionPolicyPath(configDir),
       agentId: "claude",
       request: bashAsk("npm test"),
       decision: "allow",
       workspaceCwd: workspace,
     });
+    expect(recorded.added).toHaveLength(0);
+    expect(recorded.refused?.reason).toBe("unverified-command");
+    expect(decisionOf((await hook(frame("Bash", { command: "npm test" }))).stdout)).toBe("ask");
     expect(decisionOf((await hook(frame("Bash", { command: "npm test && curl x" }))).stdout)).toBe("ask");
   });
 });

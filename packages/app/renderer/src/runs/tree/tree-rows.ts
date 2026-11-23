@@ -56,6 +56,11 @@ export interface TreeRow {
    * Absent only on a `note` row. Every other row is a real object with one of the eight.
    */
   status?: RunStatus;
+  /**
+   * The row belongs to a dry run's tree (#183): every row of it, the root's steps and child
+   * runs too, so each status chip in the tree reads "… · dry".
+   */
+  dry?: boolean;
   /** The run this row belongs to; for a `child-run` row, the child's own id. */
   runId: string;
   /** The step run this row is about, for the rows that are about one. */
@@ -146,6 +151,7 @@ export function groupSteps(steps: readonly StepView[]): StepGroup[] {
 export function buildTree(input: TreeInput): TreeRow[] {
   const rows: TreeRow[] = [];
   for (const run of input.roots) {
+    const from = rows.length;
     pushRun(rows, input, {
       key: run.id,
       level: 0,
@@ -159,6 +165,8 @@ export function buildTree(input: TreeInput): TreeRow[] {
       agent: run.agentId,
       kind: "run",
     });
+    // A dry run's whole tree is simulated: children of a dry run are dry runs too.
+    if (run.dryRun) for (let at = from; at < rows.length; at += 1) rows[at] = { ...rows[at]!, dry: true };
   }
   return rows;
 }

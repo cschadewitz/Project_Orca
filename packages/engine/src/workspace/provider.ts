@@ -55,6 +55,18 @@ export function gitRefRefusal(ref: string, why: string): OrcaError {
     gitRef: ref.slice(0, 200),
   });
 }
+/**
+ * The refusal for a ref that no longer names the object it was admitted with (#956): a
+ * `gitRefRefusal` marked `moved`, so an admission can report it as final (`GIT_REF_MOVED`)
+ * rather than as an incomplete admission to reconcile.
+ */
+export function gitRefMoved(ref: string, why: string): OrcaError {
+  const refusal = gitRefRefusal(ref, why);
+  return new OrcaError(refusal.code, refusal.message, { ...refusal.details, moved: true });
+}
+export function isGitRefMoved(error: unknown): error is OrcaError {
+  return error instanceof OrcaError && error.code === "NOT_SUPPORTED" && error.details?.moved === true;
+}
 
 export interface WorkspaceProvider {
   readonly name: string;

@@ -20,6 +20,7 @@ import type {
   FieldShape,
 } from "../../../src/configuration-launch-contract.js";
 import { isObject, pathLabel } from "./structured-form/collection-model.js";
+import { capabilityPreview } from "./capability-preview.js";
 
 export const sameEditorTarget = (a: EditorTarget | undefined, b: EditorTarget | undefined): boolean =>
   a !== undefined &&
@@ -201,7 +202,9 @@ export class ConfigurationAdapter implements ConfigurationPorts {
       throw new Error("Unexpected configuration validation response.");
     const shape = richShape(this.base());
     if (!shape && rawText === undefined) throw new Error("Structured metadata unavailable.");
+    const capabilities = capabilityPreview(this.base().capabilities, result.capabilities);
     const review: ConfigReview = {
+      ...(capabilities ? { capabilities } : {}),
       candidate: structuredClone(candidate),
       candidateRevision: result.document.revision,
       validation: result.validation.errors,
@@ -209,6 +212,7 @@ export class ConfigurationAdapter implements ConfigurationPorts {
         ? configurationChanges(shape, this.base().config.parsed, result.document.parsed)
         : [{ path: [], kind: "changed", valueDisplay: "withheld" }],
     };
+
     this.retained = { review, text: result.document.text, parsed: result.document.parsed };
     return review;
   }

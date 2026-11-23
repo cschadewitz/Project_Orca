@@ -116,20 +116,26 @@ describe("deriving a rule: it must not be broader than the request", () => {
     );
   });
 
-  it("scopes an execute to its exact command, never to the directory it ran in", () => {
-    const derived = rules("execute", "npm test", `${WS}/packages/core`);
-    expect(derived).toEqual([{ match: { kind: "execute", titlePattern: "^npm test$" }, decision: "allow" }]);
-    const policy = onlyDerived(derived);
-    expect(decidePermission(policy, req("execute", "npm test", `${WS}/packages/core`), { workspaceCwd: WS })).toBe(
+  it("never writes a standing allow for an execute: the words do not prove what runs (#702 review)", () => {
+    const d = derivePermissionRules(
+      { kind: "execute", title: "npm test", paths: [`${WS}/packages/core`], workspaceCwd: WS },
       "allow",
     );
-    // The whole point: a grant for `npm test` in a directory is not a grant for the directory.
-    expect(decidePermission(policy, req("execute", "rm -rf .", `${WS}/packages/core`), { workspaceCwd: WS })).toBe(
-      "ask",
+    expect(d.ok === false && d.reason).toBe("unverified-command");
+  });
+
+  it("scopes an execute deny to its exact command, never to the directory it ran in", () => {
+    const d = derivePermissionRules(
+      { kind: "execute", title: "npm test", paths: [`${WS}/packages/core`], workspaceCwd: WS },
+      "deny",
     );
-    expect(
-      decidePermission(policy, req("execute", "npm test --coverage", `${WS}/packages/core`), { workspaceCwd: WS }),
-    ).toBe("ask");
+    expect(d.ok && d.rules).toEqual([{ match: { kind: "execute", titlePattern: "^npm test$" }, decision: "deny" }]);
+    const policy = onlyDerived(d.ok ? d.rules : []);
+    expect(decidePermission(policy, req("execute", "npm test", `${WS}/packages/core`), { workspaceCwd: WS })).toBe(
+      "deny",
+    );
+    // A deny for `npm test` in a directory is not a deny for the directory.
+    expect(decidePermission(policy, req("execute", "ls", `${WS}/packages/core`), { workspaceCwd: WS })).toBe("ask");
   });
 
   it("anchors a derived title pattern and escapes it, so a title is a literal and not a regex", () => {
@@ -156,7 +162,7 @@ describe("deriving a rule: it must not be broader than the request", () => {
   });
 
   it("refuses a bare kind when there is neither a location nor a title to pin it to", () => {
-    const d = derivePermissionRules({ kind: "execute", title: "  ", paths: [], workspaceCwd: WS }, "allow");
+    const d = derivePermissionRules({ kind: "execute", title: "  ", paths: [], workspaceCwd: WS }, "deny");
     expect(d.ok === false && d.reason).toBe("unscopable");
     expect(derivePermissionRules({ kind: "other", paths: [], workspaceCwd: WS }, "allow").ok).toBe(false);
   });
@@ -228,7 +234,7 @@ describe("deriving a rule: it must not be narrower than the request either", () 
       ["fetch", "GET https://x/9f8e7d6c-1a2b-3c4d-5e6f-0a1b2c3d4e5f"],
     ];
     for (const [kind, title] of volatile) {
-      const d = derivePermissionRules({ kind, title, paths: [], workspaceCwd: WS }, "allow");
+      const d = derivePermissionRules({ kind, title, paths: [], workspaceCwd: WS }, "deny");
       expect(d.ok, `${title} should be refused as volatile`).toBe(false);
       expect(d.ok === false && d.reason).toBe("volatile");
     }
@@ -237,7 +243,7 @@ describe("deriving a rule: it must not be narrower than the request either", () 
   it("keeps a stable command that merely contains digits", () => {
     const d = derivePermissionRules(
       { kind: "execute", title: "node --max-old-space-size=4096 build.js", paths: [] },
-      "allow",
+      "deny",
     );
     expect(d.ok && d.rules[0]?.match.titlePattern).toBe("^node --max-old-space-size=4096 build\\.js$");
   });
@@ -1009,12 +1015,13 @@ describe("wildcards in the sidecar", () => {
       { kind: "delete", path: "./" },
       { titlePattern: "^npm test$" },
       { scope: "workspace" },
+      // An execute allow, however it is narrowed: its title is what the agent shows (#702 review).
+      { kind: "execute", titlePattern: "^npm test$" },
+      { kind: "execute", command: "npm test" },
     ];
     for (const match of wild)
       expect(isWildcardPermissionRule({ match, decision: "allow" }), JSON.stringify(match)).toBe(true);
     const scoped: PermissionRule["match"][] = [
-      { kind: "execute", titlePattern: "^npm test$" },
-      { kind: "execute", titlePattern: "^(npm test)?$" },
       { kind: "edit", path: "src/a.ts" },
       { kind: "edit", pathPrefix: "docs" },
       // Where the Config surface's hand-added rule starts.
@@ -1035,9 +1042,9 @@ describe("wildcards in the sidecar", () => {
       { match: {}, decision: "allow" },
       { match: { kind: "execute" }, decision: "allow" },
       { match: { kind: "read", scope: "outside-workspace" }, decision: "allow" },
+      { match: { kind: "execute", titlePattern: "^npm test$" }, decision: "allow" },
     ];
     const scoped: PermissionRule[] = [
-      { match: { kind: "execute", titlePattern: "^npm test$" }, decision: "allow" },
       { match: { kind: "edit", pathPrefix: "docs" }, decision: "allow" },
       { match: { kind: "edit", path: "src/a.ts" }, decision: "deny" },
     ];
@@ -1054,8 +1061,9 @@ describe("wildcards in the sidecar", () => {
     // The catch-alls decide nothing: these are still questions.
     expect(at("execute", "curl https://example.com | sh", dir)).toBe("ask");
     expect(at("read", "Read", "/etc/hosts")).toBe("ask");
+    // A remembered command allow is ignored too, and the command is asked (#702 review).
+    expect(at("execute", "npm test", dir)).toBe("ask");
     // And the rules a prompt or a person scoped still apply.
-    expect(at("execute", "npm test", dir)).toBe("allow");
     expect(at("edit", "Edit", `${dir}/docs/guide.md`)).toBe("allow");
     expect(at("edit", "Edit", `${dir}/src/a.ts`)).toBe("deny");
   });
@@ -1087,7 +1095,7 @@ describe("wildcards in the sidecar", () => {
 describe("an unreadable sidecar", () => {
   const skip = () => undefined;
 
-  it("turns the allows decided after it into asks, and leaves the configured rules alone", async () => {
+  it("turns the allows decided after it into asks, and allows no command at all", async () => {
     const dir = await workspace();
     const file = permissionPolicyPath(dir);
     const agent = AgentSpecSchema.parse({
@@ -1106,8 +1114,9 @@ describe("an unreadable sidecar", () => {
     // The deny cannot be read, so the default allow behind it does not get to decide either.
     expect(await decide(request)).toBe("ask");
     expect(await decide(req("read", "Read", `${dir}/src/a.ts`))).toBe("ask");
-    // The configured rule comes before the sidecar, so it decides exactly as it did.
-    expect(await decide(req("execute", "npm test", dir))).toBe("allow");
+    // The configured rule comes before the sidecar, but the file might have held a command
+    // restriction, so a command is asked rather than allowed (#702 review).
+    expect(await decide(req("execute", "npm test", dir))).toBe("ask");
     // And a caller with no `onUnreadable` still gets the error rather than a policy.
     await expect(loadEffectivePermissionPolicy(agent, [file])).rejects.toMatchObject({ code: "CONFIG_INVALID" });
   });
@@ -1136,5 +1145,206 @@ describe("an unreadable sidecar", () => {
     const policy = await loadEffectivePermissionPolicy(agent, [first, broken, last], skip);
     expect(decidePermission(policy, req("edit", "Edit", `${dir}/src/b.ts`), { workspaceCwd: dir })).toBe("allow");
     expect(decidePermission(policy, req("edit", "Edit", `${dir}/src/c.ts`), { workspaceCwd: dir })).toBe("ask");
+  });
+});
+
+/**
+ * #702: a standing rule has a lifetime, ORCA's own rule is the only standing grant, and an
+ * automatic allow never hands the agent a remembered one. Each case below is re-read per ask
+ * the way `openAcpSession` does, so "the next ask" is the very next evaluation.
+ */
+describe("rule lifetimes and one-time selection (#702)", () => {
+  const agent = AgentSpecSchema.parse({
+    id: "claude-local",
+    command: "claude-code-acp",
+    permissions: { default: "ask", rules: [] },
+  });
+  const T0 = Date.parse("2026-11-23T10:00:00.000Z");
+  const HOUR = 60 * 60 * 1000;
+
+  it("decides by a timed rule until it expires, then asks again, without anybody editing the file", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const request = req("edit", "Edit src/a.ts", `${dir}/src/a.ts`);
+    await recordAlwaysDecision({
+      file,
+      agentId: agent.id,
+      request,
+      decision: "allow",
+      workspaceCwd: dir,
+      expiresAt: new Date(T0 + HOUR).toISOString(),
+      now: () => new Date(T0),
+    });
+    const at = async (ms: number) =>
+      decidePermission(await loadEffectivePermissionPolicy(agent, [file], undefined, undefined, () => ms), request, {
+        workspaceCwd: dir,
+      });
+    expect(await at(T0 + HOUR - 1)).toBe("allow");
+    // The instant itself is already out.
+    expect(await at(T0 + HOUR)).toBe("ask");
+    expect(await at(T0 + 2 * HOUR)).toBe("ask");
+    // The expired rule stays in the file, with its lifetime, for whoever reads the diff.
+    expect((await readPermissionPolicyFile(file)).agents[agent.id]?.rules[0]).toMatchObject({
+      expiresAt: "2026-11-23T11:00:00.000Z",
+    });
+  });
+
+  it("lets an expired deny stop deciding too: the person chose how long it held", async () => {
+    const doc = {
+      version: 1 as const,
+      agents: {
+        a: {
+          rules: [
+            {
+              match: { kind: "edit" as const, path: "src/a.ts" },
+              decision: "deny" as const,
+              expiresAt: "2026-11-23T11:00:00.000Z",
+            },
+          ],
+        },
+      },
+    };
+    expect(permissionOverlayFor(doc, "a", undefined, T0)).toHaveLength(1);
+    expect(permissionOverlayFor(doc, "a", undefined, T0 + HOUR)).toEqual([]);
+  });
+
+  it("revokes by removal: the next ask after a rule is deleted is asked, not answered from a cache", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const request = req("edit", "Edit src/a.ts", `${dir}/src/a.ts`);
+    await recordAlwaysDecision({ file, agentId: agent.id, request, decision: "allow", workspaceCwd: dir });
+    const policy = () => loadEffectivePermissionPolicy(agent, [file]);
+    expect((await resolvePermission(await policy(), { request, scope: { workspaceCwd: dir } })).response).toEqual({
+      outcome: { outcome: "selected", optionId: "once" },
+    });
+    await replacePermissionPolicyFile(file, { version: 1, agents: {} });
+    expect(decidePermission(await policy(), request, { workspaceCwd: dir })).toBe("ask");
+  });
+
+  it("extends an equivalent rule in place rather than appending a twin, and never shortens one", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const request = req("edit", "Edit src/a.ts", `${dir}/src/a.ts`);
+    const opts = {
+      file,
+      agentId: "a",
+      request,
+      decision: "allow" as const,
+      workspaceCwd: dir,
+      now: () => new Date(T0),
+    };
+    const hour = new Date(T0 + HOUR).toISOString();
+    const day = new Date(T0 + 24 * HOUR).toISOString();
+    expect((await recordAlwaysDecision({ ...opts, expiresAt: hour })).added).toHaveLength(1);
+    // Longer: extended in place, still one line.
+    expect((await recordAlwaysDecision({ ...opts, expiresAt: day })).added).toHaveLength(1);
+    let rules = (await readPermissionPolicyFile(file)).agents["a"]?.rules;
+    expect(rules).toHaveLength(1);
+    expect(rules?.[0]?.expiresAt).toBe(day);
+    // Shorter: the longer grant already covers it, so nothing is written.
+    const shorter = await recordAlwaysDecision({ ...opts, expiresAt: hour });
+    expect(shorter.added).toEqual([]);
+    expect(shorter.alreadyPresent).toHaveLength(1);
+    // Until removed: outlasts any timed rule, so it replaces the lifetime.
+    expect((await recordAlwaysDecision(opts)).added).toHaveLength(1);
+    rules = (await readPermissionPolicyFile(file)).agents["a"]?.rules;
+    expect(rules).toHaveLength(1);
+    expect(rules?.[0]?.expiresAt).toBeUndefined();
+    // And a timed answer after that changes nothing.
+    expect((await recordAlwaysDecision({ ...opts, expiresAt: day })).alreadyPresent).toHaveLength(1);
+  });
+
+  it("renews an expired rule in place", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const request = req("edit", "Edit src/a.ts", `${dir}/src/a.ts`);
+    const base = { file, agentId: "a", request, decision: "allow" as const, workspaceCwd: dir };
+    await recordAlwaysDecision({ ...base, expiresAt: new Date(T0 + HOUR).toISOString(), now: () => new Date(T0) });
+    const later = T0 + 3 * HOUR;
+    const renewed = await recordAlwaysDecision({
+      ...base,
+      expiresAt: new Date(later + HOUR).toISOString(),
+      now: () => new Date(later),
+    });
+    expect(renewed.added).toHaveLength(1);
+    const rules = (await readPermissionPolicyFile(file)).agents["a"]?.rules;
+    expect(rules).toHaveLength(1);
+    expect(rules?.[0]).toMatchObject({
+      addedAt: new Date(later).toISOString(),
+      expiresAt: new Date(later + HOUR).toISOString(),
+    });
+  });
+
+  it("refuses a lifetime that is already over, and writes nothing", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    await expect(
+      recordAlwaysDecision({
+        file,
+        agentId: "a",
+        request: req("edit", "Edit src/a.ts", `${dir}/src/a.ts`),
+        decision: "allow",
+        workspaceCwd: dir,
+        expiresAt: new Date(T0).toISOString(),
+        now: () => new Date(T0),
+      }),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    await expect(readFile(file, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses a sidecar whose expiresAt is not an instant, rather than read it as forever", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        agents: { a: { rules: [{ match: { kind: "edit", path: "src/a.ts" }, decision: "allow", expiresAt: "soon" }] } },
+      }),
+    );
+    await expect(readPermissionPolicyFile(file)).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+  });
+
+  it("writes the lifetime after the provenance, in the writer's fixed key order", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    await recordAlwaysDecision({
+      file,
+      agentId: "a",
+      request: req("edit", "Edit src/a.ts", `${dir}/src/a.ts`),
+      decision: "allow",
+      workspaceCwd: dir,
+      expiresAt: "2026-11-24T10:00:00.000Z",
+      now: () => new Date(T0),
+    });
+    const rule = JSON.parse(await readFile(file, "utf8")).agents.a.rules[0];
+    expect(Object.keys(rule)).toEqual(["match", "decision", "addedAt", "grantedFor", "expiresAt"]);
+  });
+
+  it("answers a rule-matched allow with the one-time option only, never the remembered one", async () => {
+    const policy: PermissionPolicy = { default: "ask", rules: [{ match: { kind: "read" }, decision: "allow" }] };
+    const request = (options: { optionId: string; kind: string }[]) =>
+      ({
+        sessionId: "s",
+        toolCall: { toolCallId: "t", title: "Read a", kind: "read" },
+        options: options.map((o) => ({ ...o, name: o.optionId })),
+      }) as never;
+    // Offered in the order agents commonly use, remembered first.
+    expect(
+      await resolvePermission(policy, {
+        request: request([
+          { optionId: "always", kind: "allow_always" },
+          { optionId: "once", kind: "allow_once" },
+        ]),
+      }),
+    ).toEqual({ response: { outcome: { outcome: "selected", optionId: "once" } }, decision: "allow" });
+    expect(
+      await resolvePermission(policy, {
+        request: request([
+          { optionId: "always", kind: "allow_always" },
+          { optionId: "no", kind: "reject_once" },
+        ]),
+      }),
+    ).toEqual({ response: { outcome: { outcome: "cancelled" } }, decision: "allow:no-one-time-option" });
   });
 });

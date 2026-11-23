@@ -144,3 +144,22 @@
   color: var(--ink-tertiary);
   user-select: none;
 }
+
+/* The standing-rule review an always-button opens (#702): the exact rule, its lifetime and
+   the save. Spaced like the note field it sits beside. */
+.orca-attn__standing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+/* type: mono-log — the rules are machine text, verbatim (rule 8). */
+.orca-attn__standing-rules {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}

@@ -102,6 +102,8 @@ class FakeDaemon {
   /** When set, reads are refused the way a daemon refuses a credential it no longer accepts. */
   denied = false;
   reads = 0;
+  /** Every `runs.list` params a member sent, oldest first. */
+  listed: unknown[] = [];
   streams: {
     onNotification: (n: DaemonNotification) => void;
     onState: (s: SubscriptionState, r: RetryCount) => void;
@@ -114,6 +116,7 @@ class FakeDaemon {
     return {
       runsList: async (params) => {
         this.reads += 1;
+        this.listed.push(params);
         const snapshot = params.status?.includes("failed") ? this.failed : this.runs;
         await this.gate;
         if (this.denied) throw denied();
@@ -257,6 +260,49 @@ describe("watched machines", () => {
     expect(t.machine("profile:beta")!.work!.inputs.map((i) => i.question)).toEqual(["Ship it?"]);
     expect(alpha.streams).toHaveLength(1);
     expect(beta.streams).toHaveLength(1);
+  });
+
+  it("asks each machine for its active runs' operations facts and carries them to the row (#340)", async () => {
+    const t = setup();
+    t.fleet.setTargets([profile("alpha", "Alpha")]);
+    await settle(0);
+    const alpha = t.daemons.get("alpha")!;
+    const listed = runs(["Build", "Lint"]);
+    listed.runs[0] = {
+      ...listed.runs[0]!,
+      status: "waiting",
+      waitingOn: "agent-slot",
+      waitingDetail: "cap 2",
+      operations: {
+        lastSeq: 9,
+        lastActivityAt: new Date(START).toISOString(),
+        progress: { attempts: 3, active: 0, waiting: 1, completed: 2, failed: 0, skipped: 0 },
+        owner: { holder: "h", host: "build-box", since: new Date(START).toISOString(), lapsed: false },
+        facets: {
+          host: { state: "unavailable", reason: "not-collected" },
+          usage: { state: "unavailable", reason: "not-collected" },
+        },
+      },
+    };
+    alpha.runs = listed;
+    alpha.live();
+    await settle(0);
+    expect(alpha.listed).toContainEqual(expect.objectContaining({ operations: true }));
+    const [build, lint] = t.machine("profile:alpha")!.work!.runs;
+    expect(build).toEqual({
+      id: "run-Build",
+      name: "Build",
+      status: "waiting",
+      waitingOn: "agent-slot",
+      waitingDetail: "cap 2",
+      operations: {
+        lastActivityAt: new Date(START).toISOString(),
+        progress: { attempts: 3, active: 0, waiting: 1, completed: 2, failed: 0, skipped: 0 },
+        owner: { holder: "h", host: "build-box", since: new Date(START).toISOString(), lapsed: false },
+      },
+    });
+    // A row the daemon sent no facts for has none, never zeros.
+    expect(lint!.operations).toBeUndefined();
   });
 
   it("never shows a machine that has not answered as zero work", async () => {

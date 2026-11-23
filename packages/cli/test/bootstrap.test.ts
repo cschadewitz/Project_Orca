@@ -147,7 +147,7 @@ describe("loadConfig", () => {
 
   it("names the offending file when the config does not parse", async () => {
     const dir = await temp();
-    await writeFile(join(dir, "orca.config.yaml"), "version: 2\n", "utf8");
+    await writeFile(join(dir, "orca.config.yaml"), "version: 9\n", "utf8");
     await expect(loadConfig(dir)).rejects.toMatchObject({
       code: "CONFIG_INVALID",
       message: expect.stringContaining("orca.config.yaml"),

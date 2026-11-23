@@ -18,6 +18,7 @@ export * from "./errors.js";
 export * from "./model/artifact.js";
 export * from "./model/request.js";
 export * from "./model/agent.js";
+export * from "./model/command-words.js";
 export * from "./model/run.js";
 export * from "./model/workflow.js";
 export * from "./model/plan.js";

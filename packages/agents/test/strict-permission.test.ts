@@ -197,7 +197,7 @@ describe("inactive typed policy", () => {
     },
   );
 
-  it("retains legacy first-match/default and remembered-option behavior", async () => {
+  it("retains legacy first-match/default and never selects a remembered option (#702)", async () => {
     const request = {
       sessionId: "session",
       options: [{ optionId: "always", kind: "allow_always" as const, name: "Always" }],
@@ -212,8 +212,9 @@ describe("inactive typed policy", () => {
     };
     expect(decidePermission(policy, request)).toBe("allow");
     expect(decidePermission({ rules: [], default: "deny" }, request)).toBe("deny");
-    expect(await resolvePermission(policy, { request })).toMatchObject({
-      response: { outcome: { optionId: "always" } },
+    expect(await resolvePermission(policy, { request })).toEqual({
+      response: { outcome: { outcome: "cancelled" } },
+      decision: "allow:no-one-time-option",
     });
   });
 });

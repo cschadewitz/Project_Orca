@@ -1,0 +1,1 @@
+- **daemon:** a delegated run whose git ref moved between admission and creation now fails at once. Before, it kept reconciling until the step timed out. The remote ends the admission with `GIT_REF_MOVED` (final under that key), and the delegating step fails with `DELEGATION_REFUSED`, reason `git-ref`.

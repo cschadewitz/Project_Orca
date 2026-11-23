@@ -214,6 +214,7 @@ describe("the permission card", () => {
     });
 
     fireEvent.click(within(ask).getByRole("button", { name: "Always allow" }));
+    fireEvent.click(within(ask).getByRole("button", { name: "Save rule and allow" }));
 
     expect(await screen.findByText(/ORCA will not ask again/)).toBeTruthy();
     // The client says which way the rule goes; ORCA does not read the option id and guess.
@@ -247,6 +248,7 @@ describe("the permission card", () => {
     });
 
     fireEvent.click(within(ask).getByRole("button", { name: "Always deny" }));
+    fireEvent.click(within(ask).getByRole("button", { name: "Save rule and deny" }));
     expect(await screen.findByText(/ORCA will ask again/)).toBeTruthy();
   });
 });

@@ -185,6 +185,36 @@ describe("config.get", () => {
     });
   });
 
+  it("leaves out an expired sidecar rule, as evaluation does, and reports a live one's lifetime (#702)", async () => {
+    const { dir, model } = await workspace();
+    await writeFile(
+      join(dir, "orca.permissions.json"),
+      JSON.stringify({
+        version: 1,
+        agents: {
+          codex: {
+            rules: [
+              { match: { kind: "edit", path: "src/old.ts" }, decision: "allow", expiresAt: "2000-01-01T00:00:00.000Z" },
+              { match: { kind: "edit", path: "src/a.ts" }, decision: "deny", expiresAt: "2999-01-01T00:00:00.000Z" },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const codex = (await model.get()).effective.agents["codex"];
+
+    expect(codex?.rules.filter((r) => r.source === "permissions")).toEqual([
+      {
+        match: { kind: "edit", path: "src/a.ts" },
+        decision: "deny",
+        source: "permissions",
+        expiresAt: "2999-01-01T00:00:00.000Z",
+      },
+    ]);
+  });
+
   /**
    * #140's first cut folded the default rules into the parsed config, so `config.get` counted
    * them as configured and the Config surface offered to edit rules that are not in any file.

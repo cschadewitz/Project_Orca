@@ -170,6 +170,82 @@ are outside every agent root and ORCA's own requests about them are asked. A har
 is the operating system's — a separate user or a sandbox — as `docs/daemon-security.md`
 says of `auth/`.
 
+**2026‑11‑23 (#702): a standing rule is reviewed, can end, and is ORCA's alone.** Three
+changes, all on this file and its writer, with no second store:
+
+- **Shown before it is saved.** `inputs.list` carries `standing` on a permission ask
+  (protocol 2.8): the rule each "always" direction would write, derived from the same
+  recorded tool call and workspace the write uses. The app's **Always allow** / **Always
+  deny** open that rule with its agent and lifetime, and only **Save rule and …** sends; the
+  plain **Answer** never writes. Where the preview says nothing can be scoped, or a 2.7 daemon
+  sent none, there is nothing to save and the one-time answers still work. Each preview
+  carries a `ref` (sha256 over the run, step, request, agent, direction and normalised
+  rules); `inputs.answer` must echo it as `always.previewRef`, and the daemon derives the
+  rule again and refuses `CONFIG_STALE` before answering anything when it no longer matches,
+  so what is saved is what was shown or nothing.
+- **A lifetime.** A rule may carry `expiresAt`. `inputs.answer`'s `always.durationMs` (at most
+  90 days) is stamped on the daemon's clock; absent, the rule stands until removed, as
+  before. An expired rule stays in the file for the diff and decides nothing: it is skipped
+  per ask, and `config.get` leaves it out of the effective policy. An answer for a grant
+  already on file extends that line in place (never shortens it) rather than appending a
+  twin. A value that is not an instant makes the file unreadable rather than "forever".
+  **A file holding any timed rule is version 3** (`PERMISSION_LIFETIME_VERSION`). Released
+  0.7.0 and 0.7.1 read version 1 and strip `expiresAt`, so in a version 1 file a timed allow
+  would be permanent to them; any other version they refuse, skipping the file with every
+  later `allow` turned to `ask`, refusing to replace it and refusing to edit it on the
+  Config surface. The writer stamps the version from the content, so removing the last
+  timed rule makes the file version 1 again, and a version 1 file that carries `expiresAt`
+  is refused. Version 2 is left to the inactive typed scoped-rule envelope.
+  Removing a rule on the Config surface is how one is revoked; the next ask is decided
+  without it.
+- **No remembered native grant.** An automatic allow selects only an agent's `allow_once`
+  and refuses (`allow:no-one-time-option`) when none is offered, instead of falling back to
+  `allow_always`. A remembered option would have the agent stop asking, so an expired,
+  removed or narrowed rule would never be consulted again. A person is offered one-time
+  options only too: the live card already was, and now a parked ask and one forwarded to an
+  upstream ACP client are as well, so an answer can never hand the agent a remembered grant.
+  The deny fallback to `reject_always` is unchanged: it can
+  only stop the agent.
+- **Command-word rules.** A rule may match an `execute` call by its command's words:
+  `command: "git push"` or `command: "npm *"`, where a final bare `*` is any further words.
+  The command is `rawInput.command` when the agent sent one, else the title. A command rule
+  can `deny` or `ask`, never `allow`: words are what the agent shows, not what runs. The
+  executable a word resolves to, the working directory, a git alias, an npm script or a
+  config file decide what a command does, and ORCA attests none of them while the agent runs
+  the command in its own process, so a word match is a hint, not proof for an automatic yes.
+  A config with a command `allow` is refused. For the same reason no standing allow is
+  written or honoured for an `execute` call: `derivePermissionRules` refuses one
+  (`unverified-command`), and a sidecar `execute` allow, by title or by command, is ignored
+  like a wildcard, so such a call is answered once each time by a person. An allow for a
+  command family waits for an executor ORCA runs itself and can constrain (#703). The match
+  is lenient: the command is split into simple commands on `&&`, `||`, `;`, `|`, `&` and
+  newlines, and a rule catches a part when the program appears by name and the rule's words
+  follow in order with anything between, so `git push` catches `git -C repo push`,
+  `sudo git push` and `bash -c "git push"`, and also `git log --grep push`. The call gets the
+  strictest answer any part gets; a `cd` part decides nothing. **Once any layer holds a
+  command rule, no `execute` call is allowed** (`unverifiedExecuteAllowed`): allow rules are
+  skipped for it, so a legacy title allow ahead of a restriction cannot win, and a call no
+  deny catches is asked, whether the allow would have come from a rule, a kindless rule or
+  `default: allow`, and whether or not the agent sent its command apart from the title. A
+  policy with no command rule anywhere decides as it did. In `orca.config.yaml` an agent
+  whose `permissions` hold a command rule must not also say `default: allow` or carry an
+  allow with no `kind` or `kind: execute`; such a config is refused with what to change
+  (`COMMAND_POLICY_PERMISSIVE`): set `default: ask` or leave it unset, and give each allow a
+  kind other than `execute`. A command rule in the sidecar, from "Always deny", turns the
+  same restriction on for that agent. Two defensive cases count as restricted too: a call the
+  agent left unclassified (no kind, or `other`), or whose input carries a command
+  (`rawInput.command`) whatever kind it claims, is never allowed in a restricted policy, and a
+  `command` rule's deny or ask reaches it; and when a sidecar cannot be read, it might have
+  held a restriction, so the policy is marked `commandsRestricted` and no `execute` or
+  unclassified call is allowed, not even by the configured rules ahead of it, until the file
+  is repaired. All of this reads what the agent's adapter reports: its kind, title and
+  `rawInput` are advice, not facts ORCA checked. An untrusted adapter can misreport a call,
+  so these rules add friction and refusals but give no enforcement guarantee; that takes an
+  executor ORCA runs itself (#703) or an operating-system boundary. A sidecar holding a command
+  rule is version 3, and a config holding one must say `version: 2`, so 0.7.x refuses them.
+  The "Always deny" review offers the exact command plus wider patterns (`npm run *`,
+  `npm *`), each with its own preview ref, and says a family rule refuses the whole family.
+
 ## Consequences
 + The hand‑written half of the config stays hand‑written. Nothing appends to the Nth element
   of a curated `agents:` array, so a machine write can never collide with a human edit.

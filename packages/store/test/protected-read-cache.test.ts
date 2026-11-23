@@ -27,7 +27,11 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 const dirs: string[] = [];
+const realNow = Date.now.bind(Date);
+// Move the wall clock past any "settled file" window an optimisation could rely on.
+const settle = () => vi.spyOn(Date, "now").mockImplementation(() => realNow() + 3_000);
 afterEach(async () => {
+  vi.restoreAllMocks();
   calls.frozenTimes.clear();
   for (const directory of dirs.splice(0)) await rm(directory, { recursive: true, force: true });
 });
@@ -46,11 +50,12 @@ async function fixture() {
   });
   await store.putPayload("payload", { type: "vars.set", runId: "run", payload: { vars: { secret: "secret-value" } } });
   const read = () => store.getPayload("run", "payload", "vars.set");
+  settle();
   await read();
   return { directory, store, read, path: (name: string) => join(directory, "private-execution", name) };
 }
 
-it("reuses unchanged ciphertext bytes while rereading the key and returns isolated decoded values", async () => {
+it("rereads the key and every ciphertext record on each call and returns isolated decoded values", async () => {
   const f = await fixture();
   calls.open = [];
   for (let index = 0; index < 8; index++) {
@@ -58,8 +63,24 @@ it("reuses unchanged ciphertext bytes while rereading the key and returns isolat
     expect(payload.vars.secret).toBe("secret-value");
     payload.vars.secret = "caller mutation";
   }
-  expect(calls.open.length).toBeGreaterThan(0);
-  expect(calls.open.every((path) => path.endsWith(".execution-key"))).toBe(true);
+  for (const name of [".execution-key", "run.inputs.json", "payload.payload.json"])
+    expect(calls.open.filter((path) => path === f.path(name)).length).toBeGreaterThanOrEqual(8);
+});
+
+it("authenticates current bytes after an earlier read of a settled record rewritten within one timestamp tick", async () => {
+  const f = await fixture();
+  const path = f.path("payload.payload.json");
+  const before = await stat(path, { bigint: true });
+  calls.frozenTimes.set(path, { mtimeNs: before.mtimeNs, ctimeNs: before.ctimeNs });
+  await expect(f.read()).resolves.toEqual({ vars: { secret: "secret-value" } });
+  // Same-size tamper: swap one base64 character of the ciphertext in place.
+  const tampered = await readFile(path);
+  const at = tampered.indexOf('"ciphertext":"') + '"ciphertext":"'.length;
+  tampered[at] = tampered[at] === 0x41 ? 0x42 : 0x41;
+  expect(BigInt(tampered.length)).toBe(before.size);
+  await writeFile(path, tampered);
+  expect((await stat(path, { bigint: true })).ino).toBe(before.ino);
+  await expect(f.read()).rejects.toMatchObject({ code: "RUN_STATE" });
 });
 
 it.each([".execution-key", "run.inputs.json", "payload.payload.json"])(
@@ -139,4 +160,31 @@ it("rejects an in-place key rewrite when the filesystem reports identical nanose
   await expect(f.read()).rejects.toMatchObject({ code: "RUN_STATE" });
   await expect(f.store.putGeneration("after-rewrite", {})).rejects.toMatchObject({ code: "RUN_STATE" });
   expect(await readFile(path)).toEqual(key);
+});
+
+it("authenticates current bytes after a fresh record is rewritten in place within one timestamp tick", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orca-private-cache-"));
+  dirs.push(directory);
+  const store = new FileExecutionStore(directory);
+  await store.putInputs({
+    runId: "run",
+    workflowId: "workflow",
+    workflowVersion: "1",
+    vars: {},
+    sensitiveNames: [],
+    secrets: [],
+  });
+  for (const ref of ["one", "two"])
+    await store.putPayload(ref, { type: "vars.set", runId: "run", payload: { vars: { secret: "same-size" } } });
+  const one = join(directory, "private-execution", "one.payload.json");
+  const two = join(directory, "private-execution", "two.payload.json");
+  const before = await stat(one, { bigint: true });
+  // A coarse filesystem clock: the same-size rewrite below reports the original times.
+  calls.frozenTimes.set(one, { mtimeNs: before.mtimeNs, ctimeNs: before.ctimeNs });
+  await expect(store.getPayload("run", "one", "vars.set")).resolves.toEqual({ vars: { secret: "same-size" } });
+  const replacement = await readFile(two);
+  expect(BigInt(replacement.length)).toBe(before.size);
+  await writeFile(one, replacement);
+  expect((await stat(one, { bigint: true })).ino).toBe(before.ino);
+  await expect(store.getPayload("run", "one", "vars.set")).rejects.toMatchObject({ code: "RUN_STATE" });
 });

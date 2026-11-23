@@ -7,7 +7,8 @@
  * a few hundred milliseconds of each other; each names the revision the previous one
  * produced, so they are queued here rather than racing to the daemon and refusing each other.
  * Every result replaces the draft wholesale - the daemon's view is the truth, including its
- * validation.
+ * validation. A dry run (#183) is queued the same way, so it simulates exactly the revision
+ * the edits before it produced.
  *
  * **A refusal keeps the draft.** `CONFIG_STALE` means another window moved the draft on: the
  * editor re-reads it and says so, rather than re-sending an edit made against bytes it no
@@ -26,7 +27,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DraftOperation,
+  DryRunFixtures,
   ProtocolError,
+  WorkflowDraftDryRunResult,
   WorkflowDraftGetResult,
   WorkflowDraftPublishResult,
   WorkflowDraftReview,
@@ -60,6 +63,23 @@ export interface WorkflowDraftController {
   review(): Promise<WorkflowDraftReview | undefined>;
   publish(reviewToken: string): Promise<WorkflowDraftPublishResult | undefined>;
   discard(): Promise<boolean>;
+  /**
+   * Simulate the draft at `revision` (#183) - the one on screen when the fixtures were chosen -
+   * with these fixtures. Queued behind any edit already sent; if one of those moved the draft
+   * past `revision`, nothing is sent and the answer is `moved`, so the choices can be checked
+   * against the new revision first. Answers once the simulation has stopped; a refusal is said
+   * in the bar like any other.
+   *
+   * `current` is the caller's binding of the press to its scope - the draft, the daemon target
+   * and the grant it was pressed under. It is asked again immediately before the call goes out
+   * and when the answer comes back: if the scope moved while the run waited in the queue,
+   * nothing is sent; if it moved while the run was out, the answer (or refusal) is dropped.
+   */
+  dryRun(
+    fixtures: DryRunFixtures,
+    revision: number,
+    current: () => boolean,
+  ): Promise<{ kind: "result"; result: WorkflowDraftDryRunResult } | { kind: "moved" } | undefined>;
   reload(): Promise<void>;
   /** Mark the findings as not current and re-read the draft, which validates it again. */
   revalidate(this: void): Promise<void>;
@@ -346,6 +366,36 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
     [enqueue, workflowId, refused],
   );
 
+  const dryRun = useCallback(
+    (fixtures: DryRunFixtures, revision: number, current: () => boolean) =>
+      enqueue(
+        async (
+          draft,
+          sentUnder,
+        ): Promise<{ kind: "result"; result: WorkflowDraftDryRunResult } | { kind: "moved" } | undefined> => {
+          // Rechecked here, at dispatch: the press may have waited behind edits while the
+          // app was pointed elsewhere or its grant changed.
+          if (!current() || draft.workflowId !== workflowId) return undefined;
+          if (draft.revision !== revision) return { kind: "moved" };
+          const bridge = window.orca.workflowDrafts;
+          if (!bridge) return undefined;
+          const result = await bridge.call("workflowDrafts.dryRun", {
+            workflowId,
+            expectedRevision: revision,
+            fixtures,
+          });
+          if (!current() || sentUnder !== freshness.current) return undefined;
+          if (result.ok) {
+            setMessage(undefined);
+            return { kind: "result", result: result.result };
+          }
+          await refused(result.error, sentUnder);
+          return undefined;
+        },
+      ),
+    [enqueue, workflowId, refused],
+  );
+
   return {
     state,
     busy,
@@ -358,6 +408,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
     review,
     publish,
     discard,
+    dryRun,
     reload,
     revalidate,
     clearMessage: () => {

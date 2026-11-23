@@ -55,6 +55,8 @@ export interface WorkflowSurfaceProps {
   connection: ConnectionState;
   /** The crumbs and the header controls, handed up for the chrome to draw (as Runs does). */
   onHeader?: (header: { crumbs: readonly Crumb[]; actions: ReactNode }) => void;
+  /** Open an `orca://` URL: the editor's "Open in Runs" for a dry run (#183). */
+  onOpen?: ((url: string) => void) | undefined;
 }
 
 export function WorkflowSurface({
@@ -63,6 +65,7 @@ export function WorkflowSurface({
   edit = false,
   connection,
   onHeader,
+  onOpen,
 }: WorkflowSurfaceProps): JSX.Element {
   /* The run being overlaid: the URL's until a person picks another, and then theirs. A URL
      that arrives afterwards wins again, which is what the effect's dependency says. */
@@ -203,6 +206,7 @@ export function WorkflowSurface({
             refreshDraft();
             reload();
           }}
+          onOpen={onOpen}
         />
       </div>
     );

@@ -25,7 +25,7 @@
  * readable, which is why the sidecar's own raw JSON is below the list rather than a form.
  */
 import type { JSX } from "react";
-import { Chip, Text, Time, textClass } from "../ui/index.js";
+import { Chip, Text, Time, formatAbsolute, textClass } from "../ui/index.js";
 import { POLICY_LAYERS, rowsFrom, type AgentPolicyView } from "./config-model.js";
 
 export interface PermissionsViewProps {
@@ -110,6 +110,11 @@ export function PermissionsView({ policies, live, path, exists }: PermissionsVie
                           {row.grantedFor !== undefined && (
                             <Text style="caption" className="orca-config__granted">
                               {`granted for ${row.grantedFor}`}
+                            </Text>
+                          )}
+                          {row.expiresAt !== undefined && (
+                            <Text style="caption" className="orca-config__granted">
+                              {`expires ${formatAbsolute(new Date(row.expiresAt))}`}
                             </Text>
                           )}
                         </li>
