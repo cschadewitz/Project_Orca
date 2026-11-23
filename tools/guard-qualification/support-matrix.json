@@ -51,7 +51,7 @@
         "F03": "Codex's hook config is session flags with a trust hash, not Claude settings, and Codex lets a call through when its hook runner fails; ORCA's startup probe covers that and is tested by the #705 Codex acceptance, not here.",
         "F04": "The hook offers no options, so there is no option for ORCA to pick on this route."
       },
-      "verifies": "The hook program's answer to a Codex frame, with the context ORCA wrote: allow is exit 0 with no output, every other answer exit 2 with a fixed reason",
+      "verifies": "The hook program's exit code and output for a Codex frame, with the context ORCA wrote: an allow is exit 0 with nothing on stdout or stderr; a deny, an ask and a block are each exactly exit 2, nothing on stdout, and a fixed reason on stderr whose first words name the decision. Anything else fails the case",
       "unverified": [
         "That Codex runs the hook on every call: text typed into a running command (write_stdin) and hosted web search are never hooked",
         "That Codex trusts and blocks on the hook; ORCA's startup probe is not run here",

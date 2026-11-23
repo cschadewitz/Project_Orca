@@ -224,6 +224,8 @@ export const codexNativeHook = {
 function codexHookOutcome(result) {
   if (result.exitCode === 0)
     return result.stdout === "" && result.stderr === "" ? "allow" : "invalid:exit-0-with-output";
+  // Codex blocks only on exit 2 with a reason on stderr; any other refusal would let it run.
+  if (result.exitCode !== 2) return `invalid:exit-${String(result.exitCode)}`;
   if (result.stdout !== "") return "invalid:stdout";
   if (result.stderr.startsWith("Denied by ORCA: ")) return "deny";
   if (result.stderr.startsWith("Blocked by ORCA: its policy asks a person first")) return "ask";
