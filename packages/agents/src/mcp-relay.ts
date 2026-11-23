@@ -22,6 +22,14 @@
  * even while it is still starting, or while a write to it is stuck. A request that had to wait
  * for its server to start is decided again once it has started, before it is written.
  *
+ * Messages reach a server one at a time, and a request's authority (its turn, its deadline,
+ * the session's check) is decided again at the moment the transport takes it: one that ran
+ * out while it waited in line is dropped unsent. Every request settles exactly once, by its
+ * answer, its deadline, its turn ending or the server ending. An answer JSON-RPC does not
+ * allow settles its request as a failure; an answer that matches no request ORCA has pending
+ * cannot be attributed, so everything pending fails, the server is stopped, and the next
+ * request starts it again.
+ *
  * A server runs under the same credential boundary as the agent: the variables the session
  * withholds from the agent (`withheldEnv`) are withheld from it too, and it gets only its own
  * configured environment on top. What a server or ORCA's side says about a failure reaches the
@@ -113,6 +121,7 @@ export type McpRelayFailureReason =
   | "write-failed"
   | "deadline"
   | "cancelled"
+  | "invalid-response"
   | "failed";
 
 const FAILURE_TEXT: Record<McpRelayFailureReason, string> = {
@@ -123,6 +132,7 @@ const FAILURE_TEXT: Record<McpRelayFailureReason, string> = {
   "write-failed": "the request could not be written to the server",
   deadline: "the request's deadline passed",
   cancelled: "the request was cancelled",
+  "invalid-response": "the server's answer was not valid",
   failed: "the request failed",
 };
 
@@ -130,6 +140,13 @@ class RelayFailure extends Error {
   constructor(readonly reason: McpRelayFailureReason) {
     super(FAILURE_TEXT[reason]);
   }
+}
+
+/** The request's authority no longer held when it reached the transport. */
+class DispatchRefused extends Error {}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
 /** Per-request metadata MCP 2026-07-28 adds; a stdio server of an older version has no use for it. */
@@ -149,6 +166,8 @@ interface Upstream {
     dispatch: () => void,
   ): Promise<unknown>;
   close(): Promise<void>;
+  /** False once the server exited, broke the protocol or was stopped. */
+  alive(): boolean;
 }
 
 export interface McpRelay {
@@ -172,10 +191,16 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
   const upstreamFor = (server: RelayedMcpServer): Promise<Upstream> => {
     let up = started.get(server.name);
     if (!up) {
-      up = startUpstream(server, opts, stopping.signal, running);
+      const starting: Promise<Upstream> = startUpstream(server, opts, stopping.signal, running, () => {
+        // A server that ended is started again on the next request, unless it was replaced already.
+        if (started.get(server.name) === starting) started.delete(server.name);
+      });
+      up = starting;
       started.set(server.name, up);
       // A server that failed to start is started again on the next request.
-      void up.catch(() => started.delete(server.name));
+      void up.catch(() => {
+        if (started.get(server.name) === starting) started.delete(server.name);
+      });
     }
     return up;
   };
@@ -267,6 +292,8 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
       } catch (error) {
         // An error the server answered was made bounded and redacted when it was read.
         if (error instanceof acpUnstable.McpProtocolError) throw error;
+        if (error instanceof DispatchRefused)
+          throw new acpUnstable.McpProtocolError(REFUSED, `not allowed: ${bounded(opts.redact(error.message))}`);
         // Anything else is reported by a fixed reason; what it said goes to ORCA's log only.
         if (!(error instanceof RelayFailure))
           opts.logger.warn("relayed MCP request failed", { server: server.name, error: describeError(error) });
@@ -361,6 +388,8 @@ async function startUpstream(
   opts: McpRelayOptions,
   stopping: AbortSignal,
   running: Set<() => Promise<void>>,
+  /** Called once when the server can no longer be used, so the next request starts it again. */
+  onEnd: () => void = () => undefined,
 ): Promise<Upstream> {
   if (stopping.aborted) throw new RelayFailure("session-closed");
   const proc: AgentProcessHandle = await opts.host
@@ -393,15 +422,40 @@ async function startUpstream(
   running.add(stop);
   const writer = proc.stream.writable.getWriter();
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  /** Requests that were written and then cancelled: a late answer to one is expected, and dropped. */
+  const cancelled = new Set<number>();
   let nextId = 0;
   let ended: Error | undefined;
   const end = (error: Error) => {
     if (ended) return;
     ended = error;
-    for (const p of pending.values()) p.reject(error);
+    for (const p of [...pending.values()]) p.reject(error);
     pending.clear();
+    onEnd();
   };
-  const send = (message: Message) => writer.write({ jsonrpc: "2.0", ...message } as acp.AnyMessage);
+  /** The server broke the protocol: nothing it has pending can be trusted, so all of it fails and it stops. */
+  const violation = (what: string) => {
+    opts.logger.warn("relayed MCP server broke the protocol; stopping it", { server: server.name, what });
+    end(new RelayFailure("invalid-response"));
+    void stop();
+  };
+
+  /**
+   * One message at a time is handed to the transport, each only once the one before it was
+   * taken. `admit` runs at that handoff, not when the message was queued: a request whose
+   * turn ended, whose deadline passed or whose authority no longer holds while it waited is
+   * dropped there and never reaches the server.
+   */
+  let tail: Promise<unknown> = Promise.resolve();
+  const enqueue = (message: Message, admit: () => boolean = () => true): Promise<boolean> => {
+    const handoff = tail.then(async () => {
+      if (ended || !admit()) return false;
+      await writer.write({ jsonrpc: "2.0", ...message } as acp.AnyMessage);
+      return true;
+    });
+    tail = handoff.catch(() => undefined);
+    return handoff;
+  };
 
   void (async () => {
     const reader = proc.stream.readable.getReader();
@@ -409,28 +463,51 @@ async function startUpstream(
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
-        const m = value as Message;
-        if (m.method !== undefined && m.id !== undefined) {
-          // A request the server makes of its client: ORCA has nobody to put it to.
-          await send({ id: m.id, error: { code: METHOD_NOT_FOUND, message: `${m.method} is not offered` } }).catch(
-            () => undefined,
-          );
-        } else if (m.method === undefined && typeof m.id === "number") {
-          const p = pending.get(m.id);
-          if (!p) continue;
-          pending.delete(m.id);
-          if (m.error !== undefined) {
-            const e = m.error as { code?: unknown; message?: unknown; data?: unknown };
-            // Its code and a bounded, redacted message; whatever `data` it attached stays here.
-            p.reject(
-              new acpUnstable.McpProtocolError(
-                typeof e.code === "number" && Number.isInteger(e.code) ? e.code : UPSTREAM_FAILED,
-                typeof e.message === "string" ? bounded(opts.redact(e.message)) : "the MCP server returned an error",
-              ),
-            );
-          } else p.resolve(m.result ?? {});
+        if (ended) continue;
+        if (value === null || typeof value !== "object" || Array.isArray(value)) {
+          violation("a message that is not a JSON-RPC object");
+          continue;
         }
-        // Notifications belong to no request ORCA relays; they are dropped.
+        const m = value as Message;
+        if (m.method !== undefined) {
+          if (typeof m.method !== "string") violation("a method that is not a string");
+          else if (m.id === undefined)
+            continue; // Notifications belong to no request ORCA relays.
+          else if (typeof m.id !== "number" && typeof m.id !== "string") violation("a request id of the wrong type");
+          // A request the server makes of its client: ORCA has nobody to put it to.
+          else
+            void enqueue({ id: m.id, error: { code: METHOD_NOT_FOUND, message: "not offered" } }).catch(
+              () => undefined,
+            );
+          continue;
+        }
+        if (typeof m.id === "number" && cancelled.delete(m.id)) continue;
+        const p = typeof m.id === "number" ? pending.get(m.id) : undefined;
+        // An answer to nothing ORCA asked, or that cannot be matched: which request it settles is
+        // ambiguous, so none is trusted.
+        if (!p) {
+          violation("a response that matches no pending request");
+          continue;
+        }
+        const hasResult = "result" in m;
+        const hasError = "error" in m;
+        if (hasError && !hasResult) {
+          const e = m.error as { code?: unknown; message?: unknown } | null;
+          if (
+            e === null ||
+            typeof e !== "object" ||
+            typeof e.code !== "number" ||
+            !Number.isInteger(e.code) ||
+            typeof e.message !== "string"
+          ) {
+            p.reject(new RelayFailure("invalid-response"));
+            continue;
+          }
+          // Its code and a bounded, redacted message; whatever `data` it attached stays here.
+          p.reject(new acpUnstable.McpProtocolError(e.code, bounded(opts.redact(e.message))));
+        } else if (hasResult && !hasError && isPlainObject(m.result)) p.resolve(m.result);
+        // Both, neither, or a result that is not an object: settled as a failure, never left open.
+        else p.reject(new RelayFailure("invalid-response"));
       }
       end(new RelayFailure("server-exited"));
     } catch (error) {
@@ -451,33 +528,54 @@ async function startUpstream(
   ): Promise<unknown> => {
     if (ended) return Promise.reject(ended);
     if (signal.aborted) return Promise.reject(new RelayFailure(abortFailure(signal)));
-    // The last check, in the same step as the write: a turn that ended since is refused here.
-    dispatch();
     const id = ++nextId;
     return new Promise<unknown>((resolve, reject) => {
+      let settled = false;
+      let written = false;
+      /** Every path ends here, and only the first one counts. */
+      const settle = (outcome: () => void) => {
+        if (settled) return;
+        settled = true;
+        pending.delete(id);
+        signal.removeEventListener("abort", onAbort);
+        outcome();
+      };
       const onAbort = () => {
-        if (!pending.delete(id)) return;
-        void send({ method: "notifications/cancelled", params: { requestId: id, reason: "cancelled" } }).catch(
-          () => undefined,
-        );
-        reject(new RelayFailure(abortFailure(signal)));
+        if (settled) return;
+        // Already with the server: tell it. Still queued: the handoff drops it.
+        if (written) {
+          cancelled.add(id);
+          void enqueue({ method: "notifications/cancelled", params: { requestId: id, reason: "cancelled" } }).catch(
+            () => undefined,
+          );
+        }
+        settle(() => reject(new RelayFailure(abortFailure(signal))));
       };
       pending.set(id, {
-        resolve: (v) => {
-          signal.removeEventListener("abort", onAbort);
-          resolve(v);
-        },
-        reject: (e) => {
-          signal.removeEventListener("abort", onAbort);
-          reject(e);
-        },
+        resolve: (v) => settle(() => resolve(v)),
+        reject: (e) => settle(() => reject(e)),
       });
       signal.addEventListener("abort", onAbort, { once: true });
-      send({ id, method, ...(params ? { params } : {}) }).catch((error: unknown) => {
-        pending.delete(id);
-        opts.logger.debug("relayed MCP write failed", { server: server.name, error: describeError(error) });
-        reject(new RelayFailure("write-failed"));
-      });
+      enqueue({ id, method, ...(params ? { params } : {}) }, () => {
+        if (settled || signal.aborted) return false;
+        // The request's authority, decided at the moment it is handed to the transport.
+        try {
+          dispatch();
+        } catch (error) {
+          settle(() => reject(new DispatchRefused(describeError(error).message)));
+          return false;
+        }
+        written = true;
+        return true;
+      }).then(
+        (sent) => {
+          if (!sent) settle(() => reject(ended ?? new RelayFailure("cancelled")));
+        },
+        (error: unknown) => {
+          opts.logger.debug("relayed MCP write failed", { server: server.name, error: describeError(error) });
+          settle(() => reject(new RelayFailure("write-failed")));
+        },
+      );
     });
   };
 
@@ -493,10 +591,10 @@ async function startUpstream(
       if (error instanceof RelayFailure) throw error;
       throw new RelayFailure("start-failed");
     })) as Upstream["initialized"];
-    // Not awaited: a server that stops reading must not hold the start; its next write fails.
-    void send({ method: "notifications/initialized" }).catch(() => undefined);
+    // Not awaited: a server that stops reading must not hold the start.
+    void enqueue({ method: "notifications/initialized" }).catch(() => undefined);
     opts.logger.debug("relayed MCP server started", { server: server.name });
-    return { initialized: init, request, close: stop };
+    return { initialized: init, request, close: stop, alive: () => ended === undefined };
   } catch (error) {
     await stop().catch(() => undefined);
     throw error;

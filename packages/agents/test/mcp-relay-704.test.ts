@@ -66,8 +66,13 @@ rl.on("line", async (line) => {
   } else if (m.method === "session/prompt") {
     const ops = JSON.parse(m.params.prompt[0].text);
     if (ops[0] === "EXIT") process.exit(0);
-    const out = [];
-    for (const s of servers) for (const [method, params] of ops) out.push(await mcp(s.serverId, method, params));
+    let out = [];
+    if (ops[0] === "PARALLEL")
+      out = await Promise.all(servers.flatMap((s) => ops.slice(1).map(([method, params]) => mcp(s.serverId, method, params))));
+    // A parallel turn stays open a while after its answers, so what is still queued then is
+    // judged by its own deadline, not by the turn having ended.
+    if (ops[0] === "PARALLEL") await new Promise((r) => setTimeout(r, 1500));
+    else for (const s of servers) for (const [method, params] of ops) out.push(await mcp(s.serverId, method, params));
     fs.writeFileSync(process.env.RESULT_LOG, JSON.stringify(out));
     send({ jsonrpc: "2.0", id: m.id, result: { stopReason: "end_turn" } });
   } else if (m.id !== undefined && waiting.has(m.id)) {
@@ -84,8 +89,8 @@ setInterval(() => {}, 1000);
 /**
  * A stdio MCP server of the 2025-06-18 era: `initialize` first (never answered with
  * `HANG_INIT`, answered after `SLOW_INIT` ms), then a tool `touch` that reports what it was
- * given, a tool `slow` that never answers, and a tool `leak` that fails with the secret in its
- * error.
+ * given, a tool `slow` that never answers, a tool `leak` that fails with the secret in its
+ * error, and tools that answer in ways JSON-RPC does not allow.
  */
 const serverScript = `
 const rl = require("node:readline").createInterface({ input: process.stdin });
@@ -105,6 +110,14 @@ rl.on("line", (line) => {
   } else if (m.method === "tools/list")
     send({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "touch", inputSchema: { type: "object" } }] } });
   else if (m.method === "tools/call" && m.params.name === "slow") {}
+  else if (m.method === "tools/call" && m.params.name === "bad-result")
+    send({ jsonrpc: "2.0", id: m.id, result: "not an object" });
+  else if (m.method === "tools/call" && m.params.name === "both")
+    send({ jsonrpc: "2.0", id: m.id, result: {}, error: { code: 1, message: "and" } });
+  else if (m.method === "tools/call" && m.params.name === "bad-error")
+    send({ jsonrpc: "2.0", id: m.id, error: "not an object" });
+  else if (m.method === "tools/call" && m.params.name === "wrong-id")
+    send({ jsonrpc: "2.0", id: "r" + m.id, result: {} });
   else if (m.method === "tools/call" && m.params.name === "leak")
     send({ jsonrpc: "2.0", id: m.id, error: { code: -32050, message: "token " + process.env.API_TOKEN + " rejected\\n" + "x".repeat(5000), data: { token: process.env.API_TOKEN, stack: "at server.cjs:1" } } });
   else if (m.method === "tools/call")
@@ -466,6 +479,67 @@ describe("ORCA serves a hooked session's MCP servers over ACP (#704)", () => {
     await turn;
   });
 
+  it("drops a queued request whose authority ran out before the transport took it", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const t = await setup({
+      noList: true,
+      requestTimeoutMs: 400,
+      host: (inner) => holdingServerInput(inner, '"name":"hold"', held),
+    });
+    const s = await t.open();
+    await t.seen();
+    const turn = t.turn(
+      s,
+      JSON.stringify([
+        "PARALLEL",
+        ["tools/call", { name: "hold", arguments: {} }],
+        ["tools/call", { name: "touch", arguments: {} }],
+      ]),
+    );
+    // Both deadlines pass while the first write is still with the transport; the turn is live.
+    await new Promise((r) => setTimeout(r, 800));
+    release();
+    const [hold, touch] = await turn;
+    expect(hold).toEqual({ acpError: expect.objectContaining({ data: { reason: "deadline" } }) });
+    expect(touch).toEqual({ acpError: expect.objectContaining({ data: { reason: "deadline" } }) });
+    await new Promise((r) => setTimeout(r, 300));
+    const log = await t.serverLog();
+    expect(log).toContain("tools/call hold");
+    expect(log).not.toContain("tools/call touch");
+  });
+
+  it.each([
+    ["a result that is not an object", "bad-result"],
+    ["both a result and an error", "both"],
+    ["an error that is not an object", "bad-error"],
+  ])("settles a request answered with %s, at once and as a failure", async (_, tool) => {
+    const t = await setup({ requestTimeoutMs: 60_000 });
+    const s = await t.open();
+    await t.listed();
+    const started = Date.now();
+    const [answer] = await t.turn(s, JSON.stringify([["tools/call", { name: tool, arguments: {} }]]));
+    expect(answer).toEqual({ acpError: expect.objectContaining({ data: { reason: "invalid-response" } }) });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    // The server itself is still usable.
+    const [call] = await t.turn(s);
+    expect(call).toEqual({ content: [{ type: "text", text: "secret is here" }] });
+  });
+
+  it("fails everything pending and stops a server whose answer matches no request, then starts it again", async () => {
+    const t = await setup({ requestTimeoutMs: 60_000 });
+    const s = await t.open();
+    await t.listed();
+    const pid = await serverPid(t.serverLog);
+    const started = Date.now();
+    const [answer] = await t.turn(s, JSON.stringify([["tools/call", { name: "wrong-id", arguments: {} }]]));
+    expect(answer).toEqual({ acpError: expect.objectContaining({ data: { reason: "invalid-response" } }) });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    await expectGone(pid);
+    const [call] = await t.turn(s);
+    expect(call).toEqual({ content: [{ type: "text", text: "secret is here" }] });
+  });
+
   it("stops its servers when the agent's transport is lost", async () => {
     const t = await setup({});
     const s = await t.open();
@@ -538,6 +612,28 @@ function stallingServerInput(inner: AgentHost, onStuck: () => void): AgentHost {
         return writer.write(message as never);
       },
       close: never,
+    });
+    return Object.assign(Object.create(handle) as typeof handle, {
+      stream: { readable: handle.stream.readable, writable },
+    });
+  };
+  return host;
+}
+
+/** The host, except that a write to a relayed server matching `match` waits for `held`. */
+function holdingServerInput(inner: AgentHost, match: string, held: Promise<void>): AgentHost {
+  const host = Object.create(inner) as AgentHost;
+  host.spawnAgent = async (agent, options) => {
+    const handle = await inner.spawnAgent(agent, options);
+    if (!agent.id.startsWith("mcp-")) return handle;
+    const writer = handle.stream.writable.getWriter();
+    const writable = new WritableStream<unknown>({
+      write: async (message) => {
+        if (JSON.stringify(message).includes(match)) await held;
+        await writer.write(message as never);
+      },
+      close: () => writer.close(),
+      abort: (reason) => writer.abort(reason),
     });
     return Object.assign(Object.create(handle) as typeof handle, {
       stream: { readable: handle.stream.readable, writable },
