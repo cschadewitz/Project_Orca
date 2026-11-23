@@ -36,9 +36,13 @@ import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import {
   AgentRegistry,
+  claudeHookSession,
+  claudePreToolHookScript,
+  nativeToolHookUnavailable,
   openAcpSession,
   withProviderGuards,
   permissionPolicyPath,
+  type AgentSession,
   type OpenSessionOptions,
   type ProtectedPaths,
 } from "@orca/agents";
@@ -284,12 +288,85 @@ export function makeWorkspaceProvider(
  * `open` exists so a test can read the options this builds without spawning an agent; it is
  * `openAcpSession` everywhere else.
  */
-export function makeSessionFactory(layout: OrcaFileLayout, open: SessionFactory = openAcpSession): SessionFactory {
+export function makeSessionFactory(
+  layout: OrcaFileLayout,
+  open: SessionFactory = openAcpSession,
+  hook: {
+    runtime: string;
+    script: string | undefined;
+    platform?: NodeJS.Platform | undefined;
+    arch?: string | undefined;
+    imageDigest?:
+      ((pid: number, agentPid: number | undefined) => Promise<{ sha256: string } | { error: string }>) | undefined;
+    /**
+     * Whether `nativeToolHook: on` may install the hook at all. Off in every build ORCA ships
+     * until the session can be held from host services until its runtime is admitted (#704);
+     * only the hook's own tests turn it on.
+     */
+    activation?: "acceptance-only" | undefined;
+  } = {
+    runtime: process.execPath,
+    script: claudePreToolHookScript(),
+  },
+): SessionFactory {
   const permissionFiles = [permissionPolicyPath(layout.configDir)];
   const protectedPaths = orcaProtectedPaths(layout);
-  // Provider-specific launch checks and session guards (#709): Copilot CLI and the like.
+  // Provider-specific launch checks and session guards (#709, #710): Copilot CLI, OpenCode.
   const guarded = withProviderGuards(open);
-  return (options: OpenSessionOptions) => guarded({ ...options, permissionFiles, protectedPaths });
+  const contextDir = join(resolve(layout.configDir, layout.storeDir), "private-execution", "tool-hooks");
+  return async (options: OpenSessionOptions) => {
+    const bound = { ...options, permissionFiles, protectedPaths };
+    // ORCA's pre-tool hook (#704): decided per session, once the agent says who it is.
+    if (options.agent.nativeToolHook !== "on") return guarded(bound);
+    if (hook.activation !== "acceptance-only") throw nativeToolHookUnavailable(options.agent)!;
+    // The hook runs where the agent does; ORCA installs it only on its own host.
+    if (options.host.spec.type !== "local")
+      throw new OrcaError(
+        "NOT_SUPPORTED",
+        `agent ${options.agent.id} has nativeToolHook: on, but it runs on ${options.host.spec.type} host ${options.host.spec.id}, where ORCA cannot install its hook. ` +
+          `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
+        { agentId: options.agent.id, host: options.host.spec.id },
+      );
+    const installed = claudeHookSession({
+      agentId: options.agent.id,
+      permissions: options.agent.permissions,
+      permissionFiles,
+      workspaceCwd: options.cwd,
+      additionalDirectories: options.additionalDirectories,
+      protectedPaths,
+      contextDir,
+      runtime: hook.runtime,
+      script: hook.script,
+      platform: hook.platform,
+      arch: hook.arch,
+      imageDigest: hook.imageDigest,
+    });
+    let session: AgentSession;
+    try {
+      session = await guarded({ ...bound, sessionMeta: installed.sessionMeta });
+    } catch (error) {
+      await installed.cleanup();
+      throw error;
+    }
+    // The session has started but has no work yet: the Claude Code it runs must be verified.
+    try {
+      await installed.verifyRuntime();
+    } catch (error) {
+      await session.close().catch(() => undefined);
+      await installed.cleanup();
+      throw error;
+    }
+    void session.closed.then(installed.cleanup, installed.cleanup);
+    const close = session.close.bind(session);
+    session.close = async (...args: Parameters<AgentSession["close"]>) => {
+      try {
+        return await close(...args);
+      } finally {
+        await installed.cleanup();
+      }
+    };
+    return session;
+  };
 }
 
 /** Where one config directory keeps ORCA's own files. */

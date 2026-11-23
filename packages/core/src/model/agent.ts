@@ -852,6 +852,21 @@ export const AgentSpecSchema = z
      */
     permissions: PermissionPolicySchema.default(() => ({ rules: [] })),
     /**
+     * Whether ORCA installs its pre-tool hook in this agent (#704), so that `permissions`
+     * decides every tool call and not only the ones the agent asks about. **Not available
+     * yet**: every build ORCA ships refuses a session with `on` until activation is complete
+     * (the hook is exercised only by its acceptance suite). Opt-in: `on`
+     * installs it in an agent that takes one, today the Claude ACP adapter on the daemon's own
+     * host, with an adapter and Claude Code version pair and on a platform ORCA's acceptance
+     * test covers (`CLAUDE_HOOK_VERIFIED_PAIRS`, `CLAUDE_HOOK_VERIFIED_PLATFORMS`; the Claude
+     * Code image is hashed from the process the session actually runs). Anywhere else (an
+     * SSH host, another adapter, an untested version, runtime or platform) ORCA refuses the
+     * session before giving it work, rather than run it unguarded. `off`, the meaning of
+     * leaving it out, sends no hook, so calls the agent allows by its own settings or
+     * remembered grants never reach ORCA.
+     */
+    nativeToolHook: z.enum(["on", "off"]).optional(),
+    /**
      * MCP servers passed in `session/new`. The legacy inline form: each one is on for this
      * agent, as if it were in the catalog and enabled here. `capabilities` below selects from
      * the shared catalog instead (#335).
@@ -908,6 +923,12 @@ export const AgentSpecSchema = z
         code: "custom",
         path: ["workflow"],
         message: "an orca-daemon agent needs the remote workflow it runs",
+      });
+    if (agent.nativeToolHook === "on")
+      ctx.addIssue({
+        code: "custom",
+        path: ["nativeToolHook"],
+        message: "an orca-daemon agent runs the remote daemon's own agents; ORCA's tool hook does not apply to it",
       });
     if (agent.mcpServers.length > 0 || agent.capabilities !== undefined)
       ctx.addIssue({
