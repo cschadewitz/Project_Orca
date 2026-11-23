@@ -388,8 +388,8 @@ describe("offered options and rule-matched answers", () => {
     expect(peer.nativeReplies.map((r) => r.reply)).toEqual(["always", "reject", "reject"]);
   });
 
-  it("COUNTERFACTUAL (not OpenCode 1.19.4's options): a rule allow with only allow_always offered selects it", async () => {
-    // Shared generic picker behavior, recorded for the follow-up proposal; OpenCode always offers "once".
+  it("COUNTERFACTUAL (not OpenCode 1.19.4's options): a rule allow with only allow_always offered is refused, not widened (#702)", async () => {
+    // Shared generic picker behavior; OpenCode always offers "once".
     const offered: acp.PermissionOption[] = [
       { optionId: "always", kind: "allow_always", name: "Always allow" },
       { optionId: "reject", kind: "reject_once", name: "Reject" },
@@ -398,7 +398,7 @@ describe("offered options and rule-matched answers", () => {
       request: { sessionId: SESSION, toolCall: edit(`${WS}/src/a.ts`), options: offered },
       scope: { workspaceCwd: WS },
     });
-    expect(answer).toEqual({ response: { outcome: { outcome: "selected", optionId: "always" } }, decision: "allow" });
+    expect(answer).toEqual({ response: { outcome: { outcome: "cancelled" } }, decision: "allow:no-one-time-option" });
   });
 });
 

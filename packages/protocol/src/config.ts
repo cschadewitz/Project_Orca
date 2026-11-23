@@ -221,6 +221,8 @@ export const EffectivePermissionRuleSchema = PermissionRuleSchema.extend({
   /** Sidecar provenance, per ADR 0009. Absent on a configured or default rule. */
   addedAt: z.string().optional(),
   grantedFor: z.string().optional(),
+  /** When a sidecar rule stops deciding (protocol 2.8, #702). Absent: until removed. */
+  expiresAt: z.string().optional(),
 });
 export type EffectivePermissionRule = z.infer<typeof EffectivePermissionRuleSchema>;
 

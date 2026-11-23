@@ -454,6 +454,8 @@ export interface PermissionRow {
   decision: EffectivePermissionRule["decision"];
   addedAt?: string;
   grantedFor?: string;
+  /** When a sidecar rule stops deciding (#702); expired rules are not in the effective list. */
+  expiresAt?: string;
 }
 
 export interface AgentPolicyView {
@@ -513,6 +515,7 @@ export function agentPolicies(effective: {
       decision: rule.decision,
       ...(rule.addedAt === undefined ? {} : { addedAt: rule.addedAt }),
       ...(rule.grantedFor === undefined ? {} : { grantedFor: rule.grantedFor }),
+      ...(rule.expiresAt === undefined ? {} : { expiresAt: rule.expiresAt }),
     })),
   }));
 }

@@ -33,6 +33,7 @@ import {
   type WorkflowDefinition,
 } from "@orca/core";
 import { recordAlwaysDecision, type RecordAlwaysResult } from "@orca/agents";
+import { standingRulePreview } from "./standing-preview.js";
 import { dryRunReport, startDryRun, type Orchestrator } from "@orca/engine";
 import {
   ProtocolFault,
@@ -697,12 +698,48 @@ export class ControlModel {
     const asRequest = { sessionId: "", toolCall, options: [] } as unknown as Parameters<
       typeof recordAlwaysDecision
     >[0]["request"];
+    // A lifetime is a duration from now on the daemon's own clock (#702): the client's clock
+    // never decides when a grant ends. Stamped here, before the answer is accepted, so the
+    // rule cannot outlive what the person chose by however long acceptance took.
+    // Save exactly the rule the person reviewed, or nothing (#702). The preview `inputs.list`
+    // showed is derived again here, from the same recorded tool call, workspace and agent, and
+    // its reference must match the one the client echoes. A different rule now - another
+    // agent, another workspace, a changed derivation - is refused before anything is answered,
+    // so the person reviews again. The one-time answer without `always` never comes here.
+    const agentId = await this.agentForStep(request.runId, request.stepRunId);
+    const preview = standingRulePreview(request, state, agentId, decision);
+    if (!preview || !("rules" in preview))
+      throw new OrcaError(
+        "NOT_SUPPORTED",
+        `no standing rule can be saved for '${params.requestId}'${preview && "refused" in preview ? `: ${preview.refused.detail}` : ""}; answer it once instead`,
+        { requestId: params.requestId },
+      );
+    if (params.always!.previewRef === undefined)
+      throw new OrcaError(
+        "NOT_SUPPORTED",
+        "an always answer must name the standing rule preview it saves (protocol 2.8); review the rule and answer again",
+        { requestId: params.requestId },
+      );
+    if (params.always!.previewRef !== preview.ref)
+      throw new OrcaError("CONFIG_STALE", "the standing rule changed since it was shown; review it again", {
+        requestId: params.requestId,
+        previewRef: params.always!.previewRef,
+      });
+    const durationMs = params.always!.durationMs;
+    const at = this.clock.now();
     return {
       file: this.permissionsFile,
-      agentId: await this.agentForStep(request.runId, request.stepRunId),
+      agentId,
       request: asRequest,
       decision: params.always!.decision,
       workspaceCwd: state.run.workspace.cwd,
+      ...(durationMs === undefined
+        ? {}
+        : {
+            expiresAt: new Date(at + durationMs).toISOString(),
+            // One instant stamps `addedAt` and the expiry, so the rule lasts exactly what was chosen.
+            now: () => new Date(at),
+          }),
     };
   }
 

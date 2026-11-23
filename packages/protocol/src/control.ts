@@ -25,7 +25,7 @@
 import { z } from "zod";
 import { LiveDecisionTargetSchema } from "./live-input.js";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
-import { PermissionRuleSchema } from "@orca/core/schemas";
+import { MAX_PERMISSION_RULE_LIFETIME_MS, PermissionRuleSchema } from "@orca/core/schemas";
 import { RunSummaryViewSchema } from "./runs.js";
 
 export const INPUTS_ANSWER_METHOD = "inputs.answer";
@@ -40,7 +40,23 @@ export const RUNS_START_METHOD = "runs.start";
  * `allow` and `deny` are the two rule decisions a sidecar can hold; `ask` is what a rule
  * produces, never what one records.
  */
-export const AlwaysDecisionSchema = z.object({ decision: z.enum(["allow", "deny"]) });
+export const AlwaysDecisionSchema = z.object({
+  decision: z.enum(["allow", "deny"]),
+  /**
+   * How long the standing rule lasts, in milliseconds from when the daemon writes it
+   * (protocol 2.8, #702). Absent: until somebody removes it. A duration rather than an
+   * instant so the client's clock never decides when a grant ends; the daemon stamps the
+   * rule's `expiresAt` from its own. Capped at `MAX_PERMISSION_RULE_LIFETIME_MS` (90 days).
+   */
+  durationMs: z.number().int().positive().max(MAX_PERMISSION_RULE_LIFETIME_MS).optional(),
+  /**
+   * The `ref` of the `OpenInputView.standing` preview the person reviewed for this direction
+   * (protocol 2.8, #702). Required by a 2.8 daemon: it saves the rule that preview showed or
+   * nothing, refusing with `CONFIG_STALE` when the rule changed so the person reviews again.
+   * Optional in the schema only so a 2.7 client's answer parses and is refused by name.
+   */
+  previewRef: z.string().min(1).optional(),
+});
 export type AlwaysDecision = z.infer<typeof AlwaysDecisionSchema>;
 
 export const InputsAnswerParamsSchema = z.object({

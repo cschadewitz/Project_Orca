@@ -44,111 +44,117 @@ describe("permission forwarding through orchestrator → human input → facade 
     { order: [1, 3, 0, 2], kind: "allow_always" },
     { order: [0, 1, 2, 3], kind: "cancel" },
     { order: [0, 1, 2, 3], kind: "unknown" },
-  ])("retains offered options in order $order, selecting $kind without a standing write", async ({ order, kind }) => {
-    const dir = await mkdtemp(join(tmpdir(), "orca-forwarding-"));
-    try {
-      const options = order.map((i) => offered[i]!);
-      const requests: acp.RequestPermissionRequest[] = [];
-      const answers: Awaited<ReturnType<typeof resolvePermission>>[] = [];
-      const port = new UpstreamHumanInput();
-      const stores = memoryStores();
-      const orchestrator = new Orchestrator({
-        stores,
-        agents: new AgentRegistry()
-          .addHost(new LocalHost({ id: "local", type: "local" }))
-          .addAgent(AgentSpecSchema.parse({ id: "fake", command: "unused", permissions: { default: "ask" } })),
-        workflows: new WorkflowRegistry().register(workflow),
-        templates: new TemplateRegistry(),
-        workspaceProvider: new LocalWorkspaceProvider(dir),
-        clock: new FakeClock(),
-        humanInput: port,
-        sessionFactory: async (o) => {
-          const session: AgentSession = {
-            id: "mock-session",
-            agentId: o.agent.id,
-            hostId: o.host.id,
-            cwd: o.cwd,
-            acpSessionId: "original",
-            configOptions: [],
-            setConfigOption: async () => [],
-            closed: new Promise(() => {}),
-            async prompt() {
-              answers.push(
-                await resolvePermission(
-                  { default: "ask", rules: [] },
-                  {
-                    request: {
-                      sessionId: "original",
-                      toolCall: { toolCallId: "synthetic", title: "Synthetic ask", kind: "edit" },
-                      options,
+  ])(
+    "retains offered one-time options in order $order, selecting $kind without a standing write",
+    async ({ order, kind }) => {
+      const dir = await mkdtemp(join(tmpdir(), "orca-forwarding-"));
+      try {
+        const options = order.map((i) => offered[i]!);
+        const requests: acp.RequestPermissionRequest[] = [];
+        const answers: Awaited<ReturnType<typeof resolvePermission>>[] = [];
+        const port = new UpstreamHumanInput();
+        const stores = memoryStores();
+        const orchestrator = new Orchestrator({
+          stores,
+          agents: new AgentRegistry()
+            .addHost(new LocalHost({ id: "local", type: "local" }))
+            .addAgent(AgentSpecSchema.parse({ id: "fake", command: "unused", permissions: { default: "ask" } })),
+          workflows: new WorkflowRegistry().register(workflow),
+          templates: new TemplateRegistry(),
+          workspaceProvider: new LocalWorkspaceProvider(dir),
+          clock: new FakeClock(),
+          humanInput: port,
+          sessionFactory: async (o) => {
+            const session: AgentSession = {
+              id: "mock-session",
+              agentId: o.agent.id,
+              hostId: o.host.id,
+              cwd: o.cwd,
+              acpSessionId: "original",
+              configOptions: [],
+              setConfigOption: async () => [],
+              closed: new Promise(() => {}),
+              async prompt() {
+                answers.push(
+                  await resolvePermission(
+                    { default: "ask", rules: [] },
+                    {
+                      request: {
+                        sessionId: "original",
+                        toolCall: { toolCallId: "synthetic", title: "Synthetic ask", kind: "edit" },
+                        options,
+                      },
+                      ask: (req) => o.askPermission!(req),
                     },
-                    ask: (req) => o.askPermission!(req),
-                  },
-                ),
-              );
-              return { stopReason: "end_turn", durationMs: 1 };
-            },
-            onUpdate: () => () => {},
-            cancel: async () => {},
-            close: async () => {},
-          };
-          return session;
-        },
-      });
-      const runId = await orchestrator.startRun({ workflowId: "forwarding" });
-      port.bind(runId, {
-        sessionId: "upstream",
-        request: (async (
-          _method: string,
-          req: acp.RequestPermissionRequest,
-        ): Promise<acp.RequestPermissionResponse> => {
-          requests.push(req);
-          if (kind === "cancel") return { outcome: { outcome: "cancelled" } };
-          const selected = kind === "unknown" ? "never-offered" : req.options.find((o) => o.kind === kind)?.optionId;
-          return { outcome: { outcome: "selected", optionId: selected ?? "no-matching-kind" } };
-        }) as UpstreamTarget["request"],
-      });
-      const state = await orchestrator.run(runId);
-      expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
-      expect(requests).toHaveLength(1);
-      expect(requests[0]!.options).toEqual(options);
-      const original = options.find((o) => o.kind === kind);
-      expect(answers).toEqual([
-        original
-          ? {
-              response: { outcome: { outcome: "selected", optionId: original.optionId } },
-              decision: `ask:${original.kind}`,
-            }
-          : { response: { outcome: { outcome: "cancelled" } }, decision: "ask:cancelled" },
-      ]);
-      const events = await stores.events.read(runId);
-      const requested = events.find((e) => e.type === "human.requested")!;
-      expect(requested.payload).toEqual({
-        stepRunId: expect.any(String),
-        requestId: expect.any(String),
-        kind: "permission",
-        question: "Synthetic ask",
-        options: options.map((o) => ({
-          id: o.optionId,
-          label: o.name,
-          ...(o.kind.startsWith("reject_") ? { destructive: true } : {}),
-        })),
-        agent: { id: "fake", hostId: "local" },
-        context: { toolCall: { toolCallId: "synthetic", title: "Synthetic ask", kind: "edit" } },
-      });
-      // Both raw events and their folded public state omit the runtime metadata/kinds.
-      expect(JSON.stringify(events)).not.toContain("permissionOptions");
-      expect(JSON.stringify(state.humanInputs)).not.toContain("permissionOptions");
-      for (const option of offered) {
-        expect(JSON.stringify(requested)).not.toContain(option.kind);
-        expect(JSON.stringify(state.humanInputs)).not.toContain(option.kind);
+                  ),
+                );
+                return { stopReason: "end_turn", durationMs: 1 };
+              },
+              onUpdate: () => () => {},
+              cancel: async () => {},
+              close: async () => {},
+            };
+            return session;
+          },
+        });
+        const runId = await orchestrator.startRun({ workflowId: "forwarding" });
+        port.bind(runId, {
+          sessionId: "upstream",
+          request: (async (
+            _method: string,
+            req: acp.RequestPermissionRequest,
+          ): Promise<acp.RequestPermissionResponse> => {
+            requests.push(req);
+            if (kind === "cancel") return { outcome: { outcome: "cancelled" } };
+            const selected = kind === "unknown" ? "never-offered" : req.options.find((o) => o.kind === kind)?.optionId;
+            return { outcome: { outcome: "selected", optionId: selected ?? "no-matching-kind" } };
+          }) as UpstreamTarget["request"],
+        });
+        const state = await orchestrator.run(runId);
+        expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
+        expect(requests).toHaveLength(1);
+        // Only the one-time choices are forwarded, in the agent's order (#702): a remembered
+        // option would have the agent stop asking, out of reach of any later ORCA rule.
+        const oneTime = options.filter((o) => o.kind === "allow_once" || o.kind === "reject_once");
+        expect(requests[0]!.options).toEqual(oneTime);
+        const original = oneTime.find((o) => o.kind === kind);
+        expect(answers).toEqual([
+          original
+            ? {
+                response: { outcome: { outcome: "selected", optionId: original.optionId } },
+                decision: `ask:${original.kind}`,
+              }
+            : { response: { outcome: { outcome: "cancelled" } }, decision: "ask:cancelled" },
+        ]);
+        const events = await stores.events.read(runId);
+        const requested = events.find((e) => e.type === "human.requested")!;
+        expect(requested.payload).toEqual({
+          stepRunId: expect.any(String),
+          requestId: expect.any(String),
+          kind: "permission",
+          question: "Synthetic ask",
+          options: oneTime.map((o) => ({
+            id: o.optionId,
+            label: o.name,
+            ...(o.kind.startsWith("reject_") ? { destructive: true } : {}),
+          })),
+          agent: { id: "fake", hostId: "local" },
+          context: { toolCall: { toolCallId: "synthetic", title: "Synthetic ask", kind: "edit" } },
+        });
+        // Both raw events and their folded public state omit the runtime metadata/kinds.
+        expect(JSON.stringify(events)).not.toContain("permissionOptions");
+        expect(JSON.stringify(state.humanInputs)).not.toContain("permissionOptions");
+        for (const option of offered) {
+          expect(JSON.stringify(requested)).not.toContain(option.kind);
+          expect(JSON.stringify(state.humanInputs)).not.toContain(option.kind);
+        }
+        expect(await readdir(dir)).not.toContain("orca.permissions.json");
+        expect((await readdir(dir)).filter((name) => name.startsWith("orca.permissions.json"))).toEqual([]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
       }
-      expect(await readdir(dir)).not.toContain("orca.permissions.json");
-      expect((await readdir(dir)).filter((name) => name.startsWith("orca.permissions.json"))).toEqual([]);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 });
 
 it.each(["unbound", "disconnect", "replacement"])(

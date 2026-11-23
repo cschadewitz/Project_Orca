@@ -25,21 +25,30 @@
  *   what they wrote comes back in `permission` and is reported verbatim (`alwaysOutcome`).
  *   The one-time answer they send goes the same way as the rule: an option `destructive`
  *   marks for deny, any other for allow (`alwaysTarget`), and the daemon refuses a mismatch.
+ * - **"Always" is reviewed before it is saved (#702).** An always-button opens
+ *   `StandingRuleReview`: the exact rule from the daemon's preview, its lifetime, and a
+ *   "Save rule and …" button. Nothing is written until that is pressed, and the plain
+ *   **Answer** never writes a rule.
  */
 import { useUpdateDraft } from "../update-drafts.js";
 
 import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode, type Ref } from "react";
 import { Button, Card, Text, textClass } from "../ui/index.js";
 import { scopeProps } from "../keyboard-map.js";
+import type { OpenInputView } from "@orca/protocol";
 import { bindOptions, defaultSelection, isFreeText, type GateOption } from "./card-model.js";
+import { DEFAULT_RULE_LIFETIME, StandingRuleReview, lifetimeDuration } from "./standing-rule-review.js";
 import { useCardKeys } from "./use-card-keys.js";
 
 /** What a card sends. `optionId` is an option's id, or the text of a free-text answer. */
 export interface AnswerRequest {
   optionId: string;
   note?: string;
-  /** Only ever set from the two always-buttons, and only on a permission ask. */
-  always?: { decision: "allow" | "deny" };
+  /**
+   * Only ever set from a reviewed standing rule (#702), and only on a permission ask.
+   * `durationMs` absent is "until removed".
+   */
+  always?: { decision: "allow" | "deny"; durationMs?: number; previewRef?: string };
 }
 
 export interface AnswerCardProps {
@@ -75,6 +84,10 @@ export interface AnswerCardProps {
   focused?: boolean;
   /** Offer "always": a permission ask can write a standing rule, a gate cannot. */
   offerAlways?: boolean;
+  /** The daemon's preview of the rule each "always" would write (protocol 2.8, #702). */
+  standing?: OpenInputView["standing"];
+  /** Whose rule it would be: the asking agent. */
+  standingAgentId?: string | undefined;
   onAnswer: (request: AnswerRequest) => void;
   /** An answer is in flight; the controls wait rather than being pressed twice. */
   pending?: boolean;
@@ -104,6 +117,8 @@ export function AnswerCard({
   cannotWrite,
   focused = false,
   offerAlways = false,
+  standing,
+  standingAgentId,
   onAnswer,
   pending = false,
   outcome,
@@ -197,14 +212,22 @@ export function AnswerCard({
     const target = always[decision];
     return blocked ?? ("reason" in target ? target.reason : undefined);
   };
+  /* An always-button opens the review (#702); only the review's save sends. */
+  const [reviewing, setReviewing] = useState<"allow" | "deny" | undefined>(undefined);
+  const [lifetime, setLifetime] = useState(DEFAULT_RULE_LIFETIME);
   const sendAlways = (decision: "allow" | "deny"): void => {
     const target = always[decision];
     if (blocked !== undefined || !("option" in target)) return;
+    const preview = standing?.[decision];
+    if (!preview || !("rules" in preview)) return;
+    const durationMs = lifetimeDuration(lifetime);
     onAnswer({
       optionId: target.option.id,
       ...(note.trim() ? { note: note.trim() } : {}),
-      always: { decision },
+      // The preview's ref binds the save to the rule shown; the daemon refuses a changed one.
+      always: { decision, ...(durationMs === undefined ? {} : { durationMs }), previewRef: preview.ref },
     });
+    setReviewing(undefined);
   };
 
   useCardKeys(bound, focused && !pending && answerForm === undefined, {
@@ -307,7 +330,8 @@ export function AnswerCard({
                     size="sm"
                     disabled={alwaysBlocked("allow") !== undefined}
                     {...(alwaysBlocked("allow") !== undefined ? { disabledReason: alwaysBlocked("allow")! } : {})}
-                    onClick={() => sendAlways("allow")}
+                    aria-expanded={reviewing === "allow"}
+                    onClick={() => setReviewing((open) => (open === "allow" ? undefined : "allow"))}
                   >
                     Always allow
                   </Button>
@@ -316,13 +340,27 @@ export function AnswerCard({
                     tone="danger"
                     disabled={alwaysBlocked("deny") !== undefined}
                     {...(alwaysBlocked("deny") !== undefined ? { disabledReason: alwaysBlocked("deny")! } : {})}
-                    onClick={() => sendAlways("deny")}
+                    aria-expanded={reviewing === "deny"}
+                    onClick={() => setReviewing((open) => (open === "deny" ? undefined : "deny"))}
                   >
                     Always deny
                   </Button>
                 </>
               )}
             </div>
+
+            {offerAlways && reviewing !== undefined && (
+              <StandingRuleReview
+                decision={reviewing}
+                standing={standing}
+                agentId={standingAgentId}
+                lifetime={lifetime}
+                onLifetime={setLifetime}
+                blocked={alwaysBlocked(reviewing)}
+                onSave={() => sendAlways(reviewing)}
+                onCancel={() => setReviewing(undefined)}
+              />
+            )}
 
             {/* The consequences, under the options rather than on them: an option's button is a
             row-height control and a clause is a sentence (rule 9). */}

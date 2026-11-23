@@ -170,6 +170,43 @@ are outside every agent root and ORCA's own requests about them are asked. A har
 is the operating system's — a separate user or a sandbox — as `docs/daemon-security.md`
 says of `auth/`.
 
+**2026‑11‑23 (#702): a standing rule is reviewed, can end, and is ORCA's alone.** Three
+changes, all on this file and its writer, with no second store:
+
+- **Shown before it is saved.** `inputs.list` carries `standing` on a permission ask
+  (protocol 2.8): the rule each "always" direction would write, derived from the same
+  recorded tool call and workspace the write uses. The app's **Always allow** / **Always
+  deny** open that rule with its agent and lifetime, and only **Save rule and …** sends; the
+  plain **Answer** never writes. Where the preview says nothing can be scoped, or a 2.7 daemon
+  sent none, there is nothing to save and the one-time answers still work. Each preview
+  carries a `ref` (sha256 over the run, step, request, agent, direction and normalised
+  rules); `inputs.answer` must echo it as `always.previewRef`, and the daemon derives the
+  rule again and refuses `CONFIG_STALE` before answering anything when it no longer matches,
+  so what is saved is what was shown or nothing.
+- **A lifetime.** A rule may carry `expiresAt`. `inputs.answer`'s `always.durationMs` (at most
+  90 days) is stamped on the daemon's clock; absent, the rule stands until removed, as
+  before. An expired rule stays in the file for the diff and decides nothing: it is skipped
+  per ask, and `config.get` leaves it out of the effective policy. An answer for a grant
+  already on file extends that line in place (never shortens it) rather than appending a
+  twin. A value that is not an instant makes the file unreadable rather than "forever".
+  **A file holding any timed rule is version 3** (`PERMISSION_LIFETIME_VERSION`). Released
+  0.7.0 and 0.7.1 read version 1 and strip `expiresAt`, so in a version 1 file a timed allow
+  would be permanent to them; any other version they refuse, skipping the file with every
+  later `allow` turned to `ask`, refusing to replace it and refusing to edit it on the
+  Config surface. The writer stamps the version from the content, so removing the last
+  timed rule makes the file version 1 again, and a version 1 file that carries `expiresAt`
+  is refused. Version 2 is left to the inactive typed scoped-rule envelope.
+  Removing a rule on the Config surface is how one is revoked; the next ask is decided
+  without it.
+- **No remembered native grant.** An automatic allow selects only an agent's `allow_once`
+  and refuses (`allow:no-one-time-option`) when none is offered, instead of falling back to
+  `allow_always`. A remembered option would have the agent stop asking, so an expired,
+  removed or narrowed rule would never be consulted again. A person is offered one-time
+  options only too: the live card already was, and now a parked ask and one forwarded to an
+  upstream ACP client are as well, so an answer can never hand the agent a remembered grant.
+  The deny fallback to `reject_always` is unchanged: it can
+  only stop the agent.
+
 ## Consequences
 + The hand‑written half of the config stays hand‑written. Nothing appends to the Nth element
   of a curated `agents:` array, so a machine write can never collide with a human edit.

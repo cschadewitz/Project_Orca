@@ -10,7 +10,8 @@
  *   there is nothing in it, the card shows the question alone rather than inventing a
  *   command from it (rule 12).
  * - **It offers "always".** A permission answer may write a standing rule into the workspace
- *   sidecar, and the two buttons say which way that rule goes, because ORCA will not read an
+ *   sidecar, shown first with its lifetime and saved only from that review (#702), and the
+ *   two buttons say which way that rule goes, because ORCA will not read an
  *   agent's own option ids and guess (#160, ADR 0009). What was written comes back on the
  *   result and is reported verbatim.
  * - **It says who is asking.** The agent and its host are what makes "allow always" a
@@ -82,6 +83,8 @@ export function PermissionCard({ input, scopedRuleReview, ...rest }: PermissionC
       command={scopedRuleReview ? undefined : subject}
       options={input.options}
       offerAlways
+      standing={input.standing}
+      standingAgentId={agent?.id}
       {...rest}
       answerForm={
         scopedRuleReview ? (

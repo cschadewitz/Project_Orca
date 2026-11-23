@@ -25,7 +25,7 @@ import { z } from "zod";
 import { PendingRevisionViewSchema, RevisionBoundaryViewSchema } from "./revision-input.js";
 import { LiveInputViewSchema } from "./live-input.js";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
-import { GateOptionSchema } from "@orca/core/schemas";
+import { GateOptionSchema, PermissionRuleSchema } from "@orca/core/schemas";
 import { AgentHostTypeSchema } from "./agents.js";
 import { ArtifactViewSchema, WorkItemViewSchema } from "./views.js";
 
@@ -51,6 +51,28 @@ export const InputAgentSchema = z.object({
   hostType: AgentHostTypeSchema.optional(),
 });
 export type InputAgent = z.infer<typeof InputAgentSchema>;
+
+/**
+ * What an "always" answer to a permission ask would write, computed before anybody answers
+ * (protocol 2.8, #702), so a card can show the exact rule and ask the person to save it
+ * rather than describing a rule it has not seen. Either the rules (`derivePermissionRules`'
+ * output for this tool call and this run's workspace) or why none can be written, in which
+ * case the card offers the one-time answers only. It is a preview, not a reservation: the
+ * write re-derives from the same recorded tool call and reports what it actually wrote.
+ */
+export const StandingRulePreviewSchema = z.union([
+  z.object({
+    rules: z.array(PermissionRuleSchema).min(1),
+    /**
+     * Binds a save to this preview: `inputs.answer`'s `always.previewRef` must echo it, and
+     * the daemon refuses (`CONFIG_STALE`) when the rule it would now write differs from the
+     * one shown. Opaque to clients.
+     */
+    ref: z.string().min(1),
+  }),
+  z.object({ refused: z.object({ reason: z.string(), detail: z.string() }) }),
+]);
+export type StandingRulePreview = z.infer<typeof StandingRulePreviewSchema>;
 
 export const OpenInputViewSchema = z.object({
   revision: RevisionBoundaryViewSchema.optional(),
@@ -80,6 +102,11 @@ export const OpenInputViewSchema = z.object({
    * honest answer and not a field that failed to load.
    */
   agent: InputAgentSchema.optional(),
+  /**
+   * The standing rule each direction of an "always" answer would write (protocol 2.8, #702).
+   * Present on a `permission` ask that recorded its tool call; absent on a gate.
+   */
+  standing: z.object({ allow: StandingRulePreviewSchema, deny: StandingRulePreviewSchema }).optional(),
   workItem: WorkItemViewSchema.optional(),
   requestedAt: z.string(),
   /** How long it has waited, against `asOf` of the result - so a client's own clock never enters into it. */

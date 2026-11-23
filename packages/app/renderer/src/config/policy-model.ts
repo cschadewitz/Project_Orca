@@ -60,6 +60,8 @@ export interface SidecarRule {
   decision: RuleDecision;
   addedAt?: string;
   grantedFor?: string;
+  /** When the rule stops deciding (#702). Absent: until removed. */
+  expiresAt?: string;
 }
 
 /**
@@ -128,9 +130,10 @@ export const EMPTY_SIDECAR: SidecarDocument = { version: 1, agents: {} };
  * array whose rows are `null`, or carry no `match`, or name a decision the vocabulary does
  * not have, is a file this panel cannot edit: `describeRule` would throw on it and blank the
  * panel, which is a worse answer than the documented one. So each row is checked and one bad
- * row refuses the document. A `version` other than 1 is refused for the same reason — it is
- * a shape this app has not been taught, and rewriting it in the only shape it knows would
- * lose whatever the new version added.
+ * row refuses the document. A `version` other than 1 or 3 is refused for the same reason — it
+ * is a shape this app has not been taught, and rewriting it in a shape it knows would lose
+ * whatever the new version added. Version 3 is version 1 plus rule lifetimes (#702); a
+ * version 1 file carrying an `expiresAt` is refused, as the daemon's reader refuses it.
  */
 export function parseSidecar(text: string): SidecarDocument | undefined {
   if (text.trim() === "") return EMPTY_SIDECAR;
@@ -143,7 +146,7 @@ export function parseSidecar(text: string): SidecarDocument | undefined {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
   const record = parsed as Record<string, unknown>;
   const version = record["version"];
-  if (version !== undefined && version !== 1) return undefined;
+  if (version !== undefined && version !== 1 && version !== SIDECAR_LIFETIME_VERSION) return undefined;
   const agents = record["agents"];
   if (agents !== undefined && (typeof agents !== "object" || agents === null || Array.isArray(agents))) {
     return undefined;
@@ -160,8 +163,16 @@ export function parseSidecar(text: string): SidecarDocument | undefined {
     }
     out[id] = { rules: checked };
   }
-  return { version: 1, agents: out };
+  const timed = Object.values(out).some((agent) => agent.rules.some((rule) => rule.expiresAt !== undefined));
+  if (timed && version !== SIDECAR_LIFETIME_VERSION) return undefined;
+  return { version: timed ? SIDECAR_LIFETIME_VERSION : 1, agents: out };
 }
+
+/**
+ * The version a sidecar with any timed rule carries: `PERMISSION_LIFETIME_VERSION` in
+ * `@orca/core`, mirrored because the renderer cannot import core (ADR 0008).
+ */
+export const SIDECAR_LIFETIME_VERSION = 3;
 
 /**
  * One row of `rules`, if it is one. The row is returned as it arrived — unknown keys and
@@ -234,7 +245,7 @@ export function withRules(doc: SidecarDocument, agentId: string, rules: readonly
 const MATCH_KEYS: readonly string[] = ["kind", "titlePattern", "path", "pathPrefix", "scope"];
 
 /** The keys of a rule, in that same writer's order. */
-const RULE_KEYS: readonly string[] = ["match", "decision", "addedAt", "grantedFor"];
+const RULE_KEYS: readonly string[] = ["match", "decision", "addedAt", "grantedFor", "expiresAt"];
 
 /**
  * One rule as it is written: the keys this app knows in the daemon's order, then any it
@@ -262,6 +273,7 @@ function canonicalRule(rule: SidecarRule): Record<string, unknown> {
   const out: Record<string, unknown> = { match, decision: rule.decision };
   if (rule.addedAt !== undefined) out["addedAt"] = rule.addedAt;
   if (rule.grantedFor !== undefined) out["grantedFor"] = rule.grantedFor;
+  if (rule.expiresAt !== undefined) out["expiresAt"] = rule.expiresAt;
   for (const key of Object.keys(raw)) {
     if (!RULE_KEYS.includes(key) && raw[key] !== undefined) out[key] = raw[key];
   }
@@ -272,7 +284,8 @@ function canonicalRule(rule: SidecarRule): Record<string, unknown> {
  * The bytes, in the daemon's own key order and with `undefined` omitted.
  *
  * The order is `serialize()` in `packages/agents/src/permissions.ts`: `version` then
- * `agents` sorted by id, each rule `match` then `decision` then `addedAt` then `grantedFor`,
+ * `agents` sorted by id, each rule `match` then `decision` then `addedAt` then `grantedFor`
+ * then `expiresAt`,
  * and a match's own keys in the vocabulary's order. Two spaces and a trailing newline, the
  * same, so that a save that changed one row produces a one-row diff. A key neither this app
  * nor that writer knows is written after the ones they do, rather than dropped.
@@ -282,8 +295,10 @@ export function serializeSidecar(doc: SidecarDocument): string {
   for (const id of Object.keys(doc.agents).sort()) {
     agents[id] = { rules: rulesOf(doc, id).map(canonicalRule) };
   }
-  // `version` and `agents`, and never a third key: the sidecar carries no `default`.
-  return `${JSON.stringify({ version: doc.version, agents }, null, 2)}\n`;
+  // `version` and `agents`, and never a third key: the sidecar carries no `default`. The
+  // version follows the content, as the daemon's writer stamps it (#702).
+  const timed = Object.keys(doc.agents).some((id) => rulesOf(doc, id).some((rule) => rule.expiresAt !== undefined));
+  return `${JSON.stringify({ version: timed ? SIDECAR_LIFETIME_VERSION : 1, agents }, null, 2)}\n`;
 }
 
 /** A rule a person adds here: narrow, and saying so in its own provenance. */

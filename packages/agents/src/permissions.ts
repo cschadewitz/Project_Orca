@@ -50,6 +50,9 @@ import {
   PERMISSION_POLICY_FILENAME,
   PermissionPolicyFileSchema,
   permissionPathForms,
+  permissionPolicyFileVersion,
+  permissionRuleExpired,
+  PERMISSION_LIFETIME_VERSION,
   samePermissionRule,
   workspaceRelativePath,
   WritablePermissionPolicyFileSchema,
@@ -150,8 +153,17 @@ export async function resolvePermission(
       ? { response: { outcome: { outcome: "selected" as const, optionId: o.optionId } }, decision: label }
       : { response: { outcome: { outcome: "cancelled" as const } }, decision: "cancelled" };
   switch (decision) {
-    case "allow":
-      return select(pick(options, ["allow_once", "allow_always"]), "allow");
+    case "allow": {
+      // Only a one-time option (#702). `allow_always` would have the *agent* remember the
+      // grant and stop asking, so a rule that later expires, is removed or is narrowed would
+      // never be consulted again for that tool: ORCA's own rule is the standing grant, and
+      // the agent is told yes for this one call. An ask that offers no one-time allow is
+      // refused and says why, rather than widened.
+      const once = pick(options, ["allow_once"]);
+      return once
+        ? select(once, "allow")
+        : { response: { outcome: { outcome: "cancelled" } }, decision: "allow:no-one-time-option" };
+    }
     case "deny":
       return select(pick(options, ["reject_once", "reject_always"]), guarded ? "deny:protected" : "deny");
     case "ask": {
@@ -364,15 +376,20 @@ export async function readPermissionPolicyFile(file: string): Promise<Permission
  * less any wildcard `allow` (`isWildcardPermissionRule` in `@orca/core`), which is reported
  * to `onIgnored` and never evaluated. ORCA only ever writes scoped grants, and a wildcard in
  * this file is how an agent that reached it would allow itself everything (C4-01); a person
- * who means one writes it in the config.
+ * who means one writes it in the config. A rule whose `expiresAt` has passed at `now` is
+ * left out too (#702).
  */
 export function permissionOverlayFor(
   doc: PermissionPolicyFile,
   agentId: string,
   onIgnored?: (rule: PermissionRule) => void,
+  now: number = Date.now(),
 ): PermissionRule[] {
   const rules: PermissionRule[] = [];
   for (const r of doc.agents[agentId]?.rules ?? []) {
+    // A rule whose lifetime has run out decides nothing (#702). It is not reported as
+    // ignored: it was a scoped grant that ended, not a wildcard somebody slipped in.
+    if (permissionRuleExpired(r, now)) continue;
     const rule: PermissionRule = { match: { ...r.match }, decision: r.decision };
     if (isWildcardPermissionRule(rule)) onIgnored?.(rule);
     else rules.push(rule);
@@ -418,6 +435,8 @@ export async function loadEffectivePermissionPolicy(
   files: readonly string[],
   onUnreadable?: (file: string, error: unknown) => void,
   onIgnored?: (file: string, rule: PermissionRule) => void,
+  /** The clock rule lifetimes are judged against (#702); injectable for tests. */
+  now: () => number = Date.now,
 ): Promise<PermissionPolicy> {
   const overlays: PermissionRule[][] = [];
   /** How many rules come before the first sidecar that could not be read. */
@@ -425,7 +444,9 @@ export async function loadEffectivePermissionPolicy(
   for (const file of files) {
     try {
       const doc = await readPermissionPolicyFile(file);
-      overlays.push(permissionOverlayFor(doc, agent.id, onIgnored ? (rule) => onIgnored(file, rule) : undefined));
+      overlays.push(
+        permissionOverlayFor(doc, agent.id, onIgnored ? (rule) => onIgnored(file, rule) : undefined, now()),
+      );
     } catch (e) {
       if (!onUnreadable) throw e;
       onUnreadable(file, e);
@@ -453,6 +474,11 @@ export interface RecordAlwaysOptions {
   decision: "allow" | "deny";
   /** Absolute path of the run's workspace. Without it, no path-scoped rule can be written. */
   workspaceCwd?: string | undefined;
+  /**
+   * When the written rule stops deciding (#702), as an ISO-8601 instant. Absent: it stands
+   * until somebody removes it, which is what "always" meant before rules had lifetimes.
+   */
+  expiresAt?: string | undefined;
   /** Injectable clock, for tests. */
   now?: (() => Date) | undefined;
   /** Lock tuning; the defaults are fine. */
@@ -469,9 +495,12 @@ export interface RecordAlwaysResult {
   agentId: string;
   /** The rules this answer implies: appended now, or already there from a previous answer. */
   rules: PermissionRule[];
-  /** The subset actually appended by this call. */
+  /**
+   * The subset this call wrote: appended, or an equivalent rule already in the file whose
+   * lifetime this answer extended (an expired one, or one ending sooner than this answer's).
+   */
   added: PermissionRule[];
-  /** The subset that was already recorded, so the file was not rewritten for them. */
+  /** The subset already recorded for at least as long, so the file was not rewritten for them. */
   alreadyPresent: PermissionRule[];
   /** Set when nothing could be derived. The caller must fall back to allowing this one call. */
   refused?: { reason: PermissionDeriveRefusal; detail: string };
@@ -506,17 +535,37 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
       refused: { reason: derived.reason, detail: derived.detail },
     };
 
-  const addedAt = (opts.now?.() ?? new Date()).toISOString();
+  const at = opts.now?.() ?? new Date();
+  const addedAt = at.toISOString();
+  const expiresAt = opts.expiresAt;
+  if (expiresAt !== undefined && !(Date.parse(expiresAt) > at.getTime()))
+    throw new OrcaError("CONFIG_INVALID", `a standing rule cannot expire at ${expiresAt}: that is not after now`);
   const grantedFor = (tc.title ?? "").trim();
+  /** How long a rule lasts, for "does this answer outlast the one on file". */
+  const until = (rule: RecordedPermissionRule): number =>
+    rule.expiresAt === undefined ? Infinity : Date.parse(rule.expiresAt);
+  const wanted = expiresAt === undefined ? Infinity : Date.parse(expiresAt);
   return withPolicyLock(opts.file, opts.lock, async () => {
     const doc = await readPermissionPolicyFile(opts.file);
     const rules = [...(doc.agents[opts.agentId]?.rules ?? [])];
     const added: PermissionRule[] = [];
     const alreadyPresent: PermissionRule[] = [];
+    const recorded = (rule: PermissionRule): RecordedPermissionRule => ({
+      ...rule,
+      addedAt,
+      ...(grantedFor === "" ? {} : { grantedFor }),
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+    });
     for (const rule of derived.rules) {
-      if (rules.some((r) => samePermissionRule(r, rule))) alreadyPresent.push(rule);
-      else {
-        rules.push({ ...rule, addedAt, ...(grantedFor === "" ? {} : { grantedFor }) });
+      const same = rules.flatMap((r, index) => (samePermissionRule(r, rule) ? [index] : []));
+      if (same.some((index) => until(rules[index]!) >= wanted)) alreadyPresent.push(rule);
+      else if (same.length > 0) {
+        // The grant is on file but ends sooner (or has ended): this answer extends it in place
+        // rather than appending a twin, so the file keeps one line per grant.
+        rules[same[0]!] = recorded(rule);
+        added.push(rule);
+      } else {
+        rules.push(recorded(rule));
         added.push(rule);
       }
     }
@@ -606,7 +655,14 @@ async function refuseUnsupportedPolicyReplacement(file: string): Promise<void> {
   } catch {
     return;
   }
-  if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && "version" in raw && raw.version !== 1)
+  if (
+    typeof raw === "object" &&
+    raw !== null &&
+    !Array.isArray(raw) &&
+    "version" in raw &&
+    raw.version !== 1 &&
+    raw.version !== PERMISSION_LIFETIME_VERSION
+  )
     throw new OrcaError("CONFIG_INVALID", `${file}: refusing to replace an unsupported permission document version`);
 }
 
@@ -635,11 +691,14 @@ function serialize(doc: PermissionPolicyFile): string {
     const out: Record<string, unknown> = { match, decision: r.decision };
     if (r.addedAt !== undefined) out["addedAt"] = r.addedAt;
     if (r.grantedFor !== undefined) out["grantedFor"] = r.grantedFor;
+    if (r.expiresAt !== undefined) out["expiresAt"] = r.expiresAt;
     return out;
   };
   const agents: Record<string, unknown> = {};
   for (const id of Object.keys(doc.agents).sort()) agents[id] = { rules: (doc.agents[id]?.rules ?? []).map(rule) };
-  return `${JSON.stringify({ version: doc.version, agents }, null, 2)}\n`;
+  // The version follows the content, never the input (#702): any lifetime moves the file to
+  // the version released 0.7.x readers refuse, and removing the last one moves it back.
+  return `${JSON.stringify({ version: permissionPolicyFileVersion(doc), agents }, null, 2)}\n`;
 }
 
 async function writePolicyFile(
