@@ -13,6 +13,7 @@ const authorized = (operationId: string) =>
     operationId,
     access: "write",
     display: "a",
+    io: "bound",
     decision: "allow",
   });
 const completed = (operationId: string, outcome: string, at: { stepRunId?: string; turnId?: string } = {}) =>

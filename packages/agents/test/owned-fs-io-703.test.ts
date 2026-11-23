@@ -13,6 +13,7 @@ import {
   stillBound,
   writeAll,
   writeBound,
+  writeCompatibility,
 } from "@orca/agents";
 
 const dirs: string[] = [];
@@ -91,7 +92,7 @@ describe("bound I/O", () => {
     const binding = bindOwnedFs(join(under, "x", "y", "new"))!;
     await rename(under, join(d, "moved"));
     await mkdir(under);
-    await expect(writeBound(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    await expect(writeCompatibility(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
     expect(existsSync(join(under, "x"))).toBe(false);
     expect(existsSync(join(d, "moved", "x"))).toBe(false);
   });
@@ -105,7 +106,7 @@ describe("bound I/O", () => {
     const binding = bindOwnedFs(join(under, "x", "new"))!;
     await rm(under, { recursive: true });
     await symlink(elsewhere, under);
-    await expect(writeBound(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    await expect(writeCompatibility(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
     expect(existsSync(join(elsewhere, "x"))).toBe(false);
   });
 
@@ -113,7 +114,7 @@ describe("bound I/O", () => {
     const d = await dir();
     const binding = bindOwnedFs(join(d, "x", "new"))!;
     await mkdir(join(d, "x"));
-    await expect(writeBound(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    await expect(writeCompatibility(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
     expect(existsSync(join(d, "x", "new"))).toBe(false);
   });
 
@@ -177,10 +178,28 @@ describe("new files outside the bound path (best effort, #1034)", () => {
     }
   };
 
+  it("is never taken by the strict write: that refuses before any change", async () => {
+    const d = await dir();
+    await asPlatform("darwin", () =>
+      expect(writeBound(bindOwnedFs(join(d, "new"))!, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched),
+    );
+    await expect(writeBound(bindOwnedFs(join(d, "x", "new"))!, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    expect(existsSync(join(d, "new"))).toBe(false);
+    expect(existsSync(join(d, "x"))).toBe(false);
+  });
+
+  it("is only for a new file the strict path cannot bind", async () => {
+    const d = await dir();
+    await writeFile(join(d, "a"), "a");
+    await expect(writeCompatibility(bindOwnedFs(join(d, "a"))!, "x")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    await expect(writeCompatibility(bindOwnedFs(join(d, "b"))!, "x")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    expect(existsSync(join(d, "b"))).toBe(false);
+  });
+
   it("creates a new file on a platform with no directory-bound creation", async () => {
     const d = await dir();
     const file = join(d, "new");
-    await asPlatform("darwin", () => writeBound(bindOwnedFs(file)!, "new"));
+    await asPlatform("darwin", () => writeCompatibility(bindOwnedFs(file)!, "new"));
     expect(await readFile(file, "utf8")).toBe("new");
   });
 
@@ -191,7 +210,9 @@ describe("new files outside the bound path (best effort, #1034)", () => {
     const binding = bindOwnedFs(join(under, "x", "new"))!;
     await rename(under, join(d, "moved"));
     await mkdir(under);
-    await asPlatform("darwin", () => expect(writeBound(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched));
+    await asPlatform("darwin", () =>
+      expect(writeCompatibility(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched),
+    );
     expect(existsSync(join(under, "x"))).toBe(false);
     expect(existsSync(join(d, "moved", "x"))).toBe(false);
   });
@@ -201,7 +222,9 @@ describe("new files outside the bound path (best effort, #1034)", () => {
     const file = join(d, "new");
     const binding = bindOwnedFs(file)!;
     await writeFile(file, "someone else's");
-    await asPlatform("darwin", () => expect(writeBound(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched));
+    await asPlatform("darwin", () =>
+      expect(writeCompatibility(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched),
+    );
     expect(await readFile(file, "utf8")).toBe("someone else's");
   });
 });

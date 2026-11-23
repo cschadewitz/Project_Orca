@@ -8,3 +8,5 @@
   recorded as effect-unknown, not as failed, and the agent is told it is not safe to retry as
   if nothing happened. If the daemon stops between the two records, the operation is shown as
   execution-unknown rather than assumed done or repeated.
+  The record also says how the file was reached: bound to the file or folder ORCA checked, the
+  best-effort way for new files, or a remote host's path as written.

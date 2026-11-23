@@ -3273,6 +3273,7 @@ export class Orchestrator {
               access: record.access,
               display: record.display,
               ...(record.linked ? { linked: true as const } : {}),
+              io: record.io,
               decision: record.decision,
               ...(record.rule
                 ? {

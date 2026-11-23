@@ -20,6 +20,8 @@ export interface OwnedFsExecution {
   /** Bounded, root-relative: what the record shows of the file. */
   display: string;
   linked?: true;
+  /** `bound`, `compatibility` (best effort, outside the guarantee) or `unbound` (remote). */
+  io: "bound" | "compatibility" | "unbound";
   decision: string;
   /** When it was authorized. */
   at: string;
@@ -45,6 +47,7 @@ export function ownedFsExecutions(events: readonly OrcaEvent[]): OwnedFsExecutio
         access: p.access,
         display: p.display,
         ...(p.linked ? { linked: true as const } : {}),
+        io: p.io,
         decision: p.decision,
         at: e.at,
         state: "execution-unknown",

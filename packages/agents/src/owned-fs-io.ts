@@ -174,16 +174,37 @@ export async function writeBound(binding: OwnedFsBinding, content: string): Prom
     }
     return;
   }
-  // The guarantee: on Linux, a file created directly in its existing, checked parent, through
-  // that parent's descriptor. Linux without a usable /proc/self/fd refuses rather than claim it.
-  const parentExists = binding.anchor === dirname(binding.io);
+  // Strict: only the bound creation. Anything else was to be dispatched as compatibility, or
+  // refused, before this was called; here it is refused before any change.
+  if (newFileMode(binding) !== "bound")
+    throw new OwnedFsNotDispatched("this new file cannot be created bound to the checked directory");
+  return createBound(binding, content);
+}
+
+/**
+ * How a write of a new file can be carried out, decided before it is authorized and recorded:
+ * `bound` on Linux when its parent exists (`writeBound`); `compatibility` when directories
+ * must be made first, or on macOS and Windows (`writeCompatibility`, best effort, outside the
+ * identity-bound guarantee, #1034); `refused` on Linux without a usable `/proc/self/fd`.
+ */
+export type OwnedFsWriteMode = "bound" | "compatibility" | "refused";
+
+export function newFileMode(binding: OwnedFsBinding): OwnedFsWriteMode {
+  if (binding.exists) return "bound";
   if (process.platform === "linux") {
-    if (!procFdUsable())
-      throw new OwnedFsNotDispatched(
-        "creating a new file needs /proc/self/fd on Linux, so the creation can be bound to the checked directory",
-      );
-    if (parentExists) return createBound(binding, content);
+    if (!procFdUsable()) return "refused";
+    if (binding.anchor === dirname(binding.io)) return "bound";
   }
+  return "compatibility";
+}
+
+/**
+ * The compatibility path for a new file the strict path cannot bind (#1034): best effort,
+ * dispatched and recorded as such by the caller, never in place of a bound write.
+ */
+export async function writeCompatibility(binding: OwnedFsBinding, content: string): Promise<void> {
+  if (binding.exists || newFileMode(binding) !== "compatibility")
+    throw new OwnedFsNotDispatched("the compatibility path is only for a new file the strict path cannot bind");
   return createBestEffort(binding, content);
 }
 
@@ -245,7 +266,7 @@ function procFdUsable(): boolean {
  * operation; one in the instant between a check and its effect may be found only afterwards,
  * if at all, and is then reported as an unknown effect. Nothing is cleaned up.
  */
-export async function createBestEffort(binding: OwnedFsBinding, content: string): Promise<void> {
+async function createBestEffort(binding: OwnedFsBinding, content: string): Promise<void> {
   const parent = dirname(binding.io);
   // Every directory between the anchor and the new file, nearest the anchor first.
   const missing: string[] = [];

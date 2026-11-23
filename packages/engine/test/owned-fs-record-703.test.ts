@@ -46,6 +46,7 @@ function recordingSession(seen: { authorizedBeforeIo: boolean[] }): SessionFacto
           turnId: "turn-1",
           access: "write",
           display: "a.ts",
+          io: "bound",
           decision: "allow",
           rule: { basis: "default" },
         });
@@ -60,6 +61,7 @@ function recordingSession(seen: { authorizedBeforeIo: boolean[] }): SessionFacto
           access: "write",
           display: "b.ts",
           linked: true,
+          io: "compatibility",
           decision: "ask:allow_once",
         });
         return { stopReason: "end_turn", durationMs: 1 };
@@ -101,10 +103,11 @@ describe("the run's record of ORCA's own file executor (#703)", () => {
         turnId: "turn-1",
         access: "write",
         display: "a.ts",
+        io: "bound",
         decision: "allow",
         rule: { basis: "default" },
       }),
-      expect.objectContaining({ operationId: "op-2", linked: true, decision: "ask:allow_once" }),
+      expect.objectContaining({ operationId: "op-2", linked: true, io: "compatibility", decision: "ask:allow_once" }),
     ]);
     const completed = events.filter((e) => e.type === "agent.fs.completed");
     expect(completed.map((e) => e.payload)).toEqual([
@@ -148,6 +151,7 @@ describe("the run's record of ORCA's own file executor (#703)", () => {
           turnId: "t",
           access: "read",
           display: "a.ts",
+          io: "bound",
           decision: "allow",
         }).catch((e: unknown) => {
           refusal = e;

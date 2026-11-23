@@ -14,7 +14,7 @@ import {
   type HostFileSystem,
   type SpawnAgentOptions,
 } from "../host.js";
-import { readBound, writeBound } from "../owned-fs-io.js";
+import { readBound, writeBound, writeCompatibility } from "../owned-fs-io.js";
 
 const exists = (p: string): Promise<boolean> =>
   access(p).then(
@@ -43,7 +43,7 @@ export const localFileSystem: HostFileSystem = {
   mkdirp: async (p) => {
     await mkdir(p, { recursive: true });
   },
-  bound: { read: readBound, write: writeBound },
+  bound: { read: readBound, write: writeBound, writeCompatibility },
 };
 
 /** Runs agents as child processes on this machine. */

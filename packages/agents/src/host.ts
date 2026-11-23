@@ -90,7 +90,10 @@ export interface HostFileSystem {
    */
   readonly bound?: {
     read(binding: OwnedFsBinding): Promise<string>;
+    /** Strict: an existing file, or a new one created bound to its checked directory. */
     write(binding: OwnedFsBinding, content: string): Promise<void>;
+    /** Compatibility, best effort and outside the guarantee: a new file `write` cannot bind. */
+    writeCompatibility(binding: OwnedFsBinding, content: string): Promise<void>;
   };
 }
 

@@ -46,6 +46,7 @@ import {
 import { judgedLane } from "./judged-lane.js";
 import {
   bindOwnedFs,
+  newFileMode,
   OwnedFsFailedWithoutEffect,
   OwnedFsNotDispatched,
   stillBound,
@@ -272,10 +273,20 @@ export interface FsAuthorizationRecord {
   display: string;
   /** Whether it reached a different file once links were followed (local hosts). */
   linked?: true;
+  /** How the I/O is carried out: bound to the checked file or directory, compatibility, or unbound (remote). */
+  io: FsIoMode;
   /** `allow` by the policy, or `ask:allow_once` by a person's one-time answer. */
   decision: string;
   rule?: PermissionRuleRecord;
 }
+
+/**
+ * How ORCA carries out an `fs/*` operation (#703): `bound` to the checked file or directory
+ * (local), `compatibility` for a new file the strict path cannot bind (best effort, outside the
+ * identity-bound guarantee, #1034), `unbound` on a remote host, whose paths are compared as
+ * written (#1032).
+ */
+export type FsIoMode = "bound" | "compatibility" | "unbound";
 
 /**
  * What happened to an authorized operation. `effect-unknown` is a write that failed once it
@@ -571,7 +582,7 @@ async function openPlanned(
   const executeOwnedFs = async <T>(
     path: string,
     access: FsAccess,
-    target: { io: string; unchanged: () => void },
+    target: { io: string; mode: FsIoMode; unchanged: () => void },
     authorized: FsAuthorization,
     io: (file: string) => Promise<T>,
   ): Promise<T> => {
@@ -584,6 +595,7 @@ async function openPlanned(
           access,
           display: fsDisplay(path, roots),
           ...(target.io !== path ? { linked: true as const } : {}),
+          io: target.mode,
           decision: authorized.decision,
           ...(authorized.rule ? { rule: authorized.rule } : {}),
         });
@@ -783,8 +795,16 @@ async function openPlanned(
   const localHost = opts.host.spec.type === "local";
   const ownedTarget = (
     path: string,
-  ): { io: string; resolved?: string; binding?: OwnedFsBinding; unchanged: () => void } => {
-    if (!localHost) return { io: path, unchanged: () => undefined };
+    access: FsAccess,
+  ): {
+    io: string;
+    resolved?: string;
+    binding?: OwnedFsBinding;
+    /** How the I/O is carried out, decided before it is authorized and recorded with it. */
+    mode: FsIoMode;
+    unchanged: () => void;
+  } => {
+    if (!localHost) return { io: path, mode: "unbound", unchanged: () => undefined };
     const target = resolveOwnedFsTarget(path, roots);
     if (!target.ok)
       throw acp.RequestError.invalidParams({
@@ -803,10 +823,19 @@ async function openPlanned(
         path,
         reason: "not an ordinary file, or the file's identity cannot be established",
       });
+    // A new file the strict path cannot bind goes the compatibility way, as its own dispatch,
+    // recorded as such; one neither can carry out is refused before anything (#1034).
+    const mode = access === "read" ? "bound" : newFileMode(binding);
+    if (mode === "refused")
+      throw acp.RequestError.invalidParams({
+        path,
+        reason: "this new file cannot be created bound to the checked directory on this host",
+      });
     return {
       io: target.io,
       resolved: target.asWritten,
       binding,
+      mode,
       unchanged: () => {
         if (!stillBound(path, binding))
           throw acp.RequestError.invalidParams({ path, reason: "the path changed before the file I/O started" });
@@ -908,7 +937,7 @@ async function openPlanned(
         throw acp.RequestError.invalidParams({ path, reason: "not this session" });
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       refuseProtected(path, "read");
-      const target = ownedTarget(path);
+      const target = ownedTarget(path, "read");
       const authorized = await authorizeFs(path, "read", target.resolved);
       let content: string;
       try {
@@ -940,10 +969,14 @@ async function openPlanned(
         throw acp.RequestError.invalidParams({ path, reason: "not this session" });
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       refuseProtected(path, "write");
-      const target = ownedTarget(path);
+      const target = ownedTarget(path, "write");
       const authorized = await authorizeFs(path, "write", target.resolved);
       await executeOwnedFs(path, "write", target, authorized, (file) =>
-        target.binding ? bound().write(target.binding, content) : opts.host.fs.writeFile(file, content),
+        !target.binding
+          ? opts.host.fs.writeFile(file, content)
+          : target.mode === "compatibility"
+            ? bound().writeCompatibility(target.binding, content)
+            : bound().write(target.binding, content),
       );
       return {};
     });

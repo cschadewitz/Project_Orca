@@ -179,7 +179,11 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   effect happens in is checked by identity and physical path just before the effect; a change
   found before the first effect refuses the operation, and one in the instant between a check
   and its effect is found only afterwards, if at all, and then reported as an unknown effect.
-  Nothing is removed afterwards. A write is complete only when all of its content was written. A
+  Nothing is removed afterwards. The two are separate dispatches, decided before the operation is
+  authorized: the strict write never falls back, and refuses before any change what it cannot
+  bind, and the authorization records which way the I/O goes (`io`: `bound`, `compatibility`,
+  or `unbound` on a remote host), so the evidence never presents a compatibility write as a
+  bound one. A write is complete only when all of its content was written. A
   path whose identity cannot be established, or that is not an ordinary file, is
   refused. This is still not an operating-system boundary. Remote (SSH) hosts are explicitly
   outside this: their paths are compared as written and their I/O is not identity-bound, as

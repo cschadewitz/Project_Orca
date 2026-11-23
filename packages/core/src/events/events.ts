@@ -299,6 +299,12 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       access: z.enum(["read", "write"]),
       display: z.string().max(200),
       linked: z.literal(true).optional(),
+      /**
+       * How the I/O is carried out: `bound` to the checked file or directory, `compatibility`
+       * (a new file the strict path cannot bind; best effort, outside the guarantee), or
+       * `unbound` (a remote host, compared as written).
+       */
+      io: z.enum(["bound", "compatibility", "unbound"]),
       decision: z.string(),
       rule: z
         .object({

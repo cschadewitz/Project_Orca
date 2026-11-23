@@ -46,7 +46,7 @@ export function formatEvent(e: Pick<OrcaEvent, "at" | "runId"> & { type: string;
     case "agent.permission":
       return `${t}     permission "${p.text("title")}" → ${p.text("decision")}`;
     case "agent.fs.authorized":
-      return `${t}     file ${p.text("access")} "${p.text("display")}" authorized (${p.text("decision")})`;
+      return `${t}     file ${p.text("access")} "${p.text("display")}" authorized (${p.text("decision")}, ${p.text("io")})`;
     case "agent.fs.completed":
       return `${t}     file operation ${p.text("outcome")}`;
     case "artifact.recorded": {

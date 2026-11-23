@@ -544,6 +544,7 @@ describe("ORCA's own file executor records each operation before its I/O (#703)"
         phase: "authorized",
         access: "write",
         display: join("src", "a.ts"),
+        io: "bound",
         decision: "allow",
         rule: { basis: "default" },
       }),
@@ -701,9 +702,10 @@ describe("authority and identity survive the wait for the record (#703 review)",
     expect(await readFile(file, "utf8")).toBe("someone else's");
   });
 
-  it("creates a new file, directories and all, under the directory it was authorized for", async () => {
+  it("creates a new file needing directories by the compatibility path, recorded as such", async () => {
     const dir = await workspace();
     const file = join(dir, "src", "deep", "er", "new.ts");
+    const records: FsOperationRecord[] = [];
     const { outcomes } = await turn(
       dir,
       [{ write: file, content: "new" }],
@@ -711,10 +713,32 @@ describe("authority and identity survive the wait for the record (#703 review)",
       undefined,
       undefined,
       local(),
+      { recordFsOperation: recorder(records) },
     );
     expect(outcomes[0]?.result).toEqual({});
     expect(await readFile(file, "utf8")).toBe("new");
+    expect(records[0]).toMatchObject({ phase: "authorized", io: "compatibility" });
   });
+
+  it.runIf(process.platform === "linux")(
+    "creates a new file in an existing directory by the bound path, recorded as such",
+    async () => {
+      const dir = await workspace();
+      const file = join(dir, "src", "new.ts");
+      const records: FsOperationRecord[] = [];
+      const { outcomes } = await turn(
+        dir,
+        [{ write: file, content: "new" }],
+        { default: "allow" },
+        undefined,
+        undefined,
+        local(),
+        { recordFsOperation: recorder(records) },
+      );
+      expect(outcomes[0]?.result).toEqual({});
+      expect(records[0]).toMatchObject({ phase: "authorized", io: "bound" });
+    },
+  );
 
   it("refuses a local request on a host that cannot bind its I/O to the file, and leaves the file alone", async () => {
     const dir = await workspace();
