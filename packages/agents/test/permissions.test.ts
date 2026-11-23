@@ -1095,7 +1095,7 @@ describe("wildcards in the sidecar", () => {
 describe("an unreadable sidecar", () => {
   const skip = () => undefined;
 
-  it("turns the allows decided after it into asks, and leaves the configured rules alone", async () => {
+  it("turns the allows decided after it into asks, and allows no command at all", async () => {
     const dir = await workspace();
     const file = permissionPolicyPath(dir);
     const agent = AgentSpecSchema.parse({
@@ -1114,8 +1114,9 @@ describe("an unreadable sidecar", () => {
     // The deny cannot be read, so the default allow behind it does not get to decide either.
     expect(await decide(request)).toBe("ask");
     expect(await decide(req("read", "Read", `${dir}/src/a.ts`))).toBe("ask");
-    // The configured rule comes before the sidecar, so it decides exactly as it did.
-    expect(await decide(req("execute", "npm test", dir))).toBe("allow");
+    // The configured rule comes before the sidecar, but the file might have held a command
+    // restriction, so a command is asked rather than allowed (#702 review).
+    expect(await decide(req("execute", "npm test", dir))).toBe("ask");
     // And a caller with no `onUnreadable` still gets the error rather than a policy.
     await expect(loadEffectivePermissionPolicy(agent, [file])).rejects.toMatchObject({ code: "CONFIG_INVALID" });
   });

@@ -124,6 +124,8 @@ function decideByRules(
   const tc = request.toolCall;
   const title = tc.title ?? "";
   const kind = tc.kind ?? "other";
+  // A call the agent did not classify could be a command under another name (#702 review).
+  const unclassified = kind === "other";
   const cwd = ctx?.workspaceCwd;
   const locations = (tc.locations ?? []).map((l) => l.path);
   const paths = locations.flatMap((p) => permissionPathForms(p, cwd));
@@ -131,7 +133,9 @@ function decideByRules(
   const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
   const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
   const matchesCall = (m: PermissionRule["match"]): boolean => {
-    if (m.kind && m.kind !== kind) return false;
+    // A command rule also reaches an unclassified call, so its restriction is not dodged by
+    // leaving the kind out.
+    if (m.kind && m.kind !== kind && !(m.command !== undefined && unclassified)) return false;
     if (m.scope === "workspace" && !allInside) return false;
     if (m.scope === "outside-workspace" && !anyOutside) return false;
     if (m.titlePattern && !new RegExp(m.titlePattern).test(title)) return false;
@@ -145,9 +149,10 @@ function decideByRules(
     }
     return true;
   };
-  // Once commands are restricted by their words, no allow decides an `execute` (#702 review):
-  // skipping them lets a restriction later in the list still be reached.
-  const restricted = kind === "execute" && !unverifiedExecuteAllowed(policy);
+  // Once commands are restricted by their words, no allow decides an `execute` or an
+  // unclassified call (#702 review): skipping them lets a restriction later in the list still
+  // be reached, and nothing approves a call whose command ORCA cannot vouch for.
+  const restricted = (kind === "execute" || unclassified) && !unverifiedExecuteAllowed(policy);
   const decide = (part: CommandPart | undefined): PermissionDecision => {
     for (const rule of policy.rules) {
       const m = rule.match;
@@ -157,7 +162,7 @@ function decideByRules(
         // A command is only ever an `execute`'s, and a part that is not there matches no rule.
         // A command rule never allows (`COMMAND_ALLOW_REFUSED`): the loaders refuse or ignore
         // one, and this skips any that got here another way.
-        if (kind !== "execute" || part === undefined || rule.decision === "allow") continue;
+        if (!restricted || part === undefined || rule.decision === "allow") continue;
         const pattern = parseCommandPattern(m.command);
         if (pattern === undefined || !commandCatches(pattern, part)) continue;
       }
@@ -466,9 +471,11 @@ export function permissionOverlayFor(
  * after it were written on the assumption that it was read first: drop it and a recorded
  * `deny` on an in-workspace edit falls through to the default `allow` (ADR 0009). So once a
  * file cannot be read, every `allow` decided *after* it — a later sidecar's, a default rule's,
- * the fallthrough's — becomes `ask`. The configured rules ahead of it decide exactly as
- * before, and what the unreadable file might have said is put to a person rather than
- * assumed, so what is lost is grants and never a restriction.
+ * the fallthrough's — becomes `ask`. The configured rules ahead of it decide as before, except
+ * that the file might have held a command restriction, so the policy is marked
+ * `commandsRestricted` and no `execute` or unclassified call is allowed at all (#702 review).
+ * What the unreadable file might have said is put to a person rather than assumed, so what is
+ * lost is grants and never a restriction.
  *
  * `onIgnored` hears each wildcard `allow` that `permissionOverlayFor` dropped from a sidecar
  * that could be read.
@@ -503,6 +510,9 @@ export async function loadEffectivePermissionPolicy(
   return {
     default: cap(policy.default),
     rules: policy.rules.map((rule, i) => (i < capFrom ? rule : { ...rule, decision: cap(rule.decision) })),
+    // The file might have held a command restriction (#702 review), so commands and
+    // unclassified calls are treated as restricted: not even the rules ahead of it allow one.
+    commandsRestricted: true,
   };
 }
 

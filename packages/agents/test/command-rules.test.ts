@@ -17,7 +17,10 @@ import {
   PermissionPolicyFileSchema,
 } from "@orca/core";
 import type { PermissionPolicy, PermissionRule } from "@orca/core";
-import { decidePermission } from "@orca/agents";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { decidePermission, loadEffectivePermissionPolicy } from "@orca/agents";
 
 const run = (title: string, rawInput?: unknown): acp.RequestPermissionRequest => ({
   sessionId: "s",
@@ -180,6 +183,43 @@ describe("a policy that restricts commands allows none (#702 review)", () => {
       toolCall: { toolCallId: "t", title: "Read a.ts", kind: "read" },
     };
     expect(decidePermission(open, req)).toBe("allow");
+  });
+
+  it("allows no call the agent left unclassified, and lets a restriction catch one", () => {
+    const mixed = policy(kindless, deny("git push"));
+    const unclassified = (title: string, kind?: acp.ToolKind): acp.RequestPermissionRequest => ({
+      ...run(title),
+      toolCall: { toolCallId: "t", title, ...(kind ? { kind } : {}) },
+    });
+    expect(decidePermission(mixed, unclassified("npm test"))).toBe("ask");
+    expect(decidePermission(mixed, unclassified("npm test", "other"))).toBe("ask");
+    expect(decidePermission(mixed, unclassified("git push", "other"))).toBe("deny");
+    expect(decidePermission({ default: "allow", rules: [deny("git push")] }, unclassified("anything"))).toBe("ask");
+    // A policy that does not use command rules decides an unclassified call as before.
+    expect(decidePermission(policy(kindless), unclassified("npm test"))).toBe("allow");
+  });
+
+  it("allows no command when a sidecar that might hold a restriction cannot be read", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-cmd-unreadable-"));
+    try {
+      const file = join(dir, "orca.permissions.json");
+      await writeFile(file, "{ not json", "utf8");
+      const agent = { id: "a", permissions: { default: "allow" as const, rules: [legacyAllow] } };
+      const unreadable: string[] = [];
+      const loaded = await loadEffectivePermissionPolicy(agent, [file], (f) => void unreadable.push(f));
+      expect(unreadable).toEqual([file]);
+      // The configured allow comes ahead of the file, and still does not approve a command.
+      expect(decidePermission(loaded, run("npm test"))).toBe("ask");
+      expect(decidePermission(loaded, { ...run("npm test"), toolCall: { toolCallId: "t", title: "npm test" } })).toBe(
+        "ask",
+      );
+      // Once the file is readable again and holds no command rule, the legacy allow is back.
+      await writeFile(file, JSON.stringify({ version: 1, agents: {} }), "utf8");
+      const repaired = await loadEffectivePermissionPolicy(agent, [file], () => undefined);
+      expect(decidePermission(repaired, run("npm test"))).toBe("allow");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("refuses a config that pairs command rules with an allow for commands, and says what to change", () => {

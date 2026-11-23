@@ -263,12 +263,16 @@ export const COMMAND_POLICY_PERMISSIVE =
 /**
  * Whether an `execute` call may be answered `allow` by this evaluated policy (#702 review).
  * Untouched legacy policies, with no `command` rule anywhere, keep their behaviour. Once any
- * layer restricts commands by their words, no `execute` call is allowed without a person: a
+ * layer restricts commands by their words, or a layer that might have was unreadable, no
+ * `execute` call, and no call the agent left unclassified, is allowed without a person: a
  * title or word match proves nothing about what runs, so an allow from an older rule, a
  * kindless rule or the fallthrough becomes an ask.
  */
-export function unverifiedExecuteAllowed(policy: { rules: readonly PermissionRule[] }): boolean {
-  return !policy.rules.some((rule) => rule.match.command !== undefined);
+export function unverifiedExecuteAllowed(policy: {
+  rules: readonly PermissionRule[];
+  commandsRestricted?: boolean | undefined;
+}): boolean {
+  return policy.commandsRestricted !== true && !policy.rules.some((rule) => rule.match.command !== undefined);
 }
 
 /**
@@ -291,7 +295,15 @@ export type ConfiguredPermissionPolicy = { default?: PermissionDecision | undefi
  * A policy as *evaluated*: every layer concatenated and the fallthrough decided.
  * `decidePermission` takes one of these, never a `ConfiguredPermissionPolicy`.
  */
-export type PermissionPolicy = { default: PermissionDecision; rules: PermissionRule[] };
+export type PermissionPolicy = {
+  default: PermissionDecision;
+  rules: PermissionRule[];
+  /**
+   * Set when a layer that could have held a `command` rule was unreadable (#702 review), so
+   * commands are treated as restricted even though no command rule is visible.
+   */
+  commandsRestricted?: boolean | undefined;
+};
 
 /* -------------------------------------------------------------------------- *
  * The written half of a permission policy
