@@ -162,6 +162,22 @@ can fall back to current. Same-version edits are not immutable recipe snapshots.
 `agent.session.opened` gains an optional `model`, the
 model the session was opened on (#187). All are absent on older logs and read as "none".
 
+### Store format: dry runs
+
+A dry run (#183, `engine/src/dry-run.ts`) is stored like any run, in the same event log and
+artifact store - there is no second store and no migration. What marks it is the optional
+`dryRun` on its `run.created` (`{ definitionRevision, draftRevision?, configGeneration?,
+fixtures, capabilities }`: the exact definition, draft revision, configuration, fixtures and
+capability manifests it was bound to), which every child run of it carries too, so each event in
+the log is known to be simulated from the run it belongs to. `Run.dryRun` and
+`RunSummary.dryRun` project it. Its definition is kept in the workflow-version store under its
+own version, `<version>+dryrun.<16 hex of its revision>`, so it never meets a real version of
+that workflow. A dry run's artifacts are fixtures or placeholders, its gate and decision choices
+are `decision.resolved` events with `source` `dry-run:fixture` or `dry-run:default` (never
+`human.answered`), and it is bound to no Request or work item. The ordinary orchestrator refuses
+to drive or recover a dry run, and a dry run's orchestrator drives nothing else. Absent on every
+other run, and on every log written before it.
+
 ## Expression / template context
 
 Built by `RunContext.evalContext()` (`packages/engine/src/run-context.ts`):

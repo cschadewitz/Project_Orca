@@ -140,6 +140,13 @@ export interface NodeExecutor<N extends NodeDef = NodeDef> {
    * block; warnings inform. Issue paths are relative to the node (`.rubric`).
    */
   validate?(node: N): NodeValidation;
+  /**
+   * A dry run's stand-in for `execute` (#183), for a custom node whose effect can be simulated
+   * safely. It must not reach outside ORCA's stores: no process, network call, file write,
+   * secret or external mutation - what it returns is a fixture, recorded as one. A dry run
+   * never calls `execute` on a custom node; without this, the node is blocked and named.
+   */
+  simulate?(ctx: StepContext & { node: N }): Promise<StepOutcome>;
 }
 
 export class NodeExecutorRegistry {

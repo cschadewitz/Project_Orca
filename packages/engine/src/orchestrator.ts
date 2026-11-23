@@ -47,6 +47,7 @@ import {
   type AgentSelector,
   type AgentSpec,
   type CapabilityScope,
+  type DryRun,
   type EffectReviewDecision,
   type Artifact,
   type ArtifactRef,
@@ -192,6 +193,13 @@ export interface OrchestratorOptions {
   artifactWatchPollMs?: number;
   /** Single-writer lease per run; see `runLease` for what the defaults mean. */
   lease?: RunLeaseOptions;
+  /**
+   * The injection point for a dry run (#183): this orchestrator drives only simulated runs.
+   * Every run it creates carries the tag on `run.created`, and it refuses to drive a run that
+   * does not, while an orchestrator without it refuses to drive or recover one that does. Built
+   * by `startDryRun` (dry-run.ts), together with the executors and ports that keep it inside ORCA.
+   */
+  dryRun?: DryRun;
 }
 
 export interface RunLeaseOptions {
@@ -423,6 +431,18 @@ function assertLastStepReviewed(state: RunState): void {
     );
 }
 
+/**
+ * A dry run is driven only by a dry-run orchestrator, and that orchestrator drives nothing else
+ * (#183): resuming a simulated run on the ordinary one would hand its fixture artifacts to real
+ * agents, and the reverse would simulate a real run's remaining steps.
+ */
+function assertDryRunMatches(runId: string, recorded: DryRun | undefined, driver: DryRun | undefined): void {
+  if (recorded && !driver)
+    throw new OrcaError("RUN_STATE", `run ${runId} is a dry run; only its dry run can drive it`, { runId });
+  if (!recorded && driver)
+    throw new OrcaError("RUN_STATE", `run ${runId} is not a dry run; a dry run drives only simulated runs`, { runId });
+}
+
 function versionCollision(def: WorkflowDefinition): OrcaError {
   return new OrcaError(
     "WORKFLOW_INVALID",
@@ -498,6 +518,8 @@ export class Orchestrator {
   private readonly artifactWatchPollMs: number | undefined;
 
   private readonly revisionRuntime: OrchestratorOptions["revisionRuntime"];
+  /** Set only on a dry-run orchestrator (#183); see `OrchestratorOptions.dryRun`. */
+  readonly dryRun: DryRun | undefined;
   private readonly live = new Map<string, RunContext>();
   private readonly running = new Map<string, Promise<RunState>>();
   /**
@@ -533,6 +555,7 @@ export class Orchestrator {
   constructor(o: OrchestratorOptions) {
     this.admissionExecution = o.admissionExecution;
     this.revisionRuntime = o.revisionRuntime;
+    this.dryRun = o.dryRun;
     this.stores = {
       ...o.stores,
       events:
@@ -560,7 +583,19 @@ export class Orchestrator {
     this.plan =
       o.plan ??
       new PlanService({ stores: this.stores, clock: this.clock, logger: this.logger.child({ component: "plan" }) });
-    this.stores.events.subscribe((e) => void this.terminalStates.delete(e.runId));
+    this.stopListening = this.stores.events.subscribe((e) => void this.terminalStates.delete(e.runId));
+  }
+
+  private readonly stopListening: () => void;
+
+  /**
+   * Stop listening to the event store. Only for a short-lived orchestrator over a long-lived
+   * store - a dry run's (#183) - once nothing it drives is running: its terminal-state cache
+   * would otherwise be notified of every later event for the life of the process.
+   */
+  detach(): void {
+    this.stopListening();
+    this.terminalStates.clear();
   }
 
   // ---------------------------------------------------------------- public API
@@ -640,6 +675,10 @@ export class Orchestrator {
       throw new OrcaError("RUN_STATE", "associated work item is unavailable");
     if (associatedRequest && item && item.requestId !== associatedRequest.id)
       throw new OrcaError("RUN_STATE", "Request and work item associations do not match");
+    // A dry run (#183) is bound to no Request or work item and checks out nothing: it must not
+    // show up in their projections, nor touch a workspace.
+    if (this.dryRun && (opts.requestId || opts.workItemId || opts.gitRef !== undefined || opts.admissionRunId))
+      throw new OrcaError("NOT_SUPPORTED", "a dry run is bound to no Request, work item, git ref or admission");
     const { definition: def, vars, generation, gitRefObject } = await this.validateStartRun(opts, supplied);
     const provenance = generation
       ? launchProvenance(generation, def, vars, opts.vars ?? {}, opts.overrides, opts.itemWorkflowSource)
@@ -748,6 +787,7 @@ export class Orchestrator {
         ...(workflowStored ? { workflowStored: true as const } : {}),
         ...(opts.checkpoint ? { checkpoint: opts.checkpoint.seed } : {}),
         ...(opts.origin ? { origin: { ...opts.origin } } : {}),
+        ...(this.dryRun ? { dryRun: { ...this.dryRun } } : {}),
       },
     };
     await this.stores.events.append(
@@ -774,7 +814,8 @@ export class Orchestrator {
     const release = this.runtimeActivity?.enter("execution");
     // Driving a run re-attaches to every unfinished run below it. Refuse before any of them is
     // touched, rather than letting one refuse mid-way and fail the container step waiting on it.
-    const p = this.assertEffectsReviewed(runId)
+    const p = this.assertDriver(runId)
+      .then(() => this.assertEffectsReviewed(runId))
       .then(() => this.executeLeased(runId, recovery))
       .then(async () => {
         const projected = this.live.get(runId)?.publicState() ?? (await this.getState(runId));
@@ -790,6 +831,12 @@ export class Orchestrator {
     return p;
   }
 
+  /** Refuse a run this orchestrator must not drive (#183), before anything else is touched. */
+  private async assertDriver(runId: string): Promise<void> {
+    const first = (await this.stores.events.readRange(runId, { limit: 1 }))[0];
+    if (first?.type === "run.created") assertDryRunMatches(runId, first.payload.dryRun, this.dryRun);
+  }
+
   async startAndRun(opts: StartRunOptions): Promise<RunState> {
     return this.run(await this.startRun(opts));
   }
@@ -803,6 +850,12 @@ export class Orchestrator {
    */
   async startCheckpointAttempt(opts: CheckpointAttemptOptions): Promise<string> {
     const sourceRunId = opts.runId;
+    // A dry run's steps and artifacts are fixtures (#183): nothing real may start from them.
+    const created = (await this.stores.events.readRange(sourceRunId, { limit: 1 }))[0];
+    if (created?.type === "run.created" && created.payload.dryRun)
+      throw new OrcaError("RUN_STATE", `run ${sourceRunId} is a dry run and cannot be recovered`, {
+        runId: sourceRunId,
+      });
     if (this.running.has(sourceRunId) || this.live.has(sourceRunId))
       throw new OrcaError("RUN_LEASED", `run ${sourceRunId} is being driven in this process`, { runId: sourceRunId });
     const holder = newId("orc", this.clock.now());
@@ -1804,6 +1857,7 @@ export class Orchestrator {
     const events = await this.stores.events.read(runId);
     const first = events[0];
     if (!first || first.type !== "run.created") throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
+    assertDryRunMatches(runId, first.payload.dryRun, this.dryRun);
     if (
       first.payload.workflowStored &&
       (first.payload.provenance || (await this.stores.execution.getInputs(runId))) &&
