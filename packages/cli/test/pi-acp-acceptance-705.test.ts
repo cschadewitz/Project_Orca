@@ -1,5 +1,5 @@
 /**
- * ORCA driving the real pi through the `pi-acp` adapter (#705, tiers A and B), with a scripted
+ * ORCA driving the real pi through the `pi-acp` adapter (#705, tier A), with a scripted
  * local stand-in for the model (an OpenAI-compatible chat completions endpoint, set up as a
  * custom provider in pi's own agent directory), so no account, key or model spend is involved.
  * `pi-acp-acceptance.yml` installs the pinned adapter and pi and runs this with
@@ -11,15 +11,16 @@
  * tool results. Each effect is a file a call writes, read independently of anything pi or ORCA
  * reports.
  *
- * What is observed:
+ * What is observed (pi is connectivity tested; none of its tool calls is an ORCA approval, so
+ * an OS sandbox is required to run it):
  * - **Connectivity (tier A)**: the qualified adapter opens an ORCA session with its own agent
  *   directory, streams the turn, is cancelled during a running command, and closes.
- * - **No approvals (tier B)**: pi runs shell commands and file writes without asking ORCA,
+ * - **Observed outside ORCA**: pi runs shell commands and file writes without asking ORCA,
  *   even under a policy that denies everything, and writes ORCA's own files; nothing reaches
  *   ORCA's `fs/*` boundary. This is what `piFindings` reports for every pi agent.
  * - **Extension dialogs**: a pi extension's `ctx.ui.confirm` reaches ORCA as a permission
  *   request on a synthetic `pi-ui-*` call of kind `other`; ORCA's answer is passed to the
- *   extension, which decides.
+ *   extension, which decides. This is not an ORCA tool approval.
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -248,7 +249,7 @@ describe.skipIf(ADAPTER === undefined || PI === undefined || PI_VERSION === unde
       }
     }, 120_000);
 
-    /* --------------------------- tier B: nothing asks ORCA --------------------------- */
+    /* ------------------------ observed: nothing asks ORCA ------------------------ */
 
     it("runs a shell command without asking ORCA, under a policy that denies everything", async () => {
       const session = await open({ default: "deny", rules: [] });

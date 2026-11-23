@@ -1,4 +1,4 @@
-# ORCA driving the real pi through the pi-acp adapter (#705, tiers A and B), pinned below. A
+# ORCA driving the real pi through the pi-acp adapter (#705, tier A), pinned below. A
 # scripted local stand-in answers for the model (an OpenAI-compatible endpoint configured as a
 # custom provider in pi's own agent directory), so the run needs no account, key or secret and
 # costs nothing. It observes on the installed agent: an ORCA session opens, streams and is

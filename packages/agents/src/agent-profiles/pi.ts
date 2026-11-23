@@ -1,5 +1,5 @@
 /**
- * pi as an ACP agent, through the `pi-acp` adapter (#705, tiers A and B): what ORCA knows
+ * pi as an ACP agent, through the `pi-acp` adapter (#705, tier A: connectivity tested): what ORCA knows
  * about it, at which versions, and what that means for ORCA's permission rules.
  *
  * **pi never asks before a tool call.** Its built-in tools (`bash`, `read`, `edit`, `write`,
@@ -7,13 +7,17 @@
  * its protected files and its `fs/*` boundary do not apply to a pi agent. Observed on the
  * installed agent by `pi-acp-acceptance-705.test.ts` (`pi-acp-acceptance.yml`). Casey chose
  * (2026-11-23) to run pi and say so plainly rather than refuse it: `piFindings` reports it for
- * every pi agent, and `orca agents` shows it. An operating-system sandbox is the boundary.
+ * every pi agent, and `orca agents` shows it. **Running pi requires an operating-system sandbox**
+ * (a container or VM holding only what pi may touch): that sandbox is the only boundary, and
+ * ORCA does not provide or check it. pi is connectivity tested, not approval tested: no tool
+ * call of pi's is ever an ORCA approval.
  *
  * The one thing that reaches ORCA as a permission request is a pi extension's own dialog
  * (`ctx.ui.confirm`/`select`): `pi-acp` turns it into a request on a synthetic `pi-ui-*` call
  * of kind `other`, with options `yes`/`no` (or `choice-<n>`), and answers the extension with
- * the label. That is the extension's question, not an authorization of a tool call ORCA can
- * see (#747), and an ORCA rule that allows kind `other` answers it "yes" unattended.
+ * the label. That is the extension's question, not an ORCA tool approval: the call it may be
+ * about stays outside ORCA's policy enforcement (#747), and an ORCA rule that allows kind
+ * `other` answers it "yes" unattended.
  */
 import { basename } from "node:path";
 import type { AgentProfileFinding, AgentSupportEntry } from "./gemini-cli.js";
@@ -25,11 +29,11 @@ export const PI_ACP_AGENT_NAME = "pi-acp";
  * The `pi-acp` versions ORCA has qualified, each installed with the pi it is paired with
  * (`pi` below) and run by `pi-acp-acceptance.yml` (the suite fails if the workflow's pins are
  * not listed here). `pi-acp` reports only its own version; the pi it starts is whichever `pi`
- * it finds (`PI_ACP_PI_COMMAND`, else `PATH`). Nothing here asks ORCA, so the level says the
- * calls were observed to run unasked, not that they are checked.
+ * it finds (`PI_ACP_PI_COMMAND`, else `PATH`). The level is connectivity: pi's tool calls never
+ * ask ORCA, so there is no approval to test, and the suite records only that they run unasked.
  */
 export const PI_ACP_SUPPORT: readonly (AgentSupportEntry & { pi: string })[] = [
-  { version: "0.0.35", pi: "1.6.0", platforms: ["linux"], level: "approval-tested" },
+  { version: "0.0.35", pi: "1.6.0", platforms: ["linux"], level: "connectivity-tested" },
 ];
 
 /** What a level says for the adapter version `pi-acp` reports, or undefined when unqualified. */

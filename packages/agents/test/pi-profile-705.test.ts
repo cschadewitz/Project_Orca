@@ -1,5 +1,5 @@
 /**
- * The pi module (#705 tiers A and B): recognising a `pi-acp` agent, the findings every pi
+ * The pi module (#705 tier A): recognising a `pi-acp` agent, the findings every pi
  * agent carries (pi never asks), the launch profile, and the qualified adapter version.
  */
 import { describe, expect, it } from "vitest";
@@ -45,6 +45,6 @@ describe("pi agents (#705)", () => {
     expect(piAcpSupport({ name: "pi-acp", version: v }, "darwin")).toBeUndefined();
     expect(piAcpSupport({ name: "pi-acp", version: "0.0.34" }, "linux")).toBeUndefined();
     expect(piAcpSupport({ name: "gemini-cli", version: v }, "linux")).toBeUndefined();
-    expect(PI_ACP_SUPPORT.every((e) => e.level !== "execution-guard-certified")).toBe(true);
+    expect(PI_ACP_SUPPORT.every((e) => e.level === "connectivity-tested")).toBe(true);
   });
 });
