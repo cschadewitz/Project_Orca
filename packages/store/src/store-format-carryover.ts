@@ -340,6 +340,11 @@ export async function stageCarryover(
      * manifest, so the archive itself records which slot it was written into.
      */
     slot?: BackupSlot;
+    /**
+     * Reads the throwaway copy of the backup as the store it is, and throws when it cannot. The
+     * default reads a file store; a store on SQLite (the switch back to files) checks its database.
+     */
+    reads?: (copy: string) => Promise<void>;
   } = {},
 ): Promise<{ commit(): Promise<string> }> {
   const fence = hooks.fence ?? (() => undefined);
@@ -375,7 +380,7 @@ export async function stageCarryover(
     await privateDirectory(privacy, validate);
     await copyTree(partial, validate, before, privacy);
     try {
-      await readsUnderCurrentFormat(validate);
+      await (hooks.reads ?? readsUnderCurrentFormat)(validate);
       // The readers may write, but only inside the throwaway copy: with links refused, every
       // store path resolves under the directory it was given. Prove that the backup and the
       // store itself were left exactly as they were.
