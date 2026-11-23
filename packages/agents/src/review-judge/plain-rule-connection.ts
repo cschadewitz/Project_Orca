@@ -13,7 +13,7 @@
  * Preparation is fail-closed and contacts only two metadata lookups: the credential binding (`describe`) and the
  * disclosure grant (`find`). No key is read and nothing is sent until the judge is called. At every call:
  * - the daily budget is reserved first and never refunded (over it the call fails, which the judge reports as
- *   `unavailable`, so the person is asked). It comes from the injected `JudgeBudget`: `fileJudgeBudget` is shared
+ *   `unavailable`, so the person is asked). It comes from the injected `JudgeBudget`: `daemonJudgeBudget` is shared
  *   by every judge using the same key and destination and survives restarts; `memoryJudgeBudget` (tests) does
  *   not, and the result says which (`durableBudget`);
  * - the key is leased for that one request only, for purpose `review-judge` and the pinned destination;
@@ -65,7 +65,7 @@ export interface PlainRuleJudgeConfig {
     readonly timeoutMs?: number;
     /**
      * Default 200. Counted per UTC day, reserved per call and never refunded, in the injected budget: durable and
-     * shared per key and destination with `fileJudgeBudget`.
+     * shared per key and destination with `daemonJudgeBudget`.
      */
     readonly maxCallsPerDay?: number;
   };
@@ -190,7 +190,7 @@ export async function preparePlainRuleJudge(
   services: {
     readonly credentials: JudgeCredentialService;
     readonly disclosure: PlainRuleDisclosureService;
-    /** The daily call budget. Activation requires a durable one (`fileJudgeBudget`). */
+    /** The daily call budget. Activation requires a durable one (`daemonJudgeBudget`). */
     readonly budget: JudgeBudget;
     /** Tests inject the HTTPS request function and the clock. */
     readonly request?: HttpsRequestFn;
@@ -279,7 +279,7 @@ export async function preparePlainRuleJudge(
   const grant = Object.freeze({ ref: found.grantRef, revision: found.revision });
 
   // The call budget, per UTC day, reserved before the key is leased and never refunded. Shared by every judge using
-  // this key for this destination when the budget is durable (`fileJudgeBudget`).
+  // this key for this destination when the budget is durable (`daemonJudgeBudget`).
   const budgetKey = judgeBudgetKey(destination, ref.id);
   const reserve = budget.reserve;
   async function post(body: string, callSignal: AbortSignal): Promise<string> {

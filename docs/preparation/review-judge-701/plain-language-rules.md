@@ -371,14 +371,26 @@ this destination and usable on this machine. The second is a disclosure grant fo
 provider version and wire format. No key is read and nothing is sent until the judge is called.
 On each call:
 - the daily budget is reserved first, per UTC day, and never refunded, from the injected
-  `JudgeBudget`. `fileJudgeBudget` (`review-judge/judge-budget.ts`) is durable and shared: one
-  file holds the day's count for every judge using the same key and destination, so a restart, a
-  second session or a re-preparation does not start at zero. Reads and writes go through the policy
-  files' strict-ownership lock, and each write is atomic. It fails closed: a file that cannot be
-  read, parsed or written refuses the call, as does a clock moved back before the file's day. A lock
-  left by a crashed process is never taken over, so calls are refused (the person is asked) until
-  it is removed. `memoryJudgeBudget` is for tests and reports `durableBudget: false`, which
-  activation refuses;
+  `JudgeBudget`. `daemonJudgeBudget` (`review-judge/judge-budget.ts`) is the daemon's one budget, at
+  `<stateDir>/review-judge/budget.json`, one object per file in a process. It holds the day's count
+  for every judge using the same key and destination, so a restart, a second session or a
+  re-preparation does not start at zero.
+  - Durable before acknowledged: a reservation answers yes only after the new count is written to a
+    temporary file, that file is synced, renamed over the budget file and the directory is synced.
+    Any failure on that path refuses the call. (Node cannot sync a directory on Windows, so there
+    the file sync is the guarantee, as in the protected and artifact stores.) Reads and writes go
+    through the policy files' strict-ownership lock; a lock left by a crashed process is never taken
+    over, so calls are refused (the person is asked) until it is removed.
+  - No silent recovery: only `initialize`, an explicit owner step, creates the file, never over an
+    existing one, and the day it is initialized counts as fully spent, so calls start on the next
+    UTC day. A missing file refuses, as does one that cannot be read, parsed or trusted, or one dated
+    after today (a clock moved back). Within a process, a file whose budget id changes or whose
+    sequence goes backwards (rolled back, replaced, restored) is refused until initialized again.
+  - Backup and restore: the file cannot tell it was restored from a copy while the daemon was
+    stopped, so do not restore it. Exclude it from backups, or after restoring a state directory
+    delete it and run `initialize`, which spends the current day. A budget belongs to one daemon.
+  - `memoryJudgeBudget` is for tests and reports `durableBudget: false`, which activation refuses.
+    Nothing in this step wires the judge into activation;
 - the key is leased for that one request (purpose `review-judge`, the pinned destination);
 - the grant is rechecked as the lease's last awaited step. Then, synchronously at the dispatch, in
   the turn that calls the sender, the call's cancellation and the grant's current revision and

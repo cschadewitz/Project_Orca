@@ -20,7 +20,7 @@ import {
 } from "../src/review-judge/plain-rule-connection.js";
 import { PLAIN_RULE_VERDICT_SCHEMA, type PlainRuleJudgeInput } from "../src/review-judge/plain-rule.js";
 import { ANTHROPIC_API_VERSION } from "../src/review-judge/plain-rule-providers.js";
-import { fileJudgeBudget, memoryJudgeBudget } from "../src/review-judge/judge-budget.js";
+import { daemonJudgeBudget, memoryJudgeBudget } from "../src/review-judge/judge-budget.js";
 import { secretJudgeCredentials } from "../src/review-judge/secret-credentials.js";
 
 interface Seen {
@@ -321,14 +321,18 @@ describe("#701 plain-rule judge from config", () => {
   it("a durable budget is shared by every judge on the same key and destination, across preparations", async () => {
     const dir = mkdtempSync(join(tmpdir(), "orca-701-shared-budget-"));
     try {
-      const file = join(dir, "judge-budget.json");
-      const first = await prepared({ limits: { maxCallsPerDay: 2 } }, { budget: fileJudgeBudget(file) });
-      const second = await prepared({ limits: { maxCallsPerDay: 2 } }, { budget: fileJudgeBudget(file) });
+      let now = Date.parse("2026-11-22T10:00:00Z");
+      const daemon = () => daemonJudgeBudget(dir, { now: () => now });
+      // The owner initializes the budget once; that day is spent, so calls start the next UTC day.
+      expect(await daemon().initialize()).toMatchObject({ status: "initialized" });
+      now = Date.parse("2026-11-23T10:00:00Z");
+      const first = await prepared({ limits: { maxCallsPerDay: 2 } }, { budget: daemon() });
+      const second = await prepared({ limits: { maxCallsPerDay: 2 } }, { budget: daemon() });
       expect(first.durableBudget).toBe(true);
       expect(await first.judge(input, signal())).toMatchObject({ outcome: "allow" });
       expect(await second.judge(input, signal())).toMatchObject({ outcome: "allow" });
       // A third preparation (as after a restart) finds the day's two calls already spent.
-      const third = await prepared({ limits: { maxCallsPerDay: 2 } }, { budget: fileJudgeBudget(file) });
+      const third = await prepared({ limits: { maxCallsPerDay: 2 } }, { budget: daemon() });
       expect(await third.judge(input, signal())).toMatchObject({ verdict: "unavailable" });
       expect(seen).toHaveLength(2);
       // The in-memory budget says it is not durable, and the config ref tells the two apart.
