@@ -41,7 +41,7 @@
  * as text. The native sandbox and ORCA's protected-path rules for its own file handlers stay
  * in force beside it.
  */
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, sep } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import { PermissionPolicySchema, type ConfiguredPermissionPolicy, type PermissionDecision } from "@orca/core";
@@ -388,12 +388,71 @@ export async function runClaudePreToolHook(args: readonly string[], input: strin
   }
 }
 
+/** Where the session-start hook records the runtime it ran under, beside the context file. */
+export const claudeRuntimeAttestationFile = (contextFile: string): string => `${contextFile}.runtime.json`;
+
+/**
+ * What the session-start hook records: the process id of the program that ran it, which is
+ * meant to be Claude Code itself. It is only a pointer. ORCA never runs or trusts anything
+ * the record names: it checks from its own side that the process is one the agent it started
+ * runs, and that the image that process actually runs is a pinned one.
+ */
+export interface ClaudeRuntimeAttestation {
+  version: 1;
+  pid: number;
+}
+
+/**
+ * The session-start half of the hook (`--attest <context file>`): Claude Code runs it when the
+ * session starts, before `session/new` returns. It records its parent's process id. Every
+ * failure records nothing, which ORCA reads as an unverified runtime.
+ */
+export async function runClaudeRuntimeAttestation(
+  args: readonly string[],
+  input: string,
+  parent: { pid: number },
+): Promise<ClaudePreToolHookResult> {
+  try {
+    const file = args[1];
+    if (args.length !== 2 || args[0] !== "--attest" || file === undefined || !isAbsolute(file))
+      throw new HookInputError("the attestation takes --attest and the absolute path of the context file");
+    let frame: unknown;
+    try {
+      frame = JSON.parse(input);
+    } catch {
+      throw new HookInputError("session start input is not JSON");
+    }
+    if (!isRecord(frame) || frame["hook_event_name"] !== "SessionStart")
+      throw new HookInputError("not a SessionStart event");
+    const attestation: ClaudeRuntimeAttestation = { version: 1, pid: parent.pid };
+    const target = claudeRuntimeAttestationFile(file);
+    try {
+      await writeFile(target, JSON.stringify(attestation), { mode: 0o600, flag: "wx" });
+    } catch (error) {
+      // A session that resumes or compacts starts again in the process it was checked in;
+      // the first record stands, and another process is reported, never recorded.
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const first = JSON.parse(await readFile(target, "utf8")) as Partial<ClaudeRuntimeAttestation>;
+      if (first.pid !== attestation.pid)
+        throw new HookInputError("the session restarted in another process than the one it was checked in");
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  } catch (error) {
+    return claudePreToolHookFailure(error);
+  }
+}
+
 /** How Claude Code should run the hook: an executable and its arguments, never a shell line. */
 export interface ClaudePreToolHookCommand {
   /** Absolute path of the executable, normally the Node binary. */
   command: string;
   /** Its arguments, normally the hook script and the context file, both absolute. */
   args: string[];
+  /**
+   * The arguments for the session-start attestation (`[script, "--attest", contextFile]`).
+   * Given, the settings also run it when the session starts.
+   */
+  attestArgs?: string[] | undefined;
   timeoutSeconds?: number | undefined;
 }
 
@@ -409,8 +468,16 @@ export interface ClaudePreToolHookCommand {
 export function claudePreToolHookSettings(hook: ClaudePreToolHookCommand): Record<string, unknown> {
   if (!isAbsolute(hook.command) || !hook.args.every((a) => a !== ""))
     throw new Error("the hook command must be an absolute path");
+  const timeout = hook.timeoutSeconds ?? CLAUDE_PRE_TOOL_TIMEOUT_SECONDS;
   return {
     hooks: {
+      ...(hook.attestArgs
+        ? {
+            SessionStart: [
+              { hooks: [{ type: "command", command: hook.command, args: [...hook.attestArgs], timeout }] },
+            ],
+          }
+        : {}),
       PreToolUse: [
         {
           matcher: "*",
@@ -419,7 +486,7 @@ export function claudePreToolHookSettings(hook: ClaudePreToolHookCommand): Recor
               type: "command",
               command: hook.command,
               args: [...hook.args],
-              timeout: hook.timeoutSeconds ?? CLAUDE_PRE_TOOL_TIMEOUT_SECONDS,
+              timeout,
               onFailure: "block",
             },
           ],
