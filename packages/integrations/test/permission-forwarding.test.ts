@@ -123,8 +123,14 @@ describe("permission forwarding through orchestrator → human input → facade 
             ? {
                 response: { outcome: { outcome: "selected", optionId: original.optionId } },
                 decision: `ask:${original.kind}`,
+                // What decided to ask (#702): no rule matched, so the policy's default.
+                rule: { basis: "default" },
               }
-            : { response: { outcome: { outcome: "cancelled" } }, decision: "ask:cancelled" },
+            : {
+                response: { outcome: { outcome: "cancelled" } },
+                decision: "ask:cancelled",
+                rule: { basis: "default" },
+              },
         ]);
         const events = await stores.events.read(runId);
         const requested = events.find((e) => e.type === "human.requested")!;
@@ -195,6 +201,7 @@ it.each(["unbound", "disconnect", "replacement"])(
     expect(await pending).toEqual({
       response: { outcome: { outcome: "selected", optionId: "allow" } },
       decision: "ask:reject_once",
+      rule: { basis: "default" },
     });
     expect(fallback).toHaveBeenCalledExactlyOnceWith(q);
   },
@@ -228,7 +235,11 @@ it("cannot deliver a late forwarded approval after the original callback expires
   );
   await requested;
   controller.abort("turn ended");
-  expect(await pending).toEqual({ response: { outcome: { outcome: "cancelled" } }, decision: "ask:expired" });
+  expect(await pending).toEqual({
+    response: { outcome: { outcome: "cancelled" } },
+    decision: "ask:expired",
+    rule: { basis: "default" },
+  });
   respond({ outcome: { outcome: "selected", optionId: "opaque-a" } });
   await response;
 });

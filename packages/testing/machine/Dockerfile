@@ -14,7 +14,7 @@ FROM ${BASE}
 # git: delegated runs check out workspaces; procps: the test drops the tunnel with pkill.
 # Each container makes its own host keys when it starts, so no two machines share one.
 RUN if ! [ -x /usr/sbin/sshd ]; then \
-      apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update -q \
+      apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update -q --error-on=any \
       && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
          install -yq --no-install-recommends \
          openssh-server openssh-client git procps xz-utils ca-certificates \

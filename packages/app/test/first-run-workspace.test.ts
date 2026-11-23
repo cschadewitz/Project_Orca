@@ -629,7 +629,11 @@ it.each(["parked", "setup"] as const)(
 );
 
 it("asks for the store's switch to SQLite once per owned launch, with its reservation, and passes it to that launch only (#339)", async () => {
-  for (const asked of [{ after: "b".repeat(64) }, undefined]) {
+  for (const asked of [
+    { to: "sqlite" as const, after: "b".repeat(64) },
+    { to: "files" as const, after: "b".repeat(64) },
+    undefined,
+  ]) {
     const takeStoreSwitch = vi.fn(() => asked);
     const f = rig({ takeStoreSwitch });
     (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());

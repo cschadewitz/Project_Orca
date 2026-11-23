@@ -32,7 +32,7 @@ import {
   redactingLogger,
   type AuthorizeSecretUse,
 } from "./secrets.js";
-import { decideFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
+import { explainFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
 import { processCleanup } from "./process-cleanup.js";
 import { nativeToolHookUnavailable } from "./native-tool-hook-session.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
@@ -40,7 +40,9 @@ import { isHostFileMissing, type AgentHost, type AgentProcessHandle } from "./ho
 import {
   loadEffectivePermissionPolicy,
   protectedPathFor,
+  permissionRuleRecord,
   resolvePermission,
+  type PermissionRuleRecord,
   type ProtectedPaths,
 } from "./permissions.js";
 import {
@@ -129,7 +131,11 @@ export interface OpenSessionOptions {
    * `makeSessionFactory`; omitted, nothing is protected beyond the policy.
    */
   protectedPaths?: ProtectedPaths;
-  onPermission?: (info: { toolCallId?: string; title: string; decision: string }) => void;
+  /**
+   * Each decision, with what decided it (#702): the basis and, when the rule's origin is
+   * known, its layer, index and sidecar revision. `rule` is absent where no policy was read.
+   */
+  onPermission?: (info: { toolCallId?: string; title: string; decision: string; rule?: PermissionRuleRecord }) => void;
   handshakeTimeoutMs?: number;
   /**
    * How long closing the session waits, after each of SIGTERM and SIGKILL, for the agent
@@ -315,12 +321,16 @@ async function openPlanned(
    */
   const authorizeFs = async (path: string, access: FsAccess): Promise<() => void> => {
     const turn = activeTurn;
-    const record = (decision: string) => {
-      opts.onPermission?.({ title: fsToolCall(path, access).title ?? path, decision: `fs:${decision}` });
+    const record = (decision: string, rule?: PermissionRuleRecord) => {
+      opts.onPermission?.({
+        title: fsToolCall(path, access).title ?? path,
+        decision: `fs:${decision}`,
+        ...(rule ? { rule } : {}),
+      });
       logger.debug("fs permission", { path, access, decision });
     };
-    const refuse = (decision: string, reason: string): never => {
-      record(decision);
+    const refuse = (decision: string, reason: string, rule?: PermissionRuleRecord): never => {
+      record(decision, rule);
       throw acp.RequestError.invalidParams({ path, reason });
     };
     // Outside a live prompt there is nobody to answer and no turn the operation belongs to.
@@ -338,12 +348,14 @@ async function openPlanned(
     };
     const policy = await policyForAsk();
     if (!live()) return refuse("turn-ended", "the turn ended before the file request was decided");
-    const decision = decideFsCall(policy, path, access, evalScope);
+    const explained = explainFsCall(policy, path, access, evalScope);
+    const decision = explained.decision;
+    const rule = permissionRuleRecord(explained);
     if (decision === "allow") {
-      record("allow");
+      record("allow", rule);
       return dispatch;
     }
-    if (decision !== "ask") return refuse(decision, `not allowed: ${decision}`);
+    if (decision !== "ask") return refuse(decision, `not allowed: ${decision}`, rule);
     const invocation: PermissionInvocation = {
       sessionId: id,
       turnId: turn.id,
@@ -364,12 +376,17 @@ async function openPlanned(
       scope: evalScope,
     });
     // Only a person's one-time allow for this very operation.
-    if (asked.decision !== "ask:allow_once") return refuse(asked.decision, `not allowed: ${asked.decision}`);
+    if (asked.decision !== "ask:allow_once") return refuse(asked.decision, `not allowed: ${asked.decision}`, rule);
     // The wait may have been long: read the policy again, and the turn must still be live.
-    const after = decideFsCall(await policyForAsk(), path, access, evalScope);
-    if (after === "deny") return refuse("ask:allow_once:denied-since", "not allowed: the policy denies it now");
-    if (!live()) return refuse("ask:allow_once:turn-ended", "the turn ended while the file request was asked");
-    record("ask:allow_once");
+    const after = explainFsCall(await policyForAsk(), path, access, evalScope);
+    if (after.decision === "deny")
+      return refuse(
+        "ask:allow_once:denied-since",
+        "not allowed: the policy denies it now",
+        permissionRuleRecord(after),
+      );
+    if (!live()) return refuse("ask:allow_once:turn-ended", "the turn ended while the file request was asked", rule);
+    record("ask:allow_once", rule);
     return dispatch;
   };
 
@@ -421,7 +438,7 @@ async function openPlanned(
         invocationId: randomUUID(),
         signal: turn.abort.signal,
       };
-      const { response, decision } = await resolvePermission(await policyForAsk(), {
+      const { response, decision, rule } = await resolvePermission(await policyForAsk(), {
         request: ctx.params,
         signal: invocation.signal,
         ...askThrough(turn, invocation),
@@ -435,6 +452,7 @@ async function openPlanned(
         ...(ctx.params.toolCall.toolCallId ? { toolCallId: ctx.params.toolCall.toolCallId } : {}),
         title: ctx.params.toolCall.title ?? "",
         decision,
+        ...(rule ? { rule } : {}),
       });
       logger.debug("permission", { title: ctx.params.toolCall.title, decision });
       return response;

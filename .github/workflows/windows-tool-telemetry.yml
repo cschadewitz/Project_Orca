@@ -1,0 +1,58 @@
+# Tool-call diagnostics (#1000) are POSIX only: on Windows the telemetry store and the hook's
+# spool must refuse and write nothing. A platform switch in a unit test cannot prove what a
+# real Windows host does; this runs that refusal test natively.
+name: Windows tool-call diagnostics refusal
+
+on:
+  pull_request:
+    paths:
+      - packages/store/src/tool-telemetry-store.ts
+      - packages/store/src/document-store.ts
+      - packages/store/src/sqlite/stores.ts
+      - packages/agents/src/hook-telemetry.ts
+      - packages/agents/test/tool-telemetry-windows-1000.test.ts
+      - .github/workflows/windows-tool-telemetry.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-tool-telemetry-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  refuse:
+    name: store and spool refuse on Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      # Fails if the file is skipped: on this host every case must run.
+      - name: Run the refusal test natively
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run packages/agents/test/tool-telemetry-windows-1000.test.ts \
+            --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/win.json"
+          node -e '
+            const r = require(process.argv[1]);
+            const ran = r.numPassedTests, all = r.numTotalTests;
+            if (all < 2 || ran !== all) { console.error(`expected every case to run and pass: ${ran}/${all}`); process.exit(1); }
+          ' "$RUNNER_TEMP/win.json"
