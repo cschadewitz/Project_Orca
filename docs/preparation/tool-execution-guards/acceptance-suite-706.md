@@ -59,21 +59,41 @@ allow every tool without asking, the worst case of natively remembered grants, s
 that stops a call is ORCA. A local stand-in for the model makes each case's tool calls, so no
 account, key or model spend is involved. MCP calls go to recorder servers.
 
-Each call's outcome is read from the world, separately from ORCA's decision:
+Every call is recorded with three things kept apart, and its outcome follows from them:
 
-| Outcome | Observed as |
+- **Refusal**: what the tool result handed back to the model said: ORCA's denial or block,
+  the agent's own refusal text, no result, or nothing.
+- **Approvals**: the asks that reached ORCA's human channel for this exact call, matched by
+  the ACP tool call id (the model's `tool_use` id), and how each was answered. An ask that
+  matches no call of its turn is recorded as stray and fails the receipt.
+- **Effect**: `observed`, `none` or `indeterminate`, from evidence neither the agent nor ORCA
+  writes:
+
+| Tool | Evidence |
 | --- | --- |
-| `allow` | The call took effect: the file holds what was written, the MCP recorder answered, the read or command returned |
-| `ask` | A permission ask reached ORCA's human channel (and was refused, unless the case answers it) and the call did not take effect |
-| `deny`, `block` | The tool result the model got back is ORCA's denial or block |
+| Write, Edit | The file's bytes before and after |
+| MCP | The recorder logs each call before answering `recorded <nonce>`; a result naming a new log line ran, and the rest of the turn ran nowhere only if every new line is accounted for |
+| Shell | `CLAUDE_CODE_SHELL_PREFIX` points at a recorder that logs each Bash command before it runs |
+| Read | A token: the content of the file, or one written into a file that did not exist yet, and whether it appears in any tool result of the turn |
+| A tool not offered | The tool list of the request the call was made in |
 
-An `allow` wins over an ask: an ask answered in a way that let the call run is counted as
-having run. The privacy cases search the tool results handed back to the model.
+| Outcome | Needs |
+| --- | --- |
+| `allow` | Effect observed |
+| `deny`, `block` | Effect none, and ORCA's denial or block in the result |
+| `ask` | Effect none, and an approval for this call |
+| `indeterminate` | Anything without proof; fails the case |
+
+A refusal text or an absent result never shows on its own that nothing ran. The receipt
+carries every call's record, and the checker refuses a connected receipt where a call lacks
+them, has an effect other than observed or none, or has an outcome that does not follow
+(`connectedEvidenceProblems`). The privacy cases search the tool results handed back to the
+model.
 
 Claude Code refuses some calls itself before any hook runs: a tool it does not offer, an Edit
 of a file that does not exist, a change to a file it has not read. For a change to an existing
 file the path first reads it, as an agent would, with a person allowing that one read if ORCA
-asks. A case that expects ask or deny accepts the agent's own refusal only where nothing could
+asks. A case that expects ask or deny accepts the agent's own refusal only with effect none proven and where nothing could
 have run anyway (the tool is not offered; Edit cannot create a file; ORCA denied the read), and
 every such call is listed under `agentRefusals` in the receipt.
 

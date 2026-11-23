@@ -53,6 +53,38 @@ export function receiptProblems(receipt, agent, route, kind, neededCases) {
   if (missing.length) problems.push(`missing ${missing.join(",")}`);
   if (!(receipt.checks?.connects === "pass" && receipt.checks?.uncoveredRoutesRefused === "pass"))
     problems.push("needs checks.connects and checks.uncoveredRoutesRefused passing");
+  if (kind === "connected") problems.push(...connectedEvidenceProblems(receipt));
+  return problems;
+}
+
+/**
+ * A connected receipt must show, per call, the refusal text, the approvals for that exact call
+ * and an independently observed effect, kept apart, and the outcome must follow from them: a
+ * refusal or an absent result alone never shows that nothing ran.
+ */
+export function connectedEvidenceProblems(receipt) {
+  const problems = [];
+  for (const c of receipt.cases ?? []) {
+    const calls = c.calls ?? [];
+    if (calls.length === 0) {
+      problems.push(`case ${c.id}: no per-call evidence`);
+      continue;
+    }
+    for (const call of calls) {
+      if (call.strayApprovals) {
+        problems.push(`case ${c.id}: an approval matched no call of its turn`);
+        continue;
+      }
+      if (!("refusal" in call) || !Array.isArray(call.approvals) || typeof call.evidence !== "string")
+        problems.push(`case ${c.id}: a call without refusal, approvals and evidence kept apart`);
+      else if (call.effect !== "observed" && call.effect !== "none")
+        problems.push(`case ${c.id}: ${call.tool} has effect ${call.effect}, not observed or none`);
+      else if ((call.outcome === "allow") !== (call.effect === "observed"))
+        problems.push(`case ${c.id}: ${call.tool} outcome ${call.outcome} does not follow from effect ${call.effect}`);
+      else if (call.outcome === "ask" && call.approvals.length === 0)
+        problems.push(`case ${c.id}: ${call.tool} counted as asked with no approval for that call`);
+    }
+  }
   return problems;
 }
 

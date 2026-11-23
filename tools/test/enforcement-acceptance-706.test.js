@@ -156,9 +156,16 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     matrix.paths.find((p) => p.id === "claude-connected"),
     catalogue,
   );
+  const evidence = [
+    { tool: "Write", outcome: "deny", refusal: "orca-deny", approvals: [], effect: "none", evidence: "unchanged" },
+  ];
   const onHook = (kind) =>
     kind === "connected"
-      ? receipt({ kind, route: "claude-connected", cases: connectedCases.map((id) => ({ id, result: "pass" })) })
+      ? receipt({
+          kind,
+          route: "claude-connected",
+          cases: connectedCases.map((id) => ({ id, result: "pass", calls: evidence })),
+        })
       : receipt({ kind, route: "claude-native-hook", cases: hookCases.map((id) => ({ id, result: "pass" })) });
   const hookAgent = (extra = {}) => claude({ tier: "C", routes: ["claude-native-hook"], ...extra });
 
@@ -184,6 +191,39 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     expect(structural(check(claude({ tier: "C" }), { "i.json": receipt() }))).toEqual([
       "agent claude: tier C on acp-ask needs a connected path that proves it",
     ]);
+  });
+
+  it("tier C on a connected receipt whose calls do not carry independent evidence", () => {
+    const withCalls = (calls) => {
+      const r = onHook("connected");
+      r.cases[0] = { ...r.cases[0], calls };
+      return r;
+    };
+    const first = connectedCases[0];
+    for (const [calls, why] of [
+      [[], `case ${first}: no per-call evidence`],
+      [
+        [{ ...evidence[0], effect: "indeterminate" }],
+        `case ${first}: Write has effect indeterminate, not observed or none`,
+      ],
+      [[{ ...evidence[0], outcome: "allow" }], `case ${first}: Write outcome allow does not follow from effect none`],
+      [
+        [{ ...evidence[0], outcome: "ask", refusal: null }],
+        `case ${first}: Write counted as asked with no approval for that call`,
+      ],
+      [
+        [{ tool: "Write", outcome: "deny", effect: "none" }],
+        `case ${first}: a call without refusal, approvals and evidence kept apart`,
+      ],
+      [[{ strayApprovals: ["Write a.md"] }], `case ${first}: an approval matched no call of its turn`],
+    ])
+      expect(structural(check(hookAgent(), { "i.json": onHook("installed"), "c.json": withCalls(calls) }))).toEqual([
+        expect.stringMatching(
+          new RegExp(
+            `tier C on claude-native-hook needs a passing connected receipt from claude-connected .*${why.replace(/[()]/g, "\\$&")}`,
+          ),
+        ),
+      ]);
   });
 
   it("tier C when its connected path excludes a lifecycle case, named residual or not", () => {

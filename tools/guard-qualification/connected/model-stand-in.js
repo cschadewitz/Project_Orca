@@ -5,8 +5,9 @@
  * that follows a tool result with "done", so the agent, its adapter and ORCA run for real while
  * no account, key or model spend is involved. It streams, as Claude Code asks it to.
  *
- * It also records what the agent handed back: the tool names offered on each request and every
- * tool result, which are the connected route's surfaces (what reaches the model).
+ * It also records what the agent handed back: the tool names offered (on the latest request,
+ * and with each call made) and every tool result, which are the connected route's surfaces
+ * (what reaches the model).
  */
 import { createServer } from "node:http";
 
@@ -20,7 +21,7 @@ const textOf = (content) =>
 
 export function modelStandIn() {
   let n = 0;
-  const log = { offered: [], calls: [], results: [], requests: 0 };
+  const log = { offered: [], calls: [], results: [], requests: 0, errors: [] };
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (d) => (body += d.toString()));
@@ -28,9 +29,11 @@ export function modelStandIn() {
       try {
         answer(body, req, res);
       } catch (error) {
-        // An answer the stand-in cannot give fails the request, rather than hanging the turn.
+        // An answer the stand-in cannot give fails the request, rather than hanging the turn. The
+        // error stays in the stand-in's log; the agent gets a fixed message.
+        log.errors.push(String(error));
         res.writeHead(500, { "content-type": "application/json" });
-        res.end(JSON.stringify({ type: "error", error: { type: "api_error", message: String(error) } }));
+        res.end(JSON.stringify({ type: "error", error: { type: "api_error", message: "the model stand-in failed" } }));
       }
     });
   });
@@ -78,12 +81,15 @@ export function modelStandIn() {
         ],
       ];
       let stop = "end_turn";
-      if (calls.length && request.tools?.length) {
-        log.offered.push(request.tools.map((t) => t.name));
+      const offered = request.tools?.map((t) => t.name) ?? [];
+      if (offered.length) log.offered = offered;
+      if (calls.length && offered.length) {
         stop = "tool_use";
         calls.forEach((call, index) => {
           const toolUseId = `toolu_${n}_${index}`;
-          log.calls.push({ toolUseId, name: call.name });
+          // What the agent offered on the request the call was made in: a tool not offered
+          // cannot run, which is independent evidence of no effect.
+          log.calls.push({ toolUseId, name: call.name, offered });
           events.push(
             [
               "content_block_start",

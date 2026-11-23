@@ -7,8 +7,9 @@
  * the agreement checks run.
  *
  * Set ORCA_ENFORCEMENT_RECEIPT_DIR to also write the run's connected receipt: the pinned pair,
- * host, ORCA commit, per-case results, the exclusions and every call Claude Code refused on
- * its own before ORCA could answer. A receipt written here is evidence for review; the support
+ * host, ORCA commit, per-case results with every call's evidence (refusal text, approvals for
+ * that call, observed effect), the exclusions and every call Claude Code refused on its own
+ * before ORCA could answer. A receipt written here is evidence for review; the support
  * matrix promotes nothing on it until receipts are bound to a trusted run.
  */
 import { execFileSync } from "node:child_process";
@@ -19,7 +20,13 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CLAUDE_HOOK_VERIFIED_PAIRS } from "@orca/agents";
 import { childBundle } from "@orca/testing/child-bundle";
-import { REPO_ROOT, casesFor, loadCatalogue, loadMatrix } from "../guard-qualification/check-support-matrix.js";
+import {
+  REPO_ROOT,
+  casesFor,
+  connectedEvidenceProblems,
+  loadCatalogue,
+  loadMatrix,
+} from "../guard-qualification/check-support-matrix.js";
 import { SCENARIOS } from "../guard-qualification/scenarios.js";
 import { createWorld } from "../guard-qualification/world.js";
 import { modelStandIn } from "../guard-qualification/connected/model-stand-in.js";
@@ -97,13 +104,15 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("connected
       `${c.id} ${c.title}`,
       async () => {
         const world = await realWorld();
+        // Every call's evidence goes in the receipt: the refusal text, the approvals for that
+        // exact call, and the independently observed effect, kept apart.
+        const entry = { id: c.id, contract: c.contract, result: "fail" };
+        receipt.cases.push(entry);
         try {
           await SCENARIOS[c.id](world, path);
-          receipt.cases.push({ id: c.id, contract: c.contract, result: "pass" });
-        } catch (error) {
-          receipt.cases.push({ id: c.id, contract: c.contract, result: "fail" });
-          throw error;
+          entry.result = "pass";
         } finally {
+          entry.calls = world.callRecords ?? [];
           for (const r of world.agentRefusals ?? []) receipt.agentRefusals.push({ case: c.id, ...r });
           await world.dispose();
         }
@@ -111,6 +120,12 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("connected
       // L02 waits out a real one-minute grant.
       300_000,
     );
+
+  it("every call of every case carries evidence the matrix checker accepts", () => {
+    expect(receipt.cases.map((c) => c.id)).toEqual([...runs]);
+    expect(connectedEvidenceProblems(receipt)).toEqual([]);
+    expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
+  });
 });
 
 async function writeReceipt(receipt) {
