@@ -34,6 +34,7 @@ import {
 } from "./secrets.js";
 import { decideFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
 import { processCleanup } from "./process-cleanup.js";
+import { SftpStatusError, SSH_FX_NO_SUCH_FILE } from "./hosts/sftp.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
 import {
@@ -424,7 +425,16 @@ async function openPlanned(
       refuseProtected(path, "read");
       const dispatch = await authorizeFs(path, "read");
       dispatch();
-      let content = await opts.host.fs.readFile(path);
+      let content: string;
+      try {
+        content = await opts.host.fs.readFile(path);
+      } catch (e) {
+        // A missing file is an answer, not a failure: agents (Gemini CLI among them) find out
+        // whether a file exists by reading it, and only "Resource not found" reads as missing.
+        // This is past the policy gate, so a path the policy refuses never learns either way.
+        if (isMissingFileError(e)) throw acp.RequestError.resourceNotFound(path);
+        throw e;
+      }
       if (line !== undefined && line !== null) {
         const lines = content
           .split("\n")
@@ -745,4 +755,17 @@ async function openPlanned(
     },
   };
   return session;
+}
+
+/**
+ * Whether a host's `readFile` failed because the file is not there: a local `ENOENT`, or an
+ * SFTP "no such file" status anywhere in the cause chain (an SSH host wraps it as
+ * `AGENT_TRANSPORT`). Anything else stays an error.
+ */
+function isMissingFileError(e: unknown): boolean {
+  for (let cur: unknown = e, depth = 0; cur instanceof Error && depth < 8; cur = cur.cause, depth++) {
+    if ((cur as NodeJS.ErrnoException).code === "ENOENT") return true;
+    if (cur instanceof SftpStatusError && cur.status === SSH_FX_NO_SUCH_FILE) return true;
+  }
+  return false;
 }

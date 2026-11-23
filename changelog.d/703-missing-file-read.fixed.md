@@ -1,0 +1,1 @@
+- **agents:** An agent reading a file that does not exist through ORCA's ACP file callback now gets "Resource not found" instead of a generic internal error, so agents that check for a file by reading it (Gemini CLI among them) can create new files. The answer comes only after the permission policy allows the read, so a refused path still reveals nothing about whether it exists.
