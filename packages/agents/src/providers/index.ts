@@ -5,14 +5,16 @@ import type { AgentSession } from "../session.js";
 import { clineGuard } from "./cline.js";
 import { copilotCliGuard } from "./copilot-cli.js";
 import type { ProviderGuard } from "./guard.js";
+import { openCodeGuard } from "./opencode.js";
 
 export type { ProviderGuard } from "./guard.js";
 export * from "./copilot-cli.js";
+export * from "./opencode.js";
 export * from "./cline.js";
 
 /** Every provider guard. Add a provider's guard here, one line, in its own module. */
 export function providerGuards(): ProviderGuard[] {
-  return [copilotCliGuard(), clineGuard()];
+  return [copilotCliGuard(), openCodeGuard(), clineGuard()];
 }
 
 /** The guard responsible for this agent, if any. Two matching guards is a configuration error. */

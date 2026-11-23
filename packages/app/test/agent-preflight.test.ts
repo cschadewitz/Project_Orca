@@ -126,3 +126,19 @@ it("names a copilot executable as a Copilot CLI candidate without running it (#7
     await expect(readFile(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
   }
 });
+it("names OpenCode's ACP route only for its acp subcommand (#710)", async () => {
+  const f = await fixture();
+  const opencode = join(f.bin, "opencode");
+  await writeFile(opencode, "synthetic file; not a provider");
+  await chmod(opencode, 0o700);
+  expect(await inspectLocalTool({ id: "oc", command: opencode, args: ["acp", "--pure"], env: {} })).toMatchObject({
+    state: "handshake-required",
+    evidence: { configuredRoute: "opencode-acp-candidate", support: "unknown", version: "unknown", signIn: "unknown" },
+  });
+  expect(
+    (await inspectLocalTool({ id: "oc", command: opencode, args: ["run"], env: {} })).evidence.configuredRoute,
+  ).toBe("unverified");
+  expect((await inspectLocalTool({ id: "oc", command: opencode, env: {} })).evidence.configuredRoute).toBe(
+    "unverified",
+  );
+});

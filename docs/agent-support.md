@@ -23,6 +23,7 @@ Every entry says how it is known, as in the hook coverage page:
 | Agent (pinned) | A | B | C | Hook (`nativeToolHook: on`) |
 | --- | --- | --- | --- | --- |
 | GitHub Copilot CLI 1.0.114, the npm builds for Linux x64 and macOS arm64 only (pinned by SHA-256), on the daemon's own computer, with a profile ORCA has inspected | **Yes** (installed) | **Yes, for the routes marked installed below** | No, after #706 | None yet: refused |
+| OpenCode 1.19.4 (`opencode acp`), the npm builds for Linux x64 and macOS arm64 only (pinned by SHA-256), on the daemon's own computer, with an isolated profile ORCA has inspected | **Yes** (installed) | **Yes, with the limits listed** (installed) | No, after #706 | None: no supported hook, refused |
 | Cline CLI 3.0.75, the npm build for Linux x64 (pinned by SHA-256 per platform), on the daemon's own computer, with a config directory ORCA has inspected | **Yes** (installed) | **Yes, for the routes marked installed below** | No, after #706 | None: no Cline hook adapter |
 
 ## GitHub Copilot CLI
@@ -60,6 +61,128 @@ Code: `packages/agents/src/providers/copilot-cli.ts`.
 | Windows | Refused (not a verified platform) | unit-tested |
 | Checkout configuration (`.github/copilot/settings*.json`, `.github/hooks`, `.claude/settings*.json`) | Copilot loads a checkout's configuration only when the folder is trusted; ORCA refuses every trust source it can see (`--trust-folder`, a truthy `COPILOT_ALLOW_ALL`, `trustedFolders`). Not exercised | source |
 
+## OpenCode 1.19.4
+
+The source review this is built on, with OpenCode's configuration layers, permission defaults
+and remembered grants in full, is
+[docs/preparation/opencode-acp-710/](preparation/opencode-acp-710/README.md). The provider
+module is `packages/agents/src/providers/opencode.ts`; the installed evidence comes from
+`.github/workflows/opencode-acceptance.yml`.
+
+### What is pinned
+
+| Item | Pin |
+| --- | --- |
+| Release | OpenCode **1.19.4**, `anomalyco/opencode@148842ef…`, npm `opencode-<platform>@1.19.4` |
+| Build | SHA-256 of the executable, per platform, in `OPENCODE_IMAGES`. ORCA hashes the configured executable (through its real path, by file identity) before every session and refuses anything else. |
+| Platforms | `linux-x64` and `darwin-arm64`, the two the acceptance suite runs. `linux-arm64` and `darwin-x64` images are recorded but **refused**: nothing has run there. Windows is not supported (upstream recommends WSL). |
+| ACP | Protocol 1 (OpenCode's SDK 0.21.0). No `terminal`; ORCA advertises none. |
+| Host | This computer only. An OpenCode agent on an SSH host is refused, because its profile and build cannot be checked there. |
+| OpenCode 2 | `@opencode/cli` is a different product with a rewritten ACP agent. It is unreviewed and refused. Never run `opencode upgrade --major` against a pinned install. |
+
+### What the launch must look like
+
+OpenCode merges up to ten configuration layers, and several of them can grant tools or run code
+with no ask at all: the person's own `~/.opencode`, a project `opencode.json`, JS plugins,
+formatters, language servers. ORCA therefore refuses to start OpenCode unless the launch is an
+isolated profile, and says exactly what is missing (`CONFIG_INVALID`, `problems`):
+
+- `opencode acp --hostname 127.0.0.1 --port 0 --pure`, as an absolute path to the verified
+  executable. The internal HTTP server OpenCode runs for itself is unauthenticated, so it is
+  held to loopback on a random port. No other flag is accepted.
+- `HOME`, `XDG_CONFIG_HOME` and `OPENCODE_CONFIG` set to the profile's own absolute paths;
+  `OPENCODE_DISABLE_PROJECT_CONFIG`, `OPENCODE_PURE` and `OPENCODE_DISABLE_AUTOUPDATE` on;
+  `OPENCODE_CONFIG_DIR` and `OPENCODE_CONFIG_CONTENT` empty.
+- Nothing in the profile's own configuration directories (`$XDG_CONFIG_HOME/opencode` and
+  `~/.opencode`) except the schema-only file OpenCode seeds and the plugin dependency it
+  installs there itself. Agents, modes, commands and tools in those directories load with no
+  ask, and `--pure` keeps out only plugins, so anything else refuses the launch.
+- The reviewed `OPENCODE_CONFIG` file: only reviewed settings (an unknown key, such as the
+  legacy `tools` map, refuses the launch), nothing natively `allow`, `"*"` written first, no
+  plugins, no MCP, no formatters, no language servers, no custom commands, the `build` agent,
+  sharing and auto-update off. `task`, `webfetch`, `websearch` and `external_directory` must
+  stay denied in the effective ruleset, not just be written as `deny`: OpenCode decides by
+  the last rule whose permission and pattern match, over the top-level `permission` and then
+  `agent.build.permission`, so ORCA rebuilds that ordered list and refuses a later rule that
+  reopens a denial (a wildcard key such as `"t*"`, a pattern entry, or an agent-level `"*"`).
+- The checks read the environment the process will actually get: the daemon's own, less exactly
+  what the host withholds for secrets, then the agent's env, then the session's, then the
+  variables a secret delivery fills. They run when the session is prepared and again at the
+  actual start, on the start's own environment, withheld names and secret deliveries; a start
+  whose directory, `HOME`, `XDG_CONFIG_HOME`, `OPENCODE_CONFIG` or `OPENCODE_PERMISSION`
+  differs from the checked ones, or whose image changed, is refused. A control variable that a
+  secret fills is refused, since its value is only known at launch. Refusals name variables,
+  never values.
+- `HOME`, `XDG_CONFIG_HOME` and `OPENCODE_CONFIG` must be canonical: written without `.`,
+  `..`, `//` or a trailing `/` (so the path ORCA reads is the exact spelling OpenCode gets,
+  which the start then passes through unchanged), no link anywhere on the path, and every directory on it the user's or root's and closed to other writers (a
+  root-owned sticky directory such as `/tmp` counts as closed).
+  The config file and every entry of the profile directories must be the expected type, not a
+  link, the user's own and not writable by others; a profile directory counts as empty only
+  when it does not exist.
+- `OPENCODE_PERMISSION` equal to that file's `permission`. It is the last layer OpenCode
+  applies, after a machine-wide or MDM configuration, which is why ORCA also refuses to start
+  when `/etc/opencode` or the macOS managed equivalent exists: a per-agent rule delivered there
+  is not overridden by it.
+- An ORCA policy that denies OpenCode's subagent launch. OpenCode reports it as kind `think`
+  with the title `task`, which ORCA's #140 defaults would otherwise allow.
+- No `mcpServers`: OpenCode registers a client's servers for every session in the process.
+
+A ready profile to copy is
+[`orca.opencode.example.yaml`](preparation/opencode-acp-710/orca.opencode.example.yaml), with
+[`opencode.isolated.json`](preparation/opencode-acp-710/opencode.isolated.json) beside it;
+[setup and preflight](preparation/opencode-acp-710/setup-preflight.md) has the operator steps,
+including verifying the binary against the pinned npm integrity rather than trusting the npm
+wrapper's postinstall.
+
+### What was observed
+
+| What | Behaviour | Known by |
+| --- | --- | --- |
+| Handshake, `session/new`, streaming, turn identity | Protocol 1, OpenCode's session id kept, `agent_message_chunk` updates, turn ends `end_turn` | installed |
+| `authenticate` | A no-op in 1.19.4 (it only advertises `opencode auth login`); ORCA never calls it | source, installed |
+| Explicit denial | A rejected shell command does not run: nothing on disk | installed |
+| A rule-matched allow | Answered `once`, every time. A repeat of the same command is decided again; a changed command reaches a person | installed |
+| A person's "Always allow" | Narrowed to "Allow once" by ORCA, so OpenCode asks again next call. **Control case, with the guard off:** OpenCode's own "always" skips the second ask entirely, directory-wide for the life of the process, and outranks a configured deny — which is why ORCA never selects it | installed (both) |
+| File edits | Asked as `edit` with the path. A rejected write leaves no file; an allowed one writes once | installed |
+| Subagents (`task`) | Denied natively: no ask, and no child's effects. Its own asks would never be forwarded over ACP in 1.19.4 anyway (upstream #48232) | installed |
+| Web fetch and search | Denied natively; a canary URL in the test's own server is never hit | installed |
+| Cancellation | A cancel while an ask is pending ends the turn `cancelled`, and a late answer runs nothing | installed |
+| A command with a `workdir` outside the workspace | Nothing lands outside: OpenCode's `external_directory` is denied natively. ORCA could not have decided it — an `execute` ask carries the command text only, with no location and no cwd, so an ORCA title rule matches the same command in any directory | installed |
+| A file path given through a link to the workspace (macOS `/var` → `/private/var`) | Treated by OpenCode as outside the project and denied natively, with no ask. Configure the workspace by its real path | installed (macOS) |
+| A prompt starting with `/` | Refused before it is sent: OpenCode would run it as one of its own commands | installed |
+| A person's "Always reject", or an answer with no one-time equivalent on offer | Sent as `reject_once`; when OpenCode offers no one-time option for the answer, the ask is cancelled instead of answered with a persistent response | unit-tested |
+| Switching the session's agent ("mode") | Refused, and a session that opens in another mode is closed: another agent brings its own native permissions | unit-tested |
+| Another build of the executable | Refused before anything starts | installed |
+| Stale, duplicate and wrong-session asks; a failed human-input callback | Answered `cancelled`, which OpenCode maps to a rejection; a failed callback fails the turn | unit-tested (`opencode-acp-fixture-710.test.ts`) |
+
+### What is outside, and stays outside
+
+These are the honest limits of tier B for OpenCode. None of them is closed by anything in this
+release, and tier C is not claimed.
+
+- **Shell children.** One ask covers the parsed command; what it spawns, writes or fetches is
+  unmediated. Children run with no sandbox.
+- **The command's directory.** An `execute` ask has no cwd and no location, so ORCA decides it
+  by title alone (`workdir` is in the raw input only). The native `external_directory` deny is
+  what keeps a command's paths inside the workspace, not an ORCA rule.
+- **Native file writes.** Every OpenCode tool reads and writes in its own process. ORCA's
+  `fs/*` handlers and protected paths see only what OpenCode chooses to send: asks with
+  locations, and the `fs/write_text_file` mirror of an edit it already made itself.
+- **The truncation directory**, which OpenCode appends as allowed after every layer.
+- **The daemon's environment.** ORCA's host can add or replace variables but cannot remove one,
+  so anything the daemon was started with reaches OpenCode and every command it runs. Start the
+  daemon for an OpenCode agent from a shell that holds no credentials.
+- **The internal HTTP server**, unauthenticated on loopback: any local process that finds the
+  port can drive OpenCode, replies to its permission asks included. ORCA cannot generate a
+  per-launch secret for it today (`OPENCODE_SERVER_PASSWORD`).
+- **No native tool hook.** OpenCode has no supported hook, so `nativeToolHook: on` is refused
+  for it, and ORCA sees only the calls OpenCode asks about.
+- **Model backends.** The acceptance suite runs against a scripted stand-in, and the reviewed
+  operator profile names one real backend (Anthropic, with the operator's own key, entered
+  outside ORCA). Every other backend, local models included, is unverified. With no credentials
+  at all OpenCode would enable its own hosted free tier, which is why the profile pins
+  `enabled_providers`.
 ## Cline CLI
 
 `cline --acp` 3.0.75. Tiers **A** and **B**. "Installed" below means one route only: the
