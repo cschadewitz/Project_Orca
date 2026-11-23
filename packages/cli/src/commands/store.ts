@@ -3,7 +3,8 @@
  *
  *   store format                 print the store's recorded format and what this ORCA would do
  *   store carry-forward          convert an older-format store, with every other ORCA stopped
- *   store sqlite switch          move the store's metadata from files to SQLite, with every other ORCA stopped (#339)
+ *   store sqlite switch          move the store's metadata from files to SQLite, with every other ORCA stopped (#339);
+ *                                --older-orca-stopped once an ORCA from before the writer registry has opened it
  *   store sqlite import          mirror the file-backed metadata into <store>/metadata.sqlite (#339)
  *   store sqlite backup <file>   a consistent copy of the SQLite metadata, taken while it is in use
  *   store sqlite restore <file>  put a backup in place in a store that has no SQLite metadata
@@ -27,6 +28,7 @@ import {
   switchStoreToSqlite,
   carryStoreForward,
   enterStoreFormat,
+  holdStoreWriter,
   importFileMetadata,
   readStoreFormat,
   restoreSqliteMetadata,
@@ -94,6 +96,7 @@ async function sqliteCommand(ctx: CommandContext, configDir: string, storeDir: s
       const outcome = await switchStoreToSqlite(storeDir, {
         appVersion: readOrcaVersion(),
         ...(privacy ? { privacy } : {}),
+        ...(ctx.flags["older-orca-stopped"] === true ? { olderWritersStopped: true } : {}),
       });
       if (outcome.status === "switched") {
         ctx.out(`switched ${storeDir} to SQLite metadata (store format ${outcome.epoch})`);
@@ -108,7 +111,14 @@ async function sqliteCommand(ctx: CommandContext, configDir: string, storeDir: s
           "CONFIG_INVALID",
           `${storeDir} already runs on SQLite metadata; its file metadata is no longer current, so there is nothing to import`,
         );
-      const report = await importFileMetadata(storeDir);
+      // A maintenance writer like any other: refused while a switch runs, and seen by one.
+      const hold = holdStoreWriter(storeDir, { appVersion: readOrcaVersion(), purpose: "store sqlite import" });
+      let report: Awaited<ReturnType<typeof importFileMetadata>>;
+      try {
+        report = await importFileMetadata(storeDir);
+      } finally {
+        hold.release();
+      }
       const docs = Object.entries(report.documents)
         .map(([name, n]) => `${name} ${n}`)
         .join(", ");
@@ -126,7 +136,13 @@ async function sqliteCommand(ctx: CommandContext, configDir: string, storeDir: s
       return 0;
     }
     case "restore": {
-      const { file: restored, schema } = await restoreSqliteMetadata(needFile(), storeDir);
+      const hold = holdStoreWriter(storeDir, { appVersion: readOrcaVersion(), purpose: "store sqlite restore" });
+      let restored: string, schema: number;
+      try {
+        ({ file: restored, schema } = await restoreSqliteMetadata(needFile(), storeDir));
+      } finally {
+        hold.release();
+      }
       ctx.out(`restored ${restored} (schema ${schema}); run 'orca store sqlite verify' next`);
       return 0;
     }

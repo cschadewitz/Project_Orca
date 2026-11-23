@@ -23,6 +23,7 @@ import {
   sqliteStores,
   type Stores,
 } from "@orca/store";
+import { SQLITE_MIGRATIONS } from "../src/sqlite/schema.js";
 import { childBundle } from "@orca/testing/child-bundle";
 
 const run = promisify(execFile);
@@ -129,7 +130,7 @@ describe("SQLite metadata backend", () => {
     expect((error as { details?: Record<string, unknown> }).details).toMatchObject({
       reason: "NEWER",
       schema: 99,
-      supported: 1,
+      supported: SQLITE_MIGRATIONS.length,
     });
   });
 

@@ -80,6 +80,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         abandon: { type: "boolean" },
         "no-resume": { type: "boolean" },
         "read-only": { type: "boolean" },
+        "older-orca-stopped": { type: "boolean" },
         help: { type: "boolean" },
         version: { type: "boolean" },
       },

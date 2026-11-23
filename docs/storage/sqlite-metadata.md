@@ -180,10 +180,35 @@ That keeps one populated workspace from ever being opened by both backends:
 - The daemon opens whichever backend the marker records, after the same format
   check as always. Closed update validation opens a SQLite store read-only (no
   migration, no setting written).
+- A store on SQLite opens **only the database it was switched to**. The switch gives
+  the database an id (`store_binding`) and records it in the marker (`sqliteId`).
+  Before anything opens the database for the workspace, a read-only check that
+  changes nothing refuses a missing database (`METADATA_MISSING`; it is never created
+  empty in its place), a file that is not an ORCA database or is bound to no store or
+  to another one (`METADATA_MISMATCH`), and a newer schema (`NEWER`). Put it back with
+  `orca store sqlite restore` from a backup of that database, or restore the whole
+  store from the format backup the marker names.
+
+**Who has the store open.** The format lock covers opening a store, not the time a
+writer keeps it open: an idle daemon holds a file store without it. So every ORCA
+writer from this one on (the daemon and CLI commands, `import`, `restore`)
+registers in `<store>/.store-writers/` while it has the store open
+(`packages/store/src/store-writers.ts`). A switch first announces itself in
+`<store>/.store-switch.json`, then lists the registrations: it is refused (`BUSY`)
+while any belongs to a live process, or to a process on another host it cannot
+check, and a writer that starts while the announcement stands is refused
+(`SWITCHING`). Each side writes before it reads the other's, so one of them always
+sees the other. Registrations and announcements of processes that are gone are
+ignored. ORCA versions from before the registry do not register: the marker
+records whether one has opened the store (`writerRegistry` is set on a fresh store
+and dropped by any older ORCA that rewrites the marker), and the switch refuses
+such a store (`OLDER_WRITER`) until it is run as `orca store sqlite switch
+--older-orca-stopped`, the operator's statement that every older ORCA using it is
+stopped.
 
 **`orca store sqlite switch`** is the one way from files to SQLite. Stop every ORCA
-app, daemon and command using the workspace, as for `carry-forward`. Under the
-store's format lock it:
+app, daemon and command using the workspace; the switch checks that it can see none.
+Under the store's format lock it:
 
 1. Switches only a store in this ORCA's current file format. An older store is
    carried forward first; an unmarked one is opened once first. A store already on
@@ -191,20 +216,26 @@ store's format lock it:
 2. **Refuses on Windows** (`UNDURABLE`), changing nothing, for as long as store format
    changes are refused there (#910: until the power-cut test in #947 proves the
    backup taken first survives).
-3. Takes a verified whole-store backup into `format-backups/`, exactly as
+3. Announces itself and checks that no registered writer is alive, and, for a store
+   an older ORCA has opened, that the operator said every older ORCA is stopped (see
+   above). The announcement stands until the marker is written.
+4. Takes a verified whole-store backup into `format-backups/`, exactly as
    `carry-forward` does: refused while a run is active or while anything writes, and
    read back under this ORCA before it counts.
-4. Imports (`orca store sqlite import`, below) and verifies (`orca store sqlite
-   verify`); a problem leaves the store on files.
-5. Checks that no file of the store changed since the backup; a write that landed
-   meanwhile would be missing from the database, so the switch is refused instead.
-6. Only then writes the SQLite format into the marker, naming the backup.
+5. Imports (`orca store sqlite import`, below) and verifies (`orca store sqlite
+   verify`); a problem leaves the store on files. Then binds the database to the
+   store with a new id.
+6. Checks that no file of the store changed since the backup and that still no
+   writer is registered; a write that landed meanwhile would be missing from the
+   database, so the switch is refused instead.
+7. Only then writes the SQLite format into the marker, naming the backup and the
+   database's id.
 
 A refusal at any step leaves the store on files and in charge; a database the
 import built is inert, as after a plain `import`. The desktop app's own workspaces
 are refused (`APP_OWNED`), as for `carry-forward`: the app's daemon holds their write
 fence, which this command cannot. There is no switch back to files yet: the backup
-from step 3 is the store as it was.
+from step 4 is the store as it was.
 
 ## Operations
 

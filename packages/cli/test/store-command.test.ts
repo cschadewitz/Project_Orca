@@ -103,7 +103,7 @@ describe("orca store", () => {
     dirs.push(dir);
     await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
     // Opened once on files (stamps the current format), then given a run.
-    await bootstrap({ cwd: dir, logger: silentLogger });
+    (await bootstrap({ cwd: dir, logger: silentLogger })).orchestrator.stores.close?.();
     await mkdir(join(dir, ".orca", "runs"), { recursive: true });
     await writeFile(join(dir, ".orca", "runs", "run_old.jsonl"), LOG);
 

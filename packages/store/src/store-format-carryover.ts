@@ -35,6 +35,7 @@ import { readArchive, writeArchiveSlot } from "./backup-archive.js";
 import { fileStores } from "./document-store.js";
 import { createCopy, createDurable, syncDirectory } from "./durable-file.js";
 import { FileLeaseStore, lapsed } from "./lease-store.js";
+import { STORE_SWITCH_FILE, STORE_WRITERS_DIR } from "./store-writers.js";
 
 export const STORE_FORMAT_BACKUP_DIR = "format-backups";
 export const STORE_FORMAT_BACKUP_RETENTION = 2;
@@ -85,11 +86,14 @@ export function windowsBootId(): number | undefined {
 export const STORE_UPDATE_HANDOFF_FILE = "update-handoff.json";
 
 /** Never copied or compared: the backups themselves, locks, update-window guards, the marker, the
- * updater's handoff (rewritten by the carrying daemon itself before it copies). */
+ * updater's handoff (rewritten by the carrying daemon itself before it copies), and who has the
+ * store open (store-writers.ts), which says nothing about its data. */
 const skipped = (name: string, top: boolean) =>
   name.endsWith(".lock") ||
   (top &&
     (name === STORE_FORMAT_BACKUP_DIR ||
+      name === STORE_WRITERS_DIR ||
+      name === STORE_SWITCH_FILE ||
       name.startsWith(".orca-update-window") ||
       name.startsWith("store-format.json") ||
       name.startsWith(STORE_UPDATE_HANDOFF_FILE)));

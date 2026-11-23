@@ -3,12 +3,19 @@
  * from files (backup, import, verify, then the marker), and the refusals that keep one
  * populated store from ever being opened by both backends.
  */
-import { lstat, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  backupSqliteMetadata,
   enterStoreFormat,
+  holdStoreWriter,
+  restoreSqliteMetadata,
+  SQLITE_METADATA_FILE,
+  STORE_SWITCH_FILE,
+  STORE_WRITERS_DIR,
   fileStores,
   readStoreFormat,
   recordedStoreBackend,
@@ -178,5 +185,156 @@ describe("store metadata backend (#339)", () => {
     ).rejects.toMatchObject(refusal("BUSY"));
     expect(await readStoreFormat(dir)).toMatchObject({ epoch: STORE_FORMAT_EPOCH });
     expect((await fileStores(dir).events.read("run_a")).length).toBe(7);
+  });
+
+  describe("no writer beside a switch", () => {
+    /** A pid no process has any more: a child that has already exited. */
+    const deadPid = () => spawnSync(process.execPath, ["-e", ""]).pid;
+    const entry = (pid: number, host = hostname()) =>
+      JSON.stringify({ pid, host, appVersion: "0.8.0", purpose: "orca", since: "x" });
+
+    it("is refused while a writer has the store open, even an idle one, and changes nothing", async () => {
+      const dir = await populated();
+      // Open and idle: no run, no lease, nothing written since it opened.
+      const idle = holdStoreWriter(dir, { appVersion: "0.8.0", purpose: "orca serve" });
+      const before = await contents(dir);
+      await expect(switchStoreToSqlite(dir, { appVersion: "0.8.0" })).rejects.toMatchObject(refusal("BUSY"));
+      expect(await contents(dir)).toEqual(before);
+      expect(recordedStoreBackend(dir)).toBe("file");
+      // Once it lets go, the switch goes ahead.
+      idle.release();
+      expect(await switchStoreToSqlite(dir, { appVersion: "0.8.0" })).toMatchObject({ status: "switched" });
+    });
+
+    it("is refused for a writer it cannot check (another host), and ignores one whose process is gone", async () => {
+      const dir = await populated();
+      await mkdir(join(dir, STORE_WRITERS_DIR), { recursive: true });
+      await writeFile(join(dir, STORE_WRITERS_DIR, "1.remote.json"), entry(1, "another-host"));
+      await expect(switchStoreToSqlite(dir, { appVersion: "0.8.0" })).rejects.toMatchObject(refusal("BUSY"));
+      await rm(join(dir, STORE_WRITERS_DIR, "1.remote.json"));
+      await writeFile(join(dir, STORE_WRITERS_DIR, "dead.json"), entry(deadPid()));
+      expect(await switchStoreToSqlite(dir, { appVersion: "0.8.0" })).toMatchObject({ status: "switched" });
+      expect(await readdir(join(dir, STORE_WRITERS_DIR))).toEqual([]);
+    });
+
+    it("turns away a writer that opens during the switch, up to the marker, and leaves it nothing to write to", async () => {
+      const dir = await populated();
+      const late = (): unknown => {
+        try {
+          return holdStoreWriter(dir, { appVersion: "0.8.0", purpose: "orca" });
+        } catch (error) {
+          return error;
+        }
+      };
+      const attempts: unknown[] = [];
+      const outcome = await switchStoreToSqlite(dir, {
+        appVersion: "0.8.0",
+        afterImport: async () => void attempts.push(late()),
+        // The last moment before the marker: after the final checks.
+        beforeMarker: async () => void attempts.push(late()),
+      });
+      expect(outcome).toMatchObject({ status: "switched" });
+      for (const attempt of attempts) expect(attempt).toMatchObject(refusal("SWITCHING"));
+      // The announcement ends with the switch; a writer starting now finds a SQLite store.
+      expect(await readdir(dir)).not.toContain(STORE_SWITCH_FILE);
+      const after = holdStoreWriter(dir, { appVersion: "0.8.0", purpose: "orca" });
+      expect(() => fileStores(dir)).toThrow(expect.objectContaining(refusal("OTHER_BACKEND")));
+      after.release();
+    });
+
+    it("honours a live switch's announcement and ignores a dead one's", async () => {
+      const dir = await populated();
+      await writeFile(join(dir, STORE_SWITCH_FILE), entry(process.pid));
+      expect(() => holdStoreWriter(dir, { appVersion: "0.8.0", purpose: "orca" })).toThrow(
+        expect.objectContaining(refusal("SWITCHING")),
+      );
+      expect(await readdir(join(dir, STORE_WRITERS_DIR))).toEqual([]);
+      await writeFile(join(dir, STORE_SWITCH_FILE), entry(deadPid()));
+      holdStoreWriter(dir, { appVersion: "0.8.0", purpose: "orca" }).release();
+      // A dead switch's file is replaced by the next switch, which removes it when done.
+      expect(await switchStoreToSqlite(dir, { appVersion: "0.8.0" })).toMatchObject({ status: "switched" });
+      expect(await readdir(dir)).not.toContain(STORE_SWITCH_FILE);
+    });
+
+    it("refuses a store an older ORCA has opened until told every older ORCA is stopped", async () => {
+      const dir = await populated();
+      expect(await readStoreFormat(dir)).toMatchObject({ writerRegistry: 1 });
+      // An ORCA from before the registry opens it: it rewrites the marker without the field.
+      const marker = JSON.parse(await readFile(join(dir, STORE_FORMAT_FILE), "utf8")) as Record<string, unknown>;
+      delete marker.writerRegistry;
+      await writeFile(join(dir, STORE_FORMAT_FILE), JSON.stringify({ ...marker, writtenBy: "0.7.1" }));
+      // This ORCA opening it again does not make that older one go away.
+      await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" });
+      expect((await readStoreFormat(dir))?.writerRegistry).toBeUndefined();
+      const before = await contents(dir);
+      await expect(switchStoreToSqlite(dir, { appVersion: "0.8.0" })).rejects.toMatchObject(refusal("OLDER_WRITER"));
+      expect(await contents(dir)).toEqual(before);
+      expect(await switchStoreToSqlite(dir, { appVersion: "0.8.0", olderWritersStopped: true })).toMatchObject({
+        status: "switched",
+      });
+      expect(await readStoreFormat(dir)).toMatchObject({ writerRegistry: 1 });
+    });
+  });
+
+  describe("a store on SQLite opens only its own database", () => {
+    const switched = async () => {
+      const dir = await populated();
+      await switchStoreToSqlite(dir, { appVersion: "0.8.0" });
+      return dir;
+    };
+
+    it("refuses a missing database instead of creating an empty one, and creates nothing", async () => {
+      const dir = await switched();
+      for (const name of await readdir(dir)) if (name.startsWith(SQLITE_METADATA_FILE)) await rm(join(dir, name));
+      const before = await contents(dir);
+      expect(() => sqliteStores(dir)).toThrow(expect.objectContaining(refusal("METADATA_MISSING")));
+      expect(() => sqliteStores(dir, { readOnly: true })).toThrow(expect.objectContaining(refusal("METADATA_MISSING")));
+      expect(await contents(dir)).toEqual(before);
+    });
+
+    it("refuses an empty or foreign file, and another store's database, changing neither", async () => {
+      const dir = await switched();
+      const file = join(dir, SQLITE_METADATA_FILE);
+      const sqlite = sqliteStores(dir);
+      sqlite.close?.();
+      const own = await readFile(file);
+
+      await rm(file);
+      await writeFile(file, "");
+      expect(() => sqliteStores(dir)).toThrow(expect.objectContaining(refusal("METADATA_MISMATCH")));
+      expect((await readFile(file)).length).toBe(0);
+
+      const other = await switched();
+      const theirs = sqliteStores(other);
+      theirs.close?.();
+      await copyFile(join(other, SQLITE_METADATA_FILE), file);
+      const copied = await readFile(file);
+      expect(() => sqliteStores(dir)).toThrow(expect.objectContaining(refusal("METADATA_MISMATCH")));
+      expect(await readFile(file)).toEqual(copied);
+
+      // Its own database, put back, opens again.
+      await writeFile(file, own);
+      const back = sqliteStores(dir);
+      try {
+        expect((await back.events.read("run_a")).length).toBe(6);
+      } finally {
+        back.close?.();
+      }
+    });
+
+    it("opens again once its own database is restored from a backup", async () => {
+      const dir = await switched();
+      const copy = join(await mkdtemp(join(tmpdir(), "orca-store-backend-backup-")), "metadata.backup");
+      await backupSqliteMetadata(dir, copy);
+      for (const name of await readdir(dir)) if (name.startsWith(SQLITE_METADATA_FILE)) await rm(join(dir, name));
+      expect(() => sqliteStores(dir)).toThrow(expect.objectContaining(refusal("METADATA_MISSING")));
+      await restoreSqliteMetadata(copy, dir);
+      const restored = sqliteStores(dir);
+      try {
+        expect((await restored.events.read("run_a")).length).toBe(6);
+      } finally {
+        restored.close?.();
+      }
+    });
   });
 });

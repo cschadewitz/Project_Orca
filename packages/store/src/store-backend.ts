@@ -37,11 +37,7 @@ export function backendOfEpoch(epoch: string): StoreBackend {
   return epoch === SQLITE_STORE_FORMAT_EPOCH ? "sqlite" : "file";
 }
 
-/**
- * The backend the store's marker records, read synchronously; `undefined` when the store has no
- * readable marker (a fresh store, or one the format gate will judge first).
- */
-export function recordedStoreBackend(dir: string): StoreBackend | undefined {
+function recordedMarker(dir: string): { epoch?: unknown; sqliteId?: unknown } | undefined {
   let text: string;
   try {
     text = readFileSync(join(dir, STORE_FORMAT_FILE), "utf8");
@@ -49,11 +45,29 @@ export function recordedStoreBackend(dir: string): StoreBackend | undefined {
     return undefined;
   }
   try {
-    const epoch = (JSON.parse(text) as { epoch?: unknown }).epoch;
-    return typeof epoch === "string" ? backendOfEpoch(epoch) : undefined;
+    const value: unknown = JSON.parse(text);
+    return value && typeof value === "object" ? value : undefined;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The backend the store's marker records, read synchronously; `undefined` when the store has no
+ * readable marker (a fresh store, or one the format gate will judge first).
+ */
+export function recordedStoreBackend(dir: string): StoreBackend | undefined {
+  const epoch = recordedMarker(dir)?.epoch;
+  return typeof epoch === "string" ? backendOfEpoch(epoch) : undefined;
+}
+
+/**
+ * The id of the database a store on SQLite runs on, as its marker records it (`sqliteId`); the
+ * database holds the same id in `store_binding`. `undefined` when the marker records none.
+ */
+export function recordedSqliteBinding(dir: string): string | undefined {
+  const id = recordedMarker(dir)?.sqliteId;
+  return typeof id === "string" ? id : undefined;
 }
 
 /** Throws `STORE_FORMAT` (`reason: "OTHER_BACKEND"`) when the store records the other backend. */

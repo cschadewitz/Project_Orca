@@ -14,8 +14,8 @@
  *   the database's write lock across it.
  *
  * This is not the default backend and changes nothing on disk for a workspace that does not
- * open it. Switching a workspace to it, and the store-format epoch that goes with that, wait for
- * the format carry-over gates (#897, #905, #910).
+ * open it. A workspace moves to it with `orca store sqlite switch` (store-format.ts), which
+ * records the backend and the database's id in the store's format marker.
  */
 import { join } from "node:path";
 import {
@@ -36,8 +36,8 @@ import { ProtectedEventStore } from "../protected-event-store.js";
 import { SQLITE_STORE_CAPABILITIES } from "../store-contracts.js";
 import { FileWorkflowVersionStore } from "../workflow-store.js";
 import { SqliteArtifactStore } from "./artifacts.js";
-import { SqliteDatabase, type SqliteOptions } from "./database.js";
-import { refuseOtherBackend } from "../store-backend.js";
+import { checkBoundSqliteMetadata, SqliteDatabase, type SqliteOptions } from "./database.js";
+import { recordedSqliteBinding, recordedStoreBackend, refuseOtherBackend } from "../store-backend.js";
 import { SqliteDocumentStore, type SqliteCollection } from "./documents.js";
 import { SqliteEventStore } from "./events.js";
 import { SqlitePlanJournal } from "./journal.js";
@@ -56,11 +56,26 @@ export interface SqliteStoresOptions extends SqliteOptions {
   unselected?: boolean;
 }
 
+/**
+ * The database under `dir`, opened as its workspace's metadata unless `unselected`. A store whose
+ * marker records SQLite opens only the database bound to it, which must already exist: it is
+ * checked first, changing nothing (`checkBoundSqliteMetadata`), so a lost or replaced database
+ * is refused rather than created empty. A store with no marker yet (a test, a fresh directory)
+ * gets a new database, as before.
+ */
+function openDatabase(dir: string, unselected: boolean | undefined, options: SqliteOptions): SqliteDatabase {
+  const file = join(dir, SQLITE_METADATA_FILE);
+  if (!unselected) {
+    refuseOtherBackend(dir, "sqlite");
+    if (recordedStoreBackend(dir) === "sqlite") checkBoundSqliteMetadata(file, dir, recordedSqliteBinding(dir));
+  }
+  return new SqliteDatabase(file, options);
+}
+
 /** A new connection on every call: two handles behave like two processes sharing the file. */
 export function sqliteStores(dir: string, options: SqliteStoresOptions = {}): Stores {
   const { clock, logger: _logger, unselected, ...db } = options;
-  if (!unselected) refuseOtherBackend(dir, "sqlite");
-  const database = new SqliteDatabase(join(dir, SQLITE_METADATA_FILE), db);
+  const database = openDatabase(dir, unselected, db);
   const execution = new FileExecutionStore(dir);
   const workflows = new FileWorkflowVersionStore(dir);
   const requests = new SqliteDocumentStore(database, "requests", RequestSchema);
@@ -101,6 +116,5 @@ export function sqliteCollection<T extends { id: string }>(
   options: SqliteOptions & { unselected?: boolean } = {},
 ): SqliteDocumentStore<T> {
   const { unselected, ...db } = options;
-  if (!unselected) refuseOtherBackend(dir, "sqlite");
-  return new SqliteDocumentStore(new SqliteDatabase(join(dir, SQLITE_METADATA_FILE), db), name, schema);
+  return new SqliteDocumentStore(openDatabase(dir, unselected, db), name, schema);
 }

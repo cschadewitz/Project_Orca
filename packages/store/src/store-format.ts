@@ -32,12 +32,15 @@ import { OrcaError } from "@orca/core";
 import { withFileLock } from "./file-lock.js";
 import { importFileMetadata, verifySqliteMetadata } from "./sqlite/maintenance.js";
 import { SQLITE_METADATA_FILE } from "./sqlite/stores.js";
+import { bindSqliteMetadata, SqliteDatabase } from "./sqlite/database.js";
+import { beginStoreSwitch, liveStoreWriters, type StoreWriterEntry } from "./store-writers.js";
 import { backendOfEpoch, SQLITE_STORE_FORMAT_EPOCH, STORE_FORMAT_FILE, type StoreBackend } from "./store-backend.js";
 import {
   CarryoverRefused,
   chooseBackupSlot,
   sameStoreSnapshot,
   snapshotStore,
+  type StoreSnapshot,
   ensureBackupSlots,
   findRecoveryRecord,
   posixPrivateCopy,
@@ -88,6 +91,18 @@ const MarkerSchema = z.object({
   writtenBy: z.string().min(1).max(64),
   updatedAt: z.string().min(1).max(64),
   backup: z.string().min(1).max(256).optional(),
+  /**
+   * 1 when every ORCA that has opened the store for writing registered while it had it open
+   * (store-writers.ts). Set on a fresh store and kept by this ORCA; an ORCA from before the
+   * registry rewrites the marker without it, so its absence means an older ORCA may still have
+   * the store open, which the registry cannot see.
+   */
+  writerRegistry: z.literal(1).optional(),
+  /** On a store switched to SQLite: the id its database holds in `store_binding` (#339). */
+  sqliteId: z
+    .string()
+    .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    .optional(),
 });
 export type StoreFormatMarker = z.infer<typeof MarkerSchema>;
 
@@ -95,6 +110,7 @@ export type StoreFormatMarker = z.infer<typeof MarkerSchema>;
 export type StoreFormatReason =
   | "NEWER"
   | "SWITCH_REFUSED"
+  | "OLDER_WRITER"
   | "TOO_OLD"
   | "DAMAGED"
   | "CARRYOVER_REQUIRED"
@@ -283,7 +299,7 @@ async function stamp(
   storeDir: string,
   appVersion: string,
   now: Date,
-  backup: string | undefined,
+  fields: Pick<StoreFormatMarker, "backup" | "writerRegistry" | "sqliteId">,
   guard: () => void = () => undefined,
   epoch: string = STORE_FORMAT_EPOCH,
 ): Promise<void> {
@@ -292,7 +308,9 @@ async function stamp(
     epoch,
     writtenBy: appVersion,
     updatedAt: now.toISOString(),
-    ...(backup ? { backup } : {}),
+    ...(fields.backup ? { backup: fields.backup } : {}),
+    ...(fields.writerRegistry ? { writerRegistry: fields.writerRegistry } : {}),
+    ...(fields.sqliteId ? { sqliteId: fields.sqliteId } : {}),
   };
   const tmp = join(storeDir, `${STORE_FORMAT_FILE}.${randomUUID()}.tmp`);
   await createDurable(tmp, JSON.stringify(value, null, 2) + "\n");
@@ -372,7 +390,19 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
     }
     const now = (options.now ?? (() => new Date()))();
     if (status !== "current" || marker?.writtenBy !== options.appVersion)
-      await stamp(storeDir, options.appVersion, now, marker?.backup, undefined, kept(marker));
+      await stamp(
+        storeDir,
+        options.appVersion,
+        now,
+        {
+          backup: marker?.backup,
+          // Kept only while no older ORCA has rewritten the marker since a fresh store got it.
+          writerRegistry: status === "fresh" || marker?.writerRegistry === 1 ? 1 : undefined,
+          sqliteId: marker?.sqliteId,
+        },
+        undefined,
+        kept(marker),
+      );
     if ((options.platform ?? process.platform) === "win32" && options.privacy)
       // Best effort: without slots a later carryover only waits for a restart (UNDURABLE).
       await ensureBackupSlots(storeDir, options.privacy, (options.bootId ?? windowsBootId)()).catch(() => undefined);
@@ -496,7 +526,7 @@ async function carryLocked(
           storeDir,
         );
       const now = (options.now ?? (() => new Date()))();
-      await stamp(storeDir, options.appVersion, now, record.path, fence);
+      await stamp(storeDir, options.appVersion, now, { backup: record.path }, fence);
       return { status: "carried", epoch: current, from, backup: record.path, backend: "file" };
     }
     slot = await chooseBackupSlot(storeDir, privacy, {
@@ -524,7 +554,7 @@ async function carryLocked(
     backup = await staged.commit();
     // The backup is published and durable; the marker is what changes the format, and the fence
     // is checked once more with no await between that check and the marker's rename.
-    await stamp(storeDir, options.appVersion, now, backup, fence);
+    await stamp(storeDir, options.appVersion, now, { backup }, fence);
   } catch (error) {
     if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
     throw error;
@@ -540,12 +570,32 @@ export interface SwitchToSqliteOptions {
   privacy?: PrivateCopyBackend;
   /** Injected for tests; defaults to this process's platform. */
   platform?: NodeJS.Platform;
+  /**
+   * The operator states that no ORCA from before the writer registry has the store open. Needed
+   * only when the marker says such an ORCA has opened it (no `writerRegistry`), since this ORCA
+   * cannot see whether it is still running.
+   */
+  olderWritersStopped?: boolean;
   /** Injected for tests: runs after the import and its verify, before the last checks. */
   afterImport?: () => Promise<void>;
+  /** Injected for tests: runs after the last checks, just before the marker is written. */
+  beforeMarker?: () => Promise<void>;
 }
 
 export type SwitchToSqliteOutcome =
   { status: "switched"; epoch: string; backup: string } | { status: "current"; epoch: string };
+
+const busyWriters = (storeDir: string, writers: StoreWriterEntry[]) =>
+  new StoreFormatError(
+    "BUSY",
+    `This store is open in ${writers.length} other ORCA process${writers.length === 1 ? "" : "es"} (${writers
+      .slice(0, 3)
+      .map((w) => `${w.purpose} ${w.pid} on ${w.host}, ORCA ${w.appVersion}`)
+      .join(
+        "; ",
+      )}), so it stays on files. Stop every ORCA app, daemon and command using it, then switch it again. Nothing was changed.`,
+    storeDir,
+  );
 
 /**
  * Switch a store's metadata from files to SQLite (#339): `orca store sqlite switch`, run with
@@ -556,16 +606,24 @@ export type SwitchToSqliteOutcome =
  *    it is.
  * 2. Not on Windows yet: changing a store's format there waits for proof that the backup taken
  *    first survives a power cut (#910, #947), exactly as carryover does.
- * 3. A verified whole-store backup into `format-backups/`, refused while a run is active or
+ * 3. No other writer: the switch announces itself (store-writers.ts), so writers from this ORCA
+ *    refuse to open the store until it is over, and is refused while any registered writer is
+ *    alive, idle or not. A store an older ORCA has opened (no `writerRegistry` in the marker) is
+ *    refused unless the operator states every older ORCA using it is stopped
+ *    (`olderWritersStopped`), because those writers do not register.
+ * 4. A verified whole-store backup into `format-backups/`, refused while a run is active or
  *    while anything writes (store-format-carryover.ts), and a read check of the copy.
- * 4. The import (`importFileMetadata`: read twice, decided and applied in one transaction) and a
- *    full `verifySqliteMetadata`, which must find nothing wrong.
- * 5. The file metadata must still be exactly what the backup holds: a write that landed after
- *    the backup would be missing from the database, so the switch is refused instead.
- * 6. Only then the marker: {@link SQLITE_STORE_FORMAT_EPOCH}, naming the backup. From here the
- *    store opens on SQLite only, and an ORCA from before this one refuses it as newer.
+ * 5. The import (`importFileMetadata`: read twice, decided and applied in one transaction), a
+ *    full `verifySqliteMetadata`, which must find nothing wrong, and the database bound to this
+ *    store with a new id (`store_binding`).
+ * 6. The file metadata must still be exactly what the backup holds, and no writer registered:
+ *    a write that landed after the backup would be missing from the database, so the switch is
+ *    refused instead.
+ * 7. Only then the marker: {@link SQLITE_STORE_FORMAT_EPOCH}, naming the backup and the
+ *    database's id. From here the store opens on SQLite only, on that database only, and an ORCA
+ *    from before this one refuses it as newer. The announcement is withdrawn after the marker.
  *
- * Any refusal before step 6 leaves the store on files, in charge, exactly as before (a database
+ * Any refusal before step 7 leaves the store on files, in charge, exactly as before (a database
  * the import built is inert, as after `orca store sqlite import`). Throws {@link StoreFormatError}.
  */
 export async function switchStoreToSqlite(
@@ -591,47 +649,94 @@ export async function switchStoreToSqlite(
         "This ORCA does not yet change a store's format on Windows, because it cannot yet prove that the backup it takes first survives a power cut. Switching to SQLite is such a change, so nothing was changed and the store stays on files.",
         storeDir,
       );
+    if (marker.writerRegistry !== 1 && !options.olderWritersStopped)
+      throw new StoreFormatError(
+        "OLDER_WRITER",
+        `An ORCA from before ${options.appVersion} has opened this store (the marker was last written by ORCA ${marker.writtenBy} or carried over from it), and such an ORCA does not say while it has the store open, so this one cannot tell whether it is still running. Stop every older ORCA app, daemon and command using this store, then run \`orca store sqlite switch --older-orca-stopped\`. Nothing was changed.`,
+        storeDir,
+      );
     const privacy = options.privacy ?? posixPrivateCopy;
     const now = (options.now ?? (() => new Date()))();
-    // Every file but the database's own: opening the SQLite backend may create empty
-    // directories (artifacts/blobs, plans), which hold nothing a write could have changed.
+    // Every file but the database's own and the registry's: opening the SQLite backend may
+    // create empty directories (artifacts/blobs, plans), which hold nothing a write could have
+    // changed, and a writer turned away by the announcement leaves nothing behind.
     const fileMetadata = async () => {
       const all = await snapshotStore(storeDir);
       for (const [path, entry] of [...all])
         if (entry.type !== "file" || path.startsWith(SQLITE_METADATA_FILE)) all.delete(path);
       return all;
     };
-    let backup: string;
+    const announcement = beginStoreSwitch(storeDir, options.appVersion);
     try {
-      const before = await fileMetadata();
-      const staged = await stageCarryover(storeDir, current, SQLITE_STORE_FORMAT_EPOCH, now, { privacy });
-      backup = await staged.commit();
-      await importFileMetadata(storeDir);
-      const verified = await verifySqliteMetadata(storeDir);
-      if (!verified.ok)
-        throw new StoreFormatError(
-          "UNREADABLE",
-          `The SQLite metadata built from this store did not verify (${verified.problems
-            .slice(0, 3)
-            .map((p) => p.kind)
-            .join(
-              ", ",
-            )}), so the store stays on files. Nothing else was changed; run \`orca store sqlite verify\` for the details.`,
-          storeDir,
-        );
-      await options.afterImport?.();
-      if (!sameStoreSnapshot(before, await fileMetadata()))
-        throw new StoreFormatError(
-          "BUSY",
-          "The store's files changed while it was being switched, so the database may not hold everything and the store stays on files. Stop every ORCA app, daemon and command using it, then switch it again.",
-          storeDir,
-        );
-      await stamp(storeDir, options.appVersion, now, backup, undefined, SQLITE_STORE_FORMAT_EPOCH);
-    } catch (error) {
-      if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
-      throw error;
+      const writers = liveStoreWriters(storeDir);
+      if (writers.length) throw busyWriters(storeDir, writers);
+      return await switchLocked(storeDir, options, { current, now, privacy, fileMetadata });
+    } finally {
+      announcement.end();
     }
-    await pruneFormatBackups(storeDir, backup, privacy);
-    return { status: "switched", epoch: SQLITE_STORE_FORMAT_EPOCH, backup };
   });
+}
+
+async function switchLocked(
+  storeDir: string,
+  options: SwitchToSqliteOptions,
+  context: {
+    current: string;
+    now: Date;
+    privacy: PrivateCopyBackend;
+    fileMetadata: () => Promise<StoreSnapshot>;
+  },
+): Promise<SwitchToSqliteOutcome> {
+  const { current, now, privacy, fileMetadata } = context;
+  let backup: string;
+  try {
+    const before = await fileMetadata();
+    const staged = await stageCarryover(storeDir, current, SQLITE_STORE_FORMAT_EPOCH, now, { privacy });
+    backup = await staged.commit();
+    await importFileMetadata(storeDir);
+    const verified = await verifySqliteMetadata(storeDir);
+    if (!verified.ok)
+      throw new StoreFormatError(
+        "UNREADABLE",
+        `The SQLite metadata built from this store did not verify (${verified.problems
+          .slice(0, 3)
+          .map((p) => p.kind)
+          .join(
+            ", ",
+          )}), so the store stays on files. Nothing else was changed; run \`orca store sqlite verify\` for the details.`,
+        storeDir,
+      );
+    const sqliteId = randomUUID();
+    const database = new SqliteDatabase(join(storeDir, SQLITE_METADATA_FILE));
+    try {
+      await bindSqliteMetadata(database, sqliteId, now);
+    } finally {
+      database.close();
+    }
+    await options.afterImport?.();
+    if (!sameStoreSnapshot(before, await fileMetadata()))
+      throw new StoreFormatError(
+        "BUSY",
+        "The store's files changed while it was being switched, so the database may not hold everything and the store stays on files. Stop every ORCA app, daemon and command using it, then switch it again.",
+        storeDir,
+      );
+    const writers = liveStoreWriters(storeDir);
+    if (writers.length) throw busyWriters(storeDir, writers);
+    await options.beforeMarker?.();
+    // No older ORCA opens this epoch, and every writer from this one registers: from here the
+    // registry sees every writer.
+    await stamp(
+      storeDir,
+      options.appVersion,
+      now,
+      { backup, writerRegistry: 1, sqliteId },
+      undefined,
+      SQLITE_STORE_FORMAT_EPOCH,
+    );
+  } catch (error) {
+    if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
+    throw error;
+  }
+  await pruneFormatBackups(storeDir, backup, privacy);
+  return { status: "switched", epoch: SQLITE_STORE_FORMAT_EPOCH, backup };
 }
