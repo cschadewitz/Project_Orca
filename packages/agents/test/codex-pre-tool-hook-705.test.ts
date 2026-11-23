@@ -5,7 +5,7 @@
  * in `packages/cli/test/codex-hook-acceptance-705.test.ts`.
  */
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -323,6 +323,46 @@ describe("installing it in Codex", () => {
         expect([command, r.blocked]).toEqual([command, false]);
       }
     });
+
+    it.skipIf(process.platform !== "linux")(
+      "refuses at its deadline, even while something the command started holds its streams",
+      async () => {
+        const marker = join(root, "descendant.pid");
+        for (const command of [
+          // Never answers.
+          "sleep 30",
+          // Answers, but leaves a descendant holding stderr open, so the stream never closes.
+          `(sleep 30 >&2 & echo $! > '${marker}'); exit 2`,
+          // A descendant in the background holding stdin and stderr, the shell waiting on it.
+          "sleep 30 <&0 >&2 & wait",
+        ]) {
+          const started = Date.now();
+          const r = await probeCodexHook({
+            command,
+            cwd: workspace,
+            contextFile,
+            probeKey: PROBE_KEY,
+            env: { ...process.env, SHELL: "/bin/sh" },
+            timeoutMs: 500,
+          });
+          const took = Date.now() - started;
+          expect([command, r.blocked]).toEqual([command, false]);
+          expect(r.detail).toContain("did not answer within 500 ms");
+          // The caller is released at the deadline, not when the descendant finally lets go.
+          expect(took).toBeLessThan(5_000);
+        }
+        // And the descendant went with the command's process group.
+        const pid = Number(await readFile(marker, "utf8"));
+        await new Promise((r) => setTimeout(r, 100));
+        // Gone, or a zombie its reaper has not collected yet: either way it no longer runs.
+        const state = await readFile(`/proc/${pid}/stat`, "utf8").then(
+          (t) => t.slice(t.lastIndexOf(")") + 2, t.lastIndexOf(")") + 3),
+          () => "gone",
+        );
+        expect(["gone", "Z"]).toContain(state);
+      },
+      30_000,
+    );
 
     it.skipIf(process.platform === "win32")("does not accept a receipt from an earlier probe", async () => {
       // A receipt for a nonce of the test's choosing, replayed to a probe that picked its own.

@@ -80,7 +80,8 @@ export interface ClaudeHookContext {
   /**
    * The key the hook signs its startup-probe receipt with (#705), 32 random bytes as hex. It
    * lives only here, in a file no agent may read, so a receipt that verifies shows ORCA that
-   * this program read this context and decided the probe's call itself.
+   * whatever answered the probe could read this context and blocked the probe's call. It does
+   * not tell ORCA's hook apart from another process under the same OS account.
    */
   probeKey?: string | undefined;
 }
@@ -452,9 +453,10 @@ export const CODEX_PROBE_TOOL_USE_ID = /^orca-hook-probe:([0-9a-f]{32})$/;
 
 /**
  * The receipt line the hook adds to its stderr when it blocks the probe's call: an HMAC, under
- * the context's `probeKey`, of the block and the probe's nonce. Only a program that read the
- * context file and reached a block for that very frame can write it. Nothing but a decided
- * block carries one: a hook that fails, or allows, writes none.
+ * the context's `probeKey`, of the block and the probe's nonce: evidence that the answer came
+ * from something holding this session's context and that it blocked that very frame, not
+ * proof of which program it was (the OS account is the boundary). The hook adds it only to a
+ * decided block: a hook that fails, or allows, writes none.
  */
 export function codexProbeReceipt(probeKey: string, nonce: string): string {
   const mac = createHmac("sha256", Buffer.from(probeKey, "hex")).update(`orca-hook-probe-block:${nonce}`).digest("hex");

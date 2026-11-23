@@ -304,9 +304,16 @@ const PROBE_STDERR_LIMIT = 16 * 1024;
  * the shell's path can exit 2 too. The probe's frame carries a fresh nonce, and the session
  * counts as guarded only if the command exits 2 and its stderr, read up to a fixed bound
  * within the hook's timeout, carries the receipt line the hook signs with the context's
- * `probeKey` for that nonce (`codexProbeReceipt`). Only the hook program, having read this
- * session's context file and decided this very call as a block, can write it. A shell or
- * runtime that cannot run the hook fails here instead of letting calls through.
+ * `probeKey` for that nonce (`codexProbeReceipt`). A matching receipt proves that whatever
+ * the command ran could read this session's context file and answered this very call with a
+ * block in ORCA's format, which is what ORCA's hook does. It is not proof of which program
+ * that was: another process under the same OS account could read the file too. What it rules
+ * out is a shell, profile or program that exits 2 without having made ORCA's decision. A
+ * shell or runtime that cannot run the hook fails here instead of letting calls through.
+ *
+ * The deadline bounds the caller, not only the shell: when it passes, the probe settles as a
+ * refusal at once, kills the command's whole process group and closes its streams, so a
+ * descendant still holding a descriptor cannot keep the session's startup waiting.
  */
 export function probeCodexHook(opts: {
   command: string;
@@ -338,31 +345,51 @@ export function probeCodexHook(opts: {
       return got.length === expected.length && timingSafeEqual(got, expected);
     });
   return new Promise((resolve) => {
-    const child = spawn(shell, ["-lc", opts.command], { cwd: opts.cwd, env, stdio: ["pipe", "ignore", "pipe"] });
+    let settled = false;
     let stderr = "";
-    let overflow = false;
-    const timer = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs ?? CODEX_PRE_TOOL_TIMEOUT_SECONDS * 1000);
-    child.stderr.on("data", (d: Buffer) => {
-      if (overflow) return;
-      stderr += d.toString();
-      if (Buffer.byteLength(stderr, "utf8") > PROBE_STDERR_LIMIT) {
-        overflow = true;
-        child.kill("SIGKILL");
+    const child = spawn(shell, ["-lc", opts.command], {
+      cwd: opts.cwd,
+      env,
+      stdio: ["pipe", "ignore", "pipe"],
+      // Its own process group, so everything the command starts can be stopped with it.
+      detached: true,
+    });
+    const stop = () => {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // Already gone.
       }
-    });
-    child.on("error", (e) => {
+      child.kill("SIGKILL");
+      child.stdin.destroy();
+      child.stderr.destroy();
+    };
+    const settle = (result: { blocked: boolean; detail: string }) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      resolve({ blocked: false, detail: e.message });
+      stop();
+      resolve(result);
+    };
+    const timeoutMs = opts.timeoutMs ?? CODEX_PRE_TOOL_TIMEOUT_SECONDS * 1000;
+    const timer = setTimeout(
+      () => settle({ blocked: false, detail: `the hook did not answer within ${timeoutMs} ms` }),
+      timeoutMs,
+    );
+    child.stderr.on("data", (d: Buffer) => {
+      stderr += d.toString();
+      if (Buffer.byteLength(stderr, "utf8") > PROBE_STDERR_LIMIT)
+        settle({ blocked: false, detail: "the hook wrote more than the probe reads" });
     });
+    child.stderr.on("error", () => undefined);
+    child.on("error", (e) => settle({ blocked: false, detail: e.message }));
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
       const said = stderr.trim().slice(0, 300);
-      if (overflow) resolve({ blocked: false, detail: "the hook wrote more than the probe reads" });
-      else if (signal) resolve({ blocked: false, detail: `killed by ${signal}` });
-      else if (code !== 2) resolve({ blocked: false, detail: `exit ${code}: ${said}` });
+      if (signal) settle({ blocked: false, detail: `killed by ${signal}` });
+      else if (code !== 2) settle({ blocked: false, detail: `exit ${code}: ${said}` });
       else if (!receipted(stderr))
-        resolve({ blocked: false, detail: `exit 2 without ORCA's hook's receipt for this call: ${said}` });
-      else resolve({ blocked: true, detail: "blocked, with the hook's receipt" });
+        settle({ blocked: false, detail: `exit 2 without ORCA's hook's receipt for this call: ${said}` });
+      else settle({ blocked: true, detail: "blocked, with the hook's receipt" });
     });
     child.stdin.on("error", () => undefined);
     child.stdin.end(frame);
