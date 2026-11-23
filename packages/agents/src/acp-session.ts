@@ -68,6 +68,12 @@ export interface OpenSessionOptions {
    * is up and initialized. A denial fails the open, and startup cleanup stops the process.
    */
   authorizeCapabilityDelivery?: (() => Promise<void>) | undefined;
+  /**
+   * Set when the session will carry skills as embedded `resource` blocks (#337): an agent that
+   * does not say at `initialize` that it accepts embedded context is refused right there,
+   * with the error this returns, before `session/new` or `session/load` configures anything.
+   */
+  requireEmbeddedContext?: (() => Error) | undefined;
   /** Handed every resolved secret value, before anything else happens, so the caller can redact it. */
   onSecretValues?: (values: readonly string[]) => void;
   host: AgentHost;
@@ -191,6 +197,7 @@ async function openPlanned(
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
   let acpSessionId = "";
   let configOptions: SessionConfigOption[] = [];
+  let embeddedContext: boolean;
   const id = newId("sess", clock.now());
   let activeTurn: ActiveTurn | undefined;
   /** Sidecar problems already reported — a file unreadable, a rule ignored — so each warns once per session, not per ask. */
@@ -423,6 +430,8 @@ async function openPlanned(
       "initialize",
     );
     logger.debug("initialized", { protocolVersion: init.protocolVersion, agentInfo: init.agentInfo });
+    embeddedContext = init.agentCapabilities?.promptCapabilities?.embeddedContext === true;
+    if (opts.requireEmbeddedContext && !embeddedContext) throw opts.requireEmbeddedContext();
     const newSession: acp.NewSessionRequest = {
       cwd: opts.cwd,
       mcpServers: mcpServers.map((m) => ({
@@ -556,6 +565,7 @@ async function openPlanned(
     acpSessionId,
     closed,
     terminated,
+    promptCapabilities: { embeddedContext },
 
     async prompt(input, options: PromptOptions = {}): Promise<TurnResult> {
       if (activeTurn) throw new OrcaError("RUN_STATE", "a prompt turn is already active on this session");

@@ -143,59 +143,97 @@ export function grantCovers(
 }
 
 /**
- * The catalog capabilities a principal's runs may be given (#337): every one (`*`), or each
- * MCP server id together with the host it runs on, that host's endpoint binding and the
- * server's definition digest when granted. A grant does not follow an id the config points
- * at another command, nor a host id pointed at another endpoint. See
+ * The catalog capabilities a principal's runs may be given (#337). A list of entries, each of
+ * one kind: an MCP server id together with the host it runs on, that host's endpoint binding
+ * and the server's definition digest when granted; a skill id with its content digest; or
+ * every entry of one kind (`{ kind, any: true }`). A grant does not follow an id the config
+ * points at another command, nor a host id pointed at another endpoint, nor an edited skill.
+ *
+ * The bare `"*"` keeps the meaning `--mcp-server '*'` first gave it: every catalog **MCP
+ * server**, and no skill. A wildcard never crosses kinds by itself: a credential is given
+ * every skill only by an explicit `{ kind: "skill", any: true }` entry. See
  * docs/secret-use-authority.md.
  */
 export const CapabilityGrantSchema = z.union([
   z.literal("*"),
   z.array(
-    z
-      .object({
-        kind: z.literal("mcpServer"),
-        id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
-        host: z.string().min(1),
-        binding: z.string().regex(/^h1:[0-9a-f]{32}$/),
-        /** `mcpServerDefinitionDigest` of the definition when granted. */
-        definition: z.string().regex(/^m1:[0-9a-f]{32}$/),
-      })
-      .strict(),
+    z.union([
+      z.object({ kind: z.enum(["mcpServer", "skill"]), any: z.literal(true) }).strict(),
+      z.discriminatedUnion("kind", [
+        z
+          .object({
+            kind: z.literal("mcpServer"),
+            id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+            host: z.string().min(1),
+            binding: z.string().regex(/^h1:[0-9a-f]{32}$/),
+            /** `mcpServerDefinitionDigest` of the definition when granted. */
+            definition: z.string().regex(/^m1:[0-9a-f]{32}$/),
+          })
+          .strict(),
+        z
+          .object({
+            kind: z.literal("skill"),
+            id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+            /** The skill's content digest when granted: an edited skill is not covered. */
+            digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+          })
+          .strict(),
+      ]),
+    ]),
   ),
 ]);
 export type CapabilityGrant = z.infer<typeof CapabilityGrantSchema>;
 
+/** Every catalog MCP server and every catalog skill, each kind named explicitly. */
+export const EVERY_CAPABILITY: CapabilityGrant = [
+  { kind: "mcpServer", any: true },
+  { kind: "skill", any: true },
+];
+
+/** Whether `grant` gives every entry of `kind`. The bare `"*"` gives every server only. */
+export function grantsEvery(grant: CapabilityGrant | undefined, kind: "mcpServer" | "skill"): boolean {
+  if (grant === undefined) return false;
+  if (grant === "*") return kind === "mcpServer";
+  return grant.some((g) => g.kind === kind && "any" in g);
+}
+
 /**
- * Whether `grant` covers one use: that server, defined that way, on that host. A narrow grant
- * covers only a server whose command was checked on that host to be a trusted executable
+ * Whether `grant` covers one use. A server: that id, defined that way, on that host and
+ * endpoint, and only when its command was checked on that host to be a trusted executable
  * (`TRUSTED_EXECUTABLE_POLICY` in `@orca/agents`: an absolute, canonical, administrator-owned
- * path), so the definition it pins names the program itself rather than whatever a `PATH`
- * search, a working directory, a symbolic link or a writable directory turns up.
+ * path), so the definition pinned names the program itself rather than whatever a `PATH`
+ * search, a working directory, a symbolic link or a writable directory turns up. A skill:
+ * that id with exactly that content digest.
  */
 export function capabilityGrantCovers(
   grant: CapabilityGrant | undefined,
-  use: {
-    kind: "mcpServer";
-    id: string;
-    hostId: string;
-    hostBinding: string;
-    definition: string;
-    trustedExecutable: boolean;
-  },
+  use:
+    | {
+        kind: "mcpServer";
+        id: string;
+        hostId: string;
+        hostBinding: string;
+        definition: string;
+        trustedExecutable: boolean;
+      }
+    | { kind: "skill"; id: string; digest: string },
 ): boolean {
   if (grant === undefined) return false;
+  if (grantsEvery(grant, use.kind)) return true;
+  if (grant === "*") return false;
+  if (use.kind === "skill")
+    return grant.some((g) => g.kind === "skill" && "digest" in g && g.id === use.id && g.digest === use.digest);
   return (
-    grant === "*" ||
-    (use.trustedExecutable &&
-      grant.some(
-        (g) =>
-          g.kind === use.kind &&
-          g.id === use.id &&
-          g.host === use.hostId &&
-          g.binding === use.hostBinding &&
-          g.definition === use.definition,
-      ))
+    use.trustedExecutable &&
+    grant.some(
+      (g) =>
+        g.kind === "mcpServer" &&
+        "definition" in g &&
+        g.id === use.id &&
+        g.host === use.hostId &&
+        g.binding === use.hostBinding &&
+        g.definition === use.definition,
+    )
   );
 }
 
@@ -245,7 +283,7 @@ export const PRESETS = {
     permissions: PERMISSIONS.filter((p) => p !== "host.telemetry.read"),
     scope: UNRESTRICTED,
     secrets: "*",
-    capabilities: "*",
+    capabilities: EVERY_CAPABILITY,
   },
   /** Drive and watch every run, plan and agent; no configuration, standing rules or admission. */
   operator: {
@@ -296,5 +334,5 @@ export const LOCAL_PRINCIPAL: Principal = {
   permissions: new Set(PRESETS.owner.permissions),
   scope: UNRESTRICTED,
   secrets: "*",
-  capabilities: "*",
+  capabilities: EVERY_CAPABILITY,
 };

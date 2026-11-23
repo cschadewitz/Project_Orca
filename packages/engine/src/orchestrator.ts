@@ -27,6 +27,7 @@ import {
 import { applyModel, currentModel, selectedModel } from "./session-model.js";
 import {
   type CapabilityIssue,
+  type CapabilityManifest,
   type ResolvedMcpServer,
   describeError,
   evaluateCondition,
@@ -129,8 +130,14 @@ import {
   nodeCapabilityScope,
   preflightCapabilities,
   preflightSecretReferences,
+  readSkillForDelivery,
   resolveNodeCapabilities,
+  SKILL_DELIVERY_MAX_BYTES,
+  SKILL_DELIVERY_MAX_FILES,
+  skillDeliveryBudget,
+  skillResourceUri,
 } from "./capabilities.js";
+import type * as acp from "@agentclientprotocol/sdk";
 import { SessionSlots, type ConfiguredSessionLimits, type SessionSlot, type SessionSlotCaps } from "./session-slots.js";
 
 /** Opens an agent session; defaults to ACP over stdio (local or ssh). Integrations can substitute other transports. */
@@ -665,7 +672,7 @@ export class Orchestrator {
     // Every agent step's MCP servers and skills resolve and can be delivered, under this run's
     // role overrides, before anything is written (#335).
     preflightCapabilities((generation?.agents ?? this.agents).withOverrides(opts.overrides), def, {
-      catalogServers: this.capabilityUse !== undefined,
+      catalog: this.capabilityUse !== undefined,
     });
     // A step whose agent uses a secret reference needs a use check to run (#336).
     if (!this.secretUse)
@@ -2544,7 +2551,12 @@ export class Orchestrator {
     rc: RunContext,
     step: StepRun,
     agent: AgentSpec,
-  ): { mcpServers: AgentSpec["mcpServers"]; catalog: ResolvedMcpServer[]; key: string } {
+  ): {
+    mcpServers: AgentSpec["mcpServers"];
+    catalog: ResolvedMcpServer[];
+    skills: CapabilityManifest["skills"];
+    key: string;
+  } {
     const registry = this.contextGenerations.get(rc)?.agents ?? this.agents;
     const node = rc.definition.nodes[step.nodeId];
     const resolved = resolveNodeCapabilities({
@@ -2558,7 +2570,7 @@ export class Orchestrator {
     const issues = [
       ...resolved.errors,
       ...deliveryIssues(resolved, `workflow.nodes.${step.nodeId}`, {
-        catalogServers: this.capabilityUse !== undefined,
+        catalog: this.capabilityUse !== undefined,
       }),
     ];
     if (issues.length) throw capabilityRefusal(step.nodeId, issues);
@@ -2575,56 +2587,92 @@ export class Orchestrator {
     return {
       mcpServers: resolved.manifest.mcpServers.map((m) => m.server),
       catalog: resolved.manifest.mcpServers.filter((m) => m.catalog),
+      skills: resolved.manifest.skills,
       key,
     };
   }
 
   /**
-   * Before a session is given a catalog MCP server (#337): the run's owner must hold one
-   * current credential granting the whole selected set, each server as defined now, on this
-   * agent's host and endpoint. Then each command is resolved on that host to the executable
-   * the agent is handed, so the agent starts exactly what was checked and does not search
-   * again, and checked against `TRUSTED_EXECUTABLE_POLICY`: only a trusted executable is
-   * covered by a grant naming the server. Either failure refuses the step before anything is
-   * spawned, naming the step and the server. Nothing is installed, and no other host is tried.
+   * Before a session is given catalog capabilities (#337): the run's owner must hold one
+   * current credential granting the whole selected set (each server as defined now, on this
+   * agent's host and endpoint; each skill with exactly its content). Then each server's
+   * command is resolved on that host to the executable the agent is handed, so the agent
+   * starts exactly what was checked and does not search again, and each skill is read once
+   * from the daemon's disk for delivery, hashed over the bytes that will be sent. Any failure
+   * refuses the step before anything is spawned, naming the step and the entry. Nothing is
+   * installed, and no other host is tried.
+   *
+   * Only a server whose command is a trusted executable there (`TRUSTED_EXECUTABLE_POLICY`)
+   * is covered by a grant naming it.
    *
    * The first decision, before the host is probed, takes an absolute command at its word, so
    * a run with no grant at all never probes anything. It is not the one that counts: the
    * returned `authorize` asks again with what the probe found, and is asked again at every
-   * point where the servers are delivered or used (after the slot wait, immediately before
-   * `session/new`, before each prompt), so authority revoked during any wait stops them.
+   * point where the capabilities are delivered or used (after the slot wait, immediately
+   * before `session/new`, before each prompt), so authority revoked during any wait stops them.
    *
-   * Returns the session's servers with each catalog server's command replaced by that path.
+   * Returns the session's servers with each catalog server's command replaced by that path,
+   * the skills' content to deliver, and `authorize`.
    */
-  private async deliverCatalogServers(
+  private async deliverCatalog(
     rc: RunContext,
     step: StepRun,
     agent: AgentSpec,
     host: AgentHost,
-    capabilities: { mcpServers: AgentSpec["mcpServers"]; catalog: ResolvedMcpServer[] },
-  ): Promise<{ mcpServers: AgentSpec["mcpServers"]; authorize?: () => Promise<void> }> {
+    capabilities: {
+      mcpServers: AgentSpec["mcpServers"];
+      catalog: ResolvedMcpServer[];
+      skills: CapabilityManifest["skills"];
+    },
+  ): Promise<{ mcpServers: AgentSpec["mcpServers"]; skills: DeliveredSkill[]; authorize?: () => Promise<void> }> {
     const servers = capabilities.catalog;
-    if (servers.length === 0) return { mcpServers: capabilities.mcpServers };
+    const selected = capabilities.skills;
+    if (servers.length === 0 && selected.length === 0) return { mcpServers: capabilities.mcpServers, skills: [] };
+    const nodePath = `workflow.nodes.${step.nodeId}`;
     const check = this.capabilityUse;
     if (!check)
       throw capabilityRefusal(
         step.nodeId,
-        deliveryIssues(
-          { manifest: { mcpServers: servers, skills: [] }, errors: [], warnings: [] },
-          `workflow.nodes.${step.nodeId}`,
-          { catalogServers: false },
-        ),
+        deliveryIssues({ manifest: { mcpServers: servers, skills: selected }, errors: [], warnings: [] }, nodePath, {
+          catalog: false,
+        }),
       );
+    // Read each skill first, so the decision is about exactly the content that will be sent.
+    const registry = this.contextGenerations.get(rc)?.agents ?? this.agents;
+    const { catalog: definitions, baseDir } = registry.capabilities();
+    const skills: DeliveredSkill[] = [];
+    const unreadable: CapabilityIssue[] = [];
+    // One budget for the whole step, bytes (names included) and files: each read is bounded
+    // by what is left of it, not checked after.
+    const budget = skillDeliveryBudget();
+    for (const skill of selected) {
+      const definition = definitions.skills[skill.id];
+      const read = definition
+        ? readSkillForDelivery(skill.id, definition, baseDir, skill.digest, budget)
+        : { error: `skill '${skill.id}' is no longer in the catalog` };
+      if ("tooLarge" in read) {
+        unreadable.push({
+          path: `${nodePath}.capabilities.skills`,
+          message: `the selected skills are more than a step may carry in its prompts: ${SKILL_DELIVERY_MAX_BYTES} bytes, names included, and ${SKILL_DELIVERY_MAX_FILES} files and directories, together`,
+        });
+        break;
+      }
+      if ("error" in read) unreadable.push({ path: `${nodePath}.capabilities.skills`, message: read.error });
+      else skills.push({ id: skill.id, digest: read.digest, files: read.files });
+    }
+    if (unreadable.length) throw capabilityRefusal(step.nodeId, unreadable);
     const hostBinding = secretHostBinding(host.spec);
-    const uses = (trusted: (m: ResolvedMcpServer) => boolean): CapabilityUse[] =>
-      servers.map((m) => ({
+    const uses = (trusted: (m: ResolvedMcpServer) => boolean): CapabilityUse[] => [
+      ...servers.map((m) => ({
         kind: "mcpServer" as const,
         id: m.id,
         hostId: host.spec.id,
         hostBinding,
         definition: mcpServerDefinitionDigest(m.server),
         trustedExecutable: trusted(m),
-      }));
+      })),
+      ...skills.map((skill) => ({ kind: "skill" as const, id: skill.id, digest: skill.digest })),
+    ];
     await check({ runId: rc.id, uses: uses((m) => isAbsoluteCommand(m.server.command, host.spec.type)) });
     const unavailable: CapabilityIssue[] = [];
     const resolved = new Map<ResolvedMcpServer["server"], { path: string; trusted: boolean }>();
@@ -2633,7 +2681,7 @@ export class Orchestrator {
       if ("path" in found) resolved.set(m.server, found);
       else
         unavailable.push({
-          path: `workflow.nodes.${step.nodeId}.capabilities.mcpServers`,
+          path: `${nodePath}.capabilities.mcpServers`,
           message:
             found.reason === "missing"
               ? `MCP server '${m.id}' cannot start on host '${host.spec.id}': command '${m.server.command}' was not found there as an executable file. Install it on that host or remove the server from the selection`
@@ -2649,15 +2697,17 @@ export class Orchestrator {
         const found = resolved.get(server);
         return found === undefined ? server : { ...server, command: found.path };
       }),
+      skills,
       authorize,
     };
   }
 
   /**
-   * The step's view of a session holding catalog MCP servers (#337): each prompt asks the use
-   * decision again before it is sent, so a step that waited after its session was opened or
-   * taken from the pool does not use servers its owner no longer may. A denied pooled session
-   * is retired, never handed to another step; the session itself is not changed.
+   * The step's view of a session holding catalog capabilities (#337): each prompt asks the
+   * use decision again before it is sent, so a step that waited after its session was opened
+   * or taken from the pool does not use servers or skills its owner no longer may. A denied
+   * pooled session is retired, never handed to another step; the session itself is not
+   * changed.
    */
   private guardCatalogUse(
     rc: RunContext,
@@ -2673,21 +2723,86 @@ export class Orchestrator {
       try {
         await authorize();
       } catch (error) {
-        const pooled = this.sessions.get(key);
-        if (pooled?.session === base) {
-          rc.logger.info("catalog capabilities no longer granted; retiring the pooled session", { key });
-          this.sessions.delete(key);
-          await pooled.close().catch(() => undefined);
-          void pooled.returnSlot();
-          await rc
-            .emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: base.id } })
-            .catch(() => undefined);
-        }
+        await this.retirePooled(rc, step, key, base, "catalog capabilities no longer granted");
         throw error;
       }
       return base.prompt(input, options);
     };
     return { session, release: opened.release };
+  }
+
+  /**
+   * Close a pooled session and take it out of the pool, so no later step is handed it. Does
+   * nothing when `session` (or the session a step's view was made from) is not the pooled one.
+   */
+  private async retirePooled(
+    rc: RunContext,
+    step: StepRun,
+    key: string,
+    session: AgentSession,
+    why: string,
+  ): Promise<void> {
+    const pooled = this.sessions.get(key);
+    if (!pooled) return;
+    let match = false;
+    for (let at: object | null = session; at; at = Object.getPrototypeOf(at) as object | null)
+      if (at === pooled.session) match = true;
+    if (!match) return;
+    rc.logger.info(`${why}; retiring the pooled session`, { key });
+    this.sessions.delete(key);
+    await pooled.close().catch(() => undefined);
+    void pooled.returnSlot();
+    await rc
+      .emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: pooled.session.id } })
+      .catch(() => undefined);
+  }
+
+  /** The refusal for a step whose agent cannot be given its skills (#337). */
+  private embeddedContextRefusal(step: StepRun, agent: AgentSpec, skills: DeliveredSkill[]): OrcaError {
+    return capabilityRefusal(step.nodeId, [
+      {
+        path: `workflow.nodes.${step.nodeId}.capabilities.skills`,
+        message: `agent '${agent.id}' does not accept embedded context in its prompts (ACP promptCapabilities.embeddedContext), so ORCA cannot give it skill${
+          skills.length > 1 ? "s" : ""
+        } ${skills.map((s) => `'${s.id}'`).join(", ")}. Remove them from the selection, or use an agent that accepts them`,
+      },
+    ]);
+  }
+
+  /**
+   * The step's view of its session (#337): every prompt it sends carries its skills first, as
+   * ACP `resource` blocks with their text inline. Only an agent that said at `initialize` it
+   * accepts embedded context gets them; any other refuses the step, with no fallback to
+   * leaving them out or pasting them in as plain text. A pooled session is never changed
+   * itself, so a later step with other skills gets only its own.
+   */
+  private withSkills(
+    rc: RunContext,
+    step: StepRun,
+    agent: AgentSpec,
+    key: string,
+    opened: { session: AgentSession; release: () => Promise<void> },
+    skills: DeliveredSkill[],
+  ): Promise<{ session: AgentSession; release: () => Promise<void> }> {
+    if (skills.length === 0) return Promise.resolve(opened);
+    return (async () => {
+      // ACP startup refuses such an agent before `session/new`; a session factory that does
+      // not is refused here, and a pooled session is retired rather than kept for later.
+      if (opened.session.promptCapabilities?.embeddedContext !== true) {
+        await opened.release().catch(() => undefined);
+        await this.retirePooled(rc, step, key, opened.session, "agent does not accept embedded context");
+        throw this.embeddedContextRefusal(step, agent, skills);
+      }
+      const blocks = skillBlocks(skills);
+      const base = opened.session;
+      const session: AgentSession = Object.create(base) as AgentSession;
+      session.prompt = (input, options) =>
+        base.prompt(
+          [...blocks, ...(typeof input === "string" ? [{ type: "text" as const, text: input }] : input)],
+          options,
+        );
+      return { session, release: opened.release };
+    })();
   }
 
   /** A child's values redact its ancestors too: a child's result is written to its parent's log. */
@@ -2717,7 +2832,7 @@ export class Orchestrator {
     const model = selectedModel(rc.state.run.overrides, agent);
     const capabilities = this.stepCapabilities(rc, step, agent);
     // Asked at every open, pooled or not: a revoked grant stops the next step (#337).
-    const delivered = await this.deliverCatalogServers(rc, step, agent, host, capabilities);
+    const delivered = await this.deliverCatalog(rc, step, agent, host, capabilities);
     const { mcpServers, authorize } = delivered;
     let pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
     if (pooled && pooled.capabilities !== capabilities.key) {
@@ -2737,7 +2852,14 @@ export class Orchestrator {
       const now = currentModel(pooled.session);
       // The pooled session is already on the run's model, or has no option to drift in.
       if (model === undefined || now === undefined || now === model)
-        return this.guardCatalogUse(rc, step, key, { session: pooled.session, release: async () => {} }, authorize);
+        return this.withSkills(
+          rc,
+          step,
+          agent,
+          key,
+          this.guardCatalogUse(rc, step, key, { session: pooled.session, release: async () => {} }, authorize),
+          delivered.skills,
+        );
       // It drifted (the agent switched model itself): re-apply rather than run a step on a
       // model the run did not select. An agent that refuses gets a fresh session instead.
       try {
@@ -2750,7 +2872,14 @@ export class Orchestrator {
             update: { kind: "config_option_update", text: `model re-applied: ${model} (was ${now})` },
           },
         });
-        return this.guardCatalogUse(rc, step, key, { session: pooled.session, release: async () => {} }, authorize);
+        return this.withSkills(
+          rc,
+          step,
+          agent,
+          key,
+          this.guardCatalogUse(rc, step, key, { session: pooled.session, release: async () => {} }, authorize),
+          delivered.skills,
+        );
       } catch (e) {
         if (e instanceof OrcaError && e.code === "AGENT_MODEL_NOT_FOUND") throw e;
         rc.logger.warn("pooled session refused the model; reopening it", { agent: agent.id, model });
@@ -2771,7 +2900,7 @@ export class Orchestrator {
         slot.release();
         throw error;
       }
-    // A denial at `session/new` is the run's authority, not the agent's health.
+    // A denial at `session/new`, or a step the agent cannot take, is not the agent's health.
     let deniedAtDelivery = false;
     const current = { step };
     let pendingAsks = 0;
@@ -2787,6 +2916,16 @@ export class Orchestrator {
         host,
         // Only the step's resolved MCP servers reach `session/new` (#335).
         agent: { ...agent, mcpServers },
+        // An agent that cannot take the step's skills is refused right after `initialize`,
+        // before `session/new` configures its servers (#337).
+        ...(delivered.skills.length
+          ? {
+              requireEmbeddedContext: () => {
+                deniedAtDelivery = true;
+                return this.embeddedContextRefusal(step, agent, delivered.skills);
+              },
+            }
+          : {}),
         // And again immediately before ACP hands the agent its servers (#337).
         ...(authorize
           ? {
@@ -2984,9 +3123,23 @@ export class Orchestrator {
         void session.closed.then(() => {
           if (this.sessions.get(key) === pooled) this.sessions.delete(key);
         });
-        return this.guardCatalogUse(rc, step, key, { session, release: async () => {} }, authorize);
+        return this.withSkills(
+          rc,
+          step,
+          agent,
+          key,
+          this.guardCatalogUse(rc, step, key, { session, release: async () => {} }, authorize),
+          delivered.skills,
+        );
       }
-      return this.guardCatalogUse(rc, step, key, { session, release: close }, authorize);
+      return this.withSkills(
+        rc,
+        step,
+        agent,
+        key,
+        this.guardCatalogUse(rc, step, key, { session, release: close }, authorize),
+        delivered.skills,
+      );
     } catch (error) {
       await closeOnce().catch((cleanupError: unknown) =>
         rc.logger.warn("agent session startup cleanup failed", {
@@ -3199,4 +3352,25 @@ function openSteps(state: RunState): StepRun[] {
   return state.stepOrder
     .map((id) => state.steps[id]!)
     .filter((s) => s.status === "scheduled" || s.status === "running" || s.status === "waiting");
+}
+
+/** A skill as delivered to a step (#337): its content, read once, and its digest. */
+interface DeliveredSkill {
+  id: string;
+  digest: string;
+  files: { rel: string; text: string }[];
+}
+
+/** Each skill file as an ACP `resource` block, named by the skill, the file and the digest. */
+function skillBlocks(skills: DeliveredSkill[]): acp.ContentBlock[] {
+  return skills.flatMap((skill) =>
+    skill.files.map((file) => ({
+      type: "resource" as const,
+      resource: {
+        uri: skillResourceUri(skill.id, file.rel, skill.digest),
+        mimeType: file.rel.endsWith(".md") ? "text/markdown" : "text/plain",
+        text: file.text,
+      },
+    })),
+  );
 }

@@ -27,6 +27,7 @@ import {
   FileAuditSink,
   LOCAL_TOKEN_FILE,
   OWNERSHIP_FILE,
+  EVERY_CAPABILITY,
   OwnershipStore,
   RunAccess,
   UNRESTRICTED,
@@ -103,7 +104,7 @@ function localUseOptions(app: LocalApp): SecretUseAuthorityOptions {
         permissions: new Set(["secrets.use", "capabilities.use"]),
         scope: UNRESTRICTED,
         secrets: "*",
-        capabilities: "*",
+        capabilities: EVERY_CAPABILITY,
       },
     ];
   };
