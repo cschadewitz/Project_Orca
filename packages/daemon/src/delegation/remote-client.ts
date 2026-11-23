@@ -62,6 +62,41 @@ class StreamAgent extends Agent {
   }
 }
 
+/**
+ * An agent that opens exactly one stream: every call through it shares that connection, and
+ * once the stream is gone a further call fails before a byte is written instead of opening
+ * another one. What one call verified about the remote then holds for the next.
+ */
+class OneStreamAgent extends Agent {
+  private opened = false;
+  constructor(private readonly open: StreamConnect) {
+    super({ keepAlive: true, maxSockets: 1 });
+  }
+  override createConnection(
+    _options: ClientRequestArgs,
+    created?: (error: Error | null, stream: Duplex) => void,
+  ): Duplex | null | undefined {
+    const fail = (error: Error) => {
+      (created as (error: Error | null, stream: Duplex) => void)(error, undefined as unknown as Duplex);
+      return undefined;
+    };
+    if (this.opened) return fail(new Error("the verified connection to the remote daemon is gone"));
+    this.opened = true;
+    try {
+      return this.open();
+    } catch (error) {
+      return fail(error as Error);
+    }
+  }
+}
+
+/** The calls made on one connection (see `RemoteDaemonClient.onOneConnection`). */
+export type ConnectionCall = (
+  method: string,
+  params: unknown,
+  options?: { timeoutMs?: number; signal?: AbortSignal | undefined },
+) => Promise<unknown>;
+
 /** The most one answer may be: an artifact's text is capped at 1 MB on the daemon side. */
 const ANSWER_LIMIT = 8 * 1024 * 1024;
 
@@ -86,6 +121,29 @@ export class RemoteDaemonClient {
     params: unknown,
     options: { timeoutMs?: number; signal?: AbortSignal | undefined } = {},
   ): Promise<unknown> {
+    return this.send(this.agent, method, params, options);
+  }
+
+  /**
+   * Run `fn` with calls that all travel on one new connection, closed afterwards (#363). A call
+   * after that connection broke rejects with `RemoteUnreachable` without sending anything, so a
+   * check made by an earlier call is about the daemon a later call reaches.
+   */
+  async onOneConnection<T>(fn: (call: ConnectionCall) => Promise<T>): Promise<T> {
+    const agent = new OneStreamAgent(this.options.connect);
+    try {
+      return await fn((method, params, options = {}) => this.send(agent, method, params, options));
+    } finally {
+      agent.destroy();
+    }
+  }
+
+  private send(
+    agent: Agent,
+    method: string,
+    params: unknown,
+    options: { timeoutMs?: number; signal?: AbortSignal | undefined },
+  ): Promise<unknown> {
     const body = JSON.stringify({ kind: "request", id: this.nextId++, method, params });
     const timeoutMs = options.timeoutMs ?? this.options.timeoutMs ?? 30_000;
     return new Promise<unknown>((resolve, reject) => {
@@ -99,7 +157,7 @@ export class RemoteDaemonClient {
       };
       const req = request(
         {
-          agent: this.agent,
+          agent,
           // Never dialled: the agent's connection is the tunnel's stream. The host names the
           // remote loopback for the daemon's Host check.
           host: "127.0.0.1",

@@ -4,7 +4,8 @@ import type { WorkflowInputDeclarationView } from "@orca/protocol";
 export type InputParse = { ok: true; value: unknown } | { ok: false; message: string };
 /** Parsing only; authoritative constraints/default resolution belong to daemon preflight. */
 export function parseInput(field: WorkflowInputDeclarationView, text: string): InputParse {
-  if (field.type === "string") return { ok: true, value: text };
+  // A `secret` input (#363) names a configured secret by id; the value itself never passes here.
+  if (field.type === "string" || field.type === "secret") return { ok: true, value: text };
   if (!["number", "integer", "boolean", "array", "object"].includes(field.type))
     return { ok: false, message: "This input type is unsupported by the guided editor." };
   let value: unknown;

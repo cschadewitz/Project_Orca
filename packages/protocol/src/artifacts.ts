@@ -105,6 +105,15 @@ export const ArtifactsGetResultSchema = z.object({
   artifact: ArtifactViewSchema,
   /** The body, verbatim. Present exactly when `omitted` is absent. */
   text: z.string().optional(),
+  /**
+   * Protocol 2.11 (#363): present when `text` is the body with the run's protected values
+   * replaced by `[REDACTED]`, so not the bytes `artifact.size` and `artifact.contentHash`
+   * describe. `size` and `contentHash` here are the producing daemon's own figures for `text`
+   * as sent: what a copy is checked against for transport integrity. They are not evidence
+   * that the projection was redacted correctly or completely. `maxBytes` applies to `text` as
+   * sent, so a body that redaction makes longer than the limit is `omitted` (`tooLarge`).
+   */
+  redacted: z.object({ size: z.number().int().nonnegative(), contentHash: z.string() }).optional(),
   /** Present exactly when `text` is absent: the body exists and is not being shown. */
   omitted: ArtifactOmittedSchema.optional(),
   asOf: z.string(),

@@ -25,6 +25,7 @@ import {
 } from "@orca/core";
 import {
   executionEvents,
+  protectedNeedles,
   redactExecutionValue,
   unavailable,
   type ExecutionInputs,
@@ -144,6 +145,41 @@ export class RunContext {
    */
   redactRuntimeSecrets<T>(value: T): T {
     return this.runtimeSecrets.size ? redactExecutionValue(value, [...this.runtimeSecrets]) : value;
+  }
+
+  /**
+   * `value` with every secret this run knows redacted, keys included: the values its sessions
+   * resolved and its sensitive inputs, as the run's log and logger redact them. For records
+   * kept outside the log, such as tool-call telemetry (#1000).
+   */
+  redactSecrets<T>(value: T): T {
+    const secrets = this.redactionInputs()?.secrets;
+    return secrets?.length ? redactExecutionValue(value, secrets, true) : value;
+  }
+
+  /** Whether `text` holds any value this run keeps protected: what redaction would replace (#363). */
+  holdsProtectedValue(text: string): boolean {
+    const secrets = this.redactionInputs()?.secrets;
+    return !!secrets?.length && redactExecutionValue(text, secrets) !== text;
+  }
+
+  /**
+   * A launch var as the launch recorded it in the private execution store (#363): the exact
+   * value admission checked, never the run's working vars, which steps may change later.
+   * Undefined when the launch recorded no such var, or no record at all.
+   */
+  launchVar(name: string): unknown {
+    const vars = this.executionInputs?.vars;
+    return vars && Object.hasOwn(vars, name) ? vars[name] : undefined;
+  }
+
+  /**
+   * The protected values that occur in `text`, as redaction matches them (#363): what a worker
+   * that is handed `text` must redact on its own surfaces. Longest first; never logged or stored.
+   */
+  protectedValuesIn(text: string): string[] {
+    const secrets = this.redactionInputs()?.secrets;
+    return secrets?.length ? protectedNeedles(secrets).filter((needle) => text.includes(needle)) : [];
   }
 
   private redactionInputs(): ExecutionInputs | undefined {

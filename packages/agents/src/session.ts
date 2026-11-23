@@ -6,6 +6,7 @@
  */
 import type * as acp from "@agentclientprotocol/sdk";
 import { toolCallBody, type AgentUpdateSummary, type SessionConfigOption, type ToolCallBody } from "@orca/core";
+import type { HookTelemetrySpool } from "./hook-telemetry.js";
 import { describeConfigOptions } from "./config-options.js";
 
 export interface TurnResult {
@@ -46,6 +47,19 @@ export interface TurnContext {
   followUp: number;
   /** The step's task as its prompt template rendered it, without ORCA's deliverable instructions. */
   task: string;
+  /**
+   * The task or prompt holds a value the run keeps protected: a sensitive launch input or a
+   * secret value read for the run (#363). A session that hands the task to another daemon
+   * must have it protected there too, or not send it.
+   */
+  sensitive?: boolean;
+  /**
+   * The protected values that occur in `task`, exactly as the run's redaction matches them
+   * (#363). Present only with `sensitive`. A delegating session hands them to the worker on its
+   * authenticated admission so the worker redacts each value on its own, not only the whole
+   * task. Held in memory for the turn: never logged, stored or shown.
+   */
+  protectedValues?: readonly string[];
   /** Where the step collects its outputs once the turn ends: absolute paths on the agent's host. */
   deliverables: readonly TurnDeliverable[];
 }
@@ -80,6 +94,12 @@ export interface AgentSession {
    * transport that does not report it, which is treated as not accepted.
    */
   readonly promptCapabilities?: { readonly embeddedContext: boolean };
+  /**
+   * The spool this session's native pre-tool hook writes tool-call telemetry to (#1000), when
+   * the agent keeps it (`diagnostics.toolCalls: keep`) and the hook is installed. The session
+   * calls its `finish()` when it ends; the engine attaches a consumer and drains it.
+   */
+  readonly hookTelemetry?: HookTelemetrySpool;
   prompt(input: string | acp.ContentBlock[], options?: PromptOptions): Promise<TurnResult>;
   onUpdate(listener: (e: SessionUpdateEvent) => void): () => void;
   /**

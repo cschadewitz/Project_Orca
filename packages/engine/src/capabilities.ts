@@ -483,6 +483,8 @@ export interface AgentInstruction {
   agent: AgentSelector;
   template?: string | undefined;
   scope: CapabilityScope | undefined;
+  /** An agent node's `secretEnv` (#363): environment variable -> `secret` launch input. */
+  secretEnv?: Record<string, string> | undefined;
 }
 
 /** Every agent instruction in a definition, nested inline graphs included (not subworkflow refs). */
@@ -499,6 +501,7 @@ export function agentInstructions(graph: WorkflowGraph, prefix = "workflow", inl
         agent: node.agent,
         template: node.template,
         scope: node.capabilities,
+        ...(node.secretEnv ? { secretEnv: node.secretEnv } : {}),
       });
     else if (node.type === "decision" && node.source.kind === "agent")
       out.push({
@@ -554,6 +557,62 @@ export function preflightCapabilities(
     });
     const issues = [...result.errors, ...deliveryIssues(result, step.nodePath, delivery)];
     if (issues.length) throw capabilityRefusal(step.nodeId, issues);
+  }
+}
+
+/**
+ * Before anything is written (#363): every step's `secretEnv` names a `secret` launch input
+ * whose value is a configured secret, bound to the host that step's agent runs on, with a
+ * use check to deliver it under, and an agent that starts a session here (not one that
+ * delegates to another daemon). Metadata only: nothing is read.
+ */
+export function preflightSecretInputs(
+  registry: AgentRegistry,
+  def: WorkflowDefinition,
+  vars: Record<string, unknown>,
+  hasUseCheck: boolean,
+): void {
+  const catalog = registry.secrets() ?? {};
+  for (const step of agentInstructions(def)) {
+    if (!step.secretEnv || !registry.canResolve(step.agent)) continue;
+    const { agent } = registry.resolve(step.agent);
+    const refuse = (message: string, details: Record<string, unknown>) =>
+      new OrcaError("CONFIG_INVALID", `step '${step.nodeId}' ${message}`, { nodeId: step.nodeId, ...details });
+    for (const [name, input] of Object.entries(step.secretEnv)) {
+      if (agent.type === "orca-daemon")
+        throw refuse(
+          "hands its agent secret environment variables, which a step delegated to another daemon cannot take",
+          {
+            variable: name,
+            reason: "unsupported",
+          },
+        );
+      const id = vars[input];
+      if (typeof id !== "string")
+        throw refuse(`maps ${name} to launch input '${input}', which names no secret`, {
+          variable: name,
+          input,
+          reason: "missing",
+        });
+      const definition = catalog[id];
+      if (!definition)
+        throw refuse(`maps ${name} to secret '${id}', which is not configured`, {
+          variable: name,
+          input,
+          secret: id,
+          reason: "not-found",
+        });
+      if (definition.host !== agent.hostId)
+        throw refuse(
+          `maps ${name} to secret '${id}', which is bound to host '${definition.host}', but agent '${agent.id}' runs on '${agent.hostId}'`,
+          { variable: name, input, secret: id, reason: "wrong-host" },
+        );
+      if (!hasUseCheck)
+        throw refuse(
+          `maps ${name} to secret '${id}', and this daemon has no server-verified use check to deliver it with yet`,
+          { variable: name, input, secret: id, reason: "unauthorized" },
+        );
+    }
   }
 }
 

@@ -56,12 +56,12 @@ function InputField({
     const parsed = parseInput(field, rawText);
     return parsed.ok ? "Review the value against the current input declaration." : parsed.message;
   })();
-  const supported = ["string", "number", "integer", "boolean", "array", "object"].includes(field.type);
+  const supported = ["string", "secret", "number", "integer", "boolean", "array", "object"].includes(field.type);
   return (
     <ConfigField
       label={name}
       path={`vars.${name}`}
-      help={`${field.description ?? field.type}${field.required === true ? "; required" : ""}. Omitted values use runtime defaults.`}
+      help={`${field.description ?? field.type}${field.type === "secret" ? "; the id of a configured secret, never its value" : ""}${field.required === true ? "; required" : ""}. Omitted values use runtime defaults.`}
       {...(error === undefined ? {} : { error })}
     >
       {(control) => (
