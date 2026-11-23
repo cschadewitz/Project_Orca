@@ -238,11 +238,15 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   `config.set` and the loader refuse the same rows; and a title pattern that does not compile
   and reaches matching anyway fails closed (never matches for an allow, always for a deny or an
   ask). A row with both a `decision` and a `judge` is refused. **Every writer of this file
-  commits only as the lock's owner and over the bytes it read:** just before the rename it
-  checks that the `link()` lock is still its own (same file, its nonce) and that the file's
-  revision is the one it read, so a writer paused past the lock's staleness cannot overwrite an
-  edit, grant or removal made meanwhile; it answers `CONFIG_STALE` or `STORE_LOCK_TIMEOUT`
-  instead, and a late release never removes a successor's lock. The same rule (match and criterion) is never appended twice; one that ends
+  takes one lock, with no automatic takeover:** `<file>.lock` is now a directory holding one
+  owner token, created with `mkdir` and never broken by age, replacing the `link()` file lock
+  that was broken after 30 seconds (age cannot prove a paused writer died, and a writer that
+  resumed after a takeover could overwrite its successor's edit, grant or removal). Just
+  before its rename a writer also checks that it still owns the lock and that the file is still
+  the bytes it read. A lock left by a writer that crashed stays, and writes refuse
+  (`STORE_LOCK_TIMEOUT`) until a person removes it after making sure no writer runs; reading
+  never takes the lock. An older release's `link()` writer cannot take the directory over, and
+  a lock file one of them left is waited on, not removed. The same rule (match and criterion) is never appended twice; one that ends
   sooner is extended in place. The loader carries saved judged rules in `policy.judged` after
   the configured ones, named `sidecar:N` by their place in the agent's list as written, and
   skips an expired one; the typed rules, and everything that decides synchronously, see none

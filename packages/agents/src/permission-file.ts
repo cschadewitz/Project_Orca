@@ -1,6 +1,6 @@
 /** Shared sidecar file mechanics. All policy writers use this lock and exact byte revision. */
 import { createHash, randomUUID } from "node:crypto";
-import { link, mkdir, readFile, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { OrcaError } from "@orca/core";
@@ -21,82 +21,29 @@ export async function revisionOf(file: string): Promise<string> {
 }
 
 /**
- * Serialise read-modify-write across processes, with the same `link()`-to-create idiom the
- * store's `withFileLock` uses. It is not reused: `@orca/agents` sits to the right of
- * `@orca/store` in the layering, so it cannot import it.
+ * Serialise read-modify-write of a sidecar across processes. **Every writer takes it the same
+ * way, with no automatic takeover** (#701 review): the lock is a directory created with
+ * `mkdir` holding one owner token, nothing ever breaks it by age, and the holder can check it
+ * still owns it (`checkOwnership`) before it publishes. Age cannot prove that a paused owner
+ * died, and a lock that can be taken over by time lets a paused writer, once it resumes,
+ * overwrite whatever its successor wrote; so a lock left by a writer that crashed stays, and
+ * later writes refuse (`STORE_LOCK_TIMEOUT`) until a person removes `<file>.lock` after
+ * making sure no writer is running. Reading the file never takes the lock.
  *
- * Legacy locks retain the old mtime-based recovery behavior. Age cannot prove that a
- * paused owner died, so `fn` is handed a `checkOwnership` that refuses once the lock is no
- * longer this holder's (#701 review); a writer calls it, with the source revision check, just
- * before it commits. Typed mode uses the same namespace with strict token ownership below.
+ * Releases before this one created the lock as a file with `link()` and broke one older than
+ * 30 seconds. Such a writer cannot take this lock either: its `link()` finds the directory,
+ * and its stale-lock `unlink` cannot remove a directory. A lock *file* one of them left is
+ * waited on here, never removed.
+ *
+ * `strictOwnership` is accepted for callers written when this was one of two modes; it is now
+ * the only mode. `staleMs` is ignored.
  */
 export async function withPolicyLock<T>(
   file: string,
   opts: { timeoutMs?: number; staleMs?: number; strictOwnership?: boolean } | undefined,
   fn: (checkOwnership: () => Promise<void>) => Promise<T>,
 ): Promise<T> {
-  if (opts?.strictOwnership) return withStrictPolicyLock(file, fn, opts.timeoutMs ?? 10_000);
-  const lock = `${file}.lock`;
-  const timeoutMs = opts?.timeoutMs ?? 10_000;
-  const staleMs = opts?.staleMs ?? 30_000;
-  await mkdir(dirname(file), { recursive: true });
-  const tmp = `${lock}.${process.pid}.${Math.random().toString(36).slice(2)}`;
-  // A nonce makes the lock's bytes this holder's alone, so ownership can be checked (#701 review).
-  const contents = JSON.stringify({ pid: process.pid, at: new Date().toISOString(), nonce: randomUUID() });
-  await writeFile(tmp, contents, "utf8");
-  const deadline = Date.now() + timeoutMs;
-  try {
-    for (let backoff = 1; ; backoff = Math.min(backoff * 2, 32)) {
-      try {
-        await link(tmp, lock);
-        break;
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-        await breakIfStale(lock, staleMs);
-        if (Date.now() >= deadline)
-          throw new OrcaError("STORE_LOCK_TIMEOUT", `${lock} is held by another writer`, { file });
-        await delay(backoff + Math.random() * backoff);
-      }
-    }
-  } finally {
-    await rm(tmp, { force: true });
-  }
-  const identity = await stat(lock);
-  /**
-   * Whether this holder still owns the lock: the same file (device and inode) with this
-   * holder's bytes. A writer paused past `staleMs` can have had its lock broken and taken by
-   * another; this is what it checks before it commits (#701 review).
-   */
-  const owned = async (): Promise<boolean> => {
-    try {
-      const current = await stat(lock);
-      return (
-        current.dev === identity.dev && current.ino === identity.ino && (await readFile(lock, "utf8")) === contents
-      );
-    } catch {
-      return false;
-    }
-  };
-  try {
-    return await fn(async () => {
-      if (!(await owned()))
-        throw new OrcaError("STORE_LOCK_TIMEOUT", `${lock} was taken over by another writer; nothing was written`, {
-          file,
-        });
-    });
-  } finally {
-    // Only our own lock is removed: a successor's must survive a late release.
-    if (await owned()) await rm(lock, { force: true });
-  }
-}
-
-async function breakIfStale(lock: string, staleMs: number): Promise<void> {
-  try {
-    const st = await stat(lock);
-    if (Date.now() - st.mtimeMs > staleMs) await unlink(lock);
-  } catch {
-    // Gone already, or another waiter broke it first. Either way, retry the link.
-  }
+  return withStrictPolicyLock(file, fn, opts?.timeoutMs ?? 10_000);
 }
 
 /** Same .lock namespace, using the store's exact-owner-token idiom without automatic
@@ -120,7 +67,11 @@ async function withStrictPolicyLock<T>(
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       if (Date.now() >= deadline)
-        throw new OrcaError("STORE_LOCK_TIMEOUT", "typed sidecar ownership unavailable; no takeover", { file });
+        throw new OrcaError(
+          "STORE_LOCK_TIMEOUT",
+          "the permission sidecar is locked by another writer, or by one that stopped; no takeover",
+          { file },
+        );
       await delay(backoff + Math.random() * backoff);
     }
   }
@@ -140,7 +91,7 @@ async function withStrictPolicyLock<T>(
     } catch (error) {
       throw new OrcaError(
         "STORE_LOCK_TIMEOUT",
-        "typed sidecar ownership lost; publication refused",
+        "permission sidecar ownership lost; nothing was written",
         { file },
         { cause: error },
       );

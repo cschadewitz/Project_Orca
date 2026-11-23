@@ -3,7 +3,7 @@
  * sidecar, which becomes version 4; the loader carries it in `policy.judged` after every
  * hand-written rule; and the judged lane can allow one call by it, exactly as by a configured one.
  */
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -131,24 +131,51 @@ describe("saving a judged rule", () => {
   });
 });
 
-describe("a writer that lost the lock", () => {
-  it("commits nothing, and leaves the successor's lock and edit in place", async () => {
+describe("sidecar ownership", () => {
+  it("never takes over a lock by age, from a writer of this release or a legacy lock file", async () => {
+    await save();
+    const before = await readFile(file, "utf8");
+    const lock = `${file}.lock`;
+    for (const leftover of ["directory", "legacy file"] as const) {
+      if (leftover === "directory") await mkdir(lock);
+      else await writeFile(lock, JSON.stringify({ pid: 1, at: "2020-01-01T00:00:00.000Z" }));
+      await utimes(lock, new Date(0), new Date(0));
+      for (const write of [
+        () => save({ criterion: "Reading docs.", lock: { timeoutMs: 40, staleMs: 0 } }),
+        () => replacePermissionPolicyFile(file, { version: 1, agents: {} }, { lock: { timeoutMs: 40, staleMs: 0 } }),
+        () =>
+          recordAlwaysDecision({
+            file,
+            agentId: "a",
+            request: call("read", join(ws, "src", "a.ts")),
+            decision: "deny",
+            workspaceCwd: ws,
+            lock: { timeoutMs: 40, staleMs: 0 },
+          }),
+      ])
+        await expect(write()).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+      expect(await readFile(file, "utf8")).toBe(before);
+      await rm(lock, { recursive: true });
+    }
+  });
+
+  it("commits nothing once its ownership is gone, and leaves the successor's lock and edit", async () => {
     await save();
     const before = await readFile(file, "utf8");
     const lock = `${file}.lock`;
     let calls = 0;
-    // The first authority check runs under the lock: stand in for a writer that paused past
-    // the lock's staleness, whose lock was broken and taken by another that then wrote.
+    // Unsupported interference standing in for a lost lock: the guarantee is that no
+    // supported writer takes one over; this checks the final ownership check as well.
     const authorize = async () => {
       if (++calls > 1) return;
-      await rm(lock);
-      await writeFile(lock, "successor");
+      await rename(lock, `${lock}.retired`);
+      await mkdir(lock);
       await writeFile(file, before.replace("Reading source.", "Edited meanwhile."));
     };
     await expect(save({ criterion: "Reading docs.", authorize })).rejects.toMatchObject({
       code: "STORE_LOCK_TIMEOUT",
     });
-    expect(await readFile(lock, "utf8")).toBe("successor");
+    expect((await stat(lock)).isDirectory()).toBe(true);
     expect(await readFile(file, "utf8")).toContain("Edited meanwhile.");
     expect(await readFile(file, "utf8")).not.toContain("Reading docs.");
   });
