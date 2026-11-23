@@ -5515,6 +5515,2052 @@
     }
   },
   {
+    "rule": "a step selecting an MCP server the catalog does not have",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review",
+          "capabilities": {
+            "mcpServers": {
+              "enable": ["ghost"]
+            }
+          }
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.plan.capabilities.mcpServers.enable[0]",
+      "graph": [],
+      "node": "plan",
+      "message": "no MCP server 'ghost' is defined in capabilities.mcpServers or on agent 'worker'"
+    }
+  },
+  {
+    "rule": "a step selecting a skill the catalog does not have",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review",
+          "capabilities": {
+            "skills": {
+              "enable": ["ghost"]
+            }
+          }
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.plan.capabilities.skills.enable[0]",
+      "graph": [],
+      "node": "plan",
+      "message": "no skill 'ghost' is defined in capabilities.skills"
+    }
+  },
+  {
+    "rule": "a step turning on an MCP server its agent may not use",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review",
+          "capabilities": {
+            "mcpServers": {
+              "enable": ["forbidden"]
+            }
+          }
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.plan.capabilities.mcpServers.enable[0]",
+      "graph": [],
+      "node": "plan",
+      "message": "this node cannot turn on MCP server 'forbidden': agent 'worker' is not permitted to use it. Enable it, or list it under 'available', in agents[].capabilities.mcpServers or capabilities.workspace.mcpServers"
+    }
+  },
+  {
+    "rule": "a step listing an MCP server twice",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review",
+          "capabilities": {
+            "mcpServers": {
+              "enable": ["github", "github"]
+            }
+          }
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.plan.capabilities.mcpServers.enable[1]",
+      "graph": [],
+      "node": "plan",
+      "message": "lists MCP server 'github' twice"
+    }
+  },
+  {
+    "rule": "a step giving its agent an MCP server whose secret lives on another host",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review",
+          "capabilities": {
+            "mcpServers": {
+              "enable": ["deploy"]
+            }
+          }
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.plan.capabilities.mcpServers",
+      "graph": [],
+      "node": "plan",
+      "message": "MCP server 'deploy' reads secret 'deploy-key' (DEPLOY_KEY), which is bound to host 'build-box', but this step's agent runs on 'local'. A secret is only ever read on its own host"
+    }
+  },
+  {
+    "rule": "a skill whose content no longer matches its pin",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review",
+          "capabilities": {
+            "skills": {
+              "enable": ["pinned"]
+            }
+          }
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "capabilities.skills.pinned.digest",
+      "graph": [],
+      "message": "skill 'pinned' content is sha256:0ec3c4315811f33335dba3b5c99cd40a2a8df5d69b7259cdeaafdf7f6bb2d93e, but its pinned digest is sha256:0000000000000000000000000000000000000000000000000000000000000000. Review the change, then update the pin"
+    }
+  },
+  {
+    "rule": "a workflow-wide selection the catalog does not have",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ],
+      "capabilities": {
+        "mcpServers": {
+          "enable": ["ghost"]
+        }
+      }
+    },
+    "issue": {
+      "severity": "error",
+      "path": "capabilities.mcpServers.enable[0]",
+      "graph": [],
+      "message": "no MCP server 'ghost' is defined in capabilities.mcpServers or on agent 'worker'"
+    }
+  },
+  {
+    "rule": "a step disabling an MCP server that is not on",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review",
+          "capabilities": {
+            "mcpServers": {
+              "disable": ["github"]
+            }
+          }
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "warning",
+      "path": "nodes.plan.capabilities.mcpServers.disable",
+      "graph": [],
+      "node": "plan",
+      "message": "MCP server 'github' is not enabled at this point, so disabling it changes nothing"
+    }
+  },
+  {
     "rule": "a node with no outgoing edge, in a loop body",
     "document": {
       "id": "ai-sdlc",
