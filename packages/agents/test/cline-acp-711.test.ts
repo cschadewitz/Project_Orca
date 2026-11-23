@@ -326,6 +326,20 @@ describe("Cline's config directory, deny by default", () => {
     ]);
   });
 
+  it("refuses links and wrong types inside the config directory", async () => {
+    const settings = join(configDir, "data", "settings");
+    await mkdir(settings, { recursive: true });
+    const elsewhere = join(root, "elsewhere.json");
+    await writeFile(elsewhere, "{}");
+    await symlink(elsewhere, join(settings, "providers.json"));
+    await mkdir(join(settings, "global-settings.json"));
+    const problems = clineFileProblems(configDir, workspace, home);
+    expect(problems).toContain(
+      `files: ${join(settings, "providers.json")} is a link; Cline's config must hold its own files, not links`,
+    );
+    expect(problems).toContain(`files: ${join(settings, "global-settings.json")} is not a file`);
+  });
+
   it("refuses a config directory that is not there", () => {
     expect(clineFileProblems(join(root, "missing"), workspace, home)[0]).toContain("cannot be read");
   });

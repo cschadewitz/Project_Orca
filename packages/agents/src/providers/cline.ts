@@ -47,7 +47,16 @@
  * can, and its effects are not ORCA's to see. See the matrix.
  */
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, readFileSync, readdirSync, realpathSync, statSync, type Stats } from "node:fs";
+import {
+  createReadStream,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  type Stats,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve as resolvePath, sep, win32 } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -372,19 +381,36 @@ function canonical(path: string): string {
 const within = (a: string, b: string) => a === b || a.startsWith(b.endsWith(sep) ? b : b + sep);
 
 /**
- * On POSIX: each entry must belong to the user ORCA runs as and be writable by nobody else,
- * so no other account can change what Cline loads between ORCA's check and Cline's read.
+ * Each recognised entry of Cline's config directory must be what it is named as (a directory
+ * or a regular file), not a link to somewhere ORCA did not check, and on POSIX belong to the
+ * user ORCA runs as and be writable by nobody else, so no other account can change what Cline
+ * loads between ORCA's check and Cline's read. A missing entry is skipped; anything that cannot
+ * be inspected is refused.
  */
-function ownershipProblems(paths: readonly string[]): string[] {
-  if (typeof process.getuid !== "function") return [];
-  const uid = process.getuid();
+function entryProblems(entries: readonly { path: string; kind: "directory" | "file" }[]): string[] {
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const problems: string[] = [];
-  for (const path of paths) {
-    const at = entryAt(path);
-    if (at.state !== "present") continue;
-    if (at.stats.uid !== uid)
-      problems.push(`files: ${path} belongs to another user; Cline's config must be yours alone`);
-    else if ((at.stats.mode & 0o022) !== 0)
+  for (const { path, kind } of entries) {
+    let stats: Stats;
+    try {
+      stats = lstatSync(path);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") continue;
+      problems.push(`files: ${path} cannot be checked (${error instanceof Error ? error.message : String(error)})`);
+      continue;
+    }
+    if (stats.isSymbolicLink()) {
+      problems.push(`files: ${path} is a link; Cline's config must hold its own ${kind}s, not links`);
+      continue;
+    }
+    if (kind === "directory" ? !stats.isDirectory() : !stats.isFile()) {
+      problems.push(`files: ${path} is not a ${kind}`);
+      continue;
+    }
+    if (uid === undefined) continue;
+    if (stats.uid !== uid) problems.push(`files: ${path} belongs to another user; Cline's config must be yours alone`);
+    else if ((stats.mode & 0o022) !== 0)
       problems.push(`files: ${path} is writable by other users; make it writable by you alone (chmod go-w)`);
   }
   return problems;
@@ -468,7 +494,14 @@ export function clineConfigDirProblems(configDir: string): string[] {
       problems.push(`files: ${settings} cannot be listed (${error instanceof Error ? error.message : String(error)})`);
     }
   }
-  problems.push(...ownershipProblems([configDir, data, settings, ...files.map((f) => join(settings, f))]));
+  problems.push(
+    ...entryProblems([
+      { path: configDir, kind: "directory" },
+      { path: data, kind: "directory" },
+      { path: settings, kind: "directory" },
+      ...files.filter((f) => SETTINGS_FILES.has(f)).map((f) => ({ path: join(settings, f), kind: "file" as const })),
+    ]),
+  );
   for (const file of files.sort())
     if (!SETTINGS_FILES.has(file))
       problems.push(`files: ${join(settings, file)} is a Cline setting ORCA does not check; remove it`);
