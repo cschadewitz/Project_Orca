@@ -7,6 +7,7 @@ import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { readFileSync, readlinkSync } from "node:fs";
 import {
+  chmod,
   link,
   lstat,
   mkdtemp,
@@ -256,8 +257,8 @@ describe("a lock left by a sidecar writer that is gone", () => {
   const nonce = "0f0f0f0f-0000-4000-8000-000000000000";
   const valid = () => ({ version: 1, kind: "sidecar", pid: dead, domain: DOMAIN, nonce });
   const leave = async (name: string, text: string) => {
-    await mkdir(`${file}.lock`);
-    await writeFile(join(`${file}.lock`, name), text);
+    await mkdir(`${file}.lock`, { mode: 0o700 });
+    await writeFile(join(`${file}.lock`, name), text, { mode: 0o600 });
   };
 
   it.skipIf(DOMAIN === null)("is removed for a well-formed token of this liveness domain", async () => {
@@ -299,6 +300,39 @@ describe("a lock left by a sidecar writer that is gone", () => {
     await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
     expect(await readdir(`${file}.lock`)).toHaveLength(2);
   });
+
+  it.skipIf(DOMAIN === null)(
+    "is recovered once while ordinary writers contend for it, and every one of them commits",
+    async () => {
+      await leave(`owner.${dead}.${nonce}.json`, JSON.stringify(valid()));
+      const criteria = Array.from({ length: 6 }, (_, i) => `Reading part ${i}.`);
+      const results = await Promise.all(criteria.map((criterion) => save({ criterion, lock: { timeoutMs: 5_000 } })));
+      expect(results.map((r) => r.outcome)).toEqual(criteria.map(() => "added"));
+      const rules = (await readPermissionPolicyFile(file)).agents["a"]!.rules;
+      expect(rules.map((r) => ("judge" in r ? r.judge?.criterion : undefined)).sort()).toEqual([...criteria].sort());
+      await expect(stat(`${file}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.skipIf(DOMAIN === null)(
+    "is left for a person outside a private workspace: a shared directory, lock or token",
+    async () => {
+      const name = `owner.${dead}.${nonce}.json`;
+      const shared = [
+        () => chmod(ws, 0o775),
+        () => chmod(`${file}.lock`, 0o770),
+        () => chmod(join(`${file}.lock`, name), 0o660),
+      ];
+      for (const share of shared) {
+        await leave(name, JSON.stringify(valid()));
+        await share();
+        await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+        expect(await readdir(`${file}.lock`)).toEqual([name]);
+        await chmod(ws, 0o700);
+        await rm(`${file}.lock`, { recursive: true });
+      }
+    },
+  );
 
   it.skipIf(DOMAIN === null)("is never removed through a link, for the lock or its token", async () => {
     const name = `owner.${dead}.${nonce}.json`;

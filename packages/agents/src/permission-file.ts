@@ -147,27 +147,35 @@ function sidecarOwner(name: string, text: string): SidecarOwner | undefined {
  * - no process with that pid is running. A pid reused since is running, so the lock stays: that
  *   errs toward refusing.
  *
- * Just before unlinking, the directory and the token are checked to be the very entries inspected
- * (same device and inode), and the directory again before it is removed. Only that exact token
- * is unlinked, and the directory is removed only if it is then empty, so a
- * writer that took the lock meanwhile keeps it, and one that made the directory but had not yet
- * written its token fails its own token write and ownership check rather than proceed. Nothing
- * here throws: any failure leaves the lock as it is.
+ * - the workspace is trusted and local, so only cooperating ORCA writers change the lock:
+ *   the directory holding the sidecar, the lock directory and its token are all owned by this
+ *   process's user and none is writable by group or others (`trustedWorkspace`). Anywhere that
+ *   does not hold (a shared or group-writable directory, another user's files, a platform with
+ *   no uid), recovery stays manual.
+ *
+ * Re-checking device and inode just before the unlink and the `rmdir` guards against the
+ * cooperating writers' own races: a writer that took the lock meanwhile keeps it, and one that
+ * made the directory but had not yet written its token fails its own token write and ownership
+ * check rather than proceed. Both still act by path after awaited checks, so they are **not**
+ * atomic against an independent process changing the paths; that is why recovery is limited to
+ * a workspace where nothing but these writers can. Nothing here throws: any failure leaves the
+ * lock as it is.
  */
 async function removeDeadSidecarLock(lock: string): Promise<boolean> {
   let dir: Stats;
   try {
     const domain = livenessDomain();
     if (domain === null) return false;
-    // The lock itself must be a plain directory, not a link or anything else, and every later
-    // step is bound to this exact directory (device and inode) and this exact token file.
+    // The lock itself must be a plain directory, not a link or anything else, in a workspace
+    // only this user's cooperating writers can change; later steps re-check its identity.
     dir = await lstat(lock);
     if (!dir.isDirectory()) return false;
+    if (!(await trustedWorkspace(lock, dir))) return false;
     const names = await readdir(lock);
     if (names.length !== 1) return false;
     const token = `${lock}/${names[0]!}`;
     const info = await lstat(token);
-    if (!info.isFile() || info.nlink !== 1 || info.size > 4096) return false;
+    if (!info.isFile() || info.nlink !== 1 || info.size > 4096 || !ownedPrivately(info)) return false;
     const owner = sidecarOwner(names[0]!, await readFile(token, "utf8"));
     if (owner === undefined || owner.domain !== domain) return false;
     if (owner.pid === process.pid || processAlive(owner.pid)) return false;
@@ -183,6 +191,22 @@ async function removeDeadSidecarLock(lock: string): Promise<boolean> {
     // Not empty, or gone: somebody else's lock now, or nothing. Leave it.
   }
   return true;
+}
+
+/** Owned by this process's user and not writable by group or others; false with no uid (Windows). */
+function ownedPrivately(info: Stats): boolean {
+  const uid = process.getuid?.();
+  return uid !== undefined && info.uid === uid && (info.mode & 0o022) === 0;
+}
+
+/**
+ * Whether the lock sits in a trusted local workspace, where only cooperating writers of this user
+ * can change it: the sidecar's directory and the lock directory are both private to this user.
+ */
+async function trustedWorkspace(lock: string, dir: Stats): Promise<boolean> {
+  if (!ownedPrivately(dir)) return false;
+  const parent = await lstat(dirname(lock));
+  return parent.isDirectory() && ownedPrivately(parent);
 }
 
 /** Whether `path` is still the very entry inspected earlier (same kind, device and inode). */
@@ -220,7 +244,8 @@ async function withStrictPolicyLock<T>(
   const deadline = Date.now() + timeoutMs;
   for (let backoff = 1; ; backoff = Math.min(backoff * 2, 32)) {
     try {
-      await mkdir(lock);
+      // Private to this user, so a lock this user's writers leave can be judged for recovery.
+      await mkdir(lock, { mode: 0o700 });
       break;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
@@ -237,7 +262,7 @@ async function withStrictPolicyLock<T>(
     }
   }
   // A crash before token publication leaves an empty directory, which also refuses takeover.
-  await writeFile(token, contents, { flag: "wx" });
+  await writeFile(token, contents, { flag: "wx", mode: 0o600 });
   const identity = await stat(lock);
   const check = async () => {
     try {
