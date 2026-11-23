@@ -130,6 +130,8 @@ describe("a plain-language rule in the sidecar", () => {
     expect(parseSidecar(row({ ...good, match: { kind: "read", path: "/etc/passwd" } }))).toBeUndefined();
     expect(parseSidecar(row({ ...good, match: { kind: "read", titlePattern: "(" } }))).toBeUndefined();
     expect(parseSidecar(row({ ...good, match: { kind: "read", command: "ls" } }))).toBeUndefined();
+    // An MCP tool rule belongs in the config; the daemon refuses one here.
+    expect(parseSidecar(row({ ...good, mcp: { server: "s", tool: "t" } }))).toBeUndefined();
   });
 
   it("says what Save would refuse, as the daemon's schema does", () => {
@@ -328,6 +330,24 @@ describe("the Config surface's list", () => {
       },
     };
     const policies = agentPolicies(effective);
+    expect(
+      agentPolicies({
+        agents: {
+          claude: {
+            ...CONFIG_GET.effective.agents["claude"]!,
+            judged: [
+              {
+                ruleId: "config:3",
+                source: "config",
+                match: {},
+                criterion: "Searching notes.",
+                mcp: { server: "notes", tool: "search", arguments: ["query"] },
+              },
+            ],
+          },
+        },
+      })[0]!.judged[0]!.gate,
+    ).toBe("MCP tool notes: search, showing query");
     expect(policies[0]!.judged.map((row) => [row.ruleId, row.source, row.gate])).toEqual([
       ["config:2", "config", "search in the workspace"],
       ["sidecar:1", "sidecar", "read under docs"],

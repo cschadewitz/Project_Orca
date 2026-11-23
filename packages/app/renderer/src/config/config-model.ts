@@ -489,6 +489,12 @@ export function describeGate(match: EffectiveJudgedRule["match"]): string {
   return describeRule({ match, decision: "ask", source: "config" }).replace(/^ask /, "");
 }
 
+/** An MCP tool rule's gate in words (#701): the tool by name, and what the judge is shown. */
+export function describeMcpGate(mcp: NonNullable<EffectiveJudgedRule["mcp"]>): string {
+  const shown = mcp.arguments?.length ? `showing ${mcp.arguments.join(", ")}` : "showing no arguments";
+  return `MCP tool ${mcp.server}: ${mcp.tool}, ${shown}`;
+}
+
 /**
  * What a rule matches, in words. The match is a set of optional narrowings and the honest
  * rendering of "no narrowings at all" is to say so rather than to draw an empty sentence.
@@ -545,7 +551,7 @@ export function agentPolicies(effective: {
     judged: (policy.judged ?? []).map((rule) => ({
       ruleId: rule.ruleId,
       source: rule.source === "permissions" ? "sidecar" : "config",
-      gate: describeGate(rule.match),
+      gate: rule.mcp ? describeMcpGate(rule.mcp) : describeGate(rule.match),
       criterion: rule.criterion,
       ...(rule.addedAt === undefined ? {} : { addedAt: rule.addedAt }),
       ...(rule.expiresAt === undefined ? {} : { expiresAt: rule.expiresAt }),
