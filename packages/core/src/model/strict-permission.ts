@@ -16,6 +16,24 @@ export interface StrictActionProfile {
   readonly minimumCoverage: "policy-per-ask" | "verified-per-execution";
   /** Every named fact must be complete unless explicitly allowed to be inapplicable. */
   readonly facts: Readonly<Record<StrictActionFact, "complete" | "complete-or-absent">>;
+  /**
+   * Opt-in judge floor (#701, option C). Absent means off, which is today's behaviour. When present, every
+   * automatic rule allow under this profile must also pass this judge; no rule, grant or Save can lower it.
+   */
+  readonly judgeFloor?: StrictJudgeFloor;
+}
+
+/**
+ * A profile's judge floor. It only ever adds review to an automatic rule allow; it never applies to a deny, an ask,
+ * or a person's own answer. An unsure or unavailable judge always falls back to asking the person.
+ */
+export interface StrictJudgeFloor {
+  readonly projectionPolicyRevision: string;
+  readonly destinationPolicyRef: string;
+  readonly judgeConfigRef: string;
+  readonly maximumDurationMs: number;
+  /** What a "not fit" answer becomes: ask the person, or deny. */
+  readonly onNotFit: "deny" | "require-human";
 }
 
 export interface StrictRuleDelegation {
