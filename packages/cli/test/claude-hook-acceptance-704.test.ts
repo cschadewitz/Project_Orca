@@ -220,7 +220,8 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Claude Code (#704)"
       JSON.stringify({ permissions: { allow: [`Bash(${COMMAND})`] } }),
       "utf8",
     );
-    return () => rm(root, { recursive: true, force: true });
+    // Claude Code can still be writing its own config as a closed session exits.
+    return () => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
   const agent = (permissions: unknown = { rules: [] }, env: Record<string, string> = {}) =>
