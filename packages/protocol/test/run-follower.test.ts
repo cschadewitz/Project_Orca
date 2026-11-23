@@ -153,6 +153,20 @@ describe("RunFollower", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("trims a batch that straddles a snapshot read while its window was open", async () => {
+    const { follower, calls } = setup();
+    follower.follow("run-a");
+    // The read lands at 4 while one step's window holding 3 and 4 is still open; the window
+    // then takes 5 and is flushed as 3..5, after the snapshot. Only 5 is news.
+    calls[0]!.resolve({ run: row("running"), lastSeq: 4 });
+    await flush();
+    follower.notify(batch(3, 5, 3));
+    expect(follower.get("run-a")).toMatchObject({ phase: "live", cursor: 5 });
+    follower.notify(appended(6));
+    expect(follower.get("run-a")).toMatchObject({ phase: "live", cursor: 6, resyncs: 0 });
+    expect(calls).toHaveLength(1);
+  });
+
   it("settles agent output alone when it covers exactly, and repairs an ambiguous gap after a delay", async () => {
     const { follower, calls, timers } = setup();
     follower.follow("run-a");
