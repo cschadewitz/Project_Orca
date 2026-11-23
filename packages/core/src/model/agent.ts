@@ -174,20 +174,23 @@ export const JUDGED_CRITERION_MAX = 2_048;
  * when any `deny` or `ask` rule anywhere in the policy matches the call, or when the call is
  * outside the safe envelope (`plain-language-rules.md` in `docs/preparation/review-judge-701`).
  *
- * Hand-written in `agents[].permissions.rules` for now; saved ones go in a version-4 sidecar
- * later. A release that does not know `judge` refuses the rule (no `decision`) rather than
- * reading it as something else.
+ * Hand-written in `agents[].permissions.rules`, or saved by the app in a version-4 sidecar
+ * (`SidecarJudgedPermissionRuleSchema`, #701). A release that does not know `judge` refuses
+ * the rule (no `decision`) rather than reading it as something else.
  */
+/** A judged rule's `judge`: the criterion, trimmed and bounded (#702). */
+const JudgeCriterionSchema = z.strictObject({
+  criterion: z
+    .string()
+    .trim()
+    .min(1, { message: "a judged rule needs a criterion" })
+    .max(JUDGED_CRITERION_MAX, { message: `a criterion is at most ${JUDGED_CRITERION_MAX} characters` }),
+});
+
 export const JudgedPermissionRuleSchema = z
   .strictObject({
     match: PermissionRuleSchema.shape.match,
-    judge: z.strictObject({
-      criterion: z
-        .string()
-        .trim()
-        .min(1, { message: "a judged rule needs a criterion" })
-        .max(JUDGED_CRITERION_MAX, { message: `a criterion is at most ${JUDGED_CRITERION_MAX} characters` }),
-    }),
+    judge: JudgeCriterionSchema,
   })
   .refine((rule) => rule.match.command === undefined, {
     // Commands need verified effect evidence before a judge may allow one (#703).
@@ -496,6 +499,58 @@ export const RecordedPermissionRuleSchema = PermissionRuleSchema.extend({
 export type RecordedPermissionRule = z.infer<typeof RecordedPermissionRuleSchema>;
 
 /**
+ * The kinds a saved judged rule may name (#701, first rollout): the known read-only operations
+ * the judged lane can open for. A rule for any other kind could never allow anything, so the
+ * app is refused one rather than told it was saved; a later stage that verifies effects widens
+ * this together with the lane (`plain-language-rules.md`, section 3).
+ */
+export const SAVED_JUDGED_KINDS = ["read", "search"] as const;
+
+/**
+ * A judged rule saved in the sidecar (#701): `match` and `judge` as in the config, with
+ * provenance. Unlike a hand-written one it must name a kind, and one of `SAVED_JUDGED_KINDS`,
+ * so the app can never write a match-everything judged rule; and it may carry a lifetime.
+ * A row with both a `decision` and a `judge` is refused rather than read as either.
+ */
+export const SidecarJudgedPermissionRuleSchema = z
+  .object({
+    match: PermissionRuleSchema.shape.match,
+    judge: JudgeCriterionSchema,
+    decision: z.undefined({ error: "a rule has a `decision` or a `judge`, not both" }).optional(),
+    /** ISO-8601 instant the rule was saved. */
+    addedAt: z.string().optional(),
+    /** As on a typed rule: when it stops deciding. Absent: until removed. */
+    expiresAt: RecordedPermissionRuleSchema.shape.expiresAt,
+  })
+  .refine((rule) => rule.match.command === undefined, {
+    message: "a judged rule cannot match a command yet: write a typed deny or ask rule instead",
+    path: ["match", "command"],
+  })
+  .refine((rule) => (SAVED_JUDGED_KINDS as readonly string[]).includes(rule.match.kind ?? ""), {
+    message: `a saved judged rule names its kind, one of ${SAVED_JUDGED_KINDS.join(" or ")}: other calls go to a person`,
+    path: ["match", "kind"],
+  });
+export type SidecarJudgedPermissionRule = z.infer<typeof SidecarJudgedPermissionRuleSchema>;
+
+/**
+ * One row of a sidecar's rule list: a typed grant, or a saved judged rule (#701). The typed
+ * branch refuses a `judge` so that a row carrying both is not read as a typed rule with the
+ * criterion stripped.
+ */
+export const SidecarPermissionRuleSchema = z.union([
+  RecordedPermissionRuleSchema.extend({
+    judge: z.undefined({ error: "a rule has a `decision` or a `judge`, not both" }).optional(),
+  }),
+  SidecarJudgedPermissionRuleSchema,
+]);
+export type SidecarPermissionRule = RecordedPermissionRule | SidecarJudgedPermissionRule;
+
+/** Whether a sidecar row is a saved judged rule (#701). */
+export function isSidecarJudgedRule(rule: SidecarPermissionRule): rule is SidecarJudgedPermissionRule {
+  return "judge" in rule && rule.judge !== undefined;
+}
+
+/**
  * Whether a recorded rule has run out at `now` (#702). The instant itself is already out:
  * a rule granted "for one hour" does not decide the ask that arrives exactly an hour later.
  */
@@ -526,6 +581,17 @@ export const MAX_PERMISSION_RULE_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000;
 export const PERMISSION_LIFETIME_VERSION = 3;
 
 /**
+ * The sidecar version a document holding any saved judged rule is written as (#701). Every
+ * earlier reader refuses it rather than dropping `judge`: 0.7.x refuses anything but version
+ * 1, and a version-3 reader refuses the row (no `decision`). Either way the file is skipped
+ * and every later `allow` becomes `ask`, never a judged rule read as a plain allow.
+ */
+export const PERMISSION_JUDGED_VERSION = 4;
+
+/** The versions a sidecar can be, in order: each one is what its content needs at least. */
+export type PermissionPolicyFileVersion = 1 | typeof PERMISSION_LIFETIME_VERSION | typeof PERMISSION_JUDGED_VERSION;
+
+/**
  * The sidecar document, keyed by agent id.
  *
  * There is deliberately no `default` here. A layer can only ever add rules: answering one
@@ -535,8 +601,10 @@ export const PERMISSION_LIFETIME_VERSION = 3;
  * layer *under* the workspace one without this schema changing.
  */
 const PermissionPolicyDocumentSchema = z.object({
-  version: z.union([z.literal(1), z.literal(PERMISSION_LIFETIME_VERSION)]).default(1),
-  agents: z.record(z.string(), z.object({ rules: z.array(RecordedPermissionRuleSchema).default([]) })).default({}),
+  version: z
+    .union([z.literal(1), z.literal(PERMISSION_LIFETIME_VERSION), z.literal(PERMISSION_JUDGED_VERSION)])
+    .default(1),
+  agents: z.record(z.string(), z.object({ rules: z.array(SidecarPermissionRuleSchema).default([]) })).default({}),
 });
 
 /**
@@ -546,17 +614,22 @@ const PermissionPolicyDocumentSchema = z.object({
  * would take as a grant with no end, so this reader will not pretend it is well formed either.
  */
 export const PermissionPolicyFileSchema = PermissionPolicyDocumentSchema.superRefine((doc, ctx) => {
-  if (doc.version === 1 && permissionPolicyFileVersion(doc) !== 1)
-    ctx.addIssue({
-      code: "custom",
-      message: `a version 1 permission sidecar cannot carry expiresAt or command: those rules are version ${PERMISSION_LIFETIME_VERSION}, which releases before 0.8 refuse rather than read wider than written`,
-    });
+  const needed = permissionPolicyFileVersion(doc);
+  if (doc.version >= needed) return;
+  ctx.addIssue({
+    code: "custom",
+    message:
+      needed === PERMISSION_JUDGED_VERSION
+        ? `a version ${doc.version} permission sidecar cannot carry a judged rule: those are version ${PERMISSION_JUDGED_VERSION}, which earlier releases refuse rather than read as a plain allow`
+        : `a version 1 permission sidecar cannot carry expiresAt or command: those rules are version ${PERMISSION_LIFETIME_VERSION}, which releases before 0.8 refuse rather than read wider than written`,
+  });
 });
 export type PermissionPolicyFile = z.infer<typeof PermissionPolicyFileSchema>;
 
 /**
  * The version a sidecar is written as, from what it holds (#702): 1 when no rule has a
- * lifetime, `PERMISSION_LIFETIME_VERSION` when any does. Writers stamp this and never copy
+ * lifetime, `PERMISSION_LIFETIME_VERSION` when any does, and `PERMISSION_JUDGED_VERSION` when
+ * any rule is judged (#701). Writers stamp this and never copy
  * a version from their input, so removing the last timed rule makes the file readable by
  * older releases again.
  */
@@ -564,15 +637,23 @@ export function permissionPolicyFileVersion(doc: {
   agents: Readonly<
     Record<
       string,
-      { rules: readonly { expiresAt?: string | undefined; match: { command?: string | undefined } }[] } | undefined
+      | {
+          rules: readonly {
+            expiresAt?: string | undefined;
+            judge?: unknown;
+            match: { command?: string | undefined };
+          }[];
+        }
+      | undefined
     >
   >;
-}): 1 | typeof PERMISSION_LIFETIME_VERSION {
+}): PermissionPolicyFileVersion {
+  const rules = Object.values(doc.agents).flatMap((agent) => agent?.rules ?? []);
+  // A judged rule is version 4 whatever else the file holds (#701).
+  if (rules.some((rule) => rule.judge !== undefined)) return PERMISSION_JUDGED_VERSION;
   // A command rule read by a release that does not know `command` would lose it and keep the
   // rest, and `{kind: execute}` alone is every command: so it is version 3 too.
-  return Object.values(doc.agents).some((agent) =>
-    agent?.rules.some((rule) => rule.expiresAt !== undefined || rule.match.command !== undefined),
-  )
+  return rules.some((rule) => rule.expiresAt !== undefined || rule.match.command !== undefined)
     ? PERMISSION_LIFETIME_VERSION
     : 1;
 }

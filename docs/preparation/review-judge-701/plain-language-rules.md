@@ -57,8 +57,11 @@ actually does (section 3, "Later stage").
   config. Both are ORCA-protected files, so an agent cannot write itself a rule.
 - **Built (#702):** config judged rules and the evaluation slot (`packages/agents/src/judged-lane.ts`).
   A rule's id is its place in the config (`config:N`); the decision record carries the verdict,
-  the id and `judgeConfigRef`, and keeps the revision in memory only. Saved (sidecar v4) judged
-  rules are not readable yet.
+  the id and `judgeConfigRef`, and keeps the revision in memory only.
+- **Built (#701, item 3b):** the save method, `permissions.saveJudgedRule` (protocol 2.12). Saved
+  judged rules are read from the version-4 sidecar into the same slot, after the configured ones,
+  named `sidecar:N`. A saved rule names `read` or `search` for now (the first-rollout envelope);
+  ADR 0009 has the details.
 - #702 owns the schema and the evaluation slot in `permissions.ts`. This thread owns the judge
   (`judgePermission`, section 5).
 

@@ -137,7 +137,7 @@ entries naming the catalog MCP servers and skills its principal's runs may be gi
 | `runs.start`         | Start runs and use installed operator launch preflight.                    |
 | `runs.control`       | Resume and cancel runs.                                                    |
 | `inputs.answer`      | Answer one open gate or permission ask, once.                              |
-| `permissions.grant`  | Answer a permission ask with `always`, which writes a standing rule.       |
+| `permissions.grant`  | Answer a permission ask with `always`, which writes a standing rule; save a plain-language rule (`permissions.saveJudgedRule`, with `config.write`). |
 | `claims.release`     | Release a work-item claim.                                                 |
 | `plan.read`          | The plan reads; `plan.changed`.                                            |
 | `plan.write`         | Waive dependencies, decide and reopen decisions, update risks.             |
@@ -279,6 +279,7 @@ that the two match. A method that is missing from the table is refused with
 | `workflowDrafts.dryRun` | `config.write` | additionally config.read and runs.start; the workflow (`workflowId`), checked as a launch of it, and the caller's current authority and workflow scope rechecked immediately before the simulation is created; owner-only, revision-checked, refused while validation finds an error; the root is owned by the caller, durably, before anything drives it, as `runs.start`; simulates the draft with fixtures (no agent, workspace, secret, Request, work item or plugin node) and leaves a dry-run tree; writes no workflow file (#183) | mutation |
 | `config.get` | `config.read` | workspace-wide | — |
 | `config.set` | `config.write` | additionally config.read; workspace-wide unredacted Save/validation receipt | mutation |
+| `permissions.saveJudgedRule` | `permissions.grant` | additionally config.write; workspace-wide; appends one plain-language rule to the sidecar under its lock, rechecked before the write; returns no document bytes | mutation |
 | `config.apply` | `config.write` | workspace-wide | mutation |
 | `plans.list` | `plan.read` | workspace-wide | — |
 | `plan.get` | `plan.read` | workspace-wide | — |

@@ -56,6 +56,7 @@ import {
   derivePermissionRules,
   effectivePermissionPolicy,
   isJudgedPermissionRule,
+  isSidecarJudgedRule,
   isWildcardPermissionRule,
   OrcaError,
   PERMISSION_POLICY_FILENAME,
@@ -63,8 +64,10 @@ import {
   permissionPathForms,
   permissionPolicyFileVersion,
   permissionRuleExpired,
+  PERMISSION_JUDGED_VERSION,
   PERMISSION_LIFETIME_VERSION,
   samePermissionRule,
+  SidecarJudgedPermissionRuleSchema,
   workspaceRelativePath,
   WritablePermissionPolicyFileSchema,
 } from "@orca/core";
@@ -81,6 +84,8 @@ import type {
   JudgedPermissionRule,
   JudgedPolicyRule,
   RecordedPermissionRule,
+  SidecarJudgedPermissionRule,
+  SidecarPermissionRule,
 } from "@orca/core";
 
 export interface PermissionContext {
@@ -761,6 +766,8 @@ function permissionOverlayEntries(
 ): { rule: PermissionRule; index: number }[] {
   const rules: { rule: PermissionRule; index: number }[] = [];
   for (const [index, r] of (doc.agents[agentId]?.rules ?? []).entries()) {
+    // A saved judged rule is not a typed rule (#701): `sidecarJudgedRules` carries it apart.
+    if (isSidecarJudgedRule(r)) continue;
     // A rule whose lifetime has run out decides nothing (#702). It is not reported as
     // ignored: it was a scoped grant that ended, not a wildcard somebody slipped in.
     if (permissionRuleExpired(r, now)) continue;
@@ -769,6 +776,33 @@ function permissionOverlayEntries(
     else rules.push({ rule, index });
   }
   return rules;
+}
+
+/**
+ * The judged rules a sidecar holds for one agent (#701), in file order, less any whose lifetime
+ * has run out at `now`. Each is named `sidecar:N` by its index in the agent's list as written,
+ * expired and typed entries counted, so the id names the entry a person sees in the file; a
+ * second sidecar's are `sidecar.F:N`. A typed rule's id is its place too: an edit or a removal
+ * above it renames it, and the judged lane's re-check then refuses an allow judged against the
+ * old name (`changed-since`) rather than crediting another rule.
+ */
+export function sidecarJudgedRules(
+  doc: PermissionPolicyFile,
+  agentId: string,
+  fileIndex = 0,
+  now: number = Date.now(),
+): JudgedPolicyRule[] {
+  const out: JudgedPolicyRule[] = [];
+  for (const [index, r] of (doc.agents[agentId]?.rules ?? []).entries()) {
+    if (!isSidecarJudgedRule(r) || permissionRuleExpired(r, now)) continue;
+    out.push(
+      judgedPolicyRule(
+        { match: r.match, judge: { criterion: r.judge.criterion } },
+        fileIndex === 0 ? `sidecar:${index}` : `sidecar.${fileIndex}:${index}`,
+      ),
+    );
+  }
+  return out;
 }
 
 /**
@@ -838,6 +872,8 @@ export async function loadEffectivePermissionPolicy(
       );
       overlays.push(entries.map((e) => e.rule));
       for (const e of entries) origins.push({ layer: "sidecar", index: e.index, file: fileIndex, revision });
+      // Saved judged rules come after every hand-written one (#701 design, decided 2026-11-23).
+      judged.push(...sidecarJudgedRules(doc, agent.id, fileIndex, now()));
     } catch (e) {
       if (!onUnreadable) throw e;
       onUnreadable(file, e);
@@ -960,12 +996,12 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
     throw new OrcaError("CONFIG_INVALID", `a standing rule cannot expire at ${expiresAt}: that is not after now`);
   const grantedFor = (tc.title ?? "").trim();
   /** How long a rule lasts, for "does this answer outlast the one on file". */
-  const until = (rule: RecordedPermissionRule): number =>
+  const until = (rule: SidecarPermissionRule): number =>
     rule.expiresAt === undefined ? Infinity : Date.parse(rule.expiresAt);
   const wanted = expiresAt === undefined ? Infinity : Date.parse(expiresAt);
   return withPolicyLock(opts.file, opts.lock, async () => {
     const doc = await readPermissionPolicyFile(opts.file);
-    const rules = [...(doc.agents[opts.agentId]?.rules ?? [])];
+    const rules: SidecarPermissionRule[] = [...(doc.agents[opts.agentId]?.rules ?? [])];
     const added: PermissionRule[] = [];
     const alreadyPresent: PermissionRule[] = [];
     const recorded = (rule: PermissionRule): RecordedPermissionRule => ({
@@ -975,7 +1011,7 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
       ...(expiresAt === undefined ? {} : { expiresAt }),
     });
     for (const rule of derived.rules) {
-      const same = rules.flatMap((r, index) => (samePermissionRule(r, rule) ? [index] : []));
+      const same = rules.flatMap((r, index) => (!isSidecarJudgedRule(r) && samePermissionRule(r, rule) ? [index] : []));
       if (same.some((index) => until(rules[index]!) >= wanted)) alreadyPresent.push(rule);
       else if (same.length > 0) {
         // The grant is on file but ends sooner (or has ended): this answer extends it in place
@@ -991,6 +1027,131 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
       await writePolicyFile(opts.file, { ...doc, agents: { ...doc.agents, [opts.agentId]: { rules } } });
     return { file: opts.file, agentId: opts.agentId, rules: derived.rules, added, alreadyPresent };
   });
+}
+
+export interface SaveJudgedRuleOptions {
+  /** The sidecar to save to; `permissionPolicyPath(configDir)` for the workspace one. */
+  file: string;
+  /** The agent whose policy the rule joins. */
+  agentId: string;
+  /** The deterministic gate. It must name a kind in `SAVED_JUDGED_KINDS`, and no command. */
+  match: PermissionRule["match"];
+  /** The plain-language criterion a judge applies to calls the match holds for. */
+  criterion: string;
+  /** When the rule stops deciding, as an ISO-8601 instant after now. Absent: until removed. */
+  expiresAt?: string | undefined;
+  /** The caller's current authority, checked under the lock and again just before the write. */
+  authorize?: (() => Promise<void>) | undefined;
+  /** Injectable clock, for tests. */
+  now?: (() => Date) | undefined;
+  /** Lock tuning; the defaults are fine. */
+  lock?: { timeoutMs?: number; staleMs?: number } | undefined;
+}
+
+export interface SaveJudgedRuleResult {
+  file: string;
+  agentId: string;
+  /** The rule's id as the judged lane names it, `sidecar:N`. */
+  ruleId: string;
+  /**
+   * `added`: appended. `extended`: the same rule was on file and ended sooner (or had ended),
+   * so its lifetime was moved out in place. `already-present`: on file for at least as long;
+   * nothing was written.
+   */
+  outcome: "added" | "extended" | "already-present";
+  /** The rule as it is now on file. */
+  rule: SidecarJudgedPermissionRule;
+}
+
+/**
+ * Save one plain-language rule a person wrote or accepted (#701, `plain-language-rules.md`
+ * section 2): the app's save method for judged rules. It lands in the sidecar, after every
+ * hand-written rule, and the file becomes version 4 (`PERMISSION_JUDGED_VERSION`), which every
+ * earlier reader refuses rather than reading the rule as a plain allow.
+ *
+ * Only what the judged lane could ever use is accepted: a kind from `SAVED_JUDGED_KINDS`, no
+ * command, and paths written relative to the workspace (ADR 0009), so a saved rule can never
+ * be a match-everything rule or name a file outside the workspace. A saved rule allows nothing
+ * by itself: the lane asks a judge only when a session was given one, only after the typed
+ * rules answered `ask`, and only inside its hard boundaries.
+ *
+ * The same rule (same match, same criterion) is never appended twice: one already on file for
+ * at least as long is reported `already-present`, and one ending sooner is extended in place,
+ * as `recordAlwaysDecision` does for a typed grant. Everything happens under the sidecar's
+ * `link()` lock, so a save racing an "always" answer or a Config-surface edit loses neither.
+ */
+export async function saveJudgedRule(opts: SaveJudgedRuleOptions): Promise<SaveJudgedRuleResult> {
+  const at = opts.now?.() ?? new Date();
+  const expiresAt = opts.expiresAt;
+  if (expiresAt !== undefined && !(Date.parse(expiresAt) > at.getTime()))
+    throw new OrcaError("CONFIG_INVALID", `a saved rule cannot expire at ${expiresAt}: that is not after now`);
+  const parsed = SidecarJudgedPermissionRuleSchema.safeParse({
+    match: opts.match,
+    judge: { criterion: opts.criterion },
+    addedAt: at.toISOString(),
+    ...(expiresAt === undefined ? {} : { expiresAt }),
+  });
+  if (!parsed.success)
+    throw new OrcaError("CONFIG_INVALID", parsed.error.issues[0]?.message ?? "invalid judged rule", {
+      issues: parsed.error.issues,
+    });
+  const rule = parsed.data;
+  for (const key of ["path", "pathPrefix"] as const) {
+    const value = rule.match[key];
+    if (value !== undefined && !workspaceRelativeText(value))
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `a saved rule's ${key} is written relative to the workspace, with no '..': ${JSON.stringify(value)} is not`,
+      );
+  }
+  const until = (r: { expiresAt?: string | undefined }): number =>
+    r.expiresAt === undefined ? Infinity : Date.parse(r.expiresAt);
+  const wanted = until(rule);
+  return withPolicyLock(opts.file, opts.lock, async () => {
+    await opts.authorize?.();
+    const doc = await readPermissionPolicyFile(opts.file);
+    const rules: SidecarPermissionRule[] = [...(doc.agents[opts.agentId]?.rules ?? [])];
+    const same = rules.flatMap((r, index) => (isSidecarJudgedRule(r) && sameJudgedRule(r, rule) ? [index] : []));
+    const kept = same.find((index) => until(rules[index]!) >= wanted);
+    const result = (index: number, outcome: SaveJudgedRuleResult["outcome"]): SaveJudgedRuleResult => ({
+      file: opts.file,
+      agentId: opts.agentId,
+      ruleId: `sidecar:${index}`,
+      outcome,
+      rule: rules[index] as SidecarJudgedPermissionRule,
+    });
+    if (kept !== undefined) return result(kept, "already-present");
+    let index: number;
+    let outcome: SaveJudgedRuleResult["outcome"];
+    if (same.length > 0) {
+      index = same[0]!;
+      rules[index] = rule;
+      outcome = "extended";
+    } else {
+      index = rules.push(rule) - 1;
+      outcome = "added";
+    }
+    await writePolicyFile(opts.file, { ...doc, agents: { ...doc.agents, [opts.agentId]: { rules } } }, opts.authorize);
+    return result(index, outcome);
+  });
+}
+
+/** The same saved judged rule: the same match and the same criterion, provenance aside. */
+function sameJudgedRule(a: SidecarJudgedPermissionRule, b: SidecarJudgedPermissionRule): boolean {
+  return (
+    a.judge.criterion === b.judge.criterion &&
+    samePermissionRule({ match: a.match, decision: "allow" }, { match: b.match, decision: "allow" })
+  );
+}
+
+/**
+ * Whether a path written in a saved rule is relative to the workspace: not absolute, no drive
+ * or home prefix, no `..` segment. Lexical on purpose; the judged lane verifies the real files.
+ */
+function workspaceRelativeText(path: string): boolean {
+  if (path === "" || isAbsolute(path) || /^[A-Za-z]:/.test(path) || path.startsWith("~")) return false;
+  if (path.startsWith("/") || path.startsWith("\\")) return false;
+  return !path.split(/[\\/]+/).includes("..");
 }
 
 /**
@@ -1079,7 +1240,8 @@ async function refuseUnsupportedPolicyReplacement(file: string): Promise<void> {
     !Array.isArray(raw) &&
     "version" in raw &&
     raw.version !== 1 &&
-    raw.version !== PERMISSION_LIFETIME_VERSION
+    raw.version !== PERMISSION_LIFETIME_VERSION &&
+    raw.version !== PERMISSION_JUDGED_VERSION
   )
     throw new OrcaError("CONFIG_INVALID", `${file}: refusing to replace an unsupported permission document version`);
 }
@@ -1102,10 +1264,17 @@ export function parsePermissionPolicyDocument(doc: unknown): PermissionPolicyFil
 
 /** Keys in a fixed order and `undefined` omitted, so a rewrite produces a minimal diff. */
 function serialize(doc: PermissionPolicyFile): string {
-  const rule = (r: RecordedPermissionRule): Record<string, unknown> => {
+  const rule = (r: SidecarPermissionRule): Record<string, unknown> => {
     const match: Record<string, unknown> = {};
     for (const key of ["kind", "titlePattern", "path", "pathPrefix", "scope", "command"] as const)
       if (r.match[key] !== undefined) match[key] = r.match[key];
+    if (isSidecarJudgedRule(r)) {
+      // A saved judged rule (#701): its criterion in place of a decision.
+      const out: Record<string, unknown> = { match, judge: { criterion: r.judge.criterion } };
+      if (r.addedAt !== undefined) out["addedAt"] = r.addedAt;
+      if (r.expiresAt !== undefined) out["expiresAt"] = r.expiresAt;
+      return out;
+    }
     const out: Record<string, unknown> = { match, decision: r.decision };
     if (r.addedAt !== undefined) out["addedAt"] = r.addedAt;
     if (r.grantedFor !== undefined) out["grantedFor"] = r.grantedFor;
@@ -1115,7 +1284,8 @@ function serialize(doc: PermissionPolicyFile): string {
   const agents: Record<string, unknown> = {};
   for (const id of Object.keys(doc.agents).sort()) agents[id] = { rules: (doc.agents[id]?.rules ?? []).map(rule) };
   // The version follows the content, never the input (#702): any lifetime moves the file to
-  // the version released 0.7.x readers refuse, and removing the last one moves it back.
+  // the version released 0.7.x readers refuse, any judged rule to version 4 (#701), and
+  // removing the last one moves it back.
   return `${JSON.stringify({ version: permissionPolicyFileVersion(doc), agents }, null, 2)}\n`;
 }
 

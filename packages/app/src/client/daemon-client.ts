@@ -41,6 +41,8 @@ import {
   ClaimsReleaseResultSchema,
   ConfigGetResultSchema,
   ConfigSetResultSchema,
+  PERMISSIONS_SAVE_JUDGED_RULE_METHOD,
+  PermissionsSaveJudgedRuleResultSchema,
   DECISIONS_DECIDE_METHOD,
   DECISIONS_LIST_METHOD,
   DECISIONS_REOPEN_METHOD,
@@ -112,6 +114,8 @@ import {
   type ConfigGetResult,
   type ConfigSetParams,
   type ConfigSetResult,
+  type PermissionsSaveJudgedRuleParams,
+  type PermissionsSaveJudgedRuleResult,
   type ClaimsReleaseParams,
   type ClaimsReleaseResult,
   type DecisionsDecideParams,
@@ -654,6 +658,15 @@ export class DaemonClient {
    */
   configSet(params: ConfigSetParams): Promise<ConfigSetResult> {
     return this.call(CONFIG_SET_METHOD, params, ConfigSetResultSchema);
+  }
+
+  /**
+   * Save a plain-language rule a person wrote or accepted (protocol 2.12, #701). The daemon
+   * appends it to the permission sidecar after every hand-written rule; it allows nothing on
+   * its own, only what a judge decides it covers, one call at a time.
+   */
+  permissionsSaveJudgedRule(params: PermissionsSaveJudgedRuleParams): Promise<PermissionsSaveJudgedRuleResult> {
+    return this.call(PERMISSIONS_SAVE_JUDGED_RULE_METHOD, params, PermissionsSaveJudgedRuleResultSchema);
   }
 
   /** Every configured agent's handshake health, with what is claimed right now beside it. */

@@ -236,6 +236,13 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
     resource: "none",
     audit: "mutation",
   },
+  // Protocol 2.12 (#701): a saved plain-language rule is standing permission policy.
+  "permissions.saveJudgedRule": {
+    permission: "permissions.grant",
+    additionalPermissions: ["config.write"],
+    resource: "none",
+    audit: "mutation",
+  },
 
   "plans.list": { permission: "plan.read", resource: "none" },
   "plan.get": { permission: "plan.read", resource: "none" },
