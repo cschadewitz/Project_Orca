@@ -84,7 +84,7 @@ describe("store metadata backend (#339)", () => {
       appVersion: "0.8.0",
     });
     expect(outcome).toMatchObject({ status: "switched", epoch: SQLITE_STORE_FORMAT_EPOCH });
-    if (outcome.status !== "switched") throw new Error("not switched");
+    if (outcome.status !== "switched" || !outcome.backup) throw new Error("not switched");
     // The backup is the whole store as it was on files.
     expect(outcome.backup.startsWith(join(dir, STORE_FORMAT_BACKUP_DIR))).toBe(true);
     expect(JSON.parse(await readFile(join(outcome.backup, STORE_FORMAT_BACKUP_MANIFEST), "utf8"))).toMatchObject({

@@ -95,7 +95,9 @@ export const STORE_FORMAT_HISTORY: readonly { epoch: string; release: string }[]
 export const STORE_FORMAT_EPOCH = STORE_FORMAT_HISTORY.at(-1)!.epoch;
 /** This format and the one before it are read in place. */
 export const SUPPORTED_STORE_FORMATS: readonly string[] = STORE_FORMAT_HISTORY.slice(-2).map((f) => f.epoch);
-const LOCK = ".store-format.lock";
+/** The format lock: opening, stamping, carrying forward and converting a store take it. */
+export const STORE_FORMAT_LOCK = ".store-format.lock";
+const LOCK = STORE_FORMAT_LOCK;
 
 const MarkerSchema = z.object({
   format: z.literal(1),
@@ -107,6 +109,18 @@ const MarkerSchema = z.object({
   sqliteId: z
     .string()
     .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    .optional(),
+  /**
+   * On a store converted from a file store into one of its own (store-convert.ts): that store,
+   * left as it was, and the signature of its files when they were copied, so a write that
+   * reached it afterwards (a released ORCA still running there) can be reported.
+   */
+  convertedFrom: z
+    .object({
+      store: z.string().min(1).max(4096),
+      signature: z.string().regex(/^[0-9a-f]{64}$/),
+      at: z.string().min(1).max(64),
+    })
     .optional(),
 });
 export type StoreFormatMarker = z.infer<typeof MarkerSchema>;
@@ -124,7 +138,8 @@ export type StoreFormatReason =
   | "FENCE_LOST"
   | "APP_OWNED"
   | "UNDURABLE"
-  | "INTERRUPTED";
+  | "INTERRUPTED"
+  | "SOURCE_CHANGED";
 export class StoreFormatError extends OrcaError {
   override readonly name = "StoreFormatError";
   constructor(
@@ -303,7 +318,7 @@ async function stamp(
   storeDir: string,
   appVersion: string,
   now: Date,
-  fields: Pick<StoreFormatMarker, "backup" | "sqliteId">,
+  fields: Pick<StoreFormatMarker, "backup" | "sqliteId" | "convertedFrom">,
   guard: () => void = () => undefined,
   epoch: string = STORE_FORMAT_EPOCH,
   afterRename?: () => Promise<void>,
@@ -315,6 +330,7 @@ async function stamp(
     updatedAt: now.toISOString(),
     ...(fields.backup ? { backup: fields.backup } : {}),
     ...(fields.sqliteId ? { sqliteId: fields.sqliteId } : {}),
+    ...(fields.convertedFrom ? { convertedFrom: fields.convertedFrom } : {}),
   };
   const tmp = join(storeDir, `${STORE_FORMAT_FILE}.${randomUUID()}.tmp`);
   await createDurable(tmp, JSON.stringify(value, null, 2) + "\n");
@@ -406,7 +422,7 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
         storeDir,
         options.appVersion,
         now,
-        { backup: marker?.backup, sqliteId: marker?.sqliteId },
+        { backup: marker?.backup, sqliteId: marker?.sqliteId, convertedFrom: marker?.convertedFrom },
         undefined,
         kept(marker),
       );
@@ -577,6 +593,11 @@ export interface SwitchToSqliteOptions {
   privacy?: PrivateCopyBackend;
   /** Injected for tests; defaults to this process's platform. */
   platform?: NodeJS.Platform;
+  /**
+   * The store is a fresh copy of `storeDir` that nothing else has open (store-convert.ts): no
+   * backup is taken (the original is left as it was), and the marker records where it came from.
+   */
+  copyOf?: { storeDir: string; signature: string };
   /** Injected for tests: runs after the import and its verify, before the last checks. */
   afterImport?: () => Promise<void>;
   /** Injected for tests: runs after each path of the legacy fence is in place. */
@@ -590,7 +611,7 @@ export interface SwitchToSqliteOptions {
 }
 
 export type SwitchToSqliteOutcome =
-  { status: "switched"; epoch: string; backup: string } | { status: "current"; epoch: string };
+  { status: "switched"; epoch: string; backup?: string } | { status: "current"; epoch: string };
 
 const busyWriters = (storeDir: string, writers: StoreWriterEntry[]) =>
   new StoreFormatError(
@@ -694,11 +715,16 @@ async function switchLocked(
   },
 ): Promise<SwitchToSqliteOutcome> {
   const { current, now, privacy, fileMetadata } = context;
-  let backup: string;
+  let backup: string | undefined;
+  const convertedFrom = options.copyOf
+    ? { store: options.copyOf.storeDir, signature: options.copyOf.signature, at: now.toISOString() }
+    : undefined;
   try {
     const before = await fileMetadata();
-    const staged = await stageCarryover(storeDir, current, SQLITE_STORE_FORMAT_EPOCH, now, { privacy });
-    backup = await staged.commit();
+    if (!options.copyOf) {
+      const staged = await stageCarryover(storeDir, current, SQLITE_STORE_FORMAT_EPOCH, now, { privacy });
+      backup = await staged.commit();
+    }
     await importFileMetadata(storeDir);
     const verified = await verifySqliteMetadata(storeDir);
     if (!verified.ok)
@@ -731,7 +757,7 @@ async function switchLocked(
     // The legacy fence (sqlite/legacy-fence.ts): from the journal on, an interruption is undone
     // (or, once the marker is written, finished) by the next start, and a released ORCA that
     // never reads the marker finds every path it would open first replaced by a marker.
-    await beginSqliteSwitchJournal(storeDir, { format: 1, sqliteId, backup });
+    await beginSqliteSwitchJournal(storeDir, { format: 1, sqliteId, backup: backup ?? options.copyOf?.storeDir ?? "" });
     try {
       await fenceLegacyMetadata(storeDir, options.afterFenceStep);
       // A write that landed while the fence went in shows up in what was set aside.
@@ -746,7 +772,7 @@ async function switchLocked(
         storeDir,
         options.appVersion,
         now,
-        { backup, sqliteId },
+        { backup, sqliteId, convertedFrom },
         undefined,
         SQLITE_STORE_FORMAT_EPOCH,
         options.afterMarkerRename,
@@ -773,6 +799,7 @@ async function switchLocked(
     if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
     throw error;
   }
+  if (!backup) return { status: "switched", epoch: SQLITE_STORE_FORMAT_EPOCH };
   await pruneFormatBackups(storeDir, backup, privacy);
   return { status: "switched", epoch: SQLITE_STORE_FORMAT_EPOCH, backup };
 }

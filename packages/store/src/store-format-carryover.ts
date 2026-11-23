@@ -250,6 +250,28 @@ async function copyTree(source: string, target: string, entries: Snapshot, priva
   await syncDirectory(target);
 }
 
+/**
+ * Copy `entries` of `source` into `target`, a new private directory, durably, and check every
+ * file's bytes against the source: false when they differ. A conversion into a store of its own
+ * (store-convert.ts) is built from this copy.
+ */
+export async function copyStoreInto(
+  source: string,
+  target: string,
+  entries: Snapshot,
+  privacy: PrivateCopyBackend,
+): Promise<boolean> {
+  await privateDirectory(privacy, target);
+  await copyTree(source, target, entries, privacy);
+  return verifyCopy(source, target, entries);
+}
+
+/** What identifies a snapshot's content: every path with its type, mode and state. */
+export const storeSnapshotSignature = (s: Snapshot): string =>
+  createHash("sha256")
+    .update(JSON.stringify([...s].map(([path, e]) => [path, e.type, e.mode, e.state])))
+    .digest("hex");
+
 async function verifyCopy(source: string, target: string, entries: Snapshot): Promise<boolean> {
   for (const [path, entry] of entries)
     if (entry.type === "file" && (await digest(join(source, path))) !== (await digest(join(target, path))))
