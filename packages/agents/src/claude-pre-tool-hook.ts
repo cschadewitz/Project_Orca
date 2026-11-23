@@ -192,6 +192,35 @@ function mcpToolName(name: string): { server: string; tool: string } | undefined
   return tool ? { server: rest.slice(0, sep), tool } : undefined;
 }
 
+/** Rust's `str::trim` (Unicode White_Space), which Codex's patch parser uses. */
+const rustTrim = (line: string) => line.replace(/^[\s\u0085]+|[\s\u0085]+$/gu, "");
+
+/**
+ * The files a Codex `apply_patch` touches (#705), read from its file headers the way Codex
+ * 0.171's parser (`codex-rs/apply-patch`) reads them: each line trimmed, then matched by
+ * prefix. Any line that could be a header counts, so a context line that happens to look
+ * like one adds a location rather than hiding one. A patch that picks another environment
+ * (`*** Environment ID:`) runs somewhere the call's cwd says nothing about, so it is not
+ * decided here at all: the hook blocks it.
+ */
+export function codexPatchFiles(patch: string): { op: "add" | "update" | "delete" | "move"; path: string }[] {
+  const headers = [
+    ["*** Add File: ", "add"],
+    ["*** Update File: ", "update"],
+    ["*** Delete File: ", "delete"],
+    ["*** Move to: ", "move"],
+  ] as const;
+  const ops: { op: "add" | "update" | "delete" | "move"; path: string }[] = [];
+  for (const raw of patch.split("\n")) {
+    const line = rustTrim(raw);
+    if (line.startsWith("*** Environment ID:"))
+      throw new HookInputError("the patch names another environment, which the hook cannot check");
+    for (const [prefix, op] of headers)
+      if (line.startsWith(prefix) && line.length > prefix.length) ops.push({ op, path: line.slice(prefix.length) });
+  }
+  return ops;
+}
+
 /**
  * The tool call as an ACP `session/request_permission` would describe it, so that one rule
  * decides a call the same way whether it arrives as an ask or through the hook.
@@ -255,6 +284,21 @@ export function claudeToolCall(frame: ClaudePreToolFrame): ClaudePreToolVerdict[
     case "WebSearch": {
       const q = str(input, "query");
       return { title: q ? `Search "${q}"` : "Web search", kind: "fetch", locations: [] };
+    }
+    // Codex (#705) reports its shell as `Bash` above, and these two by their own names.
+    case "apply_patch": {
+      const ops = codexPatchFiles(str(input, "command") ?? "");
+      const kind: acp.ToolKind = ops.some((o) => o.op === "delete")
+        ? "delete"
+        : ops.some((o) => o.op === "move")
+          ? "move"
+          : "edit";
+      const paths = [...new Set(ops.map((o) => o.path))];
+      return { title: paths.length ? `Edit ${paths.join(", ")}` : "Edit", kind, locations: paths.flatMap(at) };
+    }
+    case "view_image": {
+      const p = str(input, "path");
+      return { title: p ? `Read ${p}` : "Read File", kind: "read", locations: at(p) };
     }
     case "Agent":
     case "Task":
@@ -354,6 +398,27 @@ export function claudePreToolHookOutput(verdict: ClaudePreToolVerdict): ClaudePr
   };
 }
 
+/**
+ * How the hook answers Codex for a verdict (#705). Codex 0.171 blocks a call only on a
+ * `deny` or on exit 2; an `ask`, an `allow`, exit 1 and output it cannot read all let the
+ * call run. So every answer but allow is exit 2 with the reason on stderr, which Codex blocks
+ * on whatever else is on stdout (a login shell's profile can print there), and an `ask`
+ * blocks too: Codex cannot pause a call for a person from a hook, and an ask that runs the
+ * call would be an allow. Allow is exit 0 and nothing else, as for Claude: Codex's own
+ * approval and sandbox still apply to the call.
+ */
+export function codexPreToolHookOutput(verdict: ClaudePreToolVerdict): ClaudePreToolHookResult {
+  if (verdict.decision === "allow") return { exitCode: 0, stdout: "", stderr: "" };
+  const reason =
+    verdict.decision === "deny"
+      ? `Denied by ORCA: ${REASON_TEXT[verdict.reason]}.`
+      : `Blocked by ORCA: its policy asks a person first (${REASON_TEXT[verdict.reason]}), and Codex cannot pause a call for that, so it does not run. A rule in ORCA can allow it.`;
+  return { exitCode: 2, stdout: "", stderr: `${reason}\n` };
+}
+
+/** Which agent the hook answers, as its command line says (`--codex` before the context file). */
+export type PreToolHookDialect = "claude" | "codex";
+
 /** The answer for a hook that could not decide: exit 2, which Claude Code treats as a block. */
 export function claudePreToolHookFailure(error: unknown): ClaudePreToolHookResult {
   const detail = error instanceof HookInputError ? error.message : "internal error";
@@ -361,15 +426,17 @@ export function claudePreToolHookFailure(error: unknown): ClaudePreToolHookResul
 }
 
 /**
- * Run the hook once: `args` is `[contextFile]`, `input` is Claude's stdin. Every failure is a
- * block. This is the whole of the hook process (`bin/claude-pre-tool-hook.ts`), kept here so
- * it is tested without spawning anything.
+ * Run the hook once: `args` is `[contextFile]` for Claude or `["--codex", contextFile]` for
+ * Codex (#705), `input` is the agent's stdin. Every failure is a block (exit 2, which both
+ * agents block on). This is the whole of the hook process (`bin/claude-pre-tool-hook.ts`),
+ * kept here so it is tested without spawning anything.
  */
 export async function runClaudePreToolHook(args: readonly string[], input: string): Promise<ClaudePreToolHookResult> {
   try {
-    const file = args[0];
-    if (args.length !== 1 || file === undefined || !isAbsolute(file))
-      throw new HookInputError("the hook takes one argument, the absolute path of its context file");
+    const dialect: PreToolHookDialect = args.length === 2 && args[0] === "--codex" ? "codex" : "claude";
+    const file = dialect === "codex" ? args[1] : args[0];
+    if (args.length !== (dialect === "codex" ? 2 : 1) || file === undefined || !isAbsolute(file))
+      throw new HookInputError("the hook takes the absolute path of its context file, after --codex for Codex");
     const text = await readFile(file, "utf8").catch(() => {
       throw new HookInputError("hook context file cannot be read");
     });
@@ -382,7 +449,8 @@ export async function runClaudePreToolHook(args: readonly string[], input: strin
     }
     const context = parseClaudeHookContext(raw);
     const frame = parseClaudePreToolFrame(input);
-    return claudePreToolHookOutput(await checkClaudePreTool(context, frame));
+    const verdict = await checkClaudePreTool(context, frame);
+    return dialect === "codex" ? codexPreToolHookOutput(verdict) : claudePreToolHookOutput(verdict);
   } catch (error) {
     return claudePreToolHookFailure(error);
   }
