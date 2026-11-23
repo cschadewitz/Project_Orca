@@ -123,11 +123,22 @@ export const SecretGrantSchema = z.union([
          */
         purpose: z.literal("review-judge").optional(),
         destination: z.string().min(1).optional(),
+        /**
+         * A review-judge grant's source binding (`secretSourceBinding`): the variable the value
+         * is read from. Rotating the value there is covered; pointing the id elsewhere is not.
+         */
+        source: z
+          .string()
+          .regex(/^s1:[0-9a-f]{32}$/)
+          .optional(),
       })
       .strict()
-      .refine((g) => (g.purpose === undefined) === (g.destination === undefined), {
-        message: "a review-judge grant names its destination, and only such a grant does",
-      }),
+      .refine(
+        (g) =>
+          (g.purpose === undefined) === (g.destination === undefined) &&
+          (g.purpose === undefined) === (g.source === undefined),
+        { message: "a review-judge grant names its destination and source, and only such a grant does" },
+      ),
   ),
 ]);
 export type SecretGrant = z.infer<typeof SecretGrantSchema>;
@@ -146,6 +157,7 @@ export function grantCovers(
     hostBinding: string;
     purpose?: "review-judge" | undefined;
     destination?: string | undefined;
+    sourceBinding?: string | undefined;
   },
 ): boolean {
   if (grant === undefined) return false;
@@ -158,7 +170,8 @@ export function grantCovers(
         g.host === use.hostId &&
         g.binding === use.hostBinding &&
         g.purpose === use.purpose &&
-        g.destination === use.destination,
+        g.destination === use.destination &&
+        g.source === use.sourceBinding,
     )
   );
 }

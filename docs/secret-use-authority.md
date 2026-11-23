@@ -40,10 +40,11 @@ may use.
   it with the credential.
 
 A secret pinned to a `destination` (#701, a review judge's own key) is granted differently:
-its entry also names `"purpose": "review-judge"` and that destination, which `auth issue`
+its entry also names `"purpose": "review-judge"`, that destination and a `source` binding (a digest of the
+variable it is read from), which `auth issue`
 copies from the config. Such an entry covers only a judge connection's use at that
-destination, and an entry without them covers only delivery to an agent. A re-pin is not
-followed. See [BYOK judge credentials](preparation/review-judge-701/byok-credentials.md).
+destination, and an entry without them covers only delivery to an agent. A re-pin or a change of
+variable is not followed; rotating the value at the same variable needs no new grant. See [BYOK judge credentials](preparation/review-judge-701/byok-credentials.md).
 
 ## The use decision
 

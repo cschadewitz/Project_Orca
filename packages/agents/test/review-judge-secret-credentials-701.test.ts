@@ -38,7 +38,7 @@ import {
   type JudgeSecretCredential,
   type SecretJudgeCredentialOptions,
 } from "../src/review-judge/secret-credentials.js";
-import { planSessionSecrets, secretHostBinding, type SecretUse } from "../src/secrets.js";
+import { planSessionSecrets, secretHostBinding, secretSourceBinding, type SecretUse } from "../src/secrets.js";
 import type { AgentHost } from "../src/host.js";
 
 const DESTINATION = "https://judge.invalid/v0";
@@ -236,6 +236,7 @@ describe("#701 BYOK through a pinned #336 secret reference", () => {
       agentId: "agent-a",
       purpose: "review-judge",
       destination: DESTINATION,
+      sourceBinding: secretSourceBinding({ provider: "env", name: h.env.name }),
     };
     // The awaited check before the read, and the synchronous one at the hand-off, both for this purpose and destination.
     expect(h.uses).toEqual([[judgeUse]]);
@@ -655,6 +656,51 @@ describe("#701 a second declaration of the same source cannot side-step a pin", 
     const host = { id: "local", spec: local.spec, deliversSecrets: true } as unknown as AgentHost;
     const agent = { id: "a", env: { K: { secret: "plain" } }, mcpServers: [] } as never;
     expect(() => planSessionSecrets(host, agent, aliased)).toThrow(OrcaError);
+  });
+});
+
+describe("#701 every local host id is one realm: the daemon's environment", () => {
+  const twoLocals = [
+    { id: "local", type: "local" },
+    { id: "local-2", type: "local" },
+    { id: "box", type: "ssh" },
+  ];
+
+  it("finds an alias under another local host id, but not on a remote host", () => {
+    const check = (secrets: SecretsConfig) =>
+      validateSecretReferences({ secrets, hosts: twoLocals, agents: [] }).map((i) => i.path);
+    expect(
+      check({
+        "judge-key": { host: "local", provider: "env", name: "JUDGE_KEY", destination: DESTINATION },
+        plain: { host: "local-2", provider: "env", name: "JUDGE_KEY" },
+      }),
+    ).toEqual(["secrets.judge-key", "secrets.plain"]);
+    expect(
+      check({
+        "judge-key": { host: "local", provider: "env", name: "JUDGE_KEY", destination: DESTINATION },
+        remote: { host: "box", provider: "env", name: "JUDGE_KEY" },
+      }),
+    ).toEqual([]);
+  });
+
+  it("refuses a pin on a remote host", () => {
+    const issues = validateSecretReferences({
+      secrets: { k: { host: "box", provider: "env", name: "K", destination: DESTINATION } },
+      hosts: twoLocals,
+      agents: [],
+    });
+    expect(issues.map((i) => i.path)).toEqual(["secrets.k.host"]);
+  });
+
+  it("withholds a pinned variable from agents on every local host id, and not on a remote one", () => {
+    const catalog: SecretsConfig = {
+      "judge-key": { host: "local", provider: "env", name: "JUDGE_KEY", destination: DESTINATION },
+    };
+    const agent = { id: "a", env: {}, mcpServers: [] } as never;
+    const on = (id: string, spec: HostSpec) =>
+      planSessionSecrets({ id, spec, deliversSecrets: true } as unknown as AgentHost, agent, catalog).withheldEnv;
+    expect(on("local-2", local.spec)).toContain("JUDGE_KEY");
+    expect(on("box", remote.spec)).not.toContain("JUDGE_KEY");
   });
 });
 

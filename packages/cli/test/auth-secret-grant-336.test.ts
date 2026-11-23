@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { secretHostBinding } from "@orca/agents";
+import { secretHostBinding, secretSourceBinding } from "@orca/agents";
 import { HostSpecSchema } from "@orca/core";
 import { openAuthDirectory } from "@orca/daemon";
 import { authCommand } from "../src/commands/auth.js";
@@ -75,6 +75,7 @@ describe("auth issue --secret", () => {
         binding: secretHostBinding({ id: "local", type: "local" }),
         purpose: "review-judge",
         destination: "https://judge.invalid/v0",
+        source: secretSourceBinding({ provider: "env", name: "JUDGE_KEY" }),
       },
     ]);
   });

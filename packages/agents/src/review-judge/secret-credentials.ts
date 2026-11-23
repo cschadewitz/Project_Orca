@@ -31,7 +31,7 @@ import type { SecretDefinition, SecretSource, SecretsConfig } from "@orca/core";
 import { secretSource, sharesPinnedSource } from "@orca/core";
 import type { AgentHost } from "../host.js";
 import { readLocalSecret } from "../hosts/local-host.js";
-import { secretHostBinding, type AuthorizeSecretUse, type SecretUse } from "../secrets.js";
+import { secretHostBinding, secretSourceBinding, type AuthorizeSecretUse, type SecretUse } from "../secrets.js";
 import {
   JUDGE_DISCLOSURE_PURPOSE,
   type JudgeCredential,
@@ -187,7 +187,7 @@ export function secretJudgeCredentials(opts: SecretJudgeCredentialOptions): Judg
       return def as SecretDefinition & { provider: "env"; destination: string };
     };
     /** The use the grant must cover: this purpose and the pinned destination, never agent delivery. */
-    const secretUse = (id: string, def: { provider: "env"; destination: string }): SecretUse => ({
+    const secretUse = (id: string, def: SecretDefinition & { provider: "env"; destination: string }): SecretUse => ({
       secret: id,
       provider: def.provider,
       hostId: host.id,
@@ -195,6 +195,7 @@ export function secretJudgeCredentials(opts: SecretJudgeCredentialOptions): Judg
       agentId,
       purpose: JUDGE_DISCLOSURE_PURPOSE,
       destination: def.destination,
+      sourceBinding: secretSourceBinding(secretSource(def)),
     });
 
     if (signal.aborted) throw refuse("cancelled");

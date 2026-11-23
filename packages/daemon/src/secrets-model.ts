@@ -8,8 +8,8 @@
  */
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
-import { OrcaError, type SecretsConfig } from "@orca/core";
-import { secretHostBinding, type AgentHost } from "@orca/agents";
+import { OrcaError, secretSource, type SecretsConfig } from "@orca/core";
+import { secretHostBinding, secretSourceBinding, type AgentHost } from "@orca/agents";
 import type { SecretReferenceView, SecretsCheckResult, SecretsListResult } from "@orca/protocol";
 import { holds, type Principal } from "./auth/principal.js";
 
@@ -52,8 +52,10 @@ export class SecretsReadModel {
           g.provider === ref.provider &&
           g.host === ref.host &&
           g.binding === binding &&
-          // A judge grant (#701) shows its secret only while it is pinned to the granted destination.
-          g.destination === ref.destination,
+          // A judge grant (#701) shows its secret only while it is pinned to the granted
+          // destination and read from the granted source.
+          g.destination === ref.destination &&
+          g.source === (ref.destination !== undefined ? secretSourceBinding(secretSource(ref)) : undefined),
       );
     });
   }
