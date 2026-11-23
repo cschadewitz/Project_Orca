@@ -20,9 +20,12 @@
  * - **Nothing outside.** No workspace is provisioned (the run gets a placeholder that names no
  *   directory), no Request or work item is bound, and planning intake goes to a scratch plan
  *   that the dry run alone sees. Container nodes (loop, parallel, subworkflow) run their
- *   children as dry runs. Every other executor - the planning and program nodes, any plugin's
- *   custom node - is blocked and named (`DRY_RUN_UNSUPPORTED`) unless it declares a
- *   `simulate`; its `execute` is never called.
+ *   children as dry runs. Every other executor - the planning and program nodes, any installed
+ *   plugin's custom node - is blocked and named (`DRY_RUN_UNSUPPORTED`); its code never runs.
+ * - **Never selectable.** The simulated definition stays out of the workflow-version store, where
+ *   live admission and version discovery look. Its runs resolve it from the dry run's own
+ *   registry, and a private copy for reading them back is kept in the execution store under
+ *   `dryRunDefinitionKey` - which no launch path reads.
  * - **Bounded.** Fixtures are checked against the definition before anything is written; a
  *   step budget across the whole tree stops a cycle that never exits (`DRY_RUN_LIMIT`); and a
  *   dry run can be cancelled like any run.
@@ -430,15 +433,24 @@ function simulationExecutors(live: NodeExecutorRegistry, sim: Simulation): NodeE
       ),
     ),
   );
-  // Every other type, plugins' included: only an explicit simulation, never `execute`.
+  // Every other type - the planning and program nodes, and any installed plugin's - is blocked
+  // and named. A plugin's code gets the whole step context, stores included, so nothing short of
+  // an enforced boundary of its own could keep a callback of it inside the simulation.
   for (const type of live.types()) {
     if (registry.get(type)) continue;
-    const executor = live.get(type)!;
     registry.register(
       guarded(type, (ctx) =>
-        executor.simulate
-          ? executor.simulate(ctx as never)
-          : Promise.resolve(dryRunUnsupported(ctx.nodeId, type, "it has no safe simulation and may act outside ORCA")),
+        Promise.resolve(
+          dryRunUnsupported(
+            ctx.nodeId,
+            type,
+            type.startsWith("custom:plan-") ||
+              type === "custom:materialize-work-items" ||
+              type === "custom:decision-matrix"
+              ? "it acts on the plan or on real work items"
+              : "a plugin's node runs code a dry run cannot keep from acting outside ORCA",
+          ),
+        ),
       ),
     );
   }
@@ -548,6 +560,7 @@ export async function startDryRun(base: Orchestrator, request: DryRunRequest): P
       ...(request.overrides ? { overrides: request.overrides } : {}),
       ...(request.actor ? { actor: request.actor } : {}),
     });
+    await keepDryRunDefinition(base, definitionRevision, simulated);
   } catch (error) {
     orchestrator.detach();
     throw error;
@@ -559,6 +572,46 @@ export async function startDryRun(base: Orchestrator, request: DryRunRequest): P
     done,
     cancel: (reason = "dry run cancelled") => orchestrator.cancel(runId, reason, request.actor),
   };
+}
+
+/** Where a dry run's definition is kept (execution store, write-once), by its revision. */
+export const dryRunDefinitionKey = (definitionRevision: string): string => `dry-run-definition:${definitionRevision}`;
+
+async function keepDryRunDefinition(base: Orchestrator, revision: string, def: WorkflowDefinition): Promise<void> {
+  const key = dryRunDefinitionKey(revision);
+  if ((await base.stores.execution.getGeneration(key)) !== undefined) return;
+  // Write-once: a concurrent dry run of the same revision may have won; content-addressed, so equal.
+  await base.stores.execution.putGeneration(key, def).catch(async (error: unknown) => {
+    if ((await base.stores.execution.getGeneration(key)) === undefined) throw error;
+  });
+}
+
+/**
+ * The definition a run of a dry run walked: the simulated one from its private copy, or for a
+ * registered subworkflow it called, the live one at that version.
+ */
+export async function dryRunDefinition(
+  orchestrator: Orchestrator,
+  state: RunState,
+): Promise<WorkflowDefinition | undefined> {
+  const dryRun = state.run.dryRun;
+  if (!dryRun) return undefined;
+  const [rootId] = state.run.workflowId.split(INLINE_SEP);
+  let root: WorkflowDefinition | undefined;
+  if (state.run.workflowVersion.includes(DRY_RUN_VERSION_MARK)) {
+    const kept = (await orchestrator.stores.execution.getGeneration(dryRunDefinitionKey(dryRun.definitionRevision))) as
+      WorkflowDefinition | undefined;
+    root = kept && kept.id === rootId && kept.version === state.run.workflowVersion ? kept : undefined;
+  } else {
+    const live = orchestrator.generations?.current.workflows ?? orchestrator.workflows;
+    const current = live.has(rootId!) ? live.get(rootId!) : undefined;
+    root =
+      current?.version === state.run.workflowVersion
+        ? current
+        : await orchestrator.stores.workflows.get(rootId!, state.run.workflowVersion);
+  }
+  if (!root) return undefined;
+  return state.run.workflowId.includes(INLINE_SEP) ? inlineWorkflowDefinition(root, state.run.workflowId) : root;
 }
 
 // --------------------------------------------------------------------------- report
@@ -612,15 +665,6 @@ export async function dryRunReport(orchestrator: Orchestrator, runId: string): P
     limits: DRY_RUN_LIMITS,
   };
   const queue = [root];
-  const roots = new Map<string, WorkflowDefinition | undefined>();
-  const definitionOf = async (state: RunState): Promise<WorkflowDefinition | undefined> => {
-    const [rootId] = state.run.workflowId.split(INLINE_SEP);
-    const key = `${rootId}@${state.run.workflowVersion}`;
-    if (!roots.has(key)) roots.set(key, await orchestrator.stores.workflows.get(rootId!, state.run.workflowVersion));
-    const kept = roots.get(key);
-    if (!kept) return undefined;
-    return state.run.workflowId.includes(INLINE_SEP) ? inlineWorkflowDefinition(kept, state.run.workflowId) : kept;
-  };
   for (let i = 0; i < queue.length && i < 10_000; i++) {
     const state = queue[i]!;
     const id = state.run.id;
@@ -642,7 +686,7 @@ export async function dryRunReport(orchestrator: Orchestrator, runId: string): P
         report.failures.push({ runId: id, nodeId: step.nodeId, code: step.error.code, message: step.error.message });
       for (const child of step.childRunIds) queue.push(await orchestrator.getState(child));
     }
-    const def = await definitionOf(state);
+    const def = await dryRunDefinition(orchestrator, state);
     if (!def) continue;
     const visited = new Set(order.map((s) => s.nodeId));
     const followed = new Set<string>();

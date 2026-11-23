@@ -14,7 +14,6 @@ import {
   placeholderArtifact,
   startDryRun,
   type NodeExecutor,
-  type StepContext,
   type Orchestrator,
 } from "@orca/engine";
 import { harness, loadShippedWorkflows, type TestHarness } from "./helpers.js";
@@ -82,6 +81,16 @@ describe("dry run (#183)", () => {
     expect(first.type === "run.created" && first.payload.dryRun).toEqual(handle.dryRun);
     expect(state.run.workflowVersion).toMatch(/^1\+dryrun\.[0-9a-f]{16}$/);
     expect(await o.stores.workflows.get("ai-sdlc", "1")).toBeUndefined();
+    // The simulated definition is never selectable or discoverable by a live launch.
+    expect(await o.stores.workflows.versions("ai-sdlc")).toEqual([]);
+    await expect(
+      o.startRun({ workflowId: "ai-sdlc", workflowVersion: state.run.workflowVersion, vars: { workItem } }),
+    ).rejects.toMatchObject({ code: "WORKFLOW_VERSION_NOT_FOUND" });
+    await expect(
+      o.validateStartRun({ workflowId: "ai-sdlc", workflowVersion: state.run.workflowVersion }),
+    ).rejects.toMatchObject({
+      code: "WORKFLOW_VERSION_NOT_FOUND",
+    });
 
     const report = await dryRunReport(o, handle.runId);
     expect(report.untakenOptions).toContainEqual({ runId: handle.runId, nodeId: "tests-passed", options: ["true"] });
@@ -208,12 +217,10 @@ edges:
     await assertNothingReal(h, o, spies);
   });
 
-  it("blocks and names a custom node with no safe simulation, never calling its execute", async () => {
+  it("blocks and names an installed plugin's node, never running its code", async () => {
     const execute = vi.fn(() => Promise.resolve(completed()));
-    const simulate = vi.fn(() => Promise.resolve(completed({ data: { simulated: true } })));
     const deploy: NodeExecutor = { type: "custom:deploy", execute } as never;
-    const notify: NodeExecutor = { type: "custom:notify", execute, simulate } as never;
-    const { h, o, spies } = await spied(builtinExecutors().register(deploy).register(notify));
+    const { h, o, spies } = await spied(builtinExecutors().register(deploy));
     const definition = parseWorkflow(`
 id: plugin
 name: Plugin
@@ -221,21 +228,24 @@ version: "1"
 start: start
 nodes:
   start: { type: start }
-  notify: { type: "custom:notify" }
   deploy: { type: "custom:deploy" }
   done: { type: end, outcome: success }
 edges:
-  - { from: start, to: notify }
-  - { from: notify, to: deploy }
+  - { from: start, to: deploy }
   - { from: deploy, to: done }
 `);
     const handle = await startDryRun(o, { definition });
     const state = await handle.done;
     expect(state.run.status).toBe("failed");
-    expect(simulate).toHaveBeenCalledOnce();
     expect(execute).not.toHaveBeenCalled();
     const r = await dryRunReport(o, handle.runId);
-    expect(r.failures).toEqual([expect.objectContaining({ nodeId: "deploy", code: "DRY_RUN_UNSUPPORTED" })]);
+    expect(r.failures).toEqual([
+      expect.objectContaining({
+        nodeId: "deploy",
+        code: "DRY_RUN_UNSUPPORTED",
+        message: expect.stringMatching(/plugin/),
+      }),
+    ]);
     await assertNothingReal(h, o, spies);
   });
 
@@ -315,15 +325,13 @@ edges:
   it("runs nested graphs as dry runs too, and can be cancelled", async () => {
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
-    const wait: NodeExecutor = {
-      type: "custom:wait",
-      execute: () => Promise.reject(new Error("never")),
-      simulate: async (ctx: StepContext) => {
-        await Promise.race([held, new Promise((r) => ctx.signal.addEventListener("abort", r, { once: true }))]);
-        return completed();
-      },
-    } as never;
-    const { o } = await spied(builtinExecutors().register(wait));
+    const { o } = await spied();
+    // Hold the branch's simulated agent step at its artifact write, so the tree is mid-flight.
+    const put = o.stores.artifacts.put.bind(o.stores.artifacts);
+    vi.spyOn(o.stores.artifacts, "put").mockImplementation(async (...args) => {
+      await held;
+      return put(...args);
+    });
     const definition = parseWorkflow(`
 id: nested
 name: Nested
@@ -334,7 +342,7 @@ nodes:
   fan:
     type: parallel
     branches:
-      a: { graph: { start: s, nodes: { s: { type: start }, w: { type: "custom:wait" }, e: { type: end, outcome: success } }, edges: [{ from: s, to: w }, { from: w, to: e }] } }
+      a: { graph: { start: s, nodes: { s: { type: start }, w: { type: agent, agent: { role: builder }, prompt: "Simulated.", produces: [{ kind: note, path: note.md }] }, e: { type: end, outcome: success } }, edges: [{ from: s, to: w }, { from: w, to: e }] } }
   done: { type: end, outcome: success }
 edges:
   - { from: start, to: fan }

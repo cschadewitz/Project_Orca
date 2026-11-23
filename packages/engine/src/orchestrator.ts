@@ -730,7 +730,10 @@ export class Orchestrator {
         ? this.generationWorkspaceProvider(generation)
         : this.workspaceProvider;
     // Record only after every admission/inherited-integrity check, before public run creation.
-    const workflowStored = await this.recordDefinition(def);
+    // A dry run's definition (#183) never enters the workflow-version store: that store is where
+    // live admission and version discovery look, and a simulated draft must never be selectable.
+    // Its runs resolve it from the dry run's own registry; dry-run.ts keeps a private copy.
+    const workflowStored = this.dryRun ? false : await this.recordDefinition(def);
     // A checkpoint attempt keeps everything its source treated as sensitive, overlays included.
     let protectedInputs = protectExecutionInputs(runId, def, vars, opts.checkpoint?.inputs ?? parentInputs);
     const configuredSecrets = generation ? configuredGenerationSecrets(generation) : [];

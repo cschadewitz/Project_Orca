@@ -170,9 +170,10 @@ artifact store - there is no second store and no migration. What marks it is the
 fixtures, capabilities }`: the exact definition, draft revision, configuration, fixtures and
 capability manifests it was bound to), which every child run of it carries too, so each event in
 the log is known to be simulated from the run it belongs to. `Run.dryRun` and
-`RunSummary.dryRun` project it. Its definition is kept in the workflow-version store under its
-own version, `<version>+dryrun.<16 hex of its revision>`, so it never meets a real version of
-that workflow. A dry run's artifacts are fixtures or placeholders, its gate and decision choices
+`RunSummary.dryRun` project it. Its runs record the version `<version>+dryrun.<16 hex of its
+revision>`, and its definition never enters the workflow-version store, where live admission and
+version discovery look: a private copy is kept in the execution store under
+`dry-run-definition:<definitionRevision>`, which no launch path reads. A dry run's artifacts are fixtures or placeholders, its gate and decision choices
 are `decision.resolved` events with `source` `dry-run:fixture` or `dry-run:default` (never
 `human.answered`), and it is bound to no Request or work item. The ordinary orchestrator refuses
 to drive or recover a dry run, and a dry run's orchestrator drives nothing else. Absent on every
