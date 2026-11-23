@@ -368,6 +368,11 @@ pointed at another Claude Code, which is refused. Without
 
 Other agents (Codex, Gemini, pi) take no hook yet (#705): with `nativeToolHook: on` they are
 refused; without it, ORCA decides only what they ask about.
+[agent-hook-coverage.md](agent-hook-coverage.md) lists, for each qualified agent and
+version, which calls reach ORCA and which the agent runs on its own, and `orca agents` names
+the settings in an agent's own configuration that let calls run without asking ORCA (for
+Gemini CLI today: YOLO or auto-edit in a trusted workspace, allowed-tools and policy flags, a
+trusted workspace, and the user's own Gemini home).
 
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive

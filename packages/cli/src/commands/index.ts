@@ -29,7 +29,7 @@ import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { hostname, tmpdir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
-import { openAcpSession, permissionPolicyPath } from "@orca/agents";
+import { agentProfileFindings, openAcpSession, permissionPolicyPath } from "@orca/agents";
 import {
   AgentModel,
   ConfigModel,
@@ -399,6 +399,10 @@ export const commands: Record<string, Command> = {
         );
         const found = discovered?.get(a.id);
         ctx.out(`    models discovered: ${found ? found.join(", ") || "none" : "not probed"}`);
+        // Settings of the agent's own that let tool calls run without asking ORCA (#705).
+        if (a.type === "acp")
+          for (const f of agentProfileFindings(a))
+            ctx.out(`    ${f.effect === "bypass" ? "runs without asking ORCA" : "outside ORCA"}: ${f.message}`);
       }
       if (Object.keys(config.roles).length)
         ctx.out(
