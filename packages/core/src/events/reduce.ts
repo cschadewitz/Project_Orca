@@ -71,8 +71,9 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
 /** Apply one event in place. Exported so live projections can stay incremental. */
 export function applyEvent(state: RunState, e: OrcaEvent): RunState {
   state.lastSeq = e.seq;
+  // Own keys only: a step id such as "__proto__" must not reach Object.prototype.
   const step = (id: string): StepRun => {
-    const s = state.steps[id];
+    const s = Object.hasOwn(state.steps, id) ? state.steps[id] : undefined;
     if (!s) throw new OrcaError("RUN_STATE", `event ${e.type} refers to unknown step ${id}`, { seq: e.seq });
     return s;
   };
@@ -224,7 +225,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       break;
     case "artifact.recorded": {
       state.artifacts[e.payload.artifact.id] = e.payload.artifact;
-      const s = state.steps[e.payload.stepRunId];
+      const s = Object.hasOwn(state.steps, e.payload.stepRunId) ? state.steps[e.payload.stepRunId] : undefined;
       if (s) {
         s.result ??= { artifactIds: [], data: {} };
         if (!s.result.artifactIds.includes(e.payload.artifact.id)) s.result.artifactIds.push(e.payload.artifact.id);

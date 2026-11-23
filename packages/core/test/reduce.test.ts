@@ -144,6 +144,20 @@ describe("reduceRun", () => {
     ];
     expect(reduceRun(events).steps.step_1?.inputArtifactIds).toEqual(["art_1", "art_2", "art_3"]);
   });
+  it("refuses an inherited key as a step id instead of writing to Object.prototype", () => {
+    const created = ev("run.created", {
+      workflowId: "wf",
+      workflowVersion: "1",
+      workspace: { hostId: "local", cwd: "/w" },
+      vars: {},
+    });
+    for (const id of ["__proto__", "constructor", "toString"]) {
+      expect(() => reduceRun([created, ev("step.started", { stepRunId: id, inputArtifactIds: [] })])).toThrow(
+        /unknown step/,
+      );
+    }
+    expect(({} as { status?: unknown }).status).toBeUndefined();
+  });
   it("rejects logs that do not start with run.created", () => {
     expect(() => reduceRun([ev("run.started", {})])).toThrow(/run.created/);
   });
