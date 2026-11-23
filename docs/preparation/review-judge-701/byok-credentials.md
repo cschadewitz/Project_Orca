@@ -25,9 +25,11 @@ A judge connection descriptor carries `judgeSecretRef("judge-key")`, an opaque
 | Only a secret pinned to the judge's destination is a judge key. An unpinned one, or one pinned elsewhere, is `credential-destination-mismatch` at preparation and `wrong-destination`/`not-pinned` at use. | `describe`, `withCredential` |
 | A pinned secret never reaches an agent or MCP server process. | `validateSecretReferences` (config load), `planSessionSecrets` (session open) |
 | The value is read on the host the connection runs on, which must be a local host. A reference bound to another host is unavailable; nothing falls back to a value found elsewhere. | `withCredential` |
-| Every use asks the run-bound #336 use check first, with the same `SecretUse` a session open sends (secret, provider, host, endpoint binding, agent). A revoked or expired grant stops the next use; a refused use reads nothing. | `withCredential` |
+| A pinned secret's value cannot also be declared unpinned or with another pin: two definitions reading the same host, provider and variable or path (case-insensitive, `.`/`..` folded) must carry the same pin. Symlinks and hard links are not seen. | `validateSecretReferences`, `sharesPinnedSource` at describe, use and session open |
+| Every use asks the run-bound #336 use check with purpose `review-judge` and the pinned destination. Only a grant entry naming that purpose and destination covers it (or `*`); an agent grant never does, and a judge grant never covers agent delivery. `orca auth issue --secret <id>@<host>` writes a judge grant for a pinned secret, taking the destination from the config. | `withCredential`, daemon `grantCovers`, CLI `auth issue` |
+| The check runs before the read (an unauthorized use reads nothing) and again at delivery, after the catalog is re-read and found identical (host, source, pin). Any change, revocation or cancellation while the value is read refuses before the sender runs. The last check and the hand-off happen in one synchronous turn. | `withCredential` |
 | Nothing is cached: the catalog is re-read at every describe and use, the value at every use. Rotation needs no restart; re-pinning or re-binding stops the next use. | `withCredential` |
-| The sender gets a handle, not a string. `reveal()` works only during the one `consume` call; `JSON.stringify`, `String` and `util.inspect` never show the value. | `leasedCredential` |
+| The sender gets a handle, not a string. `reveal()` works only during the one `consume` call and stops at once if the use is cancelled, even while the sender holds it; `JSON.stringify`, `String` and `util.inspect` never show the value. | `leasedCredential` |
 | Every refusal is a fixed code (`JudgeSecretRefused.code`), never a value, path contents or provider text. The connection reports all of them to the adapter as `transport-failed`. | `withCredential` |
 
 ## Tests
@@ -36,6 +38,8 @@ A judge connection descriptor carries `judgeSecretRef("judge-key")`, an opaque
 endpoint adapter with this service and a deterministic fake endpoint: end-to-end `fit`, rotation and
 revocation between uses, file and env providers, every refusal above, cancellation before and after the
 read, and the agent/MCP refusals. The value is generated per run; no network, real key or paid call.
+
+This makes no sender trusted. A real network sender is separate work with its own review, and nothing here activates one.
 
 ## Still open for #701
 

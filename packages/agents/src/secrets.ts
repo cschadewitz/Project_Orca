@@ -17,6 +17,7 @@
  */
 import {
   isSecretRef,
+  sharesPinnedSource,
   literalEnv,
   OrcaError,
   redactSecretValues,
@@ -45,6 +46,13 @@ export interface SecretUse {
    */
   hostBinding: string;
   agentId: string;
+  /**
+   * Absent for delivery to an agent or MCP server. `review-judge` (#701) for a judge
+   * connection's own use of a secret pinned to `destination`; a grant covers it only when it
+   * names the same purpose and destination.
+   */
+  purpose?: "review-judge";
+  destination?: string;
 }
 
 /**
@@ -189,11 +197,11 @@ export function planSessionSecrets(
         `it is bound to host '${def.host}', and this session runs on '${host.id}'`,
         host.id,
       );
-    if (def.destination !== undefined)
+    if (def.destination !== undefined || sharesPinnedSource(secrets, id))
       throw secretUnavailable(
         id,
         "unsupported",
-        `it is pinned to destination '${def.destination}', and only ORCA's own connection to it may use it`,
+        "it, or a secret read from the same source, is pinned to a destination that only ORCA's own connection to it may use",
         host.id,
       );
     if (!host.deliversSecrets)

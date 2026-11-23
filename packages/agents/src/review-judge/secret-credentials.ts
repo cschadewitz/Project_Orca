@@ -11,16 +11,20 @@
  *   the other.
  * - The value is read on the host the judge connection runs on, which must be a local host (the daemon's machine).
  *   A reference bound to any other host is unavailable; there is no fallback to a value found elsewhere.
- * - Every use is asked of the run-bound use check first, as a session open is, with the same `SecretUse` shape, so
- *   a grant names this secret, its provider and this host's endpoint binding. A revoked grant stops the next use.
+ * - Every use is asked of the run-bound use check, with the purpose `review-judge` and the pinned destination: only a
+ *   grant for that purpose and destination covers it (or `*`), never a grant for delivery to an agent. It is asked
+ *   before the value is read and again at delivery, after the catalog is re-read and found unchanged.
+ * - A secret read from the same source as a secret with another pin (or none) is refused, so declaring the same
+ *   variable or file twice cannot side-step a pin.
  * - Nothing is cached. The catalog is read again at every describe and every use, and the value at every use, so a
  *   rotated value is picked up and a re-pinned or re-bound reference stops working.
  * - The value reaches only the sender, inside the one `consume` call, as a handle that does not serialize or print
- *   it and stops revealing it once that call settles. Every refusal is a fixed code, never a value or provider text.
+ *   it and stops revealing it once that call settles or the use is cancelled, whichever is first. This makes no
+ *   sender trusted: a real network sender is separate work with its own review, and nothing here activates one. Every refusal is a fixed code, never a value or provider text.
  */
 import { inspect } from "node:util";
 import type { SecretDefinition, SecretSource, SecretsConfig } from "@orca/core";
-import { secretSource } from "@orca/core";
+import { secretSource, sharesPinnedSource } from "@orca/core";
 import type { AgentHost } from "../host.js";
 import { readLocalSecret } from "../hosts/local-host.js";
 import { secretHostBinding, type AuthorizeSecretUse } from "../secrets.js";
@@ -61,6 +65,8 @@ export type JudgeSecretRefusal =
   | "wrong-purpose"
   | "wrong-host"
   | "unsupported-host"
+  | "aliased-source"
+  | "reconfigured"
   | "unauthorized"
   | "missing";
 
@@ -122,22 +128,24 @@ function leasedCredential(destination: string, value: string) {
 export function secretJudgeCredentials(opts: SecretJudgeCredentialOptions): JudgeCredentialService {
   const { host, authorize, agentId } = opts;
   const read = opts.read ?? readLocalSecret;
-  const current = (id: string): SecretDefinition | undefined => {
-    const catalog = opts.secrets() ?? {};
-    return Object.hasOwn(catalog, id) ? catalog[id] : undefined;
-  };
+  const catalog = (): SecretsConfig => opts.secrets() ?? {};
+  const lookup = (secrets: SecretsConfig, id: string): SecretDefinition | undefined =>
+    Object.hasOwn(secrets, id) ? secrets[id] : undefined;
   const readable = (def: SecretDefinition) => def.host === host.id && host.spec.type === "local";
+  /** Exactly where and for what a value is read; any difference between two reads of the catalog is a refusal. */
+  const identity = (def: SecretDefinition) => JSON.stringify([def.host, secretSource(def), def.destination ?? null]);
 
   const describe = async (ref: OpaqueCredentialRef, signal: AbortSignal): Promise<JudgeCredentialBinding | null> => {
     signal.throwIfAborted();
     const id = secretId(ref);
-    const def = id === undefined ? undefined : current(id);
-    if (def === undefined) return null;
+    const secrets = catalog();
+    const def = id === undefined ? undefined : lookup(secrets, id);
+    if (id === undefined || def === undefined) return null;
     // An unpinned secret has no destination, so the connection refuses it as a destination mismatch.
     return Object.freeze({
       refId: ref.id,
       destination: def.destination ?? "",
-      available: def.destination !== undefined && readable(def),
+      available: def.destination !== undefined && readable(def) && !sharesPinnedSource(secrets, id),
     });
   };
 
@@ -148,38 +156,69 @@ export function secretJudgeCredentials(opts: SecretJudgeCredentialOptions): Judg
     consume: (credential: JudgeCredential) => Promise<T>,
   ): Promise<T> => {
     const refuse = (code: JudgeSecretRefusal) => new JudgeSecretRefused(signal.aborted ? "cancelled" : code);
+
+    /** Every check on the catalog as configured now, for this use. */
+    const current = (id: string): SecretDefinition & { destination: string } => {
+      const secrets = catalog();
+      const def = lookup(secrets, id);
+      if (def === undefined) throw refuse("undefined");
+      if (def.destination === undefined) throw refuse("not-pinned");
+      if (sharesPinnedSource(secrets, id)) throw refuse("aliased-source");
+      if (use === null || typeof use !== "object" || use.purpose !== JUDGE_DISCLOSURE_PURPOSE)
+        throw refuse("wrong-purpose");
+      if (typeof use.grantRef !== "string" || use.grantRef.length === 0) throw refuse("wrong-purpose");
+      if (use.destination !== def.destination) throw refuse("wrong-destination");
+      if (def.host !== host.id) throw refuse("wrong-host");
+      if (host.spec.type !== "local") throw refuse("unsupported-host");
+      return def as SecretDefinition & { destination: string };
+    };
+
+    /** The run's use check for this purpose and destination; a grant for agent delivery does not cover it. */
+    const authorized = async (id: string, def: SecretDefinition & { destination: string }) => {
+      try {
+        await authorize([
+          {
+            secret: id,
+            provider: def.provider,
+            hostId: host.id,
+            hostBinding: secretHostBinding(host.spec),
+            agentId,
+            purpose: JUDGE_DISCLOSURE_PURPOSE,
+            destination: def.destination,
+          },
+        ]);
+      } catch {
+        throw refuse("unauthorized");
+      }
+      if (signal.aborted) throw refuse("cancelled");
+    };
+
     if (signal.aborted) throw refuse("cancelled");
     const id = secretId(ref);
     if (id === undefined) throw refuse("not-a-secret-ref");
-    const def = current(id);
-    if (def === undefined) throw refuse("undefined");
-    if (def.destination === undefined) throw refuse("not-pinned");
-    if (use === null || typeof use !== "object" || use.purpose !== JUDGE_DISCLOSURE_PURPOSE)
-      throw refuse("wrong-purpose");
-    if (typeof use.grantRef !== "string" || use.grantRef.length === 0) throw refuse("wrong-purpose");
-    if (use.destination !== def.destination) throw refuse("wrong-destination");
-    if (def.host !== host.id) throw refuse("wrong-host");
-    if (host.spec.type !== "local") throw refuse("unsupported-host");
-    const source = secretSource(def);
-    try {
-      await authorize([
-        { secret: id, provider: source.provider, hostId: host.id, hostBinding: secretHostBinding(host.spec), agentId },
-      ]);
-    } catch {
-      throw refuse("unauthorized");
-    }
-    if (signal.aborted) throw refuse("cancelled");
+    const before = current(id);
+    // Asked before the read, so an unauthorized use reads nothing.
+    await authorized(id, before);
     let value: string;
     try {
-      value = await read(id, source, host.id);
+      value = await read(id, secretSource(before), host.id);
     } catch {
       throw refuse("missing");
     }
+    // Revalidated at delivery: the catalog, the pin and the grant may have changed while the value was read.
     if (signal.aborted) throw refuse("cancelled");
-    const lease = leasedCredential(def.destination, value);
+    const after = current(id);
+    if (identity(after) !== identity(before)) throw refuse("reconfigured");
+    await authorized(id, after);
+    // From here to the lease, nothing awaits: the last check and the hand-off are one turn.
+    const lease = leasedCredential(after.destination, value);
+    // Cancellation ends the lease at once, even while the sender still holds the handle.
+    const end = () => lease.end();
+    signal.addEventListener("abort", end, { once: true });
     try {
       return await consume(lease.credential);
     } finally {
+      signal.removeEventListener("abort", end);
       lease.end();
     }
   };

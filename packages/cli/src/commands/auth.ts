@@ -50,7 +50,15 @@ function secretGrant(ctx: CommandContext, config: OrcaConfig): SecretGrant | und
     const spec = config.hosts.find((h) => h.id === host);
     if (!spec)
       throw new OrcaError("CONFIG_INVALID", `--secret '${secret}' names host '${host}', which is not configured`);
-    return { secret, provider: bound.provider, host, binding: secretHostBinding(spec) };
+    // A secret pinned to a destination (#701) is only ever a review judge's key: its grant is
+    // for that purpose and that destination, so a later re-pin is not covered.
+    return {
+      secret,
+      provider: bound.provider,
+      host,
+      binding: secretHostBinding(spec),
+      ...(bound.destination !== undefined ? { purpose: "review-judge" as const, destination: bound.destination } : {}),
+    };
   });
   const parsed = SecretGrantSchema.safeParse(grants);
   if (!parsed.success) throw new OrcaError("CONFIG_INVALID", "--secret ids use letters, digits, '.', '_' and '-'");

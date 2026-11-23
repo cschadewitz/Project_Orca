@@ -219,17 +219,17 @@ describe("#701 BYOK through a pinned #336 secret reference", () => {
     const h = harness();
     const { result, connection } = await assess(h);
     expect(result).toMatchObject({ execution: "evaluated", result: "fit", judgeVersion: connection.configRef });
-    expect(h.uses).toEqual([
-      [
-        {
-          secret: "judge-key",
-          provider: "env",
-          hostId: "local",
-          hostBinding: secretHostBinding(local.spec),
-          agentId: "agent-a",
-        },
-      ],
-    ]);
+    const judgeUse = {
+      secret: "judge-key",
+      provider: "env",
+      hostId: "local",
+      hostBinding: secretHostBinding(local.spec),
+      agentId: "agent-a",
+      purpose: "review-judge",
+      destination: DESTINATION,
+    };
+    // Asked before the read and again at delivery, each time for this purpose and destination.
+    expect(h.uses).toEqual([[judgeUse], [judgeUse]]);
     // The value is absent from everything the caller can see or serialize.
     const visible = JSON.stringify([connection, result, connection.refusals()]) + inspect(connection, { depth: 9 });
     expect(visible).not.toContain(h.env.value);
@@ -251,7 +251,7 @@ describe("#701 BYOK through a pinned #336 secret reference", () => {
     expect(await run()).toMatchObject({ result: "fit" });
     process.env[h.env.name] = `rotated-${randomUUID()}`;
     expect(await run()).toMatchObject({ result: "fit" });
-    expect(h.authorize).toHaveBeenCalledTimes(2);
+    expect(h.authorize).toHaveBeenCalledTimes(4);
     h.authorize.mockImplementation(async () => {
       throw new OrcaError("CONFIG_INVALID", "not granted");
     });
@@ -422,6 +422,166 @@ describe("#701 BYOK refusals: no fallback to another value, host or destination"
       credentials.withCredential(judgeSecretRef("judge-key"), use, controller.signal, consume),
     ).rejects.toMatchObject({ code: "cancelled" });
     expect(consume).not.toHaveBeenCalled();
+  });
+});
+
+describe("#701 revalidation at delivery", () => {
+  const use = { purpose: JUDGE_DISCLOSURE_PURPOSE, destination: DESTINATION, grantRef: "g" } as const;
+  const pinned: SecretsConfig = {
+    "judge-key": { host: "local", provider: "env", name: "X", destination: DESTINATION },
+  };
+
+  it("refuses when the catalog changes while the value is read: re-pinned, re-sourced or removed", async () => {
+    const changes: SecretsConfig[] = [
+      { "judge-key": { host: "local", provider: "env", name: "X", destination: OTHER } },
+      { "judge-key": { host: "local", provider: "env", name: "Y", destination: DESTINATION } },
+      { "judge-key": { host: "local", provider: "file", path: "/k", destination: DESTINATION } },
+      {},
+    ];
+    for (const next of changes) {
+      let catalog = pinned;
+      const consume = vi.fn(async () => 1);
+      const authorize = vi.fn(async () => {});
+      const credentials = secretJudgeCredentials({
+        secrets: () => catalog,
+        host: local,
+        authorize,
+        agentId: "agent-a",
+        read: async () => {
+          catalog = next;
+          return "value";
+        },
+      });
+      const code = await credentials
+        .withCredential(judgeSecretRef("judge-key"), use, new AbortController().signal, consume)
+        .catch((e: JudgeSecretRefused) => e.code);
+      expect(["reconfigured", "wrong-destination", "undefined"]).toContain(code);
+      expect(consume).not.toHaveBeenCalled();
+      expect(authorize).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("refuses when the grant is revoked while the value is read", async () => {
+    let granted = true;
+    const consume = vi.fn(async () => 1);
+    const credentials = secretJudgeCredentials({
+      secrets: () => pinned,
+      host: local,
+      authorize: async () => {
+        if (!granted) throw new OrcaError("CONFIG_INVALID", "not granted");
+      },
+      agentId: "agent-a",
+      read: async () => {
+        granted = false;
+        return "value";
+      },
+    });
+    await expect(
+      credentials.withCredential(judgeSecretRef("judge-key"), use, new AbortController().signal, consume),
+    ).rejects.toMatchObject({ code: "unauthorized" });
+    expect(consume).not.toHaveBeenCalled();
+  });
+
+  it("refuses when cancelled during the delivery-time use check", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const consume = vi.fn(async () => 1);
+    const credentials = secretJudgeCredentials({
+      secrets: () => pinned,
+      host: local,
+      authorize: async () => {
+        if (++calls === 2) controller.abort();
+      },
+      agentId: "agent-a",
+      read: async () => "value",
+    });
+    await expect(
+      credentials.withCredential(judgeSecretRef("judge-key"), use, controller.signal, consume),
+    ).rejects.toMatchObject({ code: "cancelled" });
+    expect(consume).not.toHaveBeenCalled();
+  });
+
+  it("ends the lease the moment the use is cancelled, while the sender still holds the handle", async () => {
+    const controller = new AbortController();
+    const credentials = secretJudgeCredentials({
+      secrets: () => pinned,
+      host: local,
+      authorize: async () => {},
+      agentId: "agent-a",
+      read: async () => "value",
+    });
+    let release!: () => void;
+    const seen: string[] = [];
+    const pending = credentials.withCredential(
+      judgeSecretRef("judge-key"),
+      use,
+      controller.signal,
+      async (credential) => {
+        const handle = credential as JudgeSecretCredential;
+        seen.push(handle.reveal());
+        await new Promise<void>((resolve) => (release = resolve));
+        try {
+          seen.push(handle.reveal());
+        } catch (error) {
+          seen.push((error as JudgeSecretRefused).code);
+        }
+      },
+    );
+    await vi.waitFor(() => expect(seen).toEqual(["value"]));
+    controller.abort();
+    release();
+    await pending;
+    expect(seen).toEqual(["value", "cancelled"]);
+  });
+});
+
+describe("#701 a second declaration of the same source cannot side-step a pin", () => {
+  const aliased: SecretsConfig = {
+    "judge-key": { host: "local", provider: "env", name: "JUDGE_KEY", destination: DESTINATION },
+    plain: { host: "local", provider: "env", name: "judge_key" },
+  };
+  const otherPin: SecretsConfig = {
+    "judge-key": { host: "local", provider: "file", path: "/etc/orca/key", destination: DESTINATION },
+    "judge-key-2": { host: "local", provider: "file", path: "/etc/orca/./x/../key", destination: OTHER },
+  };
+
+  it("is a config error", () => {
+    const check = (secrets: SecretsConfig) =>
+      validateSecretReferences({ secrets, hosts: [{ id: "local" }], agents: [] }).map((i) => i.path);
+    expect(check(aliased)).toEqual(["secrets.judge-key", "secrets.plain"]);
+    expect(check(otherPin)).toEqual(["secrets.judge-key", "secrets.judge-key-2"]);
+    expect(
+      check({
+        a: { host: "local", provider: "env", name: "K", destination: DESTINATION },
+        b: { host: "local", provider: "env", name: "K", destination: DESTINATION },
+      }),
+    ).toEqual([]);
+  });
+
+  it("is refused for the judge and for an agent at use", async () => {
+    for (const catalog of [aliased, otherPin]) {
+      const credentials = secretJudgeCredentials({
+        secrets: () => catalog,
+        host: local,
+        authorize: async () => {},
+        agentId: "agent-a",
+        read: async () => "value",
+      });
+      expect(await credentials.describe(judgeSecretRef("judge-key"), new AbortController().signal)).toMatchObject({
+        available: false,
+      });
+      await expect(
+        credentials.withCredential(
+          judgeSecretRef("judge-key"),
+          { purpose: JUDGE_DISCLOSURE_PURPOSE, destination: DESTINATION, grantRef: "g" },
+          new AbortController().signal,
+          async () => 1,
+        ),
+      ).rejects.toMatchObject({ code: "aliased-source" });
+    }
+    const host = { id: "local", spec: local.spec, deliversSecrets: true } as unknown as AgentHost;
+    const agent = { id: "a", env: { K: { secret: "plain" } }, mcpServers: [] } as never;
+    expect(() => planSessionSecrets(host, agent, aliased)).toThrow(OrcaError);
   });
 });
 

@@ -47,7 +47,13 @@ export class SecretsReadModel {
       if (!grant || !registry.hasHost(ref.host)) return false;
       const binding = secretHostBinding(registry.host(ref.host).spec);
       return grant.some(
-        (g) => g.secret === id && g.provider === ref.provider && g.host === ref.host && g.binding === binding,
+        (g) =>
+          g.secret === id &&
+          g.provider === ref.provider &&
+          g.host === ref.host &&
+          g.binding === binding &&
+          // A judge grant (#701) shows its secret only while it is pinned to the granted destination.
+          g.destination === ref.destination,
       );
     });
   }

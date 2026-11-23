@@ -78,6 +78,48 @@ export function secretSource(def: SecretDefinition): SecretSource {
 export const SecretsConfigSchema = z.record(SecretIdSchema, SecretDefinitionSchema);
 export type SecretsConfig = z.infer<typeof SecretsConfigSchema>;
 
+/**
+ * What identifies where a value is read: host, provider and the variable or path. Compared
+ * case-insensitively and with the path's `.`/`..` segments and repeated separators folded, so
+ * more definitions count as the same source rather than fewer. It cannot see symlinks or hard
+ * links: two different paths to one file are two sources here.
+ */
+export function secretSourceKey(def: SecretDefinition): string {
+  const where =
+    def.provider === "env"
+      ? def.name
+      : def.path
+          .replace(/\\/g, "/")
+          .split("/")
+          .reduce<string[]>((parts, part, i) => {
+            if (part === "" && i > 0) return parts;
+            if (part === ".") return parts;
+            if (part === "..") return parts.length > 1 ? parts.slice(0, -1) : parts;
+            return [...parts, part];
+          }, [])
+          .join("/");
+  return JSON.stringify([def.host, def.provider, where.toLowerCase()]);
+}
+
+/**
+ * True when secret `id` is read from the same source as a secret pinned to a destination
+ * (#701) other than its own pin, or when it is unpinned and any secret from its source is
+ * pinned. A pin then cannot be side-stepped by declaring the same variable or file twice.
+ */
+export function sharesPinnedSource(secrets: SecretsConfig | undefined, id: string): boolean {
+  const catalog = secrets ?? {};
+  const def = Object.hasOwn(catalog, id) ? catalog[id] : undefined;
+  if (def === undefined) return false;
+  const key = secretSourceKey(def);
+  return Object.entries(catalog).some(
+    ([other, d]) =>
+      other !== id &&
+      secretSourceKey(d) === key &&
+      (d.destination !== undefined || def.destination !== undefined) &&
+      d.destination !== def.destination,
+  );
+}
+
 /** Every reference in an env map, with the variable it fills. */
 export function secretRefs(env: Env): { name: string; ref: SecretRef }[] {
   return Object.entries(env).flatMap(([name, value]) => (isSecretRef(value) ? [{ name, ref: value }] : []));
@@ -106,6 +148,12 @@ export function validateSecretReferences(config: {
   const issues: SecretIssue[] = [];
   const secrets = config.secrets ?? {};
   const hosts = new Set(config.hosts.map((h) => h.id));
+  for (const id of Object.keys(secrets))
+    if (sharesPinnedSource(secrets, id))
+      issues.push({
+        path: `secrets.${id}`,
+        message: `secret '${id}' is read from the same source as a secret pinned to another destination. A pinned value has one id and one destination`,
+      });
   for (const [id, def] of Object.entries(secrets))
     if (!hosts.has(def.host))
       issues.push({

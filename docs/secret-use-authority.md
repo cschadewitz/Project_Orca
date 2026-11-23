@@ -39,6 +39,12 @@ may use.
   issued; the provider and the endpoint binding are taken from the config at that moment. `rotate` keeps the grant. `revoke` ends
   it with the credential.
 
+A secret pinned to a `destination` (#701, a review judge's own key) is granted differently:
+its entry also names `"purpose": "review-judge"` and that destination, which `auth issue`
+copies from the config. Such an entry covers only a judge connection's use at that
+destination, and an entry without them covers only delivery to an agent. A re-pin is not
+followed. See [BYOK judge credentials](preparation/review-judge-701/byok-credentials.md).
+
 ## The use decision
 
 `Orchestrator.secretUse({ runId, uses })` is asked at every session open, after the catalog
