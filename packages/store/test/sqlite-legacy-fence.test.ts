@@ -1,0 +1,269 @@
+/**
+ * The legacy fence of a switch to SQLite (#339): released ORCA versions that never read the
+ * format marker are kept out by markers in place of every path they open first, every step can
+ * be undone until the marker is written, an interrupted switch is finished or undone by the next
+ * start, and a SQLite store takes back only its own database. The released binaries themselves
+ * are run against a fenced store in `tools/legacy-fence` (CI: legacy-fence workflow).
+ */
+import { spawn } from "node:child_process";
+import { appendFile, lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { parseWorkflow, RequestSchema, sha256 } from "@orca/core";
+import { childBundle } from "@orca/testing/child-bundle";
+import {
+  backupSqliteMetadata,
+  enterStoreFormat,
+  fileStores,
+  FileWorkflowVersionStore,
+  LEGACY_FENCE_MARKER,
+  LEGACY_FENCES,
+  readStoreFormat,
+  recordedStoreBackend,
+  restoreSqliteMetadata,
+  SQLITE_KEY_FILE,
+  SQLITE_METADATA_FILE,
+  SQLITE_STORE_FORMAT_EPOCH,
+  SQLITE_SWITCH_DIR,
+  sqliteStores,
+  STORE_FORMAT_EPOCH,
+  switchStoreToSqlite,
+} from "@orca/store";
+import { readPrivateJson, writePrivateJson } from "../src/protected-file.js";
+
+const store = async () => join(await mkdtemp(join(tmpdir(), "orca-legacy-fence-")), ".orca");
+const refusal = (reason: string) => ({ code: "STORE_FORMAT", details: expect.objectContaining({ reason }) });
+
+const workflow = parseWorkflow(`id: pinned\nname: Pinned\nstart: e\nnodes: { e: { type: end } }\nedges: []`);
+const oldWorkflow = parseWorkflow(`id: old\nname: Old\nstart: e\nnodes: { e: { type: end } }\nedges: []`);
+
+/** A store on files with something at every path the fence covers. */
+async function populated(): Promise<string> {
+  const dir = await store();
+  await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" });
+  const files = fileStores(dir);
+  await files.events.append({
+    type: "run.created",
+    runId: "run_a",
+    payload: { workflowId: "pinned", workflowVersion: "1", workspace: { hostId: "local", cwd: "/w" }, vars: {} },
+  });
+  await files.events.append({ type: "run.started", runId: "run_a", payload: {} });
+  await files.requests.put(
+    RequestSchema.parse({
+      id: "req_1",
+      title: "A request",
+      body: "",
+      createdAt: "2026-11-23T00:00:00.000Z",
+      updatedAt: "2026-11-23T00:00:00.000Z",
+    }),
+  );
+  await files.plan.journal.append({
+    type: "request.linked",
+    planId: "plan_a",
+    origin: { kind: "api" },
+    payload: { requestId: "req_1" },
+  });
+  await files.artifacts.put(
+    {
+      id: "art_1",
+      kind: "spec",
+      name: "note",
+      mediaType: "text/plain",
+      contentHash: sha256("hello"),
+      size: 5,
+      version: 1,
+      producedBy: { runId: "run_a" },
+      createdAt: "t",
+    } as never,
+    "hello",
+  );
+  await files.workflows.put(workflow);
+  await writePrivateJson(join(dir, "private-execution"), "record.json", { secret: 1 });
+  // A plain snapshot an ORCA before 0.7 pinned.
+  await mkdir(join(dir, "workflows"), { recursive: true });
+  await writeFile(join(dir, "workflows", "old@v1.json"), JSON.stringify(oldWorkflow));
+  return dir;
+}
+
+/** Every file's bytes, leaving out what a refused switch may leave (backups, the inert database). */
+async function contents(dir: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const walk = async (path: string, prefix: string) => {
+    for (const name of (await readdir(path)).sort()) {
+      const relative = `${prefix}${name}`;
+      if (name.endsWith(".lock") || relative.startsWith("format-backups") || name.startsWith(SQLITE_METADATA_FILE))
+        continue;
+      const info = await lstat(join(path, name));
+      if (info.isDirectory()) await walk(join(path, name), `${relative}/`);
+      else out[relative] = (await readFile(join(path, name))).toString("base64");
+    }
+  };
+  await walk(dir, "");
+  return out;
+}
+
+async function isMarker(path: string): Promise<boolean> {
+  const info = await lstat(path).catch(() => undefined);
+  if (!info) return false;
+  const file = info.isDirectory() ? join(path, "ORCA-SQLITE-STORE.json") : path;
+  return (await readFile(file, "utf8").catch(() => "")) === LEGACY_FENCE_MARKER;
+}
+
+async function expectFenced(dir: string): Promise<void> {
+  for (const fence of LEGACY_FENCES) expect(await isMarker(join(dir, fence.path)), fence.path).toBe(true);
+  expect(await readdir(dir)).not.toContain(SQLITE_SWITCH_DIR);
+}
+
+async function expectReadsOnSqlite(dir: string): Promise<void> {
+  const sqlite = sqliteStores(dir);
+  try {
+    expect((await sqlite.events.read("run_a")).map((e) => e.type)).toEqual(["run.created", "run.started"]);
+    expect((await sqlite.requests.list()).map((r) => r.id)).toEqual(["req_1"]);
+    expect((await sqlite.plan.journal.read("plan_a")).length).toBe(1);
+    expect((await sqlite.artifacts.list()).map((a) => a.id)).toEqual(["art_1"]);
+    expect(await sqlite.workflows.get("pinned", workflow.version)).toEqual(workflow);
+    expect(await sqlite.workflows.get("old", oldWorkflow.version)).toEqual(oldWorkflow);
+    expect(await readPrivateJson(join(dir, "private-execution"), "record.json")).toEqual({ secret: 1 });
+  } finally {
+    sqlite.close?.();
+  }
+}
+
+describe("legacy fence (#339)", () => {
+  it("replaces every path a released ORCA opens first with a marker, and runs on SQLite with nothing lost", async () => {
+    const dir = await populated();
+    expect(await switchStoreToSqlite(dir, { appVersion: "0.8.0" })).toMatchObject({ status: "switched" });
+    await expectFenced(dir);
+    // The keys moved to where only this ORCA looks; the originals are no longer anywhere live.
+    for (const sub of ["private-execution", "private-workflows"])
+      expect((await lstat(join(dir, sub, SQLITE_KEY_FILE))).size).toBe(32);
+    expect((await readdir(join(dir, "workflows.sqlite"))).sort()).toEqual(["old@v1.json"]);
+    await expectReadsOnSqlite(dir);
+    // Writing works too, through the moved keys.
+    const sqlite = sqliteStores(dir);
+    try {
+      await sqlite.workflows.put({ ...workflow, version: "2" });
+      expect(await new FileWorkflowVersionStore(dir).versions("pinned")).toEqual([workflow.version, "2"]);
+    } finally {
+      sqlite.close?.();
+    }
+  });
+
+  it("undoes every step when the switch fails at any point of the fence, leaving the files exactly as they were", async () => {
+    for (const fence of LEGACY_FENCES) {
+      const dir = await populated();
+      const before = await contents(dir);
+      await expect(
+        switchStoreToSqlite(dir, {
+          appVersion: "0.8.0",
+          afterFenceStep: async (path) => {
+            if (path === fence.path) throw new Error("disk full");
+          },
+        }),
+      ).rejects.toThrow("disk full");
+      expect(await contents(dir), fence.path).toEqual(before);
+      expect(recordedStoreBackend(dir)).toBe("file");
+      expect((await fileStores(dir).events.read("run_a")).length).toBe(2);
+    }
+  });
+
+  it("refuses, and puts everything back, when a released ORCA writes while the fence goes in", async () => {
+    const dir = await populated();
+    await expect(
+      switchStoreToSqlite(dir, {
+        appVersion: "0.8.0",
+        // The keys are fenced, the run logs not yet: a legacy append that was already under way.
+        afterFenceStep: async (path) => {
+          if (path === "private-workflows/.execution-key") await appendFile(join(dir, "runs", "run_a.jsonl"), "");
+          if (path === "decisions.json")
+            await appendFile(
+              join(dir, "runs", "run_a.jsonl"),
+              JSON.stringify({ seq: 2, type: "run.completed", runId: "run_a", payload: {} }) + "\n",
+            );
+        },
+      }),
+    ).rejects.toMatchObject(refusal("BUSY"));
+    expect(recordedStoreBackend(dir)).toBe("file");
+    expect(await readFile(join(dir, "runs", "run_a.jsonl"), "utf8")).toContain("run.completed");
+    expect(await readdir(dir)).not.toContain(SQLITE_SWITCH_DIR);
+  });
+
+  describe("interrupted by a kill", () => {
+    const script = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "sqlite-switch-crasher.ts");
+    const bundle = childBundle("sqlite-switch-crasher", { entries: { crasher: script } })?.crasher;
+    const killedAt = (dir: string, point: string) =>
+      new Promise<number | null>((resolve, reject) => {
+        const child = spawn(process.execPath, bundle ? [bundle, dir, point] : ["--import", "tsx", script, dir, point], {
+          stdio: ["ignore", "ignore", "inherit"],
+        });
+        child.on("error", reject);
+        child.on("exit", (code, signal) => resolve(signal === "SIGKILL" ? null : code));
+      });
+
+    for (const point of ["private-execution/.execution-key", "requests.json", "runs", "beforeMarker"])
+      it(`before the marker (${point}): keeps released ORCA out meanwhile, and the next start undoes it`, async () => {
+        const dir = await populated();
+        const before = await contents(dir);
+        expect(await killedAt(dir, point)).toBeNull();
+        // Until then: the first key is fenced, and nothing reads the store.
+        expect(await isMarker(join(dir, "private-execution", ".execution-key"))).toBe(true);
+        await expect(enterStoreFormat(dir, { appVersion: "0.8.0", mode: "read" })).rejects.toMatchObject(
+          refusal("INTERRUPTED"),
+        );
+        expect(await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).toMatchObject({
+          epoch: STORE_FORMAT_EPOCH,
+          backend: "file",
+        });
+        expect(await contents(dir)).toEqual(before);
+        expect((await fileStores(dir).events.read("run_a")).length).toBe(2);
+        // And the switch can simply be run again.
+        expect(await switchStoreToSqlite(dir, { appVersion: "0.8.0" })).toMatchObject({ status: "switched" });
+        await expectFenced(dir);
+        await expectReadsOnSqlite(dir);
+      });
+
+    it("after the marker: the store is on SQLite, and the next start finishes", async () => {
+      const dir = await populated();
+      expect(await killedAt(dir, "afterMarker")).toBeNull();
+      expect(await readStoreFormat(dir)).toMatchObject({ epoch: SQLITE_STORE_FORMAT_EPOCH });
+      expect(await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).toMatchObject({ backend: "sqlite" });
+      await expectFenced(dir);
+      await expectReadsOnSqlite(dir);
+    });
+  });
+
+  it("restores only the store's own database, checked before anything is published", async () => {
+    const dir = await populated();
+    await switchStoreToSqlite(dir, { appVersion: "0.8.0" });
+    const other = await populated();
+    await switchStoreToSqlite(other, { appVersion: "0.8.0" });
+    const backups = await mkdtemp(join(tmpdir(), "orca-legacy-fence-backups-"));
+    await backupSqliteMetadata(dir, join(backups, "own"));
+    await backupSqliteMetadata(other, join(backups, "other"));
+    // A mirror built beside the files before any switch: bound to no store.
+    const unswitched = await populated();
+    sqliteStores(unswitched, { unselected: true }).close?.();
+    await backupSqliteMetadata(unswitched, join(backups, "unbound"));
+
+    for (const name of await readdir(dir)) if (name.startsWith(SQLITE_METADATA_FILE)) await rm(join(dir, name));
+    for (const [backup, reason] of [
+      ["other", "METADATA_MISMATCH"],
+      ["unbound", "METADATA_MISMATCH"],
+    ] as const) {
+      await expect(restoreSqliteMetadata(join(backups, backup), dir)).rejects.toMatchObject(refusal(reason));
+      expect((await readdir(dir)).filter((n) => n.startsWith(SQLITE_METADATA_FILE))).toEqual([]);
+    }
+    await restoreSqliteMetadata(join(backups, "own"), dir);
+    await expectReadsOnSqlite(dir);
+  });
+
+  it("never makes a new key for a switched store whose key went missing", async () => {
+    const dir = await populated();
+    await switchStoreToSqlite(dir, { appVersion: "0.8.0" });
+    await rm(join(dir, "private-execution", SQLITE_KEY_FILE));
+    await expect(writePrivateJson(join(dir, "private-execution"), "new.json", { a: 1 })).rejects.toThrow();
+    expect(await readdir(join(dir, "private-execution"))).not.toContain(SQLITE_KEY_FILE);
+  });
+});

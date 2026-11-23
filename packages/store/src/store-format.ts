@@ -33,7 +33,19 @@ import { withFileLock } from "./file-lock.js";
 import { importFileMetadata, verifySqliteMetadata } from "./sqlite/maintenance.js";
 import { SQLITE_METADATA_FILE } from "./sqlite/stores.js";
 import { bindSqliteMetadata, SqliteDatabase } from "./sqlite/database.js";
-import { beginStoreSwitch, liveStoreWriters, type StoreWriterEntry } from "./store-writers.js";
+import { beginStoreSwitch, clearDeadStoreSwitch, liveStoreWriters, type StoreWriterEntry } from "./store-writers.js";
+import {
+  beginSqliteSwitchJournal,
+  endSqliteSwitchJournal,
+  fenceLegacyMetadata,
+  LEGACY_FENCES,
+  legacyFenceComplete,
+  SQLITE_LEGACY_WORKFLOWS_DIR,
+  readSqliteSwitchJournal,
+  unfenceLegacyMetadata,
+  unfencedPaths,
+} from "./sqlite/legacy-fence.js";
+import { SQLITE_KEY_FILE } from "./protected-file.js";
 import { backendOfEpoch, SQLITE_STORE_FORMAT_EPOCH, STORE_FORMAT_FILE, type StoreBackend } from "./store-backend.js";
 import {
   CarryoverRefused,
@@ -75,17 +87,6 @@ export {
  */
 export const WINDOWS_STORE_CARRYOVER = false;
 
-/**
- * Switching a store's metadata to SQLite in place (#339) stays refused (`LEGACY_UNFENCED`) until
- * released ORCA versions that never read the format marker can be kept out. v0.7.0 and v0.6.0
- * open a standalone file store without looking at `store-format.json`, so neither the SQLite
- * epoch nor the writer registry stops them from reopening the file metadata a switch leaves
- * behind, and `olderWritersStopped` is only the operator's word. The switch below is complete and
- * tested with this on (`inPlace`); turning it on needs an enforced boundary against those
- * releases, proven against a real released build.
- */
-export const IN_PLACE_SQLITE_SWITCH = false;
-
 /** Oldest first. `release` is the first release line that wrote the format. */
 export const STORE_FORMAT_HISTORY: readonly { epoch: string; release: string }[] = [
   { epoch: "ownership-fences-v1", release: "0.6" },
@@ -102,13 +103,6 @@ const MarkerSchema = z.object({
   writtenBy: z.string().min(1).max(64),
   updatedAt: z.string().min(1).max(64),
   backup: z.string().min(1).max(256).optional(),
-  /**
-   * 1 when every ORCA that has opened the store for writing registered while it had it open
-   * (store-writers.ts). Set on a fresh store and kept by this ORCA; an ORCA from before the
-   * registry rewrites the marker without it, so its absence means an older ORCA may still have
-   * the store open, which the registry cannot see.
-   */
-  writerRegistry: z.literal(1).optional(),
   /** On a store switched to SQLite: the id its database holds in `store_binding` (#339). */
   sqliteId: z
     .string()
@@ -121,8 +115,6 @@ export type StoreFormatMarker = z.infer<typeof MarkerSchema>;
 export type StoreFormatReason =
   | "NEWER"
   | "SWITCH_REFUSED"
-  | "OLDER_WRITER"
-  | "LEGACY_UNFENCED"
   | "TOO_OLD"
   | "DAMAGED"
   | "CARRYOVER_REQUIRED"
@@ -311,7 +303,7 @@ async function stamp(
   storeDir: string,
   appVersion: string,
   now: Date,
-  fields: Pick<StoreFormatMarker, "backup" | "writerRegistry" | "sqliteId">,
+  fields: Pick<StoreFormatMarker, "backup" | "sqliteId">,
   guard: () => void = () => undefined,
   epoch: string = STORE_FORMAT_EPOCH,
 ): Promise<void> {
@@ -321,7 +313,6 @@ async function stamp(
     writtenBy: appVersion,
     updatedAt: now.toISOString(),
     ...(fields.backup ? { backup: fields.backup } : {}),
-    ...(fields.writerRegistry ? { writerRegistry: fields.writerRegistry } : {}),
     ...(fields.sqliteId ? { sqliteId: fields.sqliteId } : {}),
   };
   const tmp = join(storeDir, `${STORE_FORMAT_FILE}.${randomUUID()}.tmp`);
@@ -365,11 +356,13 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
     marker?.epoch === SQLITE_STORE_FORMAT_EPOCH ? SQLITE_STORE_FORMAT_EPOCH : current;
   if (options.mode === "read") {
     const marker = await check();
+    if (await readSqliteSwitchJournal(storeDir)) throw switchInterrupted(storeDir);
     const status = await classify(marker);
     return { status, epoch: kept(marker), backend: backendOfEpoch(kept(marker)) };
   }
   await mkdir(storeDir, { recursive: true });
   return withFileLock(join(storeDir, LOCK), async (): Promise<StoreFormatOutcome> => {
+    await settleSqliteSwitch(storeDir, await readStoreFormat(storeDir));
     const marker = await check();
     let status: Awaited<ReturnType<typeof classify>>;
     try {
@@ -406,12 +399,7 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
         storeDir,
         options.appVersion,
         now,
-        {
-          backup: marker?.backup,
-          // Kept only while no older ORCA has rewritten the marker since a fresh store got it.
-          writerRegistry: status === "fresh" || marker?.writerRegistry === 1 ? 1 : undefined,
-          sqliteId: marker?.sqliteId,
-        },
+        { backup: marker?.backup, sqliteId: marker?.sqliteId },
         undefined,
         kept(marker),
       );
@@ -582,18 +570,14 @@ export interface SwitchToSqliteOptions {
   privacy?: PrivateCopyBackend;
   /** Injected for tests; defaults to this process's platform. */
   platform?: NodeJS.Platform;
-  /**
-   * The operator states that no ORCA from before the writer registry has the store open. Needed
-   * only when the marker says such an ORCA has opened it (no `writerRegistry`), since this ORCA
-   * cannot see whether it is still running.
-   */
-  olderWritersStopped?: boolean;
-  /** Tests only: switch in place despite {@link IN_PLACE_SQLITE_SWITCH}. */
-  inPlace?: boolean;
   /** Injected for tests: runs after the import and its verify, before the last checks. */
   afterImport?: () => Promise<void>;
+  /** Injected for tests: runs after each path of the legacy fence is in place. */
+  afterFenceStep?: (path: string) => Promise<void>;
   /** Injected for tests: runs after the last checks, just before the marker is written. */
   beforeMarker?: () => Promise<void>;
+  /** Injected for tests: runs after the marker, before the switch's journal is dropped. */
+  afterMarker?: () => Promise<void>;
 }
 
 export type SwitchToSqliteOutcome =
@@ -647,6 +631,8 @@ export async function switchStoreToSqlite(
 ): Promise<SwitchToSqliteOutcome> {
   const current = STORE_FORMAT_EPOCH;
   return withFileLock(join(storeDir, LOCK), async (): Promise<SwitchToSqliteOutcome> => {
+    // An earlier switch that was interrupted is finished or undone first, by its own journal.
+    await settleSqliteSwitch(storeDir, await readStoreFormat(storeDir));
     const marker = await readStoreFormat(storeDir);
     if (marker) judge(storeDir, marker, current);
     if (marker?.epoch === SQLITE_STORE_FORMAT_EPOCH) return { status: "current", epoch: marker.epoch };
@@ -662,18 +648,6 @@ export async function switchStoreToSqlite(
       throw new StoreFormatError(
         "UNDURABLE",
         "This ORCA does not yet change a store's format on Windows, because it cannot yet prove that the backup it takes first survives a power cut. Switching to SQLite is such a change, so nothing was changed and the store stays on files.",
-        storeDir,
-      );
-    if (!(options.inPlace ?? IN_PLACE_SQLITE_SWITCH))
-      throw new StoreFormatError(
-        "LEGACY_UNFENCED",
-        "Switching a store to SQLite in place is not available yet: ORCA 0.7.0 and earlier open a store without reading its format marker, so they could still open the file metadata a switch leaves behind, and nothing can keep them out yet. Nothing was changed and the store stays on files.",
-        storeDir,
-      );
-    if (marker.writerRegistry !== 1 && !options.olderWritersStopped)
-      throw new StoreFormatError(
-        "OLDER_WRITER",
-        `An ORCA from before ${options.appVersion} has opened this store (the marker was last written by ORCA ${marker.writtenBy} or carried over from it), and such an ORCA does not say while it has the store open, so this one cannot tell whether it is still running. Stop every older ORCA app, daemon and command using this store, then run \`orca store sqlite switch --older-orca-stopped\`. Nothing was changed.`,
         storeDir,
       );
     const privacy = options.privacy ?? posixPrivateCopy;
@@ -743,21 +717,87 @@ async function switchLocked(
       );
     const writers = liveStoreWriters(storeDir);
     if (writers.length) throw busyWriters(storeDir, writers);
-    await options.beforeMarker?.();
-    // No older ORCA opens this epoch, and every writer from this one registers: from here the
-    // registry sees every writer.
-    await stamp(
-      storeDir,
-      options.appVersion,
-      now,
-      { backup, writerRegistry: 1, sqliteId },
-      undefined,
-      SQLITE_STORE_FORMAT_EPOCH,
-    );
+    // The legacy fence (sqlite/legacy-fence.ts): from the journal on, an interruption is undone
+    // (or, once the marker is written, finished) by the next start, and a released ORCA that
+    // never reads the marker finds every path it would open first replaced by a marker.
+    await beginSqliteSwitchJournal(storeDir, { format: 1, sqliteId, backup });
+    try {
+      await fenceLegacyMetadata(storeDir, options.afterFenceStep);
+      // A write that landed while the fence went in shows up in what was set aside.
+      if (!sameStoreSnapshot(before, await fencedFileMetadata(storeDir)))
+        throw new StoreFormatError(
+          "BUSY",
+          "The store's files changed while it was being switched, so the database may not hold everything and the store stays on files. Stop every ORCA app, daemon and command using it, then switch it again.",
+          storeDir,
+        );
+      await options.beforeMarker?.();
+      await stamp(storeDir, options.appVersion, now, { backup, sqliteId }, undefined, SQLITE_STORE_FORMAT_EPOCH);
+    } catch (error) {
+      // Refused or failed before the marker: put every original back. An interruption (a crash)
+      // never gets here; the journal makes the next start do this instead.
+      await unfenceLegacyMetadata(storeDir);
+      await endSqliteSwitchJournal(storeDir);
+      throw error;
+    }
+    await options.afterMarker?.();
+    await endSqliteSwitchJournal(storeDir);
   } catch (error) {
     if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
     throw error;
   }
   await pruneFormatBackups(storeDir, backup, privacy);
   return { status: "switched", epoch: SQLITE_STORE_FORMAT_EPOCH, backup };
+}
+
+const switchInterrupted = (storeDir: string) =>
+  new StoreFormatError(
+    "INTERRUPTED",
+    "A switch of this store to SQLite was interrupted. Start ORCA (or run `orca store sqlite switch`) once to finish or undo it; nothing reads the store until then.",
+    storeDir,
+  );
+
+/**
+ * Finish or undo a switch to SQLite that was interrupted, from its journal (legacy-fence.ts),
+ * under the format lock. The marker decides: written with the journal's database id, the switch
+ * happened, and only the journal is left to drop (the fence went in before the marker);
+ * otherwise the store is still on files, and every original goes back where it was.
+ */
+async function settleSqliteSwitch(storeDir: string, marker: StoreFormatMarker | undefined): Promise<void> {
+  clearDeadStoreSwitch(storeDir);
+  const journal = await readSqliteSwitchJournal(storeDir);
+  if (!journal) return;
+  if (marker?.epoch === SQLITE_STORE_FORMAT_EPOCH) {
+    if (marker.sqliteId !== journal.sqliteId) throw switchInterrupted(storeDir);
+    if (!(await legacyFenceComplete(storeDir))) await fenceLegacyMetadata(storeDir);
+  } else await unfenceLegacyMetadata(storeDir);
+  await endSqliteSwitchJournal(storeDir);
+}
+
+/**
+ * The store's files as the switch compares them, with the legacy fence in place: each original
+ * read where it was set aside, the markers and the keys' links left out.
+ */
+async function fencedFileMetadata(storeDir: string): Promise<StoreSnapshot> {
+  const out: StoreSnapshot = new Map();
+  const fenced = LEGACY_FENCES.map((f) => f.path);
+  const under = (path: string, root: string) => path === root || path.startsWith(`${root}/`);
+  for (const [path, entry] of await snapshotStore(storeDir)) {
+    if (entry.type !== "file" || path.startsWith(SQLITE_METADATA_FILE)) continue;
+    if (fenced.some((root) => under(path, root)) || path.endsWith(`/${SQLITE_KEY_FILE}`)) continue;
+    if (under(path, SQLITE_LEGACY_WORKFLOWS_DIR)) continue;
+    out.set(path, entry);
+  }
+  for (const [path, actual] of await unfencedPaths(storeDir)) {
+    const info = await lstat(actual, { bigint: true });
+    if (info.isDirectory()) {
+      for (const [inner, entry] of await snapshotStore(actual))
+        if (entry.type === "file") out.set(`${path}/${inner}`, entry);
+    } else
+      out.set(path, {
+        type: "file",
+        mode: Number(info.mode & 0o7777n),
+        state: `${info.size}:${info.mtimeNs}:${info.ino}`,
+      });
+  }
+  return out;
 }

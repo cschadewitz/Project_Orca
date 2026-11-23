@@ -209,3 +209,13 @@ export function beginStoreSwitch(storeDir: string, appVersion: string): { end():
   });
   return { end: () => rmSync(path, { force: true }) };
 }
+
+/**
+ * Remove a switch announcement whose process is provably gone (a switch that was killed). Only
+ * under the format lock, which every switch holds while its announcement stands.
+ */
+export function clearDeadStoreSwitch(storeDir: string): void {
+  const path = join(storeDir, STORE_SWITCH_FILE);
+  const entry = readEntry(path);
+  if (entry && !storeWriterAlive(entry)) rmSync(path, { force: true });
+}
