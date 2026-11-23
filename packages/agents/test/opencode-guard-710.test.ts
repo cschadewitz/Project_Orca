@@ -311,12 +311,32 @@ describe("the profile's own configuration directories", () => {
   it("refuses a config file that is a link or writable by others", async () => {
     const { root, agent, configPath } = await profile();
     await chmod(configPath, 0o666);
-    expect((await refusal(guard().prepare(options(agent)))).message).toMatch(/OPENCODE_CONFIG .* can be written/);
+    expect((await refusal(guard().prepare(options(agent)))).message).toMatch(
+      /OPENCODE_CONFIG.*can be (written|changed) by other users/,
+    );
     await chmod(configPath, 0o644);
     const linked = join(root, "linked.json");
     await symlink(configPath, linked);
     const viaLink = { ...agent, env: { ...agent.env, OPENCODE_CONFIG: linked } };
     expect((await refusal(guard().prepare(options(viaLink)))).message).toMatch(/is a symbolic link/);
+  });
+
+  it("refuses a profile path with a link on it, or a directory on it others can change", async () => {
+    const { root, agent } = await profile();
+    const real = join(root, "real-home");
+    await mkdir(real);
+    await symlink(real, join(root, "linked-home"));
+    const viaLink = { ...agent, env: { ...agent.env, HOME: join(root, "linked-home", "inner") } };
+    expect((await refusal(guard().prepare(options(viaLink)))).message).toMatch(
+      /linked-home, on the path to HOME, is a symbolic link/,
+    );
+    const shared = join(root, "shared");
+    await mkdir(shared);
+    await chmod(shared, 0o777);
+    const underShared = { ...agent, env: { ...agent.env, XDG_CONFIG_HOME: join(shared, "xdg") } };
+    expect((await refusal(guard().prepare(options(underShared)))).message).toMatch(
+      /shared, on the path to XDG_CONFIG_HOME, can be changed by other users/,
+    );
   });
 
   it("refuses a launch whose profile carries its own agents", async () => {

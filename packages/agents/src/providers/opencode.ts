@@ -40,7 +40,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import type { Stats } from "node:fs";
 import { access, lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
-import { isAbsolute, join, resolve as resolvePath, win32 } from "node:path";
+import { dirname, isAbsolute, join, resolve as resolvePath, win32 } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   OrcaError,
@@ -549,6 +549,42 @@ function ownership(what: string, info: Stats, kind: "file" | "directory"): strin
   return problems;
 }
 
+/**
+ * Problems with the path to one of the profile's locations (`what`): from the nearest part of
+ * `path` that exists up to the root, nothing may be a link, and every directory must belong to
+ * the user or to root and be closed to other writers (a root-owned sticky directory such as
+ * /tmp counts as closed). So the path checked is the path OpenCode opens, and no one else can
+ * swap a directory on it between ORCA's check and OpenCode's read. A component that is a link,
+ * even a dangling one, is refused.
+ */
+export async function openCodePathCustodyProblems(path: string, what: string): Promise<string[]> {
+  if (process.platform === "win32") return [];
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const on = `on the path to ${what}`;
+  let current = resolvePath(path);
+  let leaf = true;
+  for (;;) {
+    let info: Stats | undefined;
+    try {
+      info = await lstat(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+        return [`${current}, ${on}, cannot be inspected (${(error as NodeJS.ErrnoException).code ?? "error"})`];
+    }
+    if (info) {
+      if (info.isSymbolicLink()) return [`${current}, ${on}, is a symbolic link; give ${what} as a path without links`];
+      if (leaf ? !info.isDirectory() && !info.isFile() : !info.isDirectory())
+        return [`${current}, ${on}, is not a directory`];
+      if (info.uid !== 0 && info.uid !== uid) return [`${current}, ${on}, belongs to another user`];
+      if (info.mode & 0o022 && !(info.uid === 0 && info.mode & 0o1000))
+        return [`${current}, ${on}, can be changed by other users`];
+    }
+    if (current === dirname(current)) return [];
+    current = dirname(current);
+    leaf = false;
+  }
+}
+
 async function managedConfigPresent(platform: string): Promise<string[]> {
   const found: string[] = [];
   for (const path of OPENCODE_MANAGED_DIRS[platform] ?? [])
@@ -687,6 +723,11 @@ export function openCodeGuard(opts: OpenCodeGuardOptions = {}): ProviderGuard {
       ...openCodeProfileProblems(launched, ambient, hostType, platform, arch, fromSecrets),
       ...openCodePolicyProblems(launched),
     ];
+    if (!problems.length) {
+      const env = literalEnv(launched.env);
+      for (const name of ["HOME", "XDG_CONFIG_HOME", "OPENCODE_CONFIG"] as const)
+        problems.push(...(await openCodePathCustodyProblems(env[name]!, name)));
+    }
     if (!problems.length)
       problems.push(...(await checkConfigFile(launched, literalEnv(launched.env).OPENCODE_PERMISSION)));
     if (!problems.length) problems.push(...(await openCodeProfileDirProblems(literalEnv(launched.env))));
