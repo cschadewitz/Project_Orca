@@ -234,10 +234,18 @@ describe("an automatic install asks again right before the stop", () => {
   });
 });
 
-it("ORCA_UPDATE_IDLE_SECONDS takes only whole seconds from 1 to 1e9", () => {
-  expect(idleThreshold(undefined)).toEqual({});
-  expect(idleThreshold("1")).toEqual({ idleSeconds: 1 });
-  expect(idleThreshold("1000000000")).toEqual({ idleSeconds: 1e9 });
+it("ORCA_UPDATE_IDLE_SECONDS only raises the 15-minute floor, except for the loopback test feed", () => {
+  const feed = "https://updates.example.net/";
+  expect(idleThreshold(undefined, feed)).toEqual({});
+  // An ordinary packaged launch ignores a shorter inherited value.
+  for (const shorter of ["1", "60", "899"]) expect(idleThreshold(shorter, feed)).toEqual({});
+  expect(idleThreshold("1", undefined)).toEqual({});
+  expect(idleThreshold("1", "https://localhost.example.net/")).toEqual({});
+  expect(idleThreshold("900", feed)).toEqual({ idleSeconds: 900 });
+  expect(idleThreshold("1000000000", feed)).toEqual({ idleSeconds: 1e9 });
+  // The isolated Windows update test's feed is this machine's own copy of the Worker.
+  expect(idleThreshold("1", "https://localhost:8443/")).toEqual({ idleSeconds: 1 });
+  expect(idleThreshold("1", "https://127.0.0.1:8443/")).toEqual({ idleSeconds: 1 });
   for (const bad of ["", "0", "-5", "1.5", "1e3", " 60", "1000000001", "99999999999"])
-    expect(idleThreshold(bad)).toEqual({});
+    expect(idleThreshold(bad, "https://localhost:8443/")).toEqual({});
 });

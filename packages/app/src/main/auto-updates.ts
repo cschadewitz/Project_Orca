@@ -184,12 +184,25 @@ export class AutoUpdates {
 
 /**
  * `ORCA_UPDATE_IDLE_SECONDS`: how long without input before an idle install, in whole seconds
- * (1 to 1e9). Anything else keeps the default 15 minutes. The Windows update test uses it to
- * take one path at a time; a machine that is never idle long enough can raise it, not lower
- * the guards: the runtime idle proof and draft checks still decide.
+ * up to 1e9. A released app only takes a value at or above the default 15 minutes, so the
+ * variable can raise the floor (a machine that is never idle that long) but never lower it.
+ * A shorter value counts only for the isolated Windows update test, whose feed
+ * (`ORCA_UPDATE_URL`) is this machine's loopback copy of the Worker; anything else, or no
+ * value, keeps the default. The runtime idle proof and draft checks decide either way.
  */
-export function idleThreshold(value: string | undefined): { idleSeconds?: number } {
+export function idleThreshold(value: string | undefined, feedUrl: string | undefined): { idleSeconds?: number } {
   if (!value || !/^[1-9][0-9]{0,9}$/.test(value)) return {};
   const seconds = Number(value);
-  return seconds <= 1e9 ? { idleSeconds: seconds } : {};
+  if (seconds > 1e9) return {};
+  if (seconds >= AUTO_UPDATE_TIMING.idleSeconds || loopbackFeed(feedUrl)) return { idleSeconds: seconds };
+  return {};
+}
+
+function loopbackFeed(feedUrl: string | undefined): boolean {
+  try {
+    const host = new URL(feedUrl ?? "").hostname;
+    return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  } catch {
+    return false;
+  }
 }

@@ -1565,7 +1565,7 @@ const autoUpdates = new AutoUpdates({
   enabled: () => preferences.read().updates.automatic,
   idleSeconds: () => powerMonitor.getSystemIdleTime(),
   now: () => Date.now(),
-  timing: idleThreshold(process.env.ORCA_UPDATE_IDLE_SECONDS),
+  timing: idleThreshold(process.env.ORCA_UPDATE_IDLE_SECONDS, process.env.ORCA_UPDATE_URL),
 });
 const storeSwitch = new StoreSwitchRestart({
   guards: updateGuards,

@@ -46,7 +46,8 @@ on work, and a busy app simply tries again later.
 - **Check and download.** Two minutes after start, then every four hours, the app checks its
   feed and downloads whatever it is offered, in the background.
 - **Install when idle.** Once a download is ready, the app installs it after 15 minutes without
-  keyboard or mouse input (`ORCA_UPDATE_IDLE_SECONDS` changes the 15 minutes), trying at most
+  keyboard or mouse input (`ORCA_UPDATE_IDLE_SECONDS` can raise the 15 minutes, never lower them; only the
+  loopback feed of the Windows update test takes a shorter value), trying at most
   every five minutes. It goes through exactly the
   restart above, with one more condition: the bundled daemon's runtime idle proof
   (`maintenance.runtime`) must close admission, which it refuses while any request, run
