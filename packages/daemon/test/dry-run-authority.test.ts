@@ -71,6 +71,9 @@ const generations: ConfigGenerationProvider = {
   status: () => STATUS,
   apply: async () => ({ outcome: "unchanged", status: STATUS, validation: { errors: [] } }),
   onChange: () => () => {},
+  // An active generation to validate drafts against: without one, a draft carries an
+  // "unvalidated" error and is refused a dry run (#182).
+  validationContext: () => ({}),
 };
 
 async function workspace() {
