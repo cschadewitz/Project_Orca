@@ -14,6 +14,7 @@ import {
   type PendingReviewV1,
   type PolicyEvaluationV1,
   type PolicyPortV1,
+  type StrictReviewTerms,
   type PolicyVerdictV1,
   type ReviewEligibilityV1,
   type StrictPermissionSource,
@@ -31,6 +32,7 @@ interface RetainedReview {
   recordRef?: string;
   review: ReviewEligibilityV1;
   rule: StrictPermissionRule;
+  terms: StrictReviewTerms;
   state: StrictPermissionState;
   originalSignal: AbortSignal;
   request?: JudgeRequestV1;
@@ -143,6 +145,7 @@ export function createStrictPolicyPort(options: StrictPolicyOptions): PolicyPort
       if (
         !isDeepStrictEqual(current, retained) ||
         !isDeepStrictEqual(result.rule, entry.rule) ||
+        !isDeepStrictEqual(result.terms, entry.terms) ||
         !isDeepStrictEqual(currentState, entry.state)
       )
         return { phase: "final", verdict: stopped(entry.action, "review-eligibility-changed") };
@@ -187,6 +190,7 @@ export function createStrictPolicyPort(options: StrictPolicyOptions): PolicyPort
         status: "pending",
         review: freeze(structuredClone(result.review)),
         rule: freeze(structuredClone(result.rule)),
+        terms: freeze(structuredClone(result.terms)),
         state: freeze(structuredClone(currentState!)),
         originalSignal: signal,
         cancel,
@@ -280,17 +284,20 @@ export function createStrictPolicyPort(options: StrictPolicyOptions): PolicyPort
           (exactResult.execution === "unavailable" && exactResult.result !== "indeterminate")
         )
           return terminal(entry, stopped(entry.action, "invalid-judge-result"));
-        const delegation = current.rule.delegation!;
+        // Terms compose the rule's delegation with the profile's judge floor; an unsure or unreachable judge under
+        // a floor asks the person.
+        const terms = current.terms;
         let verdict: PolicyVerdictV1;
         if (exactResult.execution === "unavailable") {
-          if (delegation.requirement === "advisory" && delegation.allowWhenUnavailable)
-            verdict = ruleAllow(entry.action, current.rule);
+          if (terms.onUnavailable === "allow") verdict = ruleAllow(entry.action, current.rule);
+          else if (terms.onUnavailable === "require-human")
+            verdict = { ...strictDecisionBinding(entry.action), outcome: "require-human", reason: "judge-unavailable" };
           else verdict = stopped(entry.action, "judge-unavailable");
         } else if (exactResult.result === "fit") verdict = ruleAllow(entry.action, current.rule);
         else
           verdict = {
             ...strictDecisionBinding(entry.action),
-            outcome: exactResult.result === "not-fit" ? delegation.onNotFit : delegation.onIndeterminate,
+            outcome: exactResult.result === "not-fit" ? terms.onNotFit : terms.onIndeterminate,
             reason: exactResult.result === "not-fit" ? "judge-not-fit" : "judge-indeterminate",
           };
         let resultRef: string;

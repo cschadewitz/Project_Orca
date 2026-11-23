@@ -17,7 +17,10 @@
  * script runs out the stand-in replies with the tool results it was given.
  */
 import { once } from "node:events";
-import { access, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -31,13 +34,18 @@ import {
   LocalHost,
   copilotCliGuard,
   openAcpSession,
+  COPILOT_CLI_VERIFIED_BUILDS,
+  copilotHomeProblems,
   parseCopilotCliVersion,
-  probeCopilotCliVersion,
+  sha256File,
   withProviderGuards,
   type AgentSession,
   type OpenSessionOptions,
   type SessionUpdateEvent,
 } from "@orca/agents";
+
+/** The temporary directory without links (macOS reaches it through /var -> /private/var). */
+const TMP = realpathSync(tmpdir());
 
 const COPILOT = process.env["ORCA_COPILOT_CLI"];
 
@@ -164,12 +172,12 @@ function profile(home: string, permissions?: unknown): AgentSpec {
 
 async function openCopilot(
   answer: (r: acp.RequestPermissionRequest) => string | undefined,
-  opts: { permissions?: unknown; guarded?: boolean } = {},
+  opts: { permissions?: unknown; guarded?: boolean; home?: string } = {},
 ): Promise<Opened> {
-  const root = await mkdtemp(join(tmpdir(), "orca-copilot-accept-"));
+  const root = await mkdtemp(join(TMP, "orca-copilot-accept-"));
   roots.push(root);
   const workspace = join(root, "workspace");
-  const home = join(root, "copilot-home");
+  const home = opts.home ?? join(root, "copilot-home");
   await mkdir(workspace);
   await writeFile(join(workspace, "existing.txt"), "hello\n");
   const asks: acp.RequestPermissionRequest[] = [];
@@ -204,9 +212,47 @@ async function savedApprovals(home: string): Promise<string[]> {
 /* ------------------------------ the suite ------------------------------ */
 
 describe.skipIf(!COPILOT)("Copilot CLI over ACP, real executable (#709)", { timeout: 120_000 }, () => {
-  it("is the pinned version", async () => {
-    const version = parseCopilotCliVersion(await probeCopilotCliVersion(COPILOT!, process.env));
-    expect(COPILOT_CLI_VERIFIED_VERSIONS).toContain(version);
+  it("is the pinned build for this platform, and says so", async () => {
+    const sum = await sha256File(await realpath(COPILOT!));
+    const build = COPILOT_CLI_VERIFIED_BUILDS.find((b) => b.platform === `${process.platform}-${process.arch}`);
+    expect(build?.sha256).toBe(sum);
+    const { stdout } = await promisify(execFile)(COPILOT!, ["--no-auto-update", "--version"]);
+    expect(parseCopilotCliVersion(stdout)).toBe(build!.version);
+    expect(COPILOT_CLI_VERIFIED_VERSIONS).toContain(build!.version);
+  });
+
+  describe("Copilot's own profile", () => {
+    it("a profile reused across sessions stays clean: no saved approval, and the next session asks again", async () => {
+      const root = await mkdtemp(join(TMP, "orca-copilot-reuse-"));
+      roots.push(root);
+      const home = join(root, "copilot-home");
+      for (const n of [1, 2]) {
+        const o = await openCopilot(pick("allow_always"), { home });
+        try {
+          await o.session.prompt(script({ tools: [bash(`touch reuse-${n}`)] }));
+          expect(o.asks).toHaveLength(1);
+          expect(await exists(join(o.workspace, `reuse-${n}`))).toBe(true);
+        } finally {
+          await o.session.close();
+        }
+        expect(await copilotHomeProblems(home)).toEqual([]);
+        expect(await savedApprovals(home)).toEqual([]);
+      }
+    });
+
+    it("a profile Copilot itself gave a standing URL approval is refused before the agent starts", async () => {
+      const root = await mkdtemp(join(TMP, "orca-copilot-seeded-"));
+      roots.push(root);
+      const home = join(root, "copilot-home");
+      await promisify(execFile)(COPILOT!, ["--no-auto-update", "config", "allowedUrls", "example.com"], {
+        env: { ...process.env, COPILOT_HOME: home, COPILOT_AUTO_UPDATE: "false" },
+      });
+      expect(await readFile(join(home, "settings.json"), "utf8")).toContain("example.com");
+      await expect(openCopilot(pick("allow_once"), { home })).rejects.toMatchObject({
+        code: "CONFIG_INVALID",
+        message: expect.stringContaining("settings.json sets allowedUrls"),
+      });
+    });
   });
 
   describe("A: connectivity", () => {

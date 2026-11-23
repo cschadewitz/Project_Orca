@@ -90,7 +90,8 @@ jobs:
   machines:
     name: two machines in containers
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # Room for the base image's bounded cold-build retries (build-base.sh) on a cache miss.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -103,9 +104,21 @@ jobs:
       - run: pnpm install --frozen-lockfile
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      # The machines' packages layer is built once per base.Dockerfile and cached, so a slow
+      # Ubuntu archive does not stall every run in the test's own image build. The cache every PR
+      # restores is saved on main (machine-base-cache.yml); on a miss this job builds it itself,
+      # with a bounded time per attempt, rather than hanging until the job times out.
+      - name: Restore the machine base image
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/orca-machine-base.tar
+          key: orca-machine-base-${{ runner.os }}-${{ hashFiles('packages/testing/machine/base.Dockerfile') }}
+      - name: Load or build the machine base image
+        run: packages/testing/machine/build-base.sh "$RUNNER_TEMP/orca-machine-base.tar"
       # The fixture bundles the daemon from the compiled packages, as the release does.
       - run: pnpm run build
       - name: A parent and a worker on separate machines, over the worker's sshd
         env:
           ORCA_TWO_MACHINES: "1"
+          ORCA_MACHINE_BASE: orca-machine-base:ci
         run: pnpm exec vitest run packages/cli/test/delegation-machines-885.test.ts

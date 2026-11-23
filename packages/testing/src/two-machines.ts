@@ -316,6 +316,9 @@ function run(
       clearTimeout(timer);
       resolve({ status: code ?? -1, stdout, stderr: signal ? `${stderr}killed by ${signal}` : stderr });
     });
+    // A command that exits without reading its input closes the pipe first; that is its
+    // answer, reported by "close", not an uncaught EPIPE that fails the whole test run.
+    child.stdin.on("error", () => undefined);
     child.stdin.end(options.input ?? "");
   });
 }

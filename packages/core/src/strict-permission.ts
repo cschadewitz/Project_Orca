@@ -7,11 +7,34 @@ import type {
   PolicyVerdictV1,
   ReviewEligibilityV1,
 } from "./model/tool-execution-guards.js";
-import type { StrictPermissionRule, StrictPermissionState } from "./model/strict-permission.js";
+import type {
+  StrictJudgeFloor,
+  StrictPermissionRule,
+  StrictPermissionState,
+  StrictRuleDelegation,
+} from "./model/strict-permission.js";
+
+/**
+ * How a judge's answer becomes a verdict, composed from the matched rule's delegation and the profile's judge floor
+ * (#701, option C). Strengthen-only: each field is the stricter of its sources.
+ */
+export interface StrictReviewTerms {
+  /** What asked for this review: the matched rule's delegation, the profile's judge floor, or both. */
+  readonly requiredBy: readonly ("rule" | "profile")[];
+  readonly onNotFit: "deny" | "require-human";
+  readonly onIndeterminate: "indeterminate" | "require-human";
+  /** A judge that could not be reached: allow only for an advisory rule that says so and no floor. */
+  readonly onUnavailable: "allow" | "require-human" | "indeterminate";
+}
 
 export type StrictPreflight =
   | { readonly phase: "final"; readonly verdict: PolicyVerdictV1 }
-  | { readonly phase: "needs-review"; readonly review: ReviewEligibilityV1; readonly rule: StrictPermissionRule };
+  | {
+      readonly phase: "needs-review";
+      readonly review: ReviewEligibilityV1;
+      readonly rule: StrictPermissionRule;
+      readonly terms: StrictReviewTerms;
+    };
 
 /** Internal comparison only: an unbounded rule never makes an action or permit
  * unbounded. Unknown/mixed encodings remain unavailable, rather than legacy. */
@@ -225,35 +248,81 @@ export function evaluateStrictPermission(
     return finish("require-human", "mandatory-human");
   if (rule.decision !== "allow") return finish("indeterminate", "invalid-rule-decision");
   const delegation = rule.delegation;
-  if (!delegation) return { phase: "final", verdict: ruleAllow(action, rule) };
+  const floor = profile.judgeFloor;
+  if (!delegation && floor === undefined) return { phase: "final", verdict: ruleAllow(action, rule) };
+  if (!reviewId) return finish("indeterminate", delegation ? "invalid-delegation" : "invalid-judge-floor");
+  if (delegation && !validDelegation(delegation)) return finish("indeterminate", "invalid-delegation");
+  if (floor !== undefined && !validFloor(floor)) return finish("indeterminate", "invalid-judge-floor");
+  const sources = [delegation, floor].filter((source) => source !== undefined);
+  const [first] = sources as [StrictRuleDelegation | StrictJudgeFloor];
+  // Two sources naming different judges, projections or destinations are refused, never merged or substituted.
   if (
-    !reviewId ||
-    !delegation.judgeConfigRef ||
-    !delegation.projectionPolicyRevision ||
-    !delegation.destinationPolicyRef ||
-    !Number.isFinite(delegation.maximumDurationMs) ||
-    delegation.maximumDurationMs <= 0 ||
-    (delegation.requirement !== "required" && delegation.requirement !== "advisory") ||
-    (delegation.onNotFit !== "deny" && delegation.onNotFit !== "require-human") ||
-    (delegation.onIndeterminate !== "indeterminate" && delegation.onIndeterminate !== "require-human")
+    !sources.every(
+      (source) =>
+        source.judgeConfigRef === first.judgeConfigRef &&
+        source.projectionPolicyRevision === first.projectionPolicyRevision &&
+        source.destinationPolicyRef === first.destinationPolicyRef,
+    )
   )
-    return finish("indeterminate", "invalid-delegation");
+    return finish("indeterminate", "judge-requirement-conflict");
+  const terms: StrictReviewTerms = {
+    requiredBy: [...(delegation ? (["rule"] as const) : []), ...(floor ? (["profile"] as const) : [])],
+    onNotFit: delegation?.onNotFit === "deny" || floor?.onNotFit === "deny" ? "deny" : "require-human",
+    onIndeterminate: delegation?.onIndeterminate === "indeterminate" ? "indeterminate" : "require-human",
+    onUnavailable: !floor
+      ? delegation!.requirement === "advisory" && delegation!.allowWhenUnavailable === true
+        ? "allow"
+        : "indeterminate"
+      : delegation && !(delegation.requirement === "advisory" && delegation.allowWhenUnavailable === true)
+        ? "indeterminate"
+        : "require-human",
+  };
   return {
     phase: "needs-review",
     rule,
+    terms,
     review: {
       ...strictDecisionBinding(action),
       reviewId,
       delegation: { ruleId: rule.ruleId, ruleRevision: rule.ruleRevision },
-      requirement: delegation.requirement,
-      projectionPolicyRevision: delegation.projectionPolicyRevision,
-      destinationPolicyRef: delegation.destinationPolicyRef,
-      judgeConfigRef: delegation.judgeConfigRef,
+      requirement: floor || delegation!.requirement === "required" ? "required" : "advisory",
+      projectionPolicyRevision: first.projectionPolicyRevision,
+      destinationPolicyRef: first.destinationPolicyRef,
+      judgeConfigRef: first.judgeConfigRef,
       deadlineAt: new Date(
-        Math.min(Date.parse(action.expiresAt), ruleExpiry, now + delegation.maximumDurationMs),
+        Math.min(Date.parse(action.expiresAt), ruleExpiry, now + Math.min(...sources.map((x) => x.maximumDurationMs))),
       ).toISOString(),
     },
   };
+}
+
+function validReviewSource(source: StrictRuleDelegation | StrictJudgeFloor): boolean {
+  return (
+    typeof source === "object" &&
+    source !== null &&
+    typeof source.judgeConfigRef === "string" &&
+    source.judgeConfigRef !== "" &&
+    typeof source.projectionPolicyRevision === "string" &&
+    source.projectionPolicyRevision !== "" &&
+    typeof source.destinationPolicyRef === "string" &&
+    source.destinationPolicyRef !== "" &&
+    Number.isFinite(source.maximumDurationMs) &&
+    source.maximumDurationMs > 0 &&
+    (source.onNotFit === "deny" || source.onNotFit === "require-human")
+  );
+}
+
+function validDelegation(delegation: StrictRuleDelegation): boolean {
+  return (
+    validReviewSource(delegation) &&
+    (delegation.requirement === "required" || delegation.requirement === "advisory") &&
+    (delegation.onIndeterminate === "indeterminate" || delegation.onIndeterminate === "require-human")
+  );
+}
+
+/** A floor that is present but malformed never means "off": it holds the call instead. */
+function validFloor(floor: StrictJudgeFloor): boolean {
+  return validReviewSource(floor);
 }
 
 /** A strict native response is eligible only for a qualified, bounded, original invocation option. */

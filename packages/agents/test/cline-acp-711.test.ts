@@ -296,6 +296,12 @@ describe("Cline's config directory, deny by default", () => {
     const link = join(root, "looks-separate");
     await symlink(shared, link);
     expect(clineFileProblems(link, workspace, home)[0]).toContain("is Cline's own default directory");
+    const plain = join(root, "plain-link");
+    await symlink(configDir, plain);
+    expect(clineFileProblems(plain, workspace, home)).toEqual([
+      `files: ${plain} has a link on its path (it is really ${configDir}); give --config its real path, with no link on it`,
+      `files: ${plain} is a link; Cline's config must hold its own directories, not links`,
+    ]);
     const intoWork = join(root, "also-separate");
     await mkdir(join(workspace, "cfg", "data"), { recursive: true });
     await symlink(join(workspace, "cfg"), intoWork);

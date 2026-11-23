@@ -46,17 +46,7 @@
  * What stays outside: a shell command Cline was allowed to run can do anything the account
  * can, and its effects are not ORCA's to see. See the matrix.
  */
-import { createHash } from "node:crypto";
-import {
-  createReadStream,
-  existsSync,
-  lstatSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-  type Stats,
-} from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve as resolvePath, sep, win32 } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -66,6 +56,7 @@ import type { AgentHost, SpawnAgentOptions } from "../host.js";
 import type { ProtectedPaths } from "../permissions.js";
 import { planSessionSecrets, withoutWithheld } from "../secrets.js";
 import type { AgentSession } from "../session.js";
+import { sha256File } from "./copilot-cli.js";
 import type { ProviderGuard } from "./guard.js";
 
 /**
@@ -98,16 +89,6 @@ export function clinePlatform(platform: string = process.platform, arch: string 
 }
 
 export type ImageDigest = (path: string) => Promise<string>;
-
-/** SHA-256 of a file, read whole. */
-export const sha256File: ImageDigest = (path) =>
-  new Promise((resolve, reject) => {
-    const hash = createHash("sha256");
-    createReadStream(path)
-      .on("data", (chunk) => hash.update(chunk))
-      .on("error", reject)
-      .on("end", () => resolve(hash.digest("hex")));
-  });
 
 /** SHA-256 digests already taken, by path, size and modification time. */
 const digestCache = new Map<string, string>();
@@ -401,7 +382,9 @@ function entryProblems(entries: readonly { path: string; kind: "directory" | "fi
       continue;
     }
     if (stats.isSymbolicLink()) {
-      problems.push(`files: ${path} is a link; Cline's config must hold its own ${kind}s, not links`);
+      problems.push(
+        `files: ${path} is a link; Cline's config must hold its own ${kind === "directory" ? "directories" : "files"}, not links`,
+      );
       continue;
     }
     if (kind === "directory" ? !stats.isDirectory() : !stats.isFile()) {
@@ -431,6 +414,10 @@ export function clineFileProblems(configDir: string, cwd: string, home: string):
   if (within(dir, workspaceRoot))
     problems.push(
       `files: ${configDir} is inside the workspace (${workspaceRoot}); keep Cline's config directory outside it`,
+    );
+  if (dir !== resolvePath(configDir))
+    problems.push(
+      `files: ${configDir} has a link on its path (it is really ${dir}); give --config its real path, with no link on it`,
     );
   problems.push(...clineConfigDirProblems(configDir));
   for (const hooks of paths.hookDirs) {

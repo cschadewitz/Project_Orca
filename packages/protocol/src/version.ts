@@ -215,7 +215,20 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * out unless asked, so a 2.8 client never lists one as work; new method names, and a 2.8 client
  * strips the field.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 9 };
+/**
+ * 2.10 (#335) adds an optional `capabilities` on the `setWorkflow` draft operation: the
+ * workflow-level capability scope, or `null` to remove it. Draft operations are strict, so a
+ * 2.9 daemon refuses the field; the app offers the control only to a 2.10 daemon.
+ */
+/**
+ * 2.11 (#363) adds optional `sensitiveVars` and `protectedValues` on `runs.admit` (launch vars
+ * the daemon protects as if the workflow declared them `sensitive`, and values it redacts
+ * wherever they appear), each listed in `hello.admitFields`, and an optional `redacted` on
+ * `artifacts.get` (the size and digest of a body sent with the run's protected values
+ * replaced). A 2.10 daemon refuses the strict admit fields, so a caller sends them only to one
+ * whose hello lists them; a 2.10 client strips `redacted`.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 11 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is

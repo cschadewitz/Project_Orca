@@ -70,13 +70,21 @@ export interface CapabilityCheck {
 /** The workflow scope travels with the context into nested graphs. */
 interface GraphContext extends ValidationContext {
   workflowCapabilities?: { scope: CapabilityScope | undefined; path: string };
+  /** The root workflow's launch inputs: what a step's `secretEnv` may name (#363). */
+  launchInputs?: WorkflowDefinition["inputSchema"];
 }
 
 export function validateWorkflow(def: WorkflowDefinition, ctx: ValidationContext = {}): ValidationResult {
   const errors: ValidationIssue[] = [];
   const warnings: ValidationIssue[] = [];
   const path = `workflow(${def.id})`;
-  validateGraph(def, path, { ...ctx, workflowCapabilities: { scope: def.capabilities, path } }, errors, warnings);
+  validateGraph(
+    def,
+    path,
+    { ...ctx, workflowCapabilities: { scope: def.capabilities, path }, launchInputs: def.inputSchema },
+    errors,
+    warnings,
+  );
   // A workflow-scope problem is found again at every agent step; report it once.
   const unique = (issues: ValidationIssue[]) => {
     const seen = new Set<string>();
@@ -223,6 +231,9 @@ function validateNode(
     case "agent":
       checkAgentPrompt(n, "");
       checkVars(n.vars);
+      for (const [name, input] of Object.entries(n.secretEnv ?? {}))
+        if (ctx.launchInputs?.fields[input]?.type !== "secret")
+          err(`'${input}' is not a launch input of type 'secret' in this workflow's inputSchema`, `.secretEnv.${name}`);
       n.inputs.forEach((r, i) => {
         if (r.fromNode && !graph.nodes[r.fromNode])
           err(`input references unknown node '${r.fromNode}'`, `.inputs[${i}]`);

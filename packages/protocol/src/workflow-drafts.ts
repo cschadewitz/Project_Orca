@@ -68,6 +68,27 @@ const coordinate = z.number().finite().min(-100_000).max(100_000);
  * Edges are addressed by their index in the graph's `edges` list as of the revision the
  * batch names, which is why the batch is revision-checked.
  */
+/**
+ * A workflow-level capability scope (#335), as the workflow schema takes it: narrow the
+ * agent's set, or opt in to what the agent's scope lists as available. Shape only; the
+ * daemon validates ids against the catalog and the agent when it validates the draft.
+ */
+const draftCapabilityId = z
+  .string()
+  .max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
+const draftCapabilityIds = z.array(draftCapabilityId).max(256);
+const DraftCapabilitySelectionSchema = z.strictObject({
+  replace: draftCapabilityIds.optional(),
+  enable: draftCapabilityIds.optional(),
+  disable: draftCapabilityIds.optional(),
+});
+export const DraftCapabilityScopeSchema = z.strictObject({
+  mcpServers: DraftCapabilitySelectionSchema.optional(),
+  skills: DraftCapabilitySelectionSchema.optional(),
+});
+export type DraftCapabilityScope = z.infer<typeof DraftCapabilityScopeSchema>;
+
 export const DraftOperationSchema = z.discriminatedUnion("op", [
   /** A new node. `id` is the person's or a generated name; the inspector renames it. */
   z.strictObject({ op: z.literal("addNode"), graph, id: nodeId, node: NodeBodySchema }),
@@ -113,11 +134,15 @@ export const DraftOperationSchema = z.discriminatedUnion("op", [
   }),
   z.strictObject({ op: z.literal("removeEdge"), graph, index: edgeIndex }),
   z.strictObject({ op: z.literal("setStart"), graph, id: nodeId }),
-  /** The workflow's own name and description. Its id is fixed; its version is publish's. */
+  /**
+   * The workflow's own name, description and (protocol 2.10, #335) capability scope. Its id is
+   * fixed; its version is publish's. `null` removes `description` or `capabilities`.
+   */
   z.strictObject({
     op: z.literal("setWorkflow"),
     name: z.string().min(1).max(256).optional(),
     description: z.string().max(4_096).nullable().optional(),
+    capabilities: DraftCapabilityScopeSchema.nullable().optional(),
   }),
   /** Pin a node where it was dropped. Layout only: the workflow text does not change. */
   z.strictObject({ op: z.literal("place"), graph, id: nodeId, x: coordinate, y: coordinate }),
