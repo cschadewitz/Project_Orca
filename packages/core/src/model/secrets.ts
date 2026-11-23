@@ -51,6 +51,7 @@ const binding = {
    * Pins the value to one network destination that ORCA itself sends it to (#701: a review
    * judge's bring-your-own-key). A pinned secret is never delivered to an agent or MCP server
    * process, and an unpinned one is never sent to a judge: neither use falls back to the other.
+   * Only `provider: env` may be pinned for now.
    */
   destination: z.string().min(1).optional(),
 };
@@ -148,6 +149,12 @@ export function validateSecretReferences(config: {
   const issues: SecretIssue[] = [];
   const secrets = config.secrets ?? {};
   const hosts = new Set(config.hosts.map((h) => h.id));
+  for (const [id, def] of Object.entries(secrets))
+    if (def.destination !== undefined && def.provider !== "env")
+      issues.push({
+        path: `secrets.${id}.provider`,
+        message: `secret '${id}' is pinned to a destination, which needs provider 'env': a file path cannot yet be bound to the file a read opens`,
+      });
   for (const id of Object.keys(secrets))
     if (sharesPinnedSource(secrets, id))
       issues.push({

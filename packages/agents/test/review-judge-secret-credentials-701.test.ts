@@ -4,9 +4,6 @@
  * run and set in this process's environment only for the test; no network, real key, model or paid call is used.
  */
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -39,6 +36,7 @@ import {
   JudgeSecretRefused,
   secretJudgeCredentials,
   type JudgeSecretCredential,
+  type SecretJudgeCredentialOptions,
 } from "../src/review-judge/secret-credentials.js";
 import { planSessionSecrets, secretHostBinding, type SecretUse } from "../src/secrets.js";
 import type { AgentHost } from "../src/host.js";
@@ -50,6 +48,12 @@ const remote: { id: string; spec: HostSpec } = {
   id: "box",
   spec: { type: "ssh", host: "box.invalid", sshArgs: [], sshBinary: "ssh", remoteShell: "sh" } as unknown as HostSpec,
 };
+
+/** The service with a dispatch-time check that always grants, unless a test passes its own. */
+const make = (
+  opts: Omit<SecretJudgeCredentialOptions, "authorizedNow"> &
+    Partial<Pick<SecretJudgeCredentialOptions, "authorizedNow">>,
+) => secretJudgeCredentials({ authorizedNow: () => true, ...opts });
 
 const envVars: string[] = [];
 function freshEnvSecret() {
@@ -180,11 +184,14 @@ function harness(
     "judge-key": { host: "local", provider: "env", name: env.name, destination: DESTINATION },
   };
   const uses: SecretUse[][] = [];
+  const nowUses: SecretUse[][] = [];
+  let granted = true;
   const authorize = vi.fn(options.authorize ?? (async (u: SecretUse[]) => void uses.push(u)));
-  const credentials = secretJudgeCredentials({
+  const credentials = make({
     secrets: options.catalog ?? (() => catalog),
     host: options.host ?? local,
     authorize,
+    authorizedNow: (u) => (nowUses.push(u), granted),
     agentId: "agent-a",
   });
   const s = sender(() => process.env[env.name]!, options.destination ?? DESTINATION);
@@ -193,6 +200,8 @@ function harness(
   return {
     env,
     uses,
+    nowUses,
+    setGranted: (value: boolean) => (granted = value),
     authorize,
     credentials,
     send: s.send,
@@ -228,8 +237,9 @@ describe("#701 BYOK through a pinned #336 secret reference", () => {
       purpose: "review-judge",
       destination: DESTINATION,
     };
-    // Asked before the read and again at delivery, each time for this purpose and destination.
-    expect(h.uses).toEqual([[judgeUse], [judgeUse]]);
+    // The awaited check before the read, and the synchronous one at the hand-off, both for this purpose and destination.
+    expect(h.uses).toEqual([[judgeUse]]);
+    expect(h.nowUses).toEqual([[judgeUse]]);
     // The value is absent from everything the caller can see or serialize.
     const visible = JSON.stringify([connection, result, connection.refusals()]) + inspect(connection, { depth: 9 });
     expect(visible).not.toContain(h.env.value);
@@ -251,7 +261,10 @@ describe("#701 BYOK through a pinned #336 secret reference", () => {
     expect(await run()).toMatchObject({ result: "fit" });
     process.env[h.env.name] = `rotated-${randomUUID()}`;
     expect(await run()).toMatchObject({ result: "fit" });
-    expect(h.authorize).toHaveBeenCalledTimes(4);
+    expect(h.authorize).toHaveBeenCalledTimes(2);
+    h.setGranted(false);
+    expect(await run()).toMatchObject({ execution: "unavailable", result: "indeterminate" });
+    h.setGranted(true);
     h.authorize.mockImplementation(async () => {
       throw new OrcaError("CONFIG_INVALID", "not granted");
     });
@@ -269,26 +282,27 @@ describe("#701 BYOK through a pinned #336 secret reference", () => {
     expect(() => credential.reveal()).toThrow(JudgeSecretRefused);
   });
 
-  it("reads a file-backed secret, dropping one trailing newline", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "orca-judge-key-"));
-    const value = `judge-file-key-${randomUUID()}`;
-    writeFileSync(join(dir, "key"), `${value}\n`);
+  it("refuses a file-backed key: a path cannot yet be bound to the file a read opens", async () => {
+    const read = vi.fn(async () => "value");
     const catalog: SecretsConfig = {
-      "judge-key": { host: "local", provider: "file", path: join(dir, "key"), destination: DESTINATION },
+      "judge-key": { host: "local", provider: "file", path: "/etc/orca/judge-key", destination: DESTINATION },
     };
-    const credentials = secretJudgeCredentials({
-      secrets: () => catalog,
-      host: local,
-      authorize: async () => {},
-      agentId: "agent-a",
+    const credentials = make({ secrets: () => catalog, host: local, authorize: async () => {}, agentId: "a", read });
+    expect(await credentials.describe(judgeSecretRef("judge-key"), new AbortController().signal)).toMatchObject({
+      available: false,
     });
-    const revealed = await credentials.withCredential(
-      judgeSecretRef("judge-key"),
-      { purpose: JUDGE_DISCLOSURE_PURPOSE, destination: DESTINATION, grantRef: "grant:1" },
-      new AbortController().signal,
-      async (credential) => (credential as JudgeSecretCredential).reveal(),
-    );
-    expect(revealed).toBe(value);
+    await expect(
+      credentials.withCredential(
+        judgeSecretRef("judge-key"),
+        { purpose: JUDGE_DISCLOSURE_PURPOSE, destination: DESTINATION, grantRef: "grant:1" },
+        new AbortController().signal,
+        async () => 1,
+      ),
+    ).rejects.toMatchObject({ code: "file-unsupported" });
+    expect(read).not.toHaveBeenCalled();
+    expect(
+      validateSecretReferences({ secrets: catalog, hosts: [{ id: "local" }], agents: [] }).map((i) => i.path),
+    ).toEqual(["secrets.judge-key.provider"]);
   });
 });
 
@@ -319,7 +333,7 @@ describe("#701 BYOK refusals: no fallback to another value, host or destination"
 
   it("refuses on a host that is not the daemon's own machine", async () => {
     const h = harness({ host: remote, catalog: () => ({}) });
-    const credentials = secretJudgeCredentials({
+    const credentials = make({
       secrets: () => ({ "judge-key": { host: "box", provider: "env", name: "X", destination: DESTINATION } }),
       host: remote,
       authorize: h.authorize,
@@ -377,7 +391,7 @@ describe("#701 BYOK refusals: no fallback to another value, host or destination"
 
   it("refuses a missing value without naming it, and an unauthorized use without reading it", async () => {
     const read = vi.fn(async () => "never");
-    const credentials = secretJudgeCredentials({
+    const credentials = make({
       secrets: () => ({ "judge-key": { host: "local", provider: "env", name: "X", destination: DESTINATION } }),
       host: local,
       authorize: async () => {
@@ -393,7 +407,7 @@ describe("#701 BYOK refusals: no fallback to another value, host or destination"
     expect(read).not.toHaveBeenCalled();
 
     const name = `ORCA_TEST_UNSET_${randomUUID().replace(/-/g, "_")}`;
-    const missing = secretJudgeCredentials({
+    const missing = make({
       secrets: () => ({ "judge-key": { host: "local", provider: "env", name, destination: DESTINATION } }),
       host: local,
       authorize: async () => {},
@@ -407,7 +421,7 @@ describe("#701 BYOK refusals: no fallback to another value, host or destination"
   it("refuses a cancelled use before reading, and discards a value read after cancellation", async () => {
     const controller = new AbortController();
     const consume = vi.fn(async () => 1);
-    const credentials = secretJudgeCredentials({
+    const credentials = make({
       secrets: () => ({ "judge-key": { host: "local", provider: "env", name: "X", destination: DESTINATION } }),
       host: local,
       authorize: async () => {},
@@ -442,7 +456,7 @@ describe("#701 revalidation at delivery", () => {
       let catalog = pinned;
       const consume = vi.fn(async () => 1);
       const authorize = vi.fn(async () => {});
-      const credentials = secretJudgeCredentials({
+      const credentials = make({
         secrets: () => catalog,
         host: local,
         authorize,
@@ -455,7 +469,7 @@ describe("#701 revalidation at delivery", () => {
       const code = await credentials
         .withCredential(judgeSecretRef("judge-key"), use, new AbortController().signal, consume)
         .catch((e: JudgeSecretRefused) => e.code);
-      expect(["reconfigured", "wrong-destination", "undefined"]).toContain(code);
+      expect(["reconfigured", "wrong-destination", "undefined", "file-unsupported"]).toContain(code);
       expect(consume).not.toHaveBeenCalled();
       expect(authorize).toHaveBeenCalledTimes(1);
     }
@@ -464,12 +478,11 @@ describe("#701 revalidation at delivery", () => {
   it("refuses when the grant is revoked while the value is read", async () => {
     let granted = true;
     const consume = vi.fn(async () => 1);
-    const credentials = secretJudgeCredentials({
+    const credentials = make({
       secrets: () => pinned,
       host: local,
-      authorize: async () => {
-        if (!granted) throw new OrcaError("CONFIG_INVALID", "not granted");
-      },
+      authorize: async () => {},
+      authorizedNow: () => granted,
       agentId: "agent-a",
       read: async () => {
         granted = false;
@@ -482,28 +495,88 @@ describe("#701 revalidation at delivery", () => {
     expect(consume).not.toHaveBeenCalled();
   });
 
-  it("refuses when cancelled during the delivery-time use check", async () => {
-    const controller = new AbortController();
-    let calls = 0;
-    const consume = vi.fn(async () => 1);
-    const credentials = secretJudgeCredentials({
-      secrets: () => pinned,
+  it("awaits the caller's last check before its own synchronous checks, and hands off in that turn", async () => {
+    const order: string[] = [];
+    const credentials = make({
+      secrets: () => (order.push("catalog"), pinned),
       host: local,
-      authorize: async () => {
-        if (++calls === 2) controller.abort();
-      },
+      authorize: async () => void order.push("authorize"),
+      authorizedNow: () => (order.push("authorizedNow"), true),
       agentId: "agent-a",
-      read: async () => "value",
+      read: async () => (order.push("read"), "value"),
     });
-    await expect(
-      credentials.withCredential(judgeSecretRef("judge-key"), use, controller.signal, consume),
-    ).rejects.toMatchObject({ code: "cancelled" });
-    expect(consume).not.toHaveBeenCalled();
+    await credentials.withCredential(
+      judgeSecretRef("judge-key"),
+      use,
+      new AbortController().signal,
+      async () => void order.push("consume"),
+      async () => void order.push("beforeHandoff"),
+    );
+    expect(order).toEqual(["catalog", "authorize", "read", "beforeHandoff", "catalog", "authorizedNow", "consume"]);
+  });
+
+  it("refuses when the catalog, the grant or the call changes during the caller's last check", async () => {
+    const cases: [string, (s: { catalog: SecretsConfig; granted: boolean; controller: AbortController }) => void][] = [
+      ["reconfigured", (s) => (s.catalog = { "judge-key": { ...pinned["judge-key"]!, name: "Y" } as never })],
+      ["wrong-destination", (s) => (s.catalog = { "judge-key": { ...pinned["judge-key"]!, destination: OTHER } })],
+      ["unauthorized", (s) => (s.granted = false)],
+      ["cancelled", (s) => s.controller.abort()],
+    ];
+    for (const [code, change] of cases) {
+      const state = { catalog: pinned, granted: true, controller: new AbortController() };
+      const consume = vi.fn(async () => 1);
+      const credentials = make({
+        secrets: () => state.catalog,
+        host: local,
+        authorize: async () => {},
+        authorizedNow: () => state.granted,
+        agentId: "agent-a",
+        read: async () => "value",
+      });
+      await expect(
+        credentials.withCredential(judgeSecretRef("judge-key"), use, state.controller.signal, consume, async () =>
+          change(state),
+        ),
+      ).rejects.toMatchObject({ code });
+      expect(consume).not.toHaveBeenCalled();
+    }
+  });
+
+  it("through the connection, reads the disclosure grant last and still stops a re-pin made during that read", async () => {
+    const h = harness();
+    const connection = await prepareJudgeConnection(
+      descriptor(),
+      {
+        grants: {
+          ...grants(),
+          current: async () => {
+            h.setCatalog({
+              "judge-key": { host: "local", provider: "env", name: `${h.env.name}_OTHER`, destination: DESTINATION },
+            });
+            return { revision: "r1", expiresAt: new Date(Date.now() + 60_000).toISOString() };
+          },
+        },
+        credentials: h.credentials,
+        sender: sender(() => process.env[h.env.name]!).sender,
+      },
+      new AbortController().signal,
+    );
+    if (connection.status !== "prepared") throw new Error(connection.reason);
+    const judge = createEndpointReviewJudge({
+      manifest: connection.manifest,
+      transport: connection.transport,
+      limits: connection.limits,
+    });
+    const { req, payload } = request(connection.configRef);
+    expect(await judge.assess(req, payload, new AbortController().signal)).toMatchObject({
+      execution: "unavailable",
+    });
+    expect(h.nowUses).toEqual([]);
   });
 
   it("ends the lease the moment the use is cancelled, while the sender still holds the handle", async () => {
     const controller = new AbortController();
-    const credentials = secretJudgeCredentials({
+    const credentials = make({
       secrets: () => pinned,
       host: local,
       authorize: async () => {},
@@ -541,8 +614,8 @@ describe("#701 a second declaration of the same source cannot side-step a pin", 
     plain: { host: "local", provider: "env", name: "judge_key" },
   };
   const otherPin: SecretsConfig = {
-    "judge-key": { host: "local", provider: "file", path: "/etc/orca/key", destination: DESTINATION },
-    "judge-key-2": { host: "local", provider: "file", path: "/etc/orca/./x/../key", destination: OTHER },
+    "judge-key": { host: "local", provider: "env", name: "JUDGE_KEY", destination: DESTINATION },
+    "judge-key-2": { host: "local", provider: "env", name: "Judge_Key", destination: OTHER },
   };
 
   it("is a config error", () => {
@@ -560,7 +633,7 @@ describe("#701 a second declaration of the same source cannot side-step a pin", 
 
   it("is refused for the judge and for an agent at use", async () => {
     for (const catalog of [aliased, otherPin]) {
-      const credentials = secretJudgeCredentials({
+      const credentials = make({
         secrets: () => catalog,
         host: local,
         authorize: async () => {},

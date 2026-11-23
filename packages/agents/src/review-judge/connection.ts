@@ -83,12 +83,18 @@ export type JudgeCredential = object;
 /** PROPOSED (#336/#337): resolution only at the execution boundary, scoped to `consume`. */
 export interface JudgeCredentialService {
   readonly describe: (ref: OpaqueCredentialRef, signal: AbortSignal) => Promise<JudgeCredentialBinding | null>;
-  /** Resolves for this one use and ends the lease when `consume` settles. Must refuse a use outside the binding. */
+  /**
+   * Resolves for this one use and ends the lease when `consume` settles. Must refuse a use outside the binding.
+   * `beforeHandoff`, when given, is the caller's last awaited check: a service awaits it after its own awaited
+   * checks and the read, then makes its synchronous checks and calls `consume` in the same turn, which must
+   * dispatch before it awaits anything.
+   */
   readonly withCredential: <T>(
     ref: OpaqueCredentialRef,
     use: JudgeCredentialUse,
     signal: AbortSignal,
     consume: (credential: JudgeCredential) => Promise<T>,
+    beforeHandoff?: () => Promise<void>,
   ) => Promise<T>;
 }
 
@@ -404,18 +410,38 @@ export async function prepareJudgeConnection(
       // Set only by the checks inside the lease, so a sender's own error can never borrow its code.
       let gated: SendRefused | undefined;
       try {
-        reply = await withCredential(credentialRef, use, callSignal, async (credential) => {
-          // The grant can lapse or the call be cancelled while resolution is pending: recheck after it.
+        // Read the disclosure grant last, from the service's hand-off hook, so every awaited check is done before
+        // the service's own synchronous checks and this callback's `admit` + `send` run in one turn. A service
+        // that never calls the hook gets the older order: the grant is read inside the callback instead.
+        let state: unknown;
+        let read = false;
+        const beforeHandoff = async () => {
           try {
-            // `admit` and the sender call below run in one synchronous turn after the read resumes, so no
-            // queued work can let the grant lapse or the call be cancelled between the check and the send.
-            admit(await readGrant(callSignal), callSignal);
+            state = await readGrant(callSignal);
+            read = true;
           } catch (error) {
             gated = error as SendRefused;
             throw error;
           }
-          return send({ frame, credential, signal: callSignal, maxResponseBytes });
-        });
+        };
+        reply = await withCredential(
+          credentialRef,
+          use,
+          callSignal,
+          async (credential) => {
+            try {
+              if (!read) state = await readGrant(callSignal);
+              // `admit` and the sender call below run in one synchronous turn, so no queued work can let the
+              // grant lapse or the call be cancelled between the check and the send.
+              admit(state, callSignal);
+            } catch (error) {
+              gated = error as SendRefused;
+              throw error;
+            }
+            return send({ frame, credential, signal: callSignal, maxResponseBytes });
+          },
+          beforeHandoff,
+        );
       } catch {
         if (gated) throw gated;
         throw refused(callSignal.aborted ? "cancelled" : "transport-failed");

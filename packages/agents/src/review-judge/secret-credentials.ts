@@ -6,14 +6,18 @@
  *   secrets:
  *     judge-key: { host: local, provider: env, name: JUDGE_API_KEY, destination: "https://judge.example" }
  *
+ * - Only `provider: env` for now. A file path names a file only lexically, and this version cannot bind delivery
+ *   to the file a read actually opens, so a file-backed judge key is refused (config check and use).
  * - Only a secret **pinned** to the judge's destination can be used, and a pinned secret is never delivered to an
  *   agent or MCP server (core `validateSecretReferences`, agents `planSessionSecrets`). Neither use falls back to
  *   the other.
  * - The value is read on the host the judge connection runs on, which must be a local host (the daemon's machine).
  *   A reference bound to any other host is unavailable; there is no fallback to a value found elsewhere.
  * - Every use is asked of the run-bound use check, with the purpose `review-judge` and the pinned destination: only a
- *   grant for that purpose and destination covers it (or `*`), never a grant for delivery to an agent. It is asked
- *   before the value is read and again at delivery, after the catalog is re-read and found unchanged.
+ *   grant for that purpose and destination covers it (or `*`), never a grant for delivery to an agent. The full,
+ *   awaited check runs before the value is read. Then, after every awaited step including the caller's last one
+ *   (`beforeHandoff`, the disclosure grant), the dispatch boundary runs synchronously in the turn that calls the
+ *   sender: cancellation, the catalog unchanged since the read, and the grant re-decided from current credentials.
  * - A secret read from the same source as a secret with another pin (or none) is refused, so declaring the same
  *   variable or file twice cannot side-step a pin.
  * - Nothing is cached. The catalog is read again at every describe and every use, and the value at every use, so a
@@ -27,7 +31,7 @@ import type { SecretDefinition, SecretSource, SecretsConfig } from "@orca/core";
 import { secretSource, sharesPinnedSource } from "@orca/core";
 import type { AgentHost } from "../host.js";
 import { readLocalSecret } from "../hosts/local-host.js";
-import { secretHostBinding, type AuthorizeSecretUse } from "../secrets.js";
+import { secretHostBinding, type AuthorizeSecretUse, type SecretUse } from "../secrets.js";
 import {
   JUDGE_DISCLOSURE_PURPOSE,
   type JudgeCredential,
@@ -67,6 +71,7 @@ export type JudgeSecretRefusal =
   | "unsupported-host"
   | "aliased-source"
   | "reconfigured"
+  | "file-unsupported"
   | "unauthorized"
   | "missing";
 
@@ -84,6 +89,12 @@ export interface SecretJudgeCredentialOptions {
   readonly host: Pick<AgentHost, "id" | "spec">;
   /** The #336 use check bound to the run whose action is judged. Asked before every read. */
   readonly authorize: AuthorizeSecretUse;
+  /**
+   * The same decision, answered synchronously from the run owner's credentials as they are at that moment (the
+   * daemon's `bindSecretUse`). Asked at the hand-off itself, after every awaited check, in the turn that calls
+   * the sender: a grant revoked while anything was awaited stops the dispatch.
+   */
+  readonly authorizedNow: (uses: SecretUse[]) => boolean;
   /** The agent whose action is judged, recorded in the use as a session open records it. */
   readonly agentId: string;
   /** Reads one value on `host`. Defaults to the local host's reader; tests inject a fake. */
@@ -145,7 +156,8 @@ export function secretJudgeCredentials(opts: SecretJudgeCredentialOptions): Judg
     return Object.freeze({
       refId: ref.id,
       destination: def.destination ?? "",
-      available: def.destination !== undefined && readable(def) && !sharesPinnedSource(secrets, id),
+      available:
+        def.destination !== undefined && def.provider === "env" && readable(def) && !sharesPinnedSource(secrets, id),
     });
   };
 
@@ -154,15 +166,17 @@ export function secretJudgeCredentials(opts: SecretJudgeCredentialOptions): Judg
     use: JudgeCredentialUse,
     signal: AbortSignal,
     consume: (credential: JudgeCredential) => Promise<T>,
+    beforeHandoff?: () => Promise<void>,
   ): Promise<T> => {
     const refuse = (code: JudgeSecretRefusal) => new JudgeSecretRefused(signal.aborted ? "cancelled" : code);
 
-    /** Every check on the catalog as configured now, for this use. */
-    const current = (id: string): SecretDefinition & { destination: string } => {
+    /** Every check on the catalog as configured now, for this use. Synchronous. */
+    const current = (id: string): SecretDefinition & { provider: "env"; destination: string } => {
       const secrets = catalog();
       const def = lookup(secrets, id);
       if (def === undefined) throw refuse("undefined");
       if (def.destination === undefined) throw refuse("not-pinned");
+      if (def.provider !== "env") throw refuse("file-unsupported");
       if (sharesPinnedSource(secrets, id)) throw refuse("aliased-source");
       if (use === null || typeof use !== "object" || use.purpose !== JUDGE_DISCLOSURE_PURPOSE)
         throw refuse("wrong-purpose");
@@ -170,47 +184,46 @@ export function secretJudgeCredentials(opts: SecretJudgeCredentialOptions): Judg
       if (use.destination !== def.destination) throw refuse("wrong-destination");
       if (def.host !== host.id) throw refuse("wrong-host");
       if (host.spec.type !== "local") throw refuse("unsupported-host");
-      return def as SecretDefinition & { destination: string };
+      return def as SecretDefinition & { provider: "env"; destination: string };
     };
-
-    /** The run's use check for this purpose and destination; a grant for agent delivery does not cover it. */
-    const authorized = async (id: string, def: SecretDefinition & { destination: string }) => {
-      try {
-        await authorize([
-          {
-            secret: id,
-            provider: def.provider,
-            hostId: host.id,
-            hostBinding: secretHostBinding(host.spec),
-            agentId,
-            purpose: JUDGE_DISCLOSURE_PURPOSE,
-            destination: def.destination,
-          },
-        ]);
-      } catch {
-        throw refuse("unauthorized");
-      }
-      if (signal.aborted) throw refuse("cancelled");
-    };
+    /** The use the grant must cover: this purpose and the pinned destination, never agent delivery. */
+    const secretUse = (id: string, def: { provider: "env"; destination: string }): SecretUse => ({
+      secret: id,
+      provider: def.provider,
+      hostId: host.id,
+      hostBinding: secretHostBinding(host.spec),
+      agentId,
+      purpose: JUDGE_DISCLOSURE_PURPOSE,
+      destination: def.destination,
+    });
 
     if (signal.aborted) throw refuse("cancelled");
     const id = secretId(ref);
     if (id === undefined) throw refuse("not-a-secret-ref");
     const before = current(id);
-    // Asked before the read, so an unauthorized use reads nothing.
-    await authorized(id, before);
+    // The full check (run root, durable owner, current grant), before the read: an unauthorized use reads nothing.
+    try {
+      await authorize([secretUse(id, before)]);
+    } catch {
+      throw refuse("unauthorized");
+    }
+    if (signal.aborted) throw refuse("cancelled");
     let value: string;
     try {
       value = await read(id, secretSource(before), host.id);
     } catch {
       throw refuse("missing");
     }
-    // Revalidated at delivery: the catalog, the pin and the grant may have changed while the value was read.
+    if (signal.aborted) throw refuse("cancelled");
+    // The caller's last awaited check (the disclosure grant). Nothing is awaited after it.
+    if (beforeHandoff) await beforeHandoff();
+
+    // The dispatch boundary, all synchronous and in the turn that calls `consume`: the catalog is the one the value
+    // was read for, the grant covers this use now, and the use is not cancelled.
     if (signal.aborted) throw refuse("cancelled");
     const after = current(id);
     if (identity(after) !== identity(before)) throw refuse("reconfigured");
-    await authorized(id, after);
-    // From here to the lease, nothing awaits: the last check and the hand-off are one turn.
+    if (opts.authorizedNow([secretUse(id, after)]) !== true) throw refuse("unauthorized");
     const lease = leasedCredential(after.destination, value);
     // Cancellation ends the lease at once, even while the sender still holds the handle.
     const end = () => lease.end();
