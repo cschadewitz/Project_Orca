@@ -46,6 +46,8 @@ import {
 import {
   createPlainRuleProviderTransport,
   plainRuleProviderSenderOptions,
+  plainRuleProviderVersion,
+  resolvePlainRuleProvider,
   type PlainRuleProviderConfig,
   type ResolvedPlainRuleProvider,
 } from "./plain-rule-providers.js";
@@ -84,6 +86,24 @@ export interface PlainRuleDisclosureGrant extends PlainRuleDisclosureQuery {
   readonly grantRef: string;
   readonly revision: string;
   readonly expiresAt: string;
+}
+
+/**
+ * The disclosure query a judge prepared from `config` will ask for, or `undefined` when the config is incomplete or
+ * its provider invalid. An owner grants exactly this (destination, provider version, wire format); preparation asks
+ * for the same query from the same normalized provider, so a grant made from one config covers only that config.
+ */
+export function plainRuleDisclosureQuery(config: unknown): PlainRuleDisclosureQuery | undefined {
+  const selected = selectConfig(config);
+  if (selected === undefined) return undefined;
+  const provider = resolvePlainRuleProvider(selected.provider);
+  if (provider === null) return undefined;
+  return Object.freeze({
+    purpose: JUDGE_DISCLOSURE_PURPOSE,
+    destination: selected.destination,
+    providerVersion: plainRuleProviderVersion(provider),
+    requestSchema: PLAIN_RULE_REQUEST_SCHEMA,
+  });
 }
 
 /** Lookup only: it can neither create nor widen a grant. Null means no approved grant. */

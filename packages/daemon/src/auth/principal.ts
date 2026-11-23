@@ -179,6 +179,40 @@ export function grantCovers(
 }
 
 /**
+ * What a principal's runs may send to a plain-rule review judge (#701): the owner's approval that
+ * the evidence of an action may be disclosed to one destination, through one provider
+ * configuration, in one wire format. Each entry is exactly the disclosure query a prepared judge
+ * asks for (`plainRuleDisclosureQuery` in `@orca/agents`), so a changed destination, provider,
+ * model, prompt or wire format is not covered until it is granted again. There is no wildcard.
+ */
+export const DisclosureGrantSchema = z.array(
+  z
+    .object({
+      purpose: z.literal("review-judge"),
+      destination: z.string().min(1).max(2048),
+      providerVersion: z.string().regex(/^plain-rule-provider\/v1:sha256:[0-9a-f]{64}$/),
+      requestSchema: z.literal("orca-plain-rule-request/v1"),
+    })
+    .strict(),
+);
+export type DisclosureGrant = z.infer<typeof DisclosureGrantSchema>;
+export type DisclosureGrantEntry = DisclosureGrant[number];
+
+/** Whether `grant` names exactly this disclosure: same purpose, destination, provider version and wire format. */
+export function disclosureGrantEntry(
+  grant: DisclosureGrant | undefined,
+  query: { purpose: string; destination: string; providerVersion: string; requestSchema: string },
+): DisclosureGrantEntry | undefined {
+  return grant?.find(
+    (g) =>
+      g.purpose === query.purpose &&
+      g.destination === query.destination &&
+      g.providerVersion === query.providerVersion &&
+      g.requestSchema === query.requestSchema,
+  );
+}
+
+/**
  * The catalog capabilities a principal's runs may be given (#337). A list of entries, each of
  * one kind: an MCP server id together with the host it runs on, that host's endpoint binding
  * and the server's definition digest when granted; a skill id with its content digest; or
@@ -289,6 +323,10 @@ export interface Principal {
   readonly secrets?: SecretGrant | undefined;
   /** The catalog capabilities this principal's runs may be given; none when absent (#337). */
   readonly capabilities?: CapabilityGrant | undefined;
+  /** What this principal's runs may disclose to a plain-rule review judge; none when absent (#701). */
+  readonly disclosures?: DisclosureGrant | undefined;
+  /** When the credential behind this principal expires, if it does (ISO). */
+  readonly expiresAt?: string | undefined;
 }
 
 /**

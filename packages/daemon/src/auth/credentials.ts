@@ -28,6 +28,7 @@ import {
   ResourceScopeSchema,
   SecretGrantSchema,
   CapabilityGrantSchema,
+  DisclosureGrantSchema,
   WORKSPACE_PERMISSIONS,
   isUnrestricted,
   type Permission,
@@ -36,6 +37,7 @@ import {
   type ResourceScope,
   type SecretGrant,
   type CapabilityGrant,
+  type DisclosureGrant,
 } from "./principal.js";
 
 export const TOKEN_PREFIX = "orca1";
@@ -54,6 +56,8 @@ export const CredentialRecordSchema = z.object({
   secrets: SecretGrantSchema.optional(),
   /** The catalog capabilities this credential's principal's runs may be given (#337). Absent: none. */
   capabilities: CapabilityGrantSchema.optional(),
+  /** What this credential's principal's runs may disclose to a plain-rule review judge (#701). Absent: nothing. */
+  disclosures: DisclosureGrantSchema.optional(),
   createdAt: z.string(),
   expiresAt: z.string().optional(),
   revokedAt: z.string().optional(),
@@ -86,6 +90,8 @@ export interface IssueOptions {
   secrets?: SecretGrant | undefined;
   /** The catalog capabilities its runs may be given (#337); a preset's grant when not given. */
   capabilities?: CapabilityGrant | undefined;
+  /** What its runs may disclose to a plain-rule review judge (#701). Never from a preset. */
+  disclosures?: DisclosureGrant | undefined;
   /** An absolute expiry; or `ttlMs` from now. Neither means it lasts until revoked. */
   expiresAt?: Date | undefined;
   ttlMs?: number | undefined;
@@ -152,6 +158,8 @@ export class CredentialStore {
     const scope = opts.scope ?? preset?.scope;
     const secrets = opts.secrets ?? (preset && "secrets" in preset ? preset.secrets : undefined);
     const capabilities = opts.capabilities ?? (preset && "capabilities" in preset ? preset.capabilities : undefined);
+    // Never from a preset: a disclosure is granted only by naming it.
+    const disclosures = opts.disclosures;
     if (!scope) throw new CredentialError("a credential needs a preset or an explicit scope");
     if (permissions.length === 0) throw new CredentialError("a credential needs at least one permission");
     const parsedScope = ResourceScopeSchema.parse(scope);
@@ -175,6 +183,7 @@ export class CredentialStore {
       scope: parsedScope,
       ...(secrets !== undefined ? { secrets: SecretGrantSchema.parse(secrets) } : {}),
       ...(capabilities !== undefined ? { capabilities: CapabilityGrantSchema.parse(capabilities) } : {}),
+      ...(disclosures !== undefined ? { disclosures: DisclosureGrantSchema.parse(disclosures) } : {}),
       createdAt: this.now().toISOString(),
       ...(expiresAt ? { expiresAt: expiresAt.toISOString() } : {}),
       ...(opts.bootstrap ? { bootstrap: true as const } : {}),
@@ -211,6 +220,7 @@ export class CredentialStore {
         scope: old.scope,
         secrets: old.secrets,
         capabilities: old.capabilities,
+        disclosures: old.disclosures,
         expiresAt: opts.expiresAt,
         ttlMs: opts.ttlMs,
         bootstrap: old.bootstrap,
@@ -303,6 +313,8 @@ export class CredentialStore {
         scope: record.scope,
         ...(record.secrets !== undefined ? { secrets: record.secrets } : {}),
         ...(record.capabilities !== undefined ? { capabilities: record.capabilities } : {}),
+        ...(record.disclosures !== undefined ? { disclosures: record.disclosures } : {}),
+        ...(record.expiresAt !== undefined ? { expiresAt: record.expiresAt } : {}),
       },
     };
   }

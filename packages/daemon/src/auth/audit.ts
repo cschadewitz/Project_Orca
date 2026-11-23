@@ -17,7 +17,13 @@ import { dirname } from "node:path";
 import type { Principal } from "./principal.js";
 
 export type AuditEvent =
-  "authn.denied" | "authz.denied" | "operation" | "connection.closed" | "secret.use" | "capability.use";
+  | "authn.denied"
+  | "authz.denied"
+  | "operation"
+  | "connection.closed"
+  | "secret.use"
+  | "capability.use"
+  | "judge.disclosure";
 
 export interface AuditActor {
   principal: string;
