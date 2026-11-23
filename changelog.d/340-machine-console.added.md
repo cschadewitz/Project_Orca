@@ -1,0 +1,1 @@
+- **app:** each run a machine lists on the Machines surface has a console line: its step counts, what it is waiting on, which process holds it and its last activity, read from that machine's daemon (protocol 2.3 or later). A machine that sends no such facts shows none, never zeros.
