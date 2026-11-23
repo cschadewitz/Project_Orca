@@ -8,8 +8,10 @@
  * Gemini decides alone, observed on the installed CLI by `gemini-acp-acceptance-705.test.ts`
  * (`gemini-acp-acceptance.yml`) or read in its source at the pinned version:
  *
- * - **Read-only tools never ask** in Gemini's default mode (`read_file`, `list_directory`,
- *   `glob`, `grep_search`, …). Gemini keeps them inside the workspace; ORCA does not see them.
+ * - **Read-only tools that never ask**, as observed: `list_directory`, `glob` and `read_file`
+ *   ran in Gemini's default mode without a permission request, and the `read_file` the suite
+ *   ran made no `fs/*` call either. Gemini's other read-only tools (`grep_search`,
+ *   `read_many_files`, web fetch, …) were not run and are unverified.
  * - **Gemini's own grants.** "Allow for this session" (`proceed_always`) covers the whole
  *   command prefix for the rest of the session (`echo a` grants `echo b`), and
  *   `proceed_always_and_save` writes a policy file under Gemini's home that allows the prefix
@@ -19,9 +21,15 @@
  *   `general.defaultApprovalMode`, extensions, trusted folders), a trusted workspace's
  *   `.gemini/settings.json`, and flags such as `--yolo` or `--approval-mode` in a trusted
  *   workspace all let calls run unasked. In a workspace Gemini does not trust it keeps its
- *   default mode, whatever the flags or `session/set_mode` say. `geminiCliFindings` names each one an agent's configuration carries, and
- *   `geminiCliLaunch` gives a profile with none of them: its own Gemini home, so nothing the
- *   user saved elsewhere applies.
+ *   default mode, whatever the flags or `session/set_mode` say.
+ *
+ * `geminiCliFindings` is an advisory, not a guard: it reports the known settings it can see in
+ * an agent's command line and environment. It does not read files (a Gemini home's settings
+ * and policies, system settings, extensions, trusted folders), so it cannot see what they
+ * allow, and an empty list does not mean nothing does. `geminiCliLaunch` gives a profile with
+ * none of the settings it knows: its own Gemini home, so what the user saved in `~/.gemini`
+ * does not apply. What is in that home is the profile's owner's to keep empty; ORCA does not
+ * check it.
  */
 import { basename } from "node:path";
 
@@ -134,10 +142,13 @@ const hasFlag = (args: readonly string[], ...flags: string[]) =>
   args.some((a) => flags.some((f) => a === f || a.startsWith(`${f}=`)));
 
 /**
- * The settings in an agent's command line and environment under which Gemini CLI 0.70.0 runs
- * tool calls without asking ORCA, or reads settings ORCA does not control. Empty for an agent
- * that is not Gemini CLI. Nothing is refused on these: they are the user's to choose, and
- * `orca agents` shows them so the choice is visible.
+ * An advisory: the known settings, among those it can inspect in an agent's command line and
+ * environment, under which Gemini CLI 0.70.0 runs tool calls without asking ORCA or reads
+ * settings ORCA does not control. It reads no file and runs nothing, so a setting inside a
+ * settings or policy file, an extension or a trusted-folders list is not seen; an empty list
+ * is not a finding that nothing bypasses ORCA. Empty for an agent that is not Gemini CLI.
+ * Nothing is refused on these: they are the user's to choose, and `orca agents` shows them
+ * so the choice is visible.
  */
 export function geminiCliFindings(agent: {
   command: string;

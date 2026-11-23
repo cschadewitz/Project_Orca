@@ -15,11 +15,14 @@
  *   Gemini's one-time option, so the next call asks again; a deny, a person's refusal and a
  *   cancelled ask do not run it. An edit to an existing file goes through ORCA's own file
  *   boundary (`fs/*`); creating a new file there fails today (a known gap, pinned).
- * - **Outside ORCA (pinned, so a change is noticed)**: read-only tools never ask; "Allow for
+ * - **Outside ORCA (pinned, so a change is noticed)**: `list_directory`, `glob` and
+ *   `read_file` never ask, and that `read_file` makes no `fs/*` call (other read-only tools
+ *   are not run here and stay unverified); "Allow for
  *   this session" covers every later call with the same command prefix; an "always allow"
  *   policy saved in the user's Gemini home, or `--yolo` in a trusted workspace, runs calls
  *   ORCA never hears about (an untrusted workspace keeps Gemini in its default mode).
- *   These are what `geminiCliFindings` reports.
+ *   The advisory (`geminiCliFindings`) reports the flag and the home setting it can see in the
+ *   command line and environment; it does not read what a home or settings file holds.
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -305,7 +308,7 @@ describe.skipIf(GEMINI === undefined)("ORCA and the real Gemini CLI (#705)", () 
 
   /* ------------------------- outside ORCA, pinned so a change shows ------------------------- */
 
-  it("runs read-only tools without asking ORCA", async () => {
+  it("runs list_directory, glob and read_file without asking ORCA or reading through it", async () => {
     await writeFile(join(workspace, "seen.txt"), "x");
     const session = await open();
     const ran: string[] = [];
