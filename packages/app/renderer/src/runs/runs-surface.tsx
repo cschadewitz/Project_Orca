@@ -60,6 +60,7 @@ import type { TimelineEntry } from "./timeline/timeline-entries.js";
 import { buildSelectionIndex, useRunSelection, EMPTY_INDEX, type SelectionIndex } from "./use-run-selection.js";
 import { runCursorSupported, runFiltersSupported, useRuns, type StatusFilter } from "./use-runs.js";
 import { RunBoard } from "./board/run-board.js";
+import { useBoardRecovery } from "./board/use-board-recovery.js";
 import { useRunBoard } from "./board/use-run-board.js";
 import { boardRuns } from "./board/board-model.js";
 import "./runs.css";
@@ -315,6 +316,7 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
     if (boardIds.join("\n") !== following.join("\n")) setFollowing(boardIds);
   }, [boardIds, following]);
   const board = useRunBoard(view === "board" ? boardIds : NO_IDS, connection);
+  const boardRecovery = useBoardRecovery(board.runs, board.scope);
   const openInTree = useCallback(
     (runId: string) => {
       pendingOpen.current = undefined;
@@ -465,7 +467,14 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
             }}
             board={
               view === "board" ? (
-                <RunBoard runs={board.runs} live={live} filtered={filtered} onOpen={openInTree} onRetry={board.retry} />
+                <RunBoard
+                  runs={board.runs}
+                  live={live}
+                  filtered={filtered}
+                  onOpen={openInTree}
+                  onRetry={board.retry}
+                  recovery={boardRecovery}
+                />
               ) : undefined
             }
           />

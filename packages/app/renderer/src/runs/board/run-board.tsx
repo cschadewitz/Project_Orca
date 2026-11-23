@@ -10,7 +10,8 @@
 import type { JSX, ReactNode } from "react";
 import type { FollowedRun, RunSummaryView } from "@orca/protocol";
 import { Button, ObjectId, StateView, StatusChip, Text, Time, textClass } from "../../ui/index.js";
-import { PHASE_WORDS, ownerText, progressText, waitText } from "./board-model.js";
+import { PHASE_WORDS, ownerText, progressText, recoveryLines, waitText } from "./board-model.js";
+import type { BoardRecovery } from "./use-board-recovery.js";
 
 export interface RunBoardProps {
   runs: readonly FollowedRun[];
@@ -18,9 +19,11 @@ export interface RunBoardProps {
   filtered: boolean;
   onOpen: (runId: string) => void;
   onRetry: (runId: string) => void;
+  /** Recovery previews of the stopped runs, by run (`useBoardRecovery`). */
+  recovery?: ReadonlyMap<string, BoardRecovery> | undefined;
 }
 
-export function RunBoard({ runs, live, filtered, onOpen, onRetry }: RunBoardProps): JSX.Element {
+export function RunBoard({ runs, live, filtered, onOpen, onRetry, recovery }: RunBoardProps): JSX.Element {
   if (runs.length === 0)
     return (
       <StateView
@@ -41,7 +44,14 @@ export function RunBoard({ runs, live, filtered, onOpen, onRetry }: RunBoardProp
         const run = followed.run;
         return (
           <li key={followed.runId} className="orca-board__item">
-            <BoardCard followed={followed} run={run} live={live} onOpen={onOpen} onRetry={onRetry} />
+            <BoardCard
+              followed={followed}
+              run={run}
+              live={live}
+              onOpen={onOpen}
+              onRetry={onRetry}
+              recovery={recovery?.get(followed.runId)}
+            />
           </li>
         );
       })}
@@ -55,9 +65,10 @@ interface BoardCardProps {
   live: boolean;
   onOpen: (runId: string) => void;
   onRetry: (runId: string) => void;
+  recovery: BoardRecovery | undefined;
 }
 
-function BoardCard({ followed, run, live, onOpen, onRetry }: BoardCardProps): JSX.Element {
+function BoardCard({ followed, run, live, onOpen, onRetry, recovery }: BoardCardProps): JSX.Element {
   const phase = followed.phase;
   const progress = run ? progressText(run) : undefined;
   const wait = run ? waitText(run) : undefined;
@@ -104,6 +115,9 @@ function BoardCard({ followed, run, live, onOpen, onRetry }: BoardCardProps): JS
           <Fact term="Usage">unavailable</Fact>
         </dl>
       )}
+      {phase !== "gone" && recovery && (
+        <RecoveryPreview recovery={recovery} onOpen={() => onOpen(followed.runId)} name={name} />
+      )}
     </article>
   );
 }
@@ -118,5 +132,46 @@ function Fact({ term, children }: { term: string; children: ReactNode }): JSX.El
         {children}
       </Text>
     </div>
+  );
+}
+
+/**
+ * What recovering a stopped run would do (#357): the daemon's assessment in a line or three,
+ * and the way to the run's own recovery section, where the options and controls are.
+ */
+function RecoveryPreview({
+  recovery,
+  onOpen,
+  name,
+}: {
+  recovery: BoardRecovery;
+  onOpen: () => void;
+  name: string;
+}): JSX.Element {
+  return (
+    <section className="orca-board__recovery" aria-label={`Recovery for ${name}`}>
+      <Text style="caption" as="h3" className="orca-board__recovery-title">
+        Recovery
+      </Text>
+      {recovery.phase === "loading" && (
+        <Text style="caption" as="p">
+          Checking what recovery would do
+        </Text>
+      )}
+      {recovery.phase === "error" && (
+        <Text style="caption" as="p">
+          Not available: {recovery.message}
+        </Text>
+      )}
+      {recovery.phase === "ready" &&
+        recoveryLines(recovery.assessment).map((line) => (
+          <Text key={line} style="caption" as="p">
+            {line}
+          </Text>
+        ))}
+      <Button size="sm" tone="ghost" onClick={onOpen}>
+        Open recovery
+      </Button>
+    </section>
   );
 }

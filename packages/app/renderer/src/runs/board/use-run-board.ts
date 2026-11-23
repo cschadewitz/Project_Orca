@@ -39,6 +39,8 @@ export interface RunBoard {
   runs: readonly FollowedRun[];
   /** Try a `stale` or refused run again. */
   retry: (runId: string) => void;
+  /** Whose runs these are (workspace, generation, grants, connection ended): anything read for them belongs to it. */
+  scope: string;
 }
 
 interface Scoped {
@@ -129,5 +131,5 @@ export function useRunBoard(runIds: readonly string[], connection: ConnectionSta
   const runs = runIds.map(
     (runId): FollowedRun => active?.views.get(runId) ?? { runId, phase: placeholder, cursor: -1, resyncs: 0 },
   );
-  return { runs, retry: (runId) => follower?.retry(runId) };
+  return { runs, retry: (runId) => follower?.retry(runId), scope };
 }
