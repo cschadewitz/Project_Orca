@@ -916,33 +916,33 @@ class DaemonSession implements AgentSession {
   // ------------------------------------------------------------------ admission
 
   /**
-   * Immediately before a protected task is sent (#363): ask the remote's `hello` again, over
-   * the same authenticated channel the admission takes, and refuse unless it is still the
-   * enrolled workspace, still speaks a protocol this daemon delegates to, and still lists both
-   * protected-input fields. No answer throws `RemoteUnreachable`, so the attempt is retried
-   * without anything sent. As a backstop, the admission's params are strict: a daemon that
-   * does not know `protectedValues` refuses the admission rather than admitting it.
+   * Send a protected task (#363) only on a connection whose daemon was just checked, on that
+   * same connection: its `hello` must positively name the enrolled workspace (no identity is
+   * not a match), speak a protocol this daemon delegates to, and list both protected-input
+   * fields. The admission then goes on that connection or not at all: once it breaks, the
+   * client fails the admission before sending a byte, and the attempt starts over with a new
+   * connection and a new check. As a backstop the admission's params are strict, so a daemon
+   * that does not know `protectedValues` refuses it rather than admitting it.
    */
-  private async confirmProtectedInputs(deadline: number, signal?: AbortSignal): Promise<void> {
-    const hello = HelloResultSchema.parse(
-      await this.client.call(
-        "hello",
-        { client: "orca-daemon/delegation", ...helloOffer() },
-        this.bounded(deadline, signal),
-      ),
-    );
-    if (hello.identity && hello.identity.workspaceId !== this.options.binding.workspaceId)
-      throw delegationRefusal(
-        this.options.profile,
-        "scope-changed",
-        `The daemon on ${this.options.remoteName} is no longer the enrolled workspace. This step's protected task was not sent.`,
+  private async admitProtected(params: unknown, deadline: number, signal?: AbortSignal): Promise<unknown> {
+    return this.client.onOneConnection(async (call) => {
+      const hello = HelloResultSchema.parse(
+        await call("hello", { client: "orca-daemon/delegation", ...helloOffer() }, this.bounded(deadline, signal)),
       );
-    if (!daemonRelation(hello.protocol) || !takesSensitiveVars(hello))
-      throw delegationRefusal(
-        this.options.profile,
-        "protocol",
-        `The daemon on ${this.options.remoteName} no longer takes a protected task (its hello does not list \`sensitiveVars\` and \`protectedValues\` in admitFields). Nothing was sent; update ORCA there.`,
-      );
+      if (hello.identity?.workspaceId !== this.options.binding.workspaceId)
+        throw delegationRefusal(
+          this.options.profile,
+          "scope-changed",
+          `The daemon on ${this.options.remoteName} did not show itself as the enrolled workspace. This step's protected task was not sent.`,
+        );
+      if (!daemonRelation(hello.protocol) || !takesSensitiveVars(hello))
+        throw delegationRefusal(
+          this.options.profile,
+          "protocol",
+          `The daemon on ${this.options.remoteName} no longer takes a protected task (its hello does not list \`sensitiveVars\` and \`protectedValues\` in admitFields). Nothing was sent; update ORCA there.`,
+        );
+      return call("runs.admit", params, this.bounded(deadline, signal));
+    });
   }
 
   /** Send the receipt's admission (same key every time) until it is accepted; `admitted` after. */
@@ -984,11 +984,12 @@ class DaemonSession implements AgentSession {
       if (signal?.aborted) return this.abandon(receipt, deadline);
       try {
         // The capability seen at open may not be the daemon's now (a restart, an update or a
-        // downgrade since): a protected task is sent only right after this target says again
-        // that it takes one. Uncertain is not sent.
-        if (task.sensitive) await this.confirmProtectedInputs(deadline, signal);
+        // downgrade since): a protected task goes only on a connection whose daemon has just
+        // said, on that connection, that it is the enrolled one and takes it.
         let answer = RunsAdmitResultSchema.parse(
-          await this.client.call("runs.admit", params, this.bounded(deadline, signal)),
+          task.sensitive
+            ? await this.admitProtected(params, deadline, signal)
+            : await this.client.call("runs.admit", params, this.bounded(deadline, signal)),
         );
         // A prepared or recoverable admission settles through its receipt, never a new submit;
         // a recoverable failure's reserved run id is followed only once reconcile accepts it.

@@ -45,7 +45,15 @@ ${
 edges: [{ from: s, to: work }, ${opts.second ? "{ from: work, to: again }, { from: again, to: e }" : "{ from: work, to: e }"}]
 `;
 
-function setup(opts: { workflow?: string; secretUse?: "none"; sessionMode?: "per-run"; hostId?: string } = {}) {
+function setup(
+  opts: {
+    workflow?: string;
+    secretUse?: "none";
+    sessionMode?: "per-run";
+    hostId?: string;
+    maxAgentSessions?: number;
+  } = {},
+) {
   const config = parseOrcaConfig({
     hosts: [
       { id: "local", type: "local" },
@@ -68,6 +76,7 @@ function setup(opts: { workflow?: string; secretUse?: "none"; sessionMode?: "per
     ],
   });
   const opened: OpenSessionOptions[] = [];
+  const shut: number[] = [];
   const prompts: unknown[] = [];
   const orchestrator = new Orchestrator({
     stores: memoryStores(),
@@ -76,8 +85,10 @@ function setup(opts: { workflow?: string; secretUse?: "none"; sessionMode?: "per
     templates: new TemplateRegistry(),
     workspaceProvider: new LocalWorkspaceProvider(process.cwd()),
     ...(opts.secretUse === "none" ? {} : { secretUse: async () => {} }),
+    ...(opts.maxAgentSessions !== undefined ? { maxAgentSessions: opts.maxAgentSessions } : {}),
     sessionFactory: async (o: OpenSessionOptions) => {
       opened.push(o);
+      const n = opened.length;
       let close!: () => void;
       const closed = new Promise<void>((r) => (close = r));
       return {
@@ -96,11 +107,14 @@ function setup(opts: { workflow?: string; secretUse?: "none"; sessionMode?: "per
         },
         onUpdate: () => () => {},
         cancel: async () => {},
-        close: async () => close(),
+        close: async () => {
+          shut.push(n);
+          close();
+        },
       } satisfies AgentSession;
     },
   });
-  return { orchestrator, opened, prompts };
+  return { orchestrator, opened, prompts, shut };
 }
 
 const refusal = async (made: ReturnType<typeof setup>, vars: Record<string, unknown>) => {
@@ -114,7 +128,7 @@ describe("secret launch inputs (#363)", () => {
   it("hands the agent a reference to the named secret as an env variable, and only the id to the prompt", async () => {
     const made = setup();
     const { run } = await made.orchestrator.startAndRun({ workflowId: "deploy", vars: { token: "deploy-a" } });
-    expect(run.status).toBe("completed");
+    expect(run.status, JSON.stringify(run.error)).toBe("completed");
     expect(made.opened[0]!.agent.env).toEqual({ LOG_LEVEL: "info", DEPLOY_TOKEN: { secret: "deploy-a" } });
     // The session reads it like any other reference: on its host, under the use decision.
     expect(made.opened[0]!.authorizeSecretUse).toBeDefined();
@@ -140,6 +154,69 @@ describe("secret launch inputs (#363)", () => {
     });
     expect(run.status).toBe("completed");
     expect(made.opened.map((o) => o.agent.env.DEPLOY_TOKEN)).toEqual([{ secret: "deploy-a" }, { secret: "deploy-b" }]);
+  });
+
+  it("under a one-session cap, retires the run's idle pool for a secret step and pools again after it", async () => {
+    const mixed = `
+id: deploy
+name: Deploy
+version: "1"
+inputSchema:
+  fields:
+    token: { type: secret, required: true }
+start: s
+nodes:
+  s: { type: start }
+  before: { type: agent, agent: { role: coder }, prompt: "prepare" }
+  work:
+    type: agent
+    agent: { role: coder }
+    prompt: "deploy"
+    secretEnv: { DEPLOY_TOKEN: token }
+  after: { type: agent, agent: { role: coder }, prompt: "verify" }
+  again: { type: agent, agent: { role: coder }, prompt: "verify again" }
+  e: { type: end }
+edges: [{ from: s, to: before }, { from: before, to: work }, { from: work, to: after }, { from: after, to: again }, { from: again, to: e }]
+`;
+    const made = setup({ workflow: mixed, sessionMode: "per-run", maxAgentSessions: 1 });
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "deploy", vars: { token: "deploy-a" } });
+    expect(run.status, JSON.stringify(run.error)).toBe("completed");
+    // The ordinary pool (1) was retired for the secret step (2), whose own session closed with
+    // it; the ordinary steps after it share a new pool (3).
+    expect(made.opened.map((o) => o.agent.env.DEPLOY_TOKEN)).toEqual([undefined, { secret: "deploy-a" }, undefined]);
+    expect(made.shut.slice(0, 2)).toEqual([1, 2]);
+    expect(made.prompts).toHaveLength(4);
+    await expect.poll(() => made.orchestrator.sessionSlots.view().inUse.total).toBe(0);
+  });
+
+  it("under a one-session cap, runs parallel secret steps one after the other", async () => {
+    const branch = (name: string) =>
+      `${name}: { graph: { start: s, nodes: { s: { type: start }, w: { type: agent, agent: { role: coder }, prompt: "${name}", secretEnv: { DEPLOY_TOKEN: token } }, e: { type: end } }, edges: [{ from: s, to: w }, { from: w, to: e }] } }`;
+    const parallel = `
+id: deploy
+name: Deploy
+version: "1"
+inputSchema:
+  fields:
+    token: { type: secret, required: true }
+start: s
+nodes:
+  s: { type: start }
+  fan:
+    type: parallel
+    branches:
+      ${branch("left")}
+      ${branch("right")}
+  e: { type: end }
+edges: [{ from: s, to: fan }, { from: fan, to: e }]
+`;
+    const made = setup({ workflow: parallel, sessionMode: "per-run", maxAgentSessions: 1 });
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "deploy", vars: { token: "deploy-a" } });
+    expect(run.status, JSON.stringify(run.error)).toBe("completed");
+    expect(made.opened.map((o) => o.agent.env.DEPLOY_TOKEN)).toEqual([{ secret: "deploy-a" }, { secret: "deploy-a" }]);
+    // Neither held the slot past its step, so the second could open once the first closed.
+    expect(made.shut).toEqual([1, 2]);
+    await expect.poll(() => made.orchestrator.sessionSlots.view().inUse.total).toBe(0);
   });
 
   it("validates that a step's secretEnv names a secret launch input", () => {

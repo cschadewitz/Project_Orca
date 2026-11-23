@@ -579,10 +579,14 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
   rest of the task is redacted too. The value stays in the bytes the agent wrote (its checkout
   and the stored artifact blob), as on this daemon.
   - Only a remote whose `hello` lists both `sensitiveVars` and `protectedValues` in
-    `admitFields` (protocol 2.11) is sent such a task, and it is asked again immediately
-    before every admission is sent: a remote that no longer lists them (a restart onto an
-    older build) is refused the step (reason `protocol`), and no answer means nothing is
-    sent. A remote that does not know the fields refuses the admission outright, since its
+    `admitFields` (protocol 2.11) is sent such a task. Every admission opens a connection of
+    its own, asks `hello` on it, and goes on that same connection only if the answer
+    positively names the enrolled workspace and still lists both fields; a `hello` with no
+    workspace identity is not a match. A remote that no longer lists them (a restart onto an
+    older build) is refused the step (reason `protocol`), and another workspace or none is
+    refused with `scope-changed`. If the connection breaks after the check, the admission is
+    not sent on another one: the attempt starts again with a new connection and a new check.
+    A remote that does not know the fields refuses the admission outright, since its
     parameters are strict.
   - An artifact whose body held a protected value comes back redacted. The remote's
     `maxBytes` limit applies to the body as sent, so one that redaction makes too long is not
@@ -978,7 +982,10 @@ nodes:
   a step at another secret.
 - **A process per step.** A step with `secretEnv` always gets an agent process of its own,
   opened for that step and closed with it, even for a `per-run` agent: it neither takes the
-  pooled session nor leaves its own for the next step. Each step's open asks for the grant
+  pooled session nor leaves its own for the next step. Its agent slot is held for that step
+  only. The run's pooled session, if idle, is closed first so it does not keep the slot the
+  step needs under a cap (one still in a turn is closed when that turn ends, never under it),
+  and the steps after it pool again. Each step's open asks for the grant
   again and reads the value again, so a revoked grant stops the next step before its process
   starts, and a rotated value is what the next step gets.
 - **Checked when the workflow is validated.** Every `secretEnv` entry must name a top-level

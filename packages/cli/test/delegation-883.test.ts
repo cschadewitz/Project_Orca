@@ -1040,7 +1040,14 @@ describe("delegation through a proxy the test controls (#883)", () => {
       tamper?: { method: string; from: string; to: string } | undefined;
       /** Answer the next call of `method` with `result` instead of the remote's own answer. */
       answer?: { method: string; result: unknown } | undefined;
+      /**
+       * Once a stream has carried this method, the next request on that same stream is never
+       * forwarded and the stream is dropped: the connection broke right after that call.
+       */
+      breakAfter?: string | undefined;
     } = {};
+    /** The methods each stream carried, in order, whether or not they were forwarded. */
+    const methodsByStream: string[][] = [];
     let held: Buffer[] | undefined;
     let onHeld: (() => void) | undefined;
     const heldNow = new Promise<void>((resolve) => (onHeld = resolve));
@@ -1050,6 +1057,7 @@ describe("delegation through a proxy the test controls (#883)", () => {
       down: false,
       streams: 0,
       rules,
+      methodsByStream,
       /** Resolves once a stream carrying `rules.hold` was held. */
       held: heldNow,
       /** Resolves once the reply to `rules.dropReply` was lost. */
@@ -1077,9 +1085,24 @@ describe("delegation through a proxy the test controls (#883)", () => {
       let holding = false;
       let loseReply = false;
       let tamper: { from: string; to: string } | undefined;
+      const methods: string[] = [];
+      methodsByStream.push(methods);
+      let breakNext = false;
       client.on("data", (chunk: Buffer) => {
         log.push(chunk);
         const text = chunk.toString("utf8");
+        const method = /"method":"([^"]+)"/.exec(text)?.[1];
+        if (method) methods.push(method);
+        if (method && breakNext) {
+          breakNext = false;
+          client.destroy();
+          upstream.destroy();
+          return;
+        }
+        if (method && rules.breakAfter === method) {
+          rules.breakAfter = undefined;
+          breakNext = true;
+        }
         if (rules.drop && text.includes(`"method":"${rules.drop}"`)) {
           rules.drop = undefined;
           client.destroy();
@@ -1925,6 +1948,56 @@ describe("delegation through a proxy the test controls (#883)", () => {
     await session.close();
     await proxy.close();
   }, 120_000);
+
+  it("sends a protected admission only on the connection its hello was just checked on (#363)", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-one-connection"));
+    const session = await open(proxy.transport(), receipts);
+    // The connection breaks right after the check: the admission on it never reaches the
+    // remote, and none is sent on another connection without a check of its own.
+    proxy.state.rules.breakAfter = "hello";
+    const parent = "run_01JD0000000000000000000368";
+    const before = (await runsOf("remote-task")).length;
+    const task = {
+      ...turn(parent, join(work, "one-connection", "report.md")),
+      task: `deploy with ${SECRET}`,
+      sensitive: true,
+      protectedValues: [SECRET],
+    };
+    await expect(session.prompt("ignored", { timeoutMs: 60_000, turn: task })).resolves.toMatchObject({
+      stopReason: "end_turn",
+    });
+    expect(proxy.state.rules.breakAfter).toBeUndefined();
+    const admitting = proxy.state.methodsByStream.filter((m) => m.includes("runs.admit"));
+    expect(admitting.length).toBeGreaterThanOrEqual(2);
+    // Every stream that carried the admission carried the check first, and nothing between.
+    for (const methods of admitting) expect(methods.slice(0, 2)).toEqual(["hello", "runs.admit"]);
+    expect(await runsOf("remote-task")).toHaveLength(before + 1);
+    await session.close();
+    await proxy.close();
+  }, 120_000);
+
+  it("refuses, sending nothing, a protected task to a worker whose hello names no workspace (#363)", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-no-identity"));
+    const session = await open(proxy.transport(), receipts);
+    proxy.state.rules.tamper = { method: "hello", from: '"identity"', to: '"identitx"' };
+    const parent = "run_01JD0000000000000000000369";
+    const before = (await runsOf("remote-task")).length;
+    const task = {
+      ...turn(parent, join(work, "no-identity", "report.md")),
+      task: `deploy with ${SECRET}`,
+      sensitive: true,
+      protectedValues: [SECRET],
+    };
+    const error = await session.prompt("ignored", { timeoutMs: 30_000, turn: task }).catch((e: unknown) => e);
+    expect(isOrcaError(error, "DELEGATION_REFUSED")).toBe(true);
+    expect((error as { details: { reason: string } }).details.reason).toBe("scope-changed");
+    expect(proxy.state.methodsByStream.flat()).not.toContain("runs.admit");
+    expect(await runsOf("remote-task")).toHaveLength(before);
+    await session.close();
+    await proxy.close();
+  }, 60_000);
 
   it("refuses, sending nothing, a protected task when the worker no longer takes one at admission (#363)", async () => {
     const proxy = await proxied();

@@ -591,6 +591,12 @@ export class Orchestrator {
       returnSlot: () => Promise<void>;
       /** `capabilityManifestKey` of what the session was opened with (#335). */
       capabilities: string;
+      /** Steps holding it right now: an incompatible step retires it only once this is 0 (#363). */
+      active: number;
+      /** Taken out of the pool: close it when the last step holding it lets go. */
+      retiring?: { stepRunId: string };
+      /** Its slot is being given up, so a waiting step does not count it as held for good. */
+      slotClosing: () => void;
     }
   >();
   private readonly maxAgentSessions: number | undefined;
@@ -2773,6 +2779,56 @@ export class Orchestrator {
    * pooled session is retired, never handed to another step; the session itself is not
    * changed.
    */
+  /** Hand a pooled session to a step; it counts as held until the step lets go (#363). */
+  private leasePooled(
+    rc: RunContext,
+    step: StepRun,
+    key: string,
+    pooled: NonNullable<ReturnType<Orchestrator["sessions"]["get"]>>,
+  ): { session: AgentSession; release: () => Promise<void> } {
+    pooled.active++;
+    let released = false;
+    return {
+      session: pooled.session,
+      release: async () => {
+        if (released) return;
+        released = true;
+        pooled.active--;
+        if (pooled.retiring && pooled.active === 0) await this.closeRetired(rc, pooled);
+      },
+    };
+  }
+
+  /**
+   * Take a pooled session out of the pool (#335, #363). Its slot is marked as being given up
+   * at once; the session itself closes now if no step holds it, or when the last one lets go.
+   */
+  private async retireFromPool(
+    rc: RunContext,
+    step: StepRun,
+    key: string,
+    pooled: NonNullable<ReturnType<Orchestrator["sessions"]["get"]>>,
+  ): Promise<void> {
+    if (this.sessions.get(key) === pooled) this.sessions.delete(key);
+    pooled.retiring ??= { stepRunId: step.id };
+    if (pooled.active === 0) await this.closeRetired(rc, pooled);
+    else pooled.slotClosing();
+  }
+
+  private async closeRetired(
+    rc: RunContext,
+    pooled: NonNullable<ReturnType<Orchestrator["sessions"]["get"]>>,
+  ): Promise<void> {
+    await pooled.close().catch(() => undefined);
+    void pooled.returnSlot();
+    await rc
+      .emit({
+        type: "agent.session.closed",
+        payload: { stepRunId: pooled.retiring?.stepRunId ?? pooled.current.step.id, sessionId: pooled.session.id },
+      })
+      .catch(() => undefined);
+  }
+
   private guardCatalogUse(
     rc: RunContext,
     step: StepRun,
@@ -2911,13 +2967,18 @@ export class Orchestrator {
       // A per-run session carries the MCP servers it was opened with. A step whose scope
       // differs gets its own session rather than a broader or narrower one (#335).
       rc.logger.info("pooled session has other capabilities; reopening it", { agent: agent.id });
-      this.sessions.delete(key);
-      await pooled.close().catch(() => undefined);
-      void pooled.returnSlot();
-      await rc
-        .emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: pooled.session.id } })
-        .catch(() => undefined);
+      await this.retireFromPool(rc, step, key, pooled);
       pooled = undefined;
+    }
+    // A step that gets a process of its own retires an idle pooled one first, so the run's
+    // ordinary pool never holds the slot that step needs; a pool still in a turn is retired
+    // when that turn lets go, never closed under it (#363).
+    if (!pooling && agent.sessionMode === "per-run") {
+      const idle = this.sessions.get(key);
+      if (idle) {
+        rc.logger.info("this step gets a session of its own; retiring the pooled one", { agent: agent.id });
+        await this.retireFromPool(rc, step, key, idle);
+      }
     }
     if (pooled) {
       pooled.current.step = step;
@@ -2929,7 +2990,7 @@ export class Orchestrator {
           step,
           agent,
           key,
-          this.guardCatalogUse(rc, step, key, { session: pooled.session, release: async () => {} }, authorize),
+          this.guardCatalogUse(rc, step, key, this.leasePooled(rc, step, key, pooled), authorize),
           delivered.skills,
         );
       // It drifted (the agent switched model itself): re-apply rather than run a step on a
@@ -2949,7 +3010,7 @@ export class Orchestrator {
           step,
           agent,
           key,
-          this.guardCatalogUse(rc, step, key, { session: pooled.session, release: async () => {} }, authorize),
+          this.guardCatalogUse(rc, step, key, this.leasePooled(rc, step, key, pooled), authorize),
           delivered.skills,
         );
       } catch (e) {
@@ -2963,7 +3024,7 @@ export class Orchestrator {
           .catch(() => undefined);
       }
     }
-    const slot = await this.takeSessionSlot(rc, step, agent, host);
+    const slot = await this.takeSessionSlot(rc, step, agent, host, pooling);
     // The slot wait can be long: ask again now that the session is about to open.
     if (authorize)
       try {
@@ -3194,7 +3255,15 @@ export class Orchestrator {
           .catch(() => undefined);
       };
       if (pooling) {
-        const pooled = { session, current, close: closeOnce, returnSlot, capabilities: sessionShape };
+        const pooled = {
+          session,
+          current,
+          close: closeOnce,
+          returnSlot,
+          capabilities: sessionShape,
+          active: 0,
+          slotClosing: () => slot.closing(),
+        };
         this.sessions.set(key, pooled);
         // A pooled session whose connection went away (wedged agent killed after a cancel, or a
         // crash) must not be handed to the next step; let that step open a fresh one instead.
@@ -3206,7 +3275,7 @@ export class Orchestrator {
           step,
           agent,
           key,
-          this.guardCatalogUse(rc, step, key, { session, release: async () => {} }, authorize),
+          this.guardCatalogUse(rc, step, key, this.leasePooled(rc, step, key, pooled), authorize),
           delivered.skills,
         );
       }
@@ -3241,6 +3310,8 @@ export class Orchestrator {
     step: StepRun,
     agent: { id: string; maxSessions?: number | undefined; sessionMode: "per-step" | "per-run" },
     host: AgentHost,
+    /** The session will be pooled for the run: its slot is held until the run ends. */
+    pinned: boolean,
   ): Promise<SessionSlot> {
     const remoteId = this.delegatedRemote(agent);
     const request = {
@@ -3251,7 +3322,9 @@ export class Orchestrator {
       signal: rc.abort.signal,
       runs: this.runAncestry(rc),
       deadlineMs: this.sessionSlotWaitMs(),
-      ...(agent.sessionMode === "per-run" ? { pinnedTo: rc.id } : {}),
+      // Pinned by the session's effective lifetime: a per-run agent's step that gets a process
+      // of its own (#363) holds its slot only for that step.
+      ...(pinned ? { pinnedTo: rc.id } : {}),
     };
     const immediate = this.sessionSlots.tryAcquire(request);
     if (immediate) {
