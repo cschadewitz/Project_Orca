@@ -314,14 +314,10 @@ An agent asks ORCA only when its own permission check has no answer. Once it rem
 grant (Claude's "always allow", a rule in its own settings), the same call never reaches ORCA
 again, so a grant you revoke in ORCA, or a rule you add, does not apply to it.
 
-For the Claude and Codex ACP adapters on the daemon's own machine, ORCA will close that gap
-with a `PreToolUse` hook it installs in the agent's sessions (#704, #705).
+For the Claude and Codex ACP adapters on the daemon's own machine, ORCA closes that gap with
+a `PreToolUse` hook it installs in the agent's sessions (#704, #705).
 
-> **Not available yet.** The hook is built and tested against the real Claude Code and the
-> real Codex, but this build refuses every session with `nativeToolHook: on`. It is turned on
-> once its activation is approved on its own. What follows is how it will work.
-
-It is opt-in, per agent:
+It is opt-in, per agent, and off unless you turn it on:
 
 ```yaml
   - id: claude
@@ -384,8 +380,9 @@ at another Claude Code or Codex, which are refused. Without
 Until those checks have passed, the session is **held**: it is started, but ORCA answers none
 of its file reads or writes and puts none of its permission asks to anybody, and a session
 that fails a check is refused everything it asked for while it waited. Only the daemon's
-session factory will install the hook; `orca ping`, and an `orca-daemon` agent's delegation,
-refuse an agent with `nativeToolHook: on` instead of starting it unhooked.
+session factory installs the hook; `orca ping` with no daemon answering, and an `orca-daemon`
+agent's delegation, refuse an agent with `nativeToolHook: on` instead of starting it unhooked.
+Ping it through a running daemon instead.
 
 **MCP servers.** Claude Code would start a session's MCP servers itself, before ORCA has
 checked the Claude Code it runs, and would be handed their commands and environment, secrets

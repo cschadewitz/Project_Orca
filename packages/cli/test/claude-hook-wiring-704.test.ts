@@ -59,8 +59,6 @@ async function setup(
     pid: RUNTIME_PID,
     image: { sha256: PINNED },
   },
-  /** `off`: a shipped build, where activation is unavailable. */
-  activation: "acceptance-only" | "off" = "acceptance-only",
   codexOpts: {
     /** The adapter's ACP extension method, which the Codex path asks for its hook listing. */
     ext?: (method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -119,7 +117,6 @@ async function setup(
       script: script ?? undefined,
       platform,
       arch: "x64",
-      activation: activation === "off" ? undefined : activation,
       // ORCA's own evidence, faked: only the attested process under the agent ORCA started.
       imageDigest: async (pid, agentPid) => {
         if (agentPid !== AGENT_PID) return { error: "not under the agent" };
@@ -290,15 +287,6 @@ describe("installing the hook", () => {
     expect(await readdir(t.hookDir)).toEqual([]);
   });
 
-  it("refuses every opted-in session while activation is unavailable, before anything starts", async () => {
-    const t = await setup(CLAUDE, {}, "/opt/orca/claude-pre-tool-hook.mjs", "linux", undefined, "off");
-    await expect(t.open()).rejects.toMatchObject({
-      code: "NOT_SUPPORTED",
-      message: expect.stringMatching(/not available in this build yet[\s\S]*nativeToolHook: on/),
-    });
-    expect(t.opened()).toBe(0);
-  });
-
   it("refuses a platform the acceptance test does not cover", async () => {
     const t = await setup(CLAUDE, {}, "/opt/orca/claude-pre-tool-hook.mjs", "win32");
     await expect(t.open()).rejects.toMatchObject({
@@ -383,7 +371,6 @@ describe("installing the hook in Codex (#705)", () => {
       "linux",
       // Codex has no session-start hook: nothing reports a runtime process in.
       null,
-      "acceptance-only",
       {
         ext: (method, params) => {
           if (t.seen.options) seen.options = t.seen.options;

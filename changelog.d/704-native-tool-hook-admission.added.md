@@ -1,5 +1,4 @@
-- **agents:** groundwork for `nativeToolHook: on`, which this build still refuses. When the
-  hook is turned on, a hooked session is held until ORCA has checked the Claude Code or Codex
+- **agents:** with `nativeToolHook: on`, a hooked session is held until ORCA has checked the Claude Code or Codex
   it runs: until then ORCA reads and writes no file for it and asks nobody on its behalf, and a
   session that fails the check is refused all of it. A hooked Claude agent's MCP servers are
   run by ORCA and served to Claude Code over the ACP connection, so Claude Code sees each

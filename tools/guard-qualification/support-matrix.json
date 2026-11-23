@@ -79,7 +79,7 @@
       "tier": "none",
       "routes": ["acp-ask"],
       "pendingRoutes": {
-        "claude-native-hook": "Merged (#980) but off in every shipped build until session admission is complete (activation acceptance-only); the connected proof runs it under acceptance only"
+        "claude-native-hook": "Available opt-in (nativeToolHook: on, off by default) since #704 activation; no tier until a trusted connected receipt exists"
       },
       "receipts": [],
       "unverified": [

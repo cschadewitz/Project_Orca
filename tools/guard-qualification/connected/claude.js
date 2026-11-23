@@ -97,7 +97,6 @@ export function claudeConnected(env) {
       return makeSessionFactory({ configDir: world.configDir, storeDir: ".orca" }, openAcpSession, {
         runtime: process.execPath,
         script: env.hookScript,
-        activation: "acceptance-only",
       })({
         host: new LocalHost({ id: "local", type: "local" }),
         agent: path.agent(world, extraEnv),

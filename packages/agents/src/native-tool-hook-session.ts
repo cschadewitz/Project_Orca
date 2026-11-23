@@ -3,9 +3,9 @@
  * the Claude ACP adapter (#704) or the Codex ACP adapter (#705).
  *
  * `nativeToolHook: on` is a promise that the agent's tool calls are checked, so every session
- * this cannot guard is refused, never opened without the hook. It is also unavailable in every
- * build ORCA ships (`nativeToolHookUnavailable`) until activation is approved on its own; only
- * the hook's own suites install it. When installed, the session factory holds the session away
+ * this cannot guard is refused, never opened without the hook. Only ORCA's session factory
+ * installs it; any other way of opening such an agent is refused (`nativeToolHookRefused`).
+ * When installed, the session factory holds the session away
  * from ORCA's host services, and from the MCP servers ORCA runs for it, until its runtime is
  * admitted, and ORCA checks every relayed MCP request again when it is dispatched.
  *
@@ -74,20 +74,24 @@ import { openHookTelemetrySpool, type HookTelemetrySpool } from "./hook-telemetr
 import type { ProtectedPaths } from "./permissions.js";
 
 /**
- * Whether `nativeToolHook: on` can be used at all. It cannot, in any build ORCA ships, until
- * activation is approved on its own (#704): every entry point that starts agent work refuses
- * such an agent before anything starts, the session factory, `openAcpSession` itself, and
- * remote delegation. Only the hook's own test suites turn it on, through the session factory's
- * `activation`, which no config reaches.
+ * The refusal for `nativeToolHook: on` wherever ORCA would open the agent without installing
+ * its hook (#704): `openAcpSession` called directly rather than through the session factory
+ * (`orca ping` with no daemon answering, an ephemeral bootstrap), and remote delegation, whose
+ * agents run on another daemon. Each refuses such an agent before anything starts.
  */
-export function nativeToolHookUnavailable(agent: {
-  id: string;
-  nativeToolHook?: "on" | "off" | undefined;
-}): OrcaError | undefined {
+export function nativeToolHookRefused(
+  agent: { id: string; nativeToolHook?: "on" | "off" | undefined },
+  where: "outside-factory" | "remote-delegation",
+): OrcaError | undefined {
   if (agent.nativeToolHook !== "on") return undefined;
+  const why =
+    where === "remote-delegation"
+      ? `it is an orca-daemon agent, and ORCA's tool hook does not apply to a remote daemon's agents`
+      : `ORCA installs its hook only in sessions its daemon or a workflow run opens, not in this one-off session ` +
+        `(to check this agent, ping it through a running daemon)`;
   return new OrcaError(
     "NOT_SUPPORTED",
-    `agent ${agent.id} has nativeToolHook: on, but ORCA's native tool hook is not available in this build yet (#704). ` +
+    `agent ${agent.id} has nativeToolHook: on, but ${why}. ` +
       `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
     { agentId: agent.id },
   );

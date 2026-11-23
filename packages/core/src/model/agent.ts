@@ -896,9 +896,7 @@ export const AgentSpecSchema = z
     /**
      * Whether ORCA installs its pre-tool hook in this agent (#704, #705), so that
      * `permissions` decides every tool call it hooks and not only the ones the agent asks
-     * about. **Not available yet**: every build ORCA ships refuses a session with `on` until
-     * activation is complete (the hook is exercised only by its acceptance suites). Opt-in:
-     * `on` installs it in an agent that takes one, today the Claude and Codex ACP adapters on
+     * about. Opt-in and off by default: `on` installs it in an agent that takes one, today the Claude and Codex ACP adapters on
      * the daemon's own host, with an adapter and runtime pair and on a platform ORCA's
      * acceptance tests cover (`CLAUDE_HOOK_VERIFIED_PAIRS`, `CODEX_HOOK_VERIFIED_PAIRS`,
      * `*_HOOK_VERIFIED_PLATFORMS`; the runtime's image is hashed from the process the session
