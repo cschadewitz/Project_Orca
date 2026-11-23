@@ -862,7 +862,7 @@ let alertsEpoch = 0;
  * must not — where the resources are, what the home directory is, what the environment
  * said — arrives here as a dependency, which is what keeps the switch itself a plain test.
  */
-/** "Switch to SQLite" for the app's own workspace (#339); created with the update guards below. */
+/** "Switch to SQLite" and back for the app's own workspace (#339); created with the update guards below. */
 const storeSwitchRef: { current?: StoreSwitchRestart } = {};
 const storeSwitchRequestFile = join(app.getPath("userData"), "store-switch", "request.json");
 // Offered to people only after the native signed/installed switch and rollback acceptance
@@ -1571,7 +1571,7 @@ const storeSwitch = new StoreSwitchRestart({
   guards: updateGuards,
   target: () => workspace.storeSwitchTarget,
   settle: (token) => workspace.settleForStoreSwitch(token),
-  request: (path, after) => writeStoreSwitchRequest(storeSwitchRequestFile, path, after),
+  request: (path, after, to) => writeStoreSwitchRequest(storeSwitchRequestFile, path, after, to),
   relaunch: () => {
     app.relaunch();
     app.quit();
@@ -1593,7 +1593,10 @@ ipcMain.handle("orca:storeSwitch.restart", async (event) => {
     !BrowserWindow.getAllWindows().some((win) => win.webContents === event.sender) ||
     event.senderFrame !== event.sender.mainFrame
   )
-    return { ok: false, error: { code: "UPDATE", message: "Switching to SQLite is not available right now" } };
+    return {
+      ok: false,
+      error: { code: "UPDATE", message: "Switching the workspace storage is not available right now" },
+    };
   return { ok: true, result: await storeSwitch.restart() };
 });
 ipcMain.on("orca:update.read", (event) => {

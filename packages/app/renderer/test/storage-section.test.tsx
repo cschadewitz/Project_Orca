@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-/** Workspace storage and "Switch to SQLite" (#339): the renderer only shows main's state and asks. */
+/** Workspace storage, "Switch to SQLite" and back (#339): the renderer only shows main's state and asks. */
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { StorageSection } from "../src/config/storage-section.js";
@@ -65,4 +65,26 @@ it("shows why a switch did not happen, and offers it again", () => {
   });
   expect(screen.getByText(/Not switched on this start \(BUSY\): A run is active/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "Switch to SQLite" })).toBeTruthy();
+});
+
+it("offers the switch back to files where main offers it, with its own confirmation", async () => {
+  const { restart } = mount(
+    { phase: "ready", backend: "sqlite", to: "files" },
+    { phase: "restarting", backend: "sqlite", to: "files" },
+  );
+  expect(screen.queryByRole("button", { name: "Switch to SQLite" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Switch back to files" }));
+  expect(screen.getByText(/written back to files/)).toBeTruthy();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Restart and switch" }));
+  });
+  expect(restart).toHaveBeenCalledTimes(1);
+});
+
+it("says how a switch back ended", () => {
+  mount({ phase: "unavailable", backend: "file", last: { to: "files", status: "switched" } });
+  expect(screen.getByText("Switched back to files on this start.")).toBeTruthy();
+  cleanup();
+  mount({ phase: "ready", backend: "sqlite", to: "files", last: { to: "files", status: "refused", reason: "BUSY" } });
+  expect(screen.getByText(/Not switched on this start \(BUSY\): the store stays on SQLite/)).toBeTruthy();
 });

@@ -400,6 +400,15 @@ An update recovery's launch never asks. A refusal before the stop reopens
 admission on the running daemon; after it, nothing restarts the old daemon, and
 reopening ORCA starts the workspace on files.
 
+**Switching back** goes the same way. A daemon on SQLite reports `filesSwitch:
+"available"` in `hello.store` on the same terms (an app workspace, its fence held, not
+Windows; a daemon from before the switch back sends nothing, which means unavailable),
+and the section then offers "Switch back to files". The request records `to: "files"`
+(a request without it is to SQLite), the daemon is started with
+`ORCA_STORE_SWITCH=files:<claim>`, and it runs `switchStoreToFiles` (below) only while
+its store is on SQLite, under the same claim and fence checks; a lost fence aborts the
+launch, a refusal starts it on SQLite. `lastSwitch.to` says which way the last ask went.
+
 **Not offered yet.** Released-binary and native signed/installed acceptance of the
 switch and of its rollback is a separate gate. Until it passes, the app offers the
 switch only when started with `ORCA_SQLITE_SWITCH=1`, which only that acceptance sets.
@@ -531,6 +540,4 @@ leaves only an unreferenced blob.
   macOS (the conversion runs there; the check runs on Linux).
 - Bringing writes a released ORCA made to the file store after a conversion into the
   new store; they are reported, not merged.
-- Asking for the switch back from the desktop app (the daemon and the app's
-  "Workspace storage" section), and native signed/installed acceptance of both
-  directions.
+- Native signed/installed acceptance of both directions, which gates offering them.

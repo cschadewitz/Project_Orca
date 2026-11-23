@@ -287,6 +287,13 @@ describe("orca store", () => {
       });
       expect(app.orchestrator.stores.capabilities?.backend).toBe("file");
       app.orchestrator.stores.close?.();
+      // A switch back to files asked of a store already on files: nothing to do, nothing run.
+      process.env.ORCA_STORE_SWITCH = `files:${"a".repeat(64)}`;
+      const back = await bootstrap({ cwd: dir, logger: silentLogger });
+      expect(process.env.ORCA_STORE_SWITCH).toBeUndefined();
+      expect(back.storeSwitch).toBeUndefined();
+      expect(back.storeStatus).toEqual({ backend: "file", sqliteSwitch: "unavailable", filesSwitch: "unavailable" });
+      back.orchestrator.stores.close?.();
     } finally {
       delete process.env.ORCA_STORE_SWITCH;
     }

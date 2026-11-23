@@ -100,8 +100,8 @@ export interface WorkspaceDeps {
     readOnly: boolean;
     configPath?: string;
     firstRunToken?: string;
-    /** Ask this launch's daemon to switch its store to SQLite in place (#339). First-run launches only. */
-    storeSwitch?: { after: string };
+    /** Ask this launch's daemon to switch its store in place (#339). First-run launches only. */
+    storeSwitch?: { to: "sqlite" | "files"; after: string };
     onExit: (exit: DaemonExit) => void;
   }) => Promise<BundledDaemon>;
   /** Build the read client for a daemon URL. */
@@ -165,12 +165,15 @@ export interface WorkspaceDeps {
   /** Test seam; production uses the store-local durable reservation. */
   reserveFirstRunOwnership?: (path: string) => FirstRunOwnership;
   /**
-   * Whether the person asked for this workspace's store to be switched to SQLite on this daemon
-   * launch (#339, store-switch.ts), and after which stopped claim. Asked once per owned
+   * Whether the person asked for this workspace's store to be switched (to SQLite, or back to
+   * files) on this daemon launch (#339, store-switch.ts), and after which stopped claim. Asked once per owned
    * first-run launch, with its new reservation, just before it starts; the request is spent by
    * asking, so a launch that fails does not repeat it.
    */
-  takeStoreSwitch?: (path: string, ownership: FirstRunOwnership) => { after: string } | undefined;
+  takeStoreSwitch?: (
+    path: string,
+    ownership: FirstRunOwnership,
+  ) => { to: "sqlite" | "files"; after: string } | undefined;
 }
 
 /**
@@ -1218,7 +1221,7 @@ export class Workspace {
 
   /**
    * The app's own workspace and its store as its current daemon reported them (#339): the
-   * connected bundled first-run daemon only, while it runs. Anything else has no SQLite switch.
+   * connected bundled first-run daemon only, while it runs. Anything else has no store switch.
    */
   get storeSwitchTarget(): { path: string; store: NonNullable<HelloResult["store"]> } | undefined {
     const daemon = this.daemon;

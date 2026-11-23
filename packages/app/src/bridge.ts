@@ -304,7 +304,7 @@ export interface OrcaBridge {
     restart(): Promise<BridgeResult<LinuxRestartState | null>>;
     subscribe(listener: (state: LinuxRestartState | null) => void): () => void;
   };
-  /** "Switch to SQLite" for the app's own workspace (#339): main decides and runs it. */
+  /** "Switch to SQLite" and back for the app's own workspace (#339): main decides and runs it. */
   storeSwitch?: {
     read(): StoreSwitchState;
     restart(): Promise<BridgeResult<StoreSwitchState>>;
