@@ -3,7 +3,7 @@
  * boundaries checked in code before any judge is asked, and only if the rule is still there
  * when the answer goes out. A fake judge stands in for #701's.
  */
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -123,7 +123,7 @@ describe("a judged rule in the config", () => {
 describe("the judged lane", () => {
   const file = () => join(ws, "src", "a.ts");
   const lane = (judge: JudgePermission, reload: () => Promise<PermissionPolicy>): JudgedLane =>
-    judgedLane({ judge, reload });
+    judgedLane({ judge, reload, localHost: true });
 
   it("allows once by the rule the judge said covers the call, after reading the policy again", async () => {
     const policy = await policyOf([READ_RULE]);
@@ -240,12 +240,46 @@ describe("the judged lane", () => {
       judged: { verdict: "changed-since" },
     });
   });
+
+  it("allows only the very file the judge was shown, not a file that took its place (#702 review)", async () => {
+    const policy = await policyOf([READ_RULE]);
+    // Replaced while the judge was thinking: same name, still eligible, another file.
+    const replaced = fakeJudge();
+    replaced.mockImplementationOnce(async (input) => {
+      await writeFile(join(ws, "src", "next.ts"), "other\n");
+      await rename(join(ws, "src", "next.ts"), file());
+      return {
+        outcome: "allow",
+        verdict: "covered",
+        ruleId: input.rules[0]!.ruleId,
+        ruleRevision: input.rules[0]!.ruleRevision,
+        verdicts: [],
+        judgeConfigRef: "judge-ref",
+      };
+    });
+    expect(await lane(replaced, async () => policy)(policy, call("read", file()), ctx, signal())).toMatchObject({
+      decision: "ask",
+      judged: { verdict: "changed-since" },
+    });
+  });
+
+  it("stays closed for a session whose files are not on the daemon's own machine", async () => {
+    const policy = await policyOf([READ_RULE]);
+    const judge = fakeJudge();
+    const remote = judgedLane({ judge, reload: async () => policy, localHost: false });
+    expect(await remote(policy, call("read", file()), ctx, signal())).toEqual({
+      decision: "ask",
+      basis: "default",
+      judged: { verdict: "outside-envelope" },
+    });
+    expect(judge).not.toHaveBeenCalled();
+  });
 });
 
 describe("answering with the judged lane", () => {
   it("answers allow once, never allow always, and records the rule by its id without its revision", async () => {
     const policy = await policyOf([READ_RULE]);
-    const judged = judgedLane({ judge: fakeJudge(), reload: async () => policy });
+    const judged = judgedLane({ judge: fakeJudge(), reload: async () => policy, localHost: true });
     const answered = await resolvePermission(policy, {
       request: call("read", join(ws, "src", "a.ts")),
       scope: ctx,
@@ -280,7 +314,7 @@ describe("answering with the judged lane", () => {
       request: call("read", join(ws, "src", "a.ts")),
       scope: ctx,
       signal: controller.signal,
-      judged: judgedLane({ judge, reload: async () => policy }),
+      judged: judgedLane({ judge, reload: async () => policy, localHost: true }),
     });
     expect(answered.decision).toBe("ask:expired");
     expect(answered.response).toEqual({ outcome: { outcome: "cancelled" } });

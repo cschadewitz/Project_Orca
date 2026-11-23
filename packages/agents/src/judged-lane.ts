@@ -15,9 +15,14 @@
  *   read-only kind (`read`, `search`), not command-like, with every target a single regular
  *   file ORCA itself resolved inside the workspace and outside every protected path
  *   (`verifyPlainRuleTargets`);
+ * - the targets are checked on the daemon's own file system, so the lane is open only for a
+ *   session whose host is positively local; a remote host's files are not what the daemon
+ *   sees, and checking these would verify nothing about them (#702 review);
  * - after an allow, the policy is read again: the rule must still be there with the same id and
  *   revision, still match, no restriction may have appeared, and the targets are verified
- *   again. Anything else and the typed answer stands.
+ *   again and must be the very files the judge was shown (same real paths, same file-system
+ *   identities), not merely files that are still eligible. Anything else and the typed answer
+ *   stands.
  *
  * The judge sees only the candidate rules' criteria and ORCA's own description of the call
  * (kind, title, the verified workspace-relative locations). Every failure is no match: the
@@ -40,6 +45,11 @@ export interface JudgedLaneOptions {
   judge: JudgePermission;
   /** The policy as it is now, read again after the verdict and before answering. */
   reload: () => Promise<PermissionPolicy>;
+  /**
+   * Whether the session's tool calls run on the daemon's own machine. Only then are the targets
+   * the check resolves the ones the agent reads; anything else keeps the lane closed.
+   */
+  localHost: boolean;
   /** Tests only: the file system the target check reads. */
   io?: PlainRuleTargetIo;
 }
@@ -58,6 +68,10 @@ export function judgedLane(options: JudgedLaneOptions): JudgedLane {
     // Protected paths and a typed allow need no judge: the one can't be opened, the other is
     // already the most a judged rule could give.
     if (typed.basis === "protected" || typed.decision === "allow") return typed;
+    if (!options.localHost) {
+      const remote = gate(policy, request, ctx, options.io, false);
+      return remote.state === "closed" && remote.verdict ? { ...typed, judged: { verdict: remote.verdict } } : typed;
+    }
     const first = gate(policy, request, ctx, options.io);
     if (first.state === "closed") return first.verdict ? { ...typed, judged: { verdict: first.verdict } } : typed;
     let outcome: PlainRuleJudgeOutcome;
@@ -109,7 +123,10 @@ export function judgedLane(options: JudgedLaneOptions): JudgedLane {
     const again = gate(now, request, ctx, options.io);
     const still =
       again.state === "open" &&
-      again.candidates.some((r) => r.ruleId === allowed.ruleId && r.ruleRevision === allowed.ruleRevision);
+      again.candidates.some((r) => r.ruleId === allowed.ruleId && r.ruleRevision === allowed.ruleRevision) &&
+      // The allow is for the files the judge was shown: the same ones, not ones still eligible.
+      sameList(again.locations, first.locations) &&
+      sameList(again.identities, first.identities);
     if (!still) return { ...after, judged: { ...said, verdict: "changed-since" } };
     return {
       decision: "allow",
@@ -127,7 +144,13 @@ type Gate =
       callKind: string;
       /** The verified real paths, workspace-relative: what the judge sees. */
       locations: readonly string[];
+      /** Their file-system identities, which the allow is bound to. */
+      identities: readonly string[];
     };
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
 
 /**
  * Whether the judged lane is open for this call under `policy`, and which judged rules it would
@@ -139,6 +162,7 @@ function gate(
   request: acp.RequestPermissionRequest,
   ctx: PermissionEvalContext | undefined,
   io: PlainRuleTargetIo | undefined,
+  verify = true,
 ): Gate {
   const { kind, commandLike, claimed, matches } = callFacts(request, ctx);
   const candidates = (policy.judged ?? []).filter((rule) => matches(rule.match, "allow"));
@@ -157,6 +181,7 @@ function gate(
   // A call claiming an MCP tool ORCA cannot verify is never allowed by anything (#1021).
   if (claimed || commandLike || !PLAIN_RULE_JUDGED_KINDS.has(kind))
     return { state: "closed", verdict: "outside-envelope" };
+  if (!verify) return { state: "closed", verdict: "outside-envelope" };
   const check = verifyPlainRuleTargets({
     kind,
     locations: (request.toolCall.locations ?? []).map((l) => l.path),
@@ -165,5 +190,5 @@ function gate(
     ...(io ? { io } : {}),
   });
   if (!check.targetsVerified) return { state: "closed", verdict: "outside-envelope" };
-  return { state: "open", candidates, callKind: kind, locations: check.locations };
+  return { state: "open", candidates, callKind: kind, locations: check.locations, identities: check.identities };
 }

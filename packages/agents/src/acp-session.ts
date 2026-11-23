@@ -330,7 +330,14 @@ async function openPlanned(
       },
     );
   /** The judged lane, when this session has a judge (#702): re-reads the policy after a verdict. */
-  const judged = opts.judgePermission ? judgedLane({ judge: opts.judgePermission, reload: policyForAsk }) : undefined;
+  const judged = opts.judgePermission
+    ? judgedLane({
+        judge: opts.judgePermission,
+        reload: policyForAsk,
+        // Targets are checked on this machine's file system: only a local session's are its own.
+        localHost: opts.host.spec.type === "local",
+      })
+    : undefined;
 
   /** Rules ORCA writes are workspace-relative; ORCA's own files go ahead of every rule (C4-01). */
   const evalScope = {

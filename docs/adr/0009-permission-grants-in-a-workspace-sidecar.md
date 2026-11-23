@@ -179,7 +179,9 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   itself verified every target as a regular file inside the workspace and outside every
   protected path (`verifyPlainRuleTargets`). A judge's `covered` becomes allow once, never
   allow always; the policy is read again first and the rule must still be there unchanged, with
-  no new restriction and the targets verified again. Every other outcome leaves the typed
+  no new restriction, and the targets verified again must be the same files the judge was shown
+  (same real paths and file-system identities). The targets are checked on the daemon's own
+  file system, so the lane is open only for a session on the local host. Every other outcome leaves the typed
   answer, and a turn that ended meanwhile is answered as expired. The event records the
   verdict, the rule's id and the judge's config ref, not the rule's revision. Nothing wires a
   judge yet; saved judged rules (a version-4 sidecar) come with the app's save method.
