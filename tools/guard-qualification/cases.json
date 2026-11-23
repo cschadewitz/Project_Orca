@@ -15,7 +15,7 @@
       "category": "lifecycle",
       "contract": ["C04"],
       "bullet": 1,
-      "needs": [],
+      "needs": ["mcp-grant-allows"],
       "title": "A remembered grant is decided again on every identical call, and the call after a revocation is not allowed"
     },
     {
@@ -23,7 +23,7 @@
       "category": "lifecycle",
       "contract": ["C04"],
       "bullet": 1,
-      "needs": [],
+      "needs": ["mcp-grant-allows"],
       "title": "A timed grant stops allowing the moment it expires"
     },
     {
@@ -39,7 +39,7 @@
       "category": "lifecycle",
       "contract": ["C04", "C15"],
       "bullet": 1,
-      "needs": [],
+      "needs": ["mcp-grant-allows"],
       "title": "An operator's policy edit between two identical calls decides the second"
     },
     {
@@ -47,7 +47,7 @@
       "category": "lifecycle",
       "contract": ["C14"],
       "bullet": 1,
-      "needs": [],
+      "needs": ["mcp-grant-allows"],
       "title": "Identical concurrent calls are each decided, and every call started after a revocation asks"
     },
     {
@@ -55,7 +55,7 @@
       "category": "lifecycle",
       "contract": ["C06"],
       "bullet": 1,
-      "needs": [],
+      "needs": ["mcp-grant-allows"],
       "title": "An unreadable sidecar turns its grants and later allows into asks, and configured denials still deny"
     },
     {
@@ -63,7 +63,7 @@
       "category": "lifecycle",
       "contract": ["C06"],
       "bullet": 1,
-      "needs": [],
+      "needs": ["mcp-grant-allows"],
       "title": "A deleted sidecar takes its grants with it"
     },
     {
@@ -119,7 +119,7 @@
       "category": "arguments",
       "contract": ["C13"],
       "bullet": 1,
-      "needs": [],
+      "needs": ["mcp-grant-allows"],
       "title": "A grant for one MCP tool covers neither another tool nor the same tool on another server"
     },
     {

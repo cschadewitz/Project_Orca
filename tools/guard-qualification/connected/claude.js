@@ -59,7 +59,7 @@ const MARKERS = { deny: "Denied by ORCA", block: "Blocked by ORCA" };
 export function claudeConnected(env) {
   const path = {
     id: "claude-connected",
-    capabilities: ["answerer", "agent-turn"],
+    capabilities: ["answerer", "agent-turn", "mcp-grant-allows"],
 
     /** The agent as ORCA's config would declare it for this world. */
     agent(world, extraEnv = {}) {

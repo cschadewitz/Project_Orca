@@ -437,7 +437,7 @@ for (const path of PATHS) {
       // and timers behave normally.
       now = Date.parse("2026-11-23T10:00:00Z");
       vi.useFakeTimers({ toFake: ["Date"], now });
-      world = await createWorld({ now: () => Date.now(), setNow: (ms) => vi.setSystemTime(ms) });
+      world = await createWorld({ now: () => Date.now(), setNow: (ms) => vi.setSystemTime(ms) }, path);
     });
     afterEach(async () => {
       vi.useRealTimers();
