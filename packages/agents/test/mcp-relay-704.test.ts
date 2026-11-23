@@ -93,8 +93,9 @@ const logger: Logger = {
   info: (msg, ctx) => void logged.push(JSON.stringify([msg, ctx])),
   warn: (msg, ctx) => void logged.push(JSON.stringify([msg, ctx])),
   error: (msg, ctx) => void logged.push(JSON.stringify([msg, ctx])),
+  log: (level, msg, ctx) => void logged.push(JSON.stringify([level, msg, ctx])),
   child: () => logger,
-} as Logger;
+};
 
 async function setup(opts: {
   admission?: Promise<void>;

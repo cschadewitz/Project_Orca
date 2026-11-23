@@ -516,7 +516,10 @@ describe("installing the hook in Codex (#705)", () => {
     "says how the startup check failed, in the refusal and its details",
     async () => {
       const t = await codexSetup({}, { script: join(tmpdir(), "orca-705-no-such-hook.mjs") });
-      const error = await t.open().catch((e: unknown) => e as { message: string; details?: Record<string, unknown> });
+      const error = (await t.open().then(
+        () => ({ message: "it opened" }),
+        (e: unknown) => e,
+      )) as { message: string; details?: Record<string, unknown> };
       expect(error.details?.["probe"]).toMatchObject({
         outcome: "exit",
         exitCode: 1,
