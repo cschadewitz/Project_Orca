@@ -40,7 +40,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import type { Stats } from "node:fs";
 import { access, lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
-import { isAbsolute, join, win32 } from "node:path";
+import { isAbsolute, join, resolve as resolvePath, win32 } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   OrcaError,
@@ -51,8 +51,9 @@ import {
   type SessionConfigOption,
 } from "@orca/core";
 import type { OpenSessionOptions } from "../acp-session.js";
+import type { AgentHost } from "../host.js";
 import { decidePermission } from "../permissions.js";
-import { planSessionSecrets } from "../secrets.js";
+import { planSessionSecrets, withoutWithheld } from "../secrets.js";
 import type { AgentSession } from "../session.js";
 import type { ProviderGuard } from "./guard.js";
 
@@ -306,8 +307,10 @@ export function openCodeConfigProblems(config: unknown, permissionEnv: string | 
 
 /**
  * What is wrong with this launch profile, as the host would start it: the agent's `env` over
- * `ambient`, the daemon's own environment less what ORCA withholds for secrets. It says nothing
- * about the executable or the config file's contents, which are read separately.
+ * `ambient`, the daemon's own environment less what ORCA withholds for secrets, and
+ * `fromSecrets`, the names a secret delivery fills last (by default the agent's own secret
+ * references). It says nothing about the executable or the config file's contents, which are
+ * read separately.
  */
 export function openCodeProfileProblems(
   agent: AgentSpec,
@@ -315,6 +318,9 @@ export function openCodeProfileProblems(
   hostType: "local" | "ssh" | undefined,
   platform: string = process.platform,
   arch: string = process.arch,
+  fromSecrets: ReadonlySet<string> = new Set(
+    Object.entries(agent.env).flatMap(([k, v]) => (isSecretRef(v) ? [k] : [])),
+  ),
 ): string[] {
   const problems: string[] = [];
   const name = win32
@@ -341,10 +347,10 @@ export function openCodeProfileProblems(
   if (agent.mcpServers.length > 0)
     problems.push("mcpServers: OpenCode shares a client's MCP servers with every session in the process; pass none");
 
-  // A control variable given as a secret reference is filled in only at launch, so its value
-  // cannot be checked here; it must be written out.
+  // A control variable filled from a secret gets its value only at launch, after every check,
+  // and that value would override the one checked here; it must be written out.
   for (const variable of CONTROL_VARIABLES)
-    if (isSecretRef(agent.env[variable]))
+    if (isSecretRef(agent.env[variable]) || fromSecrets.has(variable))
       problems.push(`env: ${variable} comes from a secret, so ORCA cannot check it; write it out`);
   const literal = literalEnv(agent.env);
   const effective: Record<string, string | undefined> = { ...ambient, ...literal };
@@ -651,46 +657,114 @@ export interface OpenCodeGuardOptions {
   environment?: () => Readonly<Record<string, string | undefined>>;
 }
 
+/** The paths and directory a launch was checked for; the start must use the same ones. */
+interface CheckedLaunch {
+  cwd: string;
+  paths: Readonly<Record<string, string | undefined>>;
+}
+
+const CHECKED_PATHS = ["HOME", "XDG_CONFIG_HOME", "OPENCODE_CONFIG", "OPENCODE_PERMISSION"] as const;
+
 export function openCodeGuard(opts: OpenCodeGuardOptions = {}): ProviderGuard {
   const digest = opts.digest ?? openCodeImageDigest;
   const platform = opts.platform ?? process.platform;
   const arch = opts.arch ?? process.arch;
   const managed = opts.managedConfig ?? managedConfigPresent;
   const environment = opts.environment ?? (() => process.env);
+
+  /**
+   * Every launch check, on one launch: the agent as the host gets it (literal env with the
+   * session's overlay), the daemon environment less what is withheld, and the variable names
+   * a secret delivery fills. Messages name variables, never values.
+   */
+  const launchProblems = async (
+    launched: AgentSpec,
+    ambient: Readonly<Record<string, string | undefined>>,
+    fromSecrets: ReadonlySet<string> | undefined,
+    hostType: "local" | "ssh" | undefined,
+  ): Promise<string[]> => {
+    const problems = [
+      ...openCodeProfileProblems(launched, ambient, hostType, platform, arch, fromSecrets),
+      ...openCodePolicyProblems(launched),
+    ];
+    if (!problems.length)
+      problems.push(...(await checkConfigFile(launched, literalEnv(launched.env).OPENCODE_PERMISSION)));
+    if (!problems.length) problems.push(...(await openCodeProfileDirProblems(literalEnv(launched.env))));
+    if (!problems.length)
+      for (const path of await managed(platform))
+        problems.push(`machine: ${path} holds a managed OpenCode configuration that ORCA cannot override`);
+    return problems;
+  };
+  const refuse = (agentId: string, problems: string[]) =>
+    new OrcaError("CONFIG_INVALID", `OpenCode agent '${agentId}' cannot start: ${problems.join("; ")}.`, {
+      agentId,
+      problems,
+    });
+
+  /**
+   * `host`, checking the launch again at the actual start, on what the host is about to give
+   * OpenCode: the daemon environment less `withheldEnv`, the agent's literal env, the start's
+   * own `env`, and the names its secret deliveries fill last. A start whose directory or
+   * profile paths differ from the ones `prepare` checked is refused, and so is the image if it
+   * changed since.
+   */
+  const checkedHost = (host: AgentHost, checked: CheckedLaunch): AgentHost => {
+    const wrapped = Object.create(host) as AgentHost;
+    Object.defineProperty(wrapped, "spawnAgent", {
+      value: async (...args: Parameters<AgentHost["spawnAgent"]>) => {
+        const [agent, start] = args;
+        const launched: AgentSpec = { ...agent, env: { ...agent.env, ...(start.env ?? {}) } };
+        const fromSecrets = new Set((start.secrets ?? []).flatMap((d) => d.env));
+        const problems = await launchProblems(
+          launched,
+          withoutWithheld(environment(), start.withheldEnv),
+          fromSecrets,
+          host.spec?.type,
+        );
+        const env = literalEnv(launched.env);
+        for (const name of CHECKED_PATHS)
+          if (env[name] !== checked.paths[name])
+            problems.push(`env: ${name} changed between ORCA's check and the start`);
+        if (resolvePath(start.cwd) !== resolvePath(checked.cwd))
+          problems.push("cwd: the directory changed between ORCA's check and the start");
+        if (problems.length) throw refuse(agent.id, problems);
+        await checkImage(launched, digest, platform, arch);
+        return host.spawnAgent(...args);
+      },
+    });
+    return wrapped;
+  };
+
   return {
     id: "opencode",
     matches: (agent) => isOpenCodeAgent(agent),
     async prepare(options: OpenSessionOptions): Promise<OpenSessionOptions> {
       const { agent, host } = options;
-      // Exactly what the host will withhold from the process (#336), so the check sees what it gets.
-      const withheld = new Set(planSessionSecrets(host, agent, options.secrets).withheldEnv);
-      const ambient = Object.fromEntries(Object.entries(environment()).filter(([k]) => !withheld.has(k)));
+      // Exactly what the host will withhold from the process and fill from secrets (#336).
+      const plan = planSessionSecrets(host, agent, options.secrets);
+      const ambient = withoutWithheld(environment(), plan.withheldEnv);
+      const fromSecrets = new Set(plan.deliveries.flatMap((d) => d.env));
       // The host lays the session's own env over the agent's, so both are checked as one.
       const launched: AgentSpec = { ...agent, env: { ...agent.env, ...(options.env ?? {}) } };
-      const problems = [
-        ...openCodeProfileProblems(launched, ambient, host.spec?.type, platform, arch),
-        ...openCodePolicyProblems(agent),
-      ];
-      if (!problems.length)
-        problems.push(...(await checkConfigFile(launched, literalEnv(launched.env).OPENCODE_PERMISSION)));
-      if (!problems.length) problems.push(...(await openCodeProfileDirProblems(literalEnv(launched.env))));
-      if (!problems.length)
-        for (const path of await managed(platform))
-          problems.push(`machine: ${path} holds a managed OpenCode configuration that ORCA cannot override`);
-      if (problems.length)
-        throw new OrcaError("CONFIG_INVALID", `OpenCode agent '${agent.id}' cannot start: ${problems.join("; ")}.`, {
-          agentId: agent.id,
-          problems,
-        });
+      const problems = await launchProblems(launched, ambient, fromSecrets, host.spec?.type);
+      if (problems.length) throw refuse(agent.id, problems);
       await checkImage(agent, digest, platform, arch);
+      const env = literalEnv(launched.env);
+      const checked: CheckedLaunch = {
+        cwd: options.cwd,
+        paths: Object.fromEntries(CHECKED_PATHS.map((name) => [name, env[name]])),
+      };
       const ask = options.askPermission;
-      return ask
-        ? {
-            ...options,
-            askPermission: async (request, invocation) =>
-              openCodeBoundedAnswer(request, await ask(request, invocation)),
-          }
-        : options;
+      return {
+        ...options,
+        host: checkedHost(host, checked),
+        ...(ask
+          ? {
+              askPermission: async (request, invocation) =>
+                openCodeBoundedAnswer(request, await ask(request, invocation)),
+            }
+          : {}),
+      };
     },
     guard: guardOpenCodeSession,
   };

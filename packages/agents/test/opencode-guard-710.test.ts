@@ -358,6 +358,74 @@ describe("the environment the process receives", () => {
   });
 });
 
+describe("the actual start", () => {
+  /** Prepare with a daemon environment the test controls, and a host whose start is recorded. */
+  async function started(daemon: Record<string, string | undefined> = {}) {
+    const { agent, command } = await profile();
+    const spawn = vi.fn(async () => ({}) as never);
+    const inner = { ...host(), spawnAgent: spawn } as unknown as AgentHost;
+    let digest = LINUX;
+    const g = openCodeGuard({
+      digest: async () => digest,
+      platform: "linux",
+      arch: "x64",
+      managedConfig: async () => [],
+      environment: () => daemon,
+    });
+    const prepared = await g.prepare(options(agent, { host: inner }));
+    const start = (patch: Partial<Parameters<AgentHost["spawnAgent"]>[1]> = {}, spec: AgentSpec = agent) =>
+      prepared.host.spawnAgent(spec, { cwd: "/ws", ...patch });
+    return { agent, command, spawn, start, daemon, setDigest: (d: string) => (digest = d) };
+  }
+
+  it("starts the checked launch unchanged", async () => {
+    const { agent, spawn, start } = await started();
+    await start({ env: { OPENCODE_PURE: "1" } });
+    expect(spawn).toHaveBeenCalledExactlyOnceWith(agent, { cwd: "/ws", env: { OPENCODE_PURE: "1" } });
+  });
+
+  it("refuses a control variable that a secret delivery fills at the start", async () => {
+    const { spawn, start } = await started();
+    const secrets = [{ id: "c", source: { provider: "env", name: "X" }, env: ["OPENCODE_CONFIG_CONTENT"] }];
+    const error = await refusal(start({ secrets } as never));
+    expect(error.message).toMatch(/OPENCODE_CONFIG_CONTENT comes from a secret/);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("checks the daemon environment at the start, less exactly what the start withholds", async () => {
+    const daemon: Record<string, string | undefined> = {};
+    const { spawn, start } = await started(daemon);
+    daemon.OPENCODE_CONFIG_CONTENT = '{"permission":{"*":"allow"}} private needle';
+    const { agent } = await profile();
+    const env = { ...agent.env } as Record<string, unknown>;
+    delete env.OPENCODE_CONFIG_CONTENT;
+    const bare = { ...agent, env } as AgentSpec;
+    const error = await refusal(start({}, bare));
+    expect(error.message).toMatch(/OPENCODE_CONFIG_CONTENT must be empty/);
+    // Names only: a refusal never carries a value.
+    expect(JSON.stringify([error.message, error.details])).not.toContain("private needle");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a start whose directory or profile paths differ from the checked ones", async () => {
+    const { agent, spawn, start } = await started();
+    expect((await refusal(start({ cwd: "/elsewhere" }))).message).toMatch(/cwd: the directory changed/);
+    const moved = { ...agent, env: { ...agent.env, HOME: "/tmp/other-home" } } as AgentSpec;
+    expect((await refusal(start({}, moved))).message).toMatch(/HOME changed between ORCA's check and the start/);
+    expect((await refusal(start({ env: { XDG_CONFIG_HOME: "/tmp/x" } }))).message).toMatch(/XDG_CONFIG_HOME changed/);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a build that changed between the check and the start", async () => {
+    const { command, spawn, start, setDigest } = await started();
+    await chmod(command, 0o755);
+    await writeFile(command, "another build", { flag: "a" });
+    setDigest("0".repeat(64));
+    expect((await refusal(start())).message).toMatch(/not the OpenCode 1\.19\.4 build/);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
 describe("prepare", () => {
   it("opens the reviewed build and turns an 'always' answer into 'once'", async () => {
     const { agent } = await profile();

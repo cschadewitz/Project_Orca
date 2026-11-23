@@ -105,8 +105,13 @@ isolated profile, and says exactly what is missing (`CONFIG_INVALID`, `problems`
   `agent.build.permission`, so ORCA rebuilds that ordered list and refuses a later rule that
   reopens a denial (a wildcard key such as `"t*"`, a pattern entry, or an agent-level `"*"`).
 - The checks read the environment the process will actually get: the daemon's own, less exactly
-  what the host withholds for secrets, then the agent's env, then the session's. A control
-  variable given as a secret reference is refused, since its value is only known at launch.
+  what the host withholds for secrets, then the agent's env, then the session's, then the
+  variables a secret delivery fills. They run when the session is prepared and again at the
+  actual start, on the start's own environment, withheld names and secret deliveries; a start
+  whose directory, `HOME`, `XDG_CONFIG_HOME`, `OPENCODE_CONFIG` or `OPENCODE_PERMISSION`
+  differs from the checked ones, or whose image changed, is refused. A control variable that a
+  secret fills is refused, since its value is only known at launch. Refusals name variables,
+  never values.
   The config file and every entry of the profile directories must be the expected type, not a
   link, the user's own and not writable by others; a profile directory counts as empty only
   when it does not exist.
