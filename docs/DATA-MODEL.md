@@ -172,8 +172,9 @@ capability manifests it was bound to), which every child run of it carries too, 
 the log is known to be simulated from the run it belongs to. `Run.dryRun` and
 `RunSummary.dryRun` project it. Its runs record the version `<version>+dryrun.<16 hex of its
 revision>`, and its definition never enters the workflow-version store, where live admission and
-version discovery look: a private copy is kept in the execution store under
-`dry-run-definition:<definitionRevision>`, which no launch path reads. A dry run's artifacts are fixtures or placeholders, its gate and decision choices
+version discovery look. Instead the exact definition each of its runs walked (root, inline graph
+or registered child) is kept privately in the execution store under `dry-run-definition:<runId>`,
+written before that run's `run.created`, and no launch path reads it. A dry run's artifacts are fixtures or placeholders, its gate and decision choices
 are `decision.resolved` events with `source` `dry-run:fixture` or `dry-run:default` (never
 `human.answered`), and it is bound to no Request or work item. The ordinary orchestrator refuses
 to drive or recover a dry run, and a dry run's orchestrator drives nothing else. Absent on every

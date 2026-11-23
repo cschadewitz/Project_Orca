@@ -362,6 +362,63 @@ edges:
     expect(state.run.status).toBe("cancelled");
   });
 
+  it("reads each run's exact definition from its own snapshot, even after a registered child changes", async () => {
+    const { o } = await spied();
+    const child = parseWorkflow(`
+id: child-flow
+name: Child
+version: "1"
+start: start
+nodes:
+  start: { type: start }
+  pick: { type: gate, question: "Which?", options: [left, right] }
+  left: { type: end, outcome: success }
+  right: { type: end, outcome: failure }
+edges:
+  - { from: start, to: pick }
+  - { from: pick, to: left, when: "choice == 'left'" }
+  - { from: pick, to: right }
+`);
+    o.workflows.register(child);
+    const definition = parseWorkflow(`
+id: parent-flow
+name: Parent
+version: "1"
+start: start
+nodes:
+  start: { type: start }
+  call: { type: subworkflow, workflow: child-flow }
+  done: { type: end, outcome: success }
+edges:
+  - { from: start, to: call }
+  - { from: call, to: done }
+`);
+    const handle = await startDryRun(o, { definition });
+    await handle.done;
+    const report = async () => dryRunReport(o, handle.runId);
+    const before = await report();
+    // The registered child is edited at the same version, then removed, after the dry run.
+    o.workflows.register({ ...child, nodes: { start: child.nodes.start!, left: child.nodes.left! }, edges: [] });
+    o.workflows.register({ ...child, id: "elsewhere" });
+    (o.workflows as unknown as { defs: Map<string, unknown> }).defs.delete("child-flow");
+    expect(await report()).toEqual(before);
+    const childRun = before.runs[1]!.runId;
+    expect(before.runs[1]!.workflowId).toBe("child-flow");
+    expect(before.untakenOptions).toContainEqual({ runId: childRun, nodeId: "pick", options: ["right"] });
+    expect(before.unreachedNodes).toContainEqual({ runId: childRun, nodeIds: ["right"] });
+    // None of it is in the live catalog.
+    expect(await o.stores.workflows.versions("child-flow")).toEqual([]);
+    expect(await o.stores.workflows.versions("parent-flow")).toEqual([]);
+  });
+
+  it("leaves no run behind when the definition snapshot cannot be written", async () => {
+    const { o } = await spied();
+    vi.spyOn(o.stores.execution, "putGeneration").mockRejectedValue(new OrcaError("RUN_STATE", "store refused"));
+    const definition = (await loadShippedWorkflows()).get("ai-sdlc");
+    await expect(startDryRun(o, { definition, vars: { workItem } })).rejects.toThrow(/store refused/);
+    expect(await o.stores.events.listRuns()).toEqual([]);
+  });
+
   it("writes a placeholder that satisfies the step's validation", () => {
     const text = placeholderArtifact(
       {

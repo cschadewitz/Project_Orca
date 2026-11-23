@@ -438,6 +438,12 @@ function assertLastStepReviewed(state: RunState): void {
 }
 
 /**
+ * Where the exact definition a dry run's run walked is kept (#183): the execution store,
+ * write-once, by run id. Outside the workflow-version store, so no launch path reads it.
+ */
+export const dryRunDefinitionKey = (runId: string): string => `dry-run-definition:${runId}`;
+
+/**
  * A dry run is driven only by a dry-run orchestrator, and that orchestrator drives nothing else
  * (#183): resuming a simulated run on the ordinary one would hand its fixture artifacts to real
  * agents, and the reverse would simulate a real run's remaining steps.
@@ -740,8 +746,11 @@ export class Orchestrator {
     // Record only after every admission/inherited-integrity check, before public run creation.
     // A dry run's definition (#183) never enters the workflow-version store: that store is where
     // live admission and version discovery look, and a simulated draft must never be selectable.
-    // Its runs resolve it from the dry run's own registry; dry-run.ts keeps a private copy.
+    // Its runs resolve it from the dry run's own registry. Instead, the exact definition each of
+    // its runs walks - root, inline graph or registered child - is kept privately under the run,
+    // before its `run.created`: a run whose snapshot did not land does not exist.
     const workflowStored = this.dryRun ? false : await this.recordDefinition(def);
+    if (this.dryRun) await this.stores.execution.putGeneration(dryRunDefinitionKey(runId), def);
     // A checkpoint attempt keeps everything its source treated as sensitive, overlays included.
     let protectedInputs = protectExecutionInputs(runId, def, vars, opts.checkpoint?.inputs ?? parentInputs);
     const configuredSecrets = generation ? configuredGenerationSecrets(generation) : [];

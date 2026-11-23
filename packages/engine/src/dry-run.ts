@@ -24,8 +24,8 @@
  *   plugin's custom node - is blocked and named (`DRY_RUN_UNSUPPORTED`); its code never runs.
  * - **Never selectable.** The simulated definition stays out of the workflow-version store, where
  *   live admission and version discovery look. Its runs resolve it from the dry run's own
- *   registry, and a private copy for reading them back is kept in the execution store under
- *   `dryRunDefinitionKey` - which no launch path reads.
+ *   registry, and the exact definition each run walked is kept privately in the execution store
+ *   (`dryRunDefinitionKey`, by run id) before that run is created - which no launch path reads.
  * - **Bounded.** Fixtures are checked against the definition before anything is written; a
  *   step budget across the whole tree stops a cycle that never exits (`DRY_RUN_LIMIT`); and a
  *   dry run can be cancelled like any run.
@@ -83,7 +83,7 @@ import {
   type StepOutcome,
 } from "./executors/types.js";
 import type { HumanInputPort } from "./human-input.js";
-import { INLINE_SEP, inlineWorkflowDefinition, Orchestrator, workflowRevision } from "./orchestrator.js";
+import { dryRunDefinitionKey, INLINE_SEP, Orchestrator, workflowRevision } from "./orchestrator.js";
 import { PlanService } from "./plan/service.js";
 import type { WorkspaceProvider } from "./workspace/provider.js";
 
@@ -560,7 +560,6 @@ export async function startDryRun(base: Orchestrator, request: DryRunRequest): P
       ...(request.overrides ? { overrides: request.overrides } : {}),
       ...(request.actor ? { actor: request.actor } : {}),
     });
-    await keepDryRunDefinition(base, definitionRevision, simulated);
   } catch (error) {
     orchestrator.detach();
     throw error;
@@ -574,44 +573,19 @@ export async function startDryRun(base: Orchestrator, request: DryRunRequest): P
   };
 }
 
-/** Where a dry run's definition is kept (execution store, write-once), by its revision. */
-export const dryRunDefinitionKey = (definitionRevision: string): string => `dry-run-definition:${definitionRevision}`;
-
-async function keepDryRunDefinition(base: Orchestrator, revision: string, def: WorkflowDefinition): Promise<void> {
-  const key = dryRunDefinitionKey(revision);
-  if ((await base.stores.execution.getGeneration(key)) !== undefined) return;
-  // Write-once: a concurrent dry run of the same revision may have won; content-addressed, so equal.
-  await base.stores.execution.putGeneration(key, def).catch(async (error: unknown) => {
-    if ((await base.stores.execution.getGeneration(key)) === undefined) throw error;
-  });
-}
-
 /**
- * The definition a run of a dry run walked: the simulated one from its private copy, or for a
- * registered subworkflow it called, the live one at that version.
+ * The exact definition a run of a dry run walked - root, inline graph or registered child - from
+ * the snapshot taken before its `run.created`. Never the workflow catalog: a registered child may
+ * have changed or gone since.
  */
 export async function dryRunDefinition(
   orchestrator: Orchestrator,
   state: RunState,
 ): Promise<WorkflowDefinition | undefined> {
-  const dryRun = state.run.dryRun;
-  if (!dryRun) return undefined;
-  const [rootId] = state.run.workflowId.split(INLINE_SEP);
-  let root: WorkflowDefinition | undefined;
-  if (state.run.workflowVersion.includes(DRY_RUN_VERSION_MARK)) {
-    const kept = (await orchestrator.stores.execution.getGeneration(dryRunDefinitionKey(dryRun.definitionRevision))) as
-      WorkflowDefinition | undefined;
-    root = kept && kept.id === rootId && kept.version === state.run.workflowVersion ? kept : undefined;
-  } else {
-    const live = orchestrator.generations?.current.workflows ?? orchestrator.workflows;
-    const current = live.has(rootId!) ? live.get(rootId!) : undefined;
-    root =
-      current?.version === state.run.workflowVersion
-        ? current
-        : await orchestrator.stores.workflows.get(rootId!, state.run.workflowVersion);
-  }
-  if (!root) return undefined;
-  return state.run.workflowId.includes(INLINE_SEP) ? inlineWorkflowDefinition(root, state.run.workflowId) : root;
+  if (!state.run.dryRun) return undefined;
+  const kept = (await orchestrator.stores.execution.getGeneration(dryRunDefinitionKey(state.run.id))) as
+    WorkflowDefinition | undefined;
+  return kept && kept.id === state.run.workflowId && kept.version === state.run.workflowVersion ? kept : undefined;
 }
 
 // --------------------------------------------------------------------------- report
