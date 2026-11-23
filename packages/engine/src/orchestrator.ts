@@ -122,7 +122,7 @@ import { recoverReleasedWorkItem } from "./program/work-items.js";
 import { RunContext } from "./run-context.js";
 import type { LiveHumanInput, ExecutionResumeAuthority, ExecutionActivity } from "./live-input.js";
 import { protectExecutionInputs } from "./execution-inputs.js";
-import { checkpointSeed } from "./checkpoint-attempt.js";
+import { checkpointSeed, resumeBlocked } from "./checkpoint-attempt.js";
 import { gitRefRefusal, LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 import {
   capabilityRefusal,
@@ -1321,6 +1321,7 @@ export class Orchestrator {
    * re-attaches to its children on the way down.
    */
   async resume(runId: string): Promise<RunState> {
+    await resumeBlocked(this.stores, runId);
     let id = runId;
     for (;;) {
       const state = await this.executionState(id);

@@ -1,0 +1,1 @@
+Recovery refusals now say what to do. A checkpoint attempt refused over the daemon includes each reason's operator sentence in its message. Resume of a run whose recorded workflow version, configuration or launch inputs are gone or changed is refused before it starts, naming the reason, with the same error codes as before.
