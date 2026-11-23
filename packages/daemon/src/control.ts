@@ -527,10 +527,19 @@ export class ControlModel {
     draftRevision: number,
     params: Pick<WorkflowDraftDryRunParams, "vars" | "fixtures" | "maxSteps">,
     actor?: MutationActor,
+    bound: {
+      /** The caller's current authority, rechecked immediately before the simulation is created. */
+      authorize?: () => Promise<void>;
+      /** Persist who owns the root before anything drives it, as `runs.start` does. */
+      attributeStartedRun?: (runId: string) => void | Promise<void>;
+    } = {},
   ): Promise<WorkflowDraftDryRunResult> {
     const release = this.orc.runtimeActivity?.enter("dispatch", true);
     try {
+      await bound.authorize?.();
+      const attribute = bound.attributeStartedRun;
       const handle = await startDryRun(this.orc, {
+        ...(attribute ? { beforeDrive: async (runId: string) => void (await attribute(runId)) } : {}),
         definition,
         draftRevision,
         ...(params.vars ? { vars: params.vars } : {}),

@@ -276,7 +276,7 @@ that the two match. A method that is missing from the table is refused with
 | `workflowDrafts.review` | `config.write` | additionally config.read; owner-only; the exact bytes publish would write; no writes | — |
 | `workflowDrafts.publish` | `config.write` | additionally config.read; owner-only, reviewed bytes under the config lock, base re-checked, generation Apply, file restored on refusal | mutation |
 | `workflowDrafts.discard` | `config.write` | additionally config.read; owner-only, revision-checked; deletes the draft file only | mutation |
-| `workflowDrafts.dryRun` | `config.write` | additionally config.read and runs.start; owner-only, revision-checked, refused while validation finds an error; simulates the draft with fixtures (no agent, workspace, secret, Request, work item or plugin node) and leaves a dry-run tree; writes no workflow file (#183) | mutation |
+| `workflowDrafts.dryRun` | `config.write` | additionally config.read and runs.start; the workflow (`workflowId`), checked as a launch of it, and the caller's current authority and workflow scope rechecked immediately before the simulation is created; owner-only, revision-checked, refused while validation finds an error; the root is owned by the caller, durably, before anything drives it, as `runs.start`; simulates the draft with fixtures (no agent, workspace, secret, Request, work item or plugin node) and leaves a dry-run tree; writes no workflow file (#183) | mutation |
 | `config.get` | `config.read` | workspace-wide | — |
 | `config.set` | `config.write` | additionally config.read; workspace-wide unredacted Save/validation receipt | mutation |
 | `config.apply` | `config.write` | workspace-wide | mutation |

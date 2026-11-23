@@ -217,7 +217,8 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "workflowDrafts.dryRun": {
     permission: "config.write",
     additionalPermissions: ["config.read", "runs.start"],
-    resource: "none",
+    resource: "workflow",
+    param: "workflowId",
     audit: "mutation",
   },
   "workflowDrafts.discard": {

@@ -93,7 +93,10 @@ export function workflowDraftMethods(writable: boolean): MethodTable {
           if (!ctx.control) throw new OrcaError("NOT_SUPPORTED", "this daemon is read-only: it does not drive runs");
           const s = service(ctx);
           const { definition, revision } = await s.model.dryRunSource(params, s.caller);
-          return ctx.control.dryRun(definition, revision, params, ctx.mutationActor);
+          return ctx.control.dryRun(definition, revision, params, ctx.mutationActor, {
+            ...(ctx.dryRunAuthority ? { authorize: () => ctx.dryRunAuthority!(params.workflowId) } : {}),
+            ...(ctx.attributeStartedRun ? { attributeStartedRun: ctx.attributeStartedRun } : {}),
+          });
         },
       },
       "workflowDrafts.discard": {

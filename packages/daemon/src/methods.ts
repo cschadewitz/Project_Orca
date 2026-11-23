@@ -319,6 +319,12 @@ export interface MethodContext {
   workflowInputs?: WorkflowInputsModel | undefined;
   /** Server-bound per-call ownership handoff; never parsed from RPC params. */
   attributeStartedRun?: ((runId: string) => void | Promise<void>) | undefined;
+  /**
+   * Set only by the authenticating guard (#183): recheck, against the caller's current
+   * credential, the authority a dry run of `workflowId` needs - the draft permissions, launch
+   * and the workflow scope - immediately before the simulation is created.
+   */
+  dryRunAuthority?: ((workflowId: string) => Promise<void>) | undefined;
   /** ORCA's own version, reported in `hello`. */
   orcaVersion: string;
   maintenance?: Maintenance | undefined;

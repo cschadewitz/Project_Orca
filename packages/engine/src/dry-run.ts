@@ -112,6 +112,12 @@ export interface DryRunRequest {
   actor?: MutationActor;
   /** Most steps across the whole tree; `DRY_RUN_DEFAULT_MAX_STEPS` when absent. */
   maxSteps?: number;
+  /**
+   * Called with the root's id once its `run.created` is written and before anything drives it:
+   * where a daemon persists who owns the run. If it throws, the run is cancelled undriven and
+   * the error is rethrown.
+   */
+  beforeDrive?: (runId: string) => Promise<void>;
 }
 
 export interface DryRunHandle {
@@ -539,6 +545,17 @@ export async function startDryRun(base: Orchestrator, request: DryRunRequest): P
     orchestrator.detach();
     throw error;
   }
+  if (request.beforeDrive)
+    try {
+      await request.beforeDrive(runId);
+    } catch (error) {
+      try {
+        await orchestrator.cancel(runId, "dry run refused before it started", request.actor);
+      } finally {
+        orchestrator.detach();
+      }
+      throw error;
+    }
   const done = orchestrator.run(runId).finally(() => orchestrator.detach());
   return {
     runId,

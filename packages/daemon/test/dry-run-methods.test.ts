@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { FakeClock, TemplateRegistry, WorkflowRegistry, parseWorkflow, silentLogger } from "@orca/core";
+import { FakeClock, OrcaError, TemplateRegistry, WorkflowRegistry, parseWorkflow, silentLogger } from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput, startDryRun } from "@orca/engine";
 import {
   RunsDryRunReportResultSchema,
@@ -165,6 +165,41 @@ describe("workflowDrafts.dryRun", () => {
     const { control: _control, ...readOnly } = h.ctx;
     expect(Object.keys(methodsFor(readOnly))).not.toContain("workflowDrafts.dryRun");
     expect(Object.keys(methodsFor(readOnly))).toContain("runs.dryRunReport");
+  });
+});
+
+describe("ControlModel.dryRun's bound authority", () => {
+  it("rechecks the caller before creating anything, and owns the root before it is driven", async () => {
+    const h = await harness();
+    const definition = parseWorkflow(GATED);
+    await expect(
+      h.control.dryRun(definition, 0, {}, undefined, {
+        authorize: () => Promise.reject(new OrcaError("WORKFLOW_NOT_FOUND", "no")),
+      }),
+    ).rejects.toMatchObject({ code: "WORKFLOW_NOT_FOUND" });
+    expect(await h.orchestrator.listRuns()).toEqual([]);
+
+    const attributed: { runId: string; events: number }[] = [];
+    const result = await h.control.dryRun(definition, 0, {}, undefined, {
+      attributeStartedRun: async (runId) => {
+        attributed.push({ runId, events: (await h.stores.events.read(runId)).length });
+      },
+    });
+    // Called once, for the root, while its log held only `run.created`.
+    expect(attributed).toEqual([{ runId: result.runId, events: 1 }]);
+  });
+
+  it("cancels the root undriven when ownership cannot be recorded", async () => {
+    const h = await harness();
+    await expect(
+      h.control.dryRun(parseWorkflow(GATED), 0, {}, undefined, {
+        attributeStartedRun: () => Promise.reject(new OrcaError("INTERNAL", "ownership could not be persisted")),
+      }),
+    ).rejects.toMatchObject({ code: "INTERNAL" });
+    const [runId] = await h.orchestrator.listRuns();
+    const state = await h.orchestrator.getState(runId!);
+    expect(state.run.status).toBe("cancelled");
+    expect(state.stepOrder).toEqual([]);
   });
 });
 
