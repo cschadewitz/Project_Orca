@@ -12,8 +12,9 @@
  *   closing its file. The hits gathered so far are kept and the result says why it stopped.
  * - **Only what the reads show.** The caller's `scope` decides which runs are read at all
  *   and whether artifacts are, before anything is opened. A caller restricted to some runs
- *   searches only the one run it names, which the guard has already authorized: walking the
- *   store and asking run by run would spend the caller's deadline on hidden runs and let them
+ *   searches the one run it names, which the guard has already authorized, or its own run
+ *   catalog (#340), which the guard fixed from `runs.list` before the scan: walking the store
+ *   and asking run by run would spend the caller's deadline on hidden runs and let them
  *   change which visible hits are found and whether the result says it was cut short.
  *   Artifact bodies are read only through `artifacts.get`'s own protected read
  *   (`artifactText`): legacy-sensitive withholding before the blob is opened, then redaction,
@@ -29,12 +30,17 @@ import type { Orchestrator } from "@orca/engine";
 import { artifactEvent } from "./auth/artifact-projection.js";
 
 /**
- * Who is asking. `runs: "named"` is a caller limited to some runs: it may search only the
- * `runId` it names, which the guard authorized before the scan, and a search without one is
- * refused here as well as there. `"all"` walks the whole store.
+ * Who is asking. `runs: "named"` is a caller limited to some runs searching the one `runId`
+ * it names, which the guard authorized before the scan; a search without one is refused here.
+ * A list is that caller's whole catalog. `"all"` walks the whole store.
  */
 export interface SearchScope {
-  runs: "all" | "named";
+  /**
+   * `"all"` walks the whole store; `"named"` only the `runId` the call names; a list is a
+   * restricted caller's run catalog (#340), newest first, which the guard decided before the
+   * scan from `runs.list`'s own answer for that caller, and the scan reads no other run.
+   */
+  runs: "all" | "named" | readonly string[];
   artifacts: boolean;
 }
 
@@ -85,7 +91,12 @@ export async function searchStore(
   if (scope.runs === "named" && params.runId === undefined)
     throw new OrcaError("RUN_STATE", "A caller limited to some runs searches one named run");
   // `listRuns` is oldest first and ids are time-ordered; the newest run is the likeliest answer.
-  const runs = params.runId !== undefined ? [params.runId] : [...(await deps.orc.listRuns())].reverse();
+  const runs =
+    params.runId !== undefined
+      ? [params.runId]
+      : typeof scope.runs === "object"
+        ? scope.runs
+        : [...(await deps.orc.listRuns())].reverse();
   try {
     for (const runId of runs) {
       check();

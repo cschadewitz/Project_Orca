@@ -365,6 +365,51 @@ describe("resource isolation", () => {
     expect(JSON.stringify(byAddress.body)).not.toContain("alice's plan");
   });
 
+  it("holds one boundary across the run list, snapshots, events, artifact previews and search (#340)", async () => {
+    await putArtifact(h.stores, "art-alice", h.runs.alice, "zebrafish notes for alice\n");
+    await putArtifact(h.stores, "art-bob", h.runs.bob, "zebrafish notes for bob\n");
+    const listed = async (token: string) => new Set(ids(await h.rpc(token, "runs.list", { limit: 500 })));
+    const reachable = async (token: string, runId: string) =>
+      (await h.rpc(token, "runs.get", { runId })).body.ok === true &&
+      (await h.rpc(token, "runs.events", { runId })).body.ok === true;
+    const searched = async (token: string) => {
+      const r = await h.rpc(token, "search", { query: "zebrafish" });
+      expect(r.body.ok).toBe(true);
+      return (r.body.result as { hits: { runId: string; kind: string }[] }).hits;
+    };
+    const previews = async (token: string) => {
+      const out: string[] = [];
+      for (const id of ["art-alice", "art-bob"])
+        if ((await h.rpc(token, "artifacts.get", { artifactId: id })).body.ok) out.push(id);
+      return out;
+    };
+    const everyRun = [h.runs.alice, h.runs.bob, h.runs.legacy];
+
+    for (const [token, expected] of [
+      [h.tokens.owner, everyRun],
+      [h.tokens.alice, [h.runs.alice]],
+      [h.tokens.bob, [h.runs.bob]],
+    ] as const) {
+      const visible = await listed(token);
+      expect([...visible].sort()).toEqual([...expected].sort());
+      // A snapshot and its events are reachable exactly for the runs the list shows.
+      for (const runId of everyRun) expect(await reachable(token, runId)).toBe(visible.has(runId));
+      // Search without a run - store-wide for the owner, the caller's catalog otherwise -
+      // finds content only in those runs, and so do artifact previews.
+      const hits = await searched(token);
+      expect(hits.length).toBeGreaterThan(0);
+      expect(hits.every((hit) => visible.has(hit.runId))).toBe(true);
+      expect(await previews(token)).toEqual(
+        ["art-alice", "art-bob"].filter((id) => visible.has(id === "art-alice" ? h.runs.alice : h.runs.bob)),
+      );
+    }
+
+    // Without `artifacts.read`, no surface shows artifact content: no preview, no artifact hit.
+    expect(await previews(h.tokens.runsOnly)).toEqual([]);
+    const blind = await searched(h.tokens.runsOnly).catch(() => []);
+    expect(blind.filter((hit) => hit.kind === "artifact")).toEqual([]);
+  });
+
   it.each(["owned", "all"] as const)("withholds input artifact metadata with %s run scope", async (runs) => {
     await recordGateArtifact(h, "gate-secret");
     const reader = await h.credentials.issue({

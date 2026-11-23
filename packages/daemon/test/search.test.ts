@@ -236,16 +236,40 @@ describe("search through the guard", () => {
       bindPrincipal({ orcaVersion: "t", capabilities: ["runs.read"], reads }, p, meta),
     ) as Promise<SearchResult>;
 
-  it("refuses a restricted caller's search across the store without reading any run", async () => {
-    const opened = vi.spyOn(f.orchestrator, "eventsRange");
-    const facts = vi.spyOn(resolver, "run");
-    await expect(ask(who(["runs.read"], ["gated"]), { query: "connection" })).rejects.toMatchObject({
-      code: "AUTH_FORBIDDEN",
+  it("searches a restricted caller's own catalog across the store, opening no run it cannot see (#340)", async () => {
+    const ownership = new OwnershipStore();
+    ownership.record("run-new", "p");
+    const mine: Principal = {
+      id: "p",
+      kind: "credential",
+      credentialId: "cred-p",
+      permissions: new Set(["runs.read"]) as never,
+      scope: { workflows: "*", runs: "owned" },
+    };
+    const table = new Authorizer({ resolver, ownership, audit: new MemoryAuditSink() }).guard({
+      [SEARCH_METHOD]: methods[SEARCH_METHOD]!,
+      "runs.list": methods["runs.list"]!,
     });
-    expect(opened).not.toHaveBeenCalled();
-    expect(facts).not.toHaveBeenCalled();
+    const opened = vi.spyOn(f.orchestrator, "eventsRange");
+    const r = (await table[SEARCH_METHOD]!.handle(
+      { query: "connection", limit: 20 },
+      bindPrincipal({ orcaVersion: "t", capabilities: ["runs.read"], reads }, mine, meta),
+    )) as SearchResult;
+    // The scan read the caller's catalog - the runs `runs.list` shows it - and nothing else.
+    expect(opened.mock.calls.map((c) => c[0])).toEqual(["run-new"]);
+    expect(r.scannedRuns).toBe(1);
+    expect(r.hits.length).toBeGreaterThan(0);
+    expect(r.hits.every((h) => h.runId === "run-new")).toBe(true);
     opened.mockRestore();
-    facts.mockRestore();
+  });
+
+  it("answers a restricted store-wide search empty when no run catalog can be read for it", async () => {
+    // A table without `runs.list` has no catalog to give; the guard answers empty, not everything.
+    const opened = vi.spyOn(f.orchestrator, "eventsRange");
+    const r = await ask(who(["runs.read"], ["gated"]), { query: "connection" });
+    expect(r.hits).toEqual([]);
+    expect(opened).not.toHaveBeenCalled();
+    opened.mockRestore();
   });
 
   it("searches a restricted caller's named run alone, and reads no artifact without artifacts.read", async () => {

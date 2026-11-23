@@ -229,7 +229,7 @@ that the two match. A method that is missing from the table is refused with
 | `runs.get` | `runs.read` | the run | — |
 | `runs.events` | `runs.read` | the run | — |
 | `runs.recovery` | `runs.read` | the run; read-only, a run started by another principal is shown as not theirs to recover; without `artifacts.read` no artifact is read or named | — |
-| `search` | `runs.read` | a run-restricted caller must name one run, which is authorized before the scan (no `runId` is `AUTH_FORBIDDEN`), and a named run it cannot see answers empty; artifact hits and artifact events need `artifacts.read` | — |
+| `search` | `runs.read` | a run-restricted caller searches the one run it names, authorized before the scan (a named run it cannot see answers empty), or without `runId` its own run catalog: the runs `runs.list` shows it, fixed before the scan (#340; before protocol 2.8, `AUTH_FORBIDDEN`); artifact hits and artifact events need `artifacts.read` | — |
 | `inputs.revise` | `inputs.answer` | also requires `runs.control`; exact durable run, input and declared destination | decision |
 | `inputs.replaceRevision` | `inputs.answer` | also requires `runs.control`; exact undelivered destination/attempt and CAS | mutation |
 | `inputs.revisionPending` | `runs.read` | exact run; protected payload also requires `inputs.answer` and `runs.control` | — |
@@ -313,10 +313,13 @@ scan cursors and `lastSeq`; clients must follow those cursors even when a filter
 is empty. Sequence gaps do not contain artifact content.
 
 `search` (#255) scans only what those reads would return to the caller. A caller whose
-scope is limited to some runs searches one run it names, authorized before the scan;
-without a `runId` it is refused, because walking the store and checking runs one by one
+scope is limited to some runs searches one run it names, authorized before the scan, or
+without a `runId` its own run catalog: the runs `runs.list` shows it, decided in full before
+the scan starts (#340). It is never a walk of the store that checks runs one by one, which
 would let hidden runs spend its deadline and change which visible hits it gets and whether
-the answer says it was cut short. Hidden runs are never opened, and a hit is never reported
+the answer says it was cut short. The run list, run and event reads, artifact previews and
+search therefore agree on one boundary: the runs `runs.list` gives the caller, and artifact
+content only with `artifacts.read`. Hidden runs are never opened, and a hit is never reported
 from one. The deadline is cooperative: a storage read in flight finishes. Without `artifacts.read` it reads no
 artifact bodies and skips the artifact events listed above. Artifact text is redacted the
 way `artifacts.get` redacts it before it is matched. Identifier fields are not searched.

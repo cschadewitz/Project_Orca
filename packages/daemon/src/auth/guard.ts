@@ -318,12 +318,18 @@ export class Authorizer {
             this.deny(principal, meta, name, params, "AUTH_FORBIDDEN", `missing-permission:${spec.permission}`);
             throw authForbidden();
           }
+          /* A restricted caller's store-wide search walks its own run catalog (#340): the runs
+             `runs.list` shows it, newest first, decided before the scan starts so its deadline
+             is spent only on runs it can see. A named run is authorized by `case "search"`. */
+          const catalog =
+            spec.resource === "search" && !isUnrestricted(principal.scope) && params?.runId === undefined
+              ? await this.runCatalog(principal, table, ctx)
+              : undefined;
           const invocation = bindPrincipal(
             {
               ...ctx,
               readScope: {
-                // Restricted: only the named run, which `case "search"` authorizes first.
-                runs: isUnrestricted(principal.scope) ? "all" : "named",
+                runs: catalog ?? (isUnrestricted(principal.scope) ? "all" : "named"),
                 artifacts: holds(principal, "artifacts.read"),
               },
               mutationActor: {
@@ -373,7 +379,7 @@ export class Authorizer {
           );
           const original = (p: Params) => method.handle(p, invocation);
           try {
-            const result = await this.authorized(name, spec, principal, params, original, table, ctx);
+            const result = await this.authorized(name, spec, principal, params, original, table, ctx, catalog);
             if (spec.audit) this.operation(principal, meta, name, params, "succeeded", undefined, result);
             return result;
           } catch (e) {
@@ -401,6 +407,7 @@ export class Authorizer {
     original: (p: Params) => unknown,
     table: MethodTable,
     ctx: MethodContext,
+    catalog?: readonly string[],
   ): Promise<unknown> {
     const restricted = !isUnrestricted(principal.scope);
     if (name === "hello") return this.hello(principal, (await original(params)) as HelloResult);
@@ -416,23 +423,24 @@ export class Authorizer {
       case "search": {
         const named = params.runId as string | undefined;
         if (restricted) {
-          /* A caller limited to some runs searches one named run. Walking the store and asking
-             run by run would read facts of hidden runs and spend this caller's deadline on
-             them, so hidden work could change which visible hits are found and whether the
-             answer says it was cut short. Workspace-wide search for a restricted caller waits
-             for an authorization-scoped run catalog. */
-          if (named === undefined) throw new Denied(authForbidden(), "search-needs-named-run");
+          /* A caller limited to some runs searches either one named run or its own catalog
+             (#340), the run list `runs.list` gives it, fixed before the scan. Walking the
+             store and asking run by run would spend this caller's deadline on hidden runs, so
+             hidden work could change which visible hits are found and whether the answer says
+             it was cut short; the catalog is decided first and the scan reads nothing else. */
+          if (named === undefined && catalog === undefined) throw new Denied(authForbidden(), "search-needs-catalog");
           // A run the caller cannot see answers as one with no matches, never as a refusal.
-          if (!(await this.runs.allows(principal, named)))
+          if (named !== undefined && !(await this.runs.allows(principal, named)))
             return { hits: [], scannedRuns: 0, asOf: this.now().toISOString() };
         }
         const result = (await original(params)) as SearchResult;
         const artifacts = holds(principal, "artifacts.read");
+        const seen = named === undefined && catalog !== undefined ? new Set(catalog) : undefined;
         // A second line behind the scan's own scope; it never calls the resolver.
         const hits: SearchHit[] = result.hits.filter(
           (hit) =>
             (artifacts || (hit.kind !== "artifact" && !artifactEvent(hit.type))) &&
-            (!restricted || hit.runId === named),
+            (!restricted || (seen ? seen.has(hit.runId) : hit.runId === named)),
         );
         return { ...result, hits };
       }
@@ -681,6 +689,19 @@ export class Authorizer {
       total: rows.length,
       asOf: stamp,
     };
+  }
+
+  /**
+   * The runs a restricted principal may see, newest first: `runs.list`'s own answer for it, so
+   * search and the run list can never disagree about which runs exist for this caller.
+   */
+  private async runCatalog(principal: Principal, table: MethodTable, ctx: MethodContext): Promise<string[]> {
+    const runsList = table["runs.list"];
+    if (!runsList) return [];
+    const listed = (await this.runsList(principal, { offset: 0, limit: Number.MAX_SAFE_INTEGER }, (p) =>
+      runsList.handle(p, ctx),
+    )) as { runs: RunSummaryView[] };
+    return listed.runs.map((r) => r.id);
   }
 
   private async visible<T>(principal: Principal, rows: readonly T[], runOf: (row: T) => string): Promise<T[]> {
