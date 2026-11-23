@@ -1,32 +1,31 @@
 # The plain-language rule judge's eval set (#701) against real hosted models, unattended.
 #
-# The same set runs on every CI build against a deterministic stand-in model
-# (packages/agents/test/plain-rule-eval-701.test.ts). This job runs it against the real providers through the
-# reviewed HTTPS sender, with the production judge limits, and fails on any false allow, boundary violation or
-# allowed injection, or when too many calls fail or too many allows are denied. It writes a comparison table of
-# both providers (false allows and denies, abstentions, injection resistance, latency, tokens and cost per decision)
-# to the job summary and keeps the JSON reports as an artifact.
+# Pull requests never run this: they get the same set against a deterministic stand-in model, with no secret, in the
+# ordinary test suite (packages/agents/test/plain-rule-eval-701.test.ts). This workflow runs only reviewed revisions
+# of main (pushes to main, the weekly schedule, and manual runs, which are refused on any other ref), through the
+# reviewed HTTPS sender with the production judge limits. It fails on any false allow, boundary violation or allowed
+# injection, on more than 10% failed calls, or when fewer than two thirds of the expected allows allow. It writes a
+# comparison table of both providers (allows, false allows and denies, abstentions, injection resistance, latency,
+# tokens and cost per decision) to the job summary and keeps the JSON reports as an artifact.
 #
-# It needs one repository secret, added once:
-#   ORCA_JUDGE_EVAL_ANTHROPIC_API_KEY  an Anthropic API key (runs the `anthropic` provider, Claude Haiku 5.5)
-# Optional, to also run the `openai-compatible` provider:
+# Credentials are bound to main twice: the jobs run only on refs/heads/main, and the keys are secrets of the
+# `plain-rule-judge-eval` environment, whose deployment branches are limited to main. The environment has no
+# required reviewers, so runs stay unattended. Only the live evaluation step receives a key; checkout, setup and the
+# dependency install do not.
+#
+# One-time setup, in Settings > Environments:
+#   environment  plain-rule-judge-eval, deployment branches: selected branches, `main` only, no required reviewers
+#   secret       ORCA_JUDGE_EVAL_ANTHROPIC_API_KEY  an Anthropic API key (runs `anthropic`, Claude Haiku 5.5)
+# Optional, to also run the `openai-compatible` provider (environment secret and variables):
 #   secret   ORCA_JUDGE_EVAL_OPENAI_API_KEY
 #   variable ORCA_JUDGE_EVAL_OPENAI_MODEL   (required for that provider)
 #   variable ORCA_JUDGE_EVAL_OPENAI_URL     (default https://api.openai.com/v1/chat/completions)
 #   variable ORCA_JUDGE_EVAL_OPENAI_PRICE   ("input,output" USD per million tokens, for the cost column)
-# Without the Anthropic key the job passes with a notice and sends nothing. One run is one call per model-decided
-# case (about 35), well under one US cent on Claude Haiku 5.5. Fork pull requests get no secrets and never run it.
+# Without the Anthropic key the evaluation job is skipped and the summary says NOT RUN: no provider was evaluated,
+# which is not a pass. One run is one call per model-decided case (34), well under one US cent on Claude Haiku 5.5.
 name: Plain-rule judge eval
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - packages/agents/src/review-judge/plain-rule*.ts
-      - packages/agents/src/review-judge/https-sender.ts
-      - packages/agents/test/plain-rule-eval*.ts
-      - packages/agents/test/fixtures/plain-rule-eval/**
-      - .github/workflows/plain-rule-judge-eval.yml
   push:
     branches: [main]
     paths:
@@ -43,53 +42,65 @@ permissions:
   contents: read
 
 concurrency:
-  group: plain-rule-judge-eval-${{ github.ref }}
-  cancel-in-progress: true
+  group: plain-rule-judge-eval
+  cancel-in-progress: false
 
 jobs:
-  eval:
-    name: plain-rule judge eval (real providers)
+  key:
+    name: plain-rule judge eval key
+    if: github.repository == 'cschadewitz/Project_Orca' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      ORCA_JUDGE_EVAL_ANTHROPIC_API_KEY: ${{ secrets.ORCA_JUDGE_EVAL_ANTHROPIC_API_KEY }}
-      ORCA_JUDGE_EVAL_OPENAI_API_KEY: ${{ secrets.ORCA_JUDGE_EVAL_OPENAI_API_KEY }}
-      ORCA_JUDGE_EVAL_OPENAI_MODEL: ${{ vars.ORCA_JUDGE_EVAL_OPENAI_MODEL }}
-      ORCA_JUDGE_EVAL_OPENAI_URL: ${{ vars.ORCA_JUDGE_EVAL_OPENAI_URL }}
-      ORCA_JUDGE_EVAL_OPENAI_PRICE: ${{ vars.ORCA_JUDGE_EVAL_OPENAI_PRICE }}
+    timeout-minutes: 5
+    environment: plain-rule-judge-eval
+    outputs:
+      present: ${{ steps.key.outputs.present }}
     steps:
       - name: Check for the key
         id: key
         shell: bash
+        env:
+          # Only whether the secret is set, never its value.
+          HAS_KEY: ${{ secrets.ORCA_JUDGE_EVAL_ANTHROPIC_API_KEY != '' }}
         run: |
-          if [ -n "$ORCA_JUDGE_EVAL_ANTHROPIC_API_KEY" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::ORCA_JUDGE_EVAL_ANTHROPIC_API_KEY is not set, so the real-provider eval was skipped."
-            echo "Real-provider eval skipped: the ORCA_JUDGE_EVAL_ANTHROPIC_API_KEY secret is not set." >> "$GITHUB_STEP_SUMMARY"
+          echo "present=$HAS_KEY" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_KEY" != "true" ]; then
+            echo "::warning::Plain-rule judge eval NOT RUN: the plain-rule-judge-eval environment has no ORCA_JUDGE_EVAL_ANTHROPIC_API_KEY secret."
+            {
+              echo "## Plain-rule judge eval: NOT RUN"
+              echo
+              echo "No provider was evaluated, because the \`plain-rule-judge-eval\` environment has no"
+              echo "\`ORCA_JUDGE_EVAL_ANTHROPIC_API_KEY\` secret. This is not a pass."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - if: steps.key.outputs.present == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  eval:
+    name: plain-rule judge eval (real providers)
+    needs: key
+    if: needs.key.outputs.present == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: plain-rule-judge-eval
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - if: steps.key.outputs.present == 'true'
-        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-      - if: steps.key.outputs.present == 'true'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
-      - if: steps.key.outputs.present == 'true'
-        run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
 
       - name: Run the eval set against the real providers
-        if: steps.key.outputs.present == 'true'
         shell: bash
         env:
+          ORCA_JUDGE_EVAL_ANTHROPIC_API_KEY: ${{ secrets.ORCA_JUDGE_EVAL_ANTHROPIC_API_KEY }}
+          ORCA_JUDGE_EVAL_OPENAI_API_KEY: ${{ secrets.ORCA_JUDGE_EVAL_OPENAI_API_KEY }}
+          ORCA_JUDGE_EVAL_OPENAI_MODEL: ${{ vars.ORCA_JUDGE_EVAL_OPENAI_MODEL }}
+          ORCA_JUDGE_EVAL_OPENAI_URL: ${{ vars.ORCA_JUDGE_EVAL_OPENAI_URL }}
+          ORCA_JUDGE_EVAL_OPENAI_PRICE: ${{ vars.ORCA_JUDGE_EVAL_OPENAI_PRICE }}
           ORCA_JUDGE_EVAL_REPORT_DIR: ${{ runner.temp }}/plain-rule-eval
         run: |
           set -euo pipefail
@@ -105,7 +116,7 @@ jobs:
           ' "$RUNNER_TEMP/plain-rule-eval.json"
 
       - name: Keep the reports
-        if: always() && steps.key.outputs.present == 'true'
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plain-rule-eval-reports

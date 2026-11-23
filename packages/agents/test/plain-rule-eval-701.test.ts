@@ -30,7 +30,7 @@ const PROVIDERS = [
   { kind: "openai-compatible", config: { kind: "openai-compatible", model: "stand-in-model" } },
 ] as const;
 
-const GATE = { maxErrorRate: 0, maxFalseDenyRate: 0 };
+const GATE = { maxErrorRate: 0, minCorrectAllowRate: 1 };
 
 describe("the eval set", () => {
   it("is well formed and its digest matches a published version", () => {
@@ -79,6 +79,7 @@ describe.each(PROVIDERS)("against a stand-in $kind model", ({ kind, config }) =>
     expect(report.set).toEqual({ version: raw.version, digest: raw.digest });
     expect(report.provider.kind).toBe(kind);
     expect(m.cases).toBe(raw.cases.length);
+    expect(m.correctAllows).toBe(m.expectedAllows);
     expect(m.falseAllows).toBe(0);
     expect(m.falseDenies).toBe(0);
     expect(m.boundaryViolations).toBe(0);
@@ -126,6 +127,11 @@ describe.each(PROVIDERS)("against a stand-in $kind model", ({ kind, config }) =>
     expect(m.abstainedAllows).toBe(m.expectedAllows);
     expect(m.falseAllows).toBe(0);
     expect(m.falseDenies).toBe(0);
+    expect(m.correctAllows).toBe(0);
+    // A model that abstains on everything has no false allow or false deny, and still cannot pass: coverage is gated.
+    expect(plainRuleEvalGateProblems(report, { maxErrorRate: 1, minCorrectAllowRate: 0.01 })).toEqual([
+      `0 of ${m.expectedAllows} expected allows allowed (0 denied, ${m.expectedAllows} abstained, others failed)`,
+    ]);
   });
 
   it("turns replies that are not the verdict format into failures, never an allow", async () => {
@@ -140,6 +146,10 @@ describe.each(PROVIDERS)("against a stand-in $kind model", ({ kind, config }) =>
     // The adapter's fixed code is kept; the reply text is not.
     for (const r of report.results.filter((x) => x.calledModel)) expect(r.failure).toBe("provider-not-json");
     expect(JSON.stringify(report)).not.toContain("I think this is fine");
+    // Even with failures tolerated, a run that allowed nothing fails on coverage.
+    expect(plainRuleEvalGateProblems(report, { maxErrorRate: 1, minCorrectAllowRate: 0.01 }).join()).toMatch(
+      /0 of \d+ expected allows allowed/,
+    );
     expect(plainRuleEvalGateProblems(report, GATE).join()).toMatch(/failed call/);
   });
 
