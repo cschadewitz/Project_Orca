@@ -211,13 +211,18 @@ export class RunFollower {
 
     if (n.method === "event.appended" || n.method === "agent.update") {
       if (seq <= entry.view.cursor) return; // a duplicate: already accounted for
-      const [key, held]: [string, Held] =
+      let [key, held]: [string, Held] =
         n.method === "event.appended"
           ? [`e:${seq}`, { kind: "event", fromSeq: seq, seq, count: 1 }]
           : [
               `b:${n.params.stepRunId}:${n.params.fromSeq}:${seq}`,
               { kind: "batch", fromSeq: n.params.fromSeq, seq, count: n.params.updates.length },
             ];
+      // A batch whose window was open when a snapshot read landed straddles the cursor. With
+      // no holes, the part above the cursor is exact, as `accept` trims one already held.
+      const cursor = entry.view.cursor;
+      if (held.kind === "batch" && held.fromSeq <= cursor && held.seq - held.fromSeq + 1 === held.count)
+        held = { ...held, fromSeq: cursor + 1, count: held.seq - cursor };
       if (entry.held.has(key) || entry.view.phase === "stale") return;
       if (entry.held.size >= FOLLOW_MAX_HELD) {
         // Bounded: drop what is held and let a snapshot cover it rather than grow without end.
