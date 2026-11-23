@@ -378,7 +378,8 @@ change shows in the decision record. Wiring this to the sender and the connectio
 - **#703 (one-use enforcement):** a judged allow is an allow once, so it goes through the same
   one-use path when that lands.
 - **#704/#705 (hooks):** no change. Hooks still never answer allow themselves.
-- **Profile judge floor (option C, pending):** independent. The floor is about judging typed-rule
+- **Profile judge floor (option C, chosen 2026-11-23; opt-in per profile, unsure or unreachable
+  asks):** independent. The floor is about judging typed-rule
   allows. A judged rule's allow is already judged.
 
 ## 12. Proposed PR sequence

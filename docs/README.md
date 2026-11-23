@@ -32,6 +32,7 @@ access invite developer insight; they do not require code changes or host access
 | [Request submission](request-submission.md) / [retry receipts](admission-retry.md) | separate Request/direct launch, acceptance, execution attachment and lost-response retry |
 | [Live input](live-input-continuity.md) / [human revisions](revision-input.md) | understand owner-local callbacks, durable gates and protected correction delivery |
 | [Protected execution storage](protected-execution-storage.md) / [replay errors](protected-replay-error-contract.md) | inspect privacy, complete backup/key boundaries and fail-closed error behavior |
+| [File locks and shared volumes](storage/file-locks.md) | see why a store must live on one host's local disk, and when a lock may be removed by hand |
 | [Recovering interrupted work](recovery.md) | preview resume, new run and checkpoint attempts with uncertain-effect review before anything runs |
 | [Hook tool-call telemetry](hook-telemetry.md) | turn on per-agent tool-call records from native pre-tool hooks, and export, delete or expire them |
 | [Owned root worktrees](root-worktree-isolation.md) | understand opt-in local Linux isolation and retained-evidence recovery limits |

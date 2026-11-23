@@ -6,15 +6,17 @@
 #
 # BASE is ubuntu:24.04 pinned by digest. A base that already holds the packages below (a
 # cached or mirrored copy, where the build has no route to the Ubuntu archive) skips the
-# download; nothing else about the image changes.
+# download; nothing else about the image changes. CI builds that base from base.Dockerfile and
+# caches it (build-base.sh), so keep its package list the same as the one below.
 ARG BASE=ubuntu@sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289
 FROM ${BASE}
 
 # git: delegated runs check out workspaces; procps: the test drops the tunnel with pkill.
 # Each container makes its own host keys when it starts, so no two machines share one.
 RUN if ! [ -x /usr/sbin/sshd ]; then \
-      apt-get update -q \
-      && DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends \
+      apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update -q \
+      && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
+         install -yq --no-install-recommends \
          openssh-server openssh-client git procps xz-utils ca-certificates \
       && rm -rf /var/lib/apt/lists/*; \
     fi \

@@ -15,7 +15,12 @@
 import { z } from "zod";
 import { checkInputValue } from "../workflow/inputs.js";
 
-export const WORKFLOW_INPUT_TYPES = ["string", "number", "integer", "boolean", "object", "array"] as const;
+/**
+ * `secret` (#363): the value is the id of an entry in `orca.config.yaml`'s `secrets`, never the
+ * credential. A step hands it to its agent only as an environment variable (`secretEnv`), read
+ * on the agent's host at session open under the run owner's grant; it never reaches a prompt.
+ */
+export const WORKFLOW_INPUT_TYPES = ["string", "number", "integer", "boolean", "object", "array", "secret"] as const;
 export type WorkflowInputType = (typeof WORKFLOW_INPUT_TYPES)[number];
 
 /** A value an `enum` may list. Structured values are not enumerable. */
@@ -108,6 +113,12 @@ export const WorkflowInputSchemaSchema: z.ZodType<WorkflowInputSchema> = z
   })
   .superRefine((s, ctx) => {
     for (const [name, decl] of Object.entries(s.fields)) {
+      for (const path of nestedSecrets(decl, []))
+        ctx.addIssue({
+          code: "custom",
+          path: ["fields", name, ...path, "type"],
+          message: "a 'secret' input is only supported at the top level",
+        });
       for (const path of nestedDefaults(decl, []))
         ctx.addIssue({
           code: "custom",
@@ -142,7 +153,7 @@ function declarationProblems(d: WorkflowInputDeclaration): Problem[] {
   else
     d.enum?.forEach((v, i) => {
       const ok =
-        d.type === "string"
+        d.type === "string" || d.type === "secret"
           ? typeof v === "string"
           : d.type === "boolean"
             ? typeof v === "boolean"
@@ -167,6 +178,18 @@ function declarationProblems(d: WorkflowInputDeclaration): Problem[] {
       out.push({ path: ["pattern"], message: "'pattern' is not a valid regular expression" });
     }
   }
+  return out;
+}
+
+/** Paths (relative to `decl`) of declarations below the top level of type `secret`. */
+function nestedSecrets(decl: WorkflowInputDeclaration, at: (string | number)[]): (string | number)[][] {
+  const out: (string | number)[][] = [];
+  const visit = (d: WorkflowInputDeclaration, path: (string | number)[]) => {
+    if (d.type === "secret") out.push(path);
+    nestedSecrets(d, path).forEach((p) => out.push(p));
+  };
+  if (decl.items) visit(decl.items, [...at, "items"]);
+  for (const [k, d] of Object.entries(decl.properties ?? {})) visit(d, [...at, "properties", k]);
   return out;
 }
 

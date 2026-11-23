@@ -10,7 +10,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConfigModel } from "../src/config-model.js";
 import { nextWorkflowVersion, WorkflowDraftService, type DraftCaller } from "../src/workflow-drafts.js";
-import type { ConfigApplyResult } from "@orca/protocol";
+import { parse } from "yaml";
+import { DraftOperationSchema, type ConfigApplyResult, type DraftOperation } from "@orca/protocol";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -238,6 +239,172 @@ describe("editing", () => {
     ]);
     expect(view.issues[0]).not.toHaveProperty("node");
     expect(view.publishBlocked).toBe("1 validation error to fix before publishing.");
+  });
+
+  it("sets and removes the workflow's capability scope, keeping the rest of the file (#335)", async () => {
+    const f = await fixture();
+    await f.service.open("tiny", casey);
+    const scoped = await f.service.apply(
+      {
+        workflowId: "tiny",
+        expectedRevision: 0,
+        ops: [{ op: "setWorkflow", capabilities: { skills: { disable: ["review"] } } }],
+      },
+      casey,
+    );
+    expect(parse(scoped.text)).toMatchObject({ capabilities: { skills: { disable: ["review"] } } });
+    expect(scoped.text).toContain("# The one step.");
+    const cleared = await f.service.apply(
+      { workflowId: "tiny", expectedRevision: scoped.revision, ops: [{ op: "setWorkflow", capabilities: null }] },
+      casey,
+    );
+    expect(cleared.text).toBe(TINY);
+    const emptied = await f.service.apply(
+      { workflowId: "tiny", expectedRevision: cleared.revision, ops: [{ op: "setWorkflow", capabilities: {} }] },
+      casey,
+    );
+    expect(parse(emptied.text)).not.toHaveProperty("capabilities");
+    // An explicit empty replace clears what the workflow inherits, so it is written as is.
+    const clearing = await f.service.apply(
+      {
+        workflowId: "tiny",
+        expectedRevision: emptied.revision,
+        ops: [{ op: "setWorkflow", capabilities: { mcpServers: { replace: [] } } }],
+      },
+      casey,
+    );
+    expect(parse(clearing.text)).toMatchObject({ capabilities: { mcpServers: { replace: [] } } });
+    // Shape is checked at the wire: an unknown selection verb is refused, not written.
+    expect(
+      DraftOperationSchema.safeParse({ op: "setWorkflow", capabilities: { skills: { available: ["x"] } } }).success,
+    ).toBe(false);
+  });
+
+  it("edits a capability scope node by node, keeping comments and anchors beside the change (#335)", async () => {
+    const f = await fixture();
+    const scoped = TINY.replace(
+      'version: "1"\n',
+      `version: "1"
+capabilities:
+  # Shared with the step below.
+  mcpServers: &servers
+    enable: [github] # the tracker
+  skills:
+    disable:
+      - review # too slow here
+`,
+    ).replace(
+      "    vars: { done: true }\n",
+      `    vars: { done: true }
+    capabilities:
+      mcpServers: *servers
+      skills:
+        # Only these.
+        replace: [lint]
+`,
+    );
+    await writeFile(f.file, scoped);
+    await f.service.open("tiny", casey);
+    // Workflow scope: an unrelated skills edit keeps every comment and the anchor.
+    const workflow = await f.service.apply(
+      {
+        workflowId: "tiny",
+        expectedRevision: 0,
+        ops: [
+          {
+            op: "setWorkflow",
+            capabilities: { mcpServers: { enable: ["github"] }, skills: { disable: ["review", "deploy"] } },
+          },
+        ],
+      },
+      casey,
+    );
+    for (const kept of ["# Shared with the step below.", "&servers", "# the tracker", "# too slow here", "*servers"])
+      expect(workflow.text).toContain(kept);
+    expect(parse(workflow.text)).toMatchObject({ capabilities: { skills: { disable: ["review", "deploy"] } } });
+    // Node scope: the alias stays an alias and the comment beside the change survives.
+    const node = await f.service.apply(
+      {
+        workflowId: "tiny",
+        expectedRevision: workflow.revision,
+        ops: [
+          {
+            op: "updateNode",
+            id: "work",
+            set: { capabilities: { mcpServers: { enable: ["github"] }, skills: { replace: ["lint", "format"] } } },
+          },
+        ],
+      },
+      casey,
+    );
+    expect(node.text).toContain("mcpServers: *servers");
+    expect(node.text).toContain("# Only these.");
+    expect(node.text).toContain("&servers");
+    expect(parse(node.text).nodes.work.capabilities.skills).toEqual({ replace: ["lint", "format"] });
+    // Changing the shared value from either side is refused with a way forward, not written.
+    await expect(
+      f.service.apply(
+        {
+          workflowId: "tiny",
+          expectedRevision: node.revision,
+          ops: [{ op: "updateNode", id: "work", set: { capabilities: { mcpServers: { enable: ["jira"] } } } }],
+        },
+        casey,
+      ),
+    ).rejects.toThrow(/anchor or alias.*Edit the workflow's YAML/);
+    await expect(
+      f.service.apply(
+        {
+          workflowId: "tiny",
+          expectedRevision: node.revision,
+          ops: [{ op: "setWorkflow", capabilities: { skills: { disable: ["review"] } } }],
+        },
+        casey,
+      ),
+    ).rejects.toThrow(/anchor or alias/);
+    await expect(
+      f.service.apply(
+        { workflowId: "tiny", expectedRevision: node.revision, ops: [{ op: "setWorkflow", capabilities: null }] },
+        casey,
+      ),
+    ).rejects.toThrow(/anchor or alias/);
+  });
+
+  it("refuses a capability edit whose step is shared with another step through an anchor (#335)", async () => {
+    const f = await fixture();
+    const shared = TINY.replace(
+      "  work:\n    type: set\n    vars: { done: true }\n",
+      `  work: &step
+    type: set
+    vars: { done: true }
+    capabilities:
+      skills: { disable: [review] }
+  twin: *step
+`,
+    ).replace("  - { from: work, to: done }\n", "  - { from: work, to: twin }\n  - { from: twin, to: done }\n");
+    await writeFile(f.file, shared);
+    const opened = await f.service.open("tiny", casey);
+    expect(opened.text).toBe(shared);
+    for (const op of [
+      { op: "updateNode", id: "work", set: { capabilities: { skills: { disable: ["review", "deploy"] } } } },
+      { op: "updateNode", id: "work", unset: ["capabilities"] },
+    ] satisfies DraftOperation[])
+      await expect(f.service.apply({ workflowId: "tiny", expectedRevision: 0, ops: [op] }, casey)).rejects.toThrow(
+        /anchor or alias shared with another part.*Edit the workflow's YAML/,
+      );
+    // The twin's scope is untouched, and an edit that changes nothing is still accepted.
+    const same = await f.service.apply(
+      {
+        workflowId: "tiny",
+        expectedRevision: 0,
+        ops: [{ op: "updateNode", id: "work", set: { capabilities: { skills: { disable: ["review"] } } } }],
+      },
+      casey,
+    );
+    expect(parse(same.text)).toEqual(parse(shared));
+    expect(same.text).toContain("work: &step");
+    expect(same.text).toContain("twin: *step");
+    expect(parse(same.text).nodes.twin.capabilities).toEqual({ skills: { disable: ["review"] } });
   });
 
   it("keeps a drag in the layout and out of the workflow text", async () => {
