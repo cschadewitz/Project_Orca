@@ -89,6 +89,14 @@ export const STORE_UPDATE_HANDOFF_FILE = "update-handoff.json";
 /** Never copied or compared: the backups themselves, locks, update-window guards, the marker, the
  * updater's handoff (rewritten by the carrying daemon itself before it copies), and who has the
  * store open (store-writers.ts), which says nothing about its data. */
+/**
+ * ORCA's private directory for its pre-tool hook's per-session files (#704, #1000): each open
+ * session's context file and its telemetry spool, whose lines are not yet redacted. They are
+ * transient, belong to sessions of this process only, and are never part of a store copy: a
+ * backup, a carryover or a conversion leaves the directory out whole.
+ */
+export const HOOK_SESSION_DIR = "private-execution/tool-hooks";
+
 const skipped = (name: string, top: boolean) =>
   name.endsWith(".lock") ||
   (top &&
@@ -171,7 +179,10 @@ export interface StoreSnapshotEntry {
 export type StoreSnapshot = Map<string, StoreSnapshotEntry>;
 type Snapshot = StoreSnapshot;
 
-/** Every file and directory under `root` (backups and lock files excluded), with what identifies its content. */
+/**
+ * Every file and directory under `root` (backups, lock files and the hook's per-session files
+ * excluded), with what identifies its content.
+ */
 export async function snapshotStore(root: string): Promise<Snapshot> {
   return snapshot(root);
 }
@@ -181,7 +192,7 @@ async function snapshot(root: string): Promise<Snapshot> {
   const walk = async (dir: string, prefix: string) => {
     for (const name of (await readdir(dir)).sort()) {
       const relative = prefix ? `${prefix}/${name}` : name;
-      if (skipped(name, !prefix)) continue;
+      if (skipped(name, !prefix) || relative === HOOK_SESSION_DIR) continue;
       const path = join(dir, name);
       const info = await lstat(path, { bigint: true });
       const mode = Number(info.mode & 0o7777n);

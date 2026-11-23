@@ -70,6 +70,7 @@ import {
   type ClaudeHookContext,
   type ClaudeRuntimeAttestation,
 } from "./claude-pre-tool-hook.js";
+import { openHookTelemetrySpool, type HookTelemetrySpool } from "./hook-telemetry.js";
 import type { ProtectedPaths } from "./permissions.js";
 
 /**
@@ -529,6 +530,11 @@ export interface NativeToolHookSessionOptions {
    * the Codex hook's `CODEX_CONFIG` builds on and its probe runs in.
    */
   agentEnv: NodeJS.ProcessEnv;
+  /**
+   * Whether the hook records each call it answers (#1000): `keep` makes a telemetry spool
+   * beside the context file and gives the hook its path. Off unless the agent keeps it.
+   */
+  toolCallTelemetry?: "off" | "keep" | undefined;
 }
 
 export type NativeToolHookStatus = "pending" | "claude" | "claude-verified" | "codex";
@@ -619,7 +625,15 @@ export interface NativeToolHookSession {
    * or runs another image.
    */
   verifyRuntime: () => Promise<void>;
-  /** Remove the context file and the runtime record, if written. Safe to call more than once. */
+  /**
+   * The session's telemetry spool (#1000), once `prepare` has made one: only with
+   * `toolCallTelemetry: keep`. The session factory hands it to the session as `hookTelemetry`.
+   */
+  telemetry: () => HookTelemetrySpool | undefined;
+  /**
+   * Remove the context file and the runtime record, if written, after the telemetry spool's
+   * last drain. Safe to call more than once.
+   */
   cleanup: () => Promise<void>;
 }
 
@@ -633,6 +647,7 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
   /** The key the hook signs its probe receipt with; written into the context file only. */
   let probeKey: string | undefined;
   let codexEnv: string | undefined;
+  let spool: HookTelemetrySpool | undefined;
   /** The pinned image for one adapter version, and the digest of what a process really runs. */
   const attest = async (
     pairs: readonly { adapter: string; runtime: string; images: Readonly<Record<string, string>> }[],
@@ -681,7 +696,11 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
   };
   return {
     status: () => status,
+    telemetry: () => spool,
     cleanup: async () => {
+      // The hook writes nothing once the agent is gone; the last lines are read before the
+      // context goes. `finish` never throws and is idempotent.
+      if (spool !== undefined) await spool.finish();
       if (file === undefined) return;
       const f = file;
       file = undefined;
@@ -725,6 +744,15 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
         probeKey,
       };
       await mkdir(opts.contextDir, { recursive: true, mode: 0o700 });
+      if (opts.toolCallTelemetry === "keep") {
+        // Beside the context, in ORCA's agent-denied directory; refused (and the session with
+        // it) when that directory is not one.
+        spool = await openHookTelemetrySpool({
+          dir: opts.contextDir,
+          protectedPaths: { readOnly: [], noAccess: [...(opts.protectedPaths?.noAccess ?? [])] },
+        });
+        context.telemetry = spool.target;
+      }
       file = join(opts.contextDir, `${randomUUID()}.json`);
       await writeFile(file, JSON.stringify(context), { encoding: "utf8", mode: 0o600, flag: "wx" });
       codexCommand = codexPreToolHookCommand(opts.runtime, opts.script, file);
