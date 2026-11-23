@@ -354,7 +354,10 @@ describe("the default policy", () => {
     // chose a fallthrough, and so what opts this agent in to the default rules at all.
     expect(bare.permissions).toEqual({ rules: [] });
     expect(bare.permissions.default).toBeUndefined();
-    expect(bareEffective).toEqual(DEFAULT_PERMISSION_POLICY);
+    // The loader also records where each rule came from (#702): here, all from the defaults.
+    const { origins, ...evaluated } = bareEffective;
+    expect(evaluated).toEqual(DEFAULT_PERMISSION_POLICY);
+    expect(origins).toEqual(DEFAULT_PERMISSION_POLICY.rules.map((_, index) => ({ layer: "default", index })));
     expect(bareEffective.default).toBe("ask");
   });
 
@@ -368,7 +371,7 @@ describe("the default policy", () => {
     const policy = await loadEffectivePermissionPolicy(asked, []);
 
     // No rules at all: the default layer is not appended, so there is nothing to match.
-    expect(policy).toEqual({ default: "ask", rules: [] });
+    expect(policy).toEqual({ default: "ask", rules: [], origins: [] });
     expect(at(policy, "read", "Read src/a.ts", `${WS}/src/a.ts`)).toBe("ask");
     expect(at(policy, "edit", "Edit src/a.ts", `${WS}/src/a.ts`)).toBe("ask");
     expect(at(policy, "think", "Think")).toBe("ask");
@@ -1337,7 +1340,11 @@ describe("rule lifetimes and one-time selection (#702)", () => {
           { optionId: "once", kind: "allow_once" },
         ]),
       }),
-    ).toEqual({ response: { outcome: { outcome: "selected", optionId: "once" } }, decision: "allow" });
+    ).toEqual({
+      response: { outcome: { outcome: "selected", optionId: "once" } },
+      decision: "allow",
+      rule: { basis: "rule" },
+    });
     expect(
       await resolvePermission(policy, {
         request: request([
@@ -1345,6 +1352,10 @@ describe("rule lifetimes and one-time selection (#702)", () => {
           { optionId: "no", kind: "reject_once" },
         ]),
       }),
-    ).toEqual({ response: { outcome: { outcome: "cancelled" } }, decision: "allow:no-one-time-option" });
+    ).toEqual({
+      response: { outcome: { outcome: "cancelled" } },
+      decision: "allow:no-one-time-option",
+      rule: { basis: "rule" },
+    });
   });
 });

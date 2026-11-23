@@ -3037,6 +3037,8 @@ export class Orchestrator {
                 title: info.title,
                 decision: info.decision,
                 ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}),
+                // Which rule decided it (#702), when the session knows.
+                ...(info.rule ? { rule: info.rule } : {}),
               },
             })
             .catch((error: unknown) =>

@@ -303,6 +303,46 @@ export type PermissionPolicy = {
    * commands are treated as restricted even though no command rule is visible.
    */
   commandsRestricted?: boolean | undefined;
+  /**
+   * Where each rule came from, parallel to `rules` (#702): what an `agent.permission` event
+   * records as the rule that decided. Absent, or of another length, means unknown, and a
+   * decision is then recorded without its rule's origin rather than with a wrong one.
+   */
+  origins?: PermissionRuleOrigin[] | undefined;
+};
+
+/**
+ * One evaluated rule's provenance (#702). `index` is the rule's position in its own layer as
+ * written: the config's `permissions.rules`, the sidecar's list for this agent (counting rules
+ * that were skipped as expired or wildcard, so it names the entry a person sees in the file),
+ * or `DEFAULT_PERMISSION_POLICY.rules`. `revision` is the sha256 of the sidecar bytes the rule
+ * was read from. `capped` is set when the rule's `allow` became `ask` because a sidecar ahead
+ * of it could not be read.
+ */
+export type PermissionRuleOrigin = {
+  layer: "config" | "sidecar" | "default";
+  index: number;
+  /** Which sidecar, by its position in the files the policy was loaded from. */
+  file?: number | undefined;
+  revision?: string | undefined;
+  capped?: boolean | undefined;
+};
+
+/**
+ * Why a call was decided the way it was (#702), as `explainPermission` reports it:
+ * - `protected`: it touches one of ORCA's own files, denied ahead of every rule;
+ * - `rule`: the rule at `ruleIndex` in the evaluated policy decided it;
+ * - `default`: no rule matched and the policy's fallthrough decided it;
+ * - `command-restricted`: commands are restricted by their words and nothing denied it, so
+ *   it is asked whatever an allow would have said.
+ */
+export type PermissionBasis = "protected" | "rule" | "default" | "command-restricted";
+
+export type PermissionExplanation = {
+  decision: PermissionDecision;
+  basis: PermissionBasis;
+  ruleIndex?: number | undefined;
+  origin?: PermissionRuleOrigin | undefined;
 };
 
 /* -------------------------------------------------------------------------- *

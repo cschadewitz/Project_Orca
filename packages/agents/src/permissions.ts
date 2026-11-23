@@ -37,6 +37,7 @@
  * (`model/agent.ts`), which is node-free; the reading, writing, locking and the physical
  * path checks are here.
  */
+import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
@@ -68,9 +69,11 @@ import type {
   ConfiguredPermissionPolicy,
   PermissionDecision,
   PermissionDeriveRefusal,
+  PermissionExplanation,
   PermissionPolicy,
   PermissionPolicyFile,
   PermissionRule,
+  PermissionRuleOrigin,
   RecordedPermissionRule,
 } from "@orca/core";
 
@@ -101,7 +104,52 @@ export function decidePermission(
   request: acp.RequestPermissionRequest,
   ctx?: PermissionEvalContext,
 ): PermissionDecision {
-  return protectedLocation(request, ctx) === undefined ? decideByRules(policy, request, ctx) : "deny";
+  return explainPermission(policy, request, ctx).decision;
+}
+
+/**
+ * `decidePermission`'s answer with what decided it (#702): ORCA's protected paths, the rule
+ * that matched (its index in `policy.rules` and, when the loader recorded one, its origin), the
+ * fallthrough, or the command restriction. This is the one evaluation; `decidePermission` is
+ * its decision.
+ */
+export function explainPermission(
+  policy: PermissionPolicy,
+  request: acp.RequestPermissionRequest,
+  ctx?: PermissionEvalContext,
+): PermissionExplanation {
+  if (protectedLocation(request, ctx) !== undefined) return { decision: "deny", basis: "protected" };
+  const found = decideByRules(policy, request, ctx);
+  if (found.ruleIndex === undefined) return found;
+  const origins = policy.origins;
+  const origin = origins && origins.length === policy.rules.length ? origins[found.ruleIndex] : undefined;
+  return origin ? { ...found, origin } : found;
+}
+
+/** The `rule` an `agent.permission` event records for an explanation (#702). */
+export function permissionRuleRecord(explained: PermissionExplanation): PermissionRuleRecord {
+  const o = explained.origin;
+  return {
+    basis: explained.basis,
+    ...(o
+      ? {
+          layer: o.layer,
+          index: o.index,
+          ...(o.file !== undefined ? { file: o.file } : {}),
+          ...(o.revision ? { revision: o.revision } : {}),
+          ...(o.capped ? { capped: true } : {}),
+        }
+      : {}),
+  };
+}
+
+export interface PermissionRuleRecord {
+  basis: PermissionExplanation["basis"];
+  layer?: PermissionRuleOrigin["layer"];
+  index?: number;
+  file?: number;
+  revision?: string;
+  capped?: boolean;
 }
 
 /**
@@ -120,7 +168,7 @@ function decideByRules(
   policy: PermissionPolicy,
   request: acp.RequestPermissionRequest,
   ctx?: PermissionEvalContext,
-): PermissionDecision {
+): PermissionExplanation {
   const tc = request.toolCall;
   const title = tc.title ?? "";
   const kind = tc.kind ?? "other";
@@ -157,8 +205,8 @@ function decideByRules(
   // unclassified call or one whose input carries a command (#702 review): skipping them lets a restriction later in the list still
   // be reached, and nothing approves a call whose command ORCA cannot vouch for.
   const restricted = (kind === "execute" || commandLike) && !unverifiedExecuteAllowed(policy);
-  const decide = (part: CommandPart | undefined): PermissionDecision => {
-    for (const rule of policy.rules) {
+  const decide = (part: CommandPart | undefined): PermissionExplanation => {
+    for (const [ruleIndex, rule] of policy.rules.entries()) {
       const m = rule.match;
       if (restricted && rule.decision === "allow") continue;
       if (!matchesCall(m)) continue;
@@ -170,9 +218,9 @@ function decideByRules(
         const pattern = parseCommandPattern(m.command);
         if (pattern === undefined || !commandCatches(pattern, part)) continue;
       }
-      return rule.decision;
+      return { decision: rule.decision, basis: "rule", ruleIndex };
     }
-    return policy.default;
+    return { decision: policy.default, basis: "default" };
   };
   if (!restricted) return decide(undefined);
   // A policy with command rules: decide each part, take the strictest, and never allow. An
@@ -180,7 +228,11 @@ function decideByRules(
   const text = commandTextOf(tc);
   const parts = text === undefined ? [] : parseCommand(text).parts.filter((p) => !neutralPart(p));
   const decisions = parts.length === 0 ? [decide(undefined)] : parts.map(decide);
-  return decisions.includes("deny") ? "deny" : "ask";
+  // The first denied part is what denied the call. Otherwise it is asked: by the first rule
+  // that itself said ask, or by the restriction when every part would have been allowed.
+  const denied = decisions.find((d) => d.decision === "deny");
+  if (denied) return denied;
+  return decisions.find((d) => d.decision === "ask") ?? { decision: "ask", basis: "command-restricted" };
 }
 
 function pick(options: acp.PermissionOption[], kinds: acp.PermissionOptionKind[]): acp.PermissionOption | undefined {
@@ -194,11 +246,20 @@ function pick(options: acp.PermissionOption[], kinds: acp.PermissionOptionKind[]
 export async function resolvePermission(
   policy: PermissionPolicy,
   ctx: PermissionContext,
-): Promise<{ response: acp.RequestPermissionResponse; decision: string }> {
+): Promise<{ response: acp.RequestPermissionResponse; decision: string; rule?: PermissionRuleRecord }> {
   if (ctx.signal?.aborted) return { response: { outcome: { outcome: "cancelled" } }, decision: "ask:expired" };
+  const explained = explainPermission(policy, ctx.request, ctx.scope);
+  // What decided it travels with the answer (#702), so the event says which rule it was.
+  return { ...(await answerPermission(explained, ctx)), rule: permissionRuleRecord(explained) };
+}
+
+async function answerPermission(
+  explained: PermissionExplanation,
+  ctx: PermissionContext,
+): Promise<{ response: acp.RequestPermissionResponse; decision: string }> {
   // `decidePermission`'s own check, kept apart here so the decision can say why it denied.
-  const guarded = protectedLocation(ctx.request, ctx.scope) !== undefined;
-  const decision = guarded ? "deny" : decideByRules(policy, ctx.request, ctx.scope);
+  const guarded = explained.basis === "protected";
+  const decision = explained.decision;
   const options = ctx.request.options;
   const select = (o: acp.PermissionOption | undefined, label: string) =>
     o
@@ -403,13 +464,29 @@ export function permissionPolicyPath(configDir: string): string {
  * may do, and this is the one file where that is never an acceptable failure mode.
  */
 export async function readPermissionPolicyFile(file: string): Promise<PermissionPolicyFile> {
-  let text: string;
+  return (await readPermissionPolicyFileRevision(file)).doc;
+}
+
+/**
+ * `readPermissionPolicyFile` with the sha256 of the very bytes it parsed (#702), the same
+ * revision `revisionOf` gives, so a decision can name the file version its rule came from
+ * without a second read that could see a later write. A missing file's revision is "".
+ */
+export async function readPermissionPolicyFileRevision(
+  file: string,
+): Promise<{ doc: PermissionPolicyFile; revision: string }> {
+  let bytes: Buffer;
   try {
-    text = await readFile(file, "utf8");
+    bytes = await readFile(file);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return { ...EMPTY_POLICY_FILE };
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return { doc: { ...EMPTY_POLICY_FILE }, revision: "" };
     throw e;
   }
+  const revision = createHash("sha256").update(bytes).digest("hex");
+  return { doc: parsePolicyFileText(file, bytes.toString("utf8")), revision };
+}
+
+function parsePolicyFileText(file: string, text: string): PermissionPolicyFile {
   if (text.trim() === "") return { ...EMPTY_POLICY_FILE };
   let raw: unknown;
   try {
@@ -437,14 +514,24 @@ export function permissionOverlayFor(
   onIgnored?: (rule: PermissionRule) => void,
   now: number = Date.now(),
 ): PermissionRule[] {
-  const rules: PermissionRule[] = [];
-  for (const r of doc.agents[agentId]?.rules ?? []) {
+  return permissionOverlayEntries(doc, agentId, onIgnored, now).map((e) => e.rule);
+}
+
+/** `permissionOverlayFor`'s rules with each one's index in the file's list for the agent (#702). */
+function permissionOverlayEntries(
+  doc: PermissionPolicyFile,
+  agentId: string,
+  onIgnored?: (rule: PermissionRule) => void,
+  now: number = Date.now(),
+): { rule: PermissionRule; index: number }[] {
+  const rules: { rule: PermissionRule; index: number }[] = [];
+  for (const [index, r] of (doc.agents[agentId]?.rules ?? []).entries()) {
     // A rule whose lifetime has run out decides nothing (#702). It is not reported as
     // ignored: it was a scoped grant that ended, not a wildcard somebody slipped in.
     if (permissionRuleExpired(r, now)) continue;
     const rule: PermissionRule = { match: { ...r.match }, decision: r.decision };
     if (isWildcardPermissionRule(rule)) onIgnored?.(rule);
-    else rules.push(rule);
+    else rules.push({ rule, index });
   }
   return rules;
 }
@@ -493,27 +580,39 @@ export async function loadEffectivePermissionPolicy(
   now: () => number = Date.now,
 ): Promise<PermissionPolicy> {
   const overlays: PermissionRule[][] = [];
+  // Where each rule came from, in evaluation order (#702): config, each sidecar, defaults.
+  const origins: PermissionRuleOrigin[] = agent.permissions.rules.map((_, index) => ({ layer: "config", index }));
   /** How many rules come before the first sidecar that could not be read. */
   let readable: number | undefined;
-  for (const file of files) {
+  for (const [fileIndex, file] of files.entries()) {
     try {
-      const doc = await readPermissionPolicyFile(file);
-      overlays.push(
-        permissionOverlayFor(doc, agent.id, onIgnored ? (rule) => onIgnored(file, rule) : undefined, now()),
+      const { doc, revision } = await readPermissionPolicyFileRevision(file);
+      const entries = permissionOverlayEntries(
+        doc,
+        agent.id,
+        onIgnored ? (rule) => onIgnored(file, rule) : undefined,
+        now(),
       );
+      overlays.push(entries.map((e) => e.rule));
+      for (const e of entries) origins.push({ layer: "sidecar", index: e.index, file: fileIndex, revision });
     } catch (e) {
       if (!onUnreadable) throw e;
       onUnreadable(file, e);
       readable ??= overlays.reduce((n, overlay) => n + overlay.length, agent.permissions.rules.length);
     }
   }
-  const policy = effectivePermissionPolicy(agent.permissions, ...overlays);
+  const layered = effectivePermissionPolicy(agent.permissions, ...overlays);
+  for (let index = 0; origins.length < layered.rules.length; index++) origins.push({ layer: "default", index });
+  const policy: PermissionPolicy = { ...layered, origins };
   if (readable === undefined) return policy;
   const capFrom = readable;
   const cap = (decision: PermissionDecision): PermissionDecision => (decision === "allow" ? "ask" : decision);
   return {
     default: cap(policy.default),
     rules: policy.rules.map((rule, i) => (i < capFrom ? rule : { ...rule, decision: cap(rule.decision) })),
+    origins: origins.map((origin, i) =>
+      i >= capFrom && policy.rules[i]?.decision === "allow" ? { ...origin, capped: true } : origin,
+    ),
     // The file might have held a command restriction (#702 review), so commands and
     // unclassified calls are treated as restricted: not even the rules ahead of it allow one.
     commandsRestricted: true,

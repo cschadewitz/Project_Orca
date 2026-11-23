@@ -252,6 +252,21 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       toolCallId: z.string().optional(),
       title: z.string(),
       decision: z.string(),
+      /**
+       * What decided it (#702): the basis, and for a rule its layer, its index in that layer
+       * and, for a sidecar rule, the sha256 of the file bytes it was read from. Absent on
+       * events written before this existed and where the policy was not consulted.
+       */
+      rule: z
+        .object({
+          basis: z.enum(["protected", "rule", "default", "command-restricted"]),
+          layer: z.enum(["config", "sidecar", "default"]).optional(),
+          index: z.number().int().nonnegative().optional(),
+          file: z.number().int().nonnegative().optional(),
+          revision: z.string().optional(),
+          capped: z.boolean().optional(),
+        })
+        .optional(),
       /** Explicit standing-rule Save acceptance; protected entry is never public or a callback answer. */
       scopedApprovalRef: z.string().optional(),
       entry: z.record(z.string(), z.unknown()).optional(),
