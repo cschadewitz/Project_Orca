@@ -43,9 +43,16 @@
  */
 import { createHmac } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, sep } from "node:path";
+import { dirname, isAbsolute, sep } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import { PermissionPolicySchema, type ConfiguredPermissionPolicy, type PermissionDecision } from "@orca/core";
+import {
+  HOOK_TELEMETRY_LINE_VERSION,
+  PermissionPolicySchema,
+  type ConfiguredPermissionPolicy,
+  type HookTelemetryLine,
+  type PermissionDecision,
+} from "@orca/core";
+import { fitHookTelemetryLine, type HookTelemetryTarget } from "./hook-telemetry.js";
 import {
   decidePermission,
   existingDirectoryWithin,
@@ -85,6 +92,12 @@ export interface ClaudeHookContext {
    * not tell ORCA's hook apart from another process under the same OS account.
    */
   probeKey?: string | undefined;
+  /**
+   * Where the hook records what it decided (#1000), when the agent keeps tool-call telemetry
+   * (`diagnostics.toolCalls: keep`): the spool ORCA made beside this context file, and the
+   * device and inode it made it with. Absent, the hook records nothing.
+   */
+  telemetry?: HookTelemetryTarget | undefined;
 }
 
 /** The part of Claude's `PreToolUse` input the hook decides on. */
@@ -113,6 +126,12 @@ export interface ClaudePreToolHookResult {
   exitCode: 0 | 2;
   stdout: string;
   stderr: string;
+  /**
+   * The telemetry line to record once the answer is out (#1000), and where. Only a
+   * `runClaudePreToolHook` whose context carries `telemetry` sets it; the hook program writes
+   * it after answering and ignores whether that worked.
+   */
+  telemetry?: { target: HookTelemetryTarget; line: HookTelemetryLine } | undefined;
 }
 
 class HookInputError extends Error {}
@@ -153,6 +172,22 @@ export function parseClaudeHookContext(raw: unknown): ClaudeHookContext {
     if (typeof probeKey !== "string" || !/^[0-9a-f]{64}$/.test(probeKey))
       throw new HookInputError("hook context probeKey must be 64 hex digits");
     context.probeKey = probeKey;
+  }
+  const telemetry = raw["telemetry"];
+  if (telemetry !== undefined) {
+    const file = isRecord(telemetry) ? telemetry["file"] : undefined;
+    const dev = isRecord(telemetry) ? telemetry["dev"] : undefined;
+    const ino = isRecord(telemetry) ? telemetry["ino"] : undefined;
+    if (
+      typeof file !== "string" ||
+      !isAbsolute(file) ||
+      typeof dev !== "string" ||
+      !/^\d{1,40}$/.test(dev) ||
+      typeof ino !== "string" ||
+      !/^\d{1,40}$/.test(ino)
+    )
+      throw new HookInputError("hook context telemetry must name an absolute file, its device and its inode");
+    context.telemetry = { file, dev, ino };
   }
   const pp = raw["protectedPaths"];
   if (pp !== undefined) {
@@ -481,6 +516,23 @@ export function claudePreToolHookFailure(error: unknown): ClaudePreToolHookResul
  * kept here so it is tested without spawning anything.
  */
 export async function runClaudePreToolHook(args: readonly string[], input: string): Promise<ClaudePreToolHookResult> {
+  const started = performance.now();
+  const at = new Date().toISOString();
+  let target: HookTelemetryTarget | undefined;
+  let frame: ClaudePreToolFrame | undefined;
+  /** The answer, with the line that records it when the context asks for one. */
+  const recorded = (
+    out: ClaudePreToolHookResult,
+    decided: { verdict: ClaudePreToolVerdict } | { error: unknown },
+  ): ClaudePreToolHookResult => {
+    if (target === undefined) return out;
+    // ORCA's own startup probe of a Codex hook is not one of the agent's calls.
+    if (frame?.toolUseId !== undefined && CODEX_PROBE_TOOL_USE_ID.test(frame.toolUseId)) return out;
+    const line = fitHookTelemetryLine(
+      preToolTelemetryLine(frame, decided, at, Math.max(0, performance.now() - started)),
+    );
+    return line === undefined ? out : { ...out, telemetry: { target, line } };
+  };
   try {
     const dialect: PreToolHookDialect = args.length === 2 && args[0] === "--codex" ? "codex" : "claude";
     const file = dialect === "codex" ? args[1] : args[0];
@@ -497,17 +549,56 @@ export async function runClaudePreToolHook(args: readonly string[], input: strin
       throw new HookInputError("hook context file is not JSON");
     }
     const context = parseClaudeHookContext(raw);
-    const frame = parseClaudePreToolFrame(input);
+    // The spool must be the one ORCA made beside this context; any other path records nothing.
+    if (context.telemetry !== undefined && dirname(context.telemetry.file) === dirname(file))
+      target = context.telemetry;
+    frame = parseClaudePreToolFrame(input);
     const verdict = await checkClaudePreTool(context, frame);
-    if (dialect === "claude") return claudePreToolHookOutput(verdict);
+    if (dialect === "claude") return recorded(claudePreToolHookOutput(verdict), { verdict });
     const out = codexPreToolHookOutput(verdict);
     const nonce = frame.toolUseId === undefined ? undefined : CODEX_PROBE_TOOL_USE_ID.exec(frame.toolUseId)?.[1];
     if (out.exitCode === 2 && context.probeKey !== undefined && nonce !== undefined)
       return { ...out, stderr: `${out.stderr}${codexProbeReceipt(context.probeKey, nonce)}\n` };
-    return out;
+    return recorded(out, { verdict });
   } catch (error) {
-    return claudePreToolHookFailure(error);
+    return recorded(claudePreToolHookFailure(error), { error });
   }
+}
+
+/**
+ * The telemetry line for one answered call (#1000). `decision` is the policy's answer
+ * (`allow`, `ask`, `deny`), as for Claude, also for Codex, where the hook blocks an `ask`
+ * because Codex cannot pause for it; `block` is the hook's own failure. `rule` is the reason
+ * the hook decided for. A frame the hook could not read is recorded as `(unreadable)`.
+ */
+function preToolTelemetryLine(
+  frame: ClaudePreToolFrame | undefined,
+  decided: { verdict: ClaudePreToolVerdict } | { error: unknown },
+  at: string,
+  latencyMs: number,
+): HookTelemetryLine {
+  const base = {
+    v: HOOK_TELEMETRY_LINE_VERSION,
+    at,
+    tool: frame?.toolName ?? "(unreadable)",
+    ...(frame?.toolUseId !== undefined ? { toolUseId: frame.toolUseId } : {}),
+    ...(frame ? { input: frame.toolInput } : {}),
+    latencyMs,
+  } as const;
+  if ("error" in decided)
+    return {
+      ...base,
+      decision: "block",
+      rule: "hook-error",
+      hookError: decided.error instanceof HookInputError ? decided.error.message : "internal error",
+    };
+  return {
+    ...base,
+    kind: decided.verdict.toolCall.kind,
+    title: decided.verdict.toolCall.title,
+    decision: decided.verdict.decision,
+    rule: decided.verdict.reason,
+  };
 }
 
 /** Where the session-start hook records the runtime it ran under, beside the context file. */

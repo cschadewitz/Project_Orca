@@ -11,6 +11,10 @@
  *
  * `hook-output-guard.js` comes first, before any other module runs: it keeps everything but
  * the answer off stdout, and makes every way out other than the answer exit 2.
+ *
+ * When the agent keeps tool-call telemetry (#1000), the line that records the answer is
+ * written after the answer, with one synchronous append that never throws; whether it was
+ * written changes nothing about the answer or the exit code.
  */
 import { answer } from "./hook-output-guard.js";
 import {
@@ -19,6 +23,7 @@ import {
   runClaudePreToolHook,
   runClaudeRuntimeAttestation,
 } from "../claude-pre-tool-hook.js";
+import { recordHookTelemetry } from "../hook-telemetry.js";
 
 class InputTooLarge extends Error {
   constructor() {
@@ -52,3 +57,9 @@ const result = await readInput().then(
       : claudePreToolHookFailure(error),
 );
 answer(result);
+if ("telemetry" in result && result.telemetry !== undefined)
+  try {
+    recordHookTelemetry(result.telemetry.target, result.telemetry.line);
+  } catch {
+    // Recording never changes the answer, which is already out.
+  }

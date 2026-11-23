@@ -127,8 +127,27 @@ is a few bytes.
 
 ## The hook's side
 
-The hook programs emit lines in a follow-up to the hook adapters (#704 Claude, #705 Codex):
-the session code opens the spool with `openHookTelemetrySpool` when the agent keeps tool
-calls, puts its path in the hook context, exposes it as the session's `hookTelemetry`, and
-calls its `finish()` when the session ends. Until then no session has a spool, and with the
-option on, nothing is recorded.
+ORCA's pre-tool hook records every call it answers, for Claude Code (#704) and Codex (#705)
+alike:
+
+- When the agent keeps tool calls, the session code opens the spool with
+  `openHookTelemetrySpool` beside the hook's context file, in the store's
+  `private-execution/tool-hooks`, and puts its path, device and inode in the context as
+  `telemetry`. It hands the spool to the session as `hookTelemetry`, and `cleanup` calls its
+  `finish()` (one last drain, then the spool is removed) before the context goes.
+- The hook builds one line per answered call: the tool, its id, the kind and title it decided
+  on, its input, the policy's answer (`allow`, `ask` or `deny`), the reason as `rule`, and how
+  long it took. For Codex the answer recorded is the policy's, though the hook blocks an
+  `ask` there. A call it could not decide is `block`, with `rule: "hook-error"` and the reason
+  in `hookError`; a frame it could not read is recorded as tool `(unreadable)`.
+- It writes the line after its answer is out, with `recordHookTelemetry`, and ignores the
+  result. A context `telemetry` that is not an absolute path, decimal device and inode is an
+  unreadable context, which blocks the call as any unreadable context does; a spool anywhere
+  but the context's own directory records nothing.
+- A line too long for the 8 KiB limit leaves things out whole, never cut, because a cut could
+  end inside a secret ORCA would then not recognize to redact: first the input's long values,
+  then the title, then the whole input, each replaced by a note of its length. A line whose
+  bare fields still do not fit is not written.
+- ORCA's own startup probe of the Codex hook records nothing.
+- The session factory discards spools a stopped process left behind
+  (`sweepHookTelemetrySpools`) once, before the first hooked session opens.

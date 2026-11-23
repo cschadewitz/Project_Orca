@@ -106,6 +106,41 @@ export function recordHookTelemetry(target: HookTelemetryTarget, line: HookTelem
   }
 }
 
+/** A value in a call's input longer than this, encoded, is left out of a line that would not fit. */
+const INPUT_VALUE_KEEP = 512;
+
+/**
+ * Hook side: the line as it will fit in {@link HOOK_TELEMETRY_LINE_LIMIT}, or `undefined` when
+ * even its bare fields do not. Whatever does not fit is left out whole, never cut: a cut value
+ * could end inside a secret that ORCA would then not recognize to redact. In order, it leaves
+ * out the input's long values, then the title, then the whole input, each replaced by a short
+ * note that says what was left out and how long it was.
+ */
+export function fitHookTelemetryLine(line: HookTelemetryLine): HookTelemetryLine | undefined {
+  const fits = (l: HookTelemetryLine) =>
+    Buffer.byteLength(`${JSON.stringify(l)}\n`, "utf8") <= HOOK_TELEMETRY_LINE_LIMIT;
+  if (fits(line)) return line;
+  const omitted = (value: unknown) => `[left out: ${JSON.stringify(value)?.length ?? 0} characters]`;
+  let next = line;
+  const input = line.input;
+  if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+    const kept: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input))
+      kept[key] = (JSON.stringify(value)?.length ?? 0) > INPUT_VALUE_KEEP ? omitted(value) : value;
+    next = { ...next, input: kept };
+    if (fits(next)) return next;
+  }
+  if (next.title !== undefined) {
+    next = { ...next, title: `[left out: ${next.title.length} characters]` };
+    if (fits(next)) return next;
+  }
+  if (input !== undefined) {
+    next = { ...next, input: omitted(input) };
+    if (fits(next)) return next;
+  }
+  return undefined;
+}
+
 /** What one drain found, besides the lines it handed on. */
 export interface HookTelemetryDrainReport {
   /** Lines that passed validation and were handed to the consumer. */

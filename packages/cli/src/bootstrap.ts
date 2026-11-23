@@ -38,6 +38,7 @@ import {
   AgentRegistry,
   claudePreToolHookScript,
   nativeToolHookSession,
+  sweepHookTelemetrySpools,
   nativeToolHookUnavailable,
   openAcpSession,
   permissionPolicyPath,
@@ -313,11 +314,20 @@ export function makeSessionFactory(
   const permissionFiles = [permissionPolicyPath(layout.configDir)];
   const protectedPaths = orcaProtectedPaths(layout);
   const contextDir = join(resolve(layout.configDir, layout.storeDir), "private-execution", "tool-hooks");
+  // Telemetry spools a stopped process left behind (#1000) are discarded, never ingested,
+  // once, before the first hooked session; whether or not this build installs the hook.
+  let swept: Promise<void> | undefined;
+  const sweep = () =>
+    (swept ??= sweepHookTelemetrySpools({ dir: contextDir, protectedPaths }).then(
+      () => undefined,
+      () => undefined,
+    ));
   return async (options: OpenSessionOptions) => {
     const bound = { ...options, permissionFiles, protectedPaths };
     // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
     // says who it is, and the session refused wherever it cannot be put in force.
     if (options.agent.nativeToolHook !== "on") return open(bound);
+    await sweep();
     if (hook.activation !== "acceptance-only") throw nativeToolHookUnavailable(options.agent)!;
     // The hook runs where the agent does; ORCA installs it only on its own host.
     if (options.host.spec.type !== "local")
@@ -342,6 +352,7 @@ export function makeSessionFactory(
       imageDigest: hook.imageDigest,
       codexProcess: hook.codexProcess,
       agentEnv: { ...process.env, ...literalEnv(options.agent.env), ...(options.env ?? {}) },
+      toolCallTelemetry: options.agent.diagnostics?.toolCalls,
     });
     let hookEnv: Record<string, string>;
     try {
@@ -378,6 +389,9 @@ export function makeSessionFactory(
         await installed.cleanup();
       }
     };
+    // The engine drains it while the session runs (#1000); `cleanup` reads it a last time.
+    const telemetry = installed.telemetry();
+    if (telemetry !== undefined) Object.defineProperty(session, "hookTelemetry", { value: telemetry });
     return session;
   };
 }

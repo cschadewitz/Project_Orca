@@ -23,6 +23,7 @@ import {
   TOOL_TELEMETRY_LIMITS,
   WorkflowRegistry,
   type HookTelemetryLine,
+  type Logger,
 } from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, toolTelemetryRecords } from "@orca/engine";
 import { InMemoryToolTelemetryStore, memoryStores } from "@orca/store";
@@ -205,5 +206,121 @@ describe("toolTelemetryRecords", () => {
     const store = new InMemoryToolTelemetryStore();
     await store.append(toolTelemetryRecords([line()], scope, { firstSeq: 0, now: new Date(), redact }));
     expect(await store.runs()).toEqual(["run_1"]);
+  });
+});
+
+describe("redaction matches the session logger's", () => {
+  const AGENT_SECRET = "agent-env-secret-value-0001";
+  const MCP_SECRET = "mcp-server-secret-value-0002";
+
+  /** A logger that keeps every line it was handed, after the run's own redaction. */
+  function capture() {
+    const lines: string[] = [];
+    const make = (bound: Record<string, unknown>): Logger => {
+      const log = (level: string, msg: string, fields?: Record<string, unknown>) =>
+        lines.push(JSON.stringify({ level, msg, ...bound, ...fields }));
+      return {
+        log,
+        debug: (m, f) => log("debug", m, f),
+        info: (m, f) => log("info", m, f),
+        warn: (m, f) => log("warn", m, f),
+        error: (m, f) => log("error", m, f),
+        child: (f) => make({ ...bound, ...f }),
+      };
+    };
+    return { lines, logger: make({}) };
+  }
+
+  it("redacts the agent's env secrets and its MCP servers' secrets, in values and keys, as the logger does", async () => {
+    const root = await mkdtemp(join(tmpdir(), "orca-hook-telemetry-"));
+    dirs.push(root);
+    const dir = join(root, "private-execution", "tool-hooks");
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const protectedPaths = { readOnly: [root], noAccess: [join(root, "private-execution")] };
+    const config = parseOrcaConfig({
+      secrets: {
+        token: { host: "local", provider: "env", name: "ORCA_TOKEN" },
+        gh: { host: "local", provider: "env", name: "ORCA_GH" },
+      },
+      agents: [
+        {
+          id: "claude",
+          command: "unused",
+          roles: ["coder"],
+          env: { TOKEN: { secret: "token" } },
+          mcpServers: [{ name: "github", command: "gh-mcp", env: { GH_TOKEN: { secret: "gh" } } }],
+          diagnostics: { toolCalls: "keep" },
+        },
+      ],
+    });
+    const workflows = new WorkflowRegistry();
+    workflows.register(parseWorkflow(single));
+    const stores = memoryStores();
+    const { lines, logger } = capture();
+    const reported = {
+      tool: "mcp__github__create_issue",
+      title: `github: create_issue ${MCP_SECRET}`,
+      input: { body: `token ${AGENT_SECRET} and ${MCP_SECRET}`, [MCP_SECRET]: "as a key" },
+      hookError: `env had ${AGENT_SECRET}`,
+    };
+    const orchestrator = new Orchestrator({
+      stores,
+      logger,
+      agents: AgentRegistry.fromConfig(config),
+      workflows,
+      templates: new TemplateRegistry(),
+      workspaceProvider: new LocalWorkspaceProvider(process.cwd()),
+      secretUse: async () => {},
+      clock: new FakeClock(Date.parse("2026-11-23T10:00:00.000Z")),
+      sessionFactory: async (o: OpenSessionOptions) => {
+        // What `openAcpSession` hands on: the agent's env values and its MCP servers' values,
+        // every one the session resolved, before anything else happens.
+        o.onSecretValues?.([AGENT_SECRET, MCP_SECRET]);
+        const spool = await openHookTelemetrySpool({ dir, protectedPaths });
+        let close!: () => void;
+        const closed = new Promise<void>((r) => (close = r));
+        return {
+          id: "sess_1",
+          agentId: o.agent.id,
+          hostId: o.host.id,
+          cwd: o.cwd,
+          acpSessionId: "acp",
+          closed,
+          terminated: closed,
+          configOptions: [],
+          hookTelemetry: spool,
+          setConfigOption: async () => [],
+          prompt: async () => {
+            recordHookTelemetry(spool.target, line({ ...reported, decision: "block" }));
+            // The same text through the session's logger, which the run redacts.
+            o.logger!.info("tool call", reported);
+            return { stopReason: "end_turn" as const, durationMs: 1 };
+          },
+          onUpdate: () => () => {},
+          cancel: async () => {},
+          close: async () => {
+            await spool.finish();
+            close();
+          },
+        } satisfies AgentSession;
+      },
+    });
+    const { run } = await orchestrator.startAndRun({ workflowId: "single" });
+    expect(run.status).toBe("completed");
+    await vi.waitFor(async () => expect(await readdir(dir)).toEqual([]));
+    const [record] = await stores.toolTelemetry!.list({ runId: run.id });
+    const logged = lines.find((l) => l.includes('"msg":"tool call"'))!;
+    for (const secret of [AGENT_SECRET, MCP_SECRET]) {
+      expect(JSON.stringify(record)).not.toContain(secret);
+      expect(logged).not.toContain(secret);
+    }
+    expect(record!.title!.text).toBe("github: create_issue [REDACTED]");
+    expect(record!.hookError!.text).toBe("env had [REDACTED]");
+    expect(JSON.parse(record!.input!.text)).toEqual({
+      body: "token [REDACTED] and [REDACTED]",
+      "[REDACTED]": "as a key",
+    });
+    // The logger said the same thing about the same input.
+    expect((JSON.parse(logged) as { input: unknown }).input).toEqual(JSON.parse(record!.input!.text));
   });
 });
