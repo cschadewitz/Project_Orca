@@ -15,6 +15,7 @@ import {
   broaderCommandPatterns,
   commandTextOf,
   derivePermissionRules,
+  permissionTitleOf,
   type HumanInputRequest,
   type PermissionRule,
   type RunState,
@@ -31,11 +32,12 @@ export function standingRulePreview(
   if (request.kind !== "permission") return undefined;
   const toolCall = request.context["toolCall"];
   if (!toolCall || typeof toolCall !== "object") return undefined;
-  const tc = toolCall as { kind?: unknown; title?: unknown; locations?: unknown; rawInput?: unknown };
+  const tc = toolCall as { kind?: unknown; title?: unknown; locations?: unknown; rawInput?: unknown; _meta?: unknown };
   const derived = derivePermissionRules(
     {
       kind: typeof tc.kind === "string" ? tc.kind : undefined,
-      title: typeof tc.title === "string" ? tc.title : undefined,
+      // `server: tool` for an MCP call that names them only in metadata (#1021).
+      title: permissionTitleOf({ title: typeof tc.title === "string" ? tc.title : undefined, _meta: tc._meta }),
       paths: Array.isArray(tc.locations)
         ? tc.locations.flatMap((l: unknown) =>
             l && typeof l === "object" && typeof (l as { path?: unknown }).path === "string"

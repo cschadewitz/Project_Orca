@@ -47,6 +47,7 @@ import {
   commandCatches,
   unverifiedExecuteAllowed,
   commandTextOf,
+  permissionTitleOf,
   neutralPart,
   parseCommand,
   parseCommandPattern,
@@ -174,7 +175,13 @@ function decideByRules(
   ctx?: PermissionEvalContext,
 ): PermissionExplanation {
   const tc = request.toolCall;
-  const title = tc.title ?? "";
+  // The title rules match (#1021): `server: tool` for an MCP call whose agent names both in its
+  // metadata (Gemini CLI leaves the server out of its title), the agent's title otherwise.
+  // An allow is tested against that alone, so a grant on one server never reaches another; a
+  // deny or ask is also tested against the agent's own title, so a restriction written for
+  // either form still holds. An MCP call that names its server badly matches no allow by title.
+  const title = permissionTitleOf(tc);
+  const rawTitle = tc.title ?? "";
   const kind = tc.kind ?? "other";
   // A call the agent did not classify could be a command under another name, and so could one
   // that carries a command in its input whatever kind it claims: the kind is the adapter's
@@ -188,13 +195,18 @@ function decideByRules(
   // Both are false for a call with no locations, so `scope` never matches one (#140).
   const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
   const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
-  const matchesCall = (m: PermissionRule["match"]): boolean => {
+  const titleMatches = (pattern: string, decision: PermissionDecision): boolean => {
+    const re = new RegExp(pattern);
+    if (title !== undefined && re.test(title)) return true;
+    return decision !== "allow" && re.test(rawTitle);
+  };
+  const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision): boolean => {
     // A command rule also reaches a command-like call of another kind, so its restriction is
     // not dodged by leaving the kind out or giving a wrong one.
     if (m.kind && m.kind !== kind && !(m.command !== undefined && commandLike)) return false;
     if (m.scope === "workspace" && !allInside) return false;
     if (m.scope === "outside-workspace" && !anyOutside) return false;
-    if (m.titlePattern && !new RegExp(m.titlePattern).test(title)) return false;
+    if (m.titlePattern && !titleMatches(m.titlePattern, decision)) return false;
     if (m.path !== undefined) {
       const wanted = permissionPathForms(m.path, cwd);
       if (!wanted.some((w) => paths.includes(w))) return false;
@@ -213,7 +225,7 @@ function decideByRules(
     for (const [ruleIndex, rule] of policy.rules.entries()) {
       const m = rule.match;
       if (restricted && rule.decision === "allow") continue;
-      if (!matchesCall(m)) continue;
+      if (!matchesCall(m, rule.decision)) continue;
       if (m.command !== undefined) {
         // A command is only ever an `execute`'s, and a part that is not there matches no rule.
         // A command rule never allows (`COMMAND_ALLOW_REFUSED`): the loaders refuse or ignore
@@ -789,7 +801,9 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
     : derivePermissionRules(
         {
           kind: tc.kind,
-          title: tc.title,
+          // `server: tool` for an MCP call that names them only in metadata (#1021), so the
+          // grant cannot reach the same tool on another server.
+          title: permissionTitleOf(tc),
           paths: (tc.locations ?? []).map((l) => l.path),
           command: tc.kind === "execute" ? commandTextOf(tc) : undefined,
           workspaceCwd: opts.workspaceCwd,

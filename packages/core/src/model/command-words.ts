@@ -360,3 +360,43 @@ export function broaderCommandPatterns(text: string): string[] {
   out.push(`${quoteWord(program)} *`);
   return out.filter((p) => parseCommandPattern(p) !== undefined);
 }
+
+/**
+ * The MCP server and tool a call names in its metadata, when its agent puts them there
+ * (#1021). Gemini CLI titles an MCP ask `create_issue(title: x)` or `create_issue (github MCP
+ * Server)`, and keeps the server and tool only in `_meta["gemini-cli"].mcp`. `invalid` means
+ * the agent said it is an MCP call but did not name both plainly.
+ */
+// eslint-disable-next-line no-control-regex
+const MCP_NAME_CONTROL = /[\u0000-\u001f\u007f]/;
+
+export function mcpToolOf(toolCall: { _meta?: unknown }): { server: string; tool: string } | "invalid" | undefined {
+  const meta = toolCall._meta;
+  if (meta === null || typeof meta !== "object") return undefined;
+  const gemini = (meta as Record<string, unknown>)["gemini-cli"];
+  if (gemini === null || typeof gemini !== "object") return undefined;
+  if (!Object.hasOwn(gemini, "mcp")) return undefined;
+  const mcp = (gemini as Record<string, unknown>)["mcp"];
+  if (mcp === null || typeof mcp !== "object") return "invalid";
+  const server = (mcp as Record<string, unknown>)["server_name"];
+  const tool = (mcp as Record<string, unknown>)["tool_name"];
+  const plain = (s: unknown): s is string =>
+    typeof s === "string" && s.trim() === s && s !== "" && s.length <= 256 && !MCP_NAME_CONTROL.test(s);
+  return plain(server) && plain(tool) ? { server, tool } : "invalid";
+}
+
+/**
+ * The title a permission rule is matched against and recorded by (#1021): `server: tool` for
+ * an MCP call whose agent names both in its metadata, as the Claude adapter titles one; the
+ * agent's own title otherwise. Undefined for an MCP call that does not name both plainly:
+ * nothing can be allowed or recorded by title for it.
+ */
+export function permissionTitleOf(toolCall: {
+  title?: string | null | undefined;
+  _meta?: unknown;
+}): string | undefined {
+  const mcp = mcpToolOf(toolCall);
+  if (mcp === "invalid") return undefined;
+  if (mcp) return `${mcp.server}: ${mcp.tool}`;
+  return toolCall.title ?? "";
+}
