@@ -194,7 +194,14 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * daemon serves, whether the desktop app may ask its daemon to switch it to SQLite in place,
  * and how such a switch on this launch ended. An optional field: a 2.6 client strips it.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 7 };
+/**
+ * 2.8 (#340) adds history paging to `runs.list`: an optional `cursor` param and an optional
+ * `nextCursor` on the result, a place in the list's order (creation time, then id) rather
+ * than a count, so a page back through history is not shifted by runs created meanwhile.
+ * A 2.7 daemon strips the unknown param and answers the first page again, so a client sends
+ * it only to a 2.8 daemon and pages a 2.7 one by `offset`.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 8 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is

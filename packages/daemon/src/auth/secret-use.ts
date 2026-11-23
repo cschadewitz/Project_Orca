@@ -14,6 +14,7 @@ import type { CredentialStore } from "./credentials.js";
 import type { OwnershipStore } from "./ownership.js";
 import {
   capabilityGrantCovers,
+  grantsEvery,
   grantCovers,
   holds,
   workflowAllowed,
@@ -48,6 +49,12 @@ function refuse(use: SecretUse | undefined): OrcaError {
 }
 
 function refuseCapability(use: CapabilityUse | undefined): OrcaError {
+  if (use?.kind === "skill")
+    return new OrcaError("CONFIG_INVALID", `skill '${use.id}' is not granted to this run`, {
+      kind: use.kind,
+      id: use.id,
+      reason: "unauthorized",
+    });
   return new OrcaError(
     "CONFIG_INVALID",
     use
@@ -178,12 +185,44 @@ export function secretUseAuthority(opts: SecretUseAuthorityOptions): SecretUseCh
 export function capabilityUseAuthority(opts: SecretUseAuthorityOptions): CapabilityUseCheck {
   return useDecision<CapabilityUse>(opts, {
     event: "capability.use",
-    names: (uses) => ({ mcpServers: joined(uses.map((u) => u.id)) }),
+    names: (uses) => {
+      const servers = uses.filter((u) => u.kind === "mcpServer").map((u) => u.id);
+      const skills = uses.filter((u) => u.kind === "skill").map((u) => u.id);
+      return {
+        ...(servers.length || !skills.length ? { mcpServers: joined(servers) } : {}),
+        ...(skills.length ? { skills: joined(skills) } : {}),
+      };
+    },
     covers: coversCapability,
     refuse: refuseCapability,
-    missing: (use) => `MCP server '${use.id}' not granted`,
+    missing: (use) => `${use.kind === "skill" ? "skill" : "MCP server"} '${use.id}' not granted`,
     together: true,
   });
+}
+
+/**
+ * A synchronous use decision for one run (#701), for a check that must sit in the same turn as
+ * the act it guards (a review judge's dispatch). Binding resolves the run's root and verifies its
+ * durable owner, which never change for a run, and refuses like `secretUseAuthority` when either
+ * fails. The returned check then reads that owner's credentials as they are at each call, so a
+ * revoked or expired credential is refused at the next call. It records no audit entry: the
+ * awaited `secretUseAuthority` decision made before the read records the use.
+ */
+export type BoundSecretUseCheck = (uses: SecretUse[]) => boolean;
+
+export async function bindSecretUse(opts: SecretUseAuthorityOptions, runId: string): Promise<BoundSecretUseCheck> {
+  const root = await opts.root(runId);
+  const owner = root === undefined ? undefined : opts.owner(root.rootRunId);
+  if (!root || !owner) throw refuse(undefined);
+  try {
+    await opts.verifyOwner(root.rootRunId, owner);
+  } catch {
+    throw refuse(undefined);
+  }
+  return (uses) => {
+    const principals = opts.principals(owner).filter((p) => p.id === owner);
+    return uses.every((use) => principals.some((p) => covers(p, root, use)));
+  };
 }
 
 /**
@@ -225,7 +264,11 @@ export function credentialSecretUse(opts: {
 
 /** Loopback compatibility mode for catalog capabilities (#337): every run may be given every one. */
 export function loopbackCapabilityUse(principal: Principal, audit?: AuditSink): CapabilityUseCheck {
-  if (principal.capabilities !== "*" || !isUnrestricted(principal.scope))
+  if (
+    !grantsEvery(principal.capabilities, "mcpServer") ||
+    !grantsEvery(principal.capabilities, "skill") ||
+    !isUnrestricted(principal.scope)
+  )
     throw new Error("loopback capability use needs an unrestricted principal granted every capability");
   return capabilityUseAuthority({
     root: async (runId) => ({ rootRunId: runId, workflowId: "*" }),

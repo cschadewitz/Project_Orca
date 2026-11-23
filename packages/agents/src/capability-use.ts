@@ -12,7 +12,7 @@ import type { Env, ResolvedMcpServerConfig } from "@orca/core";
 import type { AgentHost } from "./host.js";
 
 /** One catalog MCP server a session is about to be given, on the agent's host. */
-export interface CapabilityUse {
+export interface McpServerUse {
   kind: "mcpServer";
   /** The catalog id. */
   id: string;
@@ -30,6 +30,20 @@ export interface CapabilityUse {
    */
   trustedExecutable: boolean;
 }
+
+/**
+ * One skill a session is about to be given (#337). Its content travels inline in the
+ * prompt, read on the daemon's machine, so no host path is involved: the grant pins the
+ * content itself by its digest.
+ */
+export interface SkillUse {
+  kind: "skill";
+  id: string;
+  /** `sha256:` content digest of exactly what will be delivered. */
+  digest: string;
+}
+
+export type CapabilityUse = McpServerUse | SkillUse;
 
 /** Whether `command` is an absolute path on a host of that type (POSIX for SSH hosts). */
 export function isAbsoluteCommand(command: string, hostType: "local" | "ssh"): boolean {

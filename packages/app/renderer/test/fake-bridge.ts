@@ -88,6 +88,7 @@ import type {
   RunsGetResult,
   RunsListParams,
   RunsListResult,
+  RunSummaryView,
   RunsResumeParams,
   RunsResumeResult,
   RunsStartParams,
@@ -97,6 +98,7 @@ import type {
   WorkflowsListParams,
   WorkflowsListResult,
 } from "@orca/protocol";
+import { isAfterRunsListCursor, runsListCursor } from "@orca/protocol";
 import type {
   AlertActivation,
   AlertsUpdate,
@@ -312,6 +314,29 @@ const LIVE_CONNECTION: ConnectionSnapshot = {
  */
 const DEFAULT_WORKSPACE: WorkspaceSnapshot = { path: "/work/orca", readOnly: false, source: "default" };
 
+/**
+ * One `runs.list` page over rows already filtered and in the daemon's order, the way the
+ * daemon pages them (protocol 2.8): after the `cursor`, then from `offset`, with `nextCursor`
+ * when more follow. `total` counts the filter, not the page or the cursor: that is what lets a
+ * client page without asking again. A test that scripts a large history pages through this.
+ */
+export function runsPage(
+  matches: readonly RunSummaryView[],
+  cursor: string | undefined,
+  offset: number,
+  limit: number,
+): RunsListResult {
+  const after = cursor === undefined ? matches : matches.filter((r) => isAfterRunsListCursor(r, cursor));
+  const runs = after.slice(offset, offset + limit);
+  const more = runs.length > 0 && offset + runs.length < after.length;
+  return {
+    runs,
+    total: matches.length,
+    ...(more ? { nextCursor: runsListCursor(runs[runs.length - 1]!) } : {}),
+    asOf: AS_OF,
+  };
+}
+
 const defaults: Handlers = {
   hello: () => ok(HELLO),
 
@@ -330,8 +355,7 @@ const defaults: Handlers = {
     );
     const offset = params.offset ?? 0;
     const limit = params.limit ?? RUNS_LIST_LIMIT;
-    // `total` counts the filter, not the page: that is what lets a client page without asking again.
-    return ok({ runs: matches.slice(offset, offset + limit), total: matches.length, asOf: AS_OF });
+    return ok(runsPage(matches, params.cursor, offset, limit));
   },
 
   "runs.get": ({ runId }) => {

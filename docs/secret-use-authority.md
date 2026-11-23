@@ -39,6 +39,13 @@ may use.
   issued; the provider and the endpoint binding are taken from the config at that moment. `rotate` keeps the grant. `revoke` ends
   it with the credential.
 
+A secret pinned to a `destination` (#701, a review judge's own key) is granted differently:
+its entry also names `"purpose": "review-judge"`, that destination and a `source` binding (a digest of the
+variable it is read from), which `auth issue`
+copies from the config. Such an entry covers only a judge connection's use at that
+destination, and an entry without them covers only delivery to an agent. A re-pin or a change of
+variable is not followed; rotating the value at the same variable needs no new grant. See [BYOK judge credentials](preparation/review-judge-701/byok-credentials.md).
+
 ## The use decision
 
 `Orchestrator.secretUse({ runId, uses })` is asked at every session open, after the catalog
@@ -180,11 +187,16 @@ Each use is
 `mcpServerDefinitionDigest` (`m1:` plus 32 hex digits of a sha256 over the server's
 command, arguments and environment, with secret references as references).
 
-- A credential's optional `capabilities` grant is `"*"` or a list of `{ kind: "mcpServer",
-  id, host, binding, definition }`. The `owner` preset grants `"*"`; no other preset grants
-  any. `orca auth issue --mcp-server <id>@<host>` (repeatable) or `--mcp-server '*'` writes
-  it and adds the `capabilities.use` permission; the definition and binding are taken from
-  the config at that moment.
+- A credential's optional `capabilities` grant is a list of entries: `{ kind: "mcpServer",
+  id, host, binding, definition }`, `{ kind: "skill", id, digest }`, or every entry of one
+  kind, `{ kind: "mcpServer" | "skill", any: true }`. A wildcard never crosses kinds:
+  `--mcp-server '*'` writes the server entry and grants no skill, `--skill '*'` writes the
+  skill entry and grants no server, and a credential gets both only when both are given.
+  The bare `"*"` a credential may already hold keeps the meaning `--mcp-server '*'` first
+  gave it: every MCP server, no skill. The `owner` preset (and loopback and standalone
+  mode) holds both entries; no other preset grants any. `orca auth issue --mcp-server
+  <id>@<host>` (repeatable) or `--mcp-server '*'` writes it and adds the `capabilities.use`
+  permission; the definition and binding are taken from the config at that moment.
 - Steps 1 to 5 above apply, with `capabilities.use` in place of `secrets.use` and the grant
   naming that server id, defined exactly that way, on the agent's host and its current
   endpoint, with one difference: **one** current credential must cover the whole selected
@@ -223,6 +235,12 @@ command, arguments and environment, with secret references as references).
   docs/WORKFLOWS.md for what a grant covers of the arguments and environment). Any secret reference in the server's `env` is then read like every
   other reference in that session: on the agent's host, under `secrets.use`, with no
   fallback to another host.
+- **Skills** are decided in the same call and the same set. A use is `{ kind: "skill", id,
+  digest }`, the content digest of exactly what will be sent; a grant entry is `{ kind:
+  "skill", id, digest }`, written by `orca auth issue --skill <id>` from the skill as it is
+  on disk then (refused if the catalog pins another digest). A skill's content travels in
+  the prompt, so it has no host binding. Only `{ kind: "skill", any: true }` (`--skill '*'`,
+  and the `owner` preset) covers every skill; a server wildcard does not.
 - `agents.ping` has no run and so no owner: it starts only the agent's own inline servers.
 
 ## Ping

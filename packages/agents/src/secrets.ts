@@ -17,6 +17,8 @@
  */
 import {
   isSecretRef,
+  pinnedEnvNames,
+  sharesPinnedSource,
   literalEnv,
   OrcaError,
   redactSecretValues,
@@ -45,6 +47,15 @@ export interface SecretUse {
    */
   hostBinding: string;
   agentId: string;
+  /**
+   * Absent for delivery to an agent or MCP server. `review-judge` (#701) for a judge
+   * connection's own use of a secret pinned to `destination`; a grant covers it only when it
+   * names the same purpose and destination.
+   */
+  purpose?: "review-judge";
+  destination?: string;
+  /** With `purpose`: where the value is read (`secretSourceBinding`). A judge grant names it. */
+  sourceBinding?: string;
 }
 
 /**
@@ -67,6 +78,16 @@ export function secretHostBinding(spec: HostSpec): string {
           remoteShell: spec.remoteShell,
         };
   return `h1:${createHash("sha256").update(JSON.stringify(endpoint)).digest("hex").slice(0, 32)}`;
+}
+
+/**
+ * A digest of where a value is read on its host: the provider and the variable or path (#701).
+ * A review-judge grant names it, so rotating the value at that source needs no new grant, while
+ * pointing the same secret id at another variable or file is not covered.
+ */
+export function secretSourceBinding(source: SecretSource): string {
+  const where = source.provider === "env" ? ["env", source.name] : ["file", source.path];
+  return `s1:${createHash("sha256").update(JSON.stringify(where)).digest("hex").slice(0, 32)}`;
 }
 
 /**
@@ -189,6 +210,13 @@ export function planSessionSecrets(
         `it is bound to host '${def.host}', and this session runs on '${host.id}'`,
         host.id,
       );
+    if (def.destination !== undefined || sharesPinnedSource(secrets, id))
+      throw secretUnavailable(
+        id,
+        "unsupported",
+        "it, or a secret read from the same source, is pinned to a destination that only ORCA's own connection to it may use",
+        host.id,
+      );
     if (!host.deliversSecrets)
       throw secretUnavailable(id, "unsupported", `host '${host.id}' cannot read secrets`, host.id);
     const delivery: SecretDelivery = { id, source: secretSource(def), env: [] };
@@ -205,11 +233,15 @@ export function planSessionSecrets(
       }
   });
   const withheldEnv = [
-    ...new Set(
-      Object.values(secrets ?? {})
+    ...new Set([
+      ...Object.values(secrets ?? {})
         .filter((d) => d.host === host.id && d.provider === "env")
         .map((d) => (d.provider === "env" ? d.name : "")),
-    ),
+      // Every local host is the daemon's machine and shares its environment: a variable a
+      // pinned secret (#701) is read from is withheld from every agent there, whichever local
+      // host id the secret names.
+      ...(host.spec?.type === "local" ? pinnedEnvNames(secrets) : []),
+    ]),
   ];
   return {
     agent: {

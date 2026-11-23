@@ -1,10 +1,11 @@
 /** `orca auth issue --mcp-server` writes a credential's catalog MCP server grant (#337). */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mcpServerDefinitionDigest, secretHostBinding } from "@orca/agents";
 import { HostSpecSchema } from "@orca/core";
+import { skillDigest } from "@orca/engine";
 import { openAuthDirectory } from "@orca/daemon";
 import { authCommand } from "../src/commands/auth.js";
 import type { CommandContext } from "../src/commands/index.js";
@@ -27,10 +28,15 @@ beforeEach(async () => {
       "  mcpServers:",
       "    github: { command: /opt/mcp/gh-mcp, args: [--stdio], env: { GITHUB_TOKEN: { secret: github-token } } }",
       "    bare: { command: gh-mcp }",
+      "  skills:",
+      "    review: { path: review }",
+      "    pinned: { path: review, digest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000' }",
       "",
     ].join("\n"),
     "utf8",
   );
+  await mkdir(join(dir, "review"));
+  await writeFile(join(dir, "review", "SKILL.md"), "review carefully", "utf8");
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -82,7 +88,8 @@ describe("auth issue --mcp-server", () => {
 
   it("grants every server with '*', and none without the flag", async () => {
     expect(await issue("all", { "mcp-server": ["*"] })).toBe(0);
-    expect(stored("all").capabilities).toBe("*");
+    // An explicit entry for servers only: it grants no skill.
+    expect(stored("all").capabilities).toEqual([{ kind: "mcpServer", any: true }]);
     expect(await issue("none", {})).toBe(0);
     expect(stored("none").capabilities).toBeUndefined();
     expect(stored("none").permissions).not.toContain("capabilities.use");
@@ -99,5 +106,33 @@ describe("auth issue --mcp-server", () => {
     await expect(issue("d", { "mcp-server": ["bare@local"] })).rejects.toMatchObject({
       message: expect.stringMatching(/'bare' runs 'gh-mcp', which is not an absolute path/),
     });
+  });
+
+  it("grants a skill by its content digest, and refuses one the catalog's pin no longer matches", async () => {
+    expect(await issue("reviewer", { skill: ["review"], "mcp-server": ["github@local"] })).toBe(0);
+    const digest = skillDigest({ path: "review" }, dir);
+    if (!("digest" in digest)) throw new Error(digest.error);
+    expect(stored("reviewer").capabilities).toContainEqual({ kind: "skill", id: "review", digest: digest.digest });
+    expect(stored("reviewer").permissions).toContain("capabilities.use");
+    await expect(issue("e", { skill: ["pinned"] })).rejects.toMatchObject({
+      message: expect.stringMatching(/no longer matches the digest the catalog pins/),
+    });
+    await expect(issue("f", { skill: ["absent"] })).rejects.toMatchObject({
+      message: "--skill names 'absent', which is not a catalog skill",
+    });
+    await expect(issue("g", { skill: ["*", "review"] })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    // Each kind's '*' is its own explicit entry; neither grants the other kind.
+    expect(await issue("h", { skill: ["*"] })).toBe(0);
+    expect(stored("h").capabilities).toEqual([{ kind: "skill", any: true }]);
+    expect(await issue("i", { skill: ["*"], "mcp-server": ["github@local"] })).toBe(0);
+    expect(stored("i").capabilities).toEqual([
+      expect.objectContaining({ kind: "mcpServer", id: "github" }),
+      { kind: "skill", any: true },
+    ]);
+    expect(await issue("j", { skill: ["*"], "mcp-server": ["*"] })).toBe(0);
+    expect(stored("j").capabilities).toEqual([
+      { kind: "mcpServer", any: true },
+      { kind: "skill", any: true },
+    ]);
   });
 });

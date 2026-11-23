@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { secretHostBinding } from "@orca/agents";
+import { secretHostBinding, secretSourceBinding } from "@orca/agents";
 import { HostSpecSchema } from "@orca/core";
 import { openAuthDirectory } from "@orca/daemon";
 import { authCommand } from "../src/commands/auth.js";
@@ -24,6 +24,7 @@ beforeEach(async () => {
       "secrets:",
       "  github-token: { host: build-box, provider: file, path: /etc/orca/gh }",
       "  npm: { host: local, provider: env, name: NPM_TOKEN }",
+      "  judge-key: { host: local, provider: env, name: JUDGE_KEY, destination: 'https://judge.invalid/v0' }",
       "",
     ].join("\n"),
     "utf8",
@@ -62,6 +63,21 @@ describe("auth issue --secret", () => {
       { secret: "npm", provider: "env", host: "local", binding: secretHostBinding({ id: "local", type: "local" }) },
     ]);
     expect(c.permissions).toContain("secrets.use");
+  });
+
+  it("grants a pinned secret for review-judge use at its destination only (#701)", async () => {
+    expect(await issue("judge", { secret: ["judge-key@local"] })).toBe(0);
+    expect(stored("judge").secrets).toEqual([
+      {
+        secret: "judge-key",
+        provider: "env",
+        host: "local",
+        binding: secretHostBinding({ id: "local", type: "local" }),
+        purpose: "review-judge",
+        destination: "https://judge.invalid/v0",
+        source: secretSourceBinding({ provider: "env", name: "JUDGE_KEY" }),
+      },
+    ]);
   });
 
   it("grants every reference with '*', and none without the flag", async () => {
