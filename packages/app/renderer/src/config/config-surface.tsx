@@ -51,6 +51,7 @@ import { ConfigForm } from "./config-form.js";
 import { DraftBar } from "./draft-bar.js";
 import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
+import { StorageSection } from "./storage-section.js";
 import { RawView } from "./raw-view.js";
 import { agentPolicies, buildSections, fieldPaths, patchFrom, placeErrors } from "./config-model.js";
 import { useConfig } from "./config-context.js";
@@ -270,6 +271,7 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
             autoFocus={open === "permissions"}
           />
 
+          <StorageSection />
           <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
 
           {/* Said on the screen that writes the file, because it is the thing a person is

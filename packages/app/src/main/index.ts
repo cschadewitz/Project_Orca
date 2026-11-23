@@ -87,6 +87,7 @@ import { createAlerts, type AlertTier } from "./alerts.js";
 import { ConnectionMachine } from "./connection-state.js";
 import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./deep-link.js";
 import { findBundledDaemon, startBundledDaemon } from "./daemon-process.js";
+import { StoreSwitchRestart, takeStoreSwitchRequest, writeStoreSwitchRequest } from "./store-switch.js";
 import { storeRoot, Workspace } from "./workspace.js";
 import { Fleet, alertScope, labelAlerts, type FleetTarget, type FocusedMachine } from "./fleet.js";
 import { MAX_WATCHED_PROFILES } from "../preferences/schema.js";
@@ -860,6 +861,12 @@ let alertsEpoch = 0;
  * must not — where the resources are, what the home directory is, what the environment
  * said — arrives here as a dependency, which is what keeps the switch itself a plain test.
  */
+/** "Switch to SQLite" for the app's own workspace (#339); created with the update guards below. */
+const storeSwitchRef: { current?: StoreSwitchRestart } = {};
+const storeSwitchRequestFile = join(app.getPath("userData"), "store-switch", "request.json");
+// Offered to people only after the native signed/installed switch and rollback acceptance
+// (#339); until then only that acceptance turns it on.
+const sqliteSwitchEnabled = process.env.ORCA_SQLITE_SWITCH === "1";
 const workspace = new Workspace({
   updateBootstrap: {
     get ordinaryAllowed() {
@@ -876,10 +883,11 @@ const workspace = new Workspace({
       // A build run from the repository: `dist/`, one level up from `dist/main`.
       fileURLToPath(new URL("../", import.meta.url)),
     ]),
-  start: ({ entry, cwd, readOnly, configPath, firstRunToken, onExit }) =>
+  start: ({ entry, cwd, readOnly, configPath, firstRunToken, storeSwitch: switchStore, onExit }) =>
     startBundledDaemon({
       entry,
       cwd,
+      ...(switchStore ? { storeSwitch: switchStore } : {}),
       ...(configPath ? { configPath } : {}),
       ...(macReplacement
         ? {
@@ -972,12 +980,18 @@ const workspace = new Workspace({
       onState: (state, retries) => connection.linkChanged(state, retries),
     }),
   onSwitch: (fileMode) => connection.reset(fileMode),
-  onSnapshot: (snapshot) => send("orca:workspace", snapshot),
+  onSnapshot: (snapshot) => {
+    send("orca:workspace", snapshot);
+    storeSwitchRef.current?.refresh();
+  },
   // A chosen store whose daemon would not start is not connected to anything (#269). The
   // machine's own input for "there is no daemon" is the one to use, so the status bar reads
   // `disconnected` through the same path as a daemon that exited, and the reason is on the
   // console beside it rather than in a field the renderer has no rendering for.
-  onDaemonGone: () => connection.daemonExited(),
+  onDaemonGone: () => {
+    connection.daemonExited();
+    storeSwitchRef.current?.refresh();
+  },
   onError: (message, cause) => {
     // The window still opens, on a status bar that reads disconnected. A desktop app that
     // refuses to start because its daemon would not is a worse failure than one that shows
@@ -1008,6 +1022,9 @@ const workspace = new Workspace({
   defaultUrl: DEFAULT_DAEMON_URL,
   defaultPath: () => process.env.ORCA_WORKSPACE || undefined,
   setupBusy: () => firstRun.isBusy,
+  // The gate is checked here too: a request written while enabled is never acted on once not.
+  takeStoreSwitch: (path, ownership) =>
+    takeStoreSwitchRequest(storeSwitchRequestFile, path, ownership, sqliteSwitchEnabled),
   recoverFirstRun: async (path, check, prepareConnection) => {
     const attempt = ++firstRunConnectionAttempt;
     await appWriters.run(() =>
@@ -1541,6 +1558,35 @@ const updates = new Updates(
 
   (state) => send("orca:update", state),
 );
+const storeSwitch = new StoreSwitchRestart({
+  guards: updateGuards,
+  target: () => workspace.storeSwitchTarget,
+  settle: (token) => workspace.settleForStoreSwitch(token),
+  request: (path, after) => writeStoreSwitchRequest(storeSwitchRequestFile, path, after),
+  relaunch: () => {
+    app.relaunch();
+    app.quit();
+  },
+  changed: (state) => send("orca:storeSwitch", state),
+  enabled: sqliteSwitchEnabled,
+});
+storeSwitchRef.current = storeSwitch;
+storeSwitch.refresh();
+ipcMain.on("orca:storeSwitch.read", (event) => {
+  event.returnValue = storeSwitch.state;
+});
+ipcMain.handle("orca:storeSwitch.restart", async (event) => {
+  if (
+    updates.state.phase === "restarting" ||
+    linuxRestart?.state?.phase === "restarting" ||
+    macUpdateWindows.active ||
+    firstRun.isBusy ||
+    !BrowserWindow.getAllWindows().some((win) => win.webContents === event.sender) ||
+    event.senderFrame !== event.sender.mainFrame
+  )
+    return { ok: false, error: { code: "UPDATE", message: "Switching to SQLite is not available right now" } };
+  return { ok: true, result: await storeSwitch.restart() };
+});
 ipcMain.on("orca:update.read", (event) => {
   event.returnValue = updates.state;
 });

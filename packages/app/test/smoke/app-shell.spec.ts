@@ -283,6 +283,9 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     // #879's server update over SSH (#918): read the offer, approve it, run it and follow its
     // progress for the focused profile's managed server.
     "serverUpdate",
+    // #339's "Switch to SQLite" for the app's own workspace: read, subscribe, and a restart that
+    // carries no argument. Main alone decides whether it is offered and which workspace it is.
+    "storeSwitch",
     "templates",
     // `updates` is v0.6.0's desktop updater (#306): read, act, subscribe and the unsaved-
     // draft challenge. No feed URL, credential or install command crosses it.

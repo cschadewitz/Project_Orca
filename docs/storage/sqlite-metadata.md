@@ -354,9 +354,31 @@ marker was written and flushed).
 - A daemon outside an app workspace (no fence) refuses (`SWITCH_REFUSED`) and points
   to `convert`. Windows is refused (#947).
 
-Before the app offers the switch to users, released-binary and native store
-acceptance of a switched app workspace is a separate gate. How the app offers it is a
-follow-up.
+**How the app asks** (`packages/app/src/main/store-switch.ts`). The daemon reports its
+store in `hello.store` (protocol 2.7): the backend, whether the switch is available
+(an app workspace on files, its fence held, not Windows) and how a switch asked for on
+its launch ended. Config shows a "Workspace storage" section with the backend and that
+outcome, and "Switch to SQLite" when main offers it. Main alone decides: only for the
+connected bundled first-run daemon reporting the switch available. After a
+confirmation, the restart goes through the update guards: drafts prepared, the
+daemon's admission closed and drained (refused while a run is active), the exact
+daemon stopped and its exit observed, its first-run reservation settled. Then a
+request is written (`<userData>/store-switch/request.json`) naming the workspace, the
+identity (device, inode, owner) of its directory and of its store directory, and the
+first-run claim of the daemon just stopped, and ORCA restarts. The next owned launch
+spends the request by asking for it, whatever it names, and acts on it only when the
+switch is enabled in this build, the workspace and both directories are the same ones
+by identity (a workspace replaced at the same path is refused), and the launch's own
+reservation directly follows the stopped claim. Its daemon is then started with
+`ORCA_STORE_SWITCH=sqlite:<claim>`, and switches only if its fence, once entered,
+also follows that claim; otherwise it refuses (`SWITCH_REFUSED`) and starts on files.
+An update recovery's launch never asks. A refusal before the stop reopens
+admission on the running daemon; after it, nothing restarts the old daemon, and
+reopening ORCA starts the workspace on files.
+
+**Not offered yet.** Released-binary and native signed/installed acceptance of the
+switch and of its rollback is a separate gate. Until it passes, the app offers the
+switch only when started with `ORCA_SQLITE_SWITCH=1`, which only that acceptance sets.
 
 ### The switch in place
 

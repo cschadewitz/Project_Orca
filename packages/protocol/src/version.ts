@@ -190,6 +190,11 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * than run without it.
  */
 /**
+ * 2.7 also adds an optional `store` on `hello` (#339): the metadata backend of the store the
+ * daemon serves, whether the desktop app may ask its daemon to switch it to SQLite in place,
+ * and how such a switch on this launch ended. An optional field: a 2.6 client strips it.
+ */
+/**
  * 2.8 (#340) adds history paging to `runs.list`: an optional `cursor` param and an optional
  * `nextCursor` on the result, a place in the list's order (creation time, then id) rather
  * than a count, so a page back through history is not shifted by runs created meanwhile.

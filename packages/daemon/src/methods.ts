@@ -8,6 +8,7 @@ import {
   ContinuationsGetParamsSchema,
   ContinuationsReconcileParamsSchema,
   type ManagedDeployment,
+  type StoreStatus,
 } from "@orca/protocol";
 import type { SearchScope } from "./search-model.js";
 import {
@@ -322,6 +323,8 @@ export interface MethodContext {
   storeDir?: string | undefined;
   /** The managed server updater that launched this daemon (#879), reported in `hello`. */
   deployment?: ManagedDeployment | undefined;
+  /** The store's backend and the desktop app's SQLite switch (#339), reported in `hello`. */
+  store?: StoreStatus | undefined;
   capabilities: readonly DaemonCapability[];
   /** The projection the read methods answer from. Without it they refuse; `hello` does not need it. */
   reads?: ReadModel | undefined;
@@ -447,6 +450,7 @@ export const hello: Method<HelloParams, HelloResult> = {
       ...(ctx.identity ? { identity: ctx.identity } : {}),
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
       ...(ctx.deployment ? { deployment: ctx.deployment } : {}),
+      ...(ctx.store ? { store: ctx.store } : {}),
       ...(ctx.agents ? { sessionSlots: ctx.agents.sessionSlotsSummary() } : {}),
       capabilities: [
         ...(Object.keys(createOperatorMutationMethods(ctx)) as DaemonCapability[]),

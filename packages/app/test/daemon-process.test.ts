@@ -118,18 +118,18 @@ it("closed validation captures one uncertain child without retry or timeout esca
 
 it("asks for the store's switch to SQLite only on the launch that asks, never inherited or on closed validation", async () => {
   const asked = harness();
-  await start(asked.seams, { storeSwitch: "sqlite", env: {} });
-  expect(asked.calls[0]!.env).toMatchObject({ ORCA_STORE_SWITCH: "sqlite" });
+  await start(asked.seams, { storeSwitch: { after: "a".repeat(64) }, env: {} });
+  expect(asked.calls[0]!.env).toMatchObject({ ORCA_STORE_SWITCH: `sqlite:${"a".repeat(64)}` });
 
   const inherited = harness();
-  await start(inherited.seams, { env: { ORCA_STORE_SWITCH: "sqlite" } });
+  await start(inherited.seams, { env: { ORCA_STORE_SWITCH: `sqlite:${"a".repeat(64)}` } });
   expect(inherited.calls[0]!.env.ORCA_STORE_SWITCH).toBeUndefined();
 
   const closed = harness();
   await start(closed.seams, {
     closedUpdate: { attempt: "attempt", token: "one-use" },
     args: ["--read-only", "--no-resume"],
-    storeSwitch: "sqlite",
+    storeSwitch: { after: "a".repeat(64) },
   });
   expect(closed.calls[0]!.env.ORCA_STORE_SWITCH).toBeUndefined();
 });

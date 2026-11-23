@@ -17,6 +17,7 @@ import { pathLabel } from "./structured-form/collection-model.js";
 import { RawView } from "./raw-view.js";
 import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
+import { StorageSection } from "./storage-section.js";
 import { agentPolicies } from "./config-model.js";
 import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
 import { FirstRunSection } from "../first-run/first-run-section.js";
@@ -367,6 +368,7 @@ export function ConfigurationStudioSurface({
             />
           </>
         )}
+        <StorageSection />
         <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
       </div>
     </div>
