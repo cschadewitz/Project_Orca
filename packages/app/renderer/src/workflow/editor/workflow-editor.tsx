@@ -26,6 +26,7 @@ import type {
   WorkflowDraftView,
 } from "@orca/protocol";
 import { useAnnounce } from "../../a11y/announce-context.js";
+import { useMethodPresent } from "../../chrome/use-connection.js";
 import { diffText, gutterFor } from "../../artifacts/diff.js";
 import { PaneSplitter } from "../../chrome/pane-splitter.js";
 import { useWritability } from "../../chrome/use-connection.js";
@@ -133,10 +134,35 @@ function Editor({
       ? heldReview.value
       : undefined;
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  /* The dry run panel (#183), and the last result it showed: kept when the draft moves on,
-     marked stale, and no longer drawn on the canvas. */
+  /* The dry run panel (#183), and the last result it showed. A result belongs to one scope -
+     this workflow's draft, its owner, and the daemon target it was asked of - and to the
+     request that asked: anything that changes the scope drops it, and an answer that arrives
+     for a superseded request or another target is dropped, never shown. Within its scope it
+     is kept when the draft moves on, marked stale, and no longer drawn on the canvas. */
+  const canDryRun = useMethodPresent("workflowDrafts.dryRun");
   const [dryOpen, setDryOpen] = useState(false);
-  const [dryResult, setDryResult] = useState<WorkflowDraftDryRunResult | undefined>(undefined);
+  const [dryResult, setDryResult] = useState<
+    { value: WorkflowDraftDryRunResult; request: number; epoch: number | undefined } | undefined
+  >(undefined);
+  const [dryNotice, setDryNotice] = useState<string | undefined>(undefined);
+  const dryRequest = useRef(0);
+  const invalidateDry = useCallback(() => {
+    dryRequest.current += 1;
+    setDryResult(undefined);
+    setDryNotice(undefined);
+  }, []);
+  useEffect(invalidateDry, [draft.workflowId, draft.owner.principalId, readOnly, canDryRun, invalidateDry]);
+  useEffect(
+    () => () => {
+      dryRequest.current += 1;
+    },
+    [],
+  );
+  const currentEpoch = window.orca.daemonConnection?.read().epoch;
+  const shownDry =
+    dryResult && dryResult.request === dryRequest.current && dryResult.epoch === currentEpoch
+      ? dryResult.value
+      : undefined;
   const workflows = useWorkflowIds();
   const inspector = useRef<InspectorHandle>(null);
   const palette = useRef<PaletteHandle>(null);
@@ -339,18 +365,39 @@ function Editor({
     onPublished(result.version);
   };
 
+  /* The fixtures were chosen against the revision on screen, so that is the revision asked
+     for; the answer is kept only if nothing changed the scope while it was out. */
   const dryRun = async (fixtures: DryRunFixtures) => {
-    if (readOnly) return;
-    const result = await controller.dryRun(fixtures);
-    if (!result) return;
-    setDryResult(result);
+    if (readOnly || !canDryRun) return;
+    const request = ++dryRequest.current;
+    const epoch = window.orca.daemonConnection?.read().epoch;
+    const scope = { workflowId: draft.workflowId, owner: draft.owner.principalId };
+    setDryNotice(undefined);
+    const answer = await controller.dryRun(fixtures, draft.revision);
+    const now = latest.current;
+    if (
+      !answer ||
+      request !== dryRequest.current ||
+      epoch !== window.orca.daemonConnection?.read().epoch ||
+      now.readOnly ||
+      now.draft.workflowId !== scope.workflowId ||
+      now.draft.owner.principalId !== scope.owner
+    )
+      return;
+    if (answer.kind === "moved") {
+      setDryNotice("The draft changed before the dry run started. Check the choices, then run it again.");
+      return;
+    }
+    if (answer.result.run.dryRun?.draftRevision === undefined) return;
+    setDryResult({ value: answer.result, request, epoch });
+    const outcome = answer.result.report.outcome;
     announce(
-      `Dry run ${result.report.outcome === "failure" ? "ended in failure" : result.report.outcome === "success" ? "ended in success" : "stopped"}.`,
+      `Dry run ${outcome === "failure" ? "ended in failure" : outcome === "success" ? "ended in success" : "stopped"}.`,
     );
   };
   const trace =
-    dryOpen && dryResult && path.length === 0 && dryResult.run.dryRun?.draftRevision === draft.revision
-      ? traceOf(dryResult.report)
+    dryOpen && shownDry && path.length === 0 && shownDry.run.dryRun?.draftRevision === draft.revision
+      ? traceOf(shownDry.report)
       : undefined;
 
   const discard = async () => {
@@ -430,7 +477,14 @@ function Editor({
             <Button size="sm" tone="ghost" onClick={() => void apply([{ op: "tidy" }])}>
               Tidy layout
             </Button>
-            <Button size="sm" tone="ghost" aria-pressed={dryOpen} onClick={() => setDryOpen((open) => !open)}>
+            <Button
+              size="sm"
+              tone="ghost"
+              aria-pressed={dryOpen}
+              onClick={() => setDryOpen((open) => !open)}
+              disabled={!canDryRun}
+              disabledReason="This daemon cannot dry-run a draft: it is older than protocol 2.9"
+            >
               Dry run
             </Button>
             <Button
@@ -540,13 +594,14 @@ function Editor({
               {...(trace ? { trace } : {})}
             />
             <ValidationPanel issues={draft.issues} path={path} onGo={goTo} />
-            {dryOpen && !readOnly && (
+            {dryOpen && !readOnly && canDryRun && (
               <DryRunPanel
                 graph={editorGraph(draft.document, draft.base.document, []) ?? graph}
                 revision={draft.revision}
                 busy={controller.busy}
                 errors={errors}
-                result={dryResult}
+                result={shownDry}
+                notice={dryNotice}
                 onRun={(fixtures) => void dryRun(fixtures)}
                 onClose={() => setDryOpen(false)}
                 onOpen={onOpen}

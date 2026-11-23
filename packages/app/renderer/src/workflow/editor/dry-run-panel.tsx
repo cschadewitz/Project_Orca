@@ -81,6 +81,8 @@ export interface DryRunPanelProps {
   /** Validation errors in the draft; the daemon refuses a dry run while there are any. */
   errors: number;
   result: WorkflowDraftDryRunResult | undefined;
+  /** Why the last press ran nothing: the draft moved on before it was sent. */
+  notice?: string | undefined;
   onRun: (fixtures: DryRunFixtures) => void;
   onClose: () => void;
   /** Open an `orca://` URL: the dry run in the Runs surface. Absent where nothing can navigate. */
@@ -93,6 +95,7 @@ export function DryRunPanel({
   busy,
   errors,
   result,
+  notice,
   onRun,
   onClose,
   onOpen,
@@ -152,6 +155,12 @@ export function DryRunPanel({
             );
           })}
         </ul>
+      )}
+
+      {notice !== undefined && (
+        <Text style="caption" role="status">
+          {notice}
+        </Text>
       )}
 
       {result && <DryRunResult result={result} stale={stale} onOpen={onOpen} />}

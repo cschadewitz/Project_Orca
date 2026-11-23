@@ -76,17 +76,38 @@ function held(revision: number): WorkflowDraftDryRunResult {
   };
 }
 
-async function openEditor() {
+async function openEditor(options: { dryRunMethod?: boolean } = {}) {
   const fake = installBridge({ deepLink: "orca://workflow/ai-sdlc" });
   teardown.push(fake.install());
   const drafts = draftBridge(fake, { base: GATED, dryRun: (revision) => held(revision) });
+  if (options.dryRunMethod === false)
+    fake.connect({
+      ...fake.connection,
+      methods: (fake.connection.methods ?? []).filter((method) => method !== "workflowDrafts.dryRun"),
+    });
+  // The daemon target the app is pointed at; `retarget` points it somewhere else.
+  let epoch = 1;
+  fake.bridge.daemonConnection = {
+    read: () => ({ epoch, url: "http://localhost:6722", source: "saved", environmentOverride: false }),
+    subscribe: () => () => {},
+    onShow: () => () => {},
+    show: () => {},
+    cancel: () => {},
+    activate: () => {},
+    connect: async () => ({ ok: true }),
+  } as unknown as NonNullable<typeof fake.bridge.daemonConnection>;
   const h = harness();
   teardown.push(h.dispose);
   renderChrome(h);
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const canvas = await screen.findByRole("listbox", { name: "ai-sdlc draft graph" });
   await act(async () => {});
-  return { canvas, drafts };
+  return { canvas, drafts, retarget: () => (epoch += 1) };
+}
+
+async function openPanel() {
+  fireEvent.click(screen.getByRole("button", { name: "Dry run" }));
+  return screen.findByRole("region", { name: "Dry run" });
 }
 
 describe("the editor's dry run", () => {
@@ -127,6 +148,49 @@ describe("the editor's dry run", () => {
     fireEvent.click(screen.getByRole("button", { name: "Tidy layout" }));
     await waitFor(() => expect(panel.textContent).toContain("The draft has changed since"));
     expect(document.querySelectorAll(".orca-node--untaken")).toHaveLength(0);
+  });
+});
+
+describe("the editor's dry run, against a moving draft or target", () => {
+  it("runs nothing when a queued edit moves the draft past the revision the choices were made on", async () => {
+    const { drafts } = await openEditor();
+    const panel = await openPanel();
+    const release = drafts.hold("workflowDrafts.apply");
+    // Both pressed before either is answered: the edit is queued first, and the choices on
+    // screen when the dry run was pressed are revision 0's.
+    fireEvent.click(screen.getByRole("button", { name: "Tidy layout" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Run a dry run" }));
+    await waitFor(() => expect(drafts.calls.some((c) => c.method === "workflowDrafts.apply")).toBe(true));
+    await act(async () => release());
+    await waitFor(() => expect(panel.textContent).toContain("The draft changed before the dry run started"));
+    expect(drafts.calls.some((c) => c.method === "workflowDrafts.dryRun")).toBe(false);
+
+    // Pressed again, now on the new revision: that one runs.
+    fireEvent.click(within(panel).getByRole("button", { name: "Run a dry run" }));
+    await waitFor(() => expect(within(panel).getByText("failed · dry")).toBeTruthy());
+    expect(drafts.calls.find((c) => c.method === "workflowDrafts.dryRun")?.params.expectedRevision).toBe(1);
+  });
+
+  it("drops a result that answers after the app was pointed at another daemon", async () => {
+    const { drafts, retarget } = await openEditor();
+    const panel = await openPanel();
+    const release = drafts.hold("workflowDrafts.dryRun");
+    fireEvent.click(within(panel).getByRole("button", { name: "Run a dry run" }));
+    await waitFor(() => expect(drafts.calls.some((c) => c.method === "workflowDrafts.dryRun")).toBe(true));
+    retarget();
+    await act(async () => release());
+    await act(async () => {});
+    expect(within(panel).queryByText("failed · dry")).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "Open in Runs" })).toBeNull();
+    expect(document.querySelectorAll(".orca-node--untaken")).toHaveLength(0);
+  });
+
+  it("offers no dry run on a daemon that does not have it, and says why", async () => {
+    await openEditor({ dryRunMethod: false });
+    const button = screen.getByRole("button", { name: "Dry run" });
+    expect(button.getAttribute("aria-disabled") ?? button.getAttribute("disabled")).not.toBeNull();
+    fireEvent.click(button);
+    expect(screen.queryByRole("region", { name: "Dry run" })).toBeNull();
   });
 });
 

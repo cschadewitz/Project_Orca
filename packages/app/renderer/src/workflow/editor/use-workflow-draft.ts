@@ -47,10 +47,16 @@ export interface WorkflowDraftController {
   publish(reviewToken: string): Promise<WorkflowDraftPublishResult | undefined>;
   discard(): Promise<boolean>;
   /**
-   * Simulate the draft at the revision the editor holds (#183), with these fixtures. Answers
-   * once the simulation has stopped; a refusal is said in the bar like any other.
+   * Simulate the draft at `revision` (#183) - the one on screen when the fixtures were chosen -
+   * with these fixtures. Queued behind any edit already sent; if one of those moved the draft
+   * past `revision`, nothing is sent and the answer is `moved`, so the choices can be checked
+   * against the new revision first. Answers once the simulation has stopped; a refusal is said
+   * in the bar like any other.
    */
-  dryRun(fixtures: DryRunFixtures): Promise<WorkflowDraftDryRunResult | undefined>;
+  dryRun(
+    fixtures: DryRunFixtures,
+    revision: number,
+  ): Promise<{ kind: "result"; result: WorkflowDraftDryRunResult } | { kind: "moved" } | undefined>;
   reload(): Promise<void>;
   clearMessage(): void;
 }
@@ -217,20 +223,25 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
   );
 
   const dryRun = useCallback(
-    (fixtures: DryRunFixtures) =>
-      enqueue(async (draft) => {
-        const result = await window.orca.workflowDrafts!.call("workflowDrafts.dryRun", {
-          workflowId,
-          expectedRevision: draft.revision,
-          fixtures,
-        });
-        if (result.ok) {
-          setMessage(undefined);
-          return result.result;
-        }
-        await refused(result.error);
-        return undefined;
-      }),
+    (fixtures: DryRunFixtures, revision: number) =>
+      enqueue(
+        async (
+          draft,
+        ): Promise<{ kind: "result"; result: WorkflowDraftDryRunResult } | { kind: "moved" } | undefined> => {
+          if (draft.revision !== revision) return { kind: "moved" };
+          const result = await window.orca.workflowDrafts!.call("workflowDrafts.dryRun", {
+            workflowId,
+            expectedRevision: revision,
+            fixtures,
+          });
+          if (result.ok) {
+            setMessage(undefined);
+            return { kind: "result", result: result.result };
+          }
+          await refused(result.error);
+          return undefined;
+        },
+      ),
     [enqueue, workflowId, refused],
   );
 

@@ -112,8 +112,18 @@ export function draftBridge(
     }
   };
 
+  /* A method a test holds answers only once released, computed when it is released. */
+  const held = new Map<string, Promise<void>>();
   const call = async (method: string, params: Record<string, unknown>) => {
     calls.push({ method, params });
+    const wait = held.get(method);
+    if (wait) {
+      held.delete(method);
+      await wait;
+    }
+    return answer(method, params);
+  };
+  const answer = async (method: string, params: Record<string, unknown>) => {
     switch (method) {
       case "workflowDrafts.get":
         return { ok: true, result: { draft: null, layout: { graphs: {} }, editable: true } };
@@ -181,6 +191,12 @@ export function draftBridge(
   });
   return {
     calls,
+    /** Hold the next call of `method` until the returned release is called. */
+    hold: (method: string): (() => void) => {
+      let release!: () => void;
+      held.set(method, new Promise<void>((resolve) => (release = resolve)));
+      return () => release();
+    },
     ops: () =>
       calls.filter((c) => c.method === "workflowDrafts.apply").flatMap((c) => c.params.ops as DraftOperation[]),
   };
