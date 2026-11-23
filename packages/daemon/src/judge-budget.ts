@@ -22,8 +22,14 @@
  *   `orca store sqlite convert`, which copies the store into `<store>-sqlite`. The anchor must lie outside all of them.
  *   Restoring any of them therefore cannot restore the anchor, and a budget rolled back with the store is refused
  *   until the owner initializes it again, which spends that day.
- * - **Unchanged since.** Before every reservation the store directory, the anchor directory and their `review-judge`
- *   subdirectories must still be the same directories (device and inode), not links. Anything else refuses the call.
+ * - **Checked where the ledger is written.** The budget primitive runs the storage check (`ledgerSeparated`) before it
+ *   creates a directory, once it holds the budget lock, and again just before each rename. The check looks at the
+ *   actual parents of both ledger files (`review-judge`): plain directories at their real paths, the store and anchor
+ *   directories still the ones qualified, and by device and inode no supported restore root, `<store>-sqlite`
+ *   included, above the anchor's ledger, and no anchor above the store's. Anything else refuses the operation and
+ *   leaves the ledger as it was.
+ * - **Read-only status.** `inspectJudgeBudget` runs the same checks without creating the anchor directory or taking
+ *   the lock, and reports whether the budget is uninitialized, ready, or refused.
  *
  * Not covered, and documented as such: rolling back both the store and the anchor to the same earlier pair (for
  * example restoring a whole disk or home directory from an image or snapshot that holds both). This is the same
@@ -39,9 +45,10 @@ import {
   daemonJudgeBudget,
   JUDGE_BUDGET_ANCHOR_FILENAME,
   JUDGE_BUDGET_FILENAME,
+  type FileJudgeBudget,
   type JudgeBudget,
-  type JudgeBudgetInitResult,
   type JudgeBudgetIo,
+  type JudgeBudgetState,
 } from "@orca/agents";
 import { CONVERTED_STORE_SUFFIX } from "@orca/store";
 
@@ -67,7 +74,7 @@ export type QualifiedJudgeBudget =
   | {
       readonly status: "durable";
       /** Reports `durable: true`. */
-      readonly budget: JudgeBudget & { readonly initialize: () => Promise<JudgeBudgetInitResult> };
+      readonly budget: JudgeBudget & Pick<FileJudgeBudget, "initialize" | "replace">;
       readonly storeDir: string;
       readonly anchorDir: string;
     }
@@ -157,13 +164,93 @@ async function plainDirectory(path: string, own = false): Promise<Identity | und
   }
 }
 
-/** A `review-judge` subdirectory: absent, or a plain directory. Never a link or a file. */
-async function subdirectoryIntact(path: string): Promise<boolean> {
+const LEDGER_DIR = dirname(JUDGE_BUDGET_FILENAME);
+if (LEDGER_DIR !== dirname(JUDGE_BUDGET_ANCHOR_FILENAME))
+  throw new Error("the budget and its anchor share a subdirectory name");
+
+/**
+ * Where a ledger file's parent is, for a directory at a real path: its `review-judge` subdirectory when that is a
+ * plain directory at exactly that real path, the directory itself while the subdirectory does not exist yet, and
+ * `undefined` for anything else (a link, a file, another real path, unreadable).
+ */
+async function ledgerParent(dir: string): Promise<string | undefined> {
+  const sub = join(dir, LEDGER_DIR);
   try {
-    const info = await lstat(path);
-    return info.isDirectory() && !info.isSymbolicLink();
+    const info = await lstat(sub);
+    if (!info.isDirectory() || info.isSymbolicLink()) return undefined;
+    return (await realpath(sub)) === sub ? sub : undefined;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? dir : undefined;
+  }
+}
+
+/** The nearest existing directory at or above `path` (a path with real existing ancestors). */
+async function nearestExisting(path: string): Promise<string> {
+  for (let at = path; ; at = dirname(at)) {
+    try {
+      await stat(at);
+      return at;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || dirname(at) === at) throw error;
+    }
+  }
+}
+
+interface Storage {
+  /** The store's real path. */
+  readonly storeDir: string;
+  /** The anchor directory's real path (or, while it does not exist, its path through its real existing ancestors). */
+  readonly anchorDir: string;
+  readonly storeId: Identity;
+  /** `undefined` while the anchor directory does not exist (read-only inspection). */
+  readonly anchorId: Identity | undefined;
+}
+
+/**
+ * The storage check, at construction and inside every locked budget operation: the store and anchor directories are
+ * still the ones qualified; each ledger's actual parent (`review-judge`, or the directory while that is missing) is
+ * a plain directory at its real path; no directory from the anchor's ledger parent up to the root is the store, the
+ * store converted beside it, or any other supported restore root (by device and inode, and by real path); and no
+ * directory from the store's ledger parent up to the root is the anchor directory. Never throws.
+ */
+async function ledgerSeparated(storage: Storage): Promise<boolean> {
+  try {
+    const { storeDir, anchorDir, storeId, anchorId } = storage;
+    const store = await plainDirectory(storeDir);
+    if (!store || !same(store, storeId)) return false;
+    if (anchorId) {
+      const anchor = await plainDirectory(anchorDir, true);
+      if (!anchor || !same(anchor, anchorId)) return false;
+    } else {
+      try {
+        await lstat(anchorDir);
+        return false; // Appeared since: inspect again.
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+      }
+    }
+    const storeLedger = await ledgerParent(storeDir);
+    const anchorLedger = anchorId ? await ledgerParent(anchorDir) : anchorDir;
+    if (storeLedger === undefined || anchorLedger === undefined) return false;
+    const roots = supportedRestoreRoots(storeDir);
+    if (roots.some((root) => within(root, anchorLedger)) || within(anchorLedger, storeDir)) return false;
+    const rootIds: Identity[] = [];
+    for (const root of roots)
+      try {
+        const info = await stat(root, { bigint: true });
+        rootIds.push({ dev: info.dev, ino: info.ino });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+      }
+    const [storeLine, anchorLine] = await Promise.all([
+      lineage(storeLedger),
+      lineage(anchorId ? anchorLedger : await nearestExisting(anchorLedger)),
+    ]);
+    if (anchorLine.some((id) => rootIds.some((root) => same(id, root)))) return false;
+    if (anchorId && storeLine.some((id) => same(id, anchorId))) return false;
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -181,32 +268,32 @@ export interface QualifiedJudgeBudgetOptions extends JudgeBudgetEnvironment {
   readonly lockTimeoutMs?: number;
 }
 
-/**
- * The daemon's budget, qualified: `durable` only when every prerequisite above holds. Never throws. Also the place
- * the owner's `orca judge budget init` gets the budget it initializes, so both use the same files.
- */
-export async function qualifiedJudgeBudget(options: QualifiedJudgeBudgetOptions): Promise<QualifiedJudgeBudget> {
-  const unavailable = (reason: JudgeBudgetUnavailableReason): QualifiedJudgeBudget =>
-    Object.freeze({ status: "unavailable", reason });
+type Located =
+  | { readonly ok: true; readonly storage: Storage }
+  | { readonly ok: false; readonly reason: JudgeBudgetUnavailableReason };
+
+/** Find and check the two directories. Creates the anchor directory only with `create`. */
+async function locate(options: QualifiedJudgeBudgetOptions, create: boolean): Promise<Located> {
+  const refuse = (reason: JudgeBudgetUnavailableReason): Located => ({ ok: false, reason });
   const platform = options.platform ?? process.platform;
-  if (!JUDGE_BUDGET_PLATFORMS.includes(platform)) return unavailable("platform");
-  if (!WORKSPACE_ID.test(options.workspaceId)) return unavailable("workspace");
+  if (!JUDGE_BUDGET_PLATFORMS.includes(platform)) return refuse("platform");
+  if (!WORKSPACE_ID.test(options.workspaceId)) return refuse("workspace");
   const chosen = options.anchorDir ?? judgeBudgetAnchorDir(options.workspaceId, options);
-  if (!chosen) return unavailable("anchor");
+  if (!chosen) return refuse("anchor");
 
   // The store: an existing plain directory, at its real path.
   const givenStore = resolve(options.storeDir);
-  if (!(await plainDirectory(givenStore))) return unavailable("store");
+  const storeId = await plainDirectory(givenStore);
+  if (!storeId) return refuse("store");
   let storeDir: string;
   try {
     storeDir = await realpath(givenStore);
   } catch {
-    return unavailable("store");
+    return refuse("store");
   }
 
-  // The anchor: created owner-only if missing, then a plain private directory of this user's, at its real path.
-  const givenAnchor = resolve(chosen);
   // Inside the store or a restore target, as spelled or through a link above it: refused before anything is created.
+  const givenAnchor = resolve(chosen);
   const spelled = await realAsFarAsExists(givenAnchor);
   if (
     spelled === undefined ||
@@ -214,82 +301,109 @@ export async function qualifiedJudgeBudget(options: QualifiedJudgeBudgetOptions)
       (path) => supportedRestoreRoots(storeDir).some((root) => within(root, path)) || within(path, storeDir),
     )
   )
-    return unavailable("not-separate");
-  try {
-    await mkdir(givenAnchor, { recursive: true, mode: 0o700 });
-  } catch {
-    return unavailable("anchor");
-  }
-  if (!(await plainDirectory(givenAnchor, true))) return unavailable("anchor");
-  let anchorDir: string;
-  try {
-    anchorDir = await realpath(givenAnchor);
-  } catch {
-    return unavailable("anchor");
-  }
+    return refuse("not-separate");
 
-  // Physically separate: by real path, and by device and inode all the way up.
-  let storeLine: Identity[];
-  let anchorLine: Identity[];
+  let exists = true;
   try {
-    [storeLine, anchorLine] = await Promise.all([lineage(storeDir), lineage(anchorDir)]);
-  } catch {
-    return unavailable("not-separate");
+    await lstat(givenAnchor);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return refuse("anchor");
+    exists = false;
   }
-  const storeId = storeLine[0]!;
-  const anchorId = anchorLine[0]!;
-  if (
-    supportedRestoreRoots(storeDir).some((root) => within(root, anchorDir)) ||
-    within(anchorDir, storeDir) ||
-    anchorLine.some((id) => same(id, storeId)) ||
-    storeLine.some((id) => same(id, anchorId))
-  )
-    return unavailable("not-separate");
+  if (!exists && create)
+    try {
+      await mkdir(givenAnchor, { recursive: true, mode: 0o700 });
+      exists = true;
+    } catch {
+      return refuse("anchor");
+    }
+  let storage: Storage;
+  if (exists) {
+    const anchorId = await plainDirectory(givenAnchor, true);
+    if (!anchorId) return refuse("anchor");
+    let anchorDir: string;
+    try {
+      anchorDir = await realpath(givenAnchor);
+    } catch {
+      return refuse("anchor");
+    }
+    storage = { storeDir, anchorDir, storeId, anchorId };
+  } else storage = { storeDir, anchorDir: spelled, storeId, anchorId: undefined };
 
-  let inner: ReturnType<typeof daemonJudgeBudget>;
+  return (await ledgerSeparated(storage)) ? { ok: true, storage } : refuse("not-separate");
+}
+
+/**
+ * The daemon's budget, qualified: `durable` only when every prerequisite above holds, and every locked budget
+ * operation checks the storage again (`ledgerSeparated`). Creates the anchor directory if it is missing, nothing
+ * else. Never throws. The owner's `orca judge budget init` and `reset` use it, so they and the daemon share the files.
+ */
+export async function qualifiedJudgeBudget(options: QualifiedJudgeBudgetOptions): Promise<QualifiedJudgeBudget> {
+  const located = await locate(options, true);
+  if (!located.ok) return Object.freeze({ status: "unavailable", reason: located.reason });
+  const { storage } = located;
+  let inner: FileJudgeBudget;
   try {
     inner = daemonJudgeBudget(
-      { stateDir: storeDir, anchorDir },
+      { stateDir: storage.storeDir, anchorDir: storage.anchorDir },
       {
+        check: () => ledgerSeparated(storage),
         ...(options.now ? { now: options.now } : {}),
         ...(options.io ? { io: options.io } : {}),
         ...(options.lockTimeoutMs !== undefined ? { lockTimeoutMs: options.lockTimeoutMs } : {}),
       },
     );
   } catch {
-    return unavailable("not-separate");
+    return Object.freeze({ status: "unavailable", reason: "not-separate" });
   }
-
-  // Before every use: still the same two directories, and their budget subdirectories are not links.
-  const intact = async (): Promise<boolean> => {
-    const [store, anchor] = await Promise.all([plainDirectory(storeDir), plainDirectory(anchorDir, true)]);
-    if (!store || !anchor || !same(store, storeId) || !same(anchor, anchorId)) return false;
-    const subdirectories = await Promise.all([
-      subdirectoryIntact(dirname(join(storeDir, JUDGE_BUDGET_FILENAME))),
-      subdirectoryIntact(dirname(join(anchorDir, JUDGE_BUDGET_ANCHOR_FILENAME))),
-    ]);
-    return subdirectories.every(Boolean);
-  };
-
   const budget = Object.freeze({
     durable: true as const,
-    reserve: async (key: string, limit: number): Promise<boolean> => {
-      try {
-        return (await intact()) && (await inner.reserve(key, limit));
-      } catch {
-        return false;
-      }
-    },
-    initialize: async (): Promise<JudgeBudgetInitResult> => {
-      try {
-        if (!(await intact())) return { status: "refused", reason: "write" };
-        return await inner.initialize();
-      } catch {
-        return { status: "refused", reason: "write" };
-      }
-    },
+    reserve: inner.reserve,
+    initialize: inner.initialize,
+    replace: inner.replace,
   });
-  return Object.freeze({ status: "durable", budget, storeDir, anchorDir });
+  return Object.freeze({ status: "durable", budget, storeDir: storage.storeDir, anchorDir: storage.anchorDir });
+}
+
+export type JudgeBudgetInspection =
+  | {
+      readonly status: "eligible";
+      readonly storeDir: string;
+      readonly anchorDir: string;
+      /** Whether the anchor directory exists yet (`init` creates it). */
+      readonly anchorCreated: boolean;
+      readonly budget: JudgeBudgetState;
+    }
+  | { readonly status: "unavailable"; readonly reason: JudgeBudgetUnavailableReason };
+
+/**
+ * Read-only: whether this machine can keep the budget durably, and what the budget's files say. Creates nothing,
+ * takes no lock. `ready` is the state a reservation would accept; `refused` needs `orca judge budget reset`.
+ */
+export async function inspectJudgeBudget(options: QualifiedJudgeBudgetOptions): Promise<JudgeBudgetInspection> {
+  const located = await locate(options, false);
+  if (!located.ok) return Object.freeze({ status: "unavailable", reason: located.reason });
+  const { storage } = located;
+  const base = { status: "eligible" as const, storeDir: storage.storeDir, anchorDir: storage.anchorDir };
+  if (!storage.anchorId) {
+    // No anchor yet: a budget file without one is refused; none at all is uninitialized.
+    let budgetExists = true;
+    try {
+      await lstat(join(storage.storeDir, JUDGE_BUDGET_FILENAME));
+    } catch (error) {
+      budgetExists = (error as NodeJS.ErrnoException).code !== "ENOENT";
+    }
+    return Object.freeze({
+      ...base,
+      anchorCreated: false,
+      budget: budgetExists ? ({ state: "refused" } as const) : ({ state: "uninitialized" } as const),
+    });
+  }
+  const budget = await daemonJudgeBudget(
+    { stateDir: storage.storeDir, anchorDir: storage.anchorDir },
+    { check: () => ledgerSeparated(storage) },
+  ).inspect();
+  return Object.freeze({ ...base, anchorCreated: true, budget });
 }
 
 /** Plain words for an unavailable budget, for the owner's command line. */

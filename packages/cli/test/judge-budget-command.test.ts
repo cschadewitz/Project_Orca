@@ -1,5 +1,5 @@
 /** `orca judge budget status | init | reset` (#701): the owner's steps for the judge's durable daily budget. */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,12 +49,22 @@ describe.skipIf(process.platform === "win32")("orca judge budget", () => {
     expect(missing.errors[0]).toMatch(/There is no store/);
 
     await mkdir(join(workspace, ".orca"));
+    const noIdentity = ctx(workspace, ["budget"]);
+    expect(await judgeCommand(noIdentity)).toBe(1);
+    expect(noIdentity.errors[0]).toMatch(/no workspace identity yet/);
+    const id = await workspaceIdentity(join(workspace, ".orca"));
+    const storeEntries = await readdir(join(workspace, ".orca"));
+
+    // Read-only: reports eligibility and an uninitialized budget, creating neither the anchor nor the ledger.
     const status = ctx(workspace, ["budget"]);
     expect(await judgeCommand(status)).toBe(0);
-    expect(status.lines.join("\n")).toMatch(/durable yes/);
-    const id = await workspaceIdentity(join(workspace, ".orca"));
-    expect(status.lines.join("\n")).toContain(join("orca-judge-budget-anchors", id));
-    expect(status.lines.join("\n")).not.toContain(join(workspace, ".orca", "orca-judge"));
+    const text = status.lines.join("\n");
+    expect(text).toContain(join("orca-judge-budget-anchors", id));
+    expect(text).toMatch(/\(not created yet\)/);
+    expect(text).toMatch(/storage eligible/);
+    expect(text).toMatch(/not created: run `orca judge budget init`/);
+    expect(await readdir(join(workspace, ".orca"))).toEqual(storeEntries);
+    await expect(readdir(join(home, "state"))).rejects.toMatchObject({ code: "ENOENT" });
 
     const init = ctx(workspace, ["budget", "init"]);
     expect(await judgeCommand(init)).toBe(0);
@@ -66,10 +76,20 @@ describe.skipIf(process.platform === "win32")("orca judge budget", () => {
     expect(again.errors[0]).toMatch(/already exists, so nothing was changed/);
     expect(await readFile(join(workspace, ".orca", JUDGE_BUDGET_FILENAME), "utf8")).toBe(before);
 
+    const ready = ctx(workspace, ["budget", "status"]);
+    expect(await judgeCommand(ready)).toBe(0);
+    expect(ready.lines.join("\n")).toMatch(/budget {2}ready: started \d{4}-\d{2}-\d{2}/);
+
+    // A budget restored from an earlier copy: status reports it refused, reset replaces it under the lock.
+    await writeFile(join(workspace, ".orca", JUDGE_BUDGET_FILENAME), "{");
+    const broken = ctx(workspace, ["budget", "status"]);
+    expect(await judgeCommand(broken)).toBe(1);
+    expect(broken.lines.join("\n")).toMatch(/budget {2}refused: .*orca judge budget reset/);
+
     const reset = ctx(workspace, ["budget", "reset"]);
     expect(await judgeCommand(reset)).toBe(0);
     expect(reset.lines.at(-1)).toMatch(/^replaced for/);
-    expect(await readFile(join(workspace, ".orca", JUDGE_BUDGET_FILENAME), "utf8")).not.toBe(before);
+    expect(await readFile(join(workspace, ".orca", JUDGE_BUDGET_FILENAME), "utf8")).not.toBe("{");
 
     // The daemon's qualified budget sees the same files: durable, and today is spent.
     const q = await qualifiedJudgeBudget({ storeDir: join(workspace, ".orca"), workspaceId: id });

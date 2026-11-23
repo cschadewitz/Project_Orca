@@ -417,12 +417,20 @@ On each call:
     restore ORCA supports, all of which write inside the store or the store converted beside it
     (`supportedRestoreRoots`: carry-forward and its `format-backups/`, the SQLite switch back,
     `orca store sqlite restore`, workspace identity repair, `orca store sqlite convert` into
-    `<store>-sqlite`). Before every reservation both directories, and their `review-judge`
-    subdirectories, must still be the same directories and not links. The two may share a file
+    `<store>-sqlite`). The budget primitive runs this storage check before it creates a
+    directory, once it holds the budget lock, and again just before each rename. The check
+    covers the actual parents of both ledger files (`review-judge`): plain directories at their
+    real paths, the store and anchor directories still the ones qualified, no supported restore
+    root (by device and inode, `<store>-sqlite` included) above the anchor's ledger, and no anchor
+    above the store's. A failed check leaves the ledger as it was. The two may share a file
     system: restoring a whole disk or home directory that holds both is the coordinated rollback
     above, and is not covered. The owner creates the budget with `orca judge budget init` (that UTC
-    day counts as spent), checks it with `orca judge budget status`, and replaces one refused after
-    a restore with `orca judge budget reset` (the new one also starts with that day spent). The CLI
+    day counts as spent). `orca judge budget status` is read-only: it creates nothing, takes no
+    lock, and reports whether the storage is eligible and whether the budget is not created yet,
+    ready, or refused. `orca judge budget reset` replaces a refused budget under the budget lock.
+    The old budget stays as it was on any failure before its replacement, a failure after the
+    replacement began is reported as uncertain (calls stay refused until a reset succeeds), and the
+    new budget also starts with that day spent. The CLI
     does not change the desktop app's own store; that step comes with the app UI.
   - **Windows has no judge in 0.8.0.** Node cannot sync a directory on Windows, so the replacement
     protocol is not verified there, and `qualifiedJudgeBudget` answers `unavailable` (`platform`)

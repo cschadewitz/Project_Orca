@@ -9,21 +9,24 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { JUDGE_BUDGET_ANCHOR_FILENAME, JUDGE_BUDGET_FILENAME, judgeBudgetKey } from "@orca/agents";
+import { JUDGE_BUDGET_ANCHOR_FILENAME, JUDGE_BUDGET_FILENAME, judgeBudgetKey, type JudgeBudgetIo } from "@orca/agents";
 import {
   describeJudgeBudgetUnavailable,
   judgeBudgetAnchorDir,
   judgeBudgetAnchorRoot,
+  inspectJudgeBudget,
   qualifiedJudgeBudget,
   supportedRestoreRoots,
   type QualifiedJudgeBudget,
@@ -209,7 +212,7 @@ describe.skipIf(process.platform === "win32")("#701 judge budget: qualified on t
     cpSync(`${anchorDir}.old`, anchorDir, { recursive: true });
     chmodSync(anchorDir, 0o700);
     expect(await q.budget.reserve(KEY, 5)).toBe(false);
-    expect(await q.budget.initialize()).toEqual({ status: "refused", reason: "write" });
+    expect(await q.budget.replace()).toEqual({ status: "refused", reason: "storage" });
   });
 
   it("a budget subdirectory replaced by a link refuses every call", async () => {
@@ -220,5 +223,122 @@ describe.skipIf(process.platform === "win32")("#701 judge budget: qualified on t
     renameSync(sub, join(root, "moved"));
     symlinkSync(join(root, "moved"), sub);
     expect(await q.budget.reserve(KEY, 5)).toBe(false);
+  });
+
+  it("the anchor's ledger folder turned into a link into the converted store refuses, and the ledger is left as it was", async () => {
+    const q = await durable();
+    await q.budget.initialize();
+    now = DAY2;
+    expect(await q.budget.reserve(KEY, 5)).toBe(true);
+    const converted = `${storeDir}-sqlite`;
+    mkdirSync(converted);
+    const sub = join(anchorDir, "review-judge");
+    renameSync(sub, join(converted, "review-judge"));
+    symlinkSync(join(converted, "review-judge"), sub);
+    const before = readFileSync(join(storeDir, JUDGE_BUDGET_FILENAME), "utf8");
+    expect(await q.budget.reserve(KEY, 5)).toBe(false);
+    expect(readFileSync(join(storeDir, JUDGE_BUDGET_FILENAME), "utf8")).toBe(before);
+  });
+
+  it("an anchor reached through a link into the converted store is refused by its real path", async () => {
+    mkdirSync(`${storeDir}-sqlite`);
+    symlinkSync(`${storeDir}-sqlite`, join(root, "conv-alias"));
+    refused(await qualify({ anchorDir: join(root, "conv-alias", "anchor") }), "not-separate");
+    expect(existsSync(join(`${storeDir}-sqlite`, "anchor"))).toBe(false);
+  });
+
+  it("the storage check runs inside the lock, just before the rename: a swap mid-commit refuses and keeps the old ledger", async () => {
+    await (await durable()).budget.initialize();
+    now = DAY2;
+    const sub = join(anchorDir, "review-judge");
+    const io: JudgeBudgetIo = {
+      writeSynced: async (path, text) => {
+        writeFileSync(path, text, { flag: "wx", mode: 0o600 });
+        if (path.startsWith(join(storeDir, "review-judge"))) {
+          // Between the write and the rename, the anchor's ledger folder becomes a link into the store.
+          mkdirSync(join(storeDir, "elsewhere"));
+          renameSync(sub, join(storeDir, "elsewhere", "review-judge"));
+          symlinkSync(join(storeDir, "elsewhere", "review-judge"), sub);
+        }
+      },
+      rename: async (from, to) => renameSync(from, to),
+      syncDirectory: async () => {},
+    };
+    const before = readFileSync(join(storeDir, JUDGE_BUDGET_FILENAME), "utf8");
+    const q = await qualifiedJudgeBudget({ storeDir, workspaceId: WORKSPACE, anchorDir, platform, now: clock, io });
+    expect(q.status).toBe("durable");
+    if (q.status !== "durable") return;
+    expect(await q.budget.reserve(KEY, 5)).toBe(false);
+    expect(readFileSync(join(storeDir, JUDGE_BUDGET_FILENAME), "utf8")).toBe(before);
+  });
+
+  it("replace is locked and guarded: before the rename nothing changes; after it, the outcome is reported uncertain", async () => {
+    const q = await durable();
+    await q.budget.initialize();
+    now = DAY2;
+    expect(await q.budget.reserve(KEY, 5)).toBe(true);
+    const before = readFileSync(join(storeDir, JUDGE_BUDGET_FILENAME), "utf8");
+    const failing = (failOn: "budget" | "anchor"): JudgeBudgetIo => ({
+      writeSynced: async (path, text) => writeFileSync(path, text, { flag: "wx", mode: 0o600 }),
+      rename: async (from, to) => {
+        if (to.endsWith(failOn === "budget" ? "budget.json" : "budget-anchor.json")) throw new Error("disk full");
+        renameSync(from, to);
+      },
+      syncDirectory: async () => {},
+    });
+    const withIo = async (io: JudgeBudgetIo) => {
+      const r = await qualifiedJudgeBudget({ storeDir, workspaceId: WORKSPACE, anchorDir, platform, now: clock, io });
+      if (r.status !== "durable") throw new Error("expected durable");
+      return r.budget;
+    };
+    // The budget's own rename fails: reported as a change that may have begun, never as nothing changed.
+    expect(await (await withIo(failing("budget"))).replace()).toEqual({ status: "uncertain" });
+    expect(readFileSync(join(storeDir, JUDGE_BUDGET_FILENAME), "utf8")).toBe(before);
+    // A clock that cannot be read: refused before anything, the old budget still counting.
+    now = Number.NaN;
+    expect(await q.budget.replace()).toEqual({ status: "refused", reason: "clock" });
+    now = DAY2;
+    expect(readFileSync(join(storeDir, JUDGE_BUDGET_FILENAME), "utf8")).toBe(before);
+    expect(await q.budget.reserve(KEY, 5)).toBe(true);
+    // The anchor's commit fails after the budget was replaced: uncertain, and calls are refused until a reset succeeds.
+    expect(await (await withIo(failing("anchor"))).replace()).toEqual({ status: "uncertain" });
+    expect(await q.budget.reserve(KEY, 5)).toBe(false);
+    expect(await q.budget.replace()).toEqual({ status: "initialized", day: "2026-11-23" });
+    expect(await q.budget.reserve(KEY, 5)).toBe(false); // the replacement's first day is spent
+    now = DAY3;
+    expect(await q.budget.reserve(KEY, 5)).toBe(true);
+  });
+
+  it("inspection is read-only and tells uninitialized, ready and refused apart", async () => {
+    const inspect = () => inspectJudgeBudget({ storeDir, workspaceId: WORKSPACE, anchorDir, platform });
+    expect(await inspect()).toMatchObject({
+      status: "eligible",
+      anchorCreated: false,
+      budget: { state: "uninitialized" },
+    });
+    expect(existsSync(anchorDir)).toBe(false);
+    expect(existsSync(join(storeDir, "review-judge"))).toBe(false);
+    refused(
+      (await inspectJudgeBudget({
+        storeDir,
+        workspaceId: WORKSPACE,
+        anchorDir: join(storeDir, "a"),
+        platform,
+      })) as QualifiedJudgeBudget,
+      "not-separate",
+    );
+    const q = await durable();
+    expect(await inspect()).toMatchObject({ anchorCreated: true, budget: { state: "uninitialized" } });
+    await q.budget.initialize();
+    const listing = () => [readdirSync(join(storeDir, "review-judge")), readdirSync(join(anchorDir, "review-judge"))];
+    const files = listing();
+    expect(await inspect()).toMatchObject({
+      budget: { state: "ready", initializedDay: "2026-11-22", day: "2026-11-22" },
+    });
+    expect(listing()).toEqual(files); // no lock or temporary file left
+    rmSync(join(anchorDir, JUDGE_BUDGET_ANCHOR_FILENAME));
+    expect(await inspect()).toMatchObject({ budget: { state: "refused" } });
+    writeFileSync(join(storeDir, JUDGE_BUDGET_FILENAME), "{");
+    expect(await inspect()).toMatchObject({ budget: { state: "refused" } });
   });
 });
