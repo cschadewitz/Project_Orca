@@ -15,6 +15,7 @@ import { useConfigurationStudio } from "./configuration-studio-context.js";
 import { StructuredForm } from "./structured-form/structured-form.js";
 import { pathLabel } from "./structured-form/collection-model.js";
 import { RawView } from "./raw-view.js";
+import { CapabilityPreview } from "./capability-preview-view.js";
 import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
 import { StorageSection } from "./storage-section.js";
@@ -250,6 +251,7 @@ export function ConfigurationStudioSurface({
                     {!review.changes.length && (
                       <Text style="caption">Parsed values are unchanged; review the private source formatting.</Text>
                     )}
+                    {review.capabilities && <CapabilityPreview agents={review.capabilities} />}
                     <Button onClick={() => setPrivatePreview((current) => !current)}>Review private YAML</Button>
                     {privatePreview && (
                       <RawView

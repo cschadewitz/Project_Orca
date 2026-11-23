@@ -7,8 +7,10 @@ const withheldRoots = [
   "agents[].args",
   "agents[].env",
   "agents[].mcpServers",
-  // Catalog MCP server definitions (#335) carry commands, arguments and environment values.
-  "capabilities.mcpServers",
+  // Catalog MCP server arguments (#335) may carry credentials; the catalog id and the
+  // command are shown like an agent's. Its environment's variable names are shown, and each
+  // value stays opaque (`.env.<key>` is unclassified): a literal is never shown.
+  "capabilities.mcpServers.<key>.args",
   "hosts[].sshArgs",
   "hosts[].remoteShell",
   "hosts[].identityFile",
@@ -92,6 +94,10 @@ const nonSecret = new Set([
   "humanInput.mode",
   // Scoped capabilities (#335): skill catalog metadata and selections are ids and paths.
   "capabilities",
+  "capabilities.mcpServers",
+  "capabilities.mcpServers.<key>",
+  "capabilities.mcpServers.<key>.command",
+  "capabilities.mcpServers.<key>.env",
   "capabilities.skills",
   "capabilities.skills.<key>",
   "capabilities.skills.<key>.path",
