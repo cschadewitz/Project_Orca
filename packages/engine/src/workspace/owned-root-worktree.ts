@@ -7,7 +7,7 @@ import { LocalHost } from "@orca/agents";
 import { OrcaError, type Workspace } from "@orca/core";
 import { z } from "zod";
 import type { GitWorktreeProviderOptions } from "./git-worktree.js";
-import { GIT_REF, gitRefRefusal, type ProvisionInput, refAllowed } from "./provider.js";
+import { GIT_REF, gitRefMoved, gitRefRefusal, type ProvisionInput, refAllowed } from "./provider.js";
 
 const exec = promisify(execFile);
 const Receipt = z.strictObject({
@@ -269,7 +269,7 @@ export class OwnedRootWorktree {
       ]);
       const object = await git(repo, "rev-parse", "--verify", "--end-of-options", local);
       if (object !== expected)
-        throw gitRefRefusal(ref, `it moved on '${this.remote}' after it was checked; admit the run again`);
+        throw gitRefMoved(ref, `it moved on '${this.remote}' after it was checked; admit the run again`);
       // A branch names a commit; an annotated tag names a tag object, peeled here explicitly.
       const commit = await git(repo, "rev-parse", "--verify", "--end-of-options", `${object}^{commit}`).catch(() => {
         throw gitRefRefusal(ref, "it does not name a commit");

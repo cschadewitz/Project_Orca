@@ -294,7 +294,7 @@ it("admits a root run on its own checkout of a named git ref, and attaches it (#
   expect(after).toMatchObject({ status: "completed" });
 });
 
-it("refuses a run whose ref moved after runs.admit checked it, never checking out the new commit (#883)", async () => {
+it("refuses a run whose ref moved after runs.admit checked it, finally, never checking out the new commit (#883, #956)", async () => {
   const f = await refFixture();
   const provider = f.orc.workspaceProvider as GitWorktreeProvider;
   const checkRef = provider.checkRef.bind(provider);
@@ -311,19 +311,35 @@ it("refuses a run whose ref moved after runs.admit checked it, never checking ou
     { idempotencyKey: "ref-moved" },
     f.authority,
   );
-  expect(admitted).toMatchObject({ state: "resolved", result: { state: "recoverable-failure" } });
+  // A distinct, final failure naming the ref (#956), not an incomplete admission to reconcile.
+  const final = {
+    state: "recoverable-failure",
+    failure: { code: "GIT_REF_MOVED", message: expect.stringContaining("refs/heads/feature") },
+  };
+  expect(admitted).toMatchObject({ state: "resolved", result: final });
   // Creation was asked for exactly the object admission pinned, and refused the moved ref.
   expect(f.start).toHaveBeenCalledTimes(1);
   expect(f.start.mock.calls[0]![0]).toMatchObject({ gitRef: "refs/heads/feature", gitRefObject: f.original });
   expect(await f.orc.listRuns()).toEqual([]);
   expect(await f.receipts()).toEqual([]);
-  // Reconciling the reserved admission keeps the pin: it never recaptures the moved ref.
-  const again = await f.service.withRetryAuthority(f.authority, () =>
-    f.claims.reconcile(admitted.operationId, f.scope),
-  );
-  expect(again).toMatchObject({ state: "resolved", result: { state: "recoverable-failure" } });
-  expect(f.start.mock.calls.at(-1)![0]).toMatchObject({ gitRefObject: f.original });
+  // Reconciling answers the same refusal and creates nothing, even once the ref is back where
+  // it was pinned: the reserved run is never created under this key.
+  const reconcile = () =>
+    f.service.withRetryAuthority(f.authority, () => f.claims.reconcile(admitted.operationId, f.scope));
+  expect(await reconcile()).toMatchObject({ state: "resolved", result: final });
+  f.moveTo(f.original);
+  expect(await reconcile()).toMatchObject({ state: "resolved", result: final });
+  expect(f.start).toHaveBeenCalledTimes(1);
+  // Admitting again under the same key replays it too.
+  expect(
+    await f.service.admitRun(
+      { workflowId: "program", gitRef: "refs/heads/feature" },
+      { idempotencyKey: "ref-moved" },
+      f.authority,
+    ),
+  ).toMatchObject({ state: "resolved", result: final });
   expect(await f.orc.listRuns()).toEqual([]);
+  f.moveTo(f.moved);
   // A new admission checks again, and pins what the ref names now.
   const fresh = await f.service.admitRun(
     { workflowId: "program", gitRef: "refs/heads/feature" },
@@ -351,15 +367,9 @@ it("recovers an admission interrupted before its workspace receipt from the pinn
   expect(await f.receipts()).toEqual([]);
   const reconcile = () =>
     f.service.withRetryAuthority(f.authority, () => f.claims.reconcile(first.operationId, f.scope));
-  // The ref moves before recovery: recovery refuses rather than recapture the new commit.
-  f.moveTo(f.moved);
-  expect(await reconcile()).toMatchObject({ state: "resolved", result: { state: "recoverable-failure" } });
-  expect(f.start.mock.calls.at(-1)![0]).toMatchObject({ gitRefObject: f.original });
-  expect(await f.orc.listRuns()).toEqual([]);
-  expect(await f.receipts()).toEqual([]);
-  // Once the ref names the pinned object again, recovery admits exactly that object.
-  f.moveTo(f.original);
+  // Recovery admits exactly the pinned object while the ref still names it.
   expect(await reconcile()).toMatchObject({ state: "resolved", result: { state: "accepted" } });
+  expect(f.start.mock.calls.at(-1)![0]).toMatchObject({ gitRefObject: f.original });
   const [runId] = await f.orc.listRuns();
   const workspace = (await f.orc.getState(runId!)).run.workspace;
   expect(workspace.rootProvisioning).toMatchObject({
@@ -370,6 +380,36 @@ it("recovers an admission interrupted before its workspace receipt from the pinn
   expect(git(workspace.cwd, "rev-parse", "HEAD")).toBe(f.original);
   await f.orc.run(runId!);
   expect((await f.orc.getState(runId!)).run).toMatchObject({ status: "completed" });
+});
+
+it("refuses finally when the ref moves before an interrupted admission is recovered (#956)", async () => {
+  const f = await refFixture();
+  f.start.mockImplementationOnce(async () => {
+    throw new Error("crash");
+  });
+  const first = await f.service.admitRun(
+    { workflowId: "program", gitRef: "refs/heads/feature" },
+    { idempotencyKey: "ref-recover-moved" },
+    f.authority,
+  );
+  // An interruption is not final: it is reconciled.
+  expect(first).toMatchObject({
+    state: "resolved",
+    result: { state: "recoverable-failure", failure: { code: "RUN_STATE" } },
+  });
+  const reconcile = () =>
+    f.service.withRetryAuthority(f.authority, () => f.claims.reconcile(first.operationId, f.scope));
+  // The ref moves before recovery: recovery refuses the moved ref, and that is final.
+  f.moveTo(f.moved);
+  const final = { state: "recoverable-failure", failure: { code: "GIT_REF_MOVED" } };
+  expect(await reconcile()).toMatchObject({ state: "resolved", result: final });
+  expect(f.start.mock.calls.at(-1)![0]).toMatchObject({ gitRefObject: f.original });
+  const calls = f.start.mock.calls.length;
+  f.moveTo(f.original);
+  expect(await reconcile()).toMatchObject({ state: "resolved", result: final });
+  expect(f.start.mock.calls.length).toBe(calls);
+  expect(await f.orc.listRuns()).toEqual([]);
+  expect(await f.receipts()).toEqual([]);
 });
 
 it("refuses an origin that is not canonical ids before anything is claimed or admitted (#883)", async () => {

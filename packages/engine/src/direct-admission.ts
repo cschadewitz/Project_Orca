@@ -15,6 +15,7 @@ import type {
   RetryResult,
 } from "../../core/src/model/admission-retry.js";
 import type { Orchestrator } from "./orchestrator.js";
+import { isGitRefMoved } from "./workspace/provider.js";
 import type { BoundLaunchOptions, CapturedLaunch, LaunchSelection } from "./configuration-generation.js";
 import { canonicalJson, type RegisteredRetryClaims } from "./admission-retry.js";
 import {
@@ -62,6 +63,13 @@ const MaterialSchema = z.object({
     .optional(),
 });
 type Material = z.infer<typeof MaterialSchema>;
+/**
+ * A final refusal recorded for an admission's reserved run (#956): the ref it pinned moved
+ * before the run could be created. Kept beside the material, so a replay or reconcile under
+ * the same key answers it again and never creates the run.
+ */
+const RefusalSchema = z.strictObject({ code: z.literal("GIT_REF_MOVED"), message: z.string().min(1) });
+const refusalId = (binding: { materialId: string }) => `${binding.materialId}-refused`;
 const unavailable = () => new OrcaError("RUN_STATE", "Direct admission is unavailable");
 /** A fence's receipt, bound like any admission: stable for its operation, so a replay answers the same. */
 async function fenced(context: RetryContext): Promise<DirectAdmissionResult> {
@@ -213,6 +221,8 @@ export class DirectAdmissionService {
       const material = await this.material(binding, command);
       await context.reauthorize();
       if (await this.findRun(binding, material)) return await this.accept(binding, context, material);
+      const refused = await this.refused(binding);
+      if (refused) return refused;
       // A private run record without run.created may have provisioned external workspace state.
       // Do not repeat that uncertain side effect; preserve the reserved identity for inspection.
       if (await this.options.orchestrator.stores.execution.getInputs(binding.runId))
@@ -284,9 +294,41 @@ export class DirectAdmissionService {
       await context.reauthorize();
       await publishAdmissionExecutionPolicy(this.options.orchestrator.stores, this.policyBinding(binding, material));
       return await this.accept(binding, context, material);
-    } catch {
+    } catch (error) {
+      if (isGitRefMoved(error)) {
+        const refused = await this.refuse(binding, reserved, error.message).catch(() => undefined);
+        if (refused) return refused;
+      }
       return { state: "recoverable-failure", admissionId: binding.admissionId, runId: binding.runId, failure };
     }
+  }
+  /**
+   * Record that the reserved run will never be created because its pinned ref moved (#956),
+   * and answer that. Only while no run exists under the reserved id: a run that does exist is
+   * left to reconcile, as before.
+   */
+  private async refuse(
+    binding: z.infer<typeof BindingSchema>,
+    reserved: Material,
+    message: string,
+  ): Promise<DirectAdmissionResult | undefined> {
+    if (await this.findRun(binding, reserved)) return undefined;
+    const recorded = await this.refused(binding);
+    if (recorded) return recorded;
+    const refusal = RefusalSchema.parse({ code: "GIT_REF_MOVED", message: message.slice(0, 500) });
+    await this.options.orchestrator.stores.execution.putGeneration(refusalId(binding), refusal);
+    return this.refused(binding);
+  }
+  private async refused(binding: z.infer<typeof BindingSchema>): Promise<DirectAdmissionResult | undefined> {
+    const raw = await this.options.orchestrator.stores.execution.getGeneration(refusalId(binding));
+    if (raw === undefined || raw === null) return undefined;
+    const refusal = RefusalSchema.parse(raw);
+    return {
+      state: "recoverable-failure",
+      admissionId: binding.admissionId,
+      runId: binding.runId,
+      failure: { code: refusal.code, message: refusal.message, recovery: "reconcile" },
+    };
   }
   private async material(binding: z.infer<typeof BindingSchema>, command: DirectAdmissionCommand) {
     const raw = await this.options.orchestrator.stores.execution.getGeneration(binding.materialId);
