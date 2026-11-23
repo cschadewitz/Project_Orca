@@ -383,8 +383,14 @@ hosted web search is not a local call at all; Codex's own hook runner, not ORCA,
 a hook it cannot run (a broken login shell, a timeout) lets the call through, which is why
 ORCA probes the hook when the session opens.
 
-Other agents (Gemini, pi) take no hook yet: with `nativeToolHook: on` they are refused;
-without it, ORCA decides only what they ask about.
+Other agents (Gemini, pi) take no hook yet (#705): with `nativeToolHook: on` they are
+refused; without it, ORCA decides only what they ask about.
+[agent-hook-coverage.md](agent-hook-coverage.md) lists, for each qualified agent and
+version, which calls reach ORCA and which the agent runs on its own. `orca agents` shows an
+advisory, not a guard: the known settings it can see in an agent's command line and
+environment that let calls run without asking ORCA (for Gemini CLI today: YOLO or auto-edit
+in a trusted workspace, allowed-tools and policy flags, a trusted workspace, and the user's
+own Gemini home). It reads no settings file, so an empty advisory is not proof.
 
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive

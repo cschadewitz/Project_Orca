@@ -76,6 +76,23 @@ export interface SqliteSwitchJournal {
   format: 1;
   sqliteId: string;
   backup: string;
+  /**
+   * `"files"`: the switch back from SQLite to files (`switchStoreToFiles`), whose metadata was
+   * written out to {@link stagedFilesDir} before this journal. Absent: a switch to SQLite.
+   */
+  to?: "files";
+  /**
+   * The database file this switch started from or built (`<dev>:<ino>` of `metadata.sqlite` when
+   * the journal was written): recovery keeps, fences or drops only that file, never a replacement
+   * that happens to be bound to the same store. Always written; a switch to SQLite journaled by an
+   * earlier build has none and is judged by its binding alone.
+   */
+  database?: string;
+}
+
+/** Where the switch back to files writes the file metadata before it restores it into place. */
+export function stagedFilesDir(storeDir: string): string {
+  return join(sqliteSwitchDir(storeDir), "files");
 }
 
 const code = (error: unknown) => (error as NodeJS.ErrnoException).code;
@@ -131,7 +148,13 @@ export async function readSqliteSwitchJournal(storeDir: string): Promise<SqliteS
   }
   try {
     const value = JSON.parse(text) as Partial<SqliteSwitchJournal>;
-    if (value.format === 1 && typeof value.sqliteId === "string" && typeof value.backup === "string")
+    if (
+      value.format === 1 &&
+      typeof value.sqliteId === "string" &&
+      typeof value.backup === "string" &&
+      (value.to === undefined || value.to === "files") &&
+      (value.database === undefined ? value.to === undefined : typeof value.database === "string")
+    )
       return value as SqliteSwitchJournal;
   } catch {
     // Unreadable: reported below.
@@ -145,9 +168,24 @@ export async function readSqliteSwitchJournal(storeDir: string): Promise<SqliteS
 
 /** Record, durably, that a switch is about to fence the store; before the first marker. */
 export async function beginSqliteSwitchJournal(storeDir: string, journal: SqliteSwitchJournal): Promise<void> {
+  await prepareSqliteSwitchDir(storeDir);
+  await recordSqliteSwitchJournal(storeDir, journal);
+}
+
+/**
+ * A fresh, empty switch directory (with its `aside/`), before anything is written into it. Only
+ * under the format lock, with no journal: what an earlier switch left without one never fenced
+ * or restored anything.
+ */
+export async function prepareSqliteSwitchDir(storeDir: string): Promise<void> {
   const dir = sqliteSwitchDir(storeDir);
   await rm(dir, { recursive: true, force: true });
   await mkdir(join(dir, ASIDE), { recursive: true, mode: 0o700 });
+}
+
+/** Write the journal into the prepared switch directory, durably. */
+export async function recordSqliteSwitchJournal(storeDir: string, journal: SqliteSwitchJournal): Promise<void> {
+  const dir = sqliteSwitchDir(storeDir);
   await createDurable(join(dir, JOURNAL), JSON.stringify(journal) + "\n");
   await syncDirectory(dir);
   await syncDirectory(storeDir);
@@ -264,6 +302,66 @@ export async function unfenceLegacyMetadata(storeDir: string): Promise<void> {
     }
 }
 
+/**
+ * The switch back to files (#339): every marker replaced by the file metadata written out to
+ * `staged` ({@link stagedFilesDir}), in the reverse of the fence's order, so the keys, which stop
+ * v0.7.0 earliest, come back last. Each step is idempotent, and
+ * {@link fenceLegacyMetadata} undoes any prefix of them (setting what was restored aside):
+ *
+ * - a key: its link `.execution-key.sqlite` renamed over the marker (one rename, never missing);
+ * - a collection file: the staged file renamed over the marker, or the marker removed when the
+ *   collection is empty;
+ * - `runs`, `plans`: the marker file removed, then the staged directory renamed into place;
+ * - `workflows`: the marker removed, then `workflows.sqlite` renamed back;
+ * - the artifact index: the marker directory removed, then the staged index renamed into place.
+ *
+ * Refuses (`INTERRUPTED`) where neither a marker nor what this restores stands at a path.
+ */
+export async function restoreLegacyMetadata(
+  storeDir: string,
+  staged: string,
+  afterStep?: (path: string) => Promise<void>,
+): Promise<void> {
+  for (const fence of [...LEGACY_FENCES].reverse()) {
+    const path = join(storeDir, fence.path);
+    const parent = join(path, "..");
+    const marked = await isMarker(path);
+    if (fence.kind === "key") {
+      const sqliteKey = join(parent, SQLITE_KEY_FILE);
+      if (marked) {
+        if ((await kindOf(sqliteKey)) !== "file") throw conflict(storeDir, path);
+        await rename(sqliteKey, path);
+        await syncDirectory(parent);
+      } else if ((await kindOf(sqliteKey)) !== undefined) throw conflict(storeDir, path);
+    } else if (fence.kind === "file") {
+      const source = join(staged, fence.path);
+      if (marked) {
+        if ((await kindOf(source)) === "file") await rename(source, path);
+        else await unlink(path);
+        await syncDirectory(parent);
+      }
+    } else {
+      const source =
+        fence.kind === "relocate"
+          ? join(storeDir, SQLITE_LEGACY_WORKFLOWS_DIR)
+          : fence.kind === "index"
+            ? join(staged, "artifacts", "index.jsonl")
+            : join(staged, fence.path);
+      if (marked) {
+        if (fence.kind === "index") await rm(path, { recursive: true });
+        else await unlink(path);
+      }
+      const now = await kindOf(path);
+      const from = await kindOf(source);
+      const want = fence.kind === "index" ? "file" : "dir";
+      if (now === undefined && from === want) await rename(source, path);
+      else if (now !== undefined && now !== want) throw conflict(storeDir, path);
+      await syncDirectory(parent);
+    }
+    await afterStep?.(fence.path);
+  }
+}
+
 /** Every path holds its marker (or, for a key directory that has none, has nothing). */
 export async function legacyFenceComplete(storeDir: string): Promise<boolean> {
   for (const fence of LEGACY_FENCES) {
@@ -318,7 +416,7 @@ function unexpected(path: string): OrcaError {
 function conflict(storeDir: string, path: string): OrcaError {
   return new OrcaError(
     "STORE_FORMAT",
-    `An interrupted switch to SQLite left ${path} changed since it began, so it cannot be undone automatically. Restore the store from the backup its switch took (see ${join(sqliteSwitchDir(storeDir), JOURNAL)}).`,
+    `An interrupted switch between files and SQLite left ${path} changed since it began, so it cannot be undone automatically. Restore the store from the backup its switch took (see ${join(sqliteSwitchDir(storeDir), JOURNAL)}).`,
     { reason: "INTERRUPTED", storeDir, path },
   );
 }

@@ -42,6 +42,8 @@ import { insertEvent } from "./events.js";
 import { expectedSchemaObjects, ORCA_SQLITE_APPLICATION_ID, schemaObjects, SQLITE_MIGRATIONS } from "./schema.js";
 import { SQLITE_METADATA_FILE, sqliteStores } from "./stores.js";
 import { recordedSqliteBinding, recordedStoreBackend } from "../store-backend.js";
+import { STORE_FORMAT_LOCK } from "../store-format-lock.js";
+import { readSqliteSwitchJournal } from "./legacy-fence.js";
 
 export interface SqliteImportReport {
   /** Documents now in each collection. */
@@ -63,14 +65,15 @@ function conflict(what: string, details: Record<string, unknown>): OrcaError {
 }
 
 /** Everything the import moves, read from the file store at one point. */
-interface SourceSnapshot {
+export interface SourceSnapshot {
   collections: [name: string, docs: { id: string }[]][];
   runs: [runId: string, events: OrcaEvent[]][];
   plans: [planId: string, events: PlanEvent[]][];
   artifacts: Artifact[];
 }
 
-async function readSource(dir: string): Promise<SourceSnapshot> {
+/** The file store's metadata under `dir`, as the import reads it (and the switch back checks it). */
+export async function readFileMetadata(dir: string): Promise<SourceSnapshot> {
   const files = fileStores(dir);
   const collections: SourceSnapshot["collections"] = [];
   for (const [name, store] of [
@@ -107,10 +110,41 @@ export interface SqliteImportOptions extends SqliteOptions {
  * the database exactly as it was.
  */
 export async function importFileMetadata(dir: string, options: SqliteImportOptions = {}): Promise<SqliteImportReport> {
+  return withFileLock(join(dir, STORE_FORMAT_LOCK), async () => {
+    await refuseWhileSwitchPending(dir, "imported");
+    return importFileMetadataUnderFormatLock(dir, options);
+  });
+}
+
+/**
+ * Refuse (`STORE_FORMAT`, `SWITCH_PENDING`) while a switch between files and SQLite has a journal
+ * in this store: an interrupted switch is finished or undone by the next start, and that recovery
+ * acts on the store as the switch left it. A database restored or imported into it meanwhile
+ * would be a replacement that recovery could keep, fence or drop as if it were the original.
+ * Under the format lock, which the switch and its recovery hold, so the answer cannot go stale.
+ */
+async function refuseWhileSwitchPending(dir: string, what: string): Promise<void> {
+  const pending = await readSqliteSwitchJournal(dir).then(
+    (journal) => journal !== undefined,
+    () => true,
+  );
+  if (pending)
+    throw new OrcaError(
+      "STORE_FORMAT",
+      `${dir} has a switch between files and SQLite that has not finished; open the store with ORCA so it is finished or undone first. Nothing was ${what}.`,
+      { reason: "SWITCH_PENDING", dir },
+    );
+}
+
+/** {@link importFileMetadata} for a caller that already holds the format lock (the switch). */
+export async function importFileMetadataUnderFormatLock(
+  dir: string,
+  options: SqliteImportOptions = {},
+): Promise<SqliteImportReport> {
   const { betweenSourceReads, ...dbOptions } = options;
-  const source = await readSource(dir);
+  const source = await readFileMetadata(dir);
   await betweenSourceReads?.();
-  const again = await readSource(dir);
+  const again = await readFileMetadata(dir);
   if (sha256(JSON.stringify(again)) !== sha256(JSON.stringify(source)))
     throw new OrcaError("STORE_WRITE", "the file store changed while it was being imported; stop ORCA and rerun", {
       reason: "SOURCE_CHANGED",
@@ -431,6 +465,20 @@ export async function restoreSqliteMetadata(
         file: backup,
       });
   await mkdir(dir, { recursive: true });
+  // The format lock first, as everything that changes what a store runs on takes it (#339).
+  return withFileLock(join(dir, STORE_FORMAT_LOCK), async () => {
+    await refuseWhileSwitchPending(dir, "restored");
+    return restoreUnderFormatLock(backup, dir, file, refuseExisting, options);
+  });
+}
+
+async function restoreUnderFormatLock(
+  backup: string,
+  dir: string,
+  file: string,
+  refuseExisting: () => Promise<void>,
+  options: SqliteRestoreOptions,
+): Promise<{ file: string; schema: number }> {
   return withFileLock(`${file}.restore.lock`, async () => {
     await refuseExisting();
     const staged = `${file}.${randomUUID()}.restore`;
