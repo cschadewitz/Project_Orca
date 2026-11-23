@@ -44,7 +44,7 @@ import {
 import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
 import { loadConfig } from "../bootstrap.js";
 import { readOrcaVersion } from "../version.js";
-import { configRevision, writeConfigStoreDir } from "../config-store-dir.js";
+import { configRevision, otherConfigs, writeConfigStoreDir } from "../config-store-dir.js";
 import { storePrivacy } from "../store-privacy.js";
 import type { CommandContext } from "./index.js";
 
@@ -112,6 +112,21 @@ async function convertCommand(
 ): Promise<number> {
   const storeDir = resolve(workspace.configDir, workspace.raw);
   refuseAppOwned(workspace.configDir, storeDir);
+  // The new store is put in use by editing the workspace's one config, before anything is copied.
+  // A config is never created: it would be in use before it could be checked, and nothing could
+  // take it back.
+  const configFile = workspace.configFile;
+  if (!configFile)
+    throw new OrcaError(
+      "CONFIG_INVALID",
+      `no ORCA config names ${storeDir}: add ${join(workspace.configDir, "orca.config.yaml")} (with \`version: 1\`) and run the conversion again. Nothing was changed.`,
+    );
+  const others = await otherConfigs(configFile);
+  if (others.length)
+    throw new OrcaError(
+      "CONFIG_INVALID",
+      `${configFile} has ${others.join(", ")} beside it, so which config an ORCA opens depends on how it is started: keep one and run the conversion again. Nothing was changed.`,
+    );
   // The config names the new store the way it named the old one: relative stays relative.
   const raw = isAbsolute(workspace.raw)
     ? convertedStoreDir(workspace.raw)
@@ -119,15 +134,14 @@ async function convertCommand(
   if (resolve(workspace.configDir, raw) !== convertedStoreDir(storeDir))
     throw new OrcaError("CONFIG_INVALID", `cannot name the converted store of ${storeDir} in the config (${raw})`);
   // The config as it is now, which must still name this store: publication is conditional on it.
-  const saved = workspace.configFile ? await readFile(workspace.configFile, "utf8") : undefined;
-  const revision = configRevision(saved);
+  const revision = configRevision(await readFile(configFile, "utf8"));
   const privacy = storePrivacy();
   let written: string | undefined;
   const outcome = await convertStoreToSqlite(storeDir, {
     appVersion: readOrcaVersion(),
     ...(privacy ? { privacy } : {}),
     publish: async () => {
-      written = await writeConfigStoreDir(workspace.configFile, workspace.configDir, raw, {
+      written = await writeConfigStoreDir(configFile, workspace.configDir, raw, {
         revision,
         source: storeDir,
       });

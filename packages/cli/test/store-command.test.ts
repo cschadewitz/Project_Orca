@@ -237,26 +237,40 @@ describe("orca store", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "sqlite convert writes a config into a workspace that has none, and rewrites a JSON one",
-    async () => {
-      const bare = await fileWorkspace(undefined);
-      expect(await storeCommand(ctx(bare, ["sqlite", "convert"]))).toBe(0);
-      expect(await readFile(join(bare, "orca.config.yaml"), "utf8")).toBe('version: 1\nstoreDir: ".orca-sqlite"\n');
-      expect(await readdir(join(bare, ".orca", "runs"))).toEqual(["run_old.jsonl"]);
+  it.runIf(process.platform !== "win32")("sqlite convert rewrites a JSON config", async () => {
+    const json = await fileWorkspace({ name: "orca.config.json", text: '{"version":1,"workflows":[]}' });
+    expect(await storeCommand(ctx(json, ["sqlite", "convert"]))).toBe(0);
+    expect(JSON.parse(await readFile(join(json, "orca.config.json"), "utf8"))).toEqual({
+      version: 1,
+      workflows: [],
+      storeDir: ".orca-sqlite",
+    });
+    const app = await bootstrap({ cwd: json, logger: silentLogger });
+    expect(app.orchestrator.stores.capabilities?.backend).toBe("sqlite");
+    app.orchestrator.stores.close?.();
+  });
 
-      const json = await fileWorkspace({ name: "orca.config.json", text: '{"version":1,"workflows":[]}' });
-      expect(await storeCommand(ctx(json, ["sqlite", "convert"]))).toBe(0);
-      expect(JSON.parse(await readFile(join(json, "orca.config.json"), "utf8"))).toEqual({
-        version: 1,
-        workflows: [],
-        storeDir: ".orca-sqlite",
-      });
-      const app = await bootstrap({ cwd: json, logger: silentLogger });
-      expect(app.orchestrator.stores.capabilities?.backend).toBe("sqlite");
-      app.orchestrator.stores.close?.();
-    },
-  );
+  it("refuses to convert, before copying anything, without exactly one config", async () => {
+    // None: a config is never created, since it could not be taken back.
+    const bare = await fileWorkspace(undefined);
+    const before = (await readdir(bare)).sort();
+    await expect(storeCommand(ctx(bare, ["sqlite", "convert"]))).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("no ORCA config"),
+    });
+    expect((await readdir(bare)).sort()).toEqual(before);
+
+    // Two: which one an ORCA opens depends on how it is started.
+    const two = await fileWorkspace({ name: "orca.config.yaml", text: "version: 1\nworkflows: []\ntemplates: []\n" });
+    await writeFile(join(two, "orca.config.json"), '{"version":1}', "utf8");
+    const both = (await readdir(two)).sort();
+    await expect(storeCommand(ctx(two, ["sqlite", "convert"]))).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("orca.config.json"),
+    });
+    expect((await readdir(two)).sort()).toEqual(both);
+    expect(await readFile(join(two, "orca.config.yaml"), "utf8")).not.toContain("sqlite");
+  });
 
   it("refuses to convert a desktop app's own store, and changes nothing", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-store-convert-"));

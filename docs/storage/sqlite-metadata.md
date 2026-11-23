@@ -270,6 +270,10 @@ leaves the file store exactly as it was. Under the file store's format lock:
    left as it is. **Refuses on Windows** (`UNDURABLE`) for as long as store format
    changes are refused there (#947), and the desktop app's own workspaces
    (`APP_OWNED`): the app's daemon holds their write fence, which this command cannot.
+   Needs exactly one existing config in the workspace (`CONFIG_INVALID`, before anything
+   is copied): a config is never created, since a new one would be in use before it
+   could be checked against the other names a config may have, and could not be taken
+   back; with two, which one an ORCA opens depends on how it was started.
 2. Announces itself and checks that no registered writer of this ORCA is alive
    (`BUSY`), and that no run is active.
 3. Copies the store whole into staging beside it (`<store>-sqlite.staging-<id>/store`,
@@ -291,12 +295,11 @@ leaves the file store exactly as it was. Under the file store's format lock:
    a power loss could still undo; a failed flush leaves the config as it is.
 7. Writes the config, under the config writer's lock (`<config>.lock`, the one
    `config.set` takes), and only if the config is still the revision read when the
-   conversion began and still names the file store; otherwise `CONFIG_STALE`, and
-   nothing is written. `storeDir` names the new store (relative if it was relative;
-   YAML is edited in place, so comments stay; a workspace with no config gets
-   `orca.config.yaml`, created only if absent, by a link that never replaces a file,
-   and removed again if a config under another name appeared meanwhile). The config's
-   rename (or link) is the commit: every ORCA started afterwards, released ones included, opens the new store.
+   conversion began, is still the only config beside it, and still names the file
+   store; otherwise `CONFIG_STALE`, and nothing is written. `storeDir` names the new
+   store (relative if it was relative; YAML is edited in place, so comments stay). The
+   config's rename is the commit: every ORCA started afterwards, released ones
+   included, opens the new store.
 
 A refusal before step 5 publishes nothing and removes its own staging. Staging an
 interrupted conversion left is removed by the next one only when its record names

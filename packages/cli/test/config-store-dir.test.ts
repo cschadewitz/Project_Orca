@@ -1,7 +1,7 @@
 /**
- * Naming a converted store in a workspace's config (#339): conditional on the config being the
- * revision it was read at and still naming the source, under the config writer's lock, so an edit
- * made while a store was converted is never undone.
+ * Naming a converted store in a workspace's existing config (#339): conditional on the config being
+ * the revision it was read at, the only config there, and still naming the source, under the config
+ * writer's lock, so an edit made while a store was converted is never undone.
  */
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -58,40 +58,30 @@ describe("writeConfigStoreDir", () => {
     expect(await readFile(file, "utf8")).toBe(text);
   });
 
-  it("creates a config only where there still is none", async () => {
+  it("refuses when the config was removed, or another config name appeared beside it", async () => {
     const dir = await workspace();
-    await writeConfigStoreDir(undefined, dir, ".orca-sqlite", { revision: null, source: join(dir, ".orca") });
-    expect(await readFile(join(dir, "orca.config.yaml"), "utf8")).toBe('version: 1\nstoreDir: ".orca-sqlite"\n');
+    const file = join(dir, "orca.config.yaml");
+    const text = "version: 1\n";
+    await writeFile(file, text);
+    await rm(file);
+    await expect(
+      writeConfigStoreDir(file, dir, ".orca-sqlite", { revision: configRevision(text), source: join(dir, ".orca") }),
+    ).rejects.toMatchObject(stale);
+    expect(await readdir(dir)).toEqual([]);
 
-    // One appeared meanwhile, under this name or another a config may have.
-    for (const name of ["orca.config.yaml", "orca.config.json"]) {
+    for (const name of ["orca.config.yml", "orca.config.json"]) {
       const other = await workspace();
-      const text = name.endsWith(".json") ? '{"version":1}' : "version: 1\n";
-      await writeFile(join(other, name), text);
+      const own = join(other, "orca.config.yaml");
+      await writeFile(own, text);
+      await writeFile(join(other, name), "{}");
       await expect(
-        writeConfigStoreDir(undefined, other, ".orca-sqlite", { revision: null, source: join(other, ".orca") }),
+        writeConfigStoreDir(own, other, ".orca-sqlite", {
+          revision: configRevision(text),
+          source: join(other, ".orca"),
+        }),
       ).rejects.toMatchObject(stale);
-      expect(await readdir(other), name).toEqual([name]);
-      expect(await readFile(join(other, name), "utf8")).toBe(text);
-    }
-  });
-
-  it("never replaces a config that arrives while the new one is created", async () => {
-    for (const name of ["orca.config.yaml", "orca.config.json"]) {
-      const dir = await workspace();
-      const late = name.endsWith(".json") ? '{"version":1}' : "version: 1\nagents: []\n";
-      await expect(
-        writeConfigStoreDir(
-          undefined,
-          dir,
-          ".orca-sqlite",
-          { revision: null, source: join(dir, ".orca") },
-          { beforeCreate: () => writeFile(join(dir, name), late) },
-        ),
-      ).rejects.toMatchObject(stale);
-      // The late arrival stands, alone.
-      expect(await readdir(dir), name).toEqual([name]);
-      expect(await readFile(join(dir, name), "utf8")).toBe(late);
+      expect(await readFile(own, "utf8"), name).toBe(text);
+      expect((await readdir(other)).sort(), name).toEqual([name, "orca.config.yaml"].sort());
     }
   });
 });
