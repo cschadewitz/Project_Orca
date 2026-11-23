@@ -146,10 +146,12 @@ on nothing is recorded, whatever `diagnostics.toolCalls` says. When it is on:
   `ask` there. A call it could not decide is `block`, with `rule: "hook-error"` and the reason
   in `hookError`; a frame it could not read is recorded as tool `(unreadable)`.
 - Recording is kept apart from the decision. The answer and exit code are settled first; a
-  line that cannot be built is dropped, never the answer. The hook program writes the line
-  after its answer is out, without blocking, and leaves when the write is done or after
-  50 ms, whichever comes first, so a slow spool can hold the hook at most that long. It
-  ignores whether the line was written. A context `telemetry` that is not an absolute path, decimal device and inode is an
+  line that cannot be built is dropped, never the answer. The hook program does not write the
+  line itself: once its answer is out, it hands the line over a pipe to a detached recorder
+  (the same program, run as `--record-telemetry`, sharing none of the hook's streams) and
+  exits without waiting for it. A slow or stuck spool holds only the recorder, which gives up
+  after 2 seconds, never the hook or the agent waiting for it. Whether the line was written
+  changes nothing. A context `telemetry` that is not an absolute path, decimal device and inode is an
   unreadable context, which blocks the call as any unreadable context does; a spool anywhere
   but the context's own directory records nothing.
 - A line too long for the 8 KiB limit leaves things out whole, never cut, because a cut could

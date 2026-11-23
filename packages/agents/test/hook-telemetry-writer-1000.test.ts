@@ -287,7 +287,12 @@ describe.runIf(process.platform !== "win32")("the hook process", () => {
     expect(asked.stdout).toContain('"permissionDecision":"ask"');
     const allowed = await run([contextFile], frame("Bash", { command: "ls" }));
     expect(allowed).toEqual({ code: 0, stdout: "", stderr: "" });
-    await spool.drain();
+    // The lines are written by detached recorders, which the hook does not wait for.
+    for (let i = 0; i < 100 && got.length < 2; i++) {
+      await spool.drain();
+      if (got.length < 2) await new Promise((r) => setTimeout(r, 50));
+    }
+    got.sort((a, b) => (a.title ?? "").localeCompare(b.title ?? "")).reverse();
     expect(got.map((l) => [l.title, l.decision])).toEqual([
       ["rm -rf x", "ask"],
       ["ls", "allow"],
@@ -311,41 +316,52 @@ describe.runIf(process.platform !== "win32")("the hook process", () => {
   it.each([
     ["Claude ask, on stdout", [] as string[], { code: 0, stdout: '"permissionDecision":"ask"', stderr: "" }],
     ["Codex block, on stderr", ["--codex"], { code: 2, stdout: "", stderr: "Blocked by ORCA" }],
-  ])("%s: the whole answer arrives even when recording never completes", async (_what, prefix, expected) => {
-    // Every open of the spool hangs for good (and holds the process), as a stuck file
-    // system would; the marker shows the recorder really started.
-    const marker = join(root, "recorder-started");
-    const preload = join(root, "hang-open.mjs");
-    await writeFile(
-      preload,
-      [
-        'import { createRequire, syncBuiltinESMExports } from "node:module";',
-        'import { writeFileSync } from "node:fs";',
-        'const fsp = createRequire(import.meta.url)("node:fs/promises");',
-        'fsp.open = () => { writeFileSync(process.env.ORCA_TEST_MARKER, "1"); setInterval(() => {}, 1000); return new Promise(() => {}); };',
-        "syncBuiltinESMExports();",
-      ].join("\n"),
-    );
-    // Without telemetry: the answer as it is.
-    await writeContext(context({ telemetry: undefined }));
-    const plain = await run([...prefix, contextFile], frame("Bash", { command: "rm -rf x" }, "toolu_w"));
-    await writeContext(context());
-    const startedAt = Date.now();
-    const hung = await run(
-      [...prefix, contextFile],
-      frame("Bash", { command: "rm -rf x" }, "toolu_w"),
-      ["--import", pathToFileURL(preload).href],
-      { ORCA_TEST_MARKER: marker },
-    );
-    expect(await readFile(marker, "utf8")).toBe("1");
-    expect(hung).toEqual(plain);
-    expect(hung.code).toBe(expected.code);
-    expect(hung.stdout).toContain(expected.stdout);
-    expect(hung.stderr).toContain(expected.stderr);
-    if (expected.stdout)
-      expect(JSON.parse(hung.stdout)).toMatchObject({ hookSpecificOutput: { permissionDecision: "ask" } });
-    expect(Date.now() - startedAt).toBeLessThan(5_000);
-  });
+  ])(
+    "%s: the whole answer arrives, and the hook exits, while recording never completes",
+    async (_what, prefix, expected) => {
+      // Every open of the spool hangs for good (and holds the process), as a stuck file
+      // system would; the marker holds the pid of the recorder that is stuck.
+      const marker = join(root, "recorder-started");
+      const preload = join(root, "hang-open.mjs");
+      await writeFile(
+        preload,
+        [
+          'import { createRequire, syncBuiltinESMExports } from "node:module";',
+          'import { writeFileSync } from "node:fs";',
+          'const fsp = createRequire(import.meta.url)("node:fs/promises");',
+          "fsp.open = () => { writeFileSync(process.env.ORCA_TEST_MARKER, String(process.pid)); setInterval(() => {}, 1000); return new Promise(() => {}); };",
+          "syncBuiltinESMExports();",
+        ].join("\n"),
+      );
+      // Without telemetry: the answer as it is.
+      await writeContext(context({ telemetry: undefined }));
+      const plain = await run([...prefix, contextFile], frame("Bash", { command: "rm -rf x" }, "toolu_w"));
+      await writeContext(context());
+      const startedAt = Date.now();
+      const hung = await run(
+        [...prefix, contextFile],
+        frame("Bash", { command: "rm -rf x" }, "toolu_w"),
+        ["--import", pathToFileURL(preload).href],
+        { ORCA_TEST_MARKER: marker },
+      );
+      // The hook has exited and closed its streams; the recorder it started is still stuck.
+      let pid = 0;
+      for (let i = 0; i < 100 && !pid; i++) {
+        pid = Number(await readFile(marker, "utf8").catch(() => "0"));
+        if (!pid) await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(pid).toBeGreaterThan(0);
+      expect(() => process.kill(pid, 0)).not.toThrow();
+      process.kill(pid, "SIGKILL");
+      expect(hung).toEqual(plain);
+      expect(hung.code).toBe(expected.code);
+      expect(hung.stdout).toContain(expected.stdout);
+      expect(hung.stderr).toContain(expected.stderr);
+      if (expected.stdout)
+        expect(JSON.parse(hung.stdout)).toMatchObject({ hookSpecificOutput: { permissionDecision: "ask" } });
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+    },
+  );
 
   it("answers the same when the spool is gone", async () => {
     await rm(spool.file);
