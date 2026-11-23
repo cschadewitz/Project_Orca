@@ -9,6 +9,7 @@ function configuredRoute(command: string): FirstRunAgentCheck["evidence"]["confi
   if (name === "claude-code-acp") return "claude-code-acp-candidate";
   if (name === "codex-acp") return "codex-acp-candidate";
   if (name.toLowerCase() === "copilot") return "copilot-cli-acp-candidate";
+  if (name.toLowerCase() === "cline") return "cline-acp-candidate";
   return "unverified";
 }
 /** Only a complete known thin Mach-O header can establish this narrow negative observation. */

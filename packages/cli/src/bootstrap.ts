@@ -313,7 +313,7 @@ export function makeSessionFactory(
 ): SessionFactory {
   const permissionFiles = [permissionPolicyPath(layout.configDir)];
   const protectedPaths = orcaProtectedPaths(layout);
-  // Provider-specific launch checks and session guards (#709): Copilot CLI and the like.
+  // Provider-specific launch checks and session guards (#709, #711): Copilot CLI, Cline and the like.
   const guarded = withProviderGuards(open);
   const contextDir = join(resolve(layout.configDir, layout.storeDir), "private-execution", "tool-hooks");
   return async (options: OpenSessionOptions) => {

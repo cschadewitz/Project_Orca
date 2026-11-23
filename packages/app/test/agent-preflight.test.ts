@@ -87,6 +87,16 @@ it("reports a short file unavailable and an unknown executable route honestly", 
     evidence: { configuredRoute: "unverified", support: "unknown", architecture: "unknown", signIn: "unknown" },
   });
 });
+it("names a cline executable as a Cline ACP candidate, and nothing more (#711)", async () => {
+  const f = await fixture();
+  const cline = join(f.bin, "cline");
+  await writeFile(cline, "#!/bin/sh\nexit 0\n");
+  await chmod(cline, 0o700);
+  expect(await inspectLocalTool({ id: "cline", command: cline, env: {} })).toMatchObject({
+    state: "handshake-required",
+    evidence: { configuredRoute: "cline-acp-candidate", support: "unknown", version: "unknown", signIn: "unknown" },
+  });
+});
 function machO(cpu: number): Buffer {
   const bytes = Buffer.alloc(8);
   bytes.writeUInt32LE(0xfeedfacf, 0);
