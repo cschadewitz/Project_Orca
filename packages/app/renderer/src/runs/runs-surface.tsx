@@ -41,13 +41,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { CHROME_GLYPHS, STATUS_PRESENTATION, type ConnectionState } from "@orca/design";
-import { DISPLAY_STATUSES, type RunSummaryView, type StepView } from "@orca/protocol";
+import { DISPLAY_STATUSES, SEARCH_METHOD, type RunSummaryView, type StepView } from "@orca/protocol";
 import type { VirtualListHandle } from "../list/index.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { useControls } from "../attention/use-controls.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
 import { Button, Menu, StateView, Text, countedOf, idText, textClass, type Crumb, type MenuItem } from "../ui/index.js";
-import { useConnection } from "../chrome/use-connection.js";
+import { useConnection, useMethodPresent } from "../chrome/use-connection.js";
+import { RunSearch } from "./search/run-search.js";
 import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { StepDetail } from "../step/index.js";
 import { matchesText } from "./run-rows.js";
@@ -89,6 +90,11 @@ export interface RunsSurfaceProps {
    * is the honest end of a link to a step that was never scheduled.
    */
   open?: { runId: string; nodeId?: string; attempt?: number } | undefined;
+  /**
+   * Open an `orca://` URL through the route table: where a search hit goes (#340). Without it
+   * a hit opens its run in the tree.
+   */
+  onOpen?: ((url: string) => void) | undefined;
 }
 
 /** A stable empty page, so the memos do not recompute before the data lands. */
@@ -114,14 +120,16 @@ const SINCE_ITEMS: readonly (MenuItem & { ms?: number })[] = [
 ];
 const ALL_WORKFLOWS = "\u0000all";
 
-type View = "tree" | "board";
+type View = "tree" | "board" | "search";
+
+const VIEW_WORDS: Readonly<Record<View, string>> = { tree: "Tree", board: "Board", search: "Search" };
 
 /** "7 runs", or "3 of 7 runs" once the text filter has narrowed what the daemon sent. */
 function countLabel(shown: number, total: number): string {
   return countedOf(shown, total, "run");
 }
 
-export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): JSX.Element {
+export function RunsSurface({ connection, onCrumbs, open, onOpen }: RunsSurfaceProps): JSX.Element {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [workflowId, setWorkflowId] = useState<string | undefined>(undefined);
   /* The instant is fixed when the range is chosen, so the read does not change under it. */
@@ -188,6 +196,8 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
     }
     appliedOpen.current = open;
     pendingOpen.current = open;
+    // A link is about one run, so it is shown where a run is: in the tree.
+    setView("tree");
     selectRun(open.runId);
   }, [open, state.phase, runs, unresolved, include, selectRun]);
   useEffect(() => setFollow(true), [selectedRunId]);
@@ -326,6 +336,19 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
     [selection],
   );
   useRunWrites(selectedRunId, selectedRun?.name);
+  const searchable = useMethodPresent(SEARCH_METHOD);
+  /* A hit is a canonical URL; the chrome's route table opens it. Rendered without one (a test,
+     a host that does not route), a hit still opens its run here. */
+  const openHit = useCallback(
+    (url: string) => {
+      if (onOpen) onOpen(url);
+      else {
+        const match = /^orca:\/\/run\/([^/?]+)/.exec(url) ?? /[?&]run=([^&]+)/.exec(url);
+        if (match?.[1]) openInTree(decodeURIComponent(match[1]));
+      }
+    },
+    [onOpen, openInTree],
+  );
 
   return (
     <div className="orca-runs">
@@ -418,9 +441,29 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
               aria-pressed={view === v}
               onClick={() => setView(v)}
             >
-              {v === "tree" ? "Tree" : "Board"}
+              {VIEW_WORDS[v]}
             </button>
           ))}
+          {/* #255's search, visibly unavailable until the daemon answers it (#340). */}
+          {searchable ? (
+            <button
+              type="button"
+              className={`orca-btn ${textClass("caption")} orca-btn--ghost orca-btn--sm`}
+              aria-pressed={view === "search"}
+              onClick={() => setView("search")}
+            >
+              {VIEW_WORDS.search}
+            </button>
+          ) : (
+            <Button
+              size="sm"
+              tone="ghost"
+              disabled
+              disabledReason="Searching event text and artifact contents needs a daemon that answers search (protocol 2.2)"
+            >
+              {VIEW_WORDS.search}
+            </Button>
+          )}
         </div>
         {state.phase === "ready" && (
           <Text style="caption" className="orca-runs__count">
@@ -474,6 +517,16 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
                   onOpen={openInTree}
                   onRetry={board.retry}
                   recovery={boardRecovery}
+                />
+              ) : undefined
+            }
+            search={
+              view === "search" && searchable ? (
+                <RunSearch
+                  selectedRunId={selectedRunId}
+                  selectedRunName={selectedRun?.name}
+                  connection={connection}
+                  onOpen={openHit}
                 />
               ) : undefined
             }
@@ -532,11 +585,18 @@ interface TreeBodyProps {
   onClearFilter: () => void;
   /** The board, in place of the tree, when that view is chosen. */
   board?: JSX.Element | undefined;
+  /**
+   * The search view, in place of the tree. It does not read the run list, so it stands
+   * whatever the list is doing: a list re-read on reconnect does not unmount a query.
+   */
+  search?: JSX.Element | undefined;
 }
 
 /** The tree, or the one state view that stands in for it. */
 function TreeBody(props: TreeBodyProps): JSX.Element {
   const { state, tree, visible, live, filtered, connection, onSelect, onRetry, onClearFilter } = props;
+
+  if (props.search) return props.search;
 
   if (state.phase === "loading") return <StateView kind="loading" title="Loading runs" />;
 

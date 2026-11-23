@@ -40,7 +40,7 @@ const caller = (principalId: string): DraftCaller => ({ principalId, read: async
 const casey = caller("casey");
 const robin = caller("robin");
 
-async function fixture(options: { activation?: "applied" | "invalid" } = {}) {
+async function fixture(options: { activation?: "applied" | "invalid"; generation?: false } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "orca-workflow-drafts-"));
   dirs.push(dir);
   await mkdir(join(dir, "workflows"));
@@ -66,7 +66,7 @@ async function fixture(options: { activation?: "applied" | "invalid" } = {}) {
     baseDir: dir,
     readConfig,
     exclusive: async (command) => command(),
-    validationContext: () => ({}),
+    validationContext: () => (options.generation === false ? undefined : {}),
     applyLocked: async (_params, recheck): Promise<ConfigApplyResult> => {
       await recheck();
       applied.push(await readFile(file, "utf8"));
@@ -220,6 +220,24 @@ describe("editing", () => {
         expect.objectContaining({ severity: "warning", node: "work", path: "nodes.work.vars" }),
       ]),
     );
+  });
+
+  it("never calls a draft clean when there is no active configuration to check it against (#182)", async () => {
+    const f = await fixture({ generation: false });
+    await f.service.open("tiny", casey);
+    const view = await f.service.apply(
+      { workflowId: "tiny", expectedRevision: 0, ops: [{ op: "setWorkflow", name: "Renamed" }] },
+      casey,
+    );
+    expect(view.issues).toEqual([
+      expect.objectContaining({
+        severity: "error",
+        graph: [],
+        message: expect.stringMatching(/no active configuration/),
+      }),
+    ]);
+    expect(view.issues[0]).not.toHaveProperty("node");
+    expect(view.publishBlocked).toBe("1 validation error to fix before publishing.");
   });
 
   it("keeps a drag in the layout and out of the workflow text", async () => {
