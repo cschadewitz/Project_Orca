@@ -322,13 +322,10 @@ Unknown or unlisted paths are **unsupported**.
 
 ## Follow-up proposals (shared code — not changed here)
 
-- **F1 — never let a rule match select a remembered option.**
-  - Gap: `resolvePermission` picks `allow_once`, falling back to `allow_always` when no
-    `allow_once` is offered. OpenCode always offers `once`, but a provider that did not
-    would turn an ORCA rule match into an unbounded native grant. (The counterfactual test
-    records the current behaviour.)
-  - Proposal: answer `cancelled` instead of falling back to `allow_always`, in
-    `packages/agents/src/permissions.ts`, with a test.
+- **F1 — never let a rule match select a remembered option.** Done in #702:
+  `resolvePermission` selects only `allow_once` for a rule-matched allow and answers
+  `cancelled` (`allow:no-one-time-option`) when none is offered. The counterfactual test
+  now records that refusal.
 - **F2 — spawn environment control.**
   - Gaps: `LocalHost` can only add or replace variables, and there is no per-spawn secret.
   - Proposal: an opt-in `envPolicy` on `AgentSpec` (an allowlist and an ephemeral generated

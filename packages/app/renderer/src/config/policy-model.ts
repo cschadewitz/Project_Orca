@@ -60,6 +60,8 @@ export interface SidecarRule {
   decision: RuleDecision;
   addedAt?: string;
   grantedFor?: string;
+  /** When the rule stops deciding (#702). Absent: until removed. */
+  expiresAt?: string;
 }
 
 /**
@@ -234,7 +236,7 @@ export function withRules(doc: SidecarDocument, agentId: string, rules: readonly
 const MATCH_KEYS: readonly string[] = ["kind", "titlePattern", "path", "pathPrefix", "scope"];
 
 /** The keys of a rule, in that same writer's order. */
-const RULE_KEYS: readonly string[] = ["match", "decision", "addedAt", "grantedFor"];
+const RULE_KEYS: readonly string[] = ["match", "decision", "addedAt", "grantedFor", "expiresAt"];
 
 /**
  * One rule as it is written: the keys this app knows in the daemon's order, then any it
@@ -262,6 +264,7 @@ function canonicalRule(rule: SidecarRule): Record<string, unknown> {
   const out: Record<string, unknown> = { match, decision: rule.decision };
   if (rule.addedAt !== undefined) out["addedAt"] = rule.addedAt;
   if (rule.grantedFor !== undefined) out["grantedFor"] = rule.grantedFor;
+  if (rule.expiresAt !== undefined) out["expiresAt"] = rule.expiresAt;
   for (const key of Object.keys(raw)) {
     if (!RULE_KEYS.includes(key) && raw[key] !== undefined) out[key] = raw[key];
   }
@@ -272,7 +275,8 @@ function canonicalRule(rule: SidecarRule): Record<string, unknown> {
  * The bytes, in the daemon's own key order and with `undefined` omitted.
  *
  * The order is `serialize()` in `packages/agents/src/permissions.ts`: `version` then
- * `agents` sorted by id, each rule `match` then `decision` then `addedAt` then `grantedFor`,
+ * `agents` sorted by id, each rule `match` then `decision` then `addedAt` then `grantedFor`
+ * then `expiresAt`,
  * and a match's own keys in the vocabulary's order. Two spaces and a trailing newline, the
  * same, so that a save that changed one row produces a one-row diff. A key neither this app
  * nor that writer knows is written after the ones they do, rather than dropped.

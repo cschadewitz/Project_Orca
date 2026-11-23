@@ -1,0 +1,1 @@
+- **agents:** A permission rule that allows a tool call now answers the agent with its one-time allow only. When an agent offers no one-time allow, the call is refused (logged as `allow:no-one-time-option`) instead of being answered with the agent's "always allow", which would have made the agent stop asking and kept a later expired or removed rule from ever being checked again.

@@ -256,8 +256,36 @@ export const RecordedPermissionRuleSchema = PermissionRuleSchema.extend({
   addedAt: z.string().optional(),
   /** The tool call title that was answered "always", verbatim. */
   grantedFor: z.string().optional(),
+  /**
+   * ISO-8601 instant after which the rule stops deciding anything (#702). Absent means the
+   * rule stands until somebody removes it. An expired rule stays in the file, so the diff
+   * still says what was granted and for how long; the evaluator just skips it, and the
+   * sidecar is read per ask, so the first ask after the instant is decided without it.
+   * A value that is not an instant is refused at parse rather than read as "forever".
+   */
+  expiresAt: z
+    .string()
+    .refine((value) => Number.isFinite(Date.parse(value)), { error: "expiresAt must be an ISO-8601 instant" })
+    .optional(),
 });
 export type RecordedPermissionRule = z.infer<typeof RecordedPermissionRuleSchema>;
+
+/**
+ * Whether a recorded rule has run out at `now` (#702). The instant itself is already out:
+ * a rule granted "for one hour" does not decide the ask that arrives exactly an hour later.
+ */
+export function permissionRuleExpired(rule: { expiresAt?: string | undefined }, now: number): boolean {
+  if (rule.expiresAt === undefined) return false;
+  const at = Date.parse(rule.expiresAt);
+  return !Number.isFinite(at) || at <= now;
+}
+
+/**
+ * The longest lifetime a client may ask an "always" answer to carry (#702), so a typo in a
+ * duration cannot quietly become a grant nobody will remember. "Until removed" is a separate,
+ * explicit choice: leave the duration out.
+ */
+export const MAX_PERMISSION_RULE_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000;
 
 /**
  * The sidecar document, keyed by agent id.

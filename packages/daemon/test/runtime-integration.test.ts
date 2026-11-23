@@ -372,6 +372,45 @@ const sidecar = async (path: string) =>
   });
 
 describe("standing permission acceptance", () => {
+  it("shows the exact rule before saving, and stamps a chosen lifetime on the daemon's clock (#702)", async () => {
+    const h = await fixture();
+    const live = await permissionGate(h);
+    const input = (await h.reads.inputsList({ runId: live.params.runId })).inputs[0]!;
+    expect(input.standing).toEqual({
+      allow: { rules: [{ match: { kind: "edit", path: "a.ts" }, decision: "allow" }] },
+      deny: { rules: [{ match: { kind: "edit", path: "a.ts" }, decision: "deny" }] },
+    });
+    const before = Date.now();
+    const reply = await h.rpc(h.owner, "inputs.answer", {
+      ...live.params,
+      optionId: "allow",
+      always: { decision: "allow", durationMs: 60 * 60 * 1000 },
+      resume: true,
+    });
+    expect(reply.ok).toBe(true);
+    const saved = JSON.parse((await sidecar(h.permissionsFile))!) as {
+      agents: Record<string, { rules: { match: unknown; addedAt: string; expiresAt: string }[] }>;
+    };
+    const [rule] = Object.values(saved.agents)[0]!.rules;
+    expect(rule!.match).toEqual({ kind: "edit", path: "a.ts" });
+    expect(Date.parse(rule!.expiresAt) - Date.parse(rule!.addedAt)).toBe(60 * 60 * 1000);
+    expect(Date.parse(rule!.addedAt)).toBeGreaterThanOrEqual(before - 1000);
+    await live.done;
+    expect(live.answers).toEqual(["allow"]);
+  });
+  it("refuses a lifetime longer than 90 days before answering anything (#702)", async () => {
+    const h = await fixture();
+    const live = await permissionGate(h);
+    const reply = await h.rpc(h.owner, "inputs.answer", {
+      ...live.params,
+      optionId: "allow",
+      always: { decision: "allow", durationMs: 91 * 24 * 60 * 60 * 1000 },
+      resume: true,
+    });
+    expect(reply.ok).toBe(false);
+    expect(await sidecar(h.permissionsFile)).toBeUndefined();
+    expect(h.livePort.inspect(live.params.live)).toBe("pending");
+  });
   it("does not grant for an invalid option, stale gate, wrong run or foreign lease", async () => {
     const h = await fixture();
     const live = await permissionGate(h);

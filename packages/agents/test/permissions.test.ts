@@ -1138,3 +1138,204 @@ describe("an unreadable sidecar", () => {
     expect(decidePermission(policy, req("edit", "Edit", `${dir}/src/c.ts`), { workspaceCwd: dir })).toBe("ask");
   });
 });
+
+/**
+ * #702: a standing rule has a lifetime, ORCA's own rule is the only standing grant, and an
+ * automatic allow never hands the agent a remembered one. Each case below is re-read per ask
+ * the way `openAcpSession` does, so "the next ask" is the very next evaluation.
+ */
+describe("rule lifetimes and one-time selection (#702)", () => {
+  const agent = AgentSpecSchema.parse({
+    id: "claude-local",
+    command: "claude-code-acp",
+    permissions: { default: "ask", rules: [] },
+  });
+  const T0 = Date.parse("2026-11-23T10:00:00.000Z");
+  const HOUR = 60 * 60 * 1000;
+
+  it("decides by a timed rule until it expires, then asks again, without anybody editing the file", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const request = req("edit", "Edit src/a.ts", `${dir}/src/a.ts`);
+    await recordAlwaysDecision({
+      file,
+      agentId: agent.id,
+      request,
+      decision: "allow",
+      workspaceCwd: dir,
+      expiresAt: new Date(T0 + HOUR).toISOString(),
+      now: () => new Date(T0),
+    });
+    const at = async (ms: number) =>
+      decidePermission(await loadEffectivePermissionPolicy(agent, [file], undefined, undefined, () => ms), request, {
+        workspaceCwd: dir,
+      });
+    expect(await at(T0 + HOUR - 1)).toBe("allow");
+    // The instant itself is already out.
+    expect(await at(T0 + HOUR)).toBe("ask");
+    expect(await at(T0 + 2 * HOUR)).toBe("ask");
+    // The expired rule stays in the file, with its lifetime, for whoever reads the diff.
+    expect((await readPermissionPolicyFile(file)).agents[agent.id]?.rules[0]).toMatchObject({
+      expiresAt: "2026-11-23T11:00:00.000Z",
+    });
+  });
+
+  it("lets an expired deny stop deciding too: the person chose how long it held", async () => {
+    const doc = {
+      version: 1 as const,
+      agents: {
+        a: {
+          rules: [
+            {
+              match: { kind: "edit" as const, path: "src/a.ts" },
+              decision: "deny" as const,
+              expiresAt: "2026-11-23T11:00:00.000Z",
+            },
+          ],
+        },
+      },
+    };
+    expect(permissionOverlayFor(doc, "a", undefined, T0)).toHaveLength(1);
+    expect(permissionOverlayFor(doc, "a", undefined, T0 + HOUR)).toEqual([]);
+  });
+
+  it("revokes by removal: the next ask after a rule is deleted is asked, not answered from a cache", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const request = req("edit", "Edit src/a.ts", `${dir}/src/a.ts`);
+    await recordAlwaysDecision({ file, agentId: agent.id, request, decision: "allow", workspaceCwd: dir });
+    const policy = () => loadEffectivePermissionPolicy(agent, [file]);
+    expect((await resolvePermission(await policy(), { request, scope: { workspaceCwd: dir } })).response).toEqual({
+      outcome: { outcome: "selected", optionId: "once" },
+    });
+    await replacePermissionPolicyFile(file, { version: 1, agents: {} });
+    expect(decidePermission(await policy(), request, { workspaceCwd: dir })).toBe("ask");
+  });
+
+  it("extends an equivalent rule in place rather than appending a twin, and never shortens one", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const request = req("edit", "Edit src/a.ts", `${dir}/src/a.ts`);
+    const opts = {
+      file,
+      agentId: "a",
+      request,
+      decision: "allow" as const,
+      workspaceCwd: dir,
+      now: () => new Date(T0),
+    };
+    const hour = new Date(T0 + HOUR).toISOString();
+    const day = new Date(T0 + 24 * HOUR).toISOString();
+    expect((await recordAlwaysDecision({ ...opts, expiresAt: hour })).added).toHaveLength(1);
+    // Longer: extended in place, still one line.
+    expect((await recordAlwaysDecision({ ...opts, expiresAt: day })).added).toHaveLength(1);
+    let rules = (await readPermissionPolicyFile(file)).agents["a"]?.rules;
+    expect(rules).toHaveLength(1);
+    expect(rules?.[0]?.expiresAt).toBe(day);
+    // Shorter: the longer grant already covers it, so nothing is written.
+    const shorter = await recordAlwaysDecision({ ...opts, expiresAt: hour });
+    expect(shorter.added).toEqual([]);
+    expect(shorter.alreadyPresent).toHaveLength(1);
+    // Until removed: outlasts any timed rule, so it replaces the lifetime.
+    expect((await recordAlwaysDecision(opts)).added).toHaveLength(1);
+    rules = (await readPermissionPolicyFile(file)).agents["a"]?.rules;
+    expect(rules).toHaveLength(1);
+    expect(rules?.[0]?.expiresAt).toBeUndefined();
+    // And a timed answer after that changes nothing.
+    expect((await recordAlwaysDecision({ ...opts, expiresAt: day })).alreadyPresent).toHaveLength(1);
+  });
+
+  it("renews an expired rule in place", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const request = req("edit", "Edit src/a.ts", `${dir}/src/a.ts`);
+    const base = { file, agentId: "a", request, decision: "allow" as const, workspaceCwd: dir };
+    await recordAlwaysDecision({ ...base, expiresAt: new Date(T0 + HOUR).toISOString(), now: () => new Date(T0) });
+    const later = T0 + 3 * HOUR;
+    const renewed = await recordAlwaysDecision({
+      ...base,
+      expiresAt: new Date(later + HOUR).toISOString(),
+      now: () => new Date(later),
+    });
+    expect(renewed.added).toHaveLength(1);
+    const rules = (await readPermissionPolicyFile(file)).agents["a"]?.rules;
+    expect(rules).toHaveLength(1);
+    expect(rules?.[0]).toMatchObject({
+      addedAt: new Date(later).toISOString(),
+      expiresAt: new Date(later + HOUR).toISOString(),
+    });
+  });
+
+  it("refuses a lifetime that is already over, and writes nothing", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    await expect(
+      recordAlwaysDecision({
+        file,
+        agentId: "a",
+        request: req("edit", "Edit src/a.ts", `${dir}/src/a.ts`),
+        decision: "allow",
+        workspaceCwd: dir,
+        expiresAt: new Date(T0).toISOString(),
+        now: () => new Date(T0),
+      }),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    await expect(readFile(file, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses a sidecar whose expiresAt is not an instant, rather than read it as forever", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        agents: { a: { rules: [{ match: { kind: "edit", path: "src/a.ts" }, decision: "allow", expiresAt: "soon" }] } },
+      }),
+    );
+    await expect(readPermissionPolicyFile(file)).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+  });
+
+  it("writes the lifetime after the provenance, in the writer's fixed key order", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    await recordAlwaysDecision({
+      file,
+      agentId: "a",
+      request: req("edit", "Edit src/a.ts", `${dir}/src/a.ts`),
+      decision: "allow",
+      workspaceCwd: dir,
+      expiresAt: "2026-11-24T10:00:00.000Z",
+      now: () => new Date(T0),
+    });
+    const rule = JSON.parse(await readFile(file, "utf8")).agents.a.rules[0];
+    expect(Object.keys(rule)).toEqual(["match", "decision", "addedAt", "grantedFor", "expiresAt"]);
+  });
+
+  it("answers a rule-matched allow with the one-time option only, never the remembered one", async () => {
+    const policy: PermissionPolicy = { default: "ask", rules: [{ match: { kind: "read" }, decision: "allow" }] };
+    const request = (options: { optionId: string; kind: string }[]) =>
+      ({
+        sessionId: "s",
+        toolCall: { toolCallId: "t", title: "Read a", kind: "read" },
+        options: options.map((o) => ({ ...o, name: o.optionId })),
+      }) as never;
+    // Offered in the order agents commonly use, remembered first.
+    expect(
+      await resolvePermission(policy, {
+        request: request([
+          { optionId: "always", kind: "allow_always" },
+          { optionId: "once", kind: "allow_once" },
+        ]),
+      }),
+    ).toEqual({ response: { outcome: { outcome: "selected", optionId: "once" } }, decision: "allow" });
+    expect(
+      await resolvePermission(policy, {
+        request: request([
+          { optionId: "always", kind: "allow_always" },
+          { optionId: "no", kind: "reject_once" },
+        ]),
+      }),
+    ).toEqual({ response: { outcome: { outcome: "cancelled" } }, decision: "allow:no-one-time-option" });
+  });
+});

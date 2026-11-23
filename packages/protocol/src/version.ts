@@ -189,7 +189,15 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * names a ref sends it only to a daemon that lists the field, and refuses any other rather
  * than run without it.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 7 };
+/**
+ * 2.8 (#702) adds standing-rule lifetimes and previews, all optional fields: `durationMs` on
+ * `inputs.answer`'s `always`, `standing` on `OpenInputView` (the rule each "always" direction
+ * would write, shown before anybody saves it) and `expiresAt` on `EffectivePermissionRule`.
+ * A 2.7 daemon sends no `standing`, so the app offers only one-time answers there rather
+ * than a save whose rule it cannot show; a 2.7 daemon would also drop `durationMs` and write
+ * a rule with no end, which is the other reason the app does not offer it.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 8 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is

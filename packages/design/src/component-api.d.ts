@@ -540,7 +540,12 @@ export interface PermissionCardProps {
    * read the result's `added`, `alreadyPresent` and `refused` before saying so; a daemon
    * with nowhere to write a rule answers `refused` and the card says that instead.
    */
-  onAnswer(request: { optionId: string; note?: string; always?: { decision: "allow" | "deny" } }): void;
+  onAnswer(request: {
+    optionId: string;
+    note?: string;
+    /** Sent only from the standing rule review (#702). `durationMs` absent: until removed. */
+    always?: { decision: "allow" | "deny"; durationMs?: number };
+  }): void;
   goToRun?: () => void;
 }
 

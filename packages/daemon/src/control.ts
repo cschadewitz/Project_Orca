@@ -599,12 +599,23 @@ export class ControlModel {
     const asRequest = { sessionId: "", toolCall, options: [] } as unknown as Parameters<
       typeof recordAlwaysDecision
     >[0]["request"];
+    // A lifetime is a duration from now on the daemon's own clock (#702): the client's clock
+    // never decides when a grant ends. Stamped here, before the answer is accepted, so the
+    // rule cannot outlive what the person chose by however long acceptance took.
+    const durationMs = params.always!.durationMs;
     return {
       file: this.permissionsFile,
       agentId: await this.agentForStep(request.runId, request.stepRunId),
       request: asRequest,
       decision: params.always!.decision,
       workspaceCwd: state.run.workspace.cwd,
+      ...(durationMs === undefined
+        ? {}
+        : {
+            expiresAt: new Date(this.clock.now() + durationMs).toISOString(),
+            // The same clock stamps `addedAt` and judges "not after now", so the two agree.
+            now: () => new Date(this.clock.now()),
+          }),
     };
   }
 

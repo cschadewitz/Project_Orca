@@ -89,6 +89,11 @@ export const PERMISSION_ASK: OpenInputView = {
     { id: "deny", label: "Deny", destructive: true },
   ],
   context: { command: "rm -rf build/" },
+  // The rule each "always" would write, previewed by the daemon (protocol 2.8, #702).
+  standing: {
+    allow: { rules: [{ match: { kind: "execute", titlePattern: "^rm -rf build/$" }, decision: "allow" }] },
+    deny: { rules: [{ match: { kind: "execute", titlePattern: "^rm -rf build/$" }, decision: "deny" }] },
+  },
   // Who is blocked, off the wire as of protocol 1.6 (#248) - the card names it rather than
   // the run, because "always allow" is not a decision a person can size without it.
   agent: { id: "claude", hostId: "build-box", hostType: "ssh" },

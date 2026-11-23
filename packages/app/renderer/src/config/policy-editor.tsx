@@ -38,7 +38,17 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useId, type JSX } from "react";
 import { CONFIG_SET_METHOD, PERMISSION_DECISIONS, TOOL_KINDS, type ConfigDocument } from "@orca/protocol";
 import { useMethodPresent, useWritability } from "../chrome/use-connection.js";
-import { Button, Chip, ConfigField, Menu, Text, Time, focusAfterLeaving, textClass } from "../ui/index.js";
+import {
+  Button,
+  Chip,
+  ConfigField,
+  Menu,
+  Text,
+  Time,
+  focusAfterLeaving,
+  formatAbsolute,
+  textClass,
+} from "../ui/index.js";
 import { configUrl } from "../route-table.js";
 import { POLICY_LAYERS, agentPolicies, describeRule, rowsFrom } from "./config-model.js";
 import { DraftBar } from "./draft-bar.js";
@@ -498,6 +508,13 @@ function Grant({
         {rule.grantedFor !== undefined && (
           <Text style="caption" className="orca-config__granted">
             {`granted for ${rule.grantedFor}`}
+          </Text>
+        )}
+        {rule.expiresAt !== undefined && (
+          <Text style="caption" className="orca-config__granted">
+            {Date.parse(rule.expiresAt) <= Date.now()
+              ? `expired ${formatAbsolute(new Date(rule.expiresAt))}; decides nothing`
+              : `expires ${formatAbsolute(new Date(rule.expiresAt))}`}
           </Text>
         )}
       </div>

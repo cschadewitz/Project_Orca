@@ -119,7 +119,8 @@ configured rules, sidecars and defaults. Offline-fixture results:
 - A changed command (`git status; curl …`) or an out-of-workspace path does not inherit a rule.
 - An option whose `kind` is outside ACP's four (for example a hypothetical session scope)
   makes the SDK reject the whole request with `-32602`; ORCA selects nothing.
-- **Gap:** when no `allow_once` is offered, a rule-matched allow selects `allow_always`.
+- When no `allow_once` is offered, a rule-matched allow is refused (`cancelled`), never
+  widened to `allow_always` (#702; this was a gap before it).
 
 What Copilot's options mean is **unknown**: the IDs, how many allow variants are offered,
 and whether an `allow_always` maps to "approve for session", "don't ask again in this
@@ -184,7 +185,8 @@ shown.
 
 These touch shared files other agents own; this PR changes none of them.
 
-- **P1 — bounded automatic selection** (`packages/agents/src/permissions.ts`, `resolvePermission`):
+- **P1 — bounded automatic selection** (done for allow in #702; the deny fallback to
+  `reject_always` is unchanged) (`packages/agents/src/permissions.ts`, `resolvePermission`):
   on a rule-matched allow, select only `allow_once`, and answer `cancelled` when none is
   offered instead of falling back to `allow_always`; keep `reject_always` as the deny
   fallback only if its native effect is qualified. The code change is the `pick` kinds list
