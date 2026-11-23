@@ -561,8 +561,37 @@ describe("profile entries are checked for type, ownership and permissions (#709 
       const above = await profile();
       await chmod(above, 0o777);
       await mkdir(join(above, "mine"), { mode: 0o700 });
-      expect((await copilotHomeProblems(join(above, "mine", "profile")))[0]).toMatch(
-        /above COPILOT_HOME .* can be changed by other users/,
+      expect((await copilotHomeProblems(join(above, "mine", "profile")))[0]).toBe(
+        `${above}, on the path to COPILOT_HOME ${join(above, "mine", "profile")}, can be changed by other users`,
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "checks the path to an existing profile too, as written and through its links (#709 review 4)",
+    async () => {
+      const above = await profile();
+      await mkdir(join(above, "mine", "profile"), { recursive: true, mode: 0o700 });
+      await chmod(join(above, "mine"), 0o700);
+      expect(await copilotHomeProblems(join(above, "mine", "profile"))).toEqual([]);
+      await chmod(above, 0o777);
+      expect(await copilotHomeProblems(join(above, "mine", "profile"))).toEqual([
+        `${above}, on the path to COPILOT_HOME ${join(above, "mine", "profile")}, can be changed by other users`,
+      ]);
+
+      // A link in a closed directory to a profile behind an open one is judged by where it leads.
+      const closed = await profile();
+      await symlink(join(above, "mine"), join(closed, "via"));
+      expect((await copilotHomeProblems(join(closed, "via", "profile")))[0]).toBe(
+        `${above}, on the path to COPILOT_HOME ${join(closed, "via", "profile")}, can be changed by other users`,
+      );
+      // And a link in an open directory is refused even when it leads somewhere closed.
+      await chmod(above, 0o700);
+      const open = await profile();
+      await chmod(open, 0o777);
+      await symlink(join(above, "mine"), join(open, "via"));
+      expect((await copilotHomeProblems(join(open, "via", "profile")))[0]).toBe(
+        `${open}, on the path to COPILOT_HOME ${join(open, "via", "profile")}, can be changed by other users`,
       );
     },
   );
