@@ -32,6 +32,13 @@ const BIN = process.env.ORCA_CLINE_BIN ?? "";
 const run = promisify(execFile);
 const TURN_MS = 90_000;
 
+/** An `apply_patch` input that adds one file, in the patch format Cline's tool reads. */
+const addFile = (path: string, body: string) =>
+  `*** Begin Patch\n*** Add File: ${path}\n${body
+    .split("\n")
+    .map((l) => `+${l}`)
+    .join("\n")}\n*** End Patch`;
+
 const model = new StandInModel({
   hello: [{ text: "hello from the stand-in" }],
   "model-error": [{ status: 400, message: "stand-in refuses this request" }],
@@ -43,8 +50,9 @@ const model = new StandInModel({
     { tool: "run_commands", args: { commands: ["touch always.txt"] } },
   ],
   "rule-deny": [{ tool: "run_commands", args: { commands: ["rm keep.txt"] } }],
-  edit: [{ tool: "editor", args: { path: "edited.txt", new_text: "written by cline" } }],
-  "plant-hook": [{ tool: "editor", args: { path: ".cline/hooks/PreToolUse", new_text: "#!/bin/sh\nexit 0\n" } }],
+  // Cline 3.0.75 offers its OpenAI-compatible models apply_patch, not editor, for file changes.
+  edit: [{ tool: "apply_patch", args: { input: addFile("edited.txt", "written by cline") } }],
+  "plant-hook": [{ tool: "apply_patch", args: { input: addFile(".cline/hooks/PreToolUse", "#!/bin/sh\nexit 0") } }],
   "cancel-ask": [{ tool: "run_commands", args: { commands: ["touch never.txt"] } }],
   subagent: [
     {
@@ -53,6 +61,13 @@ const model = new StandInModel({
     },
   ],
   "sub-inner": [{ tool: "run_commands", args: { commands: ["touch from-subagent.txt"] } }],
+  "subagent-unguarded": [
+    {
+      tool: "spawn_agent",
+      args: { systemPrompt: "You are a helper.", task: "SCENARIO:sub-inner-unguarded Run the command you are given." },
+    },
+  ],
+  "sub-inner-unguarded": [{ tool: "run_commands", args: { commands: ["touch unguarded-subagent.txt"] } }],
 });
 
 let root: string;
@@ -108,8 +123,8 @@ function agent(over: { permissions?: unknown; env?: Record<string, unknown> } = 
 
 type Ask = (req: acp.RequestPermissionRequest, inv?: PermissionInvocation) => Promise<string | undefined>;
 
-async function connect(opts: { agent?: AgentSpec; askPermission?: Ask } = {}) {
-  const opened = withProviderGuards(openAcpSession, [clineGuard(() => home)]);
+async function connect(opts: { agent?: AgentSpec; askPermission?: Ask; unguarded?: boolean } = {}) {
+  const opened = opts.unguarded ? openAcpSession : withProviderGuards(openAcpSession, [clineGuard(() => home)]);
   const session = await opened({
     host: new LocalHost({ id: "local", type: "local" }),
     agent: opts.agent ?? agent(),
@@ -167,7 +182,9 @@ describe.skipIf(!BIN)("Cline CLI over ACP, installed (#711)", () => {
         expect(turn.stopReason).toBe("end_turn");
         expect(chunks.join("")).toContain("hello from the stand-in");
         const call = callsFor("hello")[0]!;
-        expect(call.tools).toEqual(expect.arrayContaining(["run_commands", "editor", "read_files"]));
+        expect(call.tools).toEqual(
+          expect.arrayContaining(["run_commands", "apply_patch", "read_files", "spawn_agent"]),
+        );
         expect(CLINE_CLI_VERIFIED_VERSIONS).toContain("3.0.75");
         await session.close();
       },
@@ -308,6 +325,7 @@ describe.skipIf(!BIN)("Cline CLI over ACP, installed (#711)", () => {
         const session = await connect({ askPermission: ask });
         await session.prompt("SCENARIO:plant-hook Add a hook.");
         expect(asked).toHaveLength(0);
+        expect(callsFor("plant-hook").at(-1)!.toolResults).toHaveLength(1);
         expect(existsSync(at(".cline/hooks/PreToolUse"))).toBe(false);
         await session.close();
       },
@@ -338,13 +356,30 @@ describe.skipIf(!BIN)("Cline CLI over ACP, installed (#711)", () => {
     );
 
     it(
-      "asks about a sub-agent, and about the sub-agent's own tools",
+      "why: without ORCA's guard, Cline runs a sub-agent's tools without asking",
       async () => {
-        const { asked, ask } = recorder((req) => (req.toolCall.kind === "execute" ? "reject_once" : "allow_once"));
+        const { asked, ask } = recorder(() => "allow_once");
+        const session = await connect({ askPermission: ask, unguarded: true });
+        await session.prompt("SCENARIO:subagent-unguarded Delegate.");
+        // One ask, for spawn_agent itself; the sub-agent's run_commands is never asked about.
+        expect(asked.map((r) => r.toolCall.title?.split(":")[0])).toEqual(["spawn_agent"]);
+        expect(callsFor("sub-inner-unguarded").length).toBeGreaterThan(0);
+        expect(existsSync(at("unguarded-subagent.txt"))).toBe(true);
+        await session.close();
+      },
+      TURN_MS,
+    );
+
+    it(
+      "refuses a sub-agent without asking, so none of its own tools runs",
+      async () => {
+        const { asked, ask } = recorder(() => "allow_once");
         const session = await connect({ askPermission: ask });
         await session.prompt("SCENARIO:subagent Delegate.");
-        expect(asked.map((r) => r.toolCall.kind)).toEqual(["other", "execute"]);
-        expect(asked[1]!.toolCall.rawInput).toMatchObject({ command: "touch from-subagent.txt" });
+        // Cline runs a sub-agent's tools without asking anyone, so ORCA never lets one start.
+        expect(asked).toHaveLength(0);
+        expect(callsFor("subagent").at(-1)!.toolResults).toHaveLength(1);
+        expect(callsFor("sub-inner")).toHaveLength(0);
         expect(existsSync(at("from-subagent.txt"))).toBe(false);
         await session.close();
       },

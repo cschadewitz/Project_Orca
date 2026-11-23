@@ -66,6 +66,11 @@ ORCA refuses to start Cline, with the reason, when:
 - Cline's own MCP settings in the config directory list any server;
 - at `initialize`, Cline reports anything but `cline` 3.0.75.
 
+During a session, ORCA itself rejects any tool outside Cline's own (`read_files`,
+`search_codebase`, `run_commands`, `fetch_web_content`, `apply_patch`, `editor`, `skills`,
+`ask_question`, `submit_and_exit`), whatever your rules say. That includes `spawn_agent`:
+Cline 3.0.75 runs a sub-agent's tools without asking anyone, so ORCA does not let one start.
+
 The desktop app's first-run check recognises a `cline` command as a Cline candidate. It does
 not start it; these checks run when a session starts.
 

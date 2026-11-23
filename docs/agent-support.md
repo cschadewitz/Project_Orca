@@ -90,7 +90,8 @@ below is about that ask being made, being decided on the right facts, and holdin
 | ORCA deny, person rejects | Cline does not run the call and tells the model it was rejected | installed |
 | ORCA allow | Cline runs exactly the call asked about | installed |
 | Cancel while asked | The ask is answered `cancelled`, the call does not run | installed |
-| Sub-agents (`spawn_agent`) | Reported by Cline as `think`; ORCA treats it as `other`, so it is asked. The sub-agent's own tools are asked through the same session | installed |
+| Sub-agents and delegation | Cline runs a sub-agent's tools without asking anyone (3.0.75 gives the sub-agent no approval callback). ORCA answers every ask about a tool outside Cline's own nine (`spawn_agent`, team tools, configured agents, `ux_verifier`) with Cline's reject option itself, before any rule or person sees it | source; installed (the unasked sub-agent command shown without the guard, refused with it) |
+| File changes | Cline 3.0.75 offers OpenAI-compatible models `apply_patch` for edits; ORCA reads its paths from the patch | installed |
 | A call ORCA cannot read the target of | Reported as `other`, which no default rule allows | offline |
 | `auto_approve` session option | ORCA never sets it on, refuses a session that opens with it on, and ends one that reports it turned on | installed (refused); offline (open and mid-session) |
 | Plan mode | Cline's `mode: plan` is its own read-only preset; it changes nothing ORCA relies on | source |

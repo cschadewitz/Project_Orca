@@ -459,18 +459,14 @@ export function normalizeClinePermissionRequest(
   const unreadable: acp.ToolCallUpdate = { ...tc, kind: "other" };
   let toolCall: acp.ToolCallUpdate;
   switch (tool) {
-    case "editor":
-    case "Edit":
-    case "Write":
-    case "NotebookEdit": {
+    case "editor": {
       const p = isObject(input)
         ? [input.path, input.file_path, input.filePath, input.notebook_path].find(str)
         : undefined;
       toolCall = p ? { ...tc, kind: "edit", locations: at([p]) } : unreadable;
       break;
     }
-    case "read_files":
-    case "Read": {
+    case "read_files": {
       const paths = readFilesPaths(input);
       toolCall = paths ? { ...tc, kind: "read", locations: at(paths) } : unreadable;
       break;
@@ -482,8 +478,7 @@ export function normalizeClinePermissionRequest(
         : unreadable;
       break;
     }
-    case "run_commands":
-    case "Bash": {
+    case "run_commands": {
       const commands = runCommandsText(input);
       toolCall = commands
         ? {
@@ -495,8 +490,7 @@ export function normalizeClinePermissionRequest(
       break;
     }
     case "spawn_agent":
-    case "Agent":
-      // A sub-agent is a new run of tools, not a thought: no default rule allows it.
+      // Refused on the wire before this (`clineRefusal`); never a thought a default rule allows.
       toolCall = unreadable;
       break;
     default:
@@ -522,13 +516,45 @@ function initializeAgentInfo(message: Wire): { name?: unknown; version?: unknown
 }
 
 /**
- * The agent's side of the stream as ORCA should read it: `initialize` must name a verified
- * Cline, and each permission request is normalized for ORCA's policy.
+ * The tools Cline runs in the process that asked ORCA about them (`DefaultToolNames` in
+ * 3.0.75). Every other tool is refused on the wire, without asking ORCA or the person:
+ * `spawn_agent`, team tools, configured agents and `ux_verifier` start a sub-agent whose own
+ * tools Cline runs without asking anyone (its `createSessionSpawnTool` passes the sub-agent no
+ * tool policy and no approval callback), so allowing one would allow every call it makes.
+ */
+export const CLINE_ASKED_TOOLS: ReadonlySet<string> = new Set([
+  "read_files",
+  "search_codebase",
+  "run_commands",
+  "fetch_web_content",
+  "apply_patch",
+  "editor",
+  "skills",
+  "ask_question",
+  "submit_and_exit",
+]);
+
+/** The answer ORCA gives, itself, to an ask about a tool outside `CLINE_ASKED_TOOLS`; undefined for one inside. */
+export function clineRefusal(request: acp.RequestPermissionRequest): acp.RequestPermissionResponse | undefined {
+  if (CLINE_ASKED_TOOLS.has(clineToolName(request.toolCall.title))) return undefined;
+  const reject =
+    request.options.find((o) => o.kind === "reject_once") ?? request.options.find((o) => o.kind === "reject_always");
+  return reject
+    ? { outcome: { outcome: "selected", optionId: reject.optionId } }
+    : { outcome: { outcome: "cancelled" } };
+}
+
+/**
+ * Cline's side of the wire as ORCA reads it: the `initialize` reply checked against the
+ * verified versions, each ask given the facts ORCA's policy needs, and an ask about a tool
+ * outside `CLINE_ASKED_TOOLS` answered with Cline's reject option through `refuse` instead of
+ * being passed on.
  */
 export function clineReadable(
   readable: ReadableStream<acp.AnyMessage>,
   cwd: string,
   agentId: string,
+  refuse: (reply: acp.AnyMessage) => void = () => undefined,
 ): ReadableStream<acp.AnyMessage> {
   return readable.pipeThrough(
     new TransformStream<acp.AnyMessage, acp.AnyMessage>({
@@ -556,9 +582,16 @@ export function clineReadable(
           }
         }
         if (m.method === "session/request_permission" && isObject(m.params)) {
+          const request = m.params as unknown as acp.RequestPermissionRequest;
+          const refusal =
+            isObject(request.toolCall) && Array.isArray(request.options) ? clineRefusal(request) : undefined;
+          if (refusal !== undefined && m.id !== undefined && m.id !== null) {
+            refuse({ jsonrpc: "2.0", id: m.id, result: refusal });
+            return;
+          }
           controller.enqueue({
             ...m,
-            params: normalizeClinePermissionRequest(m.params as unknown as acp.RequestPermissionRequest, cwd),
+            params: normalizeClinePermissionRequest(request, cwd),
           } as acp.AnyMessage);
           return;
         }
@@ -568,15 +601,47 @@ export function clineReadable(
   );
 }
 
-/** `host`, starting the agent with its readable side passed through `clineReadable`. */
+/**
+ * `writable`, shared: ORCA's client writes through the returned stream and `inject` writes
+ * between its messages, both through one writer, so neither interleaves inside the other.
+ */
+export function sharedWritable(writable: WritableStream<acp.AnyMessage>): {
+  writable: WritableStream<acp.AnyMessage>;
+  inject: (message: acp.AnyMessage) => void;
+} {
+  const writer = writable.getWriter();
+  let open = true;
+  return {
+    writable: new WritableStream<acp.AnyMessage>({
+      write: (chunk) => writer.write(chunk),
+      close: () => {
+        open = false;
+        return writer.close();
+      },
+      abort: (reason) => {
+        open = false;
+        return writer.abort(reason);
+      },
+    }),
+    inject: (message) => {
+      if (open) writer.write(message).catch(() => undefined);
+    },
+  };
+}
+
+/** `host`, starting the agent with its wire passed through `clineReadable`. */
 export function clineHost(host: AgentHost, cwd: string): AgentHost {
   const wrapped = Object.create(host) as AgentHost;
   Object.defineProperty(wrapped, "spawnAgent", {
     value: async (...args: Parameters<AgentHost["spawnAgent"]>) => {
       const handle = await host.spawnAgent(...args);
+      const out = sharedWritable(handle.stream.writable);
       return {
         ...handle,
-        stream: { readable: clineReadable(handle.stream.readable, cwd, args[0].id), writable: handle.stream.writable },
+        stream: {
+          readable: clineReadable(handle.stream.readable, cwd, args[0].id, out.inject),
+          writable: out.writable,
+        },
         // Keep the methods bound to the original handle.
         stderrTail: () => handle.stderrTail(),
         kill: (signal?: NodeJS.Signals) => handle.kill(signal),

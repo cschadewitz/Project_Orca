@@ -470,13 +470,18 @@ describe("the session, through ORCA's policy", () => {
     expect(answers).toEqual([{ outcome: "selected", optionId: "allow_once" }]);
   });
 
-  it("asks about a sub-agent rather than allowing it as a thought", async () => {
-    const peer = new ScriptedClinePeer();
-    onPrompt(peer, (p) => p.askTool("spawn_agent", { task: "x" }, "x", "think"));
-    const asked = vi.fn(async () => "reject_once");
-    const { session } = await connect(peer, { askPermission: asked });
-    await session.prompt("go");
-    expect(asked).toHaveBeenCalledTimes(1);
+  it("refuses a sub-agent, and any tool outside Cline's own, without asking anyone", async () => {
+    for (const tool of ["spawn_agent", "ux_verifier", "team_spawn_teammate", "reviewer", ""]) {
+      const peer = new ScriptedClinePeer();
+      const answers = onPrompt(peer, (p) => p.askTool(tool, { task: "x" }, "x", "think"));
+      const asked = vi.fn(async () => "allow_once");
+      // Even a rule that allows everything does not reach it.
+      const { session } = await connect(peer, { askPermission: asked }, spec({ permissions: { default: "allow" } }));
+      await session.prompt("go");
+      expect(asked).not.toHaveBeenCalled();
+      expect(answers).toEqual([{ outcome: "selected", optionId: "reject_once" }]);
+      await session.close();
+    }
   });
 
   it("fails the handshake for another version or another agent", async () => {
