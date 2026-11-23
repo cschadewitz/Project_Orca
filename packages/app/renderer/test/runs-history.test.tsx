@@ -159,6 +159,40 @@ describe("the Runs surface over a large history", () => {
     expect(listCalls()).toHaveLength(1);
   });
 
+  it("keeps a link pending through a failed read, and opens it when a reconnect reads it", async () => {
+    const target = HISTORY[200]!;
+    let failing = true;
+    fake.script({
+      "runs.get": ({ runId }) => {
+        if (failing) return { ok: false, error: { code: "DAEMON_UNAVAILABLE", message: "connection reset" } };
+        const run = HISTORY.find((r) => r.id === runId)!;
+        return {
+          ok: true,
+          result: { ...RUN_DETAILS["run-parent"]!, run, steps: [], traversal: [], artifacts: [], vars: {} },
+        };
+      },
+    });
+    renderRuns({ open: { runId: target.id } });
+    await waitFor(() => expect(fake.calls.filter((c) => c.method === "runs.get")).toHaveLength(1));
+    await screen.findByRole("tree", { name: "Run tree" });
+    // Not an answer about the run: nothing is selected, and nothing marks the link as dead.
+    expect(
+      within(tree())
+        .queryAllByRole("treeitem")
+        .some((row) => row.getAttribute("aria-selected") === "true"),
+    ).toBe(false);
+
+    // The transport comes back: the list is read again, and so is the link's run.
+    failing = false;
+    act(() => fake.connect({ ...fake.connection, generation: 1 }));
+    await waitFor(() => expect(fake.calls.filter((c) => c.method === "runs.get")).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.getByRole("treeitem", { name: new RegExp(target.name) }).getAttribute("aria-selected")).toBe(
+        "true",
+      ),
+    );
+  });
+
   it("selects nothing for a link to a run the daemon does not know, and stops asking", async () => {
     renderRuns({ open: { runId: "run-gone" } });
     await waitFor(() => expect(fake.calls.filter((c) => c.method === "runs.get")).toHaveLength(1));

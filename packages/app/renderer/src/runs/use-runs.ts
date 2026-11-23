@@ -104,7 +104,12 @@ export interface RunsFeed {
   loadOlder: () => void;
   /** Hold this run in the list whatever the filter or the pages say: a link named it. */
   include: (runId: string) => void;
-  /** The run ids `include` could not resolve: a link to a run the daemon does not know. */
+  /**
+   * The run ids `include` could not resolve because the daemon said so: `RUN_NOT_FOUND`, which
+   * is also how it answers a run this caller may not see. A failed read (a dropped connection,
+   * a daemon error) is not an answer: the link stays pending and is read again on the next
+   * reconnect or retry. Emptied at every new read generation; an id leaves it once read.
+   */
   unresolved: ReadonlySet<string>;
 }
 
@@ -158,6 +163,8 @@ export function useRuns(status: StatusFilter, query: RunsQuery = {}, paging: Run
     const cursors = new Map<string, number>();
     const fetching = new Set<string>();
     setState({ phase: "loading" });
+    // A new read generation (retry, reconnect, filter) asks again about every pinned run.
+    setUnresolved(NOTHING);
 
     const filter = {
       ...(status === "all" ? {} : { status: [status] }),
@@ -210,10 +217,18 @@ export function useRuns(status: StatusFilter, query: RunsQuery = {}, paging: Run
         fetching.delete(runId);
         if (!live) return;
         if (!result.ok) {
-          // Only a link's run is reported: a notification for a run that went is not news.
-          if (pinned.has(runId)) setUnresolved((gone) => new Set(gone).add(runId));
+          // Only a link's run is reported, and only on the daemon's definitive answer: a
+          // transient failure leaves the link pending for the next generation to read again.
+          if (pinned.has(runId) && result.error.code === "RUN_NOT_FOUND")
+            setUnresolved((gone) => new Set(gone).add(runId));
           return;
         }
+        setUnresolved((gone) => {
+          if (!gone.has(runId)) return gone;
+          const next = new Set(gone);
+          next.delete(runId);
+          return next;
+        });
         resolved.set(runId, result.result.run);
         cursors.set(runId, result.result.lastSeq);
         publish();
