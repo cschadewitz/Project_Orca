@@ -280,6 +280,96 @@ describe("editing", () => {
     ).toBe(false);
   });
 
+  it("edits a capability scope node by node, keeping comments and anchors beside the change (#335)", async () => {
+    const f = await fixture();
+    const scoped = TINY.replace(
+      'version: "1"\n',
+      `version: "1"
+capabilities:
+  # Shared with the step below.
+  mcpServers: &servers
+    enable: [github] # the tracker
+  skills:
+    disable:
+      - review # too slow here
+`,
+    ).replace(
+      "    vars: { done: true }\n",
+      `    vars: { done: true }
+    capabilities:
+      mcpServers: *servers
+      skills:
+        # Only these.
+        replace: [lint]
+`,
+    );
+    await writeFile(f.file, scoped);
+    await f.service.open("tiny", casey);
+    // Workflow scope: an unrelated skills edit keeps every comment and the anchor.
+    const workflow = await f.service.apply(
+      {
+        workflowId: "tiny",
+        expectedRevision: 0,
+        ops: [
+          {
+            op: "setWorkflow",
+            capabilities: { mcpServers: { enable: ["github"] }, skills: { disable: ["review", "deploy"] } },
+          },
+        ],
+      },
+      casey,
+    );
+    for (const kept of ["# Shared with the step below.", "&servers", "# the tracker", "# too slow here", "*servers"])
+      expect(workflow.text).toContain(kept);
+    expect(parse(workflow.text)).toMatchObject({ capabilities: { skills: { disable: ["review", "deploy"] } } });
+    // Node scope: the alias stays an alias and the comment beside the change survives.
+    const node = await f.service.apply(
+      {
+        workflowId: "tiny",
+        expectedRevision: workflow.revision,
+        ops: [
+          {
+            op: "updateNode",
+            id: "work",
+            set: { capabilities: { mcpServers: { enable: ["github"] }, skills: { replace: ["lint", "format"] } } },
+          },
+        ],
+      },
+      casey,
+    );
+    expect(node.text).toContain("mcpServers: *servers");
+    expect(node.text).toContain("# Only these.");
+    expect(node.text).toContain("&servers");
+    expect(parse(node.text).nodes.work.capabilities.skills).toEqual({ replace: ["lint", "format"] });
+    // Changing the shared value from either side is refused with a way forward, not written.
+    await expect(
+      f.service.apply(
+        {
+          workflowId: "tiny",
+          expectedRevision: node.revision,
+          ops: [{ op: "updateNode", id: "work", set: { capabilities: { mcpServers: { enable: ["jira"] } } } }],
+        },
+        casey,
+      ),
+    ).rejects.toThrow(/anchor or alias.*Edit the workflow's YAML/);
+    await expect(
+      f.service.apply(
+        {
+          workflowId: "tiny",
+          expectedRevision: node.revision,
+          ops: [{ op: "setWorkflow", capabilities: { skills: { disable: ["review"] } } }],
+        },
+        casey,
+      ),
+    ).rejects.toThrow(/anchor or alias/);
+    await expect(
+      f.service.apply(
+        { workflowId: "tiny", expectedRevision: node.revision, ops: [{ op: "setWorkflow", capabilities: null }] },
+        casey,
+      ),
+    ).rejects.toThrow(/anchor or alias/);
+  });
+
   it("keeps a drag in the layout and out of the workflow text", async () => {
     const f = await fixture();
     await f.service.open("tiny", casey);
