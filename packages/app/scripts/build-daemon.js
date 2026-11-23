@@ -100,6 +100,23 @@ const result = await build({
   metafile: true,
 });
 
+// ORCA's Claude tool-call hook (#704), which a Claude agent runs once per tool call with the
+// daemon's own runtime. It sits beside the bundle, where `claudePreToolHookScript()` looks
+// for it, and is `.mjs` so the desktop app's `extraResources` filter carries it too.
+await build({
+  entryPoints: [fileURLToPath(new URL("../../agents/dist/bin/claude-pre-tool-hook.js", import.meta.url))],
+  outfile: join(dirname(outfile), "claude-pre-tool-hook.mjs"),
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node24",
+  banner: {
+    js: "import { createRequire as __createRequire } from 'node:module';\nconst require = __createRequire(import.meta.url);",
+  },
+  minify: false,
+  logLevel: "info",
+});
+
 if (values.server) {
   // Built from the compiled packages, the same JavaScript the unbundled daemon starts.
   for (const [entry, target] of [

@@ -314,7 +314,7 @@ describe("bootstrap", () => {
     let opened: OpenSessionOptions | undefined;
     const factory = makeSessionFactory({ configDir: dir, storeDir: ".orca" }, async (options) => {
       opened = options;
-      return undefined as unknown as AgentSession;
+      return { closed: new Promise<void>(() => undefined), close: async () => undefined } as unknown as AgentSession;
     });
     await factory({
       host: new LocalHost({ id: "local", type: "local" }),

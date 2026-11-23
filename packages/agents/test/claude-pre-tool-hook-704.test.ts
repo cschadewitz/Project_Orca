@@ -9,7 +9,9 @@
  * every failure it can see.
  */
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,7 +27,10 @@ import {
   readPermissionPolicyFile,
   recordAlwaysDecision,
   replacePermissionPolicyFile,
+  claudeRuntimeAttestationFile,
+  processImageDigest,
   runClaudePreToolHook,
+  runClaudeRuntimeAttestation,
   type ClaudeHookContext,
   type ClaudePreToolFrame,
 } from "@orca/agents";
@@ -388,6 +393,75 @@ describe("settings", () => {
   });
 });
 
+describe("the runtime attestation", () => {
+  const start = JSON.stringify({ hook_event_name: "SessionStart", source: "startup" });
+  const parent = (pid: number) => ({ pid });
+
+  it("records, owner-only, only the process id of the program that ran it", async () => {
+    const r = await runClaudeRuntimeAttestation(["--attest", contextFile], start, parent(4343));
+    expect(r).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+    const file = claudeRuntimeAttestationFile(contextFile);
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ version: 1, pid: 4343 });
+    if (process.platform !== "win32") expect((await stat(file)).mode & 0o777).toBe(0o600);
+  });
+
+  it("keeps the first record when the session starts again, and fails in another process", async () => {
+    await runClaudeRuntimeAttestation(["--attest", contextFile], start, parent(4343));
+    const resume = JSON.stringify({ hook_event_name: "SessionStart", source: "resume" });
+    expect((await runClaudeRuntimeAttestation(["--attest", contextFile], resume, parent(4343))).exitCode).toBe(0);
+    expect((await runClaudeRuntimeAttestation(["--attest", contextFile], resume, parent(5555))).exitCode).toBe(2);
+    expect(JSON.parse(await readFile(claudeRuntimeAttestationFile(contextFile), "utf8"))).toEqual({
+      version: 1,
+      pid: 4343,
+    });
+  });
+
+  it.each([
+    ["a relative context file", ["--attest", "ctx.json"], start],
+    ["extra arguments", ["--attest", "/x/ctx.json", "more"], start],
+    ["input that is not JSON", ["--attest", "/x/ctx.json"], "not json"],
+    ["another event", ["--attest", "/x/ctx.json"], JSON.stringify({ hook_event_name: "PreToolUse" })],
+  ])("records nothing for %s", async (_what, args, input) => {
+    const r = await runClaudeRuntimeAttestation(args, input, parent(4343));
+    expect(r.exitCode).toBe(2);
+    await expect(readFile(claudeRuntimeAttestationFile("/x/ctx.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("ORCA's own evidence for a runtime's image", () => {
+  const sha = async (file: string) =>
+    createHash("sha256")
+      .update(await readFile(file))
+      .digest("hex");
+
+  it("hashes the image a process under the agent runs, without running anything", async () => {
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      await once(child, "spawn");
+      const image = await processImageDigest(child.pid!, process.pid);
+      expect(image).toEqual({ sha256: await sha(await realpath(await readlink(`/proc/${child.pid!}/exe`))) });
+    } finally {
+      child.kill();
+    }
+  });
+
+  it("refuses a process that is not under the agent, or the agent itself", async () => {
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      await once(child, "spawn");
+      // The agent here is another process: this test's child is not under it.
+      expect(await processImageDigest(child.pid!, child.pid! + 100_000)).toMatchObject({
+        error: expect.stringContaining("not running under the agent"),
+      });
+      expect(await processImageDigest(process.pid, process.pid)).toHaveProperty("error");
+      expect(await processImageDigest(1, process.pid)).toHaveProperty("error");
+      expect(await processImageDigest(child.pid!, undefined)).toHaveProperty("error");
+    } finally {
+      child.kill();
+    }
+  });
+});
+
 describe("the hook process", () => {
   const entry = fileURLToPath(new URL("../src/bin/claude-pre-tool-hook.ts", import.meta.url));
   const bundled = childBundle("claude-pre-tool-hook-704", { entries: { hook: entry } })?.["hook"];
@@ -435,5 +509,47 @@ describe("the hook process", () => {
     const allowed = frame("Read", { file_path: join(workspace, "a") });
     const exact = allowed + " ".repeat(CLAUDE_PRE_TOOL_FRAME_LIMIT - Buffer.byteLength(allowed));
     expect(await run([contextFile], exact)).toEqual({ code: 0, stdout: "", stderr: "" });
+  });
+});
+
+describe("the hook process's output guard", () => {
+  const names = ["stray-log", "stray-write", "early-exit", "crash", "answers"] as const;
+  const entries = Object.fromEntries(
+    names.map((n) => [n, fileURLToPath(new URL(`./fixtures/hook-output-guard/${n}.ts`, import.meta.url))]),
+  );
+  const bundled = childBundle("hook-output-guard-704", { entries });
+
+  const run = (name: (typeof names)[number], args: string[] = []) =>
+    new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+      const built = bundled?.[name];
+      const child = spawn(process.execPath, built ? [built, ...args] : ["--import", "tsx", entries[name]!, ...args], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+      child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+      child.on("error", reject);
+      child.on("close", (code) => resolve({ code, stdout, stderr }));
+    });
+
+  // Claude Code lets a call through when a hook exits 0 with stdout that is not JSON, and
+  // when it exits 0 with nothing; neither may happen except as the hook's own answer.
+  it.each(["stray-log", "stray-write"] as const)("blocks, printing nothing, when %s reaches stdout", async (name) => {
+    const r = await run(name);
+    expect(r.code).toBe(2);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("Blocked by ORCA");
+  });
+
+  it.each(["early-exit", "crash"] as const)("blocks when the process leaves without answering (%s)", async (name) => {
+    const r = await run(name);
+    expect(r.code).toBe(2);
+    expect(r.stdout).toBe("");
+  });
+
+  it("passes the hook's own answer through untouched", async () => {
+    expect(await run("answers")).toEqual({ code: 0, stdout: "", stderr: "" });
+    expect(await run("answers", ['{"x":1}\n'])).toEqual({ code: 0, stdout: '{"x":1}\n', stderr: "" });
   });
 });
