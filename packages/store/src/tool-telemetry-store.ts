@@ -27,10 +27,16 @@
  * the run's lock, which lives outside the run's directory so that removing the directory never
  * removes a lock somebody holds.
  *
- * **Deletion is final for the scope.** Deleting a run's (or a session's) records leaves a small
- * marker, and an append for that run (or session) afterwards is refused and dropped: a live
- * session's late records do not bring deleted diagnostics back. The marker is removed by the
- * expiry sweep after {@link TOOL_TELEMETRY_TOMBSTONE_DAYS}, longer than any record is kept.
+ * **Deletion is final for the scope, from the moment its marker is durable.** Deleting a run's
+ * (or a session's) records first writes a small marker (a new file, flushed, renamed into
+ * place, its directory flushed), then removes the records. The marker is authoritative: from
+ * then on the scope's records are never listed, exported or counted, and an append for it is
+ * refused and dropped, so a live session's late records do not bring deleted diagnostics back.
+ * If deletion stops after the marker (a crash, an error), the records still on disk stay
+ * hidden and the next {@link ToolTelemetryStore.prune} removes them. If it stops before the
+ * marker is durable, nothing was deleted, and deleting again is the remedy. Markers are kept
+ * for good: the store cannot know that no producer for the run is still alive (a resumed run
+ * can open sessions much later), and a marker is a few bytes.
  *
  * **Retention** is enforced when records are read as well as by the sweep: an expired record is
  * never listed or exported, whether or not {@link ToolTelemetryStore.prune} has run.
@@ -52,11 +58,9 @@ export const DIAGNOSTICS_DIR = "diagnostics";
 /** Where records live, under the store directory. */
 export const TOOL_TELEMETRY_DIR = join(DIAGNOSTICS_DIR, "tool-calls");
 
-/** Days a deletion marker refuses late records: longer than the longest retention (365). */
-export const TOOL_TELEMETRY_TOMBSTONE_DAYS = 400;
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+/** A FIFO or device put where a file should be opens without waiting, then fails the type check. */
+const NONBLOCK = constants.O_NONBLOCK ?? 0;
 const POSIX = process.platform !== "win32";
 
 /** What to read or remove: one run, or one session of it. */
@@ -181,7 +185,7 @@ async function existingDir(path: string): Promise<boolean> {
 }
 
 async function openChecked(path: string, flags: number): Promise<FileHandle> {
-  const handle = await open(path, flags | NOFOLLOW, 0o600);
+  const handle = await open(path, flags | NOFOLLOW | NONBLOCK, 0o600);
   try {
     checkFileStat(path, await handle.stat());
     return handle;
@@ -235,7 +239,11 @@ async function listDir(dir: string): Promise<string[]> {
 
 /** Write a new owner-only file holding `text`, flushed. */
 async function writeNew(path: string, text: string): Promise<void> {
-  const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
+  const handle = await open(
+    path,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW | NONBLOCK,
+    0o600,
+  );
   try {
     await handle.writeFile(text);
     await handle.sync();
@@ -244,22 +252,12 @@ async function writeNew(path: string, text: string): Promise<void> {
   }
 }
 
-/** A deletion marker: present means refuse; refreshed by a later deletion of the same scope. */
-async function writeMarker(path: string, at: Date): Promise<void> {
+/** A deletion marker, durable before it returns: present means hidden and refused. */
+async function writeMarker(path: string, dir: string, at: Date): Promise<void> {
   const temp = `${path}.${randomUUID()}.tmp`;
   await writeNew(temp, `${JSON.stringify({ deletedAt: at.toISOString() })}\n`);
   await rename(temp, path);
-}
-
-async function markerExpired(path: string, now: Date): Promise<boolean> {
-  try {
-    const raw = JSON.parse((await readChecked(path)) ?? "{}") as { deletedAt?: unknown };
-    const at = typeof raw.deletedAt === "string" ? Date.parse(raw.deletedAt) : Number.NaN;
-    return !Number.isFinite(at) || at + TOOL_TELEMETRY_TOMBSTONE_DAYS * DAY_MS <= now.getTime();
-  } catch (error) {
-    if (error instanceof SyntaxError) return true;
-    throw error;
-  }
+  await syncDirectory(dir);
 }
 
 export class FileToolTelemetryStore implements ToolTelemetryStore {
@@ -329,16 +327,24 @@ export class FileToolTelemetryStore implements ToolTelemetryStore {
     });
   }
 
-  private async readRun(runId: string, sessionId: string | undefined): Promise<ToolCallTelemetry[]> {
+  /** The session files of a run that no marker hides; none when the run is marked. */
+  private async visibleFiles(runId: string, sessionId: string | undefined): Promise<string[]> {
     if (!(await this.rooted())) return [];
+    if (await exists(this.runMarker(runId))) return [];
     const dir = this.runDir(runId);
     if (!(await existingDir(dir))) return [];
-    const files =
+    const names = await listDir(dir);
+    const marked = new Set(names.filter((n) => n.endsWith(".deleted")).map((n) => n.slice(0, -".deleted".length)));
+    const sessions =
       sessionId !== undefined
-        ? [this.sessionFile(runId, sessionId)]
-        : (await listDir(dir)).filter((n) => n.endsWith(".jsonl")).map((n) => join(dir, n));
+        ? [toolTelemetrySegment(sessionId)]
+        : names.filter((n) => n.endsWith(".jsonl")).map((n) => n.slice(0, -".jsonl".length));
+    return sessions.filter((seg) => !marked.has(seg)).map((seg) => join(dir, `${seg}.jsonl`));
+  }
+
+  private async readRun(runId: string, sessionId: string | undefined): Promise<ToolCallTelemetry[]> {
     const out: ToolCallTelemetry[] = [];
-    for (const file of files) {
+    for (const file of await this.visibleFiles(runId, sessionId)) {
       const text = await readChecked(file);
       if (text === undefined) continue;
       // A digest-named file holds only its own ids; anything else in it is not this scope's.
@@ -364,7 +370,8 @@ export class FileToolTelemetryStore implements ToolTelemetryStore {
       if (!(await existingDir(dir))) continue;
       for (const file of (await listDir(dir)).filter((n) => n.endsWith(".jsonl"))) {
         const live = parseLines((await readChecked(join(dir, file))) ?? "").find((r) => !expired(r, now));
-        if (live) ids.add(live.runId);
+        // A marked run or session is not listed, whatever is still on disk.
+        if (live && (await this.visibleFiles(live.runId, live.sessionId)).length) ids.add(live.runId);
       }
     }
     return [...ids].sort();
@@ -377,11 +384,12 @@ export class FileToolTelemetryStore implements ToolTelemetryStore {
       const dir = this.runDir(scope.runId);
       if (scope.sessionId !== undefined) {
         await ensureDir(dir);
-        // The marker first: a crash between the two still refuses what comes later.
-        await writeMarker(this.sessionMarker(scope.runId, scope.sessionId), now);
+        // The marker first, durably: from then on the scope is hidden and refused, and an
+        // interrupted removal is finished by prune.
+        await writeMarker(this.sessionMarker(scope.runId, scope.sessionId), dir, now);
         await unlinkIfPresent(this.sessionFile(scope.runId, scope.sessionId));
       } else {
-        await writeMarker(this.runMarker(scope.runId), now);
+        await writeMarker(this.runMarker(scope.runId), join(this.root, ".deleted"), now);
         if (await existingDir(dir)) await rm(dir, { recursive: true, force: true });
       }
       return removed;
@@ -393,31 +401,37 @@ export class FileToolTelemetryStore implements ToolTelemetryStore {
     let removed = 0;
     for (const name of await listDir(this.root)) {
       if (name.startsWith(".")) continue;
-      removed += await this.withRun(name, () => this.pruneRun(join(this.root, name), now));
+      removed += await this.withRun(name, () => this.pruneRun(name, now));
     }
-    const markers = join(this.root, ".deleted");
-    if (await existingDir(markers))
-      for (const name of await listDir(markers)) {
-        if (name.endsWith(".tmp")) continue;
-        await this.withRun(name, async () => {
-          const marker = join(markers, name);
-          if ((await exists(marker)) && (await markerExpired(marker, now))) await unlinkIfPresent(marker);
-        });
-      }
     return removed;
   }
 
-  /** Expire one run's records and old session markers; remove its directory once empty. */
-  private async pruneRun(dir: string, now: Date): Promise<number> {
+  /**
+   * Expire one run's records, and finish any deletion that stopped after its marker: a marked
+   * run's directory, a marked session's file. Markers stay. The directory goes once empty.
+   */
+  private async pruneRun(segment: string, now: Date): Promise<number> {
+    const dir = join(this.root, segment);
     if (!(await existingDir(dir))) return 0;
+    if (await exists(join(this.root, ".deleted", segment))) {
+      await rm(dir, { recursive: true, force: true });
+      return 0;
+    }
     let removed = 0;
-    for (const name of await listDir(dir)) {
+    const names = await listDir(dir);
+    const marked = new Set(names.filter((n) => n.endsWith(".deleted")).map((n) => n.slice(0, -".deleted".length)));
+    for (const name of names) {
       const path = join(dir, name);
-      if (name.endsWith(".deleted")) {
-        if (await markerExpired(path, now)) await unlinkIfPresent(path);
+      if (name.endsWith(".tmp")) {
+        // A marker or rewrite a crash left half done: never the authoritative copy.
+        await unlinkIfPresent(path);
         continue;
       }
       if (!name.endsWith(".jsonl")) continue;
+      if (marked.has(name.slice(0, -".jsonl".length))) {
+        await unlinkIfPresent(path);
+        continue;
+      }
       const text = await readChecked(path);
       if (text === undefined) continue;
       const records = parseLines(text);

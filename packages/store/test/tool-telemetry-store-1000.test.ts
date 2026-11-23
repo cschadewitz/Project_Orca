@@ -223,14 +223,34 @@ describe("tool telemetry files", () => {
     expect(await readdir(root)).not.toContain("run_a");
   });
 
-  it("drops deletion markers only after they outlive any retention", async () => {
+  it("keeps deletion markers for good: a run's later sessions stay refused", async () => {
     const dir = await tmp();
     const store = new FileToolTelemetryStore(dir);
     await store.delete({ runId: "run_a" });
-    await store.prune(new Date(Date.now() + 365 * 24 * 3600 * 1000));
-    expect(await store.append([record("run_a", "sess_1", 0)])).toBe(0);
-    await store.prune(new Date(Date.now() + 401 * 24 * 3600 * 1000));
-    expect(await store.append([record("run_a", "sess_1", 0)])).toBe(1);
+    await store.prune(new Date(Date.now() + 10 * 365 * 24 * 3600 * 1000));
+    expect(await store.append([record("run_a", "sess_9", 0)])).toBe(0);
+  });
+
+  it("hides a scope as soon as its marker is down, and prune finishes an interrupted deletion", async () => {
+    const dir = await tmp();
+    const store = new FileToolTelemetryStore(dir);
+    await store.append([record("run_a", "sess_1", 0)]);
+    await store.append([record("run_a", "sess_2", 0)]);
+    await store.append([record("run_b", "sess_3", 0)]);
+    const root = join(dir, TOOL_TELEMETRY_DIR);
+    // Deletions that stopped right after their markers: the records are still on disk.
+    await writeFile(join(root, "run_a", "sess_1.deleted"), "{}\n", { mode: 0o600 });
+    await writeFile(join(root, ".deleted", "run_b"), "{}\n", { mode: 0o600 });
+    expect((await store.list({ runId: "run_a" })).map((r) => r.id)).toEqual(["sess_2:0"]);
+    expect(await store.list({ runId: "run_a", sessionId: "sess_1" })).toEqual([]);
+    expect(await store.list({ runId: "run_b" })).toEqual([]);
+    expect(await store.runs()).toEqual(["run_a"]);
+    expect(await store.append([record("run_a", "sess_1", 1)])).toBe(0);
+    expect(await store.append([record("run_b", "sess_3", 1)])).toBe(0);
+    await store.prune(new Date());
+    expect((await readdir(join(root, "run_a"))).sort()).toEqual(["sess_1.deleted", "sess_2.jsonl"]);
+    expect(await readdir(root)).not.toContain("run_b");
+    expect(await readdir(join(root, ".deleted"))).toEqual(["run_b"]);
   });
 
   it("refuses to read or write through a link, a shared mode, a foreign file or a second name", async () => {
@@ -258,6 +278,14 @@ describe("tool telemetry files", () => {
     await expect(store.list({ runId: "run_a" })).rejects.toThrow();
     await expect(store.append([record("run_a", "sess_1", 1)])).rejects.toThrow();
     expect((await readFile(outside, "utf8")).trim().split("\n")).toHaveLength(1);
+
+    // A FIFO in the file's place neither holds a reader or writer nor is used.
+    await rm(file);
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("mkfifo", ["-m", "600", file]);
+    await expect(store.list({ runId: "run_a" })).rejects.toThrow(/not a regular file/);
+    await expect(store.append([record("run_a", "sess_1", 1)])).rejects.toThrow();
+    await rm(file);
 
     // The run's directory itself replaced by a link.
     const elsewhere = join(dir, "elsewhere");

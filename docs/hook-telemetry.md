@@ -58,8 +58,10 @@ The hook runs under the agent's runtime and has no access to ORCA's store.
    spool is made. The path goes into the hook's context.
 2. After the hook has decided a call and written its answer, it appends one JSON line to the
    spool (`recordHookTelemetry`): a single synchronous append to a file that must already
-   exist, never creating one and never following a link, at most 8 KiB per line and 4 MiB
-   per spool. It never throws or prints, and the hook ignores whether it worked.
+   exist, never creating one, never following a link and never blocking, at most 8 KiB per
+   line and 4 MiB per spool. The hook's context carries the spool's path and the device and
+   inode ORCA made it with; the hook writes only if the open file is that one, a regular,
+   owner-only file of its user with one name. It never throws or prints, and the hook ignores whether it worked.
 3. While the session runs, ORCA drains the spool every few seconds, and once more when the
    session ends, after which the spool is removed.
 
@@ -84,8 +86,9 @@ backup, carryover or SQLite conversion copies it with the rest of the store.
 `diagnostics/` is in the store's agent-denied set, beside `private-execution`: no agent tool
 may read or write it. Owner-only modes do not stop a process of the same user, so every open
 is checked as well: directories must be real, owner-only directories of ORCA's user, and
-files are opened without following links and must be regular, owner-only files of ORCA's
-user with one name. Anything else is refused, not read or written through. (Windows has no
+files are opened without following links and without blocking (a FIFO or device in a file's
+place cannot hold a reader or writer), and must be regular, owner-only files of ORCA's user
+with one name. Anything else is refused, not read or written through. (Windows has no
 POSIX modes; there the protected directory and the link refusal are the boundary.)
 
 Every change to a run (appending, deleting, expiring) holds that run's lock, which is kept
@@ -103,9 +106,15 @@ orca diagnostics tool-calls prune                        # remove every expired 
 An expired record is never listed or exported, whether or not a sweep has removed it yet.
 Expired records are also removed while ORCA ingests new ones, at most once an hour.
 
-Deleting is final for what was deleted: a small marker stays, and records that arrive later
-for that run (or session), from a session still running, are refused and dropped. Markers
-are removed by `prune` after 400 days, longer than any record is kept.
+Deleting is final for what was deleted, from the moment its marker is durable. A deletion
+first writes a small marker (a new file, flushed, renamed into place, its directory flushed)
+and only then removes the records. From then on the marker decides: the run's (or session's)
+records are never listed, exported or counted, and records that arrive later, from a session
+still running, are refused and dropped. If the deletion stops after the marker, the records
+left on disk stay hidden and the next `prune` removes them; if it stops before, nothing was
+deleted, and deleting again is the remedy. Markers are kept for good: the store cannot know
+that no session of the run will ever run again (a resumed run opens new ones), and a marker
+is a few bytes.
 
 ## The hook's side
 

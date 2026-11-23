@@ -36,7 +36,7 @@
  * This module has no side effects on import, because the hook program imports it and anything
  * a hook prints on stdout becomes its answer.
  */
-import { closeSync, constants, fstatSync, openSync, writeSync, type Stats } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, writeSync, type BigIntStats } from "node:fs";
 import { lstat, open, readdir, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -53,23 +53,40 @@ export const HOOK_TELEMETRY_SESSION_LINES = 20_000;
 const DRAIN_CHUNK = 256 * 1024;
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+/** A FIFO or device put where a file should be opens without waiting, then fails the type check. */
+const NONBLOCK = constants.O_NONBLOCK ?? 0;
+
+/**
+ * Which spool a hook may write: its path and the identity ORCA recorded when it made it
+ * (device and inode, as decimal strings so no precision is lost). This is what goes into the
+ * hook's context, as `telemetry`.
+ */
+export interface HookTelemetryTarget {
+  file: string;
+  dev: string;
+  ino: string;
+}
 
 /**
  * Hook side: append one line to the spool. Synchronous, never throws, prints nothing.
  * Returns whether the line was written; a hook must not act on the answer.
  *
- * The spool must already exist as a regular file: ORCA made it. A missing spool, a link, a
- * spool past {@link HOOK_TELEMETRY_SPOOL_LIMIT}, or a line over
- * {@link HOOK_TELEMETRY_LINE_LIMIT} skips the record.
+ * The spool must be exactly the file ORCA made: opened without following a link and without
+ * blocking (a FIFO or device in its place cannot hold the hook), and on the open handle a
+ * regular file with ORCA's recorded device and inode, this user's, owner-only, with one name.
+ * A missing or different spool, one past {@link HOOK_TELEMETRY_SPOOL_LIMIT}, or a line over
+ * {@link HOOK_TELEMETRY_LINE_LIMIT} skips the record. It never creates a file.
  */
-export function recordHookTelemetry(spool: string, line: HookTelemetryLine): boolean {
+export function recordHookTelemetry(target: HookTelemetryTarget, line: HookTelemetryLine): boolean {
   let fd: number | undefined;
   try {
     const bytes = Buffer.from(`${JSON.stringify(line)}\n`, "utf8");
     if (bytes.length > HOOK_TELEMETRY_LINE_LIMIT) return false;
-    fd = openSync(spool, constants.O_WRONLY | constants.O_APPEND | NOFOLLOW);
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size + bytes.length > HOOK_TELEMETRY_SPOOL_LIMIT) return false;
+    fd = openSync(target.file, constants.O_WRONLY | constants.O_APPEND | NOFOLLOW | NONBLOCK);
+    const stat = fstatSync(fd, { bigint: true });
+    if (!stat.isFile() || String(stat.dev) !== target.dev || String(stat.ino) !== target.ino) return false;
+    if (privateEnough(stat) || stat.nlink !== 1n) return false;
+    if (Number(stat.size) + bytes.length > HOOK_TELEMETRY_SPOOL_LIMIT) return false;
     // One write: an O_APPEND write this small lands whole, after every earlier one.
     return writeSync(fd, bytes) === bytes.length;
   } catch {
@@ -102,6 +119,8 @@ export type HookTelemetryConsumer = (lines: readonly HookTelemetryLine[]) => Pro
 export interface HookTelemetrySpool {
   /** Absolute path of the spool: what goes into the hook's context. */
   readonly file: string;
+  /** The path and the identity ORCA made it with: what the hook's context carries. */
+  readonly target: HookTelemetryTarget;
   /** Set who receives validated lines. Lines drained before a consumer is attached are dropped. */
   attach(consumer: HookTelemetryConsumer): void;
   /** Read what the hook appended since the last drain. Serialized; never throws. */
@@ -134,10 +153,10 @@ const SPOOL_NAME = /^tool-calls-(\d+)-[0-9a-f-]{36}\.spool$/;
 const POSIX = process.platform !== "win32";
 
 /** Owner-only, this user's, not a link: what ORCA's own private files and directories are. */
-function privateEnough(stat: Stats): string | undefined {
-  if (POSIX && typeof process.getuid === "function" && stat.uid !== process.getuid())
+function privateEnough(stat: { uid: number | bigint; mode: number | bigint }): string | undefined {
+  if (POSIX && typeof process.getuid === "function" && Number(stat.uid) !== process.getuid())
     return "is not owned by ORCA's user";
-  if (POSIX && (stat.mode & 0o077) !== 0) return "is open to group or others";
+  if (POSIX && (Number(stat.mode) & 0o077) !== 0) return "is open to group or others";
   return undefined;
 }
 
@@ -153,7 +172,8 @@ async function checkSpoolDir(dir: string, protectedPaths: ProtectedPaths): Promi
   if (why) throw new OrcaError("CONFIG_INVALID", `tool-call telemetry spool directory ${dir} ${why}`, { dir });
 }
 
-const sameFile = (a: Pick<Stats, "dev" | "ino">, b: Pick<Stats, "dev" | "ino">) => a.dev === b.dev && a.ino === b.ino;
+const sameFile = (a: Pick<BigIntStats, "dev" | "ino">, b: Pick<BigIntStats, "dev" | "ino">) =>
+  a.dev === b.dev && a.ino === b.ino;
 
 /** Parse one spool line; `undefined` when it is not a valid line. */
 export function parseHookTelemetryLine(line: string): HookTelemetryLine | undefined {
@@ -177,9 +197,9 @@ export async function openHookTelemetrySpool(options: OpenHookTelemetrySpoolOpti
   // The pid names who may still be draining it, for the sweep after a crash.
   const file = join(options.dir, `tool-calls-${process.pid}-${randomUUID()}.spool`);
   const handle = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
-  let made: Stats;
+  let made: BigIntStats;
   try {
-    made = await handle.stat();
+    made = await handle.stat({ bigint: true });
   } finally {
     await handle.close();
   }
@@ -209,24 +229,24 @@ export async function openHookTelemetrySpool(options: OpenHookTelemetrySpoolOpti
     if (refused) return { ...out, refused };
     let fd;
     try {
-      fd = await open(file, constants.O_RDONLY | NOFOLLOW);
+      fd = await open(file, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
     } catch (error) {
       refused = `spool could not be opened: ${(error as NodeJS.ErrnoException).code ?? "error"}`;
       return { ...out, refused };
     }
     const valid: HookTelemetryLine[] = [];
     try {
-      const stat = await fd.stat();
+      const stat = await fd.stat({ bigint: true });
       if (!stat.isFile() || !sameFile(stat, made)) {
         refused = "spool is not the file ORCA made";
         return { ...out, refused };
       }
-      const why = privateEnough(stat) ?? (stat.nlink !== 1 ? "has another name" : undefined);
+      const why = privateEnough(stat) ?? (stat.nlink !== 1n ? "has another name" : undefined);
       if (why) {
         refused = `spool ${why}`;
         return { ...out, refused };
       }
-      const end = Math.min(stat.size, HOOK_TELEMETRY_SPOOL_LIMIT);
+      const end = Math.min(Number(stat.size), HOOK_TELEMETRY_SPOOL_LIMIT);
       while (offset < end) {
         const want = Math.min(DRAIN_CHUNK, end - offset);
         const buffer = Buffer.alloc(want);
@@ -292,6 +312,7 @@ export async function openHookTelemetrySpool(options: OpenHookTelemetrySpoolOpti
 
   return {
     file,
+    target: { file, dev: String(made.dev), ino: String(made.ino) },
     attach(next) {
       consumer = next;
     },
@@ -304,7 +325,7 @@ export async function openHookTelemetrySpool(options: OpenHookTelemetrySpoolOpti
         const last = await serialized(true);
         liveSpools.delete(file);
         try {
-          const stat = await lstat(file);
+          const stat = await lstat(file, { bigint: true });
           if (stat.isFile() && sameFile(stat, made)) await unlink(file);
         } catch {
           // Already gone, or not ours to remove.

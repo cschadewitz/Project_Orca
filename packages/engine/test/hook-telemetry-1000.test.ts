@@ -108,10 +108,10 @@ async function setup(diagnostics: Record<string, unknown> | undefined) {
         setConfigOption: async () => [],
         prompt: async () => {
           // The hook's lines, and one the agent forged to land in another run.
-          recordHookTelemetry(spool.file, line());
-          recordHookTelemetry(spool.file, line({ tool: "Read", decision: "allow", input: { path: "a.ts" } }));
-          recordHookTelemetry(spool.file, { ...line(), runId: "run_other" } as unknown as HookTelemetryLine);
-          recordHookTelemetry(spool.file, line({ decision: "block", hookError: `context unreadable: ${VALUE}` }));
+          recordHookTelemetry(spool.target, line());
+          recordHookTelemetry(spool.target, line({ tool: "Read", decision: "allow", input: { path: "a.ts" } }));
+          recordHookTelemetry(spool.target, { ...line(), runId: "run_other" } as unknown as HookTelemetryLine);
+          recordHookTelemetry(spool.target, line({ decision: "block", hookError: `context unreadable: ${VALUE}` }));
           return { stopReason: "end_turn" as const, durationMs: 1 };
         },
         onUpdate: () => () => {},

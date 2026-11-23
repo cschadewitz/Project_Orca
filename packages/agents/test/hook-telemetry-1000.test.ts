@@ -48,6 +48,8 @@ async function tmp(): Promise<string> {
   return dir;
 }
 const protectedPaths = (dir: string) => guarded.get(dir)!;
+/** A target with no identity ORCA recorded: no file can match it. */
+const at = (file: string) => ({ file, dev: "0", ino: "0" });
 
 const line = (over: Partial<HookTelemetryLine> = {}): HookTelemetryLine => ({
   v: 1,
@@ -77,15 +79,15 @@ describe("hook telemetry spool", () => {
     const made = await stat(spool.file);
     expect(made.size).toBe(0);
     if (posix) expect(made.mode & 0o077).toBe(0);
-    expect(recordHookTelemetry(spool.file, line({ tool: "Bash" }))).toBe(true);
-    expect(recordHookTelemetry(spool.file, line({ tool: "Edit", decision: "deny", rule: "deny-edit" }))).toBe(true);
+    expect(recordHookTelemetry(spool.target, line({ tool: "Bash" }))).toBe(true);
+    expect(recordHookTelemetry(spool.target, line({ tool: "Edit", decision: "deny", rule: "deny-edit" }))).toBe(true);
     expect(await spool.drain()).toEqual({ accepted: 2, rejected: 0, dropped: 0 });
     expect(got.map((l) => [l.tool, l.decision])).toEqual([
       ["Bash", "allow"],
       ["Edit", "deny"],
     ]);
     // A second drain reads only what came after.
-    recordHookTelemetry(spool.file, line({ tool: "Read" }));
+    recordHookTelemetry(spool.target, line({ tool: "Read" }));
     expect(await spool.drain()).toEqual({ accepted: 1, rejected: 0, dropped: 0 });
     expect(got.map((l) => l.tool)).toEqual(["Bash", "Edit", "Read"]);
   });
@@ -93,30 +95,30 @@ describe("hook telemetry spool", () => {
   it("hook side: never creates a spool, never follows a link, never throws", async () => {
     const dir = await tmp();
     const missing = join(dir, "missing.spool");
-    expect(recordHookTelemetry(missing, line())).toBe(false);
+    expect(recordHookTelemetry(at(missing), line())).toBe(false);
     expect(await readdir(dir)).toEqual([]);
     const target = join(dir, "target");
     await writeFile(target, "");
     const link = join(dir, "link.spool");
     await symlink(target, link);
     if (process.platform !== "win32") {
-      expect(recordHookTelemetry(link, line())).toBe(false);
+      expect(recordHookTelemetry(at(link), line())).toBe(false);
       expect((await stat(target)).size).toBe(0);
     }
-    expect(recordHookTelemetry(dir, line())).toBe(false);
+    expect(recordHookTelemetry(at(dir), line())).toBe(false);
     // A line that cannot be encoded is skipped, not thrown.
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
-    expect(recordHookTelemetry(target, line({ input: cyclic }))).toBe(false);
+    expect(recordHookTelemetry(at(target), line({ input: cyclic }))).toBe(false);
   });
 
   it("hook side: skips a line over the line limit, and stops at the spool limit", async () => {
     const dir = await tmp();
     const { spool } = await collecting(dir);
-    expect(recordHookTelemetry(spool.file, line({ title: "x".repeat(HOOK_TELEMETRY_LINE_LIMIT) }))).toBe(false);
+    expect(recordHookTelemetry(spool.target, line({ title: "x".repeat(HOOK_TELEMETRY_LINE_LIMIT) }))).toBe(false);
     expect((await stat(spool.file)).size).toBe(0);
     await writeFile(spool.file, Buffer.alloc(HOOK_TELEMETRY_SPOOL_LIMIT - 10, 0x0a));
-    expect(recordHookTelemetry(spool.file, line())).toBe(false);
+    expect(recordHookTelemetry(spool.target, line())).toBe(false);
     expect((await stat(spool.file)).size).toBe(HOOK_TELEMETRY_SPOOL_LIMIT - 10);
   });
 
@@ -167,7 +169,7 @@ describe("hook telemetry spool", () => {
   it("stops reading a spool that is no longer the file ORCA made", async () => {
     const dir = await tmp();
     const { spool, got } = await collecting(dir);
-    recordHookTelemetry(spool.file, line());
+    recordHookTelemetry(spool.target, line());
     const other = join(dir, "other");
     await writeFile(other, `${JSON.stringify(line({ tool: "Forged" }))}\n`);
     await rename(other, spool.file);
@@ -195,26 +197,26 @@ describe("hook telemetry spool", () => {
   it("drops lines when no consumer is attached or the consumer fails, and never throws", async () => {
     const dir = await tmp();
     const spool = await openHookTelemetrySpool({ dir, protectedPaths: protectedPaths(dir) });
-    recordHookTelemetry(spool.file, line());
+    recordHookTelemetry(spool.target, line());
     expect(await spool.drain()).toEqual({ accepted: 0, rejected: 0, dropped: 1 });
     spool.attach(async () => {
       throw new Error("store is full");
     });
-    recordHookTelemetry(spool.file, line());
+    recordHookTelemetry(spool.target, line());
     expect(await spool.drain()).toEqual({ accepted: 0, rejected: 0, dropped: 1 });
   });
 
   it("finish drains once more, removes the spool, and is idempotent", async () => {
     const dir = await tmp();
     const { spool, got } = await collecting(dir);
-    recordHookTelemetry(spool.file, line({ tool: "Last" }));
+    recordHookTelemetry(spool.target, line({ tool: "Last" }));
     const [a, b] = await Promise.all([spool.finish(), spool.finish()]);
     expect(a).toEqual({ accepted: 1, rejected: 0, dropped: 0 });
     expect(b).toBe(a);
     expect(got.map((l) => l.tool)).toEqual(["Last"]);
     expect(await readdir(dir)).toEqual([]);
     // After finish, the hook's writes go nowhere and nothing reads.
-    expect(recordHookTelemetry(spool.file, line())).toBe(false);
+    expect(recordHookTelemetry(spool.target, line())).toBe(false);
     expect(await spool.drain()).toBe(a);
   });
 
@@ -244,11 +246,11 @@ describe("hook telemetry spool", () => {
     if (!posix) return;
     const dir = await tmp();
     const { spool, got } = await collecting(dir);
-    recordHookTelemetry(spool.file, line());
+    recordHookTelemetry(spool.target, line());
     await chmod(spool.file, 0o644);
     expect((await spool.drain()).refused).toMatch(/open to group or others/);
     const other = await collecting(dir);
-    recordHookTelemetry(other.spool.file, line());
+    recordHookTelemetry(other.spool.target, line());
     await link(other.spool.file, join(dir, "alias"));
     expect((await other.spool.drain()).refused).toMatch(/another name/);
     expect([...got, ...other.got]).toEqual([]);
@@ -274,5 +276,48 @@ describe("hook telemetry spool", () => {
     // A finished spool is no longer live, and is gone anyway.
     await live.spool.finish();
     expect(await sweepHookTelemetrySpools({ dir, protectedPaths: protectedPaths(dir), alive: () => true })).toBe(0);
+  });
+
+  it("hook side: writes only to the very file ORCA made, owner-only, with one name, without blocking", async () => {
+    const dir = await tmp();
+    const { spool, got } = await collecting(dir);
+    // Replaced by another file at the same path.
+    const other = join(dir, "other");
+    await writeFile(other, "", { mode: 0o600 });
+    const saved = join(dir, "saved");
+    await rename(spool.file, saved);
+    await rename(other, spool.file);
+    expect(recordHookTelemetry(spool.target, line())).toBe(false);
+    expect((await stat(spool.file)).size).toBe(0);
+    await rename(saved, spool.file);
+    expect(recordHookTelemetry(spool.target, line())).toBe(true);
+    if (posix) {
+      await chmod(spool.file, 0o644);
+      expect(recordHookTelemetry(spool.target, line())).toBe(false);
+      await chmod(spool.file, 0o600);
+      await link(spool.file, join(dir, "alias"));
+      expect(recordHookTelemetry(spool.target, line())).toBe(false);
+      await rm(join(dir, "alias"));
+      // A FIFO in the spool's place: the hook neither waits on it nor writes to it.
+      const { execFileSync } = await import("node:child_process");
+      const fifo = join(dir, "fifo");
+      execFileSync("mkfifo", [fifo]);
+      const started = Date.now();
+      expect(recordHookTelemetry({ ...spool.target, file: fifo }, line())).toBe(false);
+      expect(Date.now() - started).toBeLessThan(1_000);
+    }
+    expect(await spool.drain()).toEqual({ accepted: 1, rejected: 0, dropped: 0 });
+    expect(got).toHaveLength(1);
+  });
+
+  it("drain does not wait on a FIFO put in the spool's place", async () => {
+    if (!posix) return;
+    const dir = await tmp();
+    const { spool } = await collecting(dir);
+    await rm(spool.file);
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("mkfifo", [spool.file]);
+    const report = await spool.drain();
+    expect(report.refused).toMatch(/not the file ORCA made/);
   });
 });
