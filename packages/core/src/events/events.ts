@@ -284,19 +284,21 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
     }),
   ),
   /**
-   * ORCA's own file executor authorized one `fs/*` operation (#703), written and awaited
-   * before its I/O may start. `operationId` pairs it with `agent.fs.completed`; an
-   * authorization with no outcome is execution-unknown (`ownedFsExecutions`).
+   * ORCA's own file executor authorized one `fs/*` operation (#703), made durable before its
+   * I/O may start. `operationId` pairs it with `agent.fs.completed`; an authorization with no
+   * outcome is execution-unknown (`ownedFsExecutions`). The file is named only by a bounded,
+   * root-relative `display` reference: the absolute and resolved paths are not recorded.
    */
   base(
     "agent.fs.authorized",
     z.object({
       stepRunId: z.string(),
       sessionId: z.string(),
+      turnId: z.string(),
       operationId: z.string(),
       access: z.enum(["read", "write"]),
-      path: z.string(),
-      target: z.string().optional(),
+      display: z.string().max(200),
+      linked: z.literal(true).optional(),
       decision: z.string(),
       rule: z
         .object({
@@ -309,14 +311,19 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
         .optional(),
     }),
   ),
-  /** What happened to an authorized `fs/*` operation (#703): `not-dispatched` when a dispatch check refused it. */
+  /**
+   * What happened to an authorized `fs/*` operation (#703), for the same step, session and
+   * turn as its authorization: `not-dispatched` when a check after the record refused it,
+   * `effect-unknown` when a write failed after it may have changed the file.
+   */
   base(
     "agent.fs.completed",
     z.object({
       stepRunId: z.string(),
       sessionId: z.string(),
+      turnId: z.string(),
       operationId: z.string(),
-      outcome: z.enum(["completed", "failed", "not-dispatched"]),
+      outcome: z.enum(["completed", "failed", "not-dispatched", "effect-unknown"]),
     }),
   ),
   base(

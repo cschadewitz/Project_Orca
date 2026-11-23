@@ -9,13 +9,14 @@ const authorized = (operationId: string) =>
   ev("agent.fs.authorized", {
     stepRunId: "s",
     sessionId: "x",
+    turnId: "t",
     operationId,
     access: "write",
-    path: "/w/a",
+    display: "a",
     decision: "allow",
   });
-const completed = (operationId: string, outcome: string) =>
-  ev("agent.fs.completed", { stepRunId: "s", sessionId: "x", operationId, outcome });
+const completed = (operationId: string, outcome: string, at: { stepRunId?: string; turnId?: string } = {}) =>
+  ev("agent.fs.completed", { stepRunId: "s", sessionId: "x", turnId: "t", ...at, operationId, outcome });
 
 describe("ownedFsExecutions", () => {
   it("gives each authorization its outcome, and none is execution-unknown", () => {
@@ -49,5 +50,20 @@ describe("ownedFsExecutions", () => {
       ["a", "execution-unknown"],
       ["b", "failed"],
     ]);
+  });
+
+  it("reads a write whose effect is unknown as execution-unknown, and marks it", () => {
+    const [op] = ownedFsExecutions([authorized("a"), completed("a", "effect-unknown"), completed("a", "completed")]);
+    expect(op).toMatchObject({ state: "execution-unknown", effectUnknown: true });
+  });
+
+  it("takes an outcome only from the step and turn its authorization was made in", () => {
+    const ops = ownedFsExecutions([
+      authorized("a"),
+      completed("a", "completed", { stepRunId: "other" }),
+      authorized("b"),
+      completed("b", "completed", { turnId: "other" }),
+    ]);
+    expect(ops.map((o) => o.state)).toEqual(["execution-unknown", "execution-unknown"]);
   });
 });

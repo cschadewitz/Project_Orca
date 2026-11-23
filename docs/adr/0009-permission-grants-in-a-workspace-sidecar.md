@@ -174,12 +174,19 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   and this is still not an operating-system boundary. A remote host's paths are still
   compared as written and its I/O is not identity-bound. A reusable permit still waits for
   physical target verification. Each operation's authorization is recorded
-  (`agent.fs.authorized`) and that record awaited before its I/O can start; a record that
-  cannot be written refuses the operation. After the record the policy is read again and must
+  (`agent.fs.authorized`) and made durable before its I/O can start: it is synced through the
+  event store's exact-event barrier (`synchronizeEvent`), as a turn record is, and a store
+  without that barrier, or a record that cannot be written, refuses the operation. The record
+  names the file only by a bounded, root-relative display reference; the absolute path and the
+  file it resolved to stay in the daemon. After the record the policy is read again and must
   still allow the operation (an `allow` must still be `allow`; an operation a person allowed
   once must not have become `deny`), the turn must still be live and the target unchanged, or
-  the operation is refused. Its outcome follows (`agent.fs.completed`: completed, failed, or
-  not dispatched when a check after the record refused). An authorization with no outcome, as after a crash, is execution-unknown
+  the operation is refused. Its outcome follows (`agent.fs.completed`), through a recorder
+  bound when the authorization was made to its step, session and turn: completed; failed (a
+  read, or a write that failed before changing anything); not dispatched when a check after
+  the record refused; or effect-unknown, a write that failed once it may have changed the
+  file, which the agent is told is not safe to retry as if it had not run. An authorization
+  with no outcome, as after a crash, or with an effect-unknown one, is execution-unknown
   (`ownedFsExecutions`): ORCA never repeats the operation, and no transaction spans the file
   and the record. The `fs:` decision log is written alongside and not awaited. This is the
   client-owned ACP file path only: an agent's native tools and its own MCP connections do not

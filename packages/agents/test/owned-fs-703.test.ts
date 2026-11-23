@@ -21,8 +21,11 @@ import {
   fsToolCall,
   openAcpSession,
   permissionPolicyPath,
+  OwnedFsFailedWithoutEffect,
   resolveOwnedFsTarget,
-  type FsOperationRecord,
+  type FsAuthorizationRecord,
+  type FsOperationOutcome,
+  type FsOutcomeRecorder,
   type OpenSessionOptions,
   type PermissionRuleRecord,
 } from "@orca/agents";
@@ -152,6 +155,25 @@ async function turn(
 }
 
 const refused = (o: Outcome | undefined) => o?.error?.reason;
+
+/** A record as the tests see it: each authorization, then the outcome its recorder was given. */
+type FsOperationRecord =
+  | ({ phase: "authorized" } & FsAuthorizationRecord)
+  | { phase: "completed"; operationId: string; outcome: FsOperationOutcome };
+
+/** `recordFsOperation` collecting into `records`, running `during` while the authorization is written. */
+function recorder(
+  records: FsOperationRecord[],
+  during?: (record: FsAuthorizationRecord) => Promise<void>,
+): (record: FsAuthorizationRecord) => Promise<FsOutcomeRecorder> {
+  return async (record) => {
+    records.push({ phase: "authorized", ...record });
+    await during?.(record);
+    return async (outcome) => {
+      records.push({ phase: "completed", operationId: record.operationId, outcome });
+    };
+  };
+}
 
 describe("the policy decides ORCA's own file executor (#703)", () => {
   it("refuses a write the policy denies, though the agent never asked", async () => {
@@ -496,7 +518,8 @@ describe("ORCA's own file executor records each operation before its I/O (#703)"
   it("records the authorization before the write starts, and the outcome after it", async () => {
     const dir = await workspace();
     const file = join(dir, "src", "a.ts");
-    const records: (FsOperationRecord & { seen?: string })[] = [];
+    const records: FsOperationRecord[] = [];
+    const seen: string[] = [];
     const { outcomes } = await turn(
       dir,
       [{ write: file, content: "new" }],
@@ -506,7 +529,12 @@ describe("ORCA's own file executor records each operation before its I/O (#703)"
       local(),
       {
         recordFsOperation: async (record) => {
-          records.push({ ...record, seen: await readFile(file, "utf8") });
+          records.push({ phase: "authorized", ...record });
+          seen.push(await readFile(file, "utf8"));
+          return async (outcome) => {
+            records.push({ phase: "completed", operationId: record.operationId, outcome });
+            seen.push(await readFile(file, "utf8"));
+          };
         },
       },
     );
@@ -515,13 +543,15 @@ describe("ORCA's own file executor records each operation before its I/O (#703)"
       expect.objectContaining({
         phase: "authorized",
         access: "write",
-        path: file,
+        display: join("src", "a.ts"),
         decision: "allow",
         rule: { basis: "default" },
-        seen: "export {};\n",
       }),
-      expect.objectContaining({ phase: "completed", outcome: "completed", seen: "new" }),
+      expect.objectContaining({ phase: "completed", outcome: "completed" }),
     ]);
+    expect(seen).toEqual(["export {};\n", "new"]);
+    // Neither the absolute path nor anything resolved from it is in the record.
+    expect(JSON.stringify(records)).not.toContain(dir);
     expect(records[0]!.operationId).toBe(records[1]!.operationId);
   });
 
@@ -537,10 +567,7 @@ describe("ORCA's own file executor records each operation before its I/O (#703)"
       undefined,
       local(),
       {
-        recordFsOperation: async (record) => {
-          records.push(record);
-          throw new Error("store refused");
-        },
+        recordFsOperation: recorder(records, () => Promise.reject(new Error("store refused"))),
       },
     );
     expect(refused(outcomes[0])).toBe("the authorization could not be recorded, so the file I/O did not start");
@@ -563,13 +590,10 @@ describe("ORCA's own file executor records each operation before its I/O (#703)"
       undefined,
       local(),
       {
-        recordFsOperation: async (record) => {
-          records.push(record);
-          if (record.phase === "authorized") {
-            await rm(alias);
-            await symlink(other, alias);
-          }
-        },
+        recordFsOperation: recorder(records, async () => {
+          await rm(alias);
+          await symlink(other, alias);
+        }),
       },
     );
     expect(refused(outcomes[0])).toBe("the path changed before the file I/O started");
@@ -592,9 +616,7 @@ describe("ORCA's own file executor records each operation before its I/O (#703)"
       undefined,
       local(),
       {
-        recordFsOperation: async (record) => {
-          records.push(record);
-        },
+        recordFsOperation: recorder(records),
       },
     );
     expect(outcomes[0]?.code).toBe(-32002);
@@ -619,18 +641,16 @@ describe("authority and identity survive the wait for the record (#703 review)",
       [sidecar],
       local(),
       {
-        recordFsOperation: async (record) => {
-          records.push(record);
-          if (record.phase === "authorized")
-            await writeFile(
-              sidecar,
-              JSON.stringify({
-                version: 1,
-                agents: { prober: { rules: [{ match: { kind: "edit", path: "src/a.ts" }, decision: "deny" }] } },
-              }),
-              "utf8",
-            );
-        },
+        recordFsOperation: recorder(records, () =>
+          writeFile(
+            sidecar,
+            JSON.stringify({
+              version: 1,
+              agents: { prober: { rules: [{ match: { kind: "edit", path: "src/a.ts" }, decision: "deny" }] } },
+            }),
+            "utf8",
+          ),
+        ),
       },
     );
     expect(refused(outcomes[0])).toBe("not allowed now: the policy changed before the file I/O");
@@ -650,13 +670,10 @@ describe("authority and identity survive the wait for the record (#703 review)",
       undefined,
       local(),
       {
-        recordFsOperation: async (record) => {
-          records.push(record);
-          if (record.phase === "authorized") {
-            await writeFile(join(dir, "src", "swap.ts"), "swapped", "utf8");
-            await rename(join(dir, "src", "swap.ts"), file);
-          }
-        },
+        recordFsOperation: recorder(records, async () => {
+          await writeFile(join(dir, "src", "swap.ts"), "swapped", "utf8");
+          await rename(join(dir, "src", "swap.ts"), file);
+        }),
       },
     );
     expect(refused(outcomes[0])).toBe("the path changed before the file I/O started");
@@ -676,10 +693,7 @@ describe("authority and identity survive the wait for the record (#703 review)",
       undefined,
       local(),
       {
-        recordFsOperation: async (record) => {
-          records.push(record);
-          if (record.phase === "authorized") await writeFile(file, "someone else's", "utf8");
-        },
+        recordFsOperation: recorder(records, () => writeFile(file, "someone else's", "utf8")),
       },
     );
     expect(refused(outcomes[0])).toBe("the path changed before the file I/O started");
@@ -717,5 +731,84 @@ describe("authority and identity survive the wait for the record (#703 review)",
     );
     expect(refused(outcomes[0])).toBe("the file's identity cannot be established");
     expect(await readFile(file, "utf8")).not.toBe("x");
+  });
+
+  it("records a write that failed after it may have started as effect-unknown, and tells the agent so", async () => {
+    const dir = await workspace();
+    const host = local();
+    const bound = host.fs.bound!;
+    Object.defineProperty(host, "fs", {
+      value: { ...host.fs, bound: { ...bound, write: () => Promise.reject(new Error("no space left on device")) } },
+    });
+    const records: FsOperationRecord[] = [];
+    const { outcomes } = await turn(
+      dir,
+      [{ write: join(dir, "src", "a.ts"), content: "new" }],
+      { default: "allow" },
+      undefined,
+      undefined,
+      host,
+      { recordFsOperation: recorder(records) },
+    );
+    expect(phases(records)).toEqual(["authorized", "effect-unknown"]);
+    expect(refused(outcomes[0])).toMatch(/whether the file changed is unknown, so it is not safe to retry/);
+  });
+
+  it("records a write that failed before changing anything as failed", async () => {
+    const dir = await workspace();
+    const host = local();
+    const bound = host.fs.bound!;
+    Object.defineProperty(host, "fs", {
+      value: {
+        ...host.fs,
+        bound: {
+          ...bound,
+          write: () => Promise.reject(new OwnedFsFailedWithoutEffect(new Error("permission denied"))),
+        },
+      },
+    });
+    const records: FsOperationRecord[] = [];
+    await turn(
+      dir,
+      [{ write: join(dir, "src", "a.ts"), content: "new" }],
+      { default: "allow" },
+      undefined,
+      undefined,
+      host,
+      { recordFsOperation: recorder(records) },
+    );
+    expect(phases(records)).toEqual(["authorized", "failed"]);
+  });
+
+  it("records a remote write that failed as effect-unknown: the host cannot show it changed nothing", async () => {
+    const dir = await workspace();
+    const host = local();
+    Object.defineProperty(host, "spec", { value: { id: "remote", type: "ssh" } });
+    host.fs.writeFile = () => Promise.reject(new Error("connection reset"));
+    const records: FsOperationRecord[] = [];
+    await turn(
+      dir,
+      [{ write: join(dir, "src", "a.ts"), content: "new" }],
+      { default: "allow" },
+      undefined,
+      undefined,
+      host,
+      { recordFsOperation: recorder(records) },
+    );
+    expect(phases(records)).toEqual(["authorized", "effect-unknown"]);
+  });
+
+  it("records the file by a bounded reference relative to its root", async () => {
+    const dir = await workspace();
+    const deep = join(dir, "src", ...Array.from({ length: 30 }, (_, i) => `directory-${i}`), "new.ts");
+    const records: FsOperationRecord[] = [];
+    await turn(dir, [{ write: deep, content: "x" }], { default: "allow" }, undefined, undefined, local(), {
+      recordFsOperation: recorder(records),
+    });
+    const authorized = records[0] as Extract<FsOperationRecord, { phase: "authorized" }>;
+    expect(authorized.display.length).toBe(200);
+    expect(authorized.display.startsWith("…")).toBe(true);
+    expect(authorized.display.endsWith(join("directory-29", "new.ts"))).toBe(true);
+    expect(authorized.display).not.toContain(dir);
   });
 });

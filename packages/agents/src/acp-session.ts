@@ -44,7 +44,13 @@ import {
   type FsAccess,
 } from "./owned-fs-gate.js";
 import { judgedLane } from "./judged-lane.js";
-import { bindOwnedFs, OwnedFsNotDispatched, stillBound, type OwnedFsBinding } from "./owned-fs-io.js";
+import {
+  bindOwnedFs,
+  OwnedFsFailedWithoutEffect,
+  OwnedFsNotDispatched,
+  stillBound,
+  type OwnedFsBinding,
+} from "./owned-fs-io.js";
 import type { JudgePermission } from "./review-judge/plain-rule.js";
 import { processCleanup } from "./process-cleanup.js";
 import * as acpUnstable from "@agentclientprotocol/sdk/unstable";
@@ -189,9 +195,12 @@ export interface OpenSessionOptions {
   /**
    * The durable record of ORCA's own file executor (#703): called with each `fs/*`
    * operation's authorization, and awaited before its I/O can start (a rejection refuses the
-   * operation), then with its outcome after the I/O. Omitted, nothing is recorded.
+   * operation). It must resolve only once the record is durable, and refuse where it cannot
+   * be. It returns the one function that records that operation's outcome, so the outcome
+   * stays bound to the step, turn and operation it was authorized for. Omitted, nothing is
+   * recorded.
    */
-  recordFsOperation?: (record: FsOperationRecord) => Promise<void>;
+  recordFsOperation?: (record: FsAuthorizationRecord) => Promise<FsOutcomeRecorder>;
   handshakeTimeoutMs?: number;
   /**
    * How long closing the session waits, after each of SIGTERM and SIGKILL, for the agent
@@ -249,25 +258,55 @@ function contextRecoveryFailure(reason: "missing-session-id" | "load-unsupported
   return new OrcaError(code, message, { contextRecoveryReason: reason });
 }
 
-/** One record of ORCA's own file executor (#703): an authorization, then its outcome. */
-export type FsOperationRecord =
-  | {
-      phase: "authorized";
-      operationId: string;
-      access: FsAccess;
-      /** The path as the agent asked for it. */
-      path: string;
-      /** The file it resolved to, when that is not `path` (#703, local hosts). */
-      target?: string;
-      /** `allow` by the policy, or `ask:allow_once` by a person's one-time answer. */
-      decision: string;
-      rule?: PermissionRuleRecord;
+/**
+ * One authorization of ORCA's own file executor (#703). It names the file only by a bounded,
+ * root-relative display reference: the path the agent asked for and the physical file it
+ * resolved to stay in this process.
+ */
+export interface FsAuthorizationRecord {
+  operationId: string;
+  /** The live turn the operation belongs to. */
+  turnId: string;
+  access: FsAccess;
+  /** The path as asked for, relative to the session root it is in, and bounded. */
+  display: string;
+  /** Whether it reached a different file once links were followed (local hosts). */
+  linked?: true;
+  /** `allow` by the policy, or `ask:allow_once` by a person's one-time answer. */
+  decision: string;
+  rule?: PermissionRuleRecord;
+}
+
+/**
+ * What happened to an authorized operation. `effect-unknown` is a write that failed once it
+ * may have changed something: not `failed`, and not safe to retry as if it had not run.
+ */
+export type FsOperationOutcome = "completed" | "failed" | "not-dispatched" | "effect-unknown";
+
+/** Records the outcome of the one operation it was returned for. */
+export type FsOutcomeRecorder = (outcome: FsOperationOutcome) => Promise<void>;
+
+/** Longest display reference recorded for a file operation; longer ones keep their end. */
+const FS_DISPLAY_MAX = 200;
+
+/** `path` relative to the session root it is in, bounded: what a run's record shows of it. */
+function fsDisplay(path: string, roots: readonly string[]): string {
+  let shown = path;
+  for (const root of roots) {
+    const rel = relative(root, path);
+    if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
+      shown = rel === "" ? "." : rel;
+      break;
     }
-  | { phase: "completed"; operationId: string; outcome: "completed" | "failed" | "not-dispatched" };
+  }
+  return shown.length <= FS_DISPLAY_MAX ? shown : `…${shown.slice(shown.length - (FS_DISPLAY_MAX - 1))}`;
+}
 
 /** What `authorizeFs` hands the executor: the dispatch check, and what allowed it. */
 interface FsAuthorization {
   dispatch: () => void;
+  /** The live turn it was authorized in. */
+  turnId: string;
   decision: string;
   rule: PermissionRuleRecord;
   /** Whether `policy`, read again just before the I/O, still lets this operation through. */
@@ -468,7 +507,13 @@ async function openPlanned(
     if (decision === "allow") {
       record("allow", rule);
       // A rule's allow holds only while the policy still allows it.
-      return { dispatch, decision: "allow", rule, stillAllowed: (now) => explain(now).decision === "allow" };
+      return {
+        dispatch,
+        turnId: turn.id,
+        decision: "allow",
+        rule,
+        stillAllowed: (now) => explain(now).decision === "allow",
+      };
     }
     if (decision !== "ask") return refuse(decision, `not allowed: ${decision}`, rule);
     const invocation: PermissionInvocation = {
@@ -503,7 +548,13 @@ async function openPlanned(
     if (!live()) return refuse("ask:allow_once:turn-ended", "the turn ended while the file request was asked", rule);
     record("ask:allow_once", rule);
     // A person's one-time answer holds unless the policy now denies it.
-    return { dispatch, decision: "ask:allow_once", rule, stillAllowed: (now) => explain(now).decision !== "deny" };
+    return {
+      dispatch,
+      turnId: turn.id,
+      decision: "ask:allow_once",
+      rule,
+      stillAllowed: (now) => explain(now).decision !== "deny",
+    };
   };
 
   /**
@@ -524,16 +575,15 @@ async function openPlanned(
     authorized: FsAuthorization,
     io: (file: string) => Promise<T>,
   ): Promise<T> => {
-    const operationId = randomUUID();
-    const recordOperation = opts.recordFsOperation;
-    if (recordOperation) {
+    let recordOutcome: FsOutcomeRecorder | undefined;
+    if (opts.recordFsOperation) {
       try {
-        await recordOperation({
-          phase: "authorized",
-          operationId,
+        recordOutcome = await opts.recordFsOperation({
+          operationId: randomUUID(),
+          turnId: authorized.turnId,
           access,
-          path,
-          ...(target.io !== path ? { target: target.io } : {}),
+          display: fsDisplay(path, roots),
+          ...(target.io !== path ? { linked: true as const } : {}),
           decision: authorized.decision,
           ...(authorized.rule ? { rule: authorized.rule } : {}),
         });
@@ -549,9 +599,9 @@ async function openPlanned(
         });
       }
     }
-    const outcome = async (result: "completed" | "failed" | "not-dispatched") => {
-      if (!recordOperation) return;
-      await recordOperation({ phase: "completed", operationId, outcome: result }).catch((error: unknown) =>
+    const outcome = async (result: FsOperationOutcome) => {
+      if (!recordOutcome) return;
+      await recordOutcome(result).catch((error: unknown) =>
         logger.warn("fs outcome could not be recorded", { path, access, error: describeError(error) }),
       );
     };
@@ -585,8 +635,20 @@ async function openPlanned(
       result = await io(target.io);
     } catch (error) {
       if (error instanceof OwnedFsNotDispatched) return refusedNow(error.message);
-      await outcome("failed");
-      throw error;
+      // A read changes nothing, and a write that failed before changing anything says so.
+      // Any other write failure may have changed the file: its effect is unknown, and the
+      // agent is told not to take it as a write that never happened (#703 review).
+      if (access === "read" || error instanceof OwnedFsFailedWithoutEffect) {
+        await outcome("failed");
+        throw error instanceof OwnedFsFailedWithoutEffect ? error.original : error;
+      }
+      await outcome("effect-unknown");
+      logger.warn("fs write failed after it may have started", { path, error: describeError(error) });
+      throw acp.RequestError.internalError({
+        path,
+        reason:
+          "the write failed after it may have started: whether the file changed is unknown, so it is not safe to retry as if it had not run",
+      });
     }
     await outcome("completed");
     return result;

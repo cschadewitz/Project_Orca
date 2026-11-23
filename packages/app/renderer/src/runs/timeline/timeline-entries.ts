@@ -268,7 +268,7 @@ export function summarise(event: OrcaEvent, subject: string): string {
     case "agent.permission":
       return `${subject} asked to ${event.payload.title}, ${event.payload.decision}`;
     case "agent.fs.authorized":
-      return `${subject} was authorized to ${event.payload.access} ${event.payload.path}, ${event.payload.decision}`;
+      return `${subject} was authorized to ${event.payload.access} ${event.payload.display}, ${event.payload.decision}`;
     case "agent.fs.completed":
       return `${subject} file operation ${event.payload.outcome}`;
     case "agent.turn.completed":

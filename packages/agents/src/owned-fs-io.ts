@@ -17,7 +17,10 @@
  *   platform has it; elsewhere the identity comparison alone binds). A directory above it
  *   swapped after the anchor check and before the open is caught for an existing file by the
  *   identity comparison, and for a new file by the directory check after creation, which
- *   removes the file it just created and reports `failed`.
+ *   removes the file it just created; its effect is then reported as unknown.
+ * - A write that fails once it may have changed something (a truncate, a write, a directory
+ *   made) is not "failed": its effect is unknown, and it is not safe to retry as if nothing
+ *   happened. Only `OwnedFsFailedWithoutEffect` and `OwnedFsNotDispatched` say nothing changed.
  * - Remote hosts are not bound: their files are not on this machine. Their paths are
  *   compared as written, as `owned-fs-gate.ts` says.
  */
@@ -29,6 +32,16 @@ import { physicalPathOf } from "./permissions.js";
 
 /** Refused before any byte was read or written. */
 export class OwnedFsNotDispatched extends Error {}
+
+/**
+ * A write that failed before anything was changed: positive evidence of no effect (#703
+ * review). Any other write failure leaves the effect unknown.
+ */
+export class OwnedFsFailedWithoutEffect extends Error {
+  constructor(readonly original: unknown) {
+    super(original instanceof Error ? original.message : String(original));
+  }
+}
 
 /** What an `fs/*` operation is bound to: the file, or the directory it will be created under. */
 export interface OwnedFsBinding {
@@ -114,7 +127,8 @@ export async function writeBound(binding: OwnedFsBinding, content: string): Prom
     } catch (error) {
       if (errorCode(error) === "ELOOP" || errorCode(error) === "ENOENT")
         throw new OwnedFsNotDispatched("the file changed before it was written");
-      throw error;
+      // Opening for writing without truncating changes nothing.
+      throw new OwnedFsFailedWithoutEffect(error);
     }
     try {
       const stats = await handle.stat({ bigint: true });
@@ -130,14 +144,17 @@ export async function writeBound(binding: OwnedFsBinding, content: string): Prom
   const parent = dirname(binding.io);
   if (identityNow(binding.anchor) !== binding.identity)
     throw new OwnedFsNotDispatched("the directory changed before the file was created");
-  await mkdir(parent, { recursive: true });
+  // A directory made here is a change: once one is, no later failure is "no effect".
+  const made = await mkdir(parent, { recursive: true });
   let handle;
   try {
     handle = await open(binding.io, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o666);
   } catch (error) {
+    // An exclusive create that failed made nothing.
+    if (made !== undefined) throw error;
     if (errorCode(error) === "EEXIST" || errorCode(error) === "ELOOP")
       throw new OwnedFsNotDispatched("a file appeared before it was created");
-    throw error;
+    throw new OwnedFsFailedWithoutEffect(error);
   }
   try {
     const created = idOf(await handle.stat({ bigint: true }));
@@ -153,7 +170,7 @@ export async function writeBound(binding: OwnedFsBinding, content: string): Prom
       handle = undefined;
       const now = await lstat(binding.io, { bigint: true }).catch(() => undefined);
       if (now && created !== undefined && idOf(now) === created) await unlink(binding.io).catch(() => undefined);
-      throw new Error("the directory changed while the file was created; nothing was written");
+      throw new Error("the directory changed while the file was created; the new file was taken away");
     }
     await handle.write(content, 0, "utf8");
   } finally {

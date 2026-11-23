@@ -35,10 +35,13 @@
  * boundary, and a remote host's paths are compared as written with no identity binding.
  *
  * The durable record is separate (`recordFsOperation`, `agent.fs.authorized` and
- * `agent.fs.completed`): each authorized operation is recorded, and that record awaited,
- * before its I/O can start, and its outcome after. After the record the policy is read again
- * and must still allow the operation, the turn must be live and the target unchanged;
- * otherwise the outcome is `not-dispatched`. An authorization with no outcome is
+ * `agent.fs.completed`): each authorized operation is recorded, durably (the store's exact-event
+ * barrier, or the operation is refused), before its I/O can start, and its outcome after,
+ * through a recorder bound to the step, session and turn it was authorized in. The record
+ * names the file by a bounded, root-relative reference only. After the record the policy is
+ * read again and must still allow the operation, the turn must be live and the target
+ * unchanged; otherwise the outcome is `not-dispatched`. A write that failed once it may have
+ * changed the file is `effect-unknown`, never `failed`. An authorization with no outcome is
  * execution-unknown (`ownedFsExecutions`), never replayed. The `fs:` decisions logged through
  * `onPermission` remain the decision log, written alongside and not awaited.
  */

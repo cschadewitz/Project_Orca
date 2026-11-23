@@ -41,23 +41,25 @@ function recordingSession(seen: { authorizedBeforeIo: boolean[] }): SessionFacto
       closed: new Promise(() => {}),
       async prompt() {
         const record = o.recordFsOperation!;
-        await record({
-          phase: "authorized",
+        const done = await record({
           operationId: "op-1",
+          turnId: "turn-1",
           access: "write",
-          path: "/w/a.ts",
+          display: "a.ts",
           decision: "allow",
           rule: { basis: "default" },
         });
         seen.authorizedBeforeIo.push(true);
-        await record({ phase: "completed", operationId: "op-1", outcome: "completed" });
+        await done("completed");
+        // A second outcome for the same authorization is not recorded.
+        await done("failed");
         // The second never gets an outcome: the daemon stopped mid-operation.
         await record({
-          phase: "authorized",
           operationId: "op-2",
+          turnId: "turn-1",
           access: "write",
-          path: "/w/b.ts",
-          target: "/w/real-b.ts",
+          display: "b.ts",
+          linked: true,
           decision: "ask:allow_once",
         });
         return { stopReason: "end_turn", durationMs: 1 };
@@ -96,16 +98,80 @@ describe("the run's record of ORCA's own file executor (#703)", () => {
     expect(authorized.map((e) => e.payload)).toEqual([
       expect.objectContaining({
         operationId: "op-1",
+        turnId: "turn-1",
         access: "write",
-        path: "/w/a.ts",
+        display: "a.ts",
         decision: "allow",
         rule: { basis: "default" },
       }),
-      expect.objectContaining({ operationId: "op-2", target: "/w/real-b.ts", decision: "ask:allow_once" }),
+      expect.objectContaining({ operationId: "op-2", linked: true, decision: "ask:allow_once" }),
+    ]);
+    const completed = events.filter((e) => e.type === "agent.fs.completed");
+    expect(completed.map((e) => e.payload)).toEqual([
+      {
+        stepRunId: authorized[0]!.payload.stepRunId,
+        sessionId: authorized[0]!.payload.sessionId,
+        turnId: "turn-1",
+        operationId: "op-1",
+        outcome: "completed",
+      },
     ]);
     expect(ownedFsExecutions(events).map((op) => [op.operationId, op.state])).toEqual([
       ["op-1", "completed"],
       ["op-2", "execution-unknown"],
     ]);
+  });
+
+  it("refuses a file authorization on a store that cannot make it durable, before appending it", async () => {
+    const workflows = new WorkflowRegistry();
+    workflows.register(parseWorkflow(workflow));
+    const agents = new AgentRegistry()
+      .addHost(new LocalHost({ id: "local", type: "local" }))
+      .addAgent(AgentSpecSchema.parse({ id: "fake", command: "x", roles: ["builder"] }));
+    const stores = memoryStores();
+    let refusal: unknown;
+    const factory: SessionFactory = async (o: OpenSessionOptions) => ({
+      id: "sess_1",
+      agentId: o.agent.id,
+      hostId: o.host.id,
+      cwd: o.cwd,
+      acpSessionId: "acp",
+      configOptions: [],
+      setConfigOption: async () => [],
+      closed: new Promise(() => {}),
+      async prompt() {
+        // The turn record itself was made durable; then the store loses the barrier.
+        // An own property shadows the store's method; deleting it restores the method.
+        Object.defineProperty(stores.events, "synchronizeEvent", { value: undefined, configurable: true });
+        await o.recordFsOperation!({
+          operationId: "op-1",
+          turnId: "t",
+          access: "read",
+          display: "a.ts",
+          decision: "allow",
+        }).catch((e: unknown) => {
+          refusal = e;
+        });
+        delete (stores.events as { synchronizeEvent?: unknown }).synchronizeEvent;
+        return { stopReason: "end_turn", durationMs: 1 };
+      },
+      onUpdate: () => () => {},
+      cancel: async () => {},
+      close: async () => {},
+    });
+    const orchestrator = new Orchestrator({
+      stores,
+      agents,
+      workflows,
+      templates: new TemplateRegistry(),
+      workspaceProvider: new LocalWorkspaceProvider("/tmp"),
+      clock: new FakeClock(),
+      humanInput: autoHumanInput("allow"),
+      sessionFactory: factory,
+    });
+    const state = await orchestrator.startAndRun({ workflowId: "fsrec" });
+    expect(String(refusal)).toMatch(/cannot make a file authorization durable/);
+    const events = await orchestrator.events(state.run.id);
+    expect(events.filter((e) => e.type === "agent.fs.authorized")).toEqual([]);
   });
 });
