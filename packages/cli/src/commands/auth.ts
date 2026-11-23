@@ -119,8 +119,8 @@ function disclosureGrant(ctx: CommandContext, config: OrcaConfig): DisclosureGra
 
 /**
  * `--judge-disclosure-kind` (repeatable): an experimental class the judge may also be shown, each
- * its own grant entry and wire format (#701 per-kind switches). Edits are writes ORCA performs
- * itself; MCP calls are to servers ORCA relays; commands are advisory only.
+ * its own grant entry and wire format (#701 per-kind switches). MCP calls are to servers ORCA
+ * relays; edits (writes ORCA performs itself) and commands are advisory only.
  */
 const JUDGE_DISCLOSURE_KINDS = {
   edits: "edit",

@@ -31,7 +31,7 @@
  * The lane is off unless a session is given a judge. Turning it on is a setting (#701).
  */
 import type * as acp from "@agentclientprotocol/sdk";
-import type { JudgedDecision, PermissionExplanation, PermissionPolicy } from "@orca/core";
+import type { JudgedDecision, JudgedPolicyRule, PermissionExplanation, PermissionPolicy } from "@orca/core";
 import { callFacts, explainPermission, type PermissionEvalContext } from "./permissions.js";
 import {
   PLAIN_RULE_JUDGED_KINDS,
@@ -223,8 +223,6 @@ function restricted(policy: PermissionPolicy, facts: ReturnType<typeof callFacts
   );
 }
 
-const sameCandidate = (policy: PermissionPolicy, rule: { ruleId: string; ruleRevision: string }): boolean =>
-  (policy.judged ?? []).some((r) => r.ruleId === rule.ruleId && r.ruleRevision === rule.ruleRevision);
 
 /** The command text an `execute` ask carries, as the agent wrote it; the title when it sent none. */
 function commandText(request: acp.RequestPermissionRequest): string {
@@ -296,15 +294,16 @@ export type JudgedOperation =
   | { readonly allowed: false; readonly judged?: JudgedDecision };
 
 /**
- * The `edits` class: a write ORCA's own file gate performs (`fs/writeTextFile`), when the typed answer is `ask`.
- * Only a judged rule naming kind `edit` is asked about, the target must be one existing regular file ORCA resolves
- * inside the workspace and outside every protected path (read-only ones included), and only on the daemon's own
- * machine. After an allow, the policy is read again and the same file must still qualify, with the same identity:
- * the allow is for that operation on that file. New files and edits the agent makes itself are not this lane's.
+ * The `edits` class: advice on a write ORCA's own file gate performs (`fs/writeTextFile`), when the typed answer
+ * is `ask` (#701 review). A verified path shows which file a write targets, not what it changes, and the
+ * coordinator cannot tell whether a free-form criterion depends only on the path; so the judge's verdict is
+ * recorded as a recommendation and the person still answers, as for commands. Only a judged rule naming kind
+ * `edit` is asked about, the target must be one existing regular file ORCA resolves inside the workspace and
+ * outside every protected path (read-only ones included), and only on the daemon's own machine. Undefined when no
+ * rule applies; otherwise the verdict, marked advisory. It never allows anything.
  */
-export function judgedEditLane(options: {
+export function judgedEditAdvice(options: {
   judge: JudgePermission;
-  reload: () => Promise<PermissionPolicy>;
   localHost: boolean;
   /** The typed answer for the write under a policy: what the file gate decides by. */
   explain: (policy: PermissionPolicy) => PermissionExplanation;
@@ -313,19 +312,18 @@ export function judgedEditLane(options: {
   policy: PermissionPolicy,
   write: { request: acp.RequestPermissionRequest; ctx: PermissionEvalContext | undefined },
   signal: AbortSignal,
-) => Promise<JudgedOperation> {
-  const base = { kind: "edit" as const };
-  const look = (
-    policy: PermissionPolicy,
-    write: { request: acp.RequestPermissionRequest; ctx?: PermissionEvalContext | undefined },
-  ) => {
+) => Promise<JudgedDecision | undefined> {
+  const base = { kind: "edit" as const, advisory: true };
+  return async (policy, write, signal) => {
+    if (!options.localHost) return undefined;
+    if (options.explain(policy).decision !== "ask") return undefined;
     const facts = callFacts(write.request, write.ctx);
     const candidates = (policy.judged ?? []).filter(
       (rule) => rule.mcp === undefined && rule.match.kind === "edit" && facts.matches(rule.match, "allow"),
     );
-    if (candidates.length === 0) return { state: "none" as const };
+    if (candidates.length === 0) return undefined;
     if (facts.kind !== "edit" || facts.claimed || facts.commandLike || restricted(policy, facts))
-      return { state: "closed" as const, verdict: "hard-boundary" };
+      return { ...base, verdict: "hard-boundary" };
     const check = verifyPlainRuleTargets({
       kind: "edit",
       locations: (write.request.toolCall.locations ?? []).map((l) => l.path),
@@ -333,31 +331,18 @@ export function judgedEditLane(options: {
       protectedPaths: write.ctx?.protectedPaths,
       ...(options.io ? { io: options.io } : {}),
     });
-    if (!check.targetsVerified) return { state: "closed" as const, verdict: "outside-envelope" };
-    return { state: "open" as const, candidates, locations: check.locations, identities: check.identities };
-  };
-  return async (policy, write, signal) => {
-    if (!options.localHost) return { allowed: false };
-    const typed = options.explain(policy);
-    if (typed.decision !== "ask") return { allowed: false };
-    const first = look(policy, write);
-    if (first.state === "none") return { allowed: false };
-    if (first.state === "closed") return { allowed: false, judged: { ...base, verdict: first.verdict } };
+    if (!check.targetsVerified) return { ...base, verdict: "outside-envelope" };
     let outcome: PlainRuleJudgeOutcome;
     try {
       outcome = await options.judge(
         {
-          rules: first.candidates.map((r) => ({
-            ruleId: r.ruleId,
-            ruleRevision: r.ruleRevision,
-            criterion: r.criterion,
-          })),
+          rules: candidates.map((r) => ({ ruleId: r.ruleId, ruleRevision: r.ruleRevision, criterion: r.criterion })),
           restrictions: { deny: false, ask: false },
           action: {
             kind: "edit",
             // ORCA's own words for its own operation, with the verified path: never the absolute path.
-            title: `Write ${first.locations[0]!}`,
-            locations: first.locations,
+            title: `Write ${check.locations[0]!}`,
+            locations: check.locations,
             inWorkspace: true,
             targetsVerified: true,
           },
@@ -365,38 +350,14 @@ export function judgedEditLane(options: {
         signal,
       );
     } catch {
-      return { allowed: false, judged: { ...base, verdict: "unavailable" } };
+      return { ...base, verdict: "unavailable" };
     }
-    const said: JudgedDecision = {
+    return {
       ...base,
       verdict: outcome.verdict,
+      ...(outcome.ruleId ? { ruleId: outcome.ruleId, ruleRevision: outcome.ruleRevision } : {}),
       ...(outcome.reasonCode ? { reasonCode: outcome.reasonCode } : {}),
       judgeConfigRef: outcome.judgeConfigRef,
-    };
-    if (outcome.outcome !== "allow" || signal.aborted) return { allowed: false, judged: said };
-    const allowed = first.candidates.find(
-      (r) => r.ruleId === outcome.ruleId && r.ruleRevision === outcome.ruleRevision,
-    );
-    if (!allowed) return { allowed: false, judged: { ...said, verdict: "malformed" } };
-    let now: PermissionPolicy;
-    try {
-      now = await options.reload();
-    } catch {
-      return { allowed: false, judged: { ...said, verdict: "unavailable" } };
-    }
-    if (signal.aborted) return { allowed: false, judged: said };
-    const again = look(now, write);
-    const still =
-      options.explain(now).decision === "ask" &&
-      again.state === "open" &&
-      sameCandidate(now, allowed) &&
-      sameList(again.locations, first.locations) &&
-      sameList(again.identities, first.identities);
-    if (!still) return { allowed: false, judged: { ...said, verdict: "changed-since" } };
-    return {
-      allowed: true,
-      judged: { ...said, ruleId: allowed.ruleId, ruleRevision: allowed.ruleRevision },
-      stillCovered: (p) => sameCandidate(p, allowed),
     };
   };
 }
@@ -449,90 +410,124 @@ export function judgedMcpLane(options: {
     if (facts.claimed || restricted(policy, facts)) return { state: "closed" as const, verdict: "hard-boundary" };
     return { state: "open" as const, candidates };
   };
+  /** Whether the call is still one this lane may allow, under `policy`, by the same rule: the whole first check. */
+  const eligible = (policy: PermissionPolicy, call: Parameters<typeof look>[1], rule: JudgedPolicyRule): boolean => {
+    if (options.explain(policy).decision !== "ask") return false;
+    const again = look(policy, call);
+    return again.state === "open" && again.candidates.some((r) => sameRule(r, rule));
+  };
   return async (policy, call, signal) => {
     if (options.explain(policy).decision !== "ask") return { allowed: false };
     const first = look(policy, call);
     if (first.state === "none") return { allowed: false };
     if (first.state === "closed") return { allowed: false, judged: { ...base, verdict: first.verdict } };
-    const args = disclosedArguments(call.arguments, first.candidates, options.redact);
-    if (args === undefined) return { allowed: false, judged: { ...base, verdict: "outside-envelope" } };
-    let outcome: PlainRuleJudgeOutcome;
-    try {
-      outcome = await options.judge(
-        {
-          rules: first.candidates.map((r) => ({
-            ruleId: r.ruleId,
-            ruleRevision: r.ruleRevision,
-            criterion: r.criterion,
-          })),
-          restrictions: { deny: false, ask: false },
-          action: {
-            kind: "other",
-            title: `${call.server}: ${call.tool}`,
-            locations: [],
-            inWorkspace: false,
-            // ORCA runs this server and relays this request: the identity is its own, not the agent's claim.
-            targetsVerified: true,
-            mcp: { server: call.server, tool: call.tool, arguments: args },
+    // Each rule is judged against only the arguments it lists (#701 review): rules listing the same
+    // names share one call, in rule order, and no rule is shown another's projection.
+    const groups = new Map<string, JudgedPolicyRule[]>();
+    for (const rule of first.candidates) {
+      const key = JSON.stringify([...new Set(rule.mcp?.arguments ?? [])].sort());
+      groups.set(key, [...(groups.get(key) ?? []), rule]);
+    }
+    let said: JudgedDecision | undefined;
+    for (const [key, rules] of groups) {
+      if (signal.aborted) break;
+      const args = disclosedArguments(call.arguments, JSON.parse(key) as string[], options.redact);
+      // Evidence these rules need cannot be shown safely: they are left to the person.
+      if (args === undefined) {
+        said ??= { ...base, verdict: "outside-envelope" };
+        continue;
+      }
+      let outcome: PlainRuleJudgeOutcome;
+      try {
+        outcome = await options.judge(
+          {
+            rules: rules.map((r) => ({ ruleId: r.ruleId, ruleRevision: r.ruleRevision, criterion: r.criterion })),
+            restrictions: { deny: false, ask: false },
+            action: {
+              kind: "other",
+              title: `${call.server}: ${call.tool}`,
+              locations: [],
+              inWorkspace: false,
+              // ORCA runs this server and relays this request: the identity is its own, not the agent's claim.
+              targetsVerified: true,
+              mcp: { server: call.server, tool: call.tool, arguments: args },
+            },
           },
-        },
-        signal,
-      );
-    } catch {
-      return { allowed: false, judged: { ...base, verdict: "unavailable" } };
+          signal,
+        );
+      } catch {
+        said = { ...base, verdict: "unavailable" };
+        continue;
+      }
+      said = {
+        ...base,
+        verdict: outcome.verdict,
+        ...(outcome.reasonCode ? { reasonCode: outcome.reasonCode } : {}),
+        judgeConfigRef: outcome.judgeConfigRef,
+      };
+      if (outcome.outcome !== "allow" || signal.aborted) continue;
+      const allowed = rules.find((r) => r.ruleId === outcome.ruleId && r.ruleRevision === outcome.ruleRevision);
+      if (!allowed) return { allowed: false, judged: { ...said, verdict: "malformed" } };
+      let now: PermissionPolicy;
+      try {
+        now = await options.reload();
+      } catch {
+        return { allowed: false, judged: { ...said, verdict: "unavailable" } };
+      }
+      if (signal.aborted) return { allowed: false, judged: said };
+      if (!eligible(now, call, allowed)) return { allowed: false, judged: { ...said, verdict: "changed-since" } };
+      return {
+        allowed: true,
+        judged: { ...said, ruleId: allowed.ruleId, ruleRevision: allowed.ruleRevision },
+        // At the handoff: the whole first check again, against the policy as it is then.
+        stillCovered: (p) => eligible(p, call, allowed),
+      };
     }
-    const said: JudgedDecision = {
-      ...base,
-      verdict: outcome.verdict,
-      ...(outcome.reasonCode ? { reasonCode: outcome.reasonCode } : {}),
-      judgeConfigRef: outcome.judgeConfigRef,
-    };
-    if (outcome.outcome !== "allow" || signal.aborted) return { allowed: false, judged: said };
-    const allowed = first.candidates.find(
-      (r) => r.ruleId === outcome.ruleId && r.ruleRevision === outcome.ruleRevision,
-    );
-    if (!allowed) return { allowed: false, judged: { ...said, verdict: "malformed" } };
-    let now: PermissionPolicy;
-    try {
-      now = await options.reload();
-    } catch {
-      return { allowed: false, judged: { ...said, verdict: "unavailable" } };
-    }
-    if (signal.aborted) return { allowed: false, judged: said };
-    const again = look(now, call);
-    const still = options.explain(now).decision === "ask" && again.state === "open" && sameCandidate(now, allowed);
-    if (!still) return { allowed: false, judged: { ...said, verdict: "changed-since" } };
-    return {
-      allowed: true,
-      judged: { ...said, ruleId: allowed.ruleId, ruleRevision: allowed.ruleRevision },
-      stillCovered: (p) => sameCandidate(p, allowed),
-    };
+    return said ? { allowed: false, judged: said } : { allowed: false };
   };
 }
 
+const sameRule = (a: JudgedPolicyRule, b: JudgedPolicyRule): boolean =>
+  a.ruleId === b.ruleId && a.ruleRevision === b.ruleRevision;
+
 /**
- * The arguments a judge may see for a relayed tool call (#701 review): only the top-level names the
- * candidate rules list, with their values exactly as they will be sent, as a JSON object string.
- * `undefined` when the judge could not see what is needed: arguments that are not an object while
- * a name is listed, or a listed value holding a session secret, which would reach the judge only
- * redacted. The person decides those instead.
+ * The arguments a judge may see for a relayed tool call (#701 review): only the top-level `names` one
+ * group of rules lists, with their values exactly as they will be sent, as a JSON object string.
+ * `undefined` when that cannot be shown safely: arguments that are not an object while a name is
+ * listed, or a listed name or value holding a session secret, which the judge could only see
+ * redacted. Each name and every string inside each value is checked before serialization, and the
+ * serialized text once more, as defense in depth. The person decides those instead.
  */
 function disclosedArguments(
   args: unknown,
-  rules: readonly { mcp?: { arguments?: readonly string[] | undefined } | undefined }[],
+  names: readonly string[],
   redact: (text: string) => string,
 ): string | undefined {
-  const names = [...new Set(rules.flatMap((rule) => rule.mcp?.arguments ?? []))].sort();
   if (names.length === 0) return "{}";
   if (args === null || typeof args !== "object" || Array.isArray(args)) return undefined;
+  const clean = (text: string): boolean => redact(text) === text;
+  const safe = (value: unknown, depth: number): boolean => {
+    if (depth > 32) return false;
+    if (typeof value === "string") return clean(value);
+    if (value === null || typeof value === "number" || typeof value === "boolean") return true;
+    if (Array.isArray(value)) return value.every((v) => safe(v, depth + 1));
+    if (typeof value === "object")
+      return Object.entries(value as Record<string, unknown>).every(([k, v]) => clean(k) && safe(v, depth + 1));
+    return false;
+  };
   const picked: Record<string, unknown> = {};
-  for (const name of names)
-    if (Object.prototype.hasOwnProperty.call(args, name)) picked[name] = (args as Record<string, unknown>)[name];
+  for (const name of names) {
+    if (!clean(name)) return undefined;
+    if (!Object.prototype.hasOwnProperty.call(args, name)) continue;
+    const value = (args as Record<string, unknown>)[name];
+    if (!safe(value, 0)) return undefined;
+    picked[name] = value;
+  }
   let text: string;
   try {
     text = JSON.stringify(picked);
   } catch {
     return undefined;
   }
-  return redact(text) === text ? text : undefined;
+  return clean(text) ? text : undefined;
 }

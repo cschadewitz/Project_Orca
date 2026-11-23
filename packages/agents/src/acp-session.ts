@@ -43,7 +43,7 @@ import {
   stricterExplanation,
   type FsAccess,
 } from "./owned-fs-gate.js";
-import { judgedEditLane, judgedLane, judgedMcpLane } from "./judged-lane.js";
+import { judgedEditAdvice, judgedLane, judgedMcpLane } from "./judged-lane.js";
 import {
   bindOwnedFs,
   newFileMode,
@@ -192,10 +192,10 @@ export interface OpenSessionOptions {
   /**
    * The experimental classes (#701 per-kind switches), each its own judge with its own disclosure
    * grant, and each used only alongside `judgePermission`:
-   * - `edit`: ORCA's own `fs/writeTextFile` writes the typed rules ask about, to an existing file
-   *   it resolved; a covered verdict allows that one write once.
+   * - `edit`: advisory only (#701 review). ORCA's own `fs/writeTextFile` writes the typed rules
+   *   ask about, to an existing file it resolved: the verdict is recorded and a person answers.
    * - `mcp`: relayed MCP tool calls the typed rules ask about, by a rule naming that exact tool;
-   *   a covered verdict allows that one call once.
+   *   a covered verdict allows that one call once, while the call stays eligible.
    * - `command`: advisory only; the verdict is recorded with the ask, and a person answers.
    */
   judgeKinds?: {
@@ -546,38 +546,20 @@ async function openPlanned(
       };
     }
     if (decision !== "ask") return refuse(decision, `not allowed: ${decision}`, rule);
-    // The experimental edit class (#701): a judged rule may allow this one write, to this file, once.
+    // The experimental edit class (#701): a judge's recommendation on this write, recorded with the ask.
+    // It allows nothing: a path does not show what a write changes (#701 review), so the person answers.
     if (access === "write" && judgedEdit) {
-      const lane = judgedEditLane({
-        judge: judgedEdit,
-        reload: policyForAsk,
-        localHost: opts.host.spec.type === "local",
-        explain,
-      });
-      const target = resolved ?? path;
-      const outcome = await lane(
+      const advise = judgedEditAdvice({ judge: judgedEdit, localHost: opts.host.spec.type === "local", explain });
+      const advice = await advise(
         policy,
-        { request: { sessionId: acpSessionId, toolCall: fsToolCall(target, access), options: [] }, ctx: evalScope },
+        {
+          request: { sessionId: acpSessionId, toolCall: fsToolCall(resolved ?? path, access), options: [] },
+          ctx: evalScope,
+        },
         turn.abort.signal,
       );
-      const judgedRule: PermissionRuleRecord = outcome.judged
-        ? permissionRuleRecord({ ...explained, judged: outcome.judged })
-        : rule;
-      if (outcome.allowed) {
-        if (!live()) return refuse("judged:turn-ended", "the turn ended while the file request was judged", judgedRule);
-        const allowedRule = permissionRuleRecord({ decision: "allow", basis: "judged", judged: outcome.judged });
-        record("judged", allowedRule);
-        // A judged allow holds only while the policy still asks rather than denies, and the rule is still there.
-        return {
-          dispatch,
-          turnId: turn.id,
-          decision: "judged",
-          rule: allowedRule,
-          stillAllowed: (now) => explain(now).decision !== "deny" && outcome.stillCovered(now),
-        };
-      }
-      if (outcome.judged) record("judged:not-allowed", judgedRule);
-      if (!live()) return refuse("turn-ended", "the turn ended before the file request was decided", judgedRule);
+      if (advice) record("judged:advisory", permissionRuleRecord({ ...explained, judged: advice }));
+      if (!live()) return refuse("turn-ended", "the turn ended before the file request was decided", rule);
     }
     const invocation: PermissionInvocation = {
       sessionId: id,
@@ -760,7 +742,7 @@ async function openPlanned(
       activeTurn === turn && !turn.abort.signal.aborted && !sessionLive.signal.aborted && !request.aborted;
     /** How the call was allowed: a person's one-time allow stands until a deny appears. */
     let grantedBy: "allow" | "ask:allow_once" | "judged" = "allow";
-    /** With a judged allow (#701): whether the allowing rule is still in the policy, at handoff. */
+    /** With a judged allow (#701): whether the call is still eligible under a policy, at handoff. */
     let stillCovered: ((policy: PermissionPolicy) => boolean) | undefined;
     const gate: McpRelayDispatch = {
       signal: turn.abort.signal,
@@ -774,8 +756,11 @@ async function openPlanned(
         const latest = await policyForAsk();
         const now = decide(latest);
         if (now === "deny") return refuse("recheck:denied-since", "ORCA's policy denies it now");
-        if (grantedBy === "judged" && stillCovered && !stillCovered(latest))
-          return refuse("recheck:judged-rule-gone", "the rule that allowed it is no longer in ORCA's policy");
+        // A judged allow holds only while the call passes the judged lane's whole first check again
+        // (#701 review): the typed answer still ask, no restriction since, the same rule. A typed allow
+        // since needs no judge.
+        if (grantedBy === "judged" && now !== "allow" && !(stillCovered?.(latest) ?? false))
+          return refuse("recheck:judged-not-eligible", "the call is no longer one a plain-language rule may allow");
         if (now === "ask" && grantedBy === "allow")
           return refuse("recheck:asks-since", "ORCA's policy asks for it now, and nobody was asked");
         if (!live()) return refuse("recheck:turn-ended", "the turn ended while the server started");

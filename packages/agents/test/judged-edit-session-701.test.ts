@@ -1,7 +1,8 @@
 /**
  * The experimental edit class end to end (#701 per-kind switches): a real ACP agent over stdio asks ORCA to write a
- * file, the typed rules ask, and a judged rule naming `edit` may allow that one write once, with nobody asked. Without
- * the edit judge, or on the judge's no, the person is asked as before. A fake judge stands in for #701's.
+ * file, the typed rules ask, and a judged rule naming `edit` gets the judge's recommendation recorded with the ask.
+ * It allows nothing (#701 review: a path does not show what a write changes): the person answers every time.
+ * A fake judge stands in for #701's.
  */
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -109,28 +110,26 @@ async function turn(opts: { edit?: JudgePermission; read?: JudgePermission; answ
   return { outcomes, decisions, rules, asked, content: await readFile(join(dir, "docs", "a.md"), "utf8") };
 }
 
-describe("ORCA's own write, judged (#701 edit class)", () => {
-  it("is allowed once by a judged edit rule, with nobody asked, and recorded as judged", async () => {
+describe("ORCA's own write, with a judge's advice (#701 edit class)", () => {
+  it("records the judge's covered verdict as advice, and the person still answers", async () => {
     const edit = fakeJudge();
-    const out = await turn({ read: fakeJudge(), edit });
-    expect(out.content).toBe("written\n");
-    expect(out.asked).toHaveLength(0);
-    expect(out.decisions).toEqual(["fs:judged"]);
-    expect(out.rules[0]).toMatchObject({ basis: "judged", judge: { kind: "edit", ruleId: "config:0" } });
+    const rejected = await turn({ read: fakeJudge(), edit, answer: "reject" });
+    expect(rejected.asked).toHaveLength(1);
+    expect(rejected.content).toBe("before\n");
+    expect(rejected.decisions[0]).toBe("fs:judged:advisory");
+    expect(rejected.rules[0]).toMatchObject({ judge: { kind: "edit", advisory: true, verdict: "covered" } });
     expect(edit.mock.calls[0]![0].action).toMatchObject({ kind: "edit", locations: ["docs/a.md"] });
+
+    const allowed = await turn({ read: fakeJudge(), edit: fakeJudge(), answer: "allow" });
+    expect(allowed.asked).toHaveLength(1);
+    expect(allowed.content).toBe("written\n");
   });
 
-  it("goes to the person without the edit judge, or on the judge's no", async () => {
+  it("asks without advice when there is no edit judge", async () => {
     const without = await turn({ read: fakeJudge(), answer: "reject" });
     expect(without.asked).toHaveLength(1);
+    expect(without.decisions).not.toContain("fs:judged:advisory");
     expect(without.content).toBe("before\n");
-
-    const edit = fakeJudge({ outcome: "no-match", verdict: "not-covered", reasonCode: "outside-criterion" });
-    const declined = await turn({ read: fakeJudge(), edit, answer: "reject" });
-    expect(edit).toHaveBeenCalledTimes(1);
-    expect(declined.asked).toHaveLength(1);
-    expect(declined.content).toBe("before\n");
-    expect(declined.decisions[0]).toBe("fs:judged:not-allowed");
   });
 
   it("is not used without the read judge: the experimental classes ride with it", async () => {

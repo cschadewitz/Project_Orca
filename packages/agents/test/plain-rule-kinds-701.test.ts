@@ -40,7 +40,7 @@ import {
   resolvePlainRuleProvider,
 } from "../src/review-judge/plain-rule-providers.js";
 import { plainRuleDisclosureQuery } from "../src/review-judge/plain-rule-connection.js";
-import { judgedEditLane, judgedMcpLane } from "../src/judged-lane.js";
+import { judgedEditAdvice, judgedMcpLane } from "../src/judged-lane.js";
 import { fsToolCall } from "../src/owned-fs-gate.js";
 
 const signal = () => new AbortController().signal;
@@ -215,71 +215,50 @@ function fakeJudge(answer?: Partial<PlainRuleJudgeOutcome>) {
 
 const EDIT_RULE = { match: { kind: "edit", pathPrefix: "docs" }, judge: { criterion: "Editing the docs." } };
 
-describe("the edit lane: ORCA's own writes", () => {
+describe("the edit class: advice on ORCA's own writes, never an allow (#701 review)", () => {
   const write = (path: string) => ({
     request: { sessionId: "s", toolCall: fsToolCall(path, "write"), options: [] } as acp.RequestPermissionRequest,
     ctx,
   });
-  const laneFor = (judge: JudgePermission, policy: () => Promise<PermissionPolicy>, localHost = true) =>
-    judgedEditLane({
+  const adviseWith = (judge: JudgePermission, localHost = true) =>
+    judgedEditAdvice({
       judge,
-      reload: policy,
       localHost,
       explain: (p) => explainPermission(p, write(join(ws, "docs", "a.md")).request, ctx),
     });
 
-  it("allows one write to an existing file a rule names, without the absolute path reaching the judge", async () => {
+  it("records a covered verdict as advice on an existing file, without the absolute path reaching the judge", async () => {
     const policy = await policyOf([EDIT_RULE]);
     const judge = fakeJudge();
-    const out = await laneFor(judge, async () => policy)(policy, write(join(ws, "docs", "a.md")), signal());
-    expect(out).toMatchObject({ allowed: true, judged: { kind: "edit", verdict: "covered", ruleId: "config:0" } });
+    const advice = await adviseWith(judge)(policy, write(join(ws, "docs", "a.md")), signal());
+    expect(advice).toMatchObject({ kind: "edit", advisory: true, verdict: "covered", ruleId: "config:0" });
     const sent = judge.mock.calls[0]![0].action;
     expect(sent).toMatchObject({ kind: "edit", title: "Write docs/a.md", locations: ["docs/a.md"] });
     expect(JSON.stringify(sent)).not.toContain(ws);
-    // The allow is recorded as judged, with its class.
-    expect(permissionRuleRecord({ decision: "allow", basis: "judged", judged: out.judged! })).toMatchObject({
-      basis: "judged",
-      judge: { kind: "edit", ruleId: "config:0" },
+    // Recorded with the ask the person still answers: a path does not show what a write changes.
+    expect(permissionRuleRecord({ decision: "ask", basis: "default", judged: advice! }).judge).toMatchObject({
+      kind: "edit",
+      advisory: true,
     });
-    // It holds at dispatch only while the rule is still there.
-    expect(out.allowed && out.stillCovered(policy)).toBe(true);
-    expect(out.allowed && out.stillCovered(await policyOf([]))).toBe(false);
   });
 
-  it("asks nobody for a read rule, a new file, a protected path, a remote host or a typed restriction", async () => {
+  it("gives no advice for a read rule, a new file, a protected path, a remote host or past a typed restriction", async () => {
     const judge = fakeJudge();
     const readOnly = await policyOf([{ match: { kind: "read" }, judge: { criterion: "Reading." } }]);
-    expect(await laneFor(judge, async () => readOnly)(readOnly, write(join(ws, "docs", "a.md")), signal())).toEqual({
-      allowed: false,
-    });
+    expect(await adviseWith(judge)(readOnly, write(join(ws, "docs", "a.md")), signal())).toBeUndefined();
     const anyEdit = await policyOf([{ match: { kind: "edit" }, judge: { criterion: "Any edit." } }]);
-    const lane = laneFor(judge, async () => anyEdit);
-    expect(await lane(anyEdit, write(join(ws, "docs", "new.md")), signal())).toMatchObject({
-      allowed: false,
-      judged: { verdict: "outside-envelope" },
+    expect(await adviseWith(judge)(anyEdit, write(join(ws, "docs", "new.md")), signal())).toMatchObject({
+      verdict: "outside-envelope",
     });
-    expect(await lane(anyEdit, write(join(ws, "orca.config.yaml")), signal())).toMatchObject({ allowed: false });
-    const remote = laneFor(judge, async () => anyEdit, false);
-    expect(await remote(anyEdit, write(join(ws, "docs", "a.md")), signal())).toEqual({ allowed: false });
+    expect(await adviseWith(judge)(anyEdit, write(join(ws, "orca.config.yaml")), signal())).toMatchObject({
+      verdict: "outside-envelope",
+    });
+    expect(await adviseWith(judge, false)(anyEdit, write(join(ws, "docs", "a.md")), signal())).toBeUndefined();
     const restricted = await policyOf([EDIT_RULE, { match: { kind: "edit", pathPrefix: "docs" }, decision: "ask" }]);
-    expect(
-      await laneFor(judge, async () => restricted)(restricted, write(join(ws, "docs", "a.md")), signal()),
-    ).toMatchObject({ allowed: false, judged: { verdict: "hard-boundary" } });
+    expect(await adviseWith(judge)(restricted, write(join(ws, "docs", "a.md")), signal())).toMatchObject({
+      verdict: "hard-boundary",
+    });
     expect(judge).not.toHaveBeenCalled();
-  });
-
-  it("refuses the allow when the rule is gone by the time the judge answers", async () => {
-    const policy = await policyOf([EDIT_RULE]);
-    const gone = await policyOf([]);
-    const out = await laneFor(fakeJudge(), async () => gone)(policy, write(join(ws, "docs", "a.md")), signal());
-    expect(out).toMatchObject({ allowed: false, judged: { verdict: "changed-since" } });
-  });
-
-  it("does not allow on a judge's no", async () => {
-    const policy = await policyOf([EDIT_RULE]);
-    const judge = fakeJudge({ outcome: "no-match", verdict: "not-covered", reasonCode: "outside-criterion" });
-    const out = await laneFor(judge, async () => policy)(policy, write(join(ws, "docs", "a.md")), signal());
-    expect(out).toMatchObject({ allowed: false, judged: { kind: "edit", verdict: "not-covered" } });
   });
 });
 
@@ -338,6 +317,44 @@ describe("the MCP lane: relayed calls by a rule naming the exact tool", () => {
     const narrow = await policyOf([rule("notes", "search", ["q"])]);
     expect(await laneFor(judge, async () => narrow, req)(narrow, c, signal())).toMatchObject({ allowed: true });
     expect(judge).toHaveBeenCalledTimes(1);
+  });
+
+  it("judges each rule against only the arguments it lists, never another rule's", async () => {
+    const policy = await policyOf([rule("notes", "search", ["q"]), rule("notes", "search", ["path"])]);
+    const { req, call: c } = call("search", { q: "release", path: "/home" });
+    const judge = fakeJudge({ outcome: "no-match", verdict: "not-covered", reasonCode: "outside-criterion" });
+    await laneFor(judge, async () => policy, req)(policy, c, signal());
+    expect(judge.mock.calls.map(([input]) => [input.rules.map((r) => r.ruleId), input.action.mcp?.arguments])).toEqual([
+      [["config:0"], '{"q":"release"}'],
+      [["config:1"], '{"path":"/home"}'],
+    ]);
+  });
+
+  it("checks every listed name and nested value for a secret before showing anything", async () => {
+    const policy = await policyOf([rule("notes", "search", ["filter"])]);
+    const judge = fakeJudge();
+    for (const filter of [{ deep: ["ok", { token: "s3cret" }] }, { s3cret: 1 }]) {
+      const { req, call: c } = call("search", { filter });
+      expect(await laneFor(judge, async () => policy, req)(policy, c, signal())).toMatchObject({
+        allowed: false,
+        judged: { verdict: "outside-envelope" },
+      });
+    }
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it("holds an allow at the handoff only while the whole first check still passes", async () => {
+    const policy = await policyOf([rule("notes", "search")]);
+    const { req, call: c } = call("search", {});
+    const out = await laneFor(fakeJudge(), async () => policy, req)(policy, c, signal());
+    expect(out.allowed && out.stillCovered(policy)).toBe(true);
+    // A typed ask for the call appears after the verdict: the same rule is still there, but the lane is closed.
+    const asksNow = await policyOf([
+      rule("notes", "search"),
+      { match: { titlePattern: "^notes: search$" }, decision: "ask" },
+    ]);
+    expect(out.allowed && out.stillCovered(asksNow)).toBe(false);
+    expect(out.allowed && out.stillCovered(await policyOf([]))).toBe(false);
   });
 
   it("matches the tool by identifiers, never by title, and leaves other calls to the person", async () => {

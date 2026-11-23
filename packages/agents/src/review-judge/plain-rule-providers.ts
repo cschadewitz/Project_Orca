@@ -145,7 +145,8 @@ export const PLAIN_RULE_SYSTEM_PROMPT = [
  */
 const CLASS_NOTES: Readonly<Record<Exclude<PlainRuleActionClass, "read">, string>> = Object.freeze({
   edit:
-    "The action is a write ORCA itself will perform to the one file in `locations`. Only its path is known: what " +
+    "The action is a write ORCA itself will perform to the one file in `locations`. Your answer is shown to the " +
+    "user as advice. Only its path is known: what " +
     "the write adds, removes or changes is not shown. Answer covered only when the criterion is about which files " +
     "may be written. If it depends on the content or effect of the write, answer unsure with criterion-ambiguous.",
   mcp:

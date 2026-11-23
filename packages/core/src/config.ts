@@ -134,11 +134,12 @@ export const OrcaConfigSchema = z
              * searches a judge may be asked about. Each also needs its own owner disclosure grant
              * (`orca auth issue --judge-disclosure --judge-disclosure-kind ...`).
              *
-             * - `edits`: a write ORCA performs itself through its file gate, to an existing file it
-             *   resolved in the workspace; a covered verdict allows that one write once. Edits the
-             *   agent makes on its own still ask.
-             * - `mcpCalls`: a call to a tool on an MCP server ORCA runs, by a rule naming that exact
-             *   tool; a covered verdict allows that one call once. Agent-reported MCP calls still ask.
+             * - `edits`: advisory only (#701 review). A write ORCA performs itself through its file
+             *   gate, to an existing file it resolved in the workspace: the judge's view is shown with
+             *   the ask, and you answer it. A path does not show what a write changes.
+             * - `mcpCalls`: a call to a tool on an MCP server ORCA runs, by a rule naming that server
+             *   and tool in `mcp`; a covered verdict allows that one call once, while it stays
+             *   eligible. Agent-reported MCP calls still ask.
              * - `commands`: advisory only. The judge's view is shown with the ask, and you answer it.
              *
              * A judge's answer is never saved as a standing grant, and typed deny and ask rules
