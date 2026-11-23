@@ -105,6 +105,7 @@ import { authCommand } from "./auth.js";
 import { remoteCommand } from "./remote.js";
 import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
+import { diagnosticsCommand } from "./diagnostics.js";
 import { recoveryCommand } from "./recovery.js";
 import { storeCommand } from "./store.js";
 import { planCommand } from "./plan.js";
@@ -591,6 +592,11 @@ export const commands: Record<string, Command> = {
   leases: {
     help: "leases [list | break <runId> [--force] [--keep]]  Show who is interpreting which run; free a run whose interpreter is gone.",
     run: leasesCommand,
+  },
+
+  diagnostics: {
+    help: "diagnostics tool-calls (runs | export <runId> [sessionId] | delete <runId> [sessionId] | prune) [--json]  List, export, delete or expire the tool-call records agents with diagnostics.toolCalls: keep reported.",
+    run: diagnosticsCommand,
   },
 
   recovery: {

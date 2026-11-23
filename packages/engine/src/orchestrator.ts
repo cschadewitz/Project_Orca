@@ -5,6 +5,7 @@
  * Concurrency comes from `parallel` nodes, which spawn child runs. Every state
  * transition is an event; a run can be resumed from its log at any time.
  */
+import { attachHookTelemetry } from "./hook-telemetry-ingest.js";
 import { ConfigurationGenerations, type GenerationMaterial } from "./configuration-generation.js";
 import { configuredGenerationSecrets, launchProvenance } from "./configuration-provenance.js";
 
@@ -2806,6 +2807,37 @@ export class Orchestrator {
     })();
   }
 
+  /**
+   * Store what the session's native pre-tool hook reports about each tool call (#1000), when
+   * the agent keeps it. Off by default: with `diagnostics.toolCalls` unset or `off`, or a
+   * session with no spool, or a store without telemetry, nothing is attached and nothing kept.
+   */
+  private keepHookTelemetry(
+    rc: RunContext,
+    agent: { id: string; diagnostics?: { toolCalls: "off" | "keep"; retainDays: number } | undefined },
+    session: AgentSession,
+    current: { step: StepRun },
+  ): void {
+    const spool = session.hookTelemetry;
+    const store = this.stores.toolTelemetry;
+    if (!spool || !store || agent.diagnostics?.toolCalls !== "keep" || rc.state.run.dryRun) return;
+    const stop = attachHookTelemetry({
+      spool,
+      store,
+      scope: {
+        runId: rc.id,
+        sessionId: session.id,
+        agentId: agent.id,
+        stepRunId: () => current.step.id,
+        retainDays: agent.diagnostics.retainDays,
+      },
+      redact: (value) => rc.redactSecrets(value),
+      clock: this.clock,
+      logger: rc.logger,
+    });
+    void session.closed.then(stop, stop);
+  }
+
   /** A child's values redact its ancestors too: a child's result is written to its parent's log. */
   private rememberSecrets(rc: RunContext, values: readonly string[]): void {
     const seen = new Set<string>();
@@ -3103,6 +3135,7 @@ export class Orchestrator {
           ...(continuity ? { continuity } : {}),
         },
       });
+      this.keepHookTelemetry(rc, agent, session, current);
       for (const listener of this.sessionOpenedListeners) {
         try {
           listener({ runId: rc.id, agentId: agent.id, session });

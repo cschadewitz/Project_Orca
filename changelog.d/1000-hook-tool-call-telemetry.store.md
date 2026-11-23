@@ -1,0 +1,1 @@
+Tool-call records (#1000) go in a new `diagnostics/tool-calls/` directory of the store, only for agents that keep them. No existing file changes and the store's format epoch is the same; an earlier ORCA ignores the directory, and backups, carryover and SQLite conversion copy it with the rest of the store.

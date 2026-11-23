@@ -17,6 +17,7 @@ import { FileArtifactStore, InMemoryArtifactStore, type ArtifactStore } from "./
 import { FileWorkflowVersionStore, InMemoryWorkflowVersionStore, type WorkflowVersionStore } from "./workflow-store.js";
 import { FileExecutionStore, InMemoryExecutionStore, type ExecutionStore } from "./execution-store.js";
 import { ProtectedEventStore } from "./protected-event-store.js";
+import { FileToolTelemetryStore, InMemoryToolTelemetryStore, type ToolTelemetryStore } from "./tool-telemetry-store.js";
 import { refuseOtherBackend } from "./store-backend.js";
 import { filePlanStores, memoryPlanStores, type PlanStores } from "./plan-store.js";
 import {
@@ -446,6 +447,11 @@ export interface Stores {
   plan: PlanStores;
   /** The workflow definitions runs were started on, by `(id, version)`; see workflow-store.ts. */
   workflows: WorkflowVersionStore;
+  /**
+   * Tool-call telemetry from native pre-tool hooks (#1000), per run and session; see
+   * tool-telemetry-store.ts. Files on every backend. Absent on stores built before it.
+   */
+  toolTelemetry?: ToolTelemetryStore;
   /** What this backend guarantees beyond the baseline contracts (#338); see store-contracts.ts. */
   capabilities?: StoreCapabilityMatrix;
   /** Present only on a backend that can commit several metadata collections together. */
@@ -472,6 +478,7 @@ export function fileStores(dir: string, clock?: Clock, logger?: Logger): Stores 
     leases: new FileLeaseStore(dir, clock),
     plan: filePlanStores(dir, clock, logger),
     workflows,
+    toolTelemetry: new FileToolTelemetryStore(dir),
     capabilities: FILE_STORE_CAPABILITIES,
   };
 }
@@ -489,6 +496,7 @@ export function memoryStores(clock?: Clock): Stores {
     leases: new InMemoryLeaseStore(clock),
     plan: memoryPlanStores(clock),
     workflows,
+    toolTelemetry: new InMemoryToolTelemetryStore(),
     capabilities: MEMORY_STORE_CAPABILITIES,
   };
 }

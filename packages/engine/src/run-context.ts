@@ -146,6 +146,16 @@ export class RunContext {
     return this.runtimeSecrets.size ? redactExecutionValue(value, [...this.runtimeSecrets]) : value;
   }
 
+  /**
+   * `value` with every secret this run knows redacted, keys included: the values its sessions
+   * resolved and its sensitive inputs, as the run's log and logger redact them. For records
+   * kept outside the log, such as tool-call telemetry (#1000).
+   */
+  redactSecrets<T>(value: T): T {
+    const secrets = this.redactionInputs()?.secrets;
+    return secrets?.length ? redactExecutionValue(value, secrets, true) : value;
+  }
+
   private redactionInputs(): ExecutionInputs | undefined {
     if (!this.runtimeSecrets.size) return this.executionInputs;
     const secrets = [...(this.executionInputs?.secrets ?? []), ...this.runtimeSecrets];

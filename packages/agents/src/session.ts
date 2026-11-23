@@ -6,6 +6,7 @@
  */
 import type * as acp from "@agentclientprotocol/sdk";
 import { toolCallBody, type AgentUpdateSummary, type SessionConfigOption, type ToolCallBody } from "@orca/core";
+import type { HookTelemetrySpool } from "./hook-telemetry.js";
 import { describeConfigOptions } from "./config-options.js";
 
 export interface TurnResult {
@@ -80,6 +81,12 @@ export interface AgentSession {
    * transport that does not report it, which is treated as not accepted.
    */
   readonly promptCapabilities?: { readonly embeddedContext: boolean };
+  /**
+   * The spool this session's native pre-tool hook writes tool-call telemetry to (#1000), when
+   * the agent keeps it (`diagnostics.toolCalls: keep`) and the hook is installed. The session
+   * calls its `finish()` when it ends; the engine attaches a consumer and drains it.
+   */
+  readonly hookTelemetry?: HookTelemetrySpool;
   prompt(input: string | acp.ContentBlock[], options?: PromptOptions): Promise<TurnResult>;
   onUpdate(listener: (e: SessionUpdateEvent) => void): () => void;
   /**
