@@ -490,7 +490,8 @@ const within = (promise, ms) =>
  */
 export function startReaders(readers, data, deadlineMs = READER_DEADLINE_MS) {
   const stopFlag = new SharedArrayBuffer(4);
-  const started = readers.map((reader) => {
+  const started = [];
+  const spawn = (reader) => {
     const worker = new Worker(new URL("./outside-reader.js", import.meta.url), {
       workerData: { ...data, holdMs: reader.holdMs, gapMs: reader.gapMs, stop: stopFlag },
     });
@@ -504,7 +505,15 @@ export function startReaders(readers, data, deadlineMs = READER_DEADLINE_MS) {
     // A worker that ends before it is ready is not waited for.
     void result.then(() => markReady(false));
     return { reader, worker, ready, result };
-  });
+  };
+  try {
+    for (const reader of readers) started.push(spawn(reader));
+  } catch (error) {
+    // A set that only partly started is not left running: stop what did start, then fail.
+    Atomics.store(new Int32Array(stopFlag), 0, 1);
+    for (const { worker } of started) void worker.terminate();
+    throw error;
+  }
   let stopped;
   return {
     async ready() {
@@ -563,8 +572,9 @@ export async function walUnderLoad({ handle, scale }) {
       });
     // Every phase starts from an empty log, so what it shows is this phase's.
     const emptied = wal.connect().checkpoint("truncate");
-    const outsideReaders = startReaders(outside, { file: wal.file, runIds, pageSize: scale.pageSize });
+    // Everything that can fail is opened before any reader starts: from here, `finally` stops them.
     const reader = handle.stores().events;
+    const outsideReaders = startReaders(outside, { file: wal.file, runIds, pageSize: scale.pageSize });
     const readLatency = [];
     let readsOrdered = true;
     const latency = [];
@@ -572,6 +582,9 @@ export async function walUnderLoad({ handle, scale }) {
     let loadMs = 0;
     let i = 0;
     let readers;
+    // Checkpoints from here on are the idle checkpoint's after the load: counted from the moment
+    // the load ends, before the readers are stopped, so one that fires while they stop is kept.
+    let seen;
     try {
       // The load starts once every outside reader has its connection open and is reading.
       await outsideReaders.ready();
@@ -608,13 +621,13 @@ export async function walUnderLoad({ handle, scale }) {
         }
       }
       loadMs = performance.now() - started;
+      seen = wal.checkpoints.length;
       samples.push({ ms: round(loadMs), walBytes: wal.bytes(), appends: i });
     } finally {
       // Whatever happened, every reader is stopped (or terminated) before the phase ends.
       readers = await outsideReaders.stop();
     }
     // Quiet for longer than the idle window: what the store's own checkpoint did after the load.
-    const seen = wal.checkpoints.length;
     await new Promise((resolve) => setTimeout(resolve, wal.settings.idleMs + 250));
     const idle = wal.checkpoints.slice(seen).map((event) =>
       "error" in event

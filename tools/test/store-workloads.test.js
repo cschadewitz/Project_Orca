@@ -6,7 +6,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { Worker } from "node:worker_threads";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import * as core from "@orca/core";
 import * as store from "@orca/store";
 import { backends } from "../benchmarks/store-workloads/backends.js";
@@ -259,6 +260,25 @@ describe("store workload benchmark", () => {
       expect(await readers.stop()).toBe(results);
       close();
       void file;
+    });
+
+    it("do not leave a partly started set running when a later reader cannot be created", async () => {
+      const { file, close } = await seeded();
+      const terminate = vi.spyOn(Worker.prototype, "terminate");
+      // The second reader's settings cannot be sent to a thread, so its Worker never starts.
+      expect(() =>
+        startReaders(
+          [
+            { holdMs: 0, gapMs: 10 },
+            { holdMs: () => 0, gapMs: 0 },
+          ],
+          { file, runIds: ["r"], pageSize: 10 },
+        ),
+      ).toThrow();
+      // The first one, already started, was terminated rather than left reading.
+      expect(terminate).toHaveBeenCalledTimes(1);
+      terminate.mockRestore();
+      close();
     });
 
     it("terminate a reader that does not stop within the deadline", async () => {
