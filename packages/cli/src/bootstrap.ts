@@ -300,7 +300,7 @@ export function makeSessionFactory(
   return async (options: OpenSessionOptions) => {
     const bound = { ...options, permissionFiles, protectedPaths };
     // ORCA's pre-tool hook (#704): decided per session, once the agent says who it is.
-    if (options.agent.nativeToolHook === "off" || options.host.spec.type !== "local") return open(bound);
+    if (options.agent.nativeToolHook !== "on" || options.host.spec.type !== "local") return open(bound);
     const installed = claudeHookSession({
       agentId: options.agent.id,
       permissions: options.agent.permissions,

@@ -56,6 +56,7 @@ async function setup(
       agent: AgentSpecSchema.parse({
         id: "claude",
         command: "claude-agent-acp",
+        nativeToolHook: "on",
         permissions: { rules: [{ match: { kind: "execute", titlePattern: "^ls$" }, decision: "allow" }] },
         ...agent,
       }),
@@ -133,7 +134,7 @@ describe("installing the hook", () => {
     const t = await setup({ name: CLAUDE.name, version: "0.95.0" });
     await expect(t.open()).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      message: expect.stringContaining("nativeToolHook: off"),
+      message: expect.stringContaining("nativeToolHook: on"),
     });
     await expect(readdir(t.hookDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -143,10 +144,12 @@ describe("installing the hook", () => {
     await expect(t.open()).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
   });
 
-  it("installs nothing for an agent that opts out, or one on another host", async () => {
-    const off = await setup(CLAUDE, { nativeToolHook: "off" });
-    await off.open();
-    expect(off.seen.options?.sessionMeta).toBeUndefined();
+  it("installs nothing unless the agent opts in, or for one on another host", async () => {
+    for (const choice of [{ nativeToolHook: "off" }, { nativeToolHook: undefined }]) {
+      const off = await setup(CLAUDE, choice);
+      await off.open();
+      expect(off.seen.options?.sessionMeta).toBeUndefined();
+    }
 
     const remote = await setup(CLAUDE);
     await remote.open(new SshHost(SshHostSchema.parse({ id: "box", type: "ssh", host: "box.example" })));

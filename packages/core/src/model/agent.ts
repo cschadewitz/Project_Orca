@@ -659,13 +659,14 @@ export const AgentSpecSchema = z
     permissions: PermissionPolicySchema.default(() => ({ rules: [] })),
     /**
      * Whether ORCA installs its pre-tool hook in this agent (#704), so that `permissions`
-     * decides every tool call and not only the ones the agent asks about. `auto`, the meaning
-     * of leaving it out, installs it in an agent that takes one: today the Claude ACP adapter
-     * on the daemon's own host, at a version ORCA has qualified (`CLAUDE_HOOK_MIN_ADAPTER`),
-     * and refuses to open a session with an older one. `off` sends no hook, so calls the agent
-     * allows by its own settings or remembered grants never reach ORCA.
+     * decides every tool call and not only the ones the agent asks about. Opt-in: `on`
+     * installs it in an agent that takes one, today the Claude ACP adapter on the daemon's own
+     * host at a version ORCA has qualified (`CLAUDE_HOOK_MIN_ADAPTER`), and refuses to open a
+     * session with an older one rather than run it looking guarded. `off`, the meaning of
+     * leaving it out, sends no hook, so calls the agent allows by its own settings or
+     * remembered grants never reach ORCA.
      */
-    nativeToolHook: z.enum(["auto", "off"]).optional(),
+    nativeToolHook: z.enum(["on", "off"]).optional(),
     /**
      * MCP servers passed in `session/new`. The legacy inline form: each one is on for this
      * agent, as if it were in the catalog and enabled here. `capabilities` below selects from

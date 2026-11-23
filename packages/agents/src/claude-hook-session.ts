@@ -13,7 +13,7 @@
  *   observes against the real Claude Code: the hook runs on remembered calls, `ask` reaches
  *   ORCA, and a hook that cannot start, crashes, times out or prints garbage blocks the call.
  *   Older adapters bundle an older Claude Code, where `onFailure: "block"` may be ignored,
- *   so a session there would only look guarded. An agent can opt out (`nativeToolHook: off`).
+ *   so a session there would only look guarded.
  * - **A qualifying adapter**: ORCA writes the session's context file (the rules, sidecars,
  *   workspace and protected paths the hook decides with) with owner-only permissions into a
  *   private directory ORCA protects from agents, and sends the settings that run the hook
@@ -112,7 +112,7 @@ export function claudeHookSession(opts: ClaudeHookSessionOptions): ClaudeHookSes
         throw new OrcaError(
           "NOT_SUPPORTED",
           `agent ${opts.agentId} runs ${agentInfo.name} ${agentInfo.version}; ORCA's tool-call hook needs ${CLAUDE_HOOK_MIN_ADAPTER} or later. ` +
-            `Upgrade the adapter, or set nativeToolHook: off for this agent to run it without ORCA checking every call.`,
+            `Upgrade the adapter, or remove nativeToolHook: on from this agent to run it without ORCA checking every call.`,
           {
             agentId: opts.agentId,
             adapter: agentInfo.name,
@@ -123,7 +123,7 @@ export function claudeHookSession(opts: ClaudeHookSessionOptions): ClaudeHookSes
       if (opts.script === undefined)
         throw new OrcaError(
           "NOT_SUPPORTED",
-          `ORCA's tool-call hook program is missing from this build, so agent ${opts.agentId} cannot be guarded; set nativeToolHook: off to run it without the hook`,
+          `ORCA's tool-call hook program is missing from this build, so agent ${opts.agentId} cannot be guarded; remove nativeToolHook: on to run it without the hook`,
           { agentId: opts.agentId },
         );
       const context: ClaudeHookContext = {

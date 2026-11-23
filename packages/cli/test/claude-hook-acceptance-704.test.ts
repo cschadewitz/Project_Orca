@@ -203,6 +203,7 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Claude Code (#704)"
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       },
       permissions,
+      nativeToolHook: "on",
     });
 
   const marks = async () =>

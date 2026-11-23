@@ -314,10 +314,17 @@ An agent asks ORCA only when its own permission check has no answer. Once it rem
 grant (Claude's "always allow", a rule in its own settings), the same call never reaches ORCA
 again, so a grant you revoke in ORCA, or a rule you add, does not apply to it.
 
-For the Claude ACP adapter on the daemon's own machine, ORCA closes that gap with a
-`PreToolUse` hook it installs in every session (#704). Claude runs it before **every** tool
-call, remembered or not, and it decides the call against the same three layers as above,
-read fresh each time:
+For the Claude ACP adapter on the daemon's own machine, ORCA can close that gap with a
+`PreToolUse` hook it installs in the agent's sessions (#704). It is opt-in, per agent:
+
+```yaml
+  - id: claude
+    command: claude-agent-acp
+    nativeToolHook: on
+```
+
+Claude then runs the hook before **every** tool call, remembered or not, and it decides the
+call against the same three layers as above, read fresh each time:
 
 | ORCA decides | What happens |
 | --- | --- |
@@ -329,16 +336,12 @@ ORCA's own files are refused to Claude's built-in tools as well, and a hook that
 decide (it cannot start, crashes, times out or answers garbage) blocks the call. An allowed
 call whose working directory is outside the workspace is asked about.
 
-The hook needs `@agentclientprotocol/claude-agent-acp` **0.109.1** or later: ORCA refuses to
-open a session with an older adapter rather than run it looking guarded. To run an agent
-without the hook (an old adapter, or one that relies on Claude's own allow rules for commands
-ORCA would ask about), set it off for that agent:
+With the hook on, calls Claude used to run by its own allow rules follow ORCA's instead, so
+an unattended run may meet asks it did not before; give the agent `rules:` for them.
 
-```yaml
-  - id: claude
-    command: claude-agent-acp
-    nativeToolHook: off
-```
+The hook needs `@agentclientprotocol/claude-agent-acp` **0.109.1** or later: with
+`nativeToolHook: on`, ORCA refuses to open a session with an older adapter rather than run it
+looking guarded. Without it (or with `off`), no hook is installed.
 
 Other agents (Codex, Gemini, pi) and agents on SSH hosts get no hook yet: ORCA decides only
 what they ask about (#705).
