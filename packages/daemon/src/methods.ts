@@ -482,9 +482,13 @@ export const hello: Method<HelloParams, HelloResult> = {
         ...(ctx.workflowInputs ? ["workflows.validateInputs" as const] : []),
       ],
       methods: Object.keys(methodsFor(ctx)),
+      ...(ctx.control && ctx.admissionRetries && ctx.admissionAuthorities ? { admitFields: [...ADMIT_FIELDS] } : {}),
     };
   },
 };
+
+/** The optional `runs.admit` fields this daemon takes (`hello.admitFields`). */
+export const ADMIT_FIELDS = ["origin", "gitRef"] as const;
 
 /** `runs.list`: the run list, newest first. */
 export const runsList: Method<Parameters<ReadModel["runsList"]>[0], RunsListResult> = {

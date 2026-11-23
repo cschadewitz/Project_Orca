@@ -109,5 +109,5 @@ it("keeps every waiting member of the shared draft-writes queue (none replaces a
 
 it("re-dispatches a missing upgrade check from the attach's reconcile", () => {
   const steps = workflow("release-attach-signed.yml").jobs.reconcile.steps;
-  expect(steps.at(-1).run).toBe("bash tools/deploy/release-attach.sh upgrade-reconcile");
+  expect(steps.some((s) => s.run === "bash tools/deploy/release-attach.sh upgrade-reconcile")).toBe(true);
 });

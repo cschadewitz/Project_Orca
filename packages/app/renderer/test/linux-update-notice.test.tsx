@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { UpdateControl } from "../src/chrome/update-control.js";
 import { harness, installBridge } from "./harness.js";
 import { installDesignSystem, setTheme } from "./themes.js";
-import type { LinuxUpdateNotice } from "../../src/linux-update-contract.js";
+import type { LinuxRestartState, LinuxUpdateNotice } from "../../src/linux-update-contract.js";
 afterEach(cleanup);
 
 const NOTICE: LinuxUpdateNotice = {
@@ -71,6 +71,43 @@ it("never shows the Linux notice on another platform", () => {
   const view = mount("win32", NOTICE);
   try {
     expect(screen.queryByRole("button", { name: /available/ })).toBeNull();
+  } finally {
+    view.mounted.unmount();
+    view.h.dispose();
+  }
+});
+
+it("once apt upgraded the package, offers to restart into it instead of the notice (#905)", async () => {
+  const view = mount("linux", NOTICE);
+  let push!: (state: LinuxRestartState | null) => void;
+  const ready: LinuxRestartState = { phase: "ready", current: "0.7.0", installed: "0.7.1" };
+  const restart = vi.fn(() =>
+    Promise.resolve({ ok: true as const, result: { ...ready, phase: "restarting" as const } }),
+  );
+  try {
+    window.orca.linuxRestart = {
+      read: () => null,
+      restart,
+      subscribe: (listener) => {
+        push = listener;
+        return () => undefined;
+      },
+    };
+    view.mounted.unmount();
+    view.mounted = render(
+      <view.h.Providers>
+        <div className="orca-window">
+          <UpdateControl />
+        </div>
+      </view.h.Providers>,
+    );
+    expect(screen.getByRole("button", { name: "ORCA 0.7.1 is available" })).toBeTruthy();
+    act(() => push(ready));
+    expect(screen.queryByRole("button", { name: "ORCA 0.7.1 is available" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Restart to finish update to 0.7.1" }));
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledOnce());
+    act(() => push({ ...ready, phase: "restarting", message: "Starting ORCA 0.7.1" }));
+    expect(screen.getByRole("button", { name: "Preparing restart" }).getAttribute("aria-disabled")).toBe("true");
   } finally {
     view.mounted.unmount();
     view.h.dispose();

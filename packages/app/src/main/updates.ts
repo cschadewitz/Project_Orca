@@ -22,6 +22,12 @@ export interface UpdateGuards {
   prepareDrafts(this: void): Promise<void>;
   prepareDaemon(this: void, token: string): Promise<void>;
   stopDaemon(this: void, token: string): Promise<void>;
+  /**
+   * After the exact stop, before the installer: hand the stopped daemon's store to the first
+   * start of `to` (#897). Best effort: without a handoff the new version still opens a store of
+   * its own format, and refuses to convert an older one automatically.
+   */
+  handOff?(this: void, token: string, from: string, to: string): Promise<void>;
   resume(this: void, token: string): Promise<void>;
   releaseDrafts(this: void): void;
 }
@@ -76,6 +82,8 @@ export class Updates {
         await this.guards.prepareDaemon(token);
         daemonPrepared = true;
         await this.guards.stopDaemon(token);
+        if (this.state.version)
+          await this.guards.handOff?.(token, this.state.current, this.state.version).catch(() => undefined);
         // Enter unknown BEFORE calling the driver, including synchronous throws.
         installerUnknown = true;
         const outcome = await this.driver.install();

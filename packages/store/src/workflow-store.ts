@@ -12,11 +12,12 @@
  * version race harmlessly: the first definition written is the one kept. Old plaintext
  * `workflows/` records remain readable without silently rewriting existing data.
  */
-import { readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { OrcaError, WorkflowDefinitionSchema, type WorkflowDefinition } from "@orca/core";
 
 import { readPrivateJson, writePrivateJson } from "./protected-file.js";
+import { SQLITE_LEGACY_WORKFLOWS_DIR } from "./sqlite/legacy-fence.js";
 
 export interface WorkflowVersionStore {
   /** The definition recorded for `(id, version)`, or undefined when none was. */
@@ -48,15 +49,26 @@ export class InMemoryWorkflowVersionStore implements WorkflowVersionStore {
 }
 
 export class FileWorkflowVersionStore implements WorkflowVersionStore {
-  private readonly dir: string;
+  private readonly storeDir: string;
   private readonly privateDir: string;
   constructor(storeDir: string) {
-    this.dir = join(storeDir, "workflows");
+    this.storeDir = storeDir;
     this.privateDir = join(storeDir, "private-workflows");
   }
 
-  private path(id: string, version: string): string {
-    return join(this.dir, fileName(id, version));
+  /**
+   * Plain snapshots written before 0.7: `workflows/`, or `workflows.sqlite/` in a store switched
+   * to SQLite, whose `workflows` is a marker that keeps released ORCA versions out (#339,
+   * sqlite/legacy-fence.ts).
+   */
+  private async legacyDir(): Promise<string> {
+    const relocated = join(this.storeDir, SQLITE_LEGACY_WORKFLOWS_DIR);
+    try {
+      if ((await lstat(relocated)).isDirectory()) return relocated;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    return join(this.storeDir, "workflows");
   }
 
   async get(id: string, version: string): Promise<WorkflowDefinition | undefined> {
@@ -68,7 +80,7 @@ export class FileWorkflowVersionStore implements WorkflowVersionStore {
     }
     let raw: string;
     try {
-      raw = await readFile(this.path(id, version), "utf8");
+      raw = await readFile(join(await this.legacyDir(), fileName(id, version)), "utf8");
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw e;
@@ -96,7 +108,7 @@ export class FileWorkflowVersionStore implements WorkflowVersionStore {
         throw error;
       }
     };
-    const names = [...new Set([...(await listing(this.dir)), ...(await listing(this.privateDir))])];
+    const names = [...new Set([...(await listing(await this.legacyDir())), ...(await listing(this.privateDir))])];
     const prefix = `${encodeURIComponent(id)}@v`;
     return names
       .filter((n) => n.startsWith(prefix) && n.endsWith(".json"))

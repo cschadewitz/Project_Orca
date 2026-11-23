@@ -237,3 +237,197 @@ it("refuses remote opt-in roots rather than falling back to the shared checkout"
   await expect(provider.provision(f.input)).rejects.toMatchObject({ code: "RUN_STATE" });
   await expect(fs.stat(f.receipt)).rejects.toMatchObject({ code: "ENOENT" });
 });
+
+/**
+ * A repository whose `origin` is a bare repository with a `feature` branch ahead of `main`,
+ * and whose administrator allows `refs/heads/feature` only.
+ */
+async function refFixture(allowedRefs: string[] = ["refs/heads/feature"]) {
+  const f = await rootFixture();
+  const upstream = join(f.dir, "upstream.git");
+  git(f.dir, "clone", "-q", "--bare", f.repo, upstream);
+  const work = join(f.dir, "upstream-work");
+  git(f.dir, "clone", "-q", upstream, work);
+  git(work, "checkout", "-q", "-b", "feature");
+  commit(work);
+  git(work, "push", "-q", "origin", "feature");
+  git(f.repo, "remote", "add", "origin", upstream);
+  const options = { ...f.options, allowedRefs };
+  return {
+    ...f,
+    options,
+    provider: new GitWorktreeProvider(options),
+    upstream,
+    work,
+    feature: git(work, "rev-parse", "HEAD"),
+  };
+}
+
+const receiptsOf = (repo: string) => fs.readdir(join(repo, ".git", "orca-root-workspaces"));
+
+it("checks out an allowed ref fetched from the remote into a run's own root, running no hook (#883)", async () => {
+  const f = await refFixture();
+  // Shared repository state the fetch must leave alone: stale remote-tracking refs (which the
+  // configured refspec would update, and pruning would delete) and FETCH_HEAD.
+  const main = git(f.repo, "rev-parse", "main");
+  git(f.repo, "update-ref", "refs/remotes/origin/feature", main);
+  git(f.repo, "update-ref", "refs/remotes/origin/gone", main);
+  git(f.repo, "config", "fetch.prune", "true");
+  git(f.repo, "config", "gc.auto", "1");
+  const shared = () => git(f.repo, "for-each-ref", "--format=%(refname) %(objectname)", "--exclude=refs/heads/orca/");
+  // Repository hooks would run outside the agent sandbox: none may fire while provisioning.
+  const ran = join(f.dir, "hook-ran");
+  for (const hook of ["post-checkout", "reference-transaction"]) {
+    const path = join(f.repo, ".git", "hooks", hook);
+    await fs.writeFile(path, `#!/bin/sh\necho ${hook} >> '${ran}'\n`, { mode: 0o755 });
+  }
+  const before = shared();
+  // The local repository has never seen the branch: provisioning fetches the object checked.
+  const object = await f.provider.checkRef("refs/heads/feature");
+  expect(object).toBe(f.feature);
+  const workspace = await f.provider.provision({ ...f.input, gitRef: "refs/heads/feature", gitRefObject: object });
+  expect(shared()).toBe(before);
+  await expect(fs.stat(join(f.repo, ".git", "FETCH_HEAD"))).rejects.toMatchObject({ code: "ENOENT" });
+  expect(workspace.rootProvisioning).toEqual({
+    runId: f.input.runId,
+    baseCommit: f.feature,
+    ref: "refs/heads/feature",
+    refObject: f.feature,
+  });
+  expect(git(workspace.cwd, "rev-parse", "HEAD")).toBe(f.feature);
+  await expect(fs.stat(ran)).rejects.toMatchObject({ code: "ENOENT" });
+  // The run-private fetch ref is gone; the run's own branch holds the commit.
+  expect(git(f.repo, "for-each-ref", "refs/orca")).toBe("");
+  // Reuse is from the receipt, never a second fetch, and only for the same ref and pin.
+  const reuse = { ...f.input, gitRef: "refs/heads/feature", gitRefObject: object };
+  expect(await new GitWorktreeProvider(f.options).provision(reuse)).toEqual(workspace);
+  await expect(
+    new GitWorktreeProvider(f.options).provision({ ...reuse, gitRefObject: git(f.repo, "rev-parse", "main") }),
+  ).rejects.toThrow("unavailable");
+  await expect(new GitWorktreeProvider(f.options).provision(f.input)).rejects.toThrow("unavailable");
+});
+
+it("refuses a ref that is not fully qualified, allowed and advertised under exactly that name (#883)", async () => {
+  const f = await refFixture(["refs/heads/feature", "refs/heads/team/*"]);
+  // The remote has `refs/heads/team/refs/heads/ghost`: Git's tail matching would find it for
+  // `refs/heads/ghost`, an exact name does not.
+  git(f.work, "push", "-q", "origin", "feature:refs/heads/team/refs/heads/ghost");
+  const refused = [
+    "-u",
+    "a..b",
+    "feature",
+    "main",
+    f.feature,
+    "refs/heads/feature@{1}",
+    "refs/heads/x:y",
+    "refs/remotes/origin/feature",
+    "refs/heads/main",
+    "refs/tags/feature",
+    "refs/heads/team/nope",
+  ];
+  for (const ref of refused)
+    await expect(f.provider.checkRef(ref)).rejects.toMatchObject({ code: "NOT_SUPPORTED", details: { gitRef: ref } });
+  await expect(
+    new GitWorktreeProvider({ ...f.options, allowedRefs: ["refs/heads/*"] }).checkRef("refs/heads/ghost"),
+  ).rejects.toThrow("does not have it");
+  await expect(f.provider.checkRef("refs/heads/team/refs/heads/ghost")).resolves.toBe(f.feature);
+  // An empty allowlist allows nothing: a `runs.admit` grant alone never selects a ref.
+  const unlisted = new GitWorktreeProvider({ ...f.options, allowedRefs: [] });
+  await expect(unlisted.checkRef("refs/heads/feature")).rejects.toThrow("does not allow it");
+  await expect(unlisted.provision({ ...f.input, gitRef: "refs/heads/feature" })).rejects.toThrow("does not allow it");
+  const shared = new GitWorktreeProvider({ ...f.options, isolateRoots: false });
+  await expect(shared.checkRef("refs/heads/feature")).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+  await expect(shared.provision({ ...f.input, gitRef: "refs/heads/feature" })).rejects.toMatchObject({
+    code: "NOT_SUPPORTED",
+  });
+  await expect(receiptsOf(f.repo)).rejects.toThrow();
+});
+
+it("writes an allowed ref's files as stored, running no filter driver the repository configures (#883)", async () => {
+  const f = await refFixture();
+  // The selected content asks for a filter the repository configures (as git-lfs does globally).
+  await fs.writeFile(join(f.work, ".gitattributes"), "*.x filter=evil\n");
+  await fs.writeFile(join(f.work, "a.x"), "stored\n");
+  git(f.work, "add", ".");
+  commit(f.work);
+  git(f.work, "push", "-q", "origin", "feature");
+  const ran = join(f.dir, "filter-ran");
+  git(f.repo, "config", "filter.evil.smudge", `sh -c 'touch ${ran}; echo smudged'`);
+  git(f.repo, "config", "filter.evil.process", `sh -c 'touch ${ran}'`);
+  git(f.repo, "config", "filter.evil.required", "true");
+  const input = {
+    ...f.input,
+    gitRef: "refs/heads/feature",
+    gitRefObject: await f.provider.checkRef("refs/heads/feature"),
+  };
+  const workspace = await f.provider.provision(input);
+  expect(await fs.readFile(join(workspace.cwd, "a.x"), "utf8")).toBe("stored\n");
+  await expect(fs.stat(ran)).rejects.toMatchObject({ code: "ENOENT" });
+  // The worktree is registered and pristine: reuse validates it.
+  expect(await new GitWorktreeProvider(f.options).provision(input)).toEqual(workspace);
+});
+
+it("refuses a ref when its remote does not answer in time or cannot be reached (#883)", async () => {
+  const f = await refFixture();
+  const slow = join(f.dir, "slow-upload-pack");
+  await fs.writeFile(slow, "#!/bin/sh\nsleep 5\n", { mode: 0o755 });
+  git(f.repo, "config", "remote.origin.uploadpack", slow);
+  const hung = new GitWorktreeProvider({ ...f.options, remoteTimeoutMs: 300 });
+  await expect(hung.checkRef("refs/heads/feature")).rejects.toThrow("did not finish within");
+  await expect(hung.provision({ ...f.input, gitRef: "refs/heads/feature", gitRefObject: f.feature })).rejects.toThrow(
+    "did not finish within",
+  );
+  git(f.repo, "config", "--unset", "remote.origin.uploadpack");
+  git(f.repo, "remote", "set-url", "origin", join(f.dir, "missing.git"));
+  await expect(f.provider.checkRef("refs/heads/feature")).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+  await expect(receiptsOf(f.repo)).rejects.toThrow();
+});
+
+it("binds provisioning to the object the ref named when checked, and refuses it once it moved (#883)", async () => {
+  const f = await refFixture(["refs/heads/feature", "refs/tags/*"]);
+  // Unchecked provisioning has nothing to bind to.
+  await expect(f.provider.provision({ ...f.input, gitRef: "refs/heads/feature" })).rejects.toThrow("was not checked");
+  const checked = await f.provider.checkRef("refs/heads/feature");
+  // The branch moves on the remote between the check and the fetch.
+  commit(f.work);
+  git(f.work, "push", "-q", "origin", "feature");
+  const moved = git(f.work, "rev-parse", "HEAD");
+  await expect(
+    f.provider.provision({ ...f.input, gitRef: "refs/heads/feature", gitRefObject: checked }),
+  ).rejects.toThrow("moved");
+  await expect(receiptsOf(f.repo)).rejects.toThrow();
+  expect(git(f.repo, "for-each-ref", "refs/orca")).toBe("");
+  // Admitting again checks again, and provisions what the ref names now.
+  const again = await f.provider.checkRef("refs/heads/feature");
+  expect(again).toBe(moved);
+  const workspace = await f.provider.provision({ ...f.input, gitRef: "refs/heads/feature", gitRefObject: again });
+  expect(workspace.rootProvisioning).toMatchObject({ baseCommit: moved, ref: "refs/heads/feature" });
+  const receipt = JSON.parse(await fs.readFile(f.receipt, "utf8")) as { refObject: string };
+  expect(receipt.refObject).toBe(moved);
+  // An annotated tag names its tag object: that is what is checked and bound, then peeled.
+  git(
+    f.work,
+    "-c",
+    "user.name=test",
+    "-c",
+    "user.email=test@example.invalid",
+    "tag",
+    "-a",
+    "v1",
+    "-m",
+    "v1",
+    f.feature,
+  );
+  git(f.work, "push", "-q", "origin", "v1");
+  const tag = await f.provider.checkRef("refs/tags/v1");
+  expect(tag).toBe(git(f.work, "rev-parse", "v1"));
+  expect(tag).not.toBe(f.feature);
+  const tagged = { ...f.input, runId: `run_${randomUUID()}` };
+  const fromTag = await f.provider.provision({ ...tagged, gitRef: "refs/tags/v1", gitRefObject: tag });
+  expect(fromTag.rootProvisioning).toMatchObject({ baseCommit: f.feature, ref: "refs/tags/v1" });
+  expect(git(fromTag.cwd, "rev-parse", "HEAD")).toBe(f.feature);
+  // The peeled commit is not the object checked: a tag cannot be swapped for its target.
+  await expect(
+    f.provider.provision({ ...f.input, runId: `run_${randomUUID()}`, gitRef: "refs/tags/v1", gitRefObject: f.feature }),
+  ).rejects.toThrow("moved");
+});

@@ -8,6 +8,26 @@ import { z } from "zod";
 import { OrcaError } from "@orca/core";
 
 const KEY_FILE = ".execution-key";
+/**
+ * The key of a private directory in a store switched to SQLite (#339). The switch hard-links the
+ * key here, then puts a marker that is not a key at {@link KEY_FILE}, so a released ORCA that
+ * never reads the store's format marker (v0.7.0) finds its key unreadable and refuses the store
+ * before writing anything, rather than writing records beside a database it does not know.
+ * Where this file exists it is the directory's key; it is never created.
+ */
+export const SQLITE_KEY_FILE = ".execution-key.sqlite";
+const isKey = (name: string) => name === KEY_FILE || name === SQLITE_KEY_FILE;
+
+/** The name of `dir`'s key: {@link SQLITE_KEY_FILE} once the store was switched, else {@link KEY_FILE}. */
+async function keyFileOf(dir: string): Promise<string> {
+  try {
+    await lstat(join(dir, SQLITE_KEY_FILE));
+    return SQLITE_KEY_FILE;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return KEY_FILE;
+    throw unreadable();
+  }
+}
 const syncedDirectories = new Set<string>();
 // Immutable ciphertext bytes only; callers still authenticate and parse every record.
 // Keys are always reread: same-size in-place rewrites can share a kernel timestamp tick.
@@ -186,12 +206,12 @@ async function inspectPrivateFile(
       chunk.fill(0);
     }
     if (
-      (name === KEY_FILE && length !== 32) ||
+      (isKey(name) && length !== 32) ||
       safeFile(await handle.stat({ bigint: true })) !== record.file ||
       safeFile(await lstat(path, { bigint: true })) !== record.file ||
       safeDirectory(await lstat(dir, { bigint: true })) !== record.directory
     ) {
-      if (name === KEY_FILE) bytes?.fill(0);
+      if (isKey(name)) bytes?.fill(0);
       throw unreadable();
     }
     record.digest = hash.digest("hex");
@@ -349,7 +369,7 @@ function assertPrivateFileUnchanged(expected: FileObservation): void {
     }
     if (
       length !== info.size ||
-      (expected.name === KEY_FILE && length !== 32n) ||
+      (isKey(expected.name) && length !== 32n) ||
       safeFile(fstatSync(fd, { bigint: true })) !== expected.file ||
       safeFile(lstatSync(path, { bigint: true })) !== expected.file ||
       safeDirectory(lstatSync(expected.dir, { bigint: true })) !== expected.directory ||
@@ -409,7 +429,7 @@ async function privateBytes(dir: string, name: string): Promise<Buffer | undefin
     if (!info.isFile() || (process.platform !== "win32" && (info.mode & 0o077n) !== 0n)) throw unreadable();
     const directoryStamp = directoryIdentity(directory);
     const fileStamp = fileIdentity(info);
-    const cacheable = name !== KEY_FILE;
+    const cacheable = !isKey(name);
     const cached = cacheable ? byteCache.get(path) : undefined;
     if (cached?.directory === directoryStamp && cached.file === fileStamp) return cached.bytes;
     forgetBytes(path);
@@ -469,8 +489,10 @@ async function publish(dir: string, name: string, bytes: Buffer): Promise<boolea
 }
 
 async function keyFor(dir: string, create: boolean): Promise<Buffer> {
-  let key = await privateBytes(dir, KEY_FILE);
-  if (!key && create) {
+  const keyFile = await keyFileOf(dir);
+  let key = await privateBytes(dir, keyFile);
+  // A switched store's key is never manufactured: it was the store's key before the switch.
+  if (!key && create && keyFile === KEY_FILE) {
     // Never manufacture a replacement key for ciphertext already in this directory.
     // Orphan temporary files have no public references and are not committed records.
     if ((await readdir(dir)).some((name) => name.endsWith(".json"))) {
@@ -533,12 +555,12 @@ async function replayKey(dir: string): Promise<{ bytes: Buffer; directory: strin
   const scope = privateObservation.getStore();
   if (scope) {
     reserveObservation(scope, 0);
-    const { record, bytes } = await inspectPrivateFile(dir, KEY_FILE, true);
+    const { record, bytes } = await inspectPrivateFile(dir, await keyFileOf(dir), true);
     captureFile(scope, record);
     if (!bytes || !record.directory || !record.file) throw unreadable();
     return { bytes, directory: record.directory, file: record.file };
   }
-  const path = join(dir, KEY_FILE);
+  const path = join(dir, await keyFileOf(dir));
   const directory = await lstat(dir, { bigint: true });
   const info = await lstat(path, { bigint: true });
   if (

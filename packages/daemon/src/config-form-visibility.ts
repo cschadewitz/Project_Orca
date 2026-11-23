@@ -85,6 +85,8 @@ const nonSecret = new Set([
   "workspace.baseBranch",
   "workspace.branchPrefix",
   "workspace.isolateRoots",
+  "workspace.fetchRemote",
+  "workspace.allowedRefs",
   "workspace.taskDir",
   "humanInput",
   "humanInput.mode",

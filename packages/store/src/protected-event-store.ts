@@ -412,6 +412,15 @@ export class ProtectedEventStore implements EventStore {
     }
     if (input.type === "run.created")
       Object.assign(payload, { vars: publicInputVars(inputs), executionInputsStored: true });
+    // A delegated run's stated origin (#883) is redacted like any value. One that a secret
+    // touched is left off the public projection whole (it would no longer be canonical ids);
+    // the encrypted original keeps it for replay.
+    if (
+      input.type === "run.created" &&
+      input.payload.origin &&
+      !isDeepStrictEqual(publicPayload.origin, input.payload.origin)
+    )
+      delete publicPayload.origin;
     // A future field must fail closed rather than persist a projection that readers cannot parse.
     if (!OrcaEventSchema.safeParse({ ...input, payload, id: "projection", seq: 0, at: "projection" }).success)
       throw new OrcaError("RUN_STATE", "sensitive event projection could not be represented safely");

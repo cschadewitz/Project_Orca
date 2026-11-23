@@ -18,11 +18,53 @@ export interface ProvisionInput {
   request?: Request | undefined;
   workItem?: WorkItem | undefined;
   parent?: Workspace | undefined;
+  /**
+   * A fully qualified branch or tag (`refs/heads/…`, `refs/tags/…`) the run works from (#883):
+   * the provider fetches it from its fetch remote and gives the run its own checkout of it.
+   * Only a provider with `checkRef` takes one, and only a ref its administrator allowed.
+   */
+  gitRef?: string | undefined;
+  /**
+   * The object `checkRef` saw `gitRef` name (a commit, or an annotated tag's tag object). The
+   * provider fetches the ref and refuses when it now names anything else: the ref moved since
+   * it was checked, and the caller must check it again.
+   */
+  gitRefObject?: string | undefined;
+}
+
+/**
+ * A git ref a run may name: a fully qualified branch or tag (`refs/heads/…`, `refs/tags/…`),
+ * so Git's implicit short-name matching never picks between a branch and a tag. Never a
+ * commit id (a commit the repository happens to hold has no provenance from the remote), an
+ * option, a revision expression (`a..b`, `@{1}`, `^`, `~`, `:`), or a path a ref cannot be.
+ * The provider still checks it with `git check-ref-format`.
+ */
+export const GIT_REF =
+  /^refs\/(?:heads|tags)\/(?![-/.])(?!.*(?:\.\.|\/\/|@\{|\.lock(?:\/|$)|\/\.|\.$|\/$))[A-Za-z0-9._/+@-]{1,190}$/;
+
+/**
+ * Whether the workspace administrator's `allowedRefs` (#883) admit `ref`: a pattern is a fully
+ * qualified ref, matched exactly, or a prefix ending in `/*`, matching every ref under it.
+ * No patterns admit nothing, so a `runs.admit` grant alone never selects a ref.
+ */
+export function refAllowed(ref: string, patterns: readonly string[] | undefined): boolean {
+  return (patterns ?? []).some((p) => (p.endsWith("/*") ? ref.startsWith(p.slice(0, -1)) : ref === p));
+}
+export function gitRefRefusal(ref: string, why: string): OrcaError {
+  return new OrcaError("NOT_SUPPORTED", `git ref '${ref.slice(0, 200)}' cannot be used: ${why}`, {
+    gitRef: ref.slice(0, 200),
+  });
 }
 
 export interface WorkspaceProvider {
   readonly name: string;
   provision(input: ProvisionInput): Promise<Workspace>;
+  /**
+   * Side-effect-free check, before a run naming `ref` is admitted, that this provider can give
+   * it a checkout of that ref (#883). Resolves to the object the ref names now, which
+   * provisioning is then bound to (`ProvisionInput.gitRefObject`). Absent: every ref is refused.
+   */
+  checkRef?(ref: string): Promise<string>;
   /** Recheck owned registration before attaching execution; never repairs or cleans up. */
   validate?(workspace: Workspace): Promise<void>;
   /** Optional cleanup hook (e.g. remove worktree) - never called automatically. */

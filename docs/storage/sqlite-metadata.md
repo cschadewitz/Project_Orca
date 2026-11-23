@@ -7,10 +7,10 @@ contracts and passes the same conformance suite as the memory and file backends
 (`packages/store/test/conformance/`), with the capability matrix in
 `docs/contracts/store-contracts-v1.md`.
 
-It is **not the default** and nothing opens it unless asked. Making it a
-workspace's backend is a store format change, so the default switch and the
-store format epoch bump wait for the format carry-over gates: #897 (updater write
-fence), #905 (Linux package hand-off) and #910 (Windows durability).
+It is **not the default**. A workspace runs on it only after `orca store sqlite
+convert` has converted its store into a SQLite store of its own (see [Choosing
+SQLite for a workspace](#choosing-sqlite-for-a-workspace)); every other store stays on
+files.
 
 ## What is where
 
@@ -159,20 +159,234 @@ settings, separate `--scale` runs from the table above):
 Every workload invariant held on all backends. These are observations, not the
 baseline: the #341 ADR records its budgets and the reference machine first.
 
+## Choosing SQLite for a workspace
+
+A store records which metadata backend it runs on in its format marker
+(`store-format.json`, `packages/store/src/store-backend.ts`):
+
+- **Files** (every store until it is converted): the marker carries the file format,
+  `operator-journals-v4`.
+- **SQLite**: the marker carries `operator-journals-v4-sqlite`, a store format of its
+  own. ORCA opens such a store on SQLite only.
+
+That keeps one populated workspace from ever being opened by both backends, by
+any ORCA:
+
+- ORCA 0.7.1 and later read the marker before opening a store, so one that does not
+  know the SQLite format refuses the store as newer than it can open (naming the
+  backup below).
+- **ORCA 0.7.0 and earlier never read the marker**, so a SQLite store keeps them out
+  with the [legacy fence](#the-legacy-fence) below: every path they open first holds a
+  marker instead of what they expect, and they refuse the store before writing
+  anything. A converted store has the fence before anything has ever opened it.
+- This ORCA's file backend refuses a store recorded for SQLite, and its SQLite backend
+  refuses a store recorded for files (`STORE_FORMAT`, `reason: "OTHER_BACKEND"`). Only
+  maintenance that builds or checks a database beside the files (`import`, `backup`,
+  `verify`, the benchmark) opens one there, and says so.
+- The daemon opens whichever backend the marker records, after the same format
+  check as always. Closed update validation opens a SQLite store read-only (no
+  migration, no setting written).
+- A store on SQLite opens **only the database it was switched to**. The switch (the
+  last step of a conversion) gives
+  the database an id (`store_binding`) and records it in the marker (`sqliteId`).
+  Before anything opens the database for the workspace, a read-only check that
+  changes nothing refuses a missing database (`METADATA_MISSING`; it is never created
+  empty in its place), a file that is not an ORCA database or is bound to no store or
+  to another one (`METADATA_MISMATCH`), and a newer schema (`NEWER`). Put it back with
+  `orca store sqlite restore` from a backup of that database, or restore the whole
+  store from the format backup the marker names.
+
+**Who has the store open.** The format lock covers opening a store, not the time a
+writer keeps it open: an idle daemon holds a file store without it. So every ORCA
+writer from this one on (the daemon and CLI commands, `import`, `restore`)
+registers in `<store>/.store-writers/` while it has the store open
+(`packages/store/src/store-writers.ts`). A switch first announces itself in
+`<store>/.store-switch.json`, then lists the registrations: it is refused (`BUSY`)
+while any belongs to a live process, or to a process on another host it cannot
+check, and a writer that starts while the announcement stands is refused
+(`SWITCHING`). Each side writes before it reads the other's, so one of them always
+sees the other. Registrations and announcements of processes that are gone are
+ignored. ORCA versions from before the registry do not register; the legacy fence
+below turns them away when they start, but cannot stop one that is already running.
+
+### The legacy fence
+
+`packages/store/src/sqlite/legacy-fence.ts`. A released v0.7.0 or v0.6.0 opens a
+store without reading its marker, so the switch puts a marker at every path they
+open before they write:
+
+| Path | Becomes | What a released ORCA does |
+|---|---|---|
+| `private-execution/.execution-key`, `private-workflows/.execution-key` | a marker file (not a 32-byte key); the key is hard-linked to `.execution-key.sqlite`, where this ORCA reads it | v0.7.0 reads these keys while it starts and refuses every command (`RUN_STATE`), the daemon included |
+| `requests.json`, `work-items.json`, `plans.json`, `dependencies.json`, `risks.json`, `decisions.json` | a marker file that is not a JSON array | v0.6.0's reads fail, and its writes (read, change, write under a lock) fail before writing |
+| `runs/`, `plans/` | a marker file | creating or reading a log fails (`EEXIST`, `ENOTDIR`) |
+| `workflows/` (snapshots pinned before 0.7) | a marker file; the directory moves to `workflows.sqlite/`, where this ORCA reads it | the same |
+| `artifacts/index.jsonl` | a marker directory; the blobs beside it stay | reading it fails (`EISDIR`) |
+
+The keys and collection files are each replaced by a single rename, so they are never
+missing. The directories and the index are renamed aside and then replaced, so for an
+instant nothing stands at their path.
+
+`tools/legacy-fence/run.js` (CI: `legacy-fence.yml`, Linux) builds v0.7.0 and v0.6.0
+from their tags, makes workspaces with v0.7.0's own demo, starts a released daemon of
+each version on one, converts it with the current CLI (`orca store sqlite convert`;
+the file store must not change by a byte), and runs every released command that opens
+the store (`runs`, `status`,
+`events`, `plan ...`, `claims ...`, `leases ...`, `admissions`, `answer`, `resume`,
+`submit`, `run`, `serve`), first against an unconverted workspace (the baseline) and
+then against the converted one. A command passes only if, in the baseline, it exists
+in that release, takes its arguments and reaches the store without timing out; and,
+on the converted store, exits with one of that release's store refusals (above) that
+its baseline output does not show, leaving every byte of the store as it was. A
+command the release does not have (`admissions` in v0.6.0) is reported as such.
+v0.6.0's `serve` opens nothing at start, so it comes up: it is sent every store
+request (`runs.list`, `runs.get`, `runs.events`, `plans.list`, `inputs.list`,
+`claims.list`, `runs.start`), each answered in the baseline and refused on the converted
+store. Reported apart as answered, never as refused: v0.6.0's `leases list`, from the
+lease files both backends keep, and `workflows.list`, from the workflows a daemon
+registered in memory.
+
+The daemons that were already running must keep answering from the file store
+(`runs.list`, `plans.list`) and change nothing in the new one; a v0.7.0 write to the
+file store afterwards must be reported by `orca store format`; and the in-place
+`orca store sqlite switch` must still refuse and change nothing.
+
+**What the fence does not do.** It turns away a released ORCA that starts, or opens a
+fenced path, after the fence is in place. It does not stop one that is already
+running: an idle v0.7.0 daemon, or a command between two writes, holds what it read
+and may write it back, over a marker. Released versions leave nothing in the store
+while idle that could be checked for. That is why a store is converted into a new one
+rather than switched in place.
+
+### Converting a workspace: `orca store sqlite convert`
+
+`packages/store/src/store-convert.ts`. The one way from files to SQLite. It converts
+the workspace's file store into a SQLite store of its own beside it, `<store>-sqlite`
+(`.orca` becomes `.orca-sqlite`), names that store in the workspace's config, and
+leaves the file store exactly as it was. Under the file store's format lock:
+
+1. Converts only a store in this ORCA's current file format (an older one is carried
+   forward first, an unmarked one opened once first); a store already on SQLite is
+   left as it is. **Refuses on Windows** (`UNDURABLE`) for as long as store format
+   changes are refused there (#947), and the desktop app's own workspaces
+   (`APP_OWNED`): the app's daemon holds their write fence, which this command cannot.
+   Needs exactly one existing config in the workspace (`CONFIG_INVALID`, before anything
+   is copied): a config is never created, since a new one would be in use before it
+   could be checked against the other names a config may have, and could not be taken
+   back; with two, which one an ORCA opens depends on how it was started.
+2. Announces itself and checks that no registered writer of this ORCA is alive
+   (`BUSY`), and that no run is active.
+3. Copies the store whole into staging beside it (`<store>-sqlite.staging-<id>/store`,
+   with a record of the store and the process that made it), checks every copied
+   file's bytes, and checks the store did not change meanwhile (`BUSY`).
+4. Switches the copy in place, as below, with no backup (the file store is the
+   backup): import, verify, bind, the legacy fence, and the SQLite marker, which also
+   records the file store and the signature of its files (`convertedFrom`).
+5. Checks the file store once more and renames the copy to `<store>-sqlite`, then
+   flushes the new store and its parent directory. From then on that store is never
+   removed by ORCA: another config could already name it.
+6. Checks that it is a complete conversion of the file store as the file store is now,
+   under its own format lock: its marker names this store and the signature; no switch
+   of it is half done; the legacy fence is complete; its database is the one it is
+   bound to and verifies. Anything else is refused (`SWITCH_REFUSED`, or
+   `SOURCE_CHANGED` when the file store changed), leaving both stores and the config as
+   they are. The new store and its parent directory are flushed again (also when an
+   interrupted conversion is resumed), so the config never names a store whose rename
+   a power loss could still undo; a failed flush leaves the config as it is.
+7. Writes the config, under the config writer's lock (`<config>.lock`, the one
+   `config.set` takes), and only if the config is still the revision read when the
+   conversion began, is still the only config beside it, and still names the file
+   store; otherwise `CONFIG_STALE`, and nothing is written. `storeDir` names the new
+   store (relative if it was relative; YAML is edited in place, so comments stay). The
+   config's rename is the commit: every ORCA started afterwards, released ones
+   included, opens the new store.
+
+A refusal before step 5 publishes nothing and removes its own staging. Staging an
+interrupted conversion left is removed by the next one only when its record names
+this store and a process on this host that is gone; anything else with a similar name
+is left alone. A conversion that stopped after step 5 (killed, refused, or its config
+write lost) is finished by the next one through steps 6 and 7, or refused and left for
+the operator to move out of the way. Anything else already at `<store>-sqlite` is
+refused.
+
+**A released ORCA that was already running** keeps the file store it opened, and
+nothing it does reaches the new store. What it writes there afterwards is not in the
+new store: `orca store format` on the new store compares the file store with the
+signature the conversion recorded and says `CHANGED since` when it differs. Stop
+every older ORCA before converting to avoid that; the conversion cannot check for
+them. To go back, point `storeDir` at the file store again: it was never changed by
+the conversion.
+
+### The switch in place
+
+**`orca store sqlite switch`** always refuses (`SWITCH_REFUSED`) and changes nothing,
+because it cannot make sure no released ORCA is still running against the store
+(above); it points to `convert`. The switch itself, `switchStoreToSqlite` in the store
+package, is what a conversion runs on its fresh copy (with `copyOf`: no backup, the
+source recorded). Under the store's format lock it:
+
+1. Switches only a store in this ORCA's current file format. An older store is
+   carried forward first; an unmarked one is opened once first. A store already on
+   SQLite is left as it is.
+2. **Refuses on Windows** (`UNDURABLE`), changing nothing, for as long as store format
+   changes are refused there (#910: until the power-cut test in #947 proves the
+   backup taken first survives).
+3. Announces itself and checks that no registered writer is alive. The
+   announcement stands until the marker is written.
+4. Takes a verified whole-store backup into `format-backups/`, exactly as
+   `carry-forward` does: refused while a run is active or while anything writes, and
+   read back under this ORCA before it counts.
+5. Imports (`orca store sqlite import`, below) and verifies (`orca store sqlite
+   verify`); a problem leaves the store on files. Then binds the database to the
+   store with a new id.
+6. Checks that no file of the store changed since the backup and that still no
+   writer is registered; a write that landed meanwhile would be missing from the
+   database, so the switch is refused instead.
+7. Records the switch in a journal (`<store>/.sqlite-switch/journal.json`, durable),
+   then puts the legacy fence in place, setting each original aside in
+   `.sqlite-switch/aside/`. It compares the originals with the snapshot from step 4
+   once more: a released ORCA that wrote while the fence went in is caught here, and
+   the switch is refused with every original put back.
+8. Only then writes the SQLite format into the marker, naming the backup and the
+   database's id. That rename is the commit, and it is flushed before the journal and
+   what it set aside go (the database and the backup hold all of it).
+
+A refusal at any step leaves the store on files and in charge, every marker gone and
+every original back, durably, before the journal goes; a database the import built is
+inert, as after a plain `import`. A failure after the marker's rename (its flush) may
+have published it, so it is not rolled back: the journal stays, and the next start
+settles the store from the marker that is actually there. So does any failure that
+leaves the marker unreadable.
+
+**Interrupted.** If the switch is killed after step 7 began, the journal stays. Until
+the next start of this ORCA, released ORCA versions are already fenced out from the
+first marker on, and this ORCA's read-only opens refuse the store (`INTERRUPTED`).
+The next write-mode start (any command, the daemon, or `switch` again) settles it
+under the format lock: with the marker still on files, every original goes back and
+every marker goes, durably, leaving the store exactly as before the switch; with the
+marker and the database both naming the journal's switch, the fence is completed and
+the marker flushed again before the journal is dropped. Anything else (a marker or a
+database naming another switch) is refused (`INTERRUPTED`) and left as it is.
+`sqlite-legacy-fence.test.ts` kills a switch at each of these points and checks
+both outcomes byte for byte. The desktop app's own workspaces
+are refused (`APP_OWNED`), as for `carry-forward`: the app's daemon holds their write
+fence, which this command cannot. There is no switch back to files yet: the backup
+from step 4 is the store as it was.
+
 ## Operations
 
-All four commands work on the configured store directory and never touch the
-file-backed metadata they read from.
+`import`, `backup`, `restore` and `verify` work on the configured store directory and
+never touch the file-backed metadata they read from.
 
 | Command | What it does |
 |---|---|
 | `orca store sqlite import` | Mirrors the file store's metadata into `<store>/metadata.sqlite`. **Run it with every ORCA using the store stopped**, as for `carry-forward`: the source is read twice and the reads must agree, or the import is refused (`SOURCE_CHANGED`). Then one transaction checks both sides before writing anything: runs, plan journals and artifact records are history, so what the database holds must be exactly a prefix of the source, record for record (same id with different content is a conflict), and nothing may exist only in the database (refused as `STORE_FORMAT` `IMPORT_CONFLICT`). Collections are current state the file store owns until the switch, so they are mirrored. Only then and applies everything: collections replaced, runs and journals extended, the artifact index upserted (blobs are already in place). The commit is the single publish point, so a refused or interrupted import leaves the database as it was, and a rerun is safe. Ids, sequence numbers and timestamps are copied, never reassigned. |
 | `orca store sqlite backup <file>` | Refuses a store with no database (never an empty "backup"). `VACUUM INTO` from a read-only connection (never migrating what it copies) into a staging file while the database stays in use, switch it to rollback-journal mode so it is one sealed standalone file, sync and integrity-check it, then hard-link it to `<file>`, which is never replaced. Blobs, encrypted records, claims and leases are files and are backed up as files. |
-| `orca store sqlite restore <file>` | Accepts only a sealed backup (refuses a WAL-mode file or one with a `-wal`/`-journal` beside it). Copies it into a staging file in the store, syncs it, checks the **staged** bytes (integrity, ORCA application id, a known schema version with exactly its tables, indexes, views and triggers, still standalone), then publishes with a hard link under a restore lock: if a database (or `-wal`) appeared meanwhile the link fails and nothing is replaced. A crash leaves no database or the whole backup. |
+| `orca store sqlite restore <file>` | Accepts only a sealed backup (refuses a WAL-mode file or one with a `-wal`/`-journal` beside it). Copies it into a staging file in the store, syncs it, checks the **staged** bytes (integrity, ORCA application id, a known schema version with exactly its tables, indexes, views and triggers, still standalone, and, in a store on SQLite, bound to that store: a backup of another store, or of a database bound to none, is refused as `METADATA_MISMATCH` before anything is published), then publishes with a hard link under a restore lock: if a database (or `-wal`) appeared meanwhile the link fails and nothing is replaced. A crash leaves no database or the whole backup. |
 | `orca store sqlite verify` | Read-only: a read-only connection (no migration; a schema this build does not verify is refused), one read snapshot, blobs only read. Checks integrity, per-run and per-plan sequence gaps, every stored event, journal entry and artifact record, and every artifact row's blob (present, matching its hash). Blobs no row references (an interrupted `put`) are listed, not deleted. Exit 1 on any problem. The only files that can appear are SQLite's own WAL coordination files (an empty `-wal` and the `-shm`), which SQLite creates when a reader opens a WAL database nobody else has open; the next writer's clean close removes them. |
 
-Until a workspace can select SQLite, the database is inert: nothing reads it, and
-older ORCA versions ignore the file.
+Until a store is switched, the database is inert: nothing reads it, and older ORCA
+versions ignore the file.
 
 **Crash behaviour.** `sqlite-recovery.test.ts` kills a writer with `SIGKILL` at
 random points, four times on one database, and checks that every acknowledged
@@ -186,9 +400,9 @@ leaves only an unreferenced blob.
 - Reference numbers for the #341 baseline come from the store workload workflow on a
   GitHub-hosted runner (`docs/performance/store-workloads/README.md`); the numbers
   above are from a cloud container.
-- Making SQLite selectable for a workspace, after the format gates above. That
-  switch is also when the daemon serves history from it to #255. **Precondition
-  for that change:** a populated workspace can never be opened by both backends.
-  The selection records the backend in the store, each backend refuses a store
-  recorded for the other, and the only way from file to SQLite is the supported
-  import-then-switch migration.
+- Converting from the desktop app, which holds its workspaces' write fence; on
+  Windows once store format changes are allowed there (#947); a release check on
+  macOS (the conversion runs there; the check runs on Linux).
+- Bringing writes a released ORCA made to the file store after a conversion into the
+  new store; they are reported, not merged.
+- A switch back from SQLite to files.

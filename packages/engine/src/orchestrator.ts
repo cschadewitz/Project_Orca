@@ -61,6 +61,7 @@ import {
   type ArtifactRef,
   type RunOverrides,
   type RunCheckpoint,
+  type RunOrigin,
   type ArtifactSpec,
   type Clock,
   type Edge,
@@ -121,7 +122,7 @@ import { RunContext } from "./run-context.js";
 import type { LiveHumanInput, ExecutionResumeAuthority, ExecutionActivity } from "./live-input.js";
 import { protectExecutionInputs } from "./execution-inputs.js";
 import { checkpointSeed } from "./checkpoint-attempt.js";
-import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
+import { gitRefRefusal, LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 import {
   capabilityRefusal,
   deliveryIssues,
@@ -272,6 +273,20 @@ export interface StartRunOptions {
   workItemId?: string;
   parentRunId?: string;
   parentStepRunId?: string;
+  /** A delegated run's parent workspace, run and step (#883); recorded on `run.created`. */
+  origin?: RunOrigin;
+  /**
+   * A named git ref (a fully qualified branch or tag) a root run works from (#883). The workspace
+   * provider checks it before admission and fetches it into the run's own checkout; the run's
+   * `workspace.rootProvisioning` records the ref and the commit it named.
+   */
+  gitRef?: string;
+  /**
+   * The object a durable admission pinned for `gitRef` when it checked it (#883). The ref is
+   * still checked (allowed, advertised), and the run is refused unless it names this object;
+   * provisioning fetches exactly it. Absent, the check made here is the pin.
+   */
+  gitRefObject?: string;
   /**
    * Per-run selection (#186): role -> agent, model, item workflow, template pack. Validated
    * before `run.created` is appended and recorded in it, so a replay resolves the same agents.
@@ -579,7 +594,13 @@ export class Orchestrator {
   async validateStartRun(
     opts: StartRunOptions,
     supplied?: GenerationMaterial,
-  ): Promise<{ definition: WorkflowDefinition; vars: Record<string, unknown>; generation?: GenerationMaterial }> {
+  ): Promise<{
+    definition: WorkflowDefinition;
+    vars: Record<string, unknown>;
+    generation?: GenerationMaterial;
+    /** The object `gitRef` named when checked; provisioning refuses if the ref has moved since. */
+    gitRefObject?: string;
+  }> {
     if (
       opts.requestAdmissionId !== undefined &&
       (!opts.requestAdmissionId || !opts.requestId || !opts.actor || opts.parentRunId)
@@ -617,6 +638,23 @@ export class Orchestrator {
         { errors, warnings },
       );
     }
+    if (opts.gitRefObject !== undefined && (opts.gitRef === undefined || !/^[a-f0-9]{40,64}$/.test(opts.gitRefObject)))
+      throw new OrcaError("RUN_STATE", "a pinned git ref object needs its ref");
+    if (opts.gitRef !== undefined) {
+      // Only a root run with no inherited or supplied workspace gets a checkout of its own.
+      if (opts.workspace || opts.parentRunId || opts.workItemId || opts.requestId || opts.inline || opts.checkpoint)
+        throw gitRefRefusal(opts.gitRef, "only a root run with a workspace of its own takes a ref");
+      const provider =
+        generation && this.generationWorkspaceProvider
+          ? this.generationWorkspaceProvider(generation)
+          : this.workspaceProvider;
+      if (!provider.checkRef)
+        throw gitRefRefusal(opts.gitRef, `the '${provider.name}' workspace does not give runs a checkout of a ref`);
+      const gitRefObject = await provider.checkRef(opts.gitRef);
+      if (opts.gitRefObject !== undefined && gitRefObject !== opts.gitRefObject)
+        throw gitRefRefusal(opts.gitRef, "it moved after the run was admitted; admit the run again");
+      return { definition: def, vars: inputs.vars, ...(generation ? { generation } : {}), gitRefObject };
+    }
     return { definition: def, vars: inputs.vars, ...(generation ? { generation } : {}) };
   }
 
@@ -629,7 +667,7 @@ export class Orchestrator {
       throw new OrcaError("RUN_STATE", "associated work item is unavailable");
     if (associatedRequest && item && item.requestId !== associatedRequest.id)
       throw new OrcaError("RUN_STATE", "Request and work item associations do not match");
-    const { definition: def, vars, generation } = await this.validateStartRun(opts, supplied);
+    const { definition: def, vars, generation, gitRefObject } = await this.validateStartRun(opts, supplied);
     const provenance = generation
       ? launchProvenance(generation, def, vars, opts.vars ?? {}, opts.overrides, opts.itemWorkflowSource)
       : undefined;
@@ -710,7 +748,14 @@ export class Orchestrator {
         request,
         workItem,
         parent: opts.parentRunId ? (await this.executionState(opts.parentRunId)).run.workspace : undefined,
+        ...(opts.gitRef !== undefined ? { gitRef: opts.gitRef, gitRefObject } : {}),
       }));
+    // A provider that ignored the ref, or the pin, must not leave the run on some other checkout.
+    if (
+      opts.gitRef !== undefined &&
+      (workspace.rootProvisioning?.ref !== opts.gitRef || workspace.rootProvisioning.refObject !== gitRefObject)
+    )
+      throw gitRefRefusal(opts.gitRef, "the workspace provider did not check it out");
     const created: Extract<OrcaEventInput, { type: "run.created" }> = {
       type: "run.created",
       runId,
@@ -729,6 +774,7 @@ export class Orchestrator {
         ...(opts.overrides ? { overrides: opts.overrides } : {}),
         ...(workflowStored ? { workflowStored: true as const } : {}),
         ...(opts.checkpoint ? { checkpoint: opts.checkpoint.seed } : {}),
+        ...(opts.origin ? { origin: { ...opts.origin } } : {}),
       },
     };
     await this.stores.events.append(
