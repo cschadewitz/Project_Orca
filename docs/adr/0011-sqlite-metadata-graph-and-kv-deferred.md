@@ -110,12 +110,26 @@ snapshot open essentially all the time keeps the log from ever starting over; on
 idle checkpoint copies everything back and the next write cuts the file to `walLimitBytes`. No
 ORCA component reads that way: the daemon's reads are synchronous and never overlap a commit.
 
-**Against the budgets:** SQLite meets every timed one. The file backend misses three at large
-scale (metadata writes at 43 ops/s with a 1 s p95, projection rebuild at 21.5 s, and cold
-dependency traversal at 261 ms), which is why SQLite is the durable backend. Durability is the
-#339 kill-at-each-commit-boundary and recovery tests, which pass; they prove no acknowledged write
-is lost and reopening needs no manual step, but the time to reopen after a kill is not yet timed
-(see Limitations).
+**Against the budgets:**
+
+- **Timed budgets.** SQLite meets every one. The file backend misses two at large scale
+  (metadata writes at 43 ops/s with a 1 s p95, and projection rebuild at 21.5 s), which is why
+  SQLite is the durable backend. Its cold traversal (261 ms) is not a miss: the traversal budget
+  is for warm reads.
+- **Memory.** The largest RSS change across a single SQLite workload at large scale was 199 MB
+  (dependency traversal; 9 to 25 MB for the others) in run 45084792624, and 193 MB in run
+  45139685534, against 512 MB. RSS is sampled before and after each workload in one long-lived
+  process, so garbage collection can move it either way; it is an indication, not a peak.
+- **Checkpoints.** In run 45139685534's reports, every `walUnderLoad` phase at every scale has
+  `afterLoad.fullyCheckpointed: true` (the store's own idle checkpoint reported, not busy, as many
+  pages checkpointed as were in the log) and every check true. The log budget holds for every
+  read pattern ORCA produces.
+- **Durability, demonstrated only for process kill.** The #339 kill-at-each-commit-boundary tests
+  show no acknowledged write is lost and reopening needs no manual step when the process is
+  killed. Surviving power loss rests on `synchronous = FULL` and storage that honours flushes; no
+  power-loss test is part of this evidence.
+- **Recovery time: not demonstrated.** No benchmark times reopening after a kill, so the 5 s
+  budget is not shown here (see Limitations).
 
 ## Decision proposed
 
@@ -185,8 +199,9 @@ window at a time; the remedy then is a restart checkpoint once the log passes `w
   dropped for cold reads (`docs/performance/store-workloads/README.md`).
 - Concurrent writers are handles in one process; cross-process exclusion is proven by the store
   tests, not timed.
-- Recovery time after a kill is not timed yet; the 5 s budget is checked only by the #339 tests
-  completing. A timed reopen-after-kill workload is a follow-up for the benchmark.
+- Recovery time after a kill is not timed, and power loss is not tested here: the durability
+  evidence is process-kill tests only. A timed reopen-after-kill workload is a follow-up for the
+  benchmark.
 
 ## What this does not show
 
