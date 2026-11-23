@@ -314,13 +314,13 @@ An agent asks ORCA only when its own permission check has no answer. Once it rem
 grant (Claude's "always allow", a rule in its own settings), the same call never reaches ORCA
 again, so a grant you revoke in ORCA, or a rule you add, does not apply to it.
 
-For the Claude ACP adapter on the daemon's own machine, ORCA will close that gap with a
-`PreToolUse` hook it installs in the agent's sessions (#704).
+For the Claude and Codex ACP adapters on the daemon's own machine, ORCA will close that gap
+with a `PreToolUse` hook it installs in the agent's sessions (#704, #705).
 
-> **Not available yet.** The hook is built and tested against the real Claude Code, but this
-> build refuses every session with `nativeToolHook: on`. It is turned on once ORCA also holds
-> a session away from its host services until its runtime is admitted. What follows is how it
-> will work.
+> **Not available yet.** The hook is built and tested against the real Claude Code and the
+> real Codex, but this build refuses every session with `nativeToolHook: on`. It is turned on
+> once ORCA also holds a session away from its host services until its runtime is admitted.
+> What follows is how it will work.
 
 It is opt-in, per agent:
 
@@ -330,44 +330,61 @@ It is opt-in, per agent:
     nativeToolHook: on
 ```
 
-Claude then runs the hook before **every** tool call, remembered or not, and it decides the
-call against the same three layers as above, read fresh each time:
+The agent then runs the hook before **every** tool call it hooks, remembered or not, and the
+hook decides the call against the same three layers as above, read fresh each time:
 
-| ORCA decides | What happens |
-| --- | --- |
-| `allow` | Nothing is added: Claude's own permission check runs as before, so ORCA never allows more than Claude would |
-| `ask` | Claude asks even if it remembers a grant, and the ask comes to ORCA like any other |
-| `deny` | The call does not run |
+| ORCA decides | Claude | Codex |
+| --- | --- | --- |
+| `allow` | Nothing is added: Claude's own permission check runs as before, so ORCA never allows more than Claude would | The same: Codex's own approval and sandbox still apply |
+| `ask` | Claude asks even if it remembers a grant, and the ask comes to ORCA like any other | **Blocked.** Codex cannot pause a call for a person from a hook, and letting it run would make the ask an allow. Give the agent `rules:` for what it should run |
+| `deny` | The call does not run | The call does not run |
 
-ORCA's own files, and the hook program itself, are refused to Claude's built-in tools as
-well, and a hook that cannot decide (it cannot start, crashes, times out, or prints anything
-but its answer) blocks the call. An allowed call whose working directory is outside the
-workspace is asked about.
+ORCA's own files, and the hook program itself, are refused to the agent's built-in tools as
+well (Codex's patches included), and a hook that cannot decide blocks the call. An allowed
+call whose working directory is outside the workspace is asked about (so, in Codex, blocked).
 
-With the hook on, calls Claude used to run by its own allow rules follow ORCA's instead, so
-an unattended run may meet asks it did not before; give the agent `rules:` for them.
+With the hook on, calls the agent used to run by its own allow rules follow ORCA's instead,
+so an unattended run may meet asks (or, in Codex, blocks) it did not before; give the agent
+`rules:` for them.
 
 `nativeToolHook: on` is a promise that the agent's calls are checked, so ORCA opens the
 session only where it has tested the hook and **refuses it everywhere else**, rather than run
 it unguarded:
 
-- the adapter must be `@agentclientprotocol/claude-agent-acp` at a version ORCA has verified,
-  and must say so when it starts;
-- the Claude Code the session actually runs must be the exact build verified with that
-  adapter. The adapter's word is not enough (an environment variable can point it at another
-  Claude Code), and so is anything the runtime says about itself: the hook only names the
-  runtime's process, and ORCA checks from its own side that the process runs under the agent
-  ORCA started and hashes the image it actually runs, accepting only the digest pinned for
-  the pair. Nothing the record names is executed. Today the one verified pair is **adapter
-  0.109.1 with Claude Code 2.1.330 (linux-x64)**, exactly;
-- the agent must run on the daemon's own machine, on Linux x64.
+- the adapter must be one ORCA has verified, at a verified version, and must say so when it
+  starts: `@agentclientprotocol/claude-agent-acp` or `@agentclientprotocol/codex-acp`;
+- the runtime the session actually runs (Claude Code, or Codex) must be the exact build
+  verified with that adapter. The adapter's word is not enough (an environment variable can
+  point it at another Claude Code or Codex), and so is anything the runtime says about
+  itself: ORCA only ever learns which **process** to look at, and then checks from its own
+  side that the process runs under the agent ORCA started and hashes the image it actually
+  runs, accepting only the digest pinned for the pair. Nothing ORCA is told to look at is
+  executed. The process is named differently per agent: for Claude, a session-start hook
+  records its own parent before `session/new` returns; for Codex, ORCA finds the Codex
+  `app-server` among the agent's own processes. Today the verified pairs are exactly
+  **adapter 0.109.1 with Claude Code 2.1.330 (linux-x64)** and **codex-acp 2.9.0 with Codex
+  0.171.0 (linux-x64)**;
+- the agent must run on the daemon's own machine, on Linux x64;
+- for Codex, ORCA also asks the adapter at startup and refuses unless Codex lists ORCA's hook
+  as trusted and enabled, and runs the hook once the way Codex will (through `$SHELL -lc`) on
+  a call it must block, and refuses unless it blocks with a receipt only ORCA's hook can sign
+  for that call: an exit status alone is not proof. An agent whose own `CODEX_CONFIG`
+  already sets hooks is refused.
 
-Each is what ORCA's acceptance test runs against the real Claude Code, including a session
-pointed at another Claude Code, which is refused. Without
+Each is what ORCA's acceptance tests run against the real agent, including sessions pointed
+at another Claude Code or Codex, which are refused. Without
 `nativeToolHook: on` (or with `off`), no hook is installed and nothing is refused.
 
-Other agents (Codex, Gemini, pi) take no hook yet (#705): with `nativeToolHook: on` they are
-refused; without it, ORCA decides only what they ask about.
+What the hook does not see, said plainly (details in
+[agent-hook-coverage.md](agent-hook-coverage.md)): a hook is not an operating-system boundary;
+it sees one call's input, not every file a command goes on to touch. In Codex, text typed
+into a command that is already running (`write_stdin`) is never shown to it, and its
+hosted web search is not a local call at all; Codex's own hook runner, not ORCA, decides that
+a hook it cannot run (a broken login shell, a timeout) lets the call through, which is why
+ORCA probes the hook when the session opens.
+
+Other agents (Gemini, pi) take no hook yet: with `nativeToolHook: on` they are refused;
+without it, ORCA decides only what they ask about.
 
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive
