@@ -36,7 +36,7 @@ import { decideFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
 import { processCleanup } from "./process-cleanup.js";
 import { nativeToolHookUnavailable } from "./native-tool-hook-session.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
-import type { AgentHost, AgentProcessHandle } from "./host.js";
+import { isHostFileMissing, type AgentHost, type AgentProcessHandle } from "./host.js";
 import {
   loadEffectivePermissionPolicy,
   protectedPathFor,
@@ -448,7 +448,16 @@ async function openPlanned(
       refuseProtected(path, "read");
       const dispatch = await authorizeFs(path, "read");
       dispatch();
-      let content = await opts.host.fs.readFile(path);
+      let content: string;
+      try {
+        content = await opts.host.fs.readFile(path);
+      } catch (e) {
+        // A missing file is an answer, not a failure: agents (Gemini CLI among them) find out
+        // whether a file exists by reading it, and only "Resource not found" reads as missing.
+        // This is past the policy gate, so a path the policy refuses never learns either way.
+        if (isHostFileMissing(e)) throw acp.RequestError.resourceNotFound(path);
+        throw e;
+      }
       if (line !== undefined && line !== null) {
         const lines = content
           .split("\n")
