@@ -43,7 +43,13 @@ import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { OrcaError, type RemoteDaemonSpec } from "@orca/core";
-import { HelloResultSchema, helloOffer, OperatorDiscoverySchema } from "@orca/protocol";
+import {
+  daemonRelation,
+  formatProtocolVersion,
+  HelloResultSchema,
+  helloOffer,
+  OperatorDiscoverySchema,
+} from "@orca/protocol";
 import {
   markPinEnrolled,
   pinState,
@@ -51,6 +57,8 @@ import {
   TunnelRefusal,
   type ConnectionProfile,
 } from "@orca/protocol/remote-access";
+import { DELEGATION_METHODS } from "./daemon-session.js";
+import { DelegationReceipts } from "./receipts.js";
 import { RemoteDaemonClient } from "./remote-client.js";
 
 /**
@@ -89,6 +97,9 @@ export function sameRoute(a: EnrolledRoute, b: EnrolledRoute): boolean {
   return JSON.stringify(EnrolledRouteSchema.parse(a)) === JSON.stringify(EnrolledRouteSchema.parse(b));
 }
 
+/** The label an issued credential carries on the remote: unique to the one issuing request. */
+const LABEL = /^orca-delegation-[a-z0-9][a-z0-9-]{0,62}-[0-9a-f]{16}$/;
+
 export const EnrollmentSchema = z
   .object({
     version: z.literal(1),
@@ -108,9 +119,14 @@ export const EnrollmentSchema = z
       .string()
       .regex(/^[a-z0-9][a-z0-9-]{0,62}\.[A-Za-z0-9_-]{12}\.token$/)
       .optional(),
+    /** The unique label it was issued under on the remote: how its issuer finds it to revoke it. */
+    label: z.string().regex(LABEL).optional(),
   })
   .strict()
-  .refine((r) => (r.issued === true) === (r.tokenFile !== undefined), "issued and tokenFile go together")
+  .refine(
+    (r) => (r.issued === true) === (r.tokenFile !== undefined) && (r.issued === true) === (r.label !== undefined),
+    "issued, tokenFile and label go together",
+  )
   .refine(
     (r) => r.tokenFile === undefined || r.tokenFile === `${r.profile}.${r.credentialId}.token`,
     "tokenFile names another credential",
@@ -179,8 +195,6 @@ export function pinFingerprints(knownHostsFile: string): string[] {
 export interface IssueRequest {
   /** The principal the remote issues it to: this daemon's own, one per delegating workspace. */
   principal: string;
-  /** The only workflows it may start: those this daemon's agents delegate to that remote. */
-  workflows: readonly string[];
   /** Issue a new credential even when the one an earlier enrollment issued still serves. */
   rotate?: boolean;
 }
@@ -190,6 +204,13 @@ export interface EnrollOptions {
   profile: ConnectionProfile;
   knownHostsFile: string;
   file: string;
+  /**
+   * The workflows this config's agents delegate to the remote. An issued credential must be
+   * scoped to exactly these; a saved one must at least cover them.
+   */
+  workflows: readonly string[];
+  /** This daemon's delegation receipts (the store's `delegations/`): what still depends on the current enrollment. */
+  receiptsDir: string;
   /** A credential the person saved; or `issue`, to have the remote issue one. */
   token?: string;
   issue?: IssueRequest;
@@ -203,6 +224,8 @@ export interface EnrollOptions {
   tunnel?: (knownHostsFile: string, pinnedOnly: boolean) => SshTunnel;
   /** Test seam: runs just before the new generation commits; a throw interrupts enrollment there. */
   beforeCommit?: () => void | Promise<void>;
+  /** Test seam: runs just after it commits, before anything is retired; a throw interrupts there. */
+  afterCommit?: () => void | Promise<void>;
 }
 
 interface Hop {
@@ -229,19 +252,33 @@ export function readIssuedToken(file: string, record: Enrollment | undefined): s
 }
 
 /**
- * Credentials enrollment issued and could not take back yet: kept beside the record until a
- * later enrollment reaches the daemon that issued them and revokes them there.
+ * The journal of credentials enrollment issued and that are not (or no longer) the active
+ * one. An entry is written before the request that issues it and before any record that
+ * replaces it is published, so neither a lost answer nor a crash leaves a credential valid on
+ * the remote and unknown here. It leaves the journal only once the daemon that issued it is
+ * proven (the entry's unique label found in that daemon's own credential list, over the same
+ * route and keys, at the same workspace when known) and has revoked it.
  */
 const PendingRevokeSchema = z
   .object({
-    credentialId: z.string().regex(/^[A-Za-z0-9_-]{12}$/),
-    /** Where it was issued: revoked only over this route, to these keys, at this workspace. */
+    /** The unique label it was issued under: how the issuing store is found, even without an id. */
+    label: z.string().regex(LABEL),
+    principal: z.string().min(1),
+    /** Unknown when the issuing answer never arrived or could not be trusted. */
+    credentialId: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{12}$/)
+      .optional(),
+    /** Its generation file, kept until it is revoked. */
+    tokenFile: z.string().optional(),
     route: EnrolledRouteSchema,
     keys: z.string().min(1),
     /** Unknown when enrollment stopped before the daemon named its workspace. */
     workspaceId: z.string().min(1).optional(),
     reason: z.string(),
     since: z.string(),
+    /** Why the last attempt left it here, for the person. */
+    unresolved: z.string().optional(),
   })
   .strict();
 type PendingRevoke = z.infer<typeof PendingRevokeSchema>;
@@ -269,48 +306,78 @@ function writePendingRevokes(file: string, entries: readonly PendingRevoke[]): v
 }
 
 /**
- * One enrollment per remote at a time: `<record>.lock`, created exclusively. A lock left by a
- * process on this host that no longer runs is taken over; any other refuses.
+ * One enrollment per remote at a time: `<record>.lock`, created exclusively, and only ever
+ * removed by its owner. A lock left by a process on this host that no longer runs is taken
+ * over through a claim file named by that lock's exact contents, which only one contender can
+ * create: only the claimant removes the dead lock, and every other contender only ever creates
+ * one, so no live lock is removed by anyone else.
  */
 function lockEnrollment(file: string, remoteId: string): () => void {
   const lock = `${file}.lock`;
   mkdirSync(dirname(file), { recursive: true });
-  const owner = JSON.stringify({ pid: process.pid, host: hostname(), since: new Date().toISOString() });
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const owner = JSON.stringify({
+    pid: process.pid,
+    host: hostname(),
+    since: new Date().toISOString(),
+    nonce: randomUUID(),
+  });
+  const create = (): boolean => {
     try {
       const fd = openSync(lock, "wx", 0o600);
       try {
         writeSync(fd, owner);
+        fsyncSync(fd);
       } finally {
         closeSync(fd);
       }
-      return () => {
-        try {
-          if (readFileSync(lock, "utf8") === owner) rmSync(lock, { force: true });
-        } catch {
-          // Already gone.
-        }
-      };
+      return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (attempt === 0 && staleLock(lock)) {
-        rmSync(lock, { force: true });
-        continue;
-      }
-      throw new OrcaError(
-        "DELEGATION_REFUSED",
-        `Remote ${remoteId} is already being enrolled (${lock}). Wait for it to finish; if no enrollment is running, remove that file.`,
-        { reason: "enrollment-in-progress", profile: remoteId },
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+  };
+  const busy = (detail: string) =>
+    new OrcaError("DELEGATION_REFUSED", `Remote ${remoteId} is already being enrolled (${lock}). ${detail}`, {
+      reason: "enrollment-in-progress",
+      profile: remoteId,
+    });
+  if (!create()) {
+    let held: string;
+    try {
+      held = readFileSync(lock, "utf8");
+    } catch {
+      throw busy("Try again.");
+    }
+    if (!deadOwner(held)) throw busy("Wait for it to finish.");
+    const claim = `${lock}.claim-${createHash("sha256").update(held).digest("hex").slice(0, 32)}`;
+    try {
+      closeSync(openSync(claim, "wx", 0o600));
+    } catch {
+      throw busy(
+        `Its process is gone and another enrollment is taking it over; if none is, remove ${lock} and ${claim}.`,
       );
     }
+    try {
+      // Only this claimant may remove that dead lock, and nobody else can have replaced it.
+      if (readFileSync(lock, "utf8") === held) rmSync(lock);
+      if (!create()) throw busy("Wait for it to finish.");
+    } finally {
+      rmSync(claim, { force: true });
+    }
   }
-  throw new OrcaError("INTERNAL", `could not lock ${lock}`);
+  return () => {
+    try {
+      if (readFileSync(lock, "utf8") === owner) rmSync(lock, { force: true });
+    } catch {
+      // Already gone.
+    }
+  };
 }
 
-function staleLock(lock: string): boolean {
+function deadOwner(text: string): boolean {
   try {
-    const owner = z.object({ pid: z.number().int(), host: z.string() }).parse(JSON.parse(readFileSync(lock, "utf8")));
-    if (owner.host !== hostname()) return false;
+    const owner = z.object({ pid: z.number().int(), host: z.string() }).parse(JSON.parse(text));
+    if (owner.host !== hostname() || owner.pid === process.pid) return false;
     try {
       process.kill(owner.pid, 0);
       return false;
@@ -330,9 +397,8 @@ function staleLock(lock: string): boolean {
  * The record is the commit point. Everything a new credential generation needs (its token
  * file, any newly pinned key) is written before it, and nothing the previous generation uses
  * is touched until it has been replaced, so an enrollment that fails or is cut off at any step
- * leaves the previous one working. An issued credential is noted as pending revocation the
- * moment it exists and stays noted until it is either committed or revoked by the daemon that
- * issued it.
+ * leaves the previous one working. Every issued credential that is not the active one is in
+ * the revocation journal from before the step that could orphan it (see `PendingRevokeSchema`).
  */
 export async function enrollRemote(options: EnrollOptions): Promise<Enrollment> {
   const id = options.remote.id;
@@ -340,7 +406,7 @@ export async function enrollRemote(options: EnrollOptions): Promise<Enrollment> 
     new OrcaError("DELEGATION_REFUSED", message, { reason: "not-enrolled", profile: id, ...details });
   if ((options.token === undefined) === (options.issue === undefined))
     throw new OrcaError("INTERNAL", "enrollRemote needs a token or an issue request, not both");
-  if (options.issue && !options.issue.workflows.length)
+  if (options.issue && !options.workflows.length)
     throw refuse(`No agent delegates to remote ${id}, so there is no workflow to issue a credential for.`);
   const unlock = lockEnrollment(options.file, id);
   try {
@@ -350,17 +416,59 @@ export async function enrollRemote(options: EnrollOptions): Promise<Enrollment> 
   }
 }
 
+/** What a credential proved it may do on the remote, checked against what delegation needs. */
+function checkAuthority(
+  hello: z.infer<typeof HelloResultSchema>,
+  discovery: z.infer<typeof OperatorDiscoverySchema>,
+  workflows: readonly string[],
+  exact: { principal: string } | undefined,
+): string | undefined {
+  if (!daemonRelation(hello.protocol))
+    return `it speaks protocol ${formatProtocolVersion(hello.protocol)}, which this daemon cannot delegate to`;
+  const missing = DELEGATION_METHODS.filter((m) => !hello.methods?.includes(m));
+  if (missing.length) return `it does not answer ${missing.join(", ")}`;
+  if (!discovery.operations.includes("runs.admit")) return "the credential may not start runs there";
+  const scope = discovery.scope;
+  if (exact) {
+    // An issued credential is exactly what was asked for: this daemon's principal, its own runs,
+    // and the delegated workflows, no more and no fewer.
+    if (discovery.principalId !== exact.principal) return `the credential answers for ${discovery.principalId}`;
+    if (scope.runs !== "owned") return "the credential may see runs it did not start";
+    const granted = scope.workflows === "*" ? ["*"] : [...scope.workflows].sort();
+    if (JSON.stringify(granted) !== JSON.stringify([...workflows].sort()))
+      return `the credential is scoped to ${granted.join(", ") || "no workflow"}, not ${workflows.join(", ")}`;
+    return undefined;
+  }
+  const uncovered = scope.workflows === "*" ? [] : workflows.filter((w) => !scope.workflows.includes(w));
+  if (uncovered.length) return `the credential may not start ${uncovered.join(", ")} there`;
+  return undefined;
+}
+
 async function enrollLocked(
   options: EnrollOptions,
   refuse: (message: string, details?: Record<string, unknown>) => OrcaError,
 ): Promise<Enrollment> {
   const id = options.remote.id;
   const route = routeOf(options.profile);
-  // Read before anything is sent: an unreadable record or pending list refuses here.
+  const dir = dirname(options.file);
+  const receipts = new DelegationReceipts(options.receiptsDir);
+  // Read before anything is sent: an unreadable record or journal refuses here.
   const previous = readEnrollment(options.file);
-  // The active generation's credential is never pending, whatever a cut-off run left listed.
+  // The active generation's credential is never pending, whatever a cut-off run left listed:
+  // this is how a run cut off just before or after its commit is reconciled.
   let pending = readPendingRevokes(options.file).filter((p) => p.credentialId !== previous?.credentialId);
   const previousToken = readIssuedToken(options.file, previous);
+  // A re-enrollment is a new binding: delegations still running under the current one would be
+  // stranded (and lose their credential on a rotation). They finish first.
+  if (previous) {
+    const busy = receipts.unsettled(id);
+    if (busy)
+      throw new OrcaError(
+        "DELEGATION_REFUSED",
+        `${busy} delegation${busy === 1 ? " is" : "s are"} still running on remote ${id} under its current enrollment. Re-enrolling now would strand ${busy === 1 ? "it" : "them"}; wait for ${busy === 1 ? "it" : "them"} to finish (or cancel ${busy === 1 ? "it" : "them"}), then enroll again.`,
+        { reason: "enrollment-in-use", profile: id, delegations: busy },
+      );
+  }
   const hops: Hop[] = [
     {
       name: "server",
@@ -415,11 +523,11 @@ async function enrollLocked(
       knownHostsFile: pinFile,
       ...(staging ? { markEnrolled: () => undefined } : { pinnedOnly: true }),
     });
-  let client: RemoteDaemonClient | undefined;
-  let issued: { token: string; credentialId: string; tokenFile: string } | undefined;
+  let issuing: PendingRevoke | undefined;
   let committed = false;
   let keys: string | undefined;
   let workspaceId: string | undefined;
+  const journal = () => writePendingRevokes(options.file, pending);
   try {
     try {
       await tunnel.open();
@@ -438,176 +546,287 @@ async function enrollLocked(
           { presented },
         );
     }
-    keys = tunnel.pinnedKeys;
-    if (!keys)
+    const pinned = tunnel.pinnedKeys;
+    if (!pinned)
       throw new OrcaError("DELEGATION_REFUSED", `The host keys of ${id} could not be pinned.`, {
         reason: "tunnel",
         profile: id,
       });
+    keys = pinned;
     // Verified: commands and the bearer may cross now.
+
+    /** Prove a credential against the daemon: its identity and the authority it was granted. */
+    const prove = async (token: string, exact: { principal: string } | undefined) => {
+      const client = new RemoteDaemonClient({ connect: () => tunnel.connect(), token });
+      try {
+        const hello = HelloResultSchema.parse(
+          await client.call("hello", { client: "orca-daemon/enroll", ...helloOffer() }),
+        );
+        const discovery = OperatorDiscoverySchema.parse(await client.call("operator.discover", {}));
+        if (hello.identity && hello.identity.workspaceId !== discovery.target.workspaceId)
+          throw new OrcaError("DELEGATION_REFUSED", `The daemon on ${id} named two different workspaces.`, {
+            reason: "scope-changed",
+            profile: id,
+          });
+        return { discovery, problem: checkAuthority(hello, discovery, options.workflows, exact) };
+      } finally {
+        client.close();
+      }
+    };
+
+    let token: string;
+    let tokenFile: string | undefined;
+    let label: string | undefined;
+    let proven: z.infer<typeof OperatorDiscoverySchema> | undefined;
     // A credential this enrollment issued earlier is reused, provenance and all, while it is
-    // still bound to this very route and these keys; `--issue` (`rotate`) replaces it.
-    const reuse =
+    // still bound to this very route and these keys and still grants exactly what the config
+    // delegates; `--issue` (`rotate`), or any of those changing, issues a new one instead.
+    if (
       options.issue &&
       !options.issue.rotate &&
       previous?.issued &&
       previousToken &&
       sameRoute(previous.route, route) &&
       previous.keys === keys
-        ? previousToken
-        : undefined;
-    if (options.issue && !reuse) {
-      const got = await issueOver(tunnel, options.remote, options.issue);
-      issued = { ...got, tokenFile: tokenFileName(id, got.credentialId) };
-      // Noted before anything else can fail, so even a crash leaves it on the list to revoke.
-      pending = [
-        ...pending,
-        {
-          credentialId: got.credentialId,
-          route,
-          keys,
-          reason: "issued, not yet enrolled",
-          since: new Date().toISOString(),
-        },
-      ];
-      writePendingRevokes(options.file, pending);
+    ) {
+      const reused = await prove(previousToken, { principal: options.issue.principal });
+      if (!reused.problem && reused.discovery.target.workspaceId === previous.workspaceId) {
+        token = previousToken;
+        tokenFile = previous.tokenFile;
+        label = previous.label;
+        proven = reused.discovery;
+      } else
+        options.warn?.(
+          `The credential issued for remote ${id} earlier no longer fits (${reused.problem ?? "the daemon names another workspace"}); issuing a new one.`,
+        );
     }
-    const token = issued?.token ?? reuse ?? options.token!;
-    client = new RemoteDaemonClient({ connect: () => tunnel.connect(), token });
-    const hello = HelloResultSchema.parse(
-      await client.call("hello", { client: "orca-daemon/enroll", ...helloOffer() }),
-    );
-    const discovery = OperatorDiscoverySchema.parse(await client.call("operator.discover", {}));
-    if (hello.identity && hello.identity.workspaceId !== discovery.target.workspaceId)
-      throw new OrcaError("DELEGATION_REFUSED", `The daemon on ${id} named two different workspaces.`, {
-        reason: "scope-changed",
-        profile: id,
-      });
-    workspaceId = discovery.target.workspaceId;
-    if (issued && discovery.principalId !== options.issue!.principal)
-      throw new OrcaError("DELEGATION_REFUSED", `The daemon on ${id} did not accept the credential it issued.`, {
-        reason: "credential-missing",
-        profile: id,
-      });
-    const credentialId = credentialIdOf(token);
-    // The exact credential an earlier enrollment issued keeps its provenance (and its file),
-    // however it was handed back in.
-    const kept =
-      !issued && previous?.issued && previous.tokenFile && previous.credentialId === credentialId
-        ? previous.tokenFile
-        : undefined;
-    // The new generation's own token file: written before the record that names it, and never
-    // the file the previous record names, so the previous generation keeps working until the
-    // record below replaces it.
-    if (issued) writeAtomic(join(dirname(options.file), issued.tokenFile), `${issued.token}\n`);
+    if (!proven && options.issue) {
+      label = `orca-delegation-${id}-${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+      // Journaled before the request: whatever becomes of the answer, the label finds it.
+      issuing = {
+        label,
+        principal: options.issue.principal,
+        route,
+        keys,
+        reason: "issued, not yet enrolled",
+        since: new Date().toISOString(),
+      };
+      pending = [...pending, issuing];
+      journal();
+      const got = await issueOver(tunnel, options.remote, options.issue.principal, options.workflows, label);
+      tokenFile = tokenFileName(id, got.credentialId);
+      issuing.credentialId = got.credentialId;
+      issuing.tokenFile = tokenFile;
+      journal();
+      const fresh = await prove(got.token, { principal: options.issue.principal });
+      if (fresh.problem)
+        throw new OrcaError(
+          "DELEGATION_REFUSED",
+          `The daemon on ${id} did not grant the credential it issued what delegation needs: ${fresh.problem}.`,
+          { reason: "credential-missing", profile: id },
+        );
+      token = got.token;
+      proven = fresh.discovery;
+      workspaceId = issuing.workspaceId = proven.target.workspaceId;
+      journal();
+      // The new generation's own token file: never the file the previous record names, so the
+      // previous generation keeps working until the record below replaces it.
+      writeAtomic(join(dir, tokenFile), `${token}\n`);
+    }
+    if (!proven) {
+      token = options.token!;
+      const saved = await prove(token, undefined);
+      if (saved.problem)
+        throw new OrcaError(
+          "DELEGATION_REFUSED",
+          `The credential saved for remote ${id} cannot delegate there: ${saved.problem}.`,
+          { reason: "auth", profile: id },
+        );
+      proven = saved.discovery;
+      // The exact credential an earlier enrollment issued keeps its provenance, however it was
+      // handed back in.
+      if (previous?.issued && previous.credentialId === credentialIdOf(token)) {
+        tokenFile = previous.tokenFile;
+        label = previous.label;
+      }
+    }
+    workspaceId = proven.target.workspaceId;
+    const credentialId = credentialIdOf(token!);
     for (const hop of fresh) {
       writeAtomic(hop.file, readFileSync(stagedOf(hop), "utf8"));
       markPinEnrolled(hop.file);
     }
-    const tokenFile = issued?.tokenFile ?? kept;
     const record: Enrollment = {
       version: 1,
       profile: id,
       route,
       keys,
       workspaceId,
-      principalId: discovery.principalId,
+      principalId: proven.principalId,
       credentialId,
       enrolledAt: new Date().toISOString(),
-      ...(tokenFile ? { issued: true as const, tokenFile } : {}),
+      ...(tokenFile && label ? { issued: true as const, tokenFile, label } : {}),
     };
-    await options.beforeCommit?.();
-    // Commit: the one rename that makes this generation the active one.
-    writeAtomic(options.file, JSON.stringify(record, null, 2));
-    committed = true;
-    pending = pending.filter((p) => p.credentialId !== credentialId);
-    // The previous generation is retired: its credential is taken back only by the daemon that
-    // issued it (same route, same keys, same workspace); otherwise it waits on the list.
-    if (previous?.issued && previous.credentialId !== credentialId) {
-      if (previous.tokenFile && previous.tokenFile !== tokenFile)
-        rmSync(join(dirname(options.file), previous.tokenFile), { force: true });
-      if (!pending.some((p) => p.credentialId === previous.credentialId))
-        pending.push({
+    // The generation being replaced is journaled before the record stops naming it, so a crash
+    // right after the commit still finds it; until then the filter above ignores it.
+    if (previous?.issued && previous.credentialId !== credentialId && previous.label)
+      pending = [
+        ...pending.filter((p) => p.label !== previous.label),
+        {
+          label: previous.label,
+          principal: previous.principalId,
           credentialId: previous.credentialId,
+          ...(previous.tokenFile ? { tokenFile: previous.tokenFile } : {}),
           route: previous.route,
           keys: previous.keys,
           workspaceId: previous.workspaceId,
           reason: "replaced by a newer enrollment",
           since: new Date().toISOString(),
-        });
-    }
-    writePendingRevokes(options.file, pending);
-    pending = await revokePending(tunnel, options, pending, { route, keys, workspaceId, credentialId });
+        },
+      ];
+    journal();
+    await options.beforeCommit?.();
+    // Commit: the one rename that makes this generation the active one.
+    writeAtomic(options.file, JSON.stringify(record, null, 2));
+    committed = true;
+    await options.afterCommit?.();
+    pending = pending.filter((p) => p.credentialId !== credentialId);
+    journal();
+    pending = await settlePending(tunnel, options, receipts, pending, { route, keys, workspaceId, credentialId });
     return record;
   } finally {
-    // Interrupted before the commit: the credential it issued must not stay valid. If it cannot
-    // be revoked now it stays on the list for the next enrollment.
-    if (issued && !committed) {
-      const ok = await revokeOver(tunnel, options.remote, issued.credentialId).then(
-        () => true,
-        () => false,
-      );
-      if (ok) pending = pending.filter((p) => p.credentialId !== issued!.credentialId);
-      else if (workspaceId)
-        pending = pending.map((p) => (p.credentialId === issued!.credentialId ? { ...p, workspaceId } : p));
+    // Cut off before the commit: the credential it issued must not stay valid. It is taken
+    // back only through the journal's proof of its issuer, like any other.
+    if (issuing && !committed && keys && pending.includes(issuing)) {
       try {
-        writePendingRevokes(options.file, pending);
+        pending = await settlePending(tunnel, options, receipts, pending, {
+          route,
+          keys,
+          ...(workspaceId ? { workspaceId } : {}),
+          credentialId: previous?.credentialId,
+          only: issuing.label,
+        });
       } catch {
-        // The entry written when it was issued is still there.
+        // The journal entry stays for the next enrollment.
       }
-      if (!ok)
-        options.warn?.(
-          `The credential ${issued.credentialId} issued on remote ${id} could not be revoked yet; the next \`orca remote enroll ${id}\` will retry, or run \`orca auth revoke ${issued.credentialId}\` there.`,
-        );
-      rmSync(join(dirname(options.file), issued.tokenFile), { force: true });
     }
-    client?.close();
     await tunnel.close().catch(() => undefined);
     if (staging && existsSync(staging)) rmSync(staging, { recursive: true, force: true });
   }
 }
 
+const RemoteCredentialsSchema = z.array(
+  z.object({ id: z.string(), principal: z.string(), label: z.string().optional(), revokedAt: z.string().optional() }),
+);
+
 /**
- * Revoke what is pending, but only on the daemon that issued it: the route and keys must be the
- * ones it was issued over, and the workspace (when it was learned) the one this daemon names.
- * Whatever cannot be proven or revoked stays on the list, with a warning.
+ * Revoke journaled credentials, but only on the daemon that issued them. That daemon is the one
+ * reached over the entry's route and keys (and at its workspace, when known) whose own
+ * credential list holds the entry's unique label for the entry's principal (and id, when
+ * known): only then is the id it lists revoked. Anything that cannot be proven, is still used
+ * by a running delegation, or cannot be revoked stays in the journal, with a warning saying why.
  */
-async function revokePending(
+async function settlePending(
   tunnel: SshTunnel,
   options: EnrollOptions,
+  receipts: DelegationReceipts,
   pending: readonly PendingRevoke[],
-  here: { route: EnrolledRoute; keys: string; workspaceId: string; credentialId: string },
+  here: {
+    route: EnrolledRoute;
+    keys: string;
+    workspaceId?: string;
+    credentialId: string | undefined;
+    only?: string;
+  },
 ): Promise<PendingRevoke[]> {
   const id = options.remote.id;
+  const dir = dirname(options.file);
   const left: PendingRevoke[] = [];
-  for (const entry of pending) {
-    if (entry.credentialId === here.credentialId) continue;
-    const issuer =
-      sameRoute(entry.route, here.route) &&
-      entry.keys === here.keys &&
-      (entry.workspaceId === undefined || entry.workspaceId === here.workspaceId);
-    if (
-      issuer &&
-      (await revokeOver(tunnel, options.remote, entry.credentialId).then(
-        () => true,
-        () => false,
-      ))
-    )
-      continue;
-    left.push(entry);
+  let listed: z.infer<typeof RemoteCredentialsSchema> | undefined | null;
+  const list = async () => {
+    if (listed !== undefined) return listed;
+    try {
+      const result = await tunnel.exec(cliOf(options.remote, "auth", "list", "--json"), 60_000);
+      listed = result.code === 0 ? RemoteCredentialsSchema.parse(JSON.parse(result.stdout)) : null;
+    } catch {
+      listed = null;
+    }
+    return listed;
+  };
+  const keep = (entry: PendingRevoke, why: string) => {
+    left.push({ ...entry, unresolved: why });
     options.warn?.(
-      issuer
-        ? `The credential ${entry.credentialId} on remote ${id} could not be revoked yet; the next enrollment will retry, or run \`orca auth revoke ${entry.credentialId}\` there.`
-        : `The credential ${entry.credentialId} was issued by the daemon remote ${id} was enrolled to before (another address, host key or workspace), so it was not revoked here. Run \`orca auth revoke ${entry.credentialId}\` on that daemon, then remove it from ${pendingRevokeFile(options.file)}.`,
+      `The credential ${entry.credentialId ?? `labelled ${entry.label}`} for remote ${id} is not revoked yet: ${why}. It stays in ${pendingRevokeFile(options.file)}; the next enrollment retries, or run \`orca auth revoke <id>\` on the daemon that issued it and remove the entry.`,
     );
+  };
+  for (const entry of pending) {
+    if (entry.credentialId !== undefined && entry.credentialId === here.credentialId) continue;
+    if (here.only !== undefined && entry.label !== here.only) {
+      left.push(entry);
+      continue;
+    }
+    if (!sameRoute(entry.route, here.route) || entry.keys !== here.keys) {
+      keep(entry, "it was issued over another address or host key than this enrollment reached");
+      continue;
+    }
+    if (entry.workspaceId && here.workspaceId && entry.workspaceId !== here.workspaceId) {
+      keep(entry, "it was issued by a daemon at another workspace");
+      continue;
+    }
+    if (entry.workspaceId && !here.workspaceId) {
+      keep(entry, "this daemon's workspace could not be confirmed");
+      continue;
+    }
+    const busy = entry.credentialId ? receipts.unsettled(id, entry.credentialId) : 0;
+    if (busy) {
+      keep(entry, `${busy} delegation${busy === 1 ? " still uses" : "s still use"} it`);
+      continue;
+    }
+    const credentials = await list();
+    if (!credentials) {
+      keep(entry, "the daemon's credential list could not be read over ssh");
+      continue;
+    }
+    const matches = credentials.filter(
+      (c) =>
+        c.label === entry.label &&
+        c.principal === entry.principal &&
+        (entry.credentialId === undefined || c.id === entry.credentialId),
+    );
+    if (!matches.length) {
+      keep(
+        entry,
+        entry.credentialId
+          ? "this daemon does not hold it"
+          : "this daemon holds nothing under its label (its issuing request may never have arrived)",
+      );
+      continue;
+    }
+    let revoked = true;
+    for (const match of matches)
+      if (!match.revokedAt)
+        revoked =
+          (await revokeOver(tunnel, options.remote, match.id).then(
+            () => true,
+            () => false,
+          )) && revoked;
+    if (!revoked) {
+      keep(entry, "the daemon refused to revoke it");
+      continue;
+    }
+    if (entry.tokenFile) rmSync(join(dir, entry.tokenFile), { force: true });
   }
-  if (left.length !== pending.length) writePendingRevokes(options.file, left);
+  writePendingRevokes(options.file, left);
   return left;
 }
 
 const IssuedSchema = z.object({
   token: z.string().regex(/^orca1\.[A-Za-z0-9_-]{12}\.[A-Za-z0-9_-]{43}$/),
-  credential: z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{12}$/), principal: z.string() }),
+  credential: z.object({
+    id: z.string().regex(/^[A-Za-z0-9_-]{12}$/),
+    principal: z.string(),
+    label: z.string().optional(),
+  }),
 });
 
 function cliOf(remote: RemoteDaemonSpec, ...args: string[]): string[] {
@@ -616,12 +835,16 @@ function cliOf(remote: RemoteDaemonSpec, ...args: string[]): string[] {
 
 /**
  * Have the remote's ORCA CLI issue this daemon a client credential for exactly `workflows`,
- * over the verified tunnel. Its output is parsed, never shown or logged.
+ * under a label no other credential has, over the verified tunnel. Its output is parsed, never
+ * shown or logged; an answer that is not exactly what was asked for is not trusted for
+ * anything, and the journal entry's label is what finds the credential later.
  */
 async function issueOver(
   tunnel: SshTunnel,
   remote: RemoteDaemonSpec,
-  request: IssueRequest,
+  principal: string,
+  workflows: readonly string[],
+  label: string,
 ): Promise<{ token: string; credentialId: string }> {
   const fail = (why: string) =>
     new OrcaError("DELEGATION_REFUSED", `Remote ${remote.id} did not issue a credential: ${why}.`, {
@@ -632,12 +855,12 @@ async function issueOver(
     remote,
     "auth",
     "issue",
-    request.principal,
+    principal,
     "--preset",
     "client",
-    ...request.workflows.flatMap((w) => ["--workflow-scope", w]),
+    ...workflows.flatMap((w) => ["--workflow-scope", w]),
     "--label",
-    `orca-delegation-${remote.id}`,
+    label,
     "--json",
   );
   let result;
@@ -654,13 +877,13 @@ async function issueOver(
   } catch {
     throw fail("its answer was not a credential");
   }
-  const issued = { token: parsed.token, credentialId: parsed.credential.id };
-  // Not what was asked for: never kept, and taken back.
-  if (parsed.credential.principal !== request.principal || credentialIdOf(parsed.token) !== parsed.credential.id) {
-    await revokeOver(tunnel, remote, parsed.credential.id).catch(() => undefined);
-    throw fail("it issued a credential other than the one asked for");
-  }
-  return issued;
+  if (
+    parsed.credential.principal !== principal ||
+    parsed.credential.label !== label ||
+    credentialIdOf(parsed.token) !== parsed.credential.id
+  )
+    throw fail("it answered with a credential other than the one asked for");
+  return { token: parsed.token, credentialId: parsed.credential.id };
 }
 
 async function revokeOver(tunnel: SshTunnel, remote: RemoteDaemonSpec, credentialId: string): Promise<void> {

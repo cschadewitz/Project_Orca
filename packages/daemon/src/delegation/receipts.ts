@@ -279,6 +279,36 @@ export class DelegationReceipts {
     }
   }
 
+  /**
+   * How many delegations to `profile` (under `credentialId`, when given) are not settled yet:
+   * still submitting, running or being cancelled. A receipt that cannot be read counts, so an
+   * enrollment never strands what it cannot see.
+   */
+  unsettled(profile: string, credentialId?: string): number {
+    let names: string[];
+    try {
+      names = readdirSync(this.dir).filter((n) => n.endsWith(".json"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+    let count = 0;
+    for (const name of names) {
+      try {
+        const receipt = DelegationReceiptSchema.parse(JSON.parse(readFileSync(join(this.dir, name), "utf8")));
+        if (
+          receipt.profile === profile &&
+          receipt.state !== "settled" &&
+          (credentialId === undefined || receipt.binding.credentialId === credentialId)
+        )
+          count++;
+      } catch {
+        count++;
+      }
+    }
+    return count;
+  }
+
   /** Cancellations still being settled under one binding (never another's). */
   cancelPending(binding: DelegationBinding, limit = 20): DelegationReceipt[] {
     let names: string[];

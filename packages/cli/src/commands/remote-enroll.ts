@@ -43,11 +43,12 @@ export async function remoteEnrollCommand(ctx: CommandContext): Promise<number> 
     profile,
     knownHostsFile: files.knownHostsFile,
     file: files.enrollmentFile,
+    workflows,
+    receiptsDir: resolve(configDir, config.storeDir, "delegations"),
     ...(issue
       ? {
           issue: {
             principal: `delegate-${await workspaceIdentity(resolve(configDir, config.storeDir))}`,
-            workflows,
             rotate,
           },
         }

@@ -436,14 +436,25 @@ names that file. Enrolling again reuses it while the route and host keys are unc
 `orca remote enroll <id> --issue` replaces it. The ssh login must be able to run that CLI
 (`remotes[].serverCommand`, default `orca`).
 
+Before anything is saved, enrollment checks what the credential may actually do there: the
+remote must take delegated runs, and the credential must be able to start every workflow this
+config delegates to it. An issued one must be scoped to exactly those workflows and to its own
+runs; one that no longer fits (the config now delegates other workflows) is replaced.
+
 The enrollment record is written last, so an enrollment that fails or is cut off at any step
 leaves the previous one in use. Only one enrollment of a remote runs at a time
-(`auth/remotes/<id>.json.lock`). A credential enrollment issued and no longer uses (one it could
-not verify, or the one a new enrollment replaced) is revoked on the remote, but only when that
-remote is provably the daemon that issued it: the same route, the same host keys and the same
-workspace. Anything it could not revoke stays listed in `auth/remotes/<id>.json.pending-revoke`,
-with a warning; the next enrollment retries the ones it can prove, and the rest need
-`orca auth revoke <credential id>` on the daemon that issued them.
+(`auth/remotes/<id>.json.lock`; a lock left by a process that is gone is taken over), and none
+runs while delegations to that remote are still in progress, since a new enrollment would
+strand them.
+
+Every credential enrollment issues carries a label unique to that request, and is listed in
+`auth/remotes/<id>.json.pending-revoke` before the request is sent and again before a newer
+enrollment replaces it. A listed credential is revoked only on the daemon that issued it: over
+the same route and host keys, at the same workspace, and only once that daemon's own credential
+list shows the label. Anything that cannot be proven or revoked yet (another daemon issued it,
+a delegation still uses it, or the request never arrived) stays listed with the reason and a
+warning. The next enrollment retries; otherwise run `orca auth revoke <credential id>` on the
+daemon that issued it and remove the entry.
 
 To use a credential issued by hand instead, save it first and enroll as above:
 

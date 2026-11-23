@@ -11,7 +11,7 @@
  *
  * Needs `pnpm run build` (it runs the compiled CLI); CI builds before it tests.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -138,8 +138,9 @@ edges:
 }
 
 /** A credential the remote issues for the parent daemon, with `orca auth issue` there. */
-function issueCredential(remote: TestDaemon, principal: string): string {
-  const out = spawnSync(process.execPath, [CLI_ENTRY, "auth", "issue", principal, "--preset", "client", "--json"], {
+function issueCredential(remote: TestDaemon, principal: string, label?: string): string {
+  const args = ["auth", "issue", principal, "--preset", "client", "--json", ...(label ? ["--label", label] : [])];
+  const out = spawnSync(process.execPath, [CLI_ENTRY, ...args], {
     cwd: remote.dir,
     encoding: "utf8",
     env: { PATH: process.env.PATH ?? "", HOME: join(remote.dir, "..", "home") },
@@ -544,7 +545,7 @@ edges:
     // On the remote: a client credential, owned runs only, for exactly the delegated workflow.
     expect(remoteCredentials().find((c) => c.id === first.credentialId)).toMatchObject({
       principal: `delegate-${parentWorkspace}`,
-      label: "orca-delegation-auto-box",
+      label: expect.stringMatching(/^orca-delegation-auto-box-[0-9a-f]{16}$/),
       scope: { workflows: ["remote-auto"], runs: "owned" },
     });
     expect(revokedOnRemote(first.credentialId)).toBe(false);
@@ -595,7 +596,9 @@ edges:
         profile: remoteProfile(spec),
         knownHostsFile: files.knownHostsFile,
         file: files.enrollmentFile,
-        issue: { principal: before.principalId, workflows: ["remote-auto"], rotate: true },
+        workflows: ["remote-auto"],
+        receiptsDir: join(parent.dir, ".orca", "delegations"),
+        issue: { principal: before.principalId, rotate: true },
         beforeCommit: () => {
           throw new Error("cut off");
         },
@@ -614,39 +617,97 @@ edges:
     await delegatesAuto("Narvik");
   }, 180_000);
 
-  it("revokes what a crashed enrollment left pending only on the daemon that issued it", async (ctx) => {
+  it("journals the generation it replaces before committing, so a cut-off just after it is cleaned up", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const before = await readAutoRecord();
+    const config = JSON.parse(await readFile(join(parent.dir, "orca.config.yaml"), "utf8")) as {
+      remotes: unknown[];
+    };
+    const spec = RemoteDaemonSpecSchema.parse(config.remotes.find((r) => (r as { id: string }).id === "auto-box"));
+    const files = remoteFiles(parent.dir, spec);
+    await expect(
+      enrollRemote({
+        remote: spec,
+        profile: remoteProfile(spec),
+        knownHostsFile: files.knownHostsFile,
+        file: files.enrollmentFile,
+        workflows: ["remote-auto"],
+        receiptsDir: join(parent.dir, ".orca", "delegations"),
+        issue: { principal: before.principalId, rotate: true },
+        afterCommit: () => {
+          throw new Error("cut off");
+        },
+      }),
+    ).rejects.toThrow("cut off");
+    // The new generation is active; the one it replaced is journaled, still valid until settled.
+    // (The new one's own issuing entry may still be listed: the active credential never counts.)
+    const after = await readAutoRecord();
+    expect(after.credentialId).not.toBe(before.credentialId);
+    const journal = JSON.parse(await readFile(`${autoRecord()}.pending-revoke`, "utf8")) as {
+      entries: { credentialId?: string; label: string }[];
+    };
+    expect(journal.entries.map((e) => e.credentialId)).toContain(before.credentialId);
+    expect(revokedOnRemote(after.credentialId)).toBe(false);
+    expect(revokedOnRemote(before.credentialId)).toBe(false);
+    await delegatesAuto("Harstad");
+    // The next enrollment reconciles against the active generation: it keeps that, revokes the old.
+    const { record } = enrollAuto();
+    expect(record.credentialId).toBe(after.credentialId);
+    expect(revokedOnRemote(before.credentialId)).toBe(true);
+    expect(existsSync(join(autoDir(), before.tokenFile!))).toBe(false);
+    expect(existsSync(`${autoRecord()}.pending-revoke`)).toBe(false);
+  }, 180_000);
+
+  it("revokes what a crashed enrollment left pending only where its label proves the issuer", async (ctx) => {
     if (!sshd) return ctx.skip();
     const current = await readAutoRecord();
     const { route, keys } = JSON.parse(await readFile(autoRecord(), "utf8")) as { route: unknown; keys: string };
-    // As a crash right after issuing leaves it: issued over this route and these keys, workspace
-    // not yet learned. And one issued by a daemon at another workspace, which must not be sent here.
-    const crashed = issueCredential(remote, current.principalId).split(".")[1]!;
-    const elsewhere = issueCredential(remote, current.principalId).split(".")[1]!;
+    const label = () => `orca-delegation-auto-box-${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    // A request whose answer was lost: only its label is known here. One whose answer arrived.
+    // One journaled at another workspace, and one that never reached the remote at all.
+    const lost = { label: label() };
+    const lostId = issueCredential(remote, current.principalId, lost.label).split(".")[1]!;
+    const known = { label: label() };
+    const knownId = issueCredential(remote, current.principalId, known.label).split(".")[1]!;
+    const elsewhere = { label: label() };
+    const elsewhereId = issueCredential(remote, current.principalId, elsewhere.label).split(".")[1]!;
+    const never = { label: label() };
     const since = new Date().toISOString();
+    const base = { principal: current.principalId, route, keys, since, reason: "issued, not yet enrolled" };
     writeFileSync(
       `${autoRecord()}.pending-revoke`,
       JSON.stringify({
         version: 1,
         entries: [
-          { credentialId: crashed, route, keys, reason: "issued, not yet enrolled", since },
-          { credentialId: elsewhere, route, keys, workspaceId: "ws_elsewhere", reason: "replaced", since },
+          { ...base, ...lost },
+          { ...base, ...known, credentialId: knownId },
+          { ...base, ...elsewhere, credentialId: elsewhereId, workspaceId: "ws_elsewhere" },
+          { ...base, ...never },
           // The active credential is never revoked, whatever a cut-off run listed.
-          { credentialId: current.credentialId, route, keys, reason: "issued, not yet enrolled", since },
+          { ...base, label: label(), credentialId: current.credentialId },
         ],
       }),
       { mode: 0o600 },
     );
     const { record, stderr } = enrollAuto();
     expect(record.credentialId).toBe(current.credentialId);
-    expect(revokedOnRemote(crashed)).toBe(true);
-    expect(revokedOnRemote(elsewhere)).toBe(false);
+    expect(revokedOnRemote(lostId)).toBe(true);
+    expect(revokedOnRemote(knownId)).toBe(true);
+    expect(revokedOnRemote(elsewhereId)).toBe(false);
     expect(revokedOnRemote(current.credentialId)).toBe(false);
-    expect(stderr).toContain(elsewhere);
+    expect(stderr).toContain(elsewhereId);
+    expect(stderr).toContain(never.label);
     const left = JSON.parse(await readFile(`${autoRecord()}.pending-revoke`, "utf8")) as {
-      entries: { credentialId: string }[];
+      entries: { label: string; unresolved?: string }[];
     };
-    expect(left.entries.map((e) => e.credentialId)).toEqual([elsewhere]);
+    expect(left.entries.map((e) => e.label).sort()).toEqual([elsewhere.label, never.label].sort());
+    expect(left.entries.every((e) => e.unresolved)).toBe(true);
     await delegatesAuto("Alta");
+    writeFileSync(
+      `${autoRecord()}.pending-revoke`,
+      JSON.stringify({ version: 1, entries: left.entries.filter((e) => e.label === elsewhere.label) }),
+      { mode: 0o600 },
+    );
 
     // A rotation away from an enrollment whose daemon named another workspace does not send its
     // credential id to this one: it is kept pending, with a warning.
@@ -657,15 +718,33 @@ edges:
     expect(revokedOnRemote(current.credentialId)).toBe(false);
     expect(warned).toContain(current.credentialId);
     const pending = JSON.parse(await readFile(`${autoRecord()}.pending-revoke`, "utf8")) as {
-      entries: { credentialId: string; workspaceId?: string }[];
+      entries: { credentialId?: string; workspaceId?: string }[];
     };
     expect(pending.entries).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ credentialId: elsewhere }),
+        expect.objectContaining({ credentialId: elsewhereId }),
         expect.objectContaining({ credentialId: current.credentialId, workspaceId: "ws_moved" }),
       ]),
     );
     await delegatesAuto("Kirkenes");
+  }, 180_000);
+
+  it("refuses to re-enroll while delegations still depend on the current enrollment", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const before = await readAutoRecord();
+    const receipts = join(parent.dir, ".orca", "delegations");
+    mkdirSync(receipts, { recursive: true });
+    // One it cannot read counts as running: never strand what cannot be seen.
+    const stuck = join(receipts, "zz-unreadable.json");
+    writeFileSync(stuck, "{");
+    try {
+      const out = cli(parent, ["remote", "enroll", "auto-box", "--issue", "--json"]);
+      expect(out.status).not.toBe(0);
+      expect(out.stderr).toContain("still running on remote auto-box");
+    } finally {
+      rmSync(stuck, { force: true });
+    }
+    expect((await readAutoRecord()).credentialId).toBe(before.credentialId);
   }, 180_000);
 
   it("refuses a second enrollment of the same remote while one is running", async (ctx) => {
@@ -679,10 +758,29 @@ edges:
     } finally {
       rmSync(lock, { force: true });
     }
-    // A lock whose process on this host is gone is taken over.
+    // A lock whose process on this host is gone is taken over by exactly one of several
+    // enrollments racing for it; the others are refused, and no lock or claim is left behind.
     writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 1, host: hostname(), since: new Date().toISOString() }));
-    enrollAuto();
-    expect(existsSync(lock)).toBe(false);
+    const racers = await Promise.all(
+      [0, 1, 2, 3].map(
+        () =>
+          new Promise<{ code: number | null; stderr: string }>((done) => {
+            const child = spawn(process.execPath, [CLI_ENTRY, "remote", "enroll", "auto-box", "--json"], {
+              cwd: parent.dir,
+              env: process.env,
+            });
+            let stderr = "";
+            child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+            child.stdout.resume();
+            child.on("close", (code) => done({ code, stderr }));
+          }),
+      ),
+    );
+    for (const racer of racers)
+      if (racer.code !== 0) expect(racer.stderr, racer.stderr).toContain("already being enrolled");
+    expect(racers.filter((r) => r.code === 0).length).toBeGreaterThanOrEqual(1);
+    expect(readdirSync(autoDir()).filter((n) => n.startsWith("auto-box.json.lock"))).toEqual([]);
+    await delegatesAuto("Vardø");
   }, 180_000);
 
   it("fails the step with a typed refusal once the remote revokes the credential", async (ctx) => {
