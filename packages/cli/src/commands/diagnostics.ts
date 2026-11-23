@@ -11,6 +11,7 @@
  * and kept `diagnostics.retainDays` days. They are diagnostics, not an audit record.
  */
 import { OrcaError } from "@orca/core";
+import { TOOL_TELEMETRY_UNSUPPORTED, toolTelemetrySupported } from "@orca/store";
 import { bootstrap } from "../bootstrap.js";
 import type { CommandContext } from "./index.js";
 
@@ -25,7 +26,11 @@ export async function diagnosticsCommand(ctx: CommandContext): Promise<number> {
     logLevel: "warn",
   });
   const store = app.orchestrator.stores.toolTelemetry;
-  if (!store) throw new OrcaError("NOT_SUPPORTED", "this store keeps no tool-call diagnostics");
+  if (!store)
+    throw new OrcaError(
+      "NOT_SUPPORTED",
+      toolTelemetrySupported() ? "this store keeps no tool-call diagnostics" : TOOL_TELEMETRY_UNSUPPORTED,
+    );
   const json = Boolean(ctx.flags.json);
   const scope = () => {
     if (!runId) throw new OrcaError("CONFIG_INVALID", `${sub} needs a run id (orca ${USAGE})`);

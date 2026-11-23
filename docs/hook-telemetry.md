@@ -58,7 +58,7 @@ The hook runs under the agent's runtime and has no access to ORCA's store.
    spool is made. The path goes into the hook's context.
 2. After the hook has decided a call and written its answer, it appends one JSON line to the
    spool (`recordHookTelemetry`): a single synchronous append to a file that must already
-   exist, never creating one, never following a link and never blocking, at most 8 KiB per
+   exist, never creating one and never following a link, at most 8 KiB per
    line and 4 MiB per spool. The hook's context carries the spool's path and the device and
    inode ORCA made it with; the hook writes only if the open file is that one, a regular,
    owner-only file of its user with one name. It never throws or prints, and the hook ignores whether it worked.
@@ -89,8 +89,12 @@ is checked as well: directories must be real, owner-only directories of ORCA's u
 files are opened without following links and with `O_NONBLOCK`, so that a FIFO or device
 put in a file's place cannot hold the open; it then fails the check. (That flag only affects
 the open: reading and writing a real file is ordinary file I/O.) Files must be regular,
-owner-only files of ORCA's user with one name. Anything else is refused, not read or written through. (Windows has no
-POSIX modes; there the protected directory and the link refusal are the boundary.)
+owner-only files of ORCA's user with one name. Anything else is refused, not read or written through.
+
+**Linux and macOS only.** These checks rest on `O_NOFOLLOW` and POSIX owners and modes, which
+Windows does not have. On Windows ORCA keeps no tool-call diagnostics at all: no spool is
+made, the store refuses every operation, and `orca diagnostics tool-calls` says it is not
+supported there.
 
 Every change to a run (appending, deleting, expiring) holds that run's lock, which is kept
 outside the run's directory so removing the directory never removes a held lock.
@@ -108,11 +112,11 @@ An expired record is never listed or exported, whether or not a sweep has remove
 Expired records are also removed while ORCA ingests new ones, at most once an hour.
 
 Deleting is final for what was deleted, from the moment its marker is written. A deletion
-first writes a small marker (a new file, flushed, renamed into place, then on Linux and macOS
-its directory flushed) and only then removes the records. That holds across an ORCA crash.
-Across a power cut it holds only as far as the flushes reach: Windows does not flush the
-directory, and the first write under a newly made directory does not flush every ancestor
-made with it, so a power cut just after such a write can lose the marker. From then on the marker decides: the run's (or session's)
+first writes a small marker (a new file, flushed, renamed into place, its directory flushed)
+and only then removes the records. That holds across an ORCA crash. Across a power cut it
+holds only as far as the flushes reach: the first write under a newly made directory does
+not flush every ancestor made with it, so a power cut just after such a write can lose the
+marker. From then on the marker decides: the run's (or session's)
 records are never listed, exported or counted, and records that arrive later, from a session
 still running, are refused and dropped. Listing runs checks markers before opening anything
 they hide, so a leftover file cannot stop other runs being listed. If the deletion stops after the marker, the records

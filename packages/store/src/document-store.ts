@@ -17,7 +17,12 @@ import { FileArtifactStore, InMemoryArtifactStore, type ArtifactStore } from "./
 import { FileWorkflowVersionStore, InMemoryWorkflowVersionStore, type WorkflowVersionStore } from "./workflow-store.js";
 import { FileExecutionStore, InMemoryExecutionStore, type ExecutionStore } from "./execution-store.js";
 import { ProtectedEventStore } from "./protected-event-store.js";
-import { FileToolTelemetryStore, InMemoryToolTelemetryStore, type ToolTelemetryStore } from "./tool-telemetry-store.js";
+import {
+  fileToolTelemetryStore,
+  InMemoryToolTelemetryStore,
+  withToolTelemetry,
+  type ToolTelemetryStore,
+} from "./tool-telemetry-store.js";
 import { refuseOtherBackend } from "./store-backend.js";
 import { filePlanStores, memoryPlanStores, type PlanStores } from "./plan-store.js";
 import {
@@ -478,7 +483,7 @@ export function fileStores(dir: string, clock?: Clock, logger?: Logger): Stores 
     leases: new FileLeaseStore(dir, clock),
     plan: filePlanStores(dir, clock, logger),
     workflows,
-    toolTelemetry: new FileToolTelemetryStore(dir),
+    ...withToolTelemetry(fileToolTelemetryStore(dir)),
     capabilities: FILE_STORE_CAPABILITIES,
   };
 }

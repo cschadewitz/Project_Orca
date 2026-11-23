@@ -83,6 +83,7 @@ export interface HookTelemetryTarget {
  */
 export function recordHookTelemetry(target: HookTelemetryTarget, line: HookTelemetryLine): boolean {
   let fd: number | undefined;
+  if (!POSIX) return false;
   try {
     const bytes = Buffer.from(`${JSON.stringify(line)}\n`, "utf8");
     if (bytes.length > HOOK_TELEMETRY_LINE_LIMIT) return false;
@@ -156,6 +157,18 @@ const SPOOL_NAME = /^tool-calls-(\d+)-[0-9a-f-]{36}\.spool$/;
 
 const POSIX = process.platform !== "win32";
 
+/**
+ * Spools are POSIX only: their checks rest on `O_NOFOLLOW` and POSIX owners and modes, which
+ * Windows does not have. There no spool is made, swept or written.
+ */
+function refuseUnsupported(): void {
+  if (!POSIX)
+    throw new OrcaError(
+      "NOT_SUPPORTED",
+      "tool-call diagnostics are not supported on Windows: ORCA cannot open their files there without following links",
+    );
+}
+
 /** Owner-only, this user's, not a link: what ORCA's own private files and directories are. */
 function privateEnough(stat: { uid: number | bigint; mode: number | bigint }): string | undefined {
   if (POSIX && typeof process.getuid === "function" && Number(stat.uid) !== process.getuid())
@@ -197,6 +210,7 @@ export function parseHookTelemetryLine(line: string): HookTelemetryLine | undefi
  * agent's `diagnostics.toolCalls` is `keep`.
  */
 export async function openHookTelemetrySpool(options: OpenHookTelemetrySpoolOptions): Promise<HookTelemetrySpool> {
+  refuseUnsupported();
   await checkSpoolDir(options.dir, options.protectedPaths);
   // The pid names who may still be draining it, for the sweep after a crash.
   const file = join(options.dir, `tool-calls-${process.pid}-${randomUUID()}.spool`);
@@ -358,6 +372,7 @@ export async function sweepHookTelemetrySpools(options: {
   /** Whether a process is running; injected for tests. */
   alive?: ((pid: number) => boolean) | undefined;
 }): Promise<number> {
+  refuseUnsupported();
   await checkSpoolDir(options.dir, options.protectedPaths);
   const alive = options.alive ?? processAlive;
   let removed = 0;

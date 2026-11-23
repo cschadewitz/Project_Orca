@@ -10,6 +10,7 @@ import type { ToolCallTelemetry } from "@orca/core";
 import {
   fileStores,
   FileToolTelemetryStore,
+  fileToolTelemetryStore,
   InMemoryToolTelemetryStore,
   memoryStores,
   sqliteStores,
@@ -325,5 +326,21 @@ describe("tool telemetry files", () => {
     // The diagnostics directory opened up to others.
     await chmod(join(dir, "diagnostics"), 0o755);
     await expect(store.runs()).rejects.toThrow(/open to group or others/);
+  });
+});
+
+describe("on Windows", () => {
+  it("keeps no telemetry store, and the file store refuses every operation", async () => {
+    const dir = await tmp();
+    expect(fileToolTelemetryStore(dir, "win32")).toBeUndefined();
+    expect(fileToolTelemetryStore(dir, "linux")).toBeInstanceOf(FileToolTelemetryStore);
+    const store = new FileToolTelemetryStore(dir, { platform: "win32" });
+    const refused = { code: "NOT_SUPPORTED", message: expect.stringContaining("not supported on Windows") };
+    await expect(store.append([record("run_a", "sess_1", 0)])).rejects.toMatchObject(refused);
+    await expect(store.list({ runId: "run_a" })).rejects.toMatchObject(refused);
+    await expect(store.runs()).rejects.toMatchObject(refused);
+    await expect(store.delete({ runId: "run_a" })).rejects.toMatchObject(refused);
+    await expect(store.prune(new Date())).rejects.toMatchObject(refused);
+    expect(await readdir(dir)).toEqual([]);
   });
 });

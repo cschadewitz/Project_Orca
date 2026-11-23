@@ -35,7 +35,7 @@ import { FileExecutionStore } from "../execution-store.js";
 import { FileLeaseStore } from "../lease-store.js";
 import { ProtectedEventStore } from "../protected-event-store.js";
 import { SQLITE_STORE_CAPABILITIES } from "../store-contracts.js";
-import { FileToolTelemetryStore } from "../tool-telemetry-store.js";
+import { fileToolTelemetryStore, withToolTelemetry } from "../tool-telemetry-store.js";
 import { FileWorkflowVersionStore } from "../workflow-store.js";
 import { SqliteArtifactStore } from "./artifacts.js";
 import { checkBoundSqliteMetadata, SqliteDatabase, type SqliteOptions } from "./database.js";
@@ -97,7 +97,7 @@ export function sqliteStores(dir: string, options: SqliteStoresOptions = {}): St
     leases: new FileLeaseStore(dir, clock),
     plan: { plans, dependencies, risks, decisions, journal: new SqlitePlanJournal(database, clock) },
     workflows,
-    toolTelemetry: new FileToolTelemetryStore(dir),
+    ...withToolTelemetry(fileToolTelemetryStore(dir)),
     capabilities: SQLITE_STORE_CAPABILITIES,
     unitOfWork: sqliteUnitOfWork(database, {
       requests: c(requests),

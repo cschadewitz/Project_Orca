@@ -20,8 +20,12 @@
  * user, so every open here is also checked: directories are made owner-only and must be real
  * directories (not links), owned by this user and not open to group or others; files are
  * opened without following links and must be regular files of this user, owner-only, with one
- * name. Anything else is refused, never read or written through. (Windows has no POSIX modes:
- * there the store's protected directory and the link refusal are the boundary.)
+ * name. Anything else is refused, never read or written through.
+ *
+ * **POSIX only.** Those checks rest on `O_NOFOLLOW` and POSIX owners and modes, which Windows
+ * does not have (Node gives no no-follow open there). On Windows the file store refuses every
+ * operation (`NOT_SUPPORTED`), and the backends keep no telemetry store at all
+ * ({@link fileToolTelemetryStore}), so nothing is recorded and the CLI says so.
  *
  * **Serialization.** Every change to a run (an append, a deletion, an expiry sweep of it) holds
  * the run's lock, which lives outside the run's directory so that removing the directory never
@@ -29,10 +33,9 @@
  *
  * **Deletion is final for the scope, from the moment its marker is written.** Deleting a run's
  * (or a session's) records first writes a small marker (a new file, flushed, renamed into
- * place, then on POSIX its directory flushed), then removes the records. What that buys is
- * bounded: Windows does not flush the directory, and the first marker or record under a new
- * directory does not flush every ancestor that was just made, so a power cut right after a
- * first write can lose the marker on either. An ORCA crash cannot. The marker is authoritative: from
+ * place, its directory flushed), then removes the records. What that buys is bounded: the
+ * first marker or record under a new directory does not flush every ancestor that was just
+ * made, so a power cut right after a first write can lose the marker. An ORCA crash cannot. The marker is authoritative: from
  * then on the scope's records are never listed, exported or counted, and an append for it is
  * refused and dropped, so a live session's late records do not bring deleted diagnostics back.
  * If deletion stops after the marker (a crash, an error), the records still on disk stay
@@ -259,7 +262,7 @@ async function writeNew(path: string, text: string): Promise<void> {
   }
 }
 
-/** A deletion marker, flushed (and on POSIX its directory) before it returns: present means hidden and refused. */
+/** A deletion marker, flushed with its directory before it returns: present means hidden and refused. */
 async function writeMarker(path: string, dir: string, at: Date): Promise<void> {
   const temp = `${path}.${randomUUID()}.tmp`;
   await writeNew(temp, `${JSON.stringify({ deletedAt: at.toISOString() })}\n`);
@@ -267,13 +270,40 @@ async function writeMarker(path: string, dir: string, at: Date): Promise<void> {
   await syncDirectory(dir);
 }
 
+/** `{ toolTelemetry }` when there is one, for spreading into a backend's stores. */
+export const withToolTelemetry = (store: ToolTelemetryStore | undefined): { toolTelemetry?: ToolTelemetryStore } =>
+  store ? { toolTelemetry: store } : {};
+
+/** Whether the file store can keep telemetry here: everywhere but Windows. */
+export const toolTelemetrySupported = (platform: NodeJS.Platform = process.platform): boolean => platform !== "win32";
+
+export const TOOL_TELEMETRY_UNSUPPORTED =
+  "tool-call diagnostics are not supported on Windows: ORCA cannot open their files there without following links";
+
+/** The file store for a backend, or none where it is not supported, so nothing is recorded. */
+export function fileToolTelemetryStore(
+  storeDir: string,
+  platform: NodeJS.Platform = process.platform,
+): FileToolTelemetryStore | undefined {
+  return toolTelemetrySupported(platform) ? new FileToolTelemetryStore(storeDir, { platform }) : undefined;
+}
+
 export class FileToolTelemetryStore implements ToolTelemetryStore {
   private readonly diagnostics: string;
   private readonly root: string;
 
-  constructor(storeDir: string) {
+  private readonly platform: NodeJS.Platform;
+
+  constructor(storeDir: string, options: { platform?: NodeJS.Platform | undefined } = {}) {
     this.diagnostics = join(storeDir, DIAGNOSTICS_DIR);
     this.root = join(storeDir, TOOL_TELEMETRY_DIR);
+    this.platform = options.platform ?? process.platform;
+  }
+
+  /** Fail closed where the file checks have no equivalent (see the module comment). */
+  private refuseUnsupported(): void {
+    if (!toolTelemetrySupported(this.platform))
+      throw new OrcaError("NOT_SUPPORTED", TOOL_TELEMETRY_UNSUPPORTED, { platform: this.platform });
   }
 
   private runDir(runId: string): string {
@@ -312,6 +342,7 @@ export class FileToolTelemetryStore implements ToolTelemetryStore {
   }
 
   async append(records: readonly ToolCallTelemetry[]): Promise<number> {
+    this.refuseUnsupported();
     const scope = sameScope(records);
     if (!scope) return 0;
     const text = records.map((r) => JSON.stringify(ToolCallTelemetrySchema.parse(r))).join("\n") + "\n";
@@ -363,11 +394,13 @@ export class FileToolTelemetryStore implements ToolTelemetryStore {
   }
 
   async list(scope: ToolTelemetryScope, options: { now?: Date } = {}): Promise<ToolCallTelemetry[]> {
+    this.refuseUnsupported();
     const now = options.now ?? new Date();
     return (await this.readRun(scope.runId, scope.sessionId)).filter((r) => !expired(r, now));
   }
 
   async runs(options: { now?: Date } = {}): Promise<string[]> {
+    this.refuseUnsupported();
     const now = options.now ?? new Date();
     if (!(await this.rooted())) return [];
     const ids = new Set<string>();
@@ -396,6 +429,7 @@ export class FileToolTelemetryStore implements ToolTelemetryStore {
   }
 
   async delete(scope: ToolTelemetryScope): Promise<number> {
+    this.refuseUnsupported();
     const now = new Date();
     return this.withRun(toolTelemetrySegment(scope.runId), async () => {
       const removed = (await this.readRun(scope.runId, scope.sessionId)).length;
@@ -415,6 +449,7 @@ export class FileToolTelemetryStore implements ToolTelemetryStore {
   }
 
   async prune(now: Date): Promise<number> {
+    this.refuseUnsupported();
     if (!(await this.rooted())) return 0;
     let removed = 0;
     for (const name of await listDir(this.root)) {
