@@ -52,6 +52,8 @@ function setup(
     sessionMode?: "per-run";
     hostId?: string;
     maxAgentSessions?: number;
+    /** Further workflows to register beside the main one. */
+    also?: string[];
   } = {},
 ) {
   const config = parseOrcaConfig({
@@ -77,11 +79,17 @@ function setup(
   });
   const opened: OpenSessionOptions[] = [];
   const shut: number[] = [];
+  /** The prompt each session (by open order, from 1) was given. */
+  const promptOf: Record<number, unknown> = {};
   const prompts: unknown[] = [];
+  const stores = memoryStores();
   const orchestrator = new Orchestrator({
-    stores: memoryStores(),
+    stores,
     agents: AgentRegistry.fromConfig(config),
-    workflows: new WorkflowRegistry().register(parseWorkflow(opts.workflow ?? workflow())),
+    workflows: (opts.also ?? []).reduce(
+      (registry, text) => registry.register(parseWorkflow(text)),
+      new WorkflowRegistry().register(parseWorkflow(opts.workflow ?? workflow())),
+    ),
     templates: new TemplateRegistry(),
     workspaceProvider: new LocalWorkspaceProvider(process.cwd()),
     ...(opts.secretUse === "none" ? {} : { secretUse: async () => {} }),
@@ -103,6 +111,7 @@ function setup(
         setConfigOption: async () => [],
         prompt: async (input) => {
           prompts.push(input);
+          promptOf[n] = input;
           return { stopReason: "end_turn" as const, durationMs: 1 };
         },
         onUpdate: () => () => {},
@@ -114,7 +123,7 @@ function setup(
       } satisfies AgentSession;
     },
   });
-  return { orchestrator, opened, prompts, shut };
+  return { orchestrator, opened, prompts, shut, stores, promptOf };
 }
 
 const refusal = async (made: ReturnType<typeof setup>, vars: Record<string, unknown>) => {
@@ -217,6 +226,57 @@ edges: [{ from: s, to: fan }, { from: fan, to: e }]
     // Neither held the slot past its step, so the second could open once the first closed.
     expect(made.shut).toEqual([1, 2]);
     await expect.poll(() => made.orchestrator.sessionSlots.view().inUse.total).toBe(0);
+  });
+
+  it("keeps an inline graph's secret to the launch's choice, while a registered child keeps its own (#363)", async () => {
+    const parent = `
+id: deploy
+name: Deploy
+version: "1"
+inputSchema:
+  fields:
+    token: { type: secret, required: true }
+start: s
+nodes:
+  s: { type: start }
+  fan:
+    type: parallel
+    branches:
+      inline: { graph: { start: s, nodes: { s: { type: start }, w: { type: agent, agent: { role: coder }, prompt: "inline", secretEnv: { DEPLOY_TOKEN: token } }, e: { type: end } }, edges: [{ from: s, to: w }, { from: w, to: e }] } }
+      registered: { workflow: child-deploy }
+  e: { type: end }
+edges: [{ from: s, to: fan }, { from: fan, to: e }]
+`;
+    const child = `
+id: child-deploy
+name: Child deploy
+version: "1"
+inputSchema:
+  fields:
+    token: { type: secret, required: true }
+start: s
+nodes:
+  s: { type: start }
+  w: { type: agent, agent: { role: coder }, prompt: "registered", secretEnv: { DEPLOY_TOKEN: token } }
+  e: { type: end }
+edges: [{ from: s, to: w }, { from: w, to: e }]
+`;
+    const made = setup({ workflow: parent, also: [child] });
+    const runId = await made.orchestrator.startRun({ workflowId: "deploy", vars: { token: "deploy-a" } });
+    // The working vars name another secret after admission: what a step may emit.
+    await made.stores.events.append({ type: "vars.set", runId, payload: { vars: { token: "deploy-b" } } });
+    const state = await made.orchestrator.run(runId);
+    expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
+    const byPrompt = Object.fromEntries(
+      made.opened.map((o, i) => [String(made.promptOf[i + 1]).includes("registered") ? "registered" : "inline", o]),
+    );
+    // The inline graph is this launch: it gets the sealed choice, whatever the working vars say.
+    expect(byPrompt.inline!.agent.env.DEPLOY_TOKEN).toEqual({ secret: "deploy-a" });
+    // A registered child is admitted on its own: its launch checked and sealed what it was given.
+    expect(byPrompt.registered!.agent.env.DEPLOY_TOKEN).toEqual({ secret: "deploy-b" });
+    const children = Object.values(state.steps).flatMap((st) => st.childRunIds);
+    const sealed = await Promise.all(children.map((id) => made.stores.execution.getInputs(id)));
+    expect(sealed.map((i) => i?.vars.token).sort()).toEqual(["deploy-a", "deploy-b"]);
   });
 
   it("validates that a step's secretEnv names a secret launch input", () => {

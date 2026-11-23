@@ -2393,7 +2393,15 @@ export class Orchestrator {
                   }),
               parentRunId: rc.id,
               parentStepRunId: step.id,
-              ...(options.vars ? { vars: { ...rc.state.run.vars, ...options.vars } } : { vars: rc.state.run.vars }),
+              // An inline graph is part of this run's launch (#363): the secrets its steps hand
+              // their agents are the ones this run's launch chose, sealed in its record, never
+              // whatever the working vars or a loop or branch overlay say by now. A registered
+              // child workflow is admitted on its own inputs instead.
+              vars: {
+                ...rc.state.run.vars,
+                ...(options.vars ?? {}),
+                ...("workflow" in target ? {} : self.launchSecretSelection(rc, target.graph)),
+              },
               ...(options.workspace
                 ? { workspace: options.workspace }
                 : options.workItemId
@@ -2779,6 +2787,18 @@ export class Orchestrator {
    * pooled session is retired, never handed to another step; the session itself is not
    * changed.
    */
+  /**
+   * The `secret` inputs an inline graph's steps map in `secretEnv` (#363), with the ids this
+   * run's launch sealed for them. An input the launch recorded no value for is left absent, so
+   * the child's own preflight refuses it rather than taking a working var's.
+   */
+  private launchSecretSelection(rc: RunContext, graph: WorkflowGraph): Record<string, unknown> {
+    const selection: Record<string, unknown> = {};
+    for (const step of agentInstructions(graph))
+      for (const input of Object.values(step.secretEnv ?? {})) selection[input] = rc.launchVar(input);
+    return selection;
+  }
+
   /** Hand a pooled session to a step; it counts as held until the step lets go (#363). */
   private leasePooled(
     rc: RunContext,

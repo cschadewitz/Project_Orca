@@ -979,7 +979,10 @@ nodes:
   the model's context or the store; `{{ vars.deployToken }}` renders the id.
 - **The secret the launch chose.** The id is read from the launch record in the private
   execution store, never from the run's working vars, so nothing a step sets later can point
-  a step at another secret.
+  a step at another secret. Steps inside the workflow's own inline graphs (loop bodies,
+  parallel branches) get the same sealed choice, whatever the working vars or a loop or
+  branch overlay say by then. A registered child workflow is launched on its own inputs,
+  checked and sealed when it starts, like any launch.
 - **A process per step.** A step with `secretEnv` always gets an agent process of its own,
   opened for that step and closed with it, even for a `per-run` agent: it neither takes the
   pooled session nor leaves its own for the next step. Its agent slot is held for that step
