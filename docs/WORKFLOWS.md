@@ -397,9 +397,11 @@ permission: ORCA checks every request again when it sends it on. Listing a serve
 needs only a live session. A tool call needs the session's live prompt turn and ORCA's rules,
 read at that moment, deciding `<server>: <tool>` (kind `other`, the same call the hook decides):
 a deny never reaches the server, and an ask is put to a person as a one-time allow for that
-call. A call that had to wait for its server to start is decided again once it has started,
-before it is sent. Any other MCP request (resources, prompts) is refused. A request ends with
-its turn, or after 10 minutes, and the server is told it was cancelled; a server that has not
+call. Each call is decided again on the policy as it is when it reaches the head of the line
+to the server, and a request's 10 minutes run from its arrival, so one that ran out while it
+was decided starts no server. Any other MCP request (resources, prompts) is refused. A request ends with
+its turn, or at that deadline, and the server is told it was cancelled; only a request ORCA
+has handed to the server can be answered; a server that has not
 answered `initialize` within 30 seconds, or is still starting when the session closes, or
 when the agent's connection is lost, is stopped, even if a write to it is stuck. A request
 still waiting in line for the server when its turn or deadline ends is never sent, and a

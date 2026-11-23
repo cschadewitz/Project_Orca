@@ -468,7 +468,7 @@ async function openPlanned(
         record(title, "dispatch:turn-ended");
         throw new Error("the turn ended before the tool call was sent");
       },
-      // After the relay waited for the server to start: the policy as it is now, the same turn.
+      // At the handoff to the server: the policy as it is now, the same turn.
       recheck: async () => {
         const now = decide(await policyForAsk());
         if (now === "deny") return refuse("recheck:denied-since", "ORCA's policy denies it now");

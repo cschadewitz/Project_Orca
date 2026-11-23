@@ -107,6 +107,9 @@ rl.on("line", (line) => {
     if (process.env.HANG_INIT) {}
     else if (process.env.SLOW_INIT) setTimeout(answer, Number(process.env.SLOW_INIT));
     else answer();
+    // An answer to a request id ORCA has not sent yet, as a server guessing ahead would.
+    if (process.env.FORGE_ID)
+      setTimeout(() => send({ jsonrpc: "2.0", id: Number(process.env.FORGE_ID), result: { content: [{ type: "text", text: "forged" }] } }), 300);
   } else if (m.method === "tools/list")
     send({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "touch", inputSchema: { type: "object" } }] } });
   else if (m.method === "tools/call" && m.params.name === "slow") {}
@@ -154,6 +157,7 @@ async function setup(opts: {
   outsideCall?: boolean;
   hangInit?: boolean;
   slowInitMs?: number;
+  forgeId?: number;
   /** Wraps the host the session spawns through. */
   host?: (inner: AgentHost) => AgentHost;
   noList?: boolean;
@@ -202,6 +206,7 @@ async function setup(opts: {
             SERVER_LOG: serverLog,
             ...(opts.hangInit ? { HANG_INIT: "1" } : {}),
             ...(opts.slowInitMs ? { SLOW_INIT: String(opts.slowInitMs) } : {}),
+            ...(opts.forgeId ? { FORGE_ID: String(opts.forgeId) } : {}),
           },
         },
       ],
@@ -507,6 +512,100 @@ describe("ORCA serves a hooked session's MCP servers over ACP (#704)", () => {
     const log = await t.serverLog();
     expect(log).toContain("tools/call hold");
     expect(log).not.toContain("tools/call touch");
+  });
+
+  it("takes no answer for a request that has not been handed to the server yet", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    // `initialize` is request 1, `hold` 2 and `touch` 3; the server answers 3 while it is queued.
+    const t = await setup({
+      noList: true,
+      forgeId: 3,
+      requestTimeoutMs: 60_000,
+      host: (inner) => holdingServerInput(inner, '"name":"hold"', held),
+    });
+    const s = await t.open();
+    await t.seen();
+    const turn = t.turn(
+      s,
+      JSON.stringify([
+        "PARALLEL",
+        ["tools/call", { name: "hold", arguments: {} }],
+        ["tools/call", { name: "touch", arguments: {} }],
+      ]),
+    );
+    await new Promise((r) => setTimeout(r, 700));
+    release();
+    const [hold, touch] = await turn;
+    expect(JSON.stringify([hold, touch])).not.toContain("forged");
+    expect(touch).toEqual({ acpError: expect.objectContaining({ data: { reason: "invalid-response" } }) });
+    expect(await t.serverLog()).not.toContain("tools/call touch");
+  });
+
+  it("decides a queued call on the policy as it is when the server is handed it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-704-sidecar-"));
+    dirs.push(dir);
+    const sidecar = join(dir, "permissions.json");
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const t = await setup({
+      noList: true,
+      permissionFiles: [sidecar],
+      requestTimeoutMs: 60_000,
+      host: (inner) => holdingServerInput(inner, '"name":"hold"', held),
+    });
+    const s = await t.open();
+    await t.seen();
+    const turn = t.turn(
+      s,
+      JSON.stringify([
+        "PARALLEL",
+        ["tools/call", { name: "hold", arguments: {} }],
+        ["tools/call", { name: "touch", arguments: {} }],
+      ]),
+    );
+    // Both were allowed and the server has started; `touch` waits in line behind `hold`.
+    await new Promise((r) => setTimeout(r, 300));
+    await writeFile(
+      sidecar,
+      JSON.stringify({
+        version: 1,
+        agents: { relay: { rules: [{ match: { kind: "other", titlePattern: "^tools: touch$" }, decision: "deny" }] } },
+      }),
+    );
+    release();
+    const [hold, touch] = await turn;
+    expect(hold).toEqual({ content: [{ type: "text", text: "secret is here" }] });
+    expect(touch).toEqual(refused(/denies it now/));
+    expect(await t.serverLog()).not.toContain("tools/call touch");
+  });
+
+  it("starts no server for a request whose deadline passed while it was decided", async () => {
+    const t = await setup({
+      noList: true,
+      permissions: { default: "ask", rules: [] },
+      requestTimeoutMs: 200,
+      askPermission: async () => {
+        await new Promise((r) => setTimeout(r, 400));
+        return "allow";
+      },
+    });
+    const s = await t.open();
+    await t.seen();
+    const [call] = await t.turn(s);
+    expect(call).toEqual({ acpError: expect.objectContaining({ data: { reason: "deadline" } }) });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await t.serverLog()).toBe("");
+  });
+
+  it("settles a request at its deadline while its server is still starting", async () => {
+    const t = await setup({ noList: true, slowInitMs: 3_000, requestTimeoutMs: 300 });
+    const s = await t.open();
+    await t.seen();
+    const started = Date.now();
+    const [call] = await t.turn(s);
+    expect(call).toEqual({ acpError: expect.objectContaining({ data: { reason: "deadline" } }) });
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   it.each([

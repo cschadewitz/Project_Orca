@@ -86,8 +86,9 @@ export interface McpRelayDispatch {
   /** Throws if the request may no longer go out; run in the same step that sends it. */
   dispatch(): void;
   /**
-   * Decides again whether the request may go out, after the relay waited for its server to
-   * start: rejects if it may not. Called before `dispatch`.
+   * Decides again, on the policy as it is now, whether the request may go out: rejects if it
+   * may not. The relay calls it when the request reaches the head of the line to the server
+   * (and for `server/discover`, once the server has started), then `dispatch`.
    */
   recheck(): Promise<void>;
   /** Aborts when the turn or session the request belongs to ends. */
@@ -158,12 +159,16 @@ const REQUEST_META_KEYS = [
 
 interface Upstream {
   initialized: { capabilities: unknown; serverInfo: unknown; instructions?: unknown };
-  /** `dispatch` runs in the same step that writes the request; if it throws, nothing is sent. */
+  /**
+   * At the handoff to the transport, `authority.recheck` decides the request on the policy as
+   * it is then, and `authority.dispatch` runs in the same step that writes it; if either
+   * refuses, nothing is sent.
+   */
   request(
     method: string,
     params: Record<string, unknown> | undefined,
     signal: AbortSignal,
-    dispatch: () => void,
+    authority?: Pick<McpRelayDispatch, "recheck" | "dispatch">,
   ): Promise<unknown>;
   close(): Promise<void>;
   /** False once the server exited, broke the protocol or was stopped. */
@@ -224,6 +229,9 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
         });
         throw new acpUnstable.McpProtocolError(METHOD_NOT_FOUND, `${op.method} is not relayed by ORCA`);
       }
+      // The request's deadline runs from its arrival: deciding it, starting its server and
+      // the server's answer all count against it.
+      const deadline = AbortSignal.timeout(opts.requestTimeoutMs ?? MCP_RELAY_REQUEST_TIMEOUT_MS);
       let gate: McpRelayDispatch;
       try {
         gate = await opts.authorize(call);
@@ -238,40 +246,35 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
           `not allowed: ${bounded(opts.redact(describeError(error).message))}`,
         );
       }
+      const signal = AbortSignal.any([op.signal, gate.signal, stopping.signal, deadline]);
+      // Nothing is started for a request that has already ended.
       if (closing) throw failure(new RelayFailure("session-closed"));
-      const signal = AbortSignal.any([
-        op.signal,
-        gate.signal,
-        stopping.signal,
-        AbortSignal.timeout(opts.requestTimeoutMs ?? MCP_RELAY_REQUEST_TIMEOUT_MS),
-      ]);
+      if (signal.aborted) throw failure(new RelayFailure(abortFailure(signal)));
       let up: Upstream;
-      const pending = upstreamFor(server);
-      const waited = !(await isSettled(pending));
       try {
-        up = await pending;
+        // A request that ends while its server starts settles then, not when the start does.
+        up = await untilAborted(upstreamFor(server), signal);
       } catch (error) {
+        if (error instanceof RelayFailure && signal.aborted) throw failure(error);
         const reason = error instanceof RelayFailure ? error.reason : "start-failed";
         opts.logger.warn("relayed MCP server did not start", { server: server.name, reason });
         throw new acpUnstable.McpProtocolError(UPSTREAM_FAILED, `the MCP server "${server.name}" did not start`, {
           reason,
         });
       }
-      // Starting took time: the authority the request was given then is decided again now.
-      if (waited)
+      if (op.method === "server/discover") {
+        // Answered here, from the start: decided now, as a request handed to the server would be.
         try {
           await gate.recheck();
+          if (signal.aborted) throw new RelayFailure(abortFailure(signal));
+          gate.dispatch();
         } catch (error) {
-          opts.logger.warn("MCP request refused after its server started", { server: server.name, method: op.method });
+          if (error instanceof RelayFailure) throw failure(error);
           throw new acpUnstable.McpProtocolError(
             REFUSED,
             `not allowed: ${bounded(opts.redact(describeError(error).message))}`,
           );
         }
-      if (closing) throw failure(new RelayFailure("session-closed"));
-      if (signal.aborted) throw failure(new RelayFailure(abortFailure(signal)));
-      if (op.method === "server/discover") {
-        gate.dispatch();
         const { capabilities, serverInfo, instructions } = up.initialized;
         return {
           result: {
@@ -284,10 +287,7 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
       }
       try {
         return {
-          result: (await up.request(op.method, withoutRequestMeta(op.params), signal, () => gate.dispatch())) as Record<
-            string,
-            unknown
-          >,
+          result: (await up.request(op.method, withoutRequestMeta(op.params), signal, gate)) as Record<string, unknown>,
         };
       } catch (error) {
         // An error the server answered was made bounded and redacted when it was read.
@@ -356,17 +356,23 @@ function bounded(text: string, max = MCP_RELAY_ERROR_MESSAGE_LIMIT): string {
   return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }
 
-async function isSettled(p: Promise<unknown>): Promise<boolean> {
-  const marker = Symbol();
-  return (
-    (await Promise.race([
-      p.then(
-        () => true,
-        () => true,
-      ),
-      Promise.resolve(marker),
-    ])) !== marker
-  );
+/** `p`, unless `signal` aborts first; then a failure for why it did. */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new RelayFailure(abortFailure(signal)));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new RelayFailure(abortFailure(signal)));
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e instanceof Error ? e : new RelayFailure("failed"));
+      },
+    );
+  });
 }
 
 function withoutRequestMeta(params: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
@@ -447,9 +453,15 @@ async function startUpstream(
    * dropped there and never reaches the server.
    */
   let tail: Promise<unknown> = Promise.resolve();
-  const enqueue = (message: Message, admit: () => boolean = () => true): Promise<boolean> => {
+  const enqueue = (
+    message: Message,
+    admit: { prepare?: () => Promise<boolean>; check?: () => boolean } = {},
+  ): Promise<boolean> => {
     const handoff = tail.then(async () => {
-      if (ended || !admit()) return false;
+      // Its turn in line: anything asynchronous is decided first, while no other message can
+      // go ahead of it, and then the last check and the write happen in one synchronous step.
+      if (ended || (admit.prepare && !(await admit.prepare()))) return false;
+      if (ended || (admit.check && !admit.check())) return false;
       await writer.write({ jsonrpc: "2.0", ...message } as acp.AnyMessage);
       return true;
     });
@@ -524,7 +536,7 @@ async function startUpstream(
     method: string,
     params: Record<string, unknown> | undefined,
     signal: AbortSignal,
-    dispatch: () => void = () => undefined,
+    authority?: Pick<McpRelayDispatch, "recheck" | "dispatch">,
   ): Promise<unknown> => {
     if (ended) return Promise.reject(ended);
     if (signal.aborted) return Promise.reject(new RelayFailure(abortFailure(signal)));
@@ -551,23 +563,41 @@ async function startUpstream(
         }
         settle(() => reject(new RelayFailure(abortFailure(signal))));
       };
-      pending.set(id, {
-        resolve: (v) => settle(() => resolve(v)),
-        reject: (e) => settle(() => reject(e)),
-      });
       signal.addEventListener("abort", onAbort, { once: true });
-      enqueue({ id, method, ...(params ? { params } : {}) }, () => {
-        if (settled || signal.aborted) return false;
-        // The request's authority, decided at the moment it is handed to the transport.
-        try {
-          dispatch();
-        } catch (error) {
-          settle(() => reject(new DispatchRefused(describeError(error).message)));
-          return false;
-        }
-        written = true;
-        return true;
-      }).then(
+      enqueue(
+        { id, method, ...(params ? { params } : {}) },
+        {
+          // The request's authority on the policy as it is at the handoff, not as it was decided.
+          prepare: async () => {
+            if (settled || signal.aborted) return false;
+            if (authority)
+              try {
+                await authority.recheck();
+              } catch (error) {
+                settle(() => reject(new DispatchRefused(describeError(error).message)));
+                return false;
+              }
+            return !settled && !signal.aborted;
+          },
+          check: () => {
+            if (settled || signal.aborted) return false;
+            try {
+              authority?.dispatch();
+            } catch (error) {
+              settle(() => reject(new DispatchRefused(describeError(error).message)));
+              return false;
+            }
+            // Only now can an answer to it be taken: a reply to anything not yet sent is a reply
+            // to nothing.
+            written = true;
+            pending.set(id, {
+              resolve: (v) => settle(() => resolve(v)),
+              reject: (e) => settle(() => reject(e)),
+            });
+            return true;
+          },
+        },
+      ).then(
         (sent) => {
           if (!sent) settle(() => reject(ended ?? new RelayFailure("cancelled")));
         },
