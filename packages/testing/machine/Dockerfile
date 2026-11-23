@@ -7,7 +7,7 @@
 # BASE is ubuntu:24.04 pinned by digest. A base that already holds the packages below (a
 # cached or mirrored copy, where the build has no route to the Ubuntu archive) skips the
 # download; nothing else about the image changes. CI builds that base from base.Dockerfile and
-# caches it, so keep its package list the same as the one below.
+# caches it (build-base.sh), so keep its package list the same as the one below.
 ARG BASE=ubuntu@sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289
 FROM ${BASE}
 
