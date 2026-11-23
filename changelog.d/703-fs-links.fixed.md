@@ -5,6 +5,7 @@
   wins), and the read or write goes to the file the link reaches. A workspace opened through
   a linked directory still matches its own rules. Remote hosts are unchanged.
   On the local machine the read or write is also tied to the file ORCA checked: if it is
-  replaced or turned into a link before the I/O starts, the operation is refused. For a new
-  file, each folder it is created in is checked again just before ORCA creates anything there.
-  Remote (SSH) hosts keep their earlier behavior.
+  replaced, turned into a link, or is not an ordinary file (a folder, a pipe, a device), the
+  operation is refused. On Linux a new file, and any folders it needs, are created only inside
+  the folder ORCA checked; on macOS and Windows each folder is checked again just before ORCA
+  creates anything there. Remote (SSH) hosts keep their earlier behavior.

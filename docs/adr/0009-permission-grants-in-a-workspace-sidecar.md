@@ -164,16 +164,20 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   target is resolved physically, links followed (a dangling one too) (`resolveOwnedFsTarget`):
   a path that leads outside every session root once resolved is refused; when the file it
   reaches is not the path as written, the policy decides both and the stricter answer stands;
-  and the I/O goes to the resolved file (`owned-fs-io.ts`). An existing file is bound to the
-  identity (device and inode) the decision saw: it is opened without following a final link
-  (`O_NOFOLLOW` where the platform has it) and the open descriptor's identity is compared
-  before a byte is read or written. A new file is verified, not bound, since Node has no
-  `openat`/`mkdirat`: before each effect (each directory made for it, then its exclusive
-  create) the directory that effect happens in is checked, by identity and physical path, to
-  be the one authorized under its nearest existing ancestor; a change found before the first
-  effect refuses the operation, and one found only after (the instant between a check and its
-  effect) takes the new file away and leaves the outcome unknown. A write is complete only
-  when all of its content was written. A path whose identity cannot be established is
+  and the I/O goes to the resolved file (`owned-fs-io.ts`). Only an ordinary file is read or
+  written. An existing file is bound to the identity (device and inode) the decision saw: just
+  before the open it must still be an ordinary file with that identity, the open follows no
+  final link and neither waits nor takes a terminal (`O_NOFOLLOW`, `O_NONBLOCK`, `O_NOCTTY`
+  where the platform has them), and the descriptor's identity and type are compared before a
+  byte is read or written. A new file on Linux is bound too: its nearest existing ancestor is
+  opened as a directory and checked by identity, and each directory and then the file are
+  made through `/proc/self/fd/N/name`, which resolves through that open directory as
+  `openat`/`mkdirat` would. On macOS and Windows, where Node has neither, a new file is
+  verified, not bound, and is outside the identity-bound guarantee (#1034): before each effect
+  the directory it happens in is checked by identity and physical path; a change found before
+  the first effect refuses the operation, and one found only after takes the new file away and
+  leaves the outcome unknown. A write is complete only when all of its content was written. A
+  path whose identity cannot be established, or that is not an ordinary file, is
   refused. This is still not an operating-system boundary. Remote (SSH) hosts are explicitly
   outside this: their paths are compared as written and their I/O is not identity-bound, as
   before; verifying them is tracked separately (#1032). A reusable permit still waits for

@@ -27,13 +27,13 @@
  * operating-system boundary's job (ADR 0009). On a local host the target is resolved
  * physically (`resolveOwnedFsTarget`): a link inside the roots that leads outside them is
  * refused, the policy decides both the path as written and the file it reaches (the stricter
- * answer stands), and the I/O goes to the resolved file (`owned-fs-io.ts`). An existing file
- * is bound to the identity the decision saw (device and inode, compared on the open
- * descriptor, final link not followed). A new file is verified, not bound: each directory an
- * effect happens in is checked just before that effect, and a change found only afterwards
- * leaves the outcome unknown. A path whose identity cannot be established is refused. This is
- * still not an operating-system boundary. Remote (SSH) hosts are explicitly outside it: their
- * paths are compared as written with no identity binding (#1032).
+ * answer stands), and the I/O goes to the resolved file (`owned-fs-io.ts`). Only an ordinary
+ * file is read or written. An existing file is bound to the identity the decision saw (checked
+ * before a safe open and again on the descriptor). A new file is bound on Linux (made through
+ * the checked, open directory) and only verified elsewhere, outside the identity-bound
+ * guarantee (#1034). A path whose identity cannot be established is refused. This is still
+ * not an operating-system boundary. Remote (SSH) hosts are explicitly outside it: their paths
+ * are compared as written with no identity binding (#1032).
  *
  * The durable record is separate (`recordFsOperation`, `agent.fs.authorized` and
  * `agent.fs.completed`): each authorized operation is recorded, durably (the store's exact-event

@@ -794,8 +794,15 @@ async function openPlanned(
       });
     // The file it reaches, or the directory it would be created under, by identity: a path
     // string alone does not show the object behind it stayed the same (#703 review).
-    const binding = opts.host.fs.bound ? bindOwnedFs(target.io) : undefined;
-    if (!binding) throw acp.RequestError.invalidParams({ path, reason: "the file's identity cannot be established" });
+    if (!opts.host.fs.bound)
+      throw acp.RequestError.invalidParams({ path, reason: "the file's identity cannot be established" });
+    // Only an ordinary file is read or written; a directory, FIFO or device is refused here.
+    const binding = bindOwnedFs(target.io);
+    if (!binding)
+      throw acp.RequestError.invalidParams({
+        path,
+        reason: "not an ordinary file, or the file's identity cannot be established",
+      });
     return {
       io: target.io,
       resolved: target.asWritten,

@@ -2,10 +2,12 @@
 import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   bindOwnedFs,
+  createVerified,
   isHostFileMissing,
   OwnedFsNotDispatched,
   readBound,
@@ -132,5 +134,64 @@ describe("bound I/O", () => {
   it("does not take a write that stopped as done", async () => {
     const handle = { write: (bytes: Buffer) => Promise.resolve({ bytesWritten: 0, buffer: bytes }) };
     await expect(writeAll(handle as never, "x")).rejects.toThrow(/stopped before all of the content/);
+  });
+
+  it("binds only an ordinary file: a directory or a FIFO is never opened", async () => {
+    const d = await dir();
+    expect(bindOwnedFs(d)).toBeUndefined();
+    if (process.platform === "win32") return;
+    const fifo = join(d, "fifo");
+    execFileSync("mkfifo", [fifo]);
+    expect(bindOwnedFs(fifo)).toBeUndefined();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses, without waiting on it, a FIFO put in place of the file",
+    async () => {
+      const d = await dir();
+      const a = join(d, "a");
+      await writeFile(a, "original");
+      const binding = bindOwnedFs(a)!;
+      await rm(a);
+      execFileSync("mkfifo", [a]);
+      await expect(readBound(binding)).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+      await expect(writeBound(binding, "x")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    },
+  );
+
+  it("refuses a file that appeared where a missing one was authorized to be read", async () => {
+    const d = await dir();
+    const binding = bindOwnedFs(join(d, "later"))!;
+    await writeFile(join(d, "later"), "someone else's");
+    await expect(readBound(binding)).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+  });
+});
+
+describe("new files where creation can only be verified, not bound", () => {
+  it("creates a new file, directories and all", async () => {
+    const d = await dir();
+    const file = join(d, "x", "y", "new");
+    await createVerified(bindOwnedFs(file)!, "new");
+    expect(await readFile(file, "utf8")).toBe("new");
+  });
+
+  it("makes no directory when the directory it goes under was replaced", async () => {
+    const d = await dir();
+    const under = join(d, "under");
+    await mkdir(under);
+    const binding = bindOwnedFs(join(under, "x", "new"))!;
+    await rename(under, join(d, "moved"));
+    await mkdir(under);
+    await expect(createVerified(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    expect(existsSync(join(under, "x"))).toBe(false);
+  });
+
+  it("refuses a file that appeared meanwhile, and leaves it alone", async () => {
+    const d = await dir();
+    const file = join(d, "new");
+    const binding = bindOwnedFs(file)!;
+    await writeFile(file, "someone else's");
+    await expect(createVerified(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    expect(await readFile(file, "utf8")).toBe("someone else's");
   });
 });
