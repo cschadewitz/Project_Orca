@@ -327,8 +327,24 @@ if (MODE === "automatic-close")
       });
       expect(quit, "nothing installs before the window closes (idle never comes in this job)").toBe(false);
       await test.step("closing the window installs instead of just closing", async () => {
-        void page.evaluate(() => window.close()).catch(() => undefined);
-        await expect.poll(() => quit, { timeout: 180_000 }).toBe(true);
+        // What the hidden window reports while the close install runs, for the log.
+        const watch = setInterval(() => {
+          void page
+            .evaluate(() => (window as unknown as UpdatesWindow).orca.updates.read())
+            .then((state) => process.stdout.write(`[close] ${JSON.stringify(state)}\n`))
+            .catch(() => undefined);
+        }, 1_000);
+        // The window's own close button: WM_CLOSE to the app's main window, as a click sends it.
+        try {
+          await execute("powershell", [
+            "-NoProfile",
+            "-Command",
+            `if (-not (Get-Process -Id ${child.pid}).CloseMainWindow()) { exit 1 }`,
+          ]);
+          await expect.poll(() => quit, { timeout: 180_000 }).toBe(true);
+        } finally {
+          clearInterval(watch);
+        }
         expect(child.exitCode, "the app's exit code").toBe(0);
       });
     } finally {
