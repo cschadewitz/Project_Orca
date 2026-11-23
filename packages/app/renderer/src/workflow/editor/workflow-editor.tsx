@@ -30,7 +30,9 @@ import { useAuthority, useMethodPresent } from "../../chrome/use-connection.js";
 import { useNotifications } from "../../notifications-context.js";
 import { diffText, gutterFor } from "../../artifacts/diff.js";
 import { PaneSplitter } from "../../chrome/pane-splitter.js";
-import { useWritability } from "../../chrome/use-connection.js";
+import { useConnection, useWritability } from "../../chrome/use-connection.js";
+import { useOptionalConfig } from "../../config/config-context.js";
+import { catalogChoices, workflowScopeSupported } from "./capability-scope.js";
 import { Button, StateView, Text, counted, focusAfterLeaving, textClass, unit } from "../../ui/index.js";
 import { changeCount, editorGraph, freshId, issuesAt, nestedSteps, newNode, type EditorGraph } from "./draft-model.js";
 import { EditorCanvas, type CanvasHandle, type EditorSelection } from "./editor-canvas.js";
@@ -200,6 +202,10 @@ function Editor({
       ? dryResult.value
       : undefined;
   const workflows = useWorkflowIds();
+  const config = useOptionalConfig();
+  const configData = config?.state.phase === "ready" ? config.state.data : undefined;
+  const capabilityChoices = useMemo(() => catalogChoices(configData?.config.parsed), [configData]);
+  const daemonProtocol = useConnection().versions?.daemon;
   const inspector = useRef<InspectorHandle>(null);
   const palette = useRef<PaletteHandle>(null);
   const canvas = useRef<CanvasHandle>(null);
@@ -670,6 +676,8 @@ function Editor({
             readOnly={readOnly}
             workflow={workflowFields(draft.document)}
             workflows={workflows}
+            capabilityChoices={capabilityChoices}
+            workflowScope={workflowScopeSupported(daemonProtocol)}
             onApply={apply}
             onSelect={setSelection}
             onDelete={remove}
@@ -754,12 +762,15 @@ function ReviewPanel({
   );
 }
 
-function workflowFields(document: unknown): { name?: string; description?: string } | undefined {
+function workflowFields(
+  document: unknown,
+): { name?: string; description?: string; capabilities?: unknown } | undefined {
   if (!document || typeof document !== "object") return undefined;
   const record = document as Record<string, unknown>;
   return {
     ...(typeof record.name === "string" ? { name: record.name } : {}),
     ...(typeof record.description === "string" ? { description: record.description } : {}),
+    ...(record.capabilities !== undefined ? { capabilities: record.capabilities } : {}),
   };
 }
 
