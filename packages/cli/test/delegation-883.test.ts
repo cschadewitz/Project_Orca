@@ -13,7 +13,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { connect, createServer, type Server, type Socket } from "node:net";
@@ -58,6 +58,27 @@ async function remoteDaemon(): Promise<TestDaemon> {
     `
 id: remote-task
 name: remote task
+start: s
+nodes:
+  s: { type: start }
+  work:
+    type: agent
+    agent: { id: scripted }
+    prompt: "{{ vars.prompt }}"
+    produces:
+      - { kind: report, name: report, path: "out/report.md" }
+  done: { type: end }
+edges:
+  - { from: s, to: work }
+  - { from: work, to: done }
+`,
+  );
+  // The workflow a remote enrolled with an issued credential (#883 part 4) delegates to.
+  writeFileSync(
+    join(wf, "remote-auto.yaml"),
+    `
+id: remote-auto
+name: remote auto
 start: s
 nodes:
   s: { type: start }
@@ -177,7 +198,20 @@ describe("delegation over SSH (#883)", () => {
   let parentWorkflows: string;
 
   beforeAll(async () => {
-    sshd = await loopbackSshd();
+    // The fixture key runs what the client asked for through this script, as a login shell
+    // would: the remote's ORCA CLI, for enrollment that issues a credential (#883 part 4).
+    const bin = await mkdtemp(join(tmpdir(), "orca-883-bin-"));
+    dirs.push(bin);
+    const shell = join(bin, "shell");
+    writeFileSync(
+      shell,
+      '#!/bin/sh\n[ -n "$SSH_ORIGINAL_COMMAND" ] || exit 0\nexec /bin/sh -c "$SSH_ORIGINAL_COMMAND"\n',
+      {
+        mode: 0o755,
+      },
+    );
+    writeFileSync(join(bin, "orca"), `#!/bin/sh\nexec '${process.execPath}' '${CLI_ENTRY}' "$@"\n`, { mode: 0o755 });
+    sshd = await loopbackSshd({ forcedCommand: shell });
     if (!sshd) return;
     remote = await remoteDaemon();
     parentWorkflows = await mkdtemp(join(tmpdir(), "orca-883-parent-wf-"));
@@ -185,6 +219,7 @@ describe("delegation over SSH (#883)", () => {
     for (const [id, workflow] of [
       ["delegate", "remote"],
       ["delegate-gated", "remote-gated"],
+      ["delegate-auto", "remote-auto"],
     ] as const)
       writeFileSync(
         join(parentWorkflows, `${id}.yaml`),
@@ -214,14 +249,24 @@ edges:
       identityFile: sshd.identity,
       remotePort: remote.port,
     };
+    // The same remote, enrolled with a credential its own CLI issues over ssh (#883 part 4):
+    // `serverCommand` is that CLI, `serverConfig` its workspace config.
+    const autoSpec = {
+      ...remoteSpec,
+      id: "auto-box",
+      name: "Auto box",
+      serverCommand: join(bin, "orca"),
+      serverConfig: join(remote.dir, "orca.config.yaml"),
+    };
     parent = await startTestDaemon({
       name: "parent",
       config: JSON.stringify({
         version: 1,
         workflows: [join(parentWorkflows, "*.yaml")],
         templates: [],
-        remotes: [remoteSpec],
+        remotes: [remoteSpec, autoSpec],
         agents: [
+          { id: "remote-auto", type: "orca-daemon", profile: "auto-box", workflow: "remote-auto" },
           { id: "remote", type: "orca-daemon", profile: "remote-box", workflow: "remote-task" },
           { id: "remote-gated", type: "orca-daemon", profile: "remote-box", workflow: "remote-gated" },
         ],
@@ -439,6 +484,60 @@ edges:
     }
     expect(((await call(remote, "runs.list", {})).runs as unknown[]).length).toBe(before);
   }, 120_000);
+
+  it("issues the credential over ssh when none was saved, scoped to the delegated workflow (#883)", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const token = join(parent.dir, "auth", "remotes", "auto-box.token");
+    const record = join(parent.dir, "auth", "remotes", "auto-box.json");
+    const credentials = () => {
+      const out = spawnSync(process.execPath, [CLI_ENTRY, "auth", "list", "--json"], {
+        cwd: remote.dir,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH ?? "", HOME: join(remote.dir, "..", "home") },
+      });
+      expect(out.status, out.stderr).toBe(0);
+      return JSON.parse(out.stdout) as {
+        id: string;
+        principal: string;
+        revokedAt?: string;
+        label?: string;
+        scope: { workflows: string[] | "*"; runs: string };
+      }[];
+    };
+    expect(existsSync(token)).toBe(false);
+    const out = cli(parent, ["remote", "enroll", "auto-box", "--json", "--host-key", sshd.hostKeyFingerprint]);
+    expect(out.status, out.stderr).toBe(0);
+    const first = JSON.parse(out.stdout) as { credentialId: string; principalId: string; issued?: boolean };
+    const parentWorkspace = ((await call(parent, "operator.discover", {})).target as { workspaceId: string })
+      .workspaceId;
+    expect(first).toMatchObject({ issued: true, principalId: `delegate-${parentWorkspace}` });
+    // Saved for this user alone, holding the credential the record names.
+    expect(statSync(token).mode & 0o777).toBe(0o600);
+    expect((await readFile(token, "utf8")).trim().split(".")[1]).toBe(first.credentialId);
+    // On the remote: a client credential, owned runs only, for exactly the delegated workflow.
+    expect(credentials().find((c) => c.id === first.credentialId)).toMatchObject({
+      principal: `delegate-${parentWorkspace}`,
+      label: "orca-delegation-auto-box",
+      scope: { workflows: ["remote-auto"], runs: "owned" },
+    });
+    expect(credentials().find((c) => c.id === first.credentialId)?.revokedAt).toBeUndefined();
+    expect(await finished(parent, await admit(parent, "delegate-auto", { city: "Oslo" }))).toMatchObject({
+      status: "succeeded",
+    });
+
+    // Enrolling again with --issue replaces it: a new credential, and the old one revoked there.
+    const again = cli(parent, ["remote", "enroll", "auto-box", "--issue", "--json"]);
+    expect(again.status, again.stderr).toBe(0);
+    const second = JSON.parse(again.stdout) as { credentialId: string; issued?: boolean };
+    expect(second.issued).toBe(true);
+    expect(second.credentialId).not.toBe(first.credentialId);
+    expect(JSON.parse(await readFile(record, "utf8"))).toMatchObject({ credentialId: second.credentialId });
+    expect(credentials().find((c) => c.id === first.credentialId)?.revokedAt).toBeTruthy();
+    expect(credentials().find((c) => c.id === second.credentialId)?.revokedAt).toBeUndefined();
+    expect(await finished(parent, await admit(parent, "delegate-auto", { city: "Bergen" }))).toMatchObject({
+      status: "succeeded",
+    });
+  }, 180_000);
 
   it("fails the step with a typed refusal once the remote revokes the credential", async (ctx) => {
     if (!sshd) return ctx.skip();

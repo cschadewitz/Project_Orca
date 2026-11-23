@@ -417,18 +417,32 @@ agents:
     roles: [builder]
 ```
 
-One-time setup on the remote: issue this daemon a credential and save it beside this
-daemon's config, readable only by its user:
+One-time setup: enroll the remote. With no credential saved for it, enrollment has the
+remote's own ORCA CLI issue one over the same verified ssh:
+
+```sh
+# on build-box: its host key's fingerprint
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+# on this machine
+orca remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for a jump host
+```
+
+The remote runs `<serverCommand> auth issue delegate-<this workspace id> --preset client
+--workflow-scope <each workflow this config's agents delegate there>` (with `--config
+<serverConfig>` when set): a credential that may start only those workflows and see only the
+runs it started. Enrollment checks it like any other and saves it to
+`auth/remotes/<id>.token`, readable only by this user; a credential it issued but could not
+verify is revoked there. `orca remote enroll <id> --issue` replaces it the same way and revokes
+the one it issued before. The ssh login must be able to run that CLI (`remotes[].serverCommand`,
+default `orca`).
+
+To use a credential issued by hand instead, save it first and enroll as above:
 
 ```sh
 # on build-box, in the remote daemon's workspace
 orca auth issue parent-daemon --preset client --json > build-box.token
 # on this machine
 install -m 600 build-box.token auth/remotes/build-box.token   # or set remotes[].credentialFile
-# on build-box: its host key's fingerprint
-ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
-# on this machine
-orca remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for a jump host
 ```
 
 `orca remote enroll` trusts a host key only when it is already pinned in
@@ -549,7 +563,7 @@ and reason `git-ref` before any run is admitted. A remote whose `hello` does not
 in `admitFields` (older than protocol 2.7) is refused with reason `protocol`, never run
 without the ref.
 
-Not yet: issuing the credential automatically over SSH, and binary artifacts.
+Not yet: binary artifacts.
 
 ## MCP servers and skills for agent steps
 

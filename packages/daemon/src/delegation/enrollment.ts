@@ -18,6 +18,12 @@
  * - sends the bearer only if its credential id is the enrolled one;
  * - refuses before any mutation unless the daemon names the enrolled workspace and principal,
  *   and binds every admission to them with `expectedScope`.
+ *
+ * Enrollment can also issue the credential itself (#883 part 4): once the hops are verified,
+ * it runs the remote's ORCA CLI over the same pinned ssh (`auth issue … --preset client
+ * --workflow-scope …`), checks the credential it got back like any other, and only then saves
+ * it (0600) beside the config. A credential it issued and could not verify is revoked there;
+ * one it issued earlier for this remote is revoked once a new one is enrolled.
  */
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -93,6 +99,8 @@ export const EnrollmentSchema = z
     /** The id half of the enrolled credential (`orca1.<id>.<secret>`). Never the secret. */
     credentialId: z.string().regex(/^[A-Za-z0-9_-]{12}$/),
     enrolledAt: z.string(),
+    /** Enrollment issued this credential (#883 part 4), so a later enrollment may revoke it. */
+    issued: z.literal(true).optional(),
   })
   .strict();
 export type Enrollment = z.infer<typeof EnrollmentSchema>;
@@ -155,12 +163,26 @@ export function pinFingerprints(knownHostsFile: string): string[] {
   );
 }
 
+/** Issue the credential on the remote rather than read one the person saved (#883 part 4). */
+export interface IssueRequest {
+  /** The principal the remote issues it to: this daemon's own, one per delegating workspace. */
+  principal: string;
+  /** The only workflows it may start: those this daemon's agents delegate to that remote. */
+  workflows: readonly string[];
+  /** Where the token is saved (0600), once the remote has accepted it. */
+  credentialFile: string;
+}
+
 export interface EnrollOptions {
   remote: RemoteDaemonSpec;
   profile: ConnectionProfile;
   knownHostsFile: string;
   file: string;
-  token: string;
+  /** A credential the person saved; or `issue`, to have the remote issue one. */
+  token?: string;
+  issue?: IssueRequest;
+  /** Told about anything left to tidy by hand (a stale credential that could not be revoked). */
+  warn?: (message: string) => void;
   /** Fingerprints the server's key may have, from the remote itself (`ssh-keygen -l` there). */
   hostKeys?: readonly string[];
   /** The same for the jump host, when the profile has one. */
@@ -185,6 +207,12 @@ export async function enrollRemote(options: EnrollOptions): Promise<Enrollment> 
   const id = options.remote.id;
   const refuse = (message: string, details: Record<string, unknown> = {}) =>
     new OrcaError("DELEGATION_REFUSED", message, { reason: "not-enrolled", profile: id, ...details });
+  if ((options.token === undefined) === (options.issue === undefined))
+    throw new OrcaError("INTERNAL", "enrollRemote needs a token or an issue request, not both");
+  if (options.issue && !options.issue.workflows.length)
+    throw refuse(`No agent delegates to remote ${id}, so there is no workflow to issue a credential for.`);
+  // Read before anything is sent: an unreadable record refuses here, not after issuing.
+  const previous = options.issue ? readEnrollment(options.file) : undefined;
   const hops: Hop[] = [
     {
       name: "server",
@@ -238,7 +266,9 @@ export async function enrollRemote(options: EnrollOptions): Promise<Enrollment> 
       knownHostsFile: pinFile,
       ...(staging ? { markEnrolled: () => undefined } : { pinnedOnly: true }),
     });
-  const client = new RemoteDaemonClient({ connect: () => tunnel.connect(), token: options.token });
+  let client: RemoteDaemonClient | undefined;
+  let issued: { token: string; credentialId: string } | undefined;
+  let enrolledIssued = false;
   try {
     try {
       await tunnel.open();
@@ -263,7 +293,10 @@ export async function enrollRemote(options: EnrollOptions): Promise<Enrollment> 
         reason: "tunnel",
         profile: id,
       });
-    // Verified: the bearer may cross now.
+    // Verified: commands and the bearer may cross now.
+    if (options.issue) issued = await issueOver(tunnel, options.remote, options.issue);
+    const token = issued?.token ?? options.token!;
+    client = new RemoteDaemonClient({ connect: () => tunnel.connect(), token });
     const hello = HelloResultSchema.parse(
       await client.call("hello", { client: "orca-daemon/enroll", ...helloOffer() }),
     );
@@ -273,6 +306,14 @@ export async function enrollRemote(options: EnrollOptions): Promise<Enrollment> 
         reason: "scope-changed",
         profile: id,
       });
+    if (issued && discovery.principalId !== options.issue!.principal)
+      throw new OrcaError("DELEGATION_REFUSED", `The daemon on ${id} did not accept the credential it issued.`, {
+        reason: "credential-missing",
+        profile: id,
+      });
+    // The credential is saved before the record that names it, so a record never names a
+    // credential this daemon does not hold.
+    if (issued) writeAtomic(options.issue!.credentialFile, `${issued.token}\n`);
     for (const hop of fresh) {
       writeAtomic(hop.file, readFileSync(stagedOf(hop), "utf8"));
       markPinEnrolled(hop.file);
@@ -284,14 +325,94 @@ export async function enrollRemote(options: EnrollOptions): Promise<Enrollment> 
       keys,
       workspaceId: discovery.target.workspaceId,
       principalId: discovery.principalId,
-      credentialId: credentialIdOf(options.token),
+      credentialId: credentialIdOf(token),
       enrolledAt: new Date().toISOString(),
+      ...(issued ? { issued: true as const } : {}),
     };
     writeAtomic(options.file, JSON.stringify(record, null, 2));
+    enrolledIssued = issued !== undefined;
+    // The credential enrollment issued last time is replaced: take it back on the remote.
+    if (issued && previous?.issued && previous.credentialId !== record.credentialId)
+      await revokeOver(tunnel, options.remote, previous.credentialId).catch(() =>
+        options.warn?.(
+          `The previous credential ${previous.credentialId} on remote ${id} could not be revoked; run \`orca auth revoke ${previous.credentialId}\` there.`,
+        ),
+      );
     return record;
   } finally {
-    client.close();
+    // Issued but never enrolled: it must not stay valid on the remote.
+    if (issued && !enrolledIssued)
+      await revokeOver(tunnel, options.remote, issued.credentialId).catch(() =>
+        options.warn?.(
+          `The credential ${issued!.credentialId} issued on remote ${id} could not be revoked; run \`orca auth revoke ${issued!.credentialId}\` there.`,
+        ),
+      );
+    client?.close();
     await tunnel.close().catch(() => undefined);
     if (staging && existsSync(staging)) rmSync(staging, { recursive: true, force: true });
   }
+}
+
+const IssuedSchema = z.object({
+  token: z.string().regex(/^orca1\.[A-Za-z0-9_-]{12}\.[A-Za-z0-9_-]{43}$/),
+  credential: z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{12}$/), principal: z.string() }),
+});
+
+function cliOf(remote: RemoteDaemonSpec, ...args: string[]): string[] {
+  return [remote.serverCommand ?? "orca", ...args, ...(remote.serverConfig ? ["--config", remote.serverConfig] : [])];
+}
+
+/**
+ * Have the remote's ORCA CLI issue this daemon a client credential for exactly `workflows`,
+ * over the verified tunnel. Its output is parsed, never shown or logged.
+ */
+async function issueOver(
+  tunnel: SshTunnel,
+  remote: RemoteDaemonSpec,
+  request: IssueRequest,
+): Promise<{ token: string; credentialId: string }> {
+  const fail = (why: string) =>
+    new OrcaError("DELEGATION_REFUSED", `Remote ${remote.id} did not issue a credential: ${why}.`, {
+      reason: "credential-missing",
+      profile: remote.id,
+    });
+  const command = cliOf(
+    remote,
+    "auth",
+    "issue",
+    request.principal,
+    "--preset",
+    "client",
+    ...request.workflows.flatMap((w) => ["--workflow-scope", w]),
+    "--label",
+    `orca-delegation-${remote.id}`,
+    "--json",
+  );
+  let result;
+  try {
+    result = await tunnel.exec(command, 60_000);
+  } catch (error) {
+    throw fail(error instanceof TunnelRefusal ? `ssh ${error.code}` : "its command could not be run");
+  }
+  if (result.code !== 0)
+    throw fail(`\`${command[0]} auth issue\` exited ${result.code} (is ORCA installed there, and serverConfig right?)`);
+  let parsed: z.infer<typeof IssuedSchema>;
+  try {
+    parsed = IssuedSchema.parse(JSON.parse(result.stdout));
+  } catch {
+    throw fail("its answer was not a credential");
+  }
+  const issued = { token: parsed.token, credentialId: parsed.credential.id };
+  // Not what was asked for: never kept, and taken back.
+  if (parsed.credential.principal !== request.principal || credentialIdOf(parsed.token) !== parsed.credential.id) {
+    await revokeOver(tunnel, remote, parsed.credential.id).catch(() => undefined);
+    throw fail("it issued a credential other than the one asked for");
+  }
+  return issued;
+}
+
+async function revokeOver(tunnel: SshTunnel, remote: RemoteDaemonSpec, credentialId: string): Promise<void> {
+  // After `--`, an id starting with `-` is never read as an option.
+  const result = await tunnel.exec([...cliOf(remote, "auth", "revoke", "--json"), "--", credentialId], 60_000);
+  if (result.code !== 0) throw new Error("revoke failed");
 }

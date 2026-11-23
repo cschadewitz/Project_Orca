@@ -130,7 +130,7 @@ export function readRemoteCredential(remote: RemoteDaemonSpec, file: string): st
     delegationRefusal(
       remote.id,
       "credential-missing",
-      `No usable credential for remote ${remote.id} (${detail}). On the remote, run \`orca auth issue <name> --preset client --json\` and save its token to ${file}, readable only by this user.`,
+      `No usable credential for remote ${remote.id} (${detail}). Run \`orca remote enroll ${remote.id} --issue\` here to have the remote issue one over ssh, or on the remote run \`orca auth issue <name> --preset client --json\` and save its token to ${file}, readable only by this user.`,
     );
   let text: string;
   try {
