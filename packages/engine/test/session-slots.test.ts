@@ -136,6 +136,27 @@ describe("SessionSlots", () => {
     expect(slots.view().inUse.total).toBe(0);
   });
 
+  it("counts sessions per remote daemon against that remote's cap, apart from other remotes (#884)", async () => {
+    const slots = new SessionSlots();
+    const capped = (remoteId: string) => request("r", "local", { remote: 2 }, { remoteId });
+    const held = [slots.tryAcquire(capped("box-a")), slots.tryAcquire(capped("box-a"))];
+    expect(held.every(Boolean)).toBe(true);
+    expect(slots.tryAcquire(capped("box-a"))).toBeUndefined();
+    // Another remote, and a session to no remote, are not held up by box-a's cap.
+    expect(slots.tryAcquire(capped("box-b"))).toBeDefined();
+    expect(slots.tryAcquire(request("r", "local", { remote: 2 }))).toBeDefined();
+    const reasons: string[] = [];
+    let granted = false;
+    void slots
+      .acquire({ ...capped("box-a"), onWait: (r: string) => void reasons.push(r) })
+      .then(() => (granted = true));
+    await settled();
+    expect(reasons).toEqual(["waiting for an agent slot: 2 of 2 in use on remote box-a (its limits.maxAgentSessions)"]);
+    held[0]!.release();
+    await settled();
+    expect(granted).toBe(true);
+  });
+
   it("re-reads caps, so a cap raised while steps wait lets them go on the next pump", async () => {
     const slots = new SessionSlots();
     let cap = 1;
@@ -186,6 +207,7 @@ function fake(opts: {
   hosts?: { id: string; maxSessions?: number }[];
   maxAgentSessions?: number;
   agentSlotWaitMs?: number;
+  remoteSessionCap?: (remoteId: string) => number | undefined;
   workflow?: string | string[];
   /** Held open until this resolves; defaults to a short timer so sessions overlap. */
   turn?: (agentId: string) => Promise<void>;
@@ -229,6 +251,7 @@ function fake(opts: {
     agents: registry,
     ...(opts.maxAgentSessions === undefined ? {} : { maxAgentSessions: opts.maxAgentSessions }),
     ...(opts.agentSlotWaitMs === undefined ? {} : { agentSlotWaitMs: opts.agentSlotWaitMs }),
+    ...(opts.remoteSessionCap ? { remoteSessionCap: opts.remoteSessionCap } : {}),
     workflows: workflows(
       opts.workflow,
       registry.listAgents().map((a) => a.id),
@@ -322,6 +345,31 @@ describe("Orchestrator session slots", () => {
     expect(reasons.length).toBeGreaterThan(0);
     expect(new Set(reasons)).toEqual(new Set(["waiting for an agent slot: 2 of 2 in use on this daemon"]));
     expect(orchestrator.sessionSlots.view()).toMatchObject({ limits: { maxAgentSessions: 2 }, inUse: { total: 0 } });
+  });
+
+  it("never opens more delegated sessions to a remote than its cap; an uncapped remote is unlimited (#884)", async () => {
+    const delegating = { type: "orca-daemon", command: "", workflow: "remote-task" };
+    const caps: Record<string, number | undefined> = { "box-a": 2, "box-b": undefined };
+    const { orchestrator, peak } = fake({
+      agents: [
+        { id: "to-a", profile: "box-a", ...delegating },
+        { id: "to-b", profile: "box-b", ...delegating },
+      ],
+      remoteSessionCap: (id) => caps[id],
+    });
+    const fanOut = (workflowId: string) =>
+      Promise.all(Array.from({ length: 5 }, () => orchestrator.startAndRun({ workflowId })));
+    const capped = await fanOut("one-to-a");
+    expect(capped.map((r) => r.run.status)).toEqual(Array(5).fill("completed"));
+    expect(peak.byAgent["to-a"]).toBe(2);
+    const reasons = (await Promise.all(capped.map((r) => orchestrator.events(r.run.id)))).flatMap(waits);
+    expect(reasons.length).toBeGreaterThan(0);
+    expect(new Set(reasons)).toEqual(
+      new Set(["waiting for an agent slot: 2 of 2 in use on remote box-a (its limits.maxAgentSessions)"]),
+    );
+    const open = await fanOut("one-to-b");
+    expect(open.map((r) => r.run.status)).toEqual(Array(5).fill("completed"));
+    expect(peak.byAgent["to-b"]).toBe(5);
   });
 
   it("holds mixed daemon, agent and host caps at once", async () => {

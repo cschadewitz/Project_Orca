@@ -1011,6 +1011,18 @@ describe("delegation through a proxy the test controls (#883)", () => {
     });
   }
 
+  it("reports the remote's session cap from its hello for the slot queue (#884)", async () => {
+    const proxy = await proxied();
+    const seen: (number | undefined)[] = [];
+    const session = await open(proxy.transport(), new DelegationReceipts(join(work, "receipts-capacity")), {
+      onCapacity: (max) => void seen.push(max),
+    });
+    // This remote sets no limits.maxAgentSessions: unlimited.
+    expect(seen).toEqual([undefined]);
+    await session.close();
+    await proxy.close();
+  }, 60_000);
+
   it("reattaches to the same remote run after the connection drops, without a second submission", async () => {
     const proxy = await proxied();
     const receipts = new DelegationReceipts(join(work, "receipts-reattach"));

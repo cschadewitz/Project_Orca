@@ -189,6 +189,8 @@ export interface OpenDaemonSessionOptions {
     /** The active record is still the one `binding` names. */
     current(): boolean;
   };
+  /** Told the remote's daemon-wide session cap from its `hello` (#884); undefined is none. */
+  onCapacity?: (maxAgentSessions: number | undefined) => void;
 }
 
 /** The turn in flight: its remote run, and what its forwarded questions are bound to. */
@@ -291,6 +293,7 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
         throw fault(e);
       }),
     );
+    options.onCapacity?.(hello.sessionSlots?.maxAgentSessions);
     if (!daemonRelation(hello.protocol))
       throw refuse(
         "protocol",
