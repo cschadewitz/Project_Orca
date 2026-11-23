@@ -154,10 +154,13 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   list above, so an agent that never asked wrote what the policy would refuse. Now each call is
   decided, just before its I/O and with the policy read fresh, as the `read` or `edit` call an
   ask for it would carry (`owned-fs-gate.ts`). An `allow` proceeds and a `deny` refuses. An
-  `ask` proceeds only on a one-use permit: a one-time allow given to the agent's own ask for
-  that path and access in this turn, or one ORCA asks for on the agent's behalf. A permit is
-  spent by the first call that uses it and dies with the turn, and a call outside a live turn
-  is refused. Each decision is recorded like an ask's, prefixed `fs:`. This is the
+  `ask` is put to a person on the agent's behalf, with one-time options only, and only that
+  answer's `allow_once` lets this one operation through; the answer to the agent's own earlier
+  ask is not reused, so one answer covers one operation. After every await the turn must be
+  the same live one, and after the answer the policy is read again and a deny that appeared
+  meanwhile wins. A call outside a live turn is refused. Each decision is recorded like an
+  ask's, prefixed `fs:`. Paths are compared as written; a reusable permit waits for physical
+  target verification. This is the
   client-owned ACP file path only: an agent's native tools and its own MCP connections do not
   pass through it, and keeping an agent on this path is an operating-system boundary's job.
 - **A wildcard `allow` in this file is ignored**, with a warning. Everything ORCA writes here

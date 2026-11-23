@@ -7,13 +7,14 @@
  * real ACP agent over stdio makes the calls, and each is decided by the policy just before
  * the I/O: a deny refuses, an ask needs a one-time allow, and that allow is good once.
  */
+import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type * as acp from "@agentclientprotocol/sdk";
 import { AgentSpecSchema, type PermissionRule } from "@orca/core";
-import { LocalHost, OwnedFsGate, fsToolCall, openAcpSession } from "@orca/agents";
+import { LocalHost, decideFsCall, fsToolCall, openAcpSession, permissionPolicyPath } from "@orca/agents";
 
 /**
  * An ACP agent that performs the operations in `OPS` during each turn — `fs/*` requests and
@@ -89,6 +90,7 @@ async function turn(
   ops: Op[],
   policy: { default?: "allow" | "deny" | "ask"; rules?: PermissionRule[] },
   answer?: (request: acp.RequestPermissionRequest) => string | undefined,
+  permissionFiles?: string[],
 ): Promise<{ outcomes: Outcome[]; decisions: string[]; asked: acp.RequestPermissionRequest[] }> {
   const log = join(await temp("orca-owned-fs-log-"), "results.json");
   const agent = AgentSpecSchema.parse({
@@ -104,6 +106,7 @@ async function turn(
     host: new LocalHost({ id: "local", type: "local" }),
     agent,
     cwd: dir,
+    ...(permissionFiles ? { permissionFiles } : {}),
     onPermission: (info) => void decisions.push(info.decision),
     ...(answer
       ? {
@@ -173,7 +176,7 @@ describe("the policy decides ORCA's own file executor (#703)", () => {
     expect(await readFile(file, "utf8")).toBe("one");
   });
 
-  it("lets an agent that asked first write once on that answer, without asking twice", async () => {
+  it("does not reuse the answer to the agent's own ask: one answer covers one operation", async () => {
     const dir = await workspace();
     const file = join(dir, "src", "c.ts");
     const { outcomes, decisions, asked } = await turn(
@@ -181,21 +184,42 @@ describe("the policy decides ORCA's own file executor (#703)", () => {
       [
         { ask: "edit", title: "Edit c.ts", paths: [file] },
         { write: file, content: "first" },
-        { write: file, content: "second" },
-        { read: file },
       ],
       { default: "ask" },
       (request) => (request.toolCall.title === "Edit c.ts" ? "allow" : "reject"),
     );
     expect(outcomes[0]).toEqual({ result: { outcome: { outcome: "selected", optionId: "allow" } } });
-    // The permit is spent by the first write: the second is put to a person and refused.
-    expect(outcomes[1]).toEqual({ result: {} });
-    expect(refused(outcomes[2])).toMatch(/ask:reject_once/);
-    // A permit to write is not a permit to read.
-    expect(refused(outcomes[3])).toMatch(/ask:reject_once/);
-    expect(asked.map((r) => r.toolCall.title)).toEqual(["Edit c.ts", `Write ${file}`, `Read ${file}`]);
-    expect(decisions).toEqual(["ask:allow_once", "fs:permit", "fs:ask:reject_once", "fs:ask:reject_once"]);
-    expect(await readFile(file, "utf8")).toBe("first");
+    // The write is its own operation, put to a person, and refused here.
+    expect(refused(outcomes[1])).toMatch(/ask:reject_once/);
+    expect(asked.map((r) => r.toolCall.title)).toEqual(["Edit c.ts", `Write ${file}`]);
+    expect(decisions).toEqual(["ask:allow_once", "fs:ask:reject_once"]);
+    await expect(readFile(file, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reads the policy again after a person answers, and a deny that appeared meanwhile wins", async () => {
+    const dir = await workspace();
+    const file = join(dir, "src", "d.ts");
+    const sidecar = permissionPolicyPath(dir);
+    const { outcomes, decisions } = await turn(
+      dir,
+      [{ write: file, content: "late" }],
+      { default: "ask" },
+      () => {
+        // While the person was deciding, a deny for this file was saved.
+        writeFileSync(
+          sidecar,
+          JSON.stringify({
+            version: 1,
+            agents: { prober: { rules: [{ match: { kind: "edit", path: "src/d.ts" }, decision: "deny" }] } },
+          }),
+        );
+        return "allow";
+      },
+      [sidecar],
+    );
+    expect(refused(outcomes[0])).toMatch(/denies it now/);
+    expect(decisions).toEqual(["fs:ask:allow_once:denied-since"]);
+    await expect(readFile(file, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("lets what the policy allows through without asking", async () => {
@@ -220,39 +244,15 @@ describe("the policy decides ORCA's own file executor (#703)", () => {
   });
 });
 
-describe("one-use permits", () => {
-  const ask = (kind: acp.ToolKind, path: string): acp.ToolCallUpdate => ({
-    toolCallId: "t",
-    title: "x",
-    kind,
-    locations: [{ path }],
-  });
-
-  it("are minted only by a one-time allow, for the access the kind stands for", () => {
-    const gate = new OwnedFsGate("/w");
-    gate.mint("t1", ask("edit", "/w/a.ts"), "allow_always");
-    gate.mint("t1", ask("edit", "/w/a.ts"), "reject_once");
-    gate.mint("t1", ask("execute", "/w/a.ts"), "allow_once");
-    expect(gate.outstanding).toBe(0);
-    gate.mint("t1", ask("search", "/w/a.ts"), "allow_once");
-    expect(gate.spend("t1", "/w/a.ts", "write")).toBe(false);
-    expect(gate.spend("t1", "a.ts", "read")).toBe(true);
-  });
-
-  it("are spent once, stay in their turn, and die with it", () => {
-    const gate = new OwnedFsGate("/w");
-    gate.mint("t1", ask("edit", "/w/a.ts"), "allow_once");
-    expect(gate.spend("t2", "/w/a.ts", "write")).toBe(false);
-    expect(gate.spend("t1", "/w/b.ts", "write")).toBe(false);
-    expect(gate.spend("t1", "/w/a.ts", "write")).toBe(true);
-    expect(gate.spend("t1", "/w/a.ts", "write")).toBe(false);
-    gate.mint("t1", ask("edit", "/w/a.ts"), "allow_once");
-    gate.endTurn("t1");
-    expect(gate.spend("t1", "/w/a.ts", "write")).toBe(false);
-  });
-
-  it("decide a file call as the kind an ask for it would carry", () => {
+describe("an fs call as the policy sees it", () => {
+  it("is decided as the kind an ask for it would carry", () => {
     expect(fsToolCall("/w/a.ts", "read")).toMatchObject({ kind: "read", title: "Read /w/a.ts" });
     expect(fsToolCall("/w/a.ts", "write")).toMatchObject({ kind: "edit", title: "Write /w/a.ts" });
+    const policy = {
+      default: "ask" as const,
+      rules: [{ match: { kind: "edit" as const, path: "a.ts" }, decision: "deny" as const }],
+    };
+    expect(decideFsCall(policy, "/w/a.ts", "write", { workspaceCwd: "/w" })).toBe("deny");
+    expect(decideFsCall(policy, "/w/a.ts", "read", { workspaceCwd: "/w" })).toBe("ask");
   });
 });

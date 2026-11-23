@@ -32,7 +32,7 @@ import {
   redactingLogger,
   type AuthorizeSecretUse,
 } from "./secrets.js";
-import { fsToolCall, OwnedFsGate, type FsAccess } from "./owned-fs-gate.js";
+import { decideFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
 import { processCleanup } from "./process-cleanup.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
@@ -276,14 +276,16 @@ async function openPlanned(
         }
       : {};
 
-  /** One-use permits for ORCA's own file executor (#703); see `owned-fs-gate.ts`. */
-  const fsGate = new OwnedFsGate(opts.cwd);
-
   /**
-   * Decide one `fs/*` request by the policy, read fresh, immediately before its I/O (#703).
-   * Allowed by a rule, or by a one-use permit an answered ask minted this turn, or by a
-   * one-time allow ORCA asks for on the agent's behalf; anything else throws before the I/O.
-   * Every decision is recorded like an ask's, prefixed `fs:`.
+   * Decide one `fs/*` request by the policy, immediately before its I/O (#703). It proceeds on
+   * a rule's allow, or on a person's one-time allow for this exact operation that ORCA asks
+   * for on the agent's behalf; anything else throws before the I/O. An answer from the
+   * agent's own earlier ask is not reused: one answer covers one operation (#703 review).
+   *
+   * Every await is followed by a recheck: the turn must be the same live one, and after a
+   * person answers, the policy is read again and a deny that appeared meanwhile wins. Paths
+   * are compared as written; physical containment is the roots and protected-path checks'.
+   * Each decision is recorded like an ask's, prefixed `fs:`.
    */
   const authorizeFs = async (path: string, access: FsAccess): Promise<void> => {
     const turn = activeTurn;
@@ -291,42 +293,45 @@ async function openPlanned(
       opts.onPermission?.({ title: fsToolCall(path, access).title ?? path, decision: `fs:${decision}` });
       logger.debug("fs permission", { path, access, decision });
     };
-    // Outside a live prompt there is nobody to answer and no turn to bind a permit to.
-    if (!turn || turn.abort.signal.aborted) {
-      record("no-turn");
-      throw acp.RequestError.invalidParams({ path, reason: "no live turn: ORCA answers file requests only in one" });
-    }
+    const refuse = (decision: string, reason: string): never => {
+      record(decision);
+      throw acp.RequestError.invalidParams({ path, reason });
+    };
+    // Outside a live prompt there is nobody to answer and no turn the operation belongs to.
+    if (!turn || turn.abort.signal.aborted)
+      return refuse("no-turn", "no live turn: ORCA answers file requests only in one");
+    const live = () => activeTurn === turn && !turn.abort.signal.aborted;
     const policy = await policyForAsk();
-    const decision = fsGate.decide(policy, path, access, evalScope);
+    if (!live()) return refuse("turn-ended", "the turn ended before the file request was decided");
+    const decision = decideFsCall(policy, path, access, evalScope);
     if (decision === "allow") return record("allow");
-    if (decision === "ask" && fsGate.spend(turn.id, path, access)) return record("permit");
-    if (decision === "ask") {
-      const invocation: PermissionInvocation = {
-        sessionId: id,
-        turnId: turn.id,
-        invocationId: randomUUID(),
-        signal: turn.abort.signal,
-      };
-      const asked = await resolvePermission(policy, {
-        request: {
-          sessionId: acpSessionId,
-          toolCall: fsToolCall(path, access, `orca-fs-${randomUUID()}`),
-          options: [
-            { optionId: "allow", name: "Allow once", kind: "allow_once" },
-            { optionId: "reject", name: "Reject", kind: "reject_once" },
-          ],
-        },
-        signal: invocation.signal,
-        ...askThrough(turn, invocation),
-        scope: evalScope,
-      });
-      record(asked.decision);
-      // Only a one-time allow for this very call; the turn must still be live for the I/O.
-      if (asked.decision === "ask:allow_once" && activeTurn === turn && !turn.abort.signal.aborted) return;
-      throw acp.RequestError.invalidParams({ path, reason: `not allowed: ${asked.decision}` });
-    }
-    record(decision);
-    throw acp.RequestError.invalidParams({ path, reason: `not allowed: ${decision}` });
+    if (decision !== "ask") return refuse(decision, `not allowed: ${decision}`);
+    const invocation: PermissionInvocation = {
+      sessionId: id,
+      turnId: turn.id,
+      invocationId: randomUUID(),
+      signal: turn.abort.signal,
+    };
+    const asked = await resolvePermission(policy, {
+      request: {
+        sessionId: acpSessionId,
+        toolCall: fsToolCall(path, access, `orca-fs-${randomUUID()}`),
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      },
+      signal: invocation.signal,
+      ...askThrough(turn, invocation),
+      scope: evalScope,
+    });
+    // Only a person's one-time allow for this very operation.
+    if (asked.decision !== "ask:allow_once") return refuse(asked.decision, `not allowed: ${asked.decision}`);
+    // The wait may have been long: read the policy again, and the turn must still be live.
+    const after = decideFsCall(await policyForAsk(), path, access, evalScope);
+    if (after === "deny") return refuse("ask:allow_once:denied-since", "not allowed: the policy denies it now");
+    if (!live()) return refuse("ask:allow_once:turn-ended", "the turn ended while the file request was asked");
+    record("ask:allow_once");
   };
 
   /**
@@ -387,12 +392,6 @@ async function openPlanned(
         // ORCA's own files go ahead of every rule, so no policy can open them (C4-01).
         scope: evalScope,
       });
-      // A one-time allow lets the agent's next `fs/*` call for those paths go ahead once,
-      // in this turn, so an agent that asked first is not asked twice (#703).
-      if (response.outcome.outcome === "selected" && activeTurn === turn) {
-        const chosen = response.outcome.optionId;
-        fsGate.mint(turn.id, ctx.params.toolCall, ctx.params.options.find((o) => o.optionId === chosen)?.kind);
-      }
       opts.onPermission?.({
         ...(ctx.params.toolCall.toolCallId ? { toolCallId: ctx.params.toolCall.toolCallId } : {}),
         title: ctx.params.toolCall.title ?? "",
@@ -679,7 +678,6 @@ async function openPlanned(
         );
       } finally {
         turn.abort.abort("turn ended");
-        fsGate.endTurn(turn.id);
         if (timer) clearTimeout(timer);
         if (turn.grace) clearTimeout(turn.grace);
         options.signal?.removeEventListener("abort", onAbort);
