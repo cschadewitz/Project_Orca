@@ -44,6 +44,7 @@ import { parse as parseYaml, parseDocument, stringify as stringifyYaml } from "y
 import { permissionOverlayFor, replacePermissionPolicyFile } from "@orca/agents";
 import {
   effectivePermissionPolicy,
+  isJudgedPermissionRule,
   isOrcaError,
   isWildcardPermissionRule,
   permissionRuleExpired,
@@ -529,7 +530,8 @@ export class ConfigModel {
         (rule) => !isWildcardPermissionRule(rule) && !permissionRuleExpired(rule, now),
       );
       const layered = effectivePermissionPolicy(agent.permissions, permissionOverlayFor(doc, agent.id, undefined, now));
-      const configured = agent.permissions.rules.length;
+      // Judged rules are not in `layered.rules` (#702), so only typed ones are counted here.
+      const configured = agent.permissions.rules.filter((rule) => !isJudgedPermissionRule(rule)).length;
       const sidecarEnd = configured + recorded.length;
       const rules: EffectivePermissionRule[] = layered.rules.map((rule, i) => {
         if (i < configured) return { ...rule, source: "config" };

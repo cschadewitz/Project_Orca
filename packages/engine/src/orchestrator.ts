@@ -3233,6 +3233,18 @@ export class Orchestrator {
                         ...(info.rule.index !== undefined ? { index: info.rule.index } : {}),
                         ...(info.rule.file !== undefined ? { file: info.rule.file } : {}),
                         ...(info.rule.capped ? { capped: true } : {}),
+                        ...(info.rule.judge
+                          ? {
+                              judge: {
+                                verdict: info.rule.judge.verdict,
+                                ...(info.rule.judge.ruleId ? { ruleId: info.rule.judge.ruleId } : {}),
+                                ...(info.rule.judge.reasonCode ? { reasonCode: info.rule.judge.reasonCode } : {}),
+                                ...(info.rule.judge.judgeConfigRef
+                                  ? { judgeConfigRef: info.rule.judge.judgeConfigRef }
+                                  : {}),
+                              },
+                            }
+                          : {}),
                       },
                     }
                   : {}),

@@ -42,6 +42,7 @@ import { readlinkSync, realpathSync, statSync } from "node:fs";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { revisionOf, withPolicyLock } from "./permission-file.js";
+import type { JudgedLane } from "./judged-lane.js";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   commandCatches,
@@ -54,6 +55,7 @@ import {
   parseCommandPattern,
   derivePermissionRules,
   effectivePermissionPolicy,
+  isJudgedPermissionRule,
   isWildcardPermissionRule,
   OrcaError,
   PERMISSION_POLICY_FILENAME,
@@ -76,6 +78,8 @@ import type {
   PermissionPolicyFile,
   PermissionRule,
   PermissionRuleOrigin,
+  JudgedPermissionRule,
+  JudgedPolicyRule,
   RecordedPermissionRule,
 } from "@orca/core";
 
@@ -87,6 +91,11 @@ export interface PermissionContext {
   scope?: PermissionEvalContext | undefined;
   /** The exact invocation's lifetime; late answers cannot authorize a subsequent turn. */
   signal?: AbortSignal;
+  /**
+   * The judged lane (#702), when this session has a judge. Without one, judged rules are not
+   * consulted and the typed rules decide alone.
+   */
+  judged?: JudgedLane | undefined;
 }
 
 /**
@@ -129,6 +138,22 @@ export function explainPermission(
 }
 
 /**
+ * A configured judged rule as the evaluated policy carries it (#702): its id names it in its
+ * layer, and its revision is the sha256 of its canonical content, so an edit is a new rule.
+ */
+export function judgedPolicyRule(rule: JudgedPermissionRule, ruleId: string): JudgedPolicyRule {
+  const match = Object.fromEntries(
+    Object.entries(rule.match)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  ) as PermissionRule["match"];
+  const ruleRevision = createHash("sha256")
+    .update(JSON.stringify({ match, judge: { criterion: rule.judge.criterion } }))
+    .digest("hex");
+  return { match, criterion: rule.judge.criterion, ruleId, ruleRevision };
+}
+
+/**
  * The `rule` an `agent.permission` event records for an explanation (#702). It never includes
  * the sidecar `revision`: that is a deterministic digest of the whole permission file, and an
  * ordinary event would carry it into every reader and export of the run log, where it could
@@ -147,6 +172,21 @@ export function permissionRuleRecord(explained: PermissionExplanation): Permissi
           ...(o.capped ? { capped: true } : {}),
         }
       : {}),
+    ...(explained.judged ? { judge: judgedRecord(explained.judged) } : {}),
+  };
+}
+
+/**
+ * What the event says about the judged lane (#702): the verdict, the reason code, which rule
+ * allowed by its id (`config:3`) and which judge decided. Not the rule's revision, which is a
+ * digest of its content, for the same reason the sidecar's is kept out (#702 review).
+ */
+function judgedRecord(j: NonNullable<PermissionExplanation["judged"]>): NonNullable<PermissionRuleRecord["judge"]> {
+  return {
+    verdict: j.verdict,
+    ...(j.ruleId ? { ruleId: j.ruleId } : {}),
+    ...(j.reasonCode ? { reasonCode: j.reasonCode } : {}),
+    ...(j.judgeConfigRef ? { judgeConfigRef: j.judgeConfigRef } : {}),
   };
 }
 
@@ -156,6 +196,7 @@ export interface PermissionRuleRecord {
   index?: number;
   file?: number;
   capped?: boolean;
+  judge?: { verdict: string; ruleId?: string; reasonCode?: string; judgeConfigRef?: string };
 }
 
 /**
@@ -175,52 +216,10 @@ function decideByRules(
   request: acp.RequestPermissionRequest,
   ctx?: PermissionEvalContext,
 ): PermissionExplanation {
-  const tc = request.toolCall;
-  // An MCP tool the call's own metadata names (#1021): Gemini CLI leaves the server out of its
-  // title and puts it only there. The agent wrote it and ORCA cannot check it, so it is a
-  // claim: a deny or ask rule is tested against the claimed `server: tool` as well as the
-  // agent's title, so a restriction written for either form holds, but no allow of any kind
-  // decides the call. It stays on the one-time path, asked each time unless something denies
-  // it, and a grant on one server cannot reach the same tool name on another. Matching by the
-  // claim may only add restrictions, never weaken one (#1021 review): see the end.
-  const claim = mcpToolClaimOf(tc);
-  const claimedTitle = claim?.identity ? mcpToolTitle(claim.identity) : undefined;
-  const title = tc.title ?? "";
-  const kind = tc.kind ?? "other";
-  // A call the agent did not classify could be a command under another name, and so could one
-  // that carries a command in its input whatever kind it claims: the kind is the adapter's
-  // advice, not a fact ORCA checked (#702 review).
-  const raw = tc.rawInput;
-  const rawCommand = raw !== null && typeof raw === "object" ? (raw as { command?: unknown }).command : undefined;
-  const commandLike = kind === "other" || (rawCommand !== undefined && rawCommand !== null && rawCommand !== "");
-  const cwd = ctx?.workspaceCwd;
-  const locations = (tc.locations ?? []).map((l) => l.path);
-  const paths = locations.flatMap((p) => permissionPathForms(p, cwd));
-  // Both are false for a call with no locations, so `scope` never matches one (#140).
-  const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
-  const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
+  const { kind, commandLike, claimed, claimedTitle, matches } = callFacts(request, ctx);
   let byClaim = false;
-  const titleMatches = (pattern: string, decision: PermissionDecision): boolean => {
-    if (!byClaim) return new RegExp(pattern).test(title);
-    return decision !== "allow" && claimedTitle !== undefined && new RegExp(pattern).test(claimedTitle);
-  };
-  const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision): boolean => {
-    // A command rule also reaches a command-like call of another kind, so its restriction is
-    // not dodged by leaving the kind out or giving a wrong one.
-    if (m.kind && m.kind !== kind && !(m.command !== undefined && commandLike)) return false;
-    if (m.scope === "workspace" && !allInside) return false;
-    if (m.scope === "outside-workspace" && !anyOutside) return false;
-    if (m.titlePattern && !titleMatches(m.titlePattern, decision)) return false;
-    if (m.path !== undefined) {
-      const wanted = permissionPathForms(m.path, cwd);
-      if (!wanted.some((w) => paths.includes(w))) return false;
-    }
-    if (m.pathPrefix) {
-      const prefixes = permissionPathForms(m.pathPrefix, cwd).filter((p) => p !== "");
-      if (prefixes.length > 0 && !paths.some((p) => prefixes.some((prefix) => p.startsWith(prefix)))) return false;
-    }
-    return true;
-  };
+  const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision) => matches(m, decision, byClaim);
+  const tc = request.toolCall;
   // Once commands are restricted by their words, no allow decides an `execute`, an
   // unclassified call or one whose input carries a command (#702 review): skipping them lets a restriction later in the list still
   // be reached, and nothing approves a call whose command ORCA cannot vouch for.
@@ -228,7 +227,7 @@ function decideByRules(
   const decide = (part: CommandPart | undefined): PermissionExplanation => {
     for (const [ruleIndex, rule] of policy.rules.entries()) {
       const m = rule.match;
-      if ((restricted || claim !== undefined) && rule.decision === "allow") continue;
+      if ((restricted || claimed) && rule.decision === "allow") continue;
       if (!matchesCall(m, rule.decision)) continue;
       if (m.command !== undefined) {
         // A command is only ever an `execute`'s, and a part that is not there matches no rule.
@@ -240,7 +239,7 @@ function decideByRules(
       }
       return { decision: rule.decision, basis: "rule", ruleIndex };
     }
-    if (claim !== undefined && policy.default === "allow") return { decision: "ask", basis: "unverified-identity" };
+    if (claimed && policy.default === "allow") return { decision: "ask", basis: "unverified-identity" };
     return { decision: policy.default, basis: "default" };
   };
   const evaluate = (): PermissionExplanation => (restricted ? decideParts() : decide(undefined));
@@ -269,10 +268,81 @@ function decideByRules(
   // decided more loosely than its title alone would decide it, and a call with no claim is
   // decided exactly as before (#1021 review).
   byClaim = true;
-  const claimed = evaluate();
-  const stricter = strictness(claimed.decision) - strictness(plain.decision);
+  const claimedAnswer = evaluate();
+  const stricter = strictness(claimedAnswer.decision) - strictness(plain.decision);
   // On a tie only the attribution can differ: a rule the claim met is cited ahead of a fallthrough.
-  return stricter > 0 || (stricter === 0 && plain.basis !== "rule" && claimed.basis === "rule") ? claimed : plain;
+  return stricter > 0 || (stricter === 0 && plain.basis !== "rule" && claimedAnswer.basis === "rule")
+    ? claimedAnswer
+    : plain;
+}
+
+/**
+ * The facts about one call that every rule is matched against: its kind, whether it could be a
+ * command, and whether a rule's `match` holds for it. Command words are not compared here;
+ * a `command` match is decided per part by `decideByRules`.
+ */
+export function callFacts(
+  request: acp.RequestPermissionRequest,
+  ctx?: PermissionEvalContext,
+): {
+  kind: string;
+  commandLike: boolean;
+  /** The call claims an MCP tool ORCA cannot verify (#1021): no allow decides it. */
+  claimed: boolean;
+  /** The claimed `server: tool`, when the claim names both plainly. */
+  claimedTitle: string | undefined;
+  /**
+   * Whether a rule's `match` holds, its title tested against the agent's title or, with
+   * `byClaim`, against the claimed `server: tool` (which no allow is ever matched by).
+   */
+  matches: (m: PermissionRule["match"], decision: PermissionDecision, byClaim?: boolean) => boolean;
+} {
+  const tc = request.toolCall;
+  // An MCP tool the call's own metadata names (#1021): Gemini CLI leaves the server out of its
+  // title and puts it only there. The agent wrote it and ORCA cannot check it, so it is a
+  // claim: a deny or ask rule is tested against the claimed `server: tool` as well as the
+  // agent's title, so a restriction written for either form holds, but no allow of any kind
+  // decides the call. It stays on the one-time path, asked each time unless something denies
+  // it, and a grant on one server cannot reach the same tool name on another. Matching by the
+  // claim may only add restrictions, never weaken one (#1021 review): see `decideByRules`.
+  const claim = mcpToolClaimOf(tc);
+  const claimedTitle = claim?.identity ? mcpToolTitle(claim.identity) : undefined;
+  const title = tc.title ?? "";
+  const kind = tc.kind ?? "other";
+  // A call the agent did not classify could be a command under another name, and so could one
+  // that carries a command in its input whatever kind it claims: the kind is the adapter's
+  // advice, not a fact ORCA checked (#702 review).
+  const raw = tc.rawInput;
+  const rawCommand = raw !== null && typeof raw === "object" ? (raw as { command?: unknown }).command : undefined;
+  const commandLike = kind === "other" || (rawCommand !== undefined && rawCommand !== null && rawCommand !== "");
+  const cwd = ctx?.workspaceCwd;
+  const locations = (tc.locations ?? []).map((l) => l.path);
+  const paths = locations.flatMap((p) => permissionPathForms(p, cwd));
+  // Both are false for a call with no locations, so `scope` never matches one (#140).
+  const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
+  const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
+  const titleMatches = (pattern: string, decision: PermissionDecision, byClaim: boolean): boolean => {
+    if (!byClaim) return new RegExp(pattern).test(title);
+    return decision !== "allow" && claimedTitle !== undefined && new RegExp(pattern).test(claimedTitle);
+  };
+  const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision, byClaim = false): boolean => {
+    // A command rule also reaches a command-like call of another kind, so its restriction is
+    // not dodged by leaving the kind out or giving a wrong one.
+    if (m.kind && m.kind !== kind && !(m.command !== undefined && commandLike)) return false;
+    if (m.scope === "workspace" && !allInside) return false;
+    if (m.scope === "outside-workspace" && !anyOutside) return false;
+    if (m.titlePattern && !titleMatches(m.titlePattern, decision, byClaim)) return false;
+    if (m.path !== undefined) {
+      const wanted = permissionPathForms(m.path, cwd);
+      if (!wanted.some((w) => paths.includes(w))) return false;
+    }
+    if (m.pathPrefix) {
+      const prefixes = permissionPathForms(m.pathPrefix, cwd).filter((p) => p !== "");
+      if (prefixes.length > 0 && !paths.some((p) => prefixes.some((prefix) => p.startsWith(prefix)))) return false;
+    }
+    return true;
+  };
+  return { kind, commandLike, claimed: claim !== undefined, claimedTitle, matches: matchesCall };
 }
 
 function strictness(decision: PermissionDecision): number {
@@ -292,7 +362,16 @@ export async function resolvePermission(
   ctx: PermissionContext,
 ): Promise<{ response: acp.RequestPermissionResponse; decision: string; rule?: PermissionRuleRecord }> {
   if (ctx.signal?.aborted) return { response: { outcome: { outcome: "cancelled" } }, decision: "ask:expired" };
-  const explained = explainPermission(policy, ctx.request, ctx.scope);
+  const explained = ctx.judged
+    ? await ctx.judged(policy, ctx.request, ctx.scope, ctx.signal ?? new AbortController().signal)
+    : explainPermission(policy, ctx.request, ctx.scope);
+  // A judge may take a while: a turn that ended meanwhile is answered as expired, never allowed.
+  if (ctx.signal?.aborted)
+    return {
+      response: { outcome: { outcome: "cancelled" } },
+      decision: "ask:expired",
+      rule: permissionRuleRecord(explained),
+    };
   // What decided it travels with the answer (#702), so the event says which rule it was.
   return { ...(await answerPermission(explained, ctx)), rule: permissionRuleRecord(explained) };
 }
@@ -723,7 +802,15 @@ export async function loadEffectivePermissionPolicy(
 ): Promise<PermissionPolicy> {
   const overlays: PermissionRule[][] = [];
   // Where each rule came from, in evaluation order (#702): config, each sidecar, defaults.
-  const origins: PermissionRuleOrigin[] = agent.permissions.rules.map((_, index) => ({ layer: "config", index }));
+  // Config indexes count every rule as written, judged ones included, so `config:N` names the
+  // Nth entry a person sees; judged rules are carried apart from the typed ones (#702).
+  const origins: PermissionRuleOrigin[] = [];
+  const judged: JudgedPolicyRule[] = [];
+  agent.permissions.rules.forEach((rule, index) => {
+    if (isJudgedPermissionRule(rule)) judged.push(judgedPolicyRule(rule, `config:${index}`));
+    else origins.push({ layer: "config", index });
+  });
+  const typedConfigured = origins.length;
   /** How many rules come before the first sidecar that could not be read. */
   let readable: number | undefined;
   for (const [fileIndex, file] of files.entries()) {
@@ -740,12 +827,12 @@ export async function loadEffectivePermissionPolicy(
     } catch (e) {
       if (!onUnreadable) throw e;
       onUnreadable(file, e);
-      readable ??= overlays.reduce((n, overlay) => n + overlay.length, agent.permissions.rules.length);
+      readable ??= overlays.reduce((n, overlay) => n + overlay.length, typedConfigured);
     }
   }
   const layered = effectivePermissionPolicy(agent.permissions, ...overlays);
   for (let index = 0; origins.length < layered.rules.length; index++) origins.push({ layer: "default", index });
-  const policy: PermissionPolicy = { ...layered, origins };
+  const policy: PermissionPolicy = { ...layered, origins, ...(judged.length ? { judged } : {}) };
   if (readable === undefined) return policy;
   const capFrom = readable;
   const cap = (decision: PermissionDecision): PermissionDecision => (decision === "allow" ? "ask" : decision);
@@ -755,6 +842,8 @@ export async function loadEffectivePermissionPolicy(
     origins: origins.map((origin, i) =>
       i >= capFrom && policy.rules[i]?.decision === "allow" ? { ...origin, capped: true } : origin,
     ),
+    // Nor is any judged rule asked: the file might have held the deny or ask that closes the
+    // judged lane, so `judged` is left out (#702).
     // The file might have held a command restriction (#702 review), so commands and
     // unclassified calls are treated as restricted: not even the rules ahead of it allow one.
     commandsRestricted: true,

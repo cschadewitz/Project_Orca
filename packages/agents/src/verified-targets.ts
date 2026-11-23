@@ -48,6 +48,12 @@ export type PlainRuleTargetCheck =
       readonly targetsVerified: true;
       /** Each target's real path, relative to the workspace's real path, `/`-separated. Always files. */
       readonly locations: readonly string[];
+      /**
+       * Each target's file-system identity (`dev:ino`), index-aligned with `locations`: what an
+       * allow based on this check is bound to, so a later check can confirm it is the same file
+       * and not only a file that is still eligible (#702 review).
+       */
+      readonly identities: readonly string[];
     }
   | { readonly targetsVerified: false; readonly reason: PlainRuleTargetRefusal };
 
@@ -164,6 +170,7 @@ export function verifyPlainRuleTargets(input: {
       guardSegments.push(segments(resolved ?? guard, true));
     }
     const verified: string[] = [];
+    const identities: string[] = [];
     for (const location of [...locations]) {
       if (typeof location !== "string" || location.length === 0 || location.includes("\0")) return refuse("missing");
       // Joined as text, not with `join`, so `sub/..` is resolved through any link in it, not folded lexically.
@@ -188,8 +195,13 @@ export function verifyPlainRuleTargets(input: {
       if (!stats.isFile()) return refuse("not-a-file");
       if (stats.nlink !== 1n) return refuse("linked-file");
       verified.push(relative(root, target).split(sep).join("/"));
+      identities.push(targetId);
     }
-    return Object.freeze({ targetsVerified: true as const, locations: Object.freeze(verified) });
+    return Object.freeze({
+      targetsVerified: true as const,
+      locations: Object.freeze(verified),
+      identities: Object.freeze(identities),
+    });
   } catch {
     // Unverifiable, or anything unexpected: never a verification.
     return refuse("unverifiable");

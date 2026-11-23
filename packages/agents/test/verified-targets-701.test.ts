@@ -40,21 +40,27 @@ const check = (over: Partial<Parameters<typeof verifyPlainRuleTargets>[0]> = {})
 
 describe("#701 plain-rule target check", () => {
   it("verifies reads and searches of files inside the workspace, returning real workspace-relative paths", () => {
-    expect(check()).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
-    expect(check({ kind: "search", locations: ["src/a.ts", "README.md"] })).toEqual({
+    expect(check()).toMatchObject({ targetsVerified: true, locations: ["src/a.ts"] });
+    // Each verified target carries its file-system identity, which an allow is bound to (#702 review).
+    const identity = check();
+    expect(identity.targetsVerified && identity.identities).toEqual([expect.stringMatching(/^\d+:\d+$/)]);
+    expect(check({ kind: "search", locations: ["src/a.ts", "README.md"] })).toMatchObject({
       targetsVerified: true,
       locations: ["src/a.ts", "README.md"],
     });
-    expect(check({ locations: [join(ws, "src", "a.ts")] })).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
+    expect(check({ locations: [join(ws, "src", "a.ts")] })).toMatchObject({
+      targetsVerified: true,
+      locations: ["src/a.ts"],
+    });
     // A directory link inside the workspace to a directory inside it is reported as its real target.
     symlinkSync(join(ws, "src"), join(ws, "srclink"), "junction");
-    expect(check({ locations: ["srclink/a.ts"] })).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
+    expect(check({ locations: ["srclink/a.ts"] })).toMatchObject({ targetsVerified: true, locations: ["src/a.ts"] });
   });
 
   // File symlinks need a privilege on Windows; directory links use junctions, which do not.
   fileLinks("reports a file link inside the workspace as its real target", () => {
     symlinkSync(join(ws, "src", "a.ts"), join(ws, "alias.ts"));
-    expect(check({ locations: ["alias.ts"] })).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
+    expect(check({ locations: ["alias.ts"] })).toMatchObject({ targetsVerified: true, locations: ["src/a.ts"] });
   });
 
   it.each(["execute", "edit", "delete", "move", "fetch", "other", undefined])("refuses kind %s", (kind) => {
@@ -204,7 +210,7 @@ describe("#701 plain-rule target check", () => {
           io: asTyped,
           ...over,
         });
-      expect(at({})).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
+      expect(at({})).toMatchObject({ targetsVerified: true, locations: ["src/a.ts"] });
       // Same file by identity, spelled differently: the text no longer proves containment, so it is refused.
       expect(at({ locations: ["/CASE/WS/src/a.ts"] })).toMatchObject({ reason: "outside-workspace" });
       expect(at({ locations: ["/case/out/x"] })).toMatchObject({ reason: "outside-workspace" });
@@ -241,7 +247,7 @@ describe("#701 plain-rule target check", () => {
     expect(at("secrets/key.pem", ["/case/ws/Secrets/KEY.pem"])).toMatchObject({ reason: "protected" });
     // A guard that does not exist still over-matches by case-folded text.
     expect(at("src/a.ts", ["/CASE/WS/SRC"])).toMatchObject({ reason: "protected" });
-    expect(at("src/a.ts", ["/case/ws/secrets"])).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
+    expect(at("src/a.ts", ["/case/ws/secrets"])).toMatchObject({ targetsVerified: true, locations: ["src/a.ts"] });
   });
 
   onPosix("refuses as unverifiable when identity evidence cannot be established; only absence is absence", () => {
@@ -264,7 +270,7 @@ describe("#701 plain-rule target check", () => {
         protectedPaths: { readOnly: [], noAccess },
         io,
       });
-    expect(at(base)).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
+    expect(at(base)).toMatchObject({ targetsVerified: true, locations: ["src/a.ts"] });
     // A guard the file system will not answer for: permission, I/O.
     expect(at(failing("EACCES", (_, p) => p === "/case/ws/secrets"))).toMatchObject({ reason: "unverifiable" });
     expect(at(failing("EIO", (op, p) => op === "realpath" && p === "/case/ws/secrets"))).toMatchObject({
@@ -285,12 +291,12 @@ describe("#701 plain-rule target check", () => {
       reason: "unverifiable",
     });
     // A guard that confirmably does not exist at resolution is fine, and still guards by text.
-    expect(at(failing("ENOENT", (op, p) => op === "realpath" && p === "/case/ws/secrets"))).toEqual({
+    expect(at(failing("ENOENT", (op, p) => op === "realpath" && p === "/case/ws/secrets"))).toMatchObject({
       targetsVerified: true,
       locations: ["src/a.ts"],
     });
-    expect(at(base, ["/case/ws/gone"])).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
-    expect(at(base, ["/case/ws/src/a.ts/x"])).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
+    expect(at(base, ["/case/ws/gone"])).toMatchObject({ targetsVerified: true, locations: ["src/a.ts"] });
+    expect(at(base, ["/case/ws/src/a.ts/x"])).toMatchObject({ targetsVerified: true, locations: ["src/a.ts"] });
     // An ancestor, the target, or the workspace whose identity cannot be read.
     expect(at(failing("EACCES", (op, p) => op === "stat" && p === "/case/ws/src"))).toMatchObject({
       reason: "unverifiable",
