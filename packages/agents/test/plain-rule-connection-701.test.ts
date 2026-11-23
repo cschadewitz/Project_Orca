@@ -5,6 +5,9 @@
  * call is used, and nothing is wired into a live permission path.
  */
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -17,6 +20,7 @@ import {
 } from "../src/review-judge/plain-rule-connection.js";
 import { PLAIN_RULE_VERDICT_SCHEMA, type PlainRuleJudgeInput } from "../src/review-judge/plain-rule.js";
 import { ANTHROPIC_API_VERSION } from "../src/review-judge/plain-rule-providers.js";
+import { daemonJudgeBudget, memoryJudgeBudget } from "../src/review-judge/judge-budget.js";
 import { secretJudgeCredentials } from "../src/review-judge/secret-credentials.js";
 
 interface Seen {
@@ -152,7 +156,13 @@ const config = (over: Record<string, unknown> = {}) => ({
 async function prepared(over: Record<string, unknown> = {}, services: Record<string, unknown> = {}) {
   const made = await preparePlainRuleJudge(
     config(over),
-    { credentials: credentials(), disclosure: disclosure().service, request: loopback, ...services },
+    {
+      credentials: credentials(),
+      disclosure: disclosure().service,
+      request: loopback,
+      budget: memoryJudgeBudget(),
+      ...services,
+    },
     signal(),
   );
   if (made.status !== "prepared") throw new Error(`unavailable: ${made.reason}`);
@@ -259,7 +269,7 @@ describe("#701 plain-rule judge from config", () => {
     const d = disclosure();
     const made = await preparePlainRuleJudge(
       cfg,
-      { credentials: credentials(), disclosure: d.service, request: loopback },
+      { credentials: credentials(), disclosure: d.service, request: loopback, budget: memoryJudgeBudget() },
       signal(),
     );
     if (made.status !== "prepared") throw new Error(made.reason);
@@ -281,7 +291,7 @@ describe("#701 plain-rule judge from config", () => {
     };
     const made2 = await preparePlainRuleJudge(
       tricky,
-      { credentials: credentials(), disclosure: disclosure().service, request: loopback },
+      { credentials: credentials(), disclosure: disclosure().service, request: loopback, budget: memoryJudgeBudget() },
       signal(),
     );
     expect(made2).toMatchObject({ status: "prepared", provider: { kind: "anthropic" } });
@@ -298,7 +308,7 @@ describe("#701 plain-rule judge from config", () => {
 
   it("enforces the daily budget per UTC day, reserved per call and never refunded", async () => {
     let now = Date.parse("2026-11-23T10:00:00Z");
-    const made = await prepared({ limits: { maxCallsPerDay: 2 } }, { now: () => now });
+    const made = await prepared({ limits: { maxCallsPerDay: 2 } }, { budget: memoryJudgeBudget({ now: () => now }) });
     expect(await made.judge(input, signal())).toMatchObject({ outcome: "allow" });
     expect(await made.judge(input, signal())).toMatchObject({ outcome: "allow" });
     expect(await made.judge(input, signal())).toMatchObject({ verdict: "unavailable" });
@@ -306,6 +316,33 @@ describe("#701 plain-rule judge from config", () => {
     now = Date.parse("2026-11-24T00:00:01Z");
     expect(await made.judge(input, signal())).toMatchObject({ outcome: "allow" });
     expect(seen).toHaveLength(3);
+  });
+
+  it("the daemon budget is shared by every judge on the same key and destination, across preparations", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orca-701-shared-budget-"));
+    try {
+      let now = Date.parse("2026-11-22T10:00:00Z");
+      const daemon = () =>
+        daemonJudgeBudget({ stateDir: join(dir, "state"), anchorDir: join(dir, "anchor") }, { now: () => now });
+      // The owner initializes the budget once; that day is spent, so calls start the next UTC day.
+      expect(await daemon().initialize()).toMatchObject({ status: "initialized" });
+      now = Date.parse("2026-11-23T10:00:00Z");
+      const first = await prepared({ limits: { maxCallsPerDay: 2 } }, { budget: daemon() });
+      const second = await prepared({ limits: { maxCallsPerDay: 2 } }, { budget: daemon() });
+      // Unqualified until a reviewed daemon integration enforces its storage prerequisites.
+      expect(first.durableBudget).toBe(false);
+      expect(await first.judge(input, signal())).toMatchObject({ outcome: "allow" });
+      expect(await second.judge(input, signal())).toMatchObject({ outcome: "allow" });
+      // A third preparation (as after a restart) finds the day's two calls already spent.
+      const third = await prepared({ limits: { maxCallsPerDay: 2 } }, { budget: daemon() });
+      expect(await third.judge(input, signal())).toMatchObject({ verdict: "unavailable" });
+      expect(seen).toHaveLength(2);
+      // The in-memory budget is not durable either.
+      const memory = await prepared({ limits: { maxCallsPerDay: 2 } });
+      expect(memory.durableBudget).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("defaults to 5 s per call and 200 calls per day; changing a limit changes the config ref", async () => {
@@ -333,7 +370,13 @@ describe("#701 plain-rule judge from config: fail-closed preparation", () => {
   const unavailable = async (cfg: unknown, services: Record<string, unknown> = {}, s = signal()) =>
     preparePlainRuleJudge(
       cfg,
-      { credentials: credentials(), disclosure: disclosure().service, request: loopback, ...services },
+      {
+        credentials: credentials(),
+        disclosure: disclosure().service,
+        request: loopback,
+        budget: memoryJudgeBudget(),
+        ...services,
+      },
       s,
     );
 
@@ -435,6 +478,7 @@ describe("#701 plain-rule judge from config: fail-closed preparation", () => {
   it("refuses missing services and a cancelled preparation", async () => {
     expect(await unavailable(config(), { credentials: undefined })).toMatchObject({ reason: "incomplete-config" });
     expect(await unavailable(config(), { disclosure: {} })).toMatchObject({ reason: "incomplete-config" });
+    expect(await unavailable(config(), { budget: undefined })).toMatchObject({ reason: "incomplete-config" });
     const { currentNow: _omitted, ...withoutDispatchCheck } = disclosure().service;
     expect(await unavailable(config(), { disclosure: withoutDispatchCheck })).toMatchObject({
       reason: "incomplete-config",

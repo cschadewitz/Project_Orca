@@ -13,8 +13,10 @@
  * Preparation is fail-closed and contacts only two metadata lookups: the credential binding (`describe`) and the
  * disclosure grant (`find`). No key is read and nothing is sent until the judge is called. At every call:
  * - the daily budget is reserved first and never refunded (over it the call fails, which the judge reports as
- *   `unavailable`, so the person is asked). It counts within one prepared judge only and is not a durable spending
- *   cap: a restart or re-preparation starts again at zero, which is one reason activation stays unwired;
+ *   `unavailable`, so the person is asked). It comes from the injected `JudgeBudget`: `daemonJudgeBudget` is shared
+ *   by every judge using the same key and destination and survives restarts; `memoryJudgeBudget` (tests) does
+ *   not. `durableBudget` is true only for a budget qualified by a reviewed daemon integration (none yet), and
+ *   activation requires it;
  * - the key is leased for that one request only, for purpose `review-judge` and the pinned destination;
  * - the disclosure grant is rechecked as the lease's last awaited step, and again synchronously at the dispatch
  *   itself (`currentNow`), with the call's cancellation, in the turn that calls the sender. The send happens only
@@ -47,6 +49,7 @@ import {
   type PlainRuleProviderConfig,
   type ResolvedPlainRuleProvider,
 } from "./plain-rule-providers.js";
+import { judgeBudgetKey, type JudgeBudget } from "./judge-budget.js";
 import { judgeSecretRef } from "./secret-credentials.js";
 
 export const PLAIN_RULE_CONNECTION_SCHEMA = "orca-701-plain-rule-connection/v1";
@@ -62,8 +65,8 @@ export interface PlainRuleJudgeConfig {
     /** Default 5000. */
     readonly timeoutMs?: number;
     /**
-     * Default 200. Counted per UTC day, reserved per call and never refunded, within one prepared judge only: it is
-     * not a durable spending cap, and a restart or re-preparation starts again at zero.
+     * Default 200. Counted per UTC day, reserved per call and never refunded, in the injected budget: committed and
+     * shared per key and destination with `daemonJudgeBudget`.
      */
     readonly maxCallsPerDay?: number;
   };
@@ -119,6 +122,8 @@ export type PreparedPlainRuleJudge =
       /** The ref every decision records: changes with the provider, sender, key binding, grant and limits. */
       readonly judgeConfigRef: string;
       readonly provider: ResolvedPlainRuleProvider;
+      /** Whether the daily budget is shared and survives restarts. Activation requires `true`. */
+      readonly durableBudget: boolean;
     }
   | { readonly status: "unavailable"; readonly reason: PlainRuleConnectionRefusal };
 
@@ -130,7 +135,6 @@ export class PlainRuleSendRefused extends Error {
   }
 }
 
-const DAY_MS = 86_400_000;
 /** A provider envelope around a verdict is larger than the verdict; still bounded. */
 const MAX_PROVIDER_RESPONSE_BYTES = 65_536;
 const QUERY_KEYS = ["purpose", "destination", "providerVersion", "requestSchema"] as const;
@@ -187,6 +191,11 @@ export async function preparePlainRuleJudge(
   services: {
     readonly credentials: JudgeCredentialService;
     readonly disclosure: PlainRuleDisclosureService;
+    /**
+     * The daily call budget. Activation requires a qualified durable one, which only a reviewed daemon integration
+     * provides; `daemonJudgeBudget` alone is shared and committed but reports `durable: false`.
+     */
+    readonly budget: JudgeBudget;
     /** Tests inject the HTTPS request function and the clock. */
     readonly request?: HttpsRequestFn;
     readonly now?: () => number;
@@ -205,6 +214,7 @@ export async function preparePlainRuleJudge(
   const find = disclosure?.find;
   const current = disclosure?.current;
   const currentNow = disclosure?.currentNow;
+  const budget = services?.budget;
   const now = services?.now ?? Date.now;
   if (
     typeof describe !== "function" ||
@@ -212,6 +222,7 @@ export async function preparePlainRuleJudge(
     typeof find !== "function" ||
     typeof current !== "function" ||
     typeof currentNow !== "function" ||
+    typeof budget?.reserve !== "function" ||
     typeof now !== "function"
   )
     return refuse("incomplete-config");
@@ -271,27 +282,16 @@ export async function preparePlainRuleJudge(
   if (!live(found.expiresAt, now())) return refuse("disclosure-grant-expired");
   const grant = Object.freeze({ ref: found.grantRef, revision: found.revision });
 
-  // The call budget, per UTC day, reserved before the key is leased and never refunded. It lives in this prepared
-  // instance only: a new instance (a restart, a re-preparation) starts again at zero. It is not a durable spending
-  // cap, and activation stays unwired until a durable one exists.
-  let day = Math.floor(now() / DAY_MS);
-  let usedToday = 0;
-  const reserve = () => {
-    const today = Math.floor(now() / DAY_MS);
-    if (!Number.isFinite(today)) throw new PlainRuleSendRefused("daily-budget");
-    if (today !== day) {
-      day = today;
-      usedToday = 0;
-    }
-    if (usedToday >= maxCallsPerDay) throw new PlainRuleSendRefused("daily-budget");
-    usedToday++;
-  };
+  // The call budget, per UTC day, reserved before the key is leased and never refunded. Shared by every judge using
+  // this key for this destination when the budget is durable (`daemonJudgeBudget`).
+  const budgetKey = judgeBudgetKey(destination, ref.id);
+  const reserve = budget.reserve;
   async function post(body: string, callSignal: AbortSignal): Promise<string> {
     // Only ever called after preparation finished, so the approved grant below is set.
     const use = grant;
     const unchanged = (state: unknown) =>
       record(state) && state.revision === use.revision && live(state.expiresAt, now());
-    reserve();
+    if (!(await reserve(budgetKey, maxCallsPerDay))) throw new PlainRuleSendRefused("daily-budget");
     let handedOff = false;
     return withCredential(
       ref,
@@ -331,6 +331,8 @@ export async function preparePlainRuleJudge(
           grant.ref,
           grant.revision,
           selected.maxCallsPerDay,
+          budgetKey,
+          budget.durable === true,
         ]),
       )
       .digest("hex")}`,
@@ -347,5 +349,6 @@ export async function preparePlainRuleJudge(
     judge: createPlainRuleJudge({ transport, limits }),
     judgeConfigRef: plainRuleJudgeConfigRef(transport.version, limits),
     provider,
+    durableBudget: budget.durable === true,
   });
 }
