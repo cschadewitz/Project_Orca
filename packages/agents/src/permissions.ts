@@ -228,11 +228,16 @@ function decideByRules(
   const text = commandTextOf(tc);
   const parts = text === undefined ? [] : parseCommand(text).parts.filter((p) => !neutralPart(p));
   const decisions = parts.length === 0 ? [decide(undefined)] : parts.map(decide);
-  // The first denied part is what denied the call. Otherwise it is asked: by the first rule
-  // that itself said ask, or by the restriction when every part would have been allowed.
+  // The first denied part is what denied the call. Otherwise it is asked, and the record cites
+  // the first part an explicit ask rule decided, ahead of any part that only fell through to
+  // an ask default; failing both, the restriction itself, when every part would have been
+  // allowed. Only the attribution depends on this order, never the outcome (#702 review).
   const denied = decisions.find((d) => d.decision === "deny");
   if (denied) return denied;
-  return decisions.find((d) => d.decision === "ask") ?? { decision: "ask", basis: "command-restricted" };
+  return (
+    decisions.find((d) => d.decision === "ask" && d.basis === "rule") ??
+    decisions.find((d) => d.decision === "ask") ?? { decision: "ask", basis: "command-restricted" }
+  );
 }
 
 function pick(options: acp.PermissionOption[], kinds: acp.PermissionOptionKind[]): acp.PermissionOption | undefined {

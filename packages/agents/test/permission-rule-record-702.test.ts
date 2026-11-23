@@ -90,6 +90,19 @@ describe("explainPermission", () => {
     expect(run("ls")).toEqual({ decision: "ask", basis: "command-restricted" });
   });
 
+  it("cites an explicit ask rule over an earlier part that only fell through to an ask default", () => {
+    const commands: PermissionPolicy = {
+      default: "ask",
+      rules: [{ match: { kind: "execute", command: "git push" }, decision: "ask" }],
+    };
+    const run = (command: string) =>
+      explainPermission(commands, call({ toolCallId: "t", kind: "execute", title: command, rawInput: { command } }));
+    // `ls` reaches the default ask first; `git push` is the rule that asks. Same outcome either way.
+    expect(run("ls && git push origin")).toEqual({ decision: "ask", basis: "rule", ruleIndex: 0 });
+    expect(run("git push origin && ls")).toEqual({ decision: "ask", basis: "rule", ruleIndex: 0 });
+    expect(run("ls && pwd")).toEqual({ decision: "ask", basis: "default" });
+  });
+
   it("attaches the rule's origin only when the origins line up with the rules", () => {
     const withOrigins: PermissionPolicy = {
       ...policy,
