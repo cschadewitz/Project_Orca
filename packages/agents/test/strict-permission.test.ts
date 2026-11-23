@@ -215,6 +215,7 @@ describe("inactive typed policy", () => {
     expect(await resolvePermission(policy, { request })).toEqual({
       response: { outcome: { outcome: "cancelled" } },
       decision: "allow:no-one-time-option",
+      rule: { basis: "rule" },
     });
   });
 });

@@ -3191,6 +3191,19 @@ export class Orchestrator {
                 title: info.title,
                 decision: info.decision,
                 ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}),
+                // Which rule decided it (#702), when the session knows: the basis and the rule's
+                // place, field by field, so nothing else (a file digest) reaches the public log.
+                ...(info.rule
+                  ? {
+                      rule: {
+                        basis: info.rule.basis,
+                        ...(info.rule.layer !== undefined ? { layer: info.rule.layer } : {}),
+                        ...(info.rule.index !== undefined ? { index: info.rule.index } : {}),
+                        ...(info.rule.file !== undefined ? { file: info.rule.file } : {}),
+                        ...(info.rule.capped ? { capped: true } : {}),
+                      },
+                    }
+                  : {}),
               },
             })
             .catch((error: unknown) =>
