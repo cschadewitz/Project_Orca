@@ -6,11 +6,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import { silentLogger } from "@orca/core";
 import { bootstrap } from "../src/bootstrap.js";
 import { storeCommand } from "../src/commands/store.js";
-import { switchStoreToSqlite } from "@orca/store";
+import { readStoreFormat, switchStoreToSqlite } from "@orca/store";
+import type { CommandContext } from "../src/commands/index.js";
 
 /** The opt-in an earlier draft of the switch read; the shipped command must ignore it. */
 const OLD_OPT_IN = "ORCA_IN_PLACE_SQLITE_SWITCH";
-import type { CommandContext } from "../src/commands/index.js";
 
 const dirs: string[] = [];
 afterAll(async () => {
@@ -183,5 +183,91 @@ describe("orca store", () => {
       details: { reason: "APP_OWNED" },
     });
     expect(await readdir(join(dir, ".orca"))).toEqual(["runs"]);
+  });
+
+  /** A workspace on files with one run, opened once (stamped), and its config file's text. */
+  async function fileWorkspace(config: { name: string; text: string } | undefined) {
+    const dir = await mkdtemp(join(tmpdir(), "orca-store-convert-"));
+    dirs.push(dir);
+    if (config) await writeFile(join(dir, config.name), config.text, "utf8");
+    (await bootstrap({ cwd: dir, logger: silentLogger })).orchestrator.stores.close?.();
+    await mkdir(join(dir, ".orca", "runs"), { recursive: true });
+    await writeFile(join(dir, ".orca", "runs", "run_old.jsonl"), LOG);
+    return dir;
+  }
+
+  it.runIf(process.platform !== "win32")(
+    "sqlite convert puts a SQLite store of its own in use, keeping the config's comments, and leaves the old one as it was",
+    async () => {
+      const text = "# my workspace\nversion: 1 # keep\nworkflows: []\ntemplates: []\n";
+      const dir = await fileWorkspace({ name: "orca.config.yaml", text });
+      const oldLog = await readFile(join(dir, ".orca", "runs", "run_old.jsonl"), "utf8");
+      const converted = ctx(dir, ["sqlite", "convert"]);
+      expect(await storeCommand(converted)).toBe(0);
+      expect(converted.lines[0]).toBe(
+        `converted ${join(dir, ".orca")} into ${join(dir, ".orca-sqlite")} (SQLite metadata)`,
+      );
+      const config = await readFile(join(dir, "orca.config.yaml"), "utf8");
+      expect(config).toContain("# my workspace");
+      expect(config).toContain("version: 1 # keep");
+      expect(config).toContain("storeDir: .orca-sqlite");
+      // The old store: still on files, its run log where it was.
+      expect(await readFile(join(dir, ".orca", "runs", "run_old.jsonl"), "utf8")).toBe(oldLog);
+      expect((await readStoreFormat(join(dir, ".orca")))?.epoch).not.toContain("sqlite");
+
+      const format = ctx(dir, ["format"]);
+      expect(await storeCommand(format)).toBe(0);
+      expect(format.lines).toContain(`store            ${join(dir, ".orca-sqlite")}`);
+      expect(format.lines).toContain("metadata         SQLite (metadata.sqlite)");
+      expect(format.lines).toContain(`converted from   ${join(dir, ".orca")} (unchanged since)`);
+      const app = await bootstrap({ cwd: dir, logger: silentLogger });
+      expect(app.orchestrator.stores.capabilities?.backend).toBe("sqlite");
+      expect((await app.orchestrator.stores.events.read("run_old")).map((e) => e.type)).toEqual(["run.created"]);
+      app.orchestrator.stores.close?.();
+
+      // A released ORCA still running on the old store writes there: reported, not merged.
+      await writeFile(join(dir, ".orca", "runs", "run_late.jsonl"), LOG.replaceAll("run_old", "run_late"));
+      const after = ctx(dir, ["format"]);
+      await storeCommand(after);
+      expect(after.lines.find((l) => l.startsWith("converted from"))).toContain("CHANGED since");
+      // And converting again has nothing to do.
+      const again = ctx(dir, ["sqlite", "convert"]);
+      expect(await storeCommand(again)).toBe(0);
+      expect(again.lines[0]).toContain("nothing to do");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "sqlite convert writes a config into a workspace that has none, and rewrites a JSON one",
+    async () => {
+      const bare = await fileWorkspace(undefined);
+      expect(await storeCommand(ctx(bare, ["sqlite", "convert"]))).toBe(0);
+      expect(await readFile(join(bare, "orca.config.yaml"), "utf8")).toBe('version: 1\nstoreDir: ".orca-sqlite"\n');
+      expect(await readdir(join(bare, ".orca", "runs"))).toEqual(["run_old.jsonl"]);
+
+      const json = await fileWorkspace({ name: "orca.config.json", text: '{"version":1,"workflows":[]}' });
+      expect(await storeCommand(ctx(json, ["sqlite", "convert"]))).toBe(0);
+      expect(JSON.parse(await readFile(join(json, "orca.config.json"), "utf8"))).toEqual({
+        version: 1,
+        workflows: [],
+        storeDir: ".orca-sqlite",
+      });
+      const app = await bootstrap({ cwd: json, logger: silentLogger });
+      expect(app.orchestrator.stores.capabilities?.backend).toBe("sqlite");
+      app.orchestrator.stores.close?.();
+    },
+  );
+
+  it("refuses to convert a desktop app's own store, and changes nothing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-store-convert-"));
+    dirs.push(dir);
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
+    await mkdir(join(dir, ".orca", "runs"), { recursive: true });
+    await mkdir(join(dir, ".orca-first-run-ownership"), { mode: 0o700 });
+    await expect(storeCommand(ctx(dir, ["sqlite", "convert"]))).rejects.toMatchObject({
+      code: "STORE_FORMAT",
+      details: { reason: "APP_OWNED" },
+    });
+    expect((await readdir(dir)).sort()).toEqual([".orca", ".orca-first-run-ownership", "orca.config.yaml"]);
   });
 });

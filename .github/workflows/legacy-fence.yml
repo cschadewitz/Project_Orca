@@ -1,12 +1,13 @@
-# The legacy fence of `orca store sqlite switch` (#339), against the released builds themselves.
-# v0.7.0 and v0.6.0 never read a store's format marker; a switched store keeps them out with
-# markers (packages/store/src/sqlite/legacy-fence.ts). This builds both releases from their
-# tags, makes workspaces with v0.7.0's demo, switches one with this commit's store build through
-# tools/legacy-fence/switch.js (the shipped CLI refuses the switch, which this also checks), and
-# runs every released store command against a baseline and then the switched store: each must
-# reach the store in the baseline, be refused by the store when switched, and change nothing
-# (tools/legacy-fence/run.js). Linux only. Runs on its own whenever the store, the CLI or the
-# check changes.
+# The legacy fence of `orca store sqlite convert` (#339), against the released builds themselves.
+# v0.7.0 and v0.6.0 never read a store's format marker; a converted store keeps them out with
+# markers (packages/store/src/sqlite/legacy-fence.ts). This builds both releases from their tags,
+# makes workspaces with v0.7.0's demo, starts a released daemon of each version on one, converts
+# it with this commit's CLI (the file store must not change), and runs every released store
+# command against a baseline and then the converted workspace: each must reach the store in the
+# baseline, be refused by the store when converted, and change nothing. The daemons that were
+# already running must keep the file store and leave the new one alone, a later write to the file
+# store must be reported, and the in-place switch must still refuse (tools/legacy-fence/run.js).
+# Linux only. Runs on its own whenever the store, the CLI or the check changes.
 name: Legacy fence
 
 on:
@@ -95,7 +96,7 @@ jobs:
                 `| ${l.tag} | \`${c.command}\` | ${c.baseline.code ?? c.baseline.signal} | ${c.outcome} | ${c.code ?? c.signal} | ${c.refusal ?? ""} | ${c.changes.length ? c.changes.length + " change(s)" : "none"} |`),
               ...l.absent.map((name) => `| ${l.tag} | \`${name}\` | | not in this release | | | |`),
             ]);
-            console.log(["## Legacy fence", "", r.failures.length ? `**${r.failures.length} failure(s)**` : "Every covered command reached the store in its baseline and was refused on the switched store, except the read-only answers listed; none changed it.", "",
+            console.log(["## Legacy fence", "", r.failures.length ? `**${r.failures.length} failure(s)**` : "The conversion left the file store as it was. Every covered command reached the store in its baseline and was refused on the converted store, except the read-only answers listed; none changed it.", "",
               "| Release | Command | Baseline exit | Outcome | Exit | Refusal | Store changes |", "|---|---|---|---|---|---|---|", ...rows].join("\n"));
           ' >> "$GITHUB_STEP_SUMMARY"
 

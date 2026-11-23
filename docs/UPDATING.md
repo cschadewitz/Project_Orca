@@ -909,11 +909,14 @@ converts a store:
 SQLite, and what startup would do.
 
 A store on SQLite (#339) records a format of its own, `operator-journals-v4-sqlite`, which
-ORCA 0.7.1 and later refuse unless they know it. No store can be switched yet:
-`orca store sqlite switch` is refused, changing nothing. ORCA 0.7.0 and earlier never read the
-marker; the switch has a fence that turns them away when they start, but nothing makes one that
-is already running stop, and they leave no trace to check for. See [the SQLite metadata
-backend](storage/sqlite-metadata.md#choosing-sqlite-for-a-workspace).
+ORCA 0.7.1 and later refuse unless they know it. `orca store sqlite convert` converts a
+workspace's file store into a SQLite store of its own beside it (`.orca-sqlite`) and names it in
+the workspace's config, leaving the file store exactly as it was. ORCA 0.7.0 and earlier never
+read the marker; the new store is fenced against them before anything opens it, so they refuse
+it. Stop every older ORCA first: one that is still running keeps the file store, and what it
+writes there is not in the new store (`orca store format` reports it). To go back, point
+`storeDir` at the file store again. `orca store sqlite switch` (in place) is refused. See [the
+SQLite metadata backend](storage/sqlite-metadata.md#choosing-sqlite-for-a-workspace).
 
 **`orca store carry-forward`** is the explicit, offline conversion. Stop every ORCA app,
 daemon and command using the workspace first. Writers from before 0.7.1 take no lock the
