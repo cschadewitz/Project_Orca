@@ -227,17 +227,26 @@ function anthropicBody(p: Extract<ResolvedPlainRuleProvider, { kind: "anthropic"
   });
 }
 
+const ANTHROPIC_BLOCKS = new Set(["thinking", "redacted_thinking", "text"]);
+/** Absent, null or an empty list: the only values of tool or function-call metadata that mean "no call". */
+const noCall = (value: unknown) =>
+  value === undefined || value === null || (Array.isArray(value) && value.length === 0);
+
 function anthropicAnswer(raw: string): string {
   const body = parseBody(raw);
-  if (body.type !== "message" || !Array.isArray(body.content)) throw new PlainRuleProviderFailed("provider-shape");
+  if (body.type !== "message" || body.role !== "assistant" || !Array.isArray(body.content))
+    throw new PlainRuleProviderFailed("provider-shape");
   if (body.stop_reason === "refusal") throw new PlainRuleProviderFailed("provider-refused");
   if (body.stop_reason === "max_tokens") throw new PlainRuleProviderFailed("provider-truncated");
   if (body.stop_reason !== "end_turn") throw new PlainRuleProviderFailed("provider-shape");
-  // Thinking blocks are skipped; the answer is the one text block, and nothing else may be there.
-  const blocks = (body.content as unknown[]).filter((b) => !(record(b) && b.type === "thinking"));
-  if (blocks.length !== 1 || !record(blocks[0]) || blocks[0].type !== "text" || typeof blocks[0].text !== "string")
+  // Every block is either thinking (skipped) or text, and there is exactly one text block: a tool call, a server
+  // tool, or any block type not documented here is refused, never ignored.
+  const blocks = body.content as unknown[];
+  if (!blocks.every((b) => record(b) && ANTHROPIC_BLOCKS.has(b.type as string)))
     throw new PlainRuleProviderFailed("provider-shape");
-  return plainRuleVerdictText(blocks[0].text);
+  const texts = blocks.filter((b) => (b as Record<string, unknown>).type === "text") as Record<string, unknown>[];
+  if (texts.length !== 1 || typeof texts[0]!.text !== "string") throw new PlainRuleProviderFailed("provider-shape");
+  return plainRuleVerdictText(texts[0]!.text);
 }
 
 function openAiBody(p: Extract<ResolvedPlainRuleProvider, { kind: "openai-compatible" }>, frame: string): string {
@@ -262,10 +271,12 @@ function openAiAnswer(raw: string): string {
   const choice = body.choices[0] as unknown;
   if (!record(choice) || !record(choice.message)) throw new PlainRuleProviderFailed("provider-shape");
   const message = choice.message;
+  if (message.role !== "assistant") throw new PlainRuleProviderFailed("provider-shape");
   if (message.refusal !== undefined && message.refusal !== null) throw new PlainRuleProviderFailed("provider-refused");
   if (choice.finish_reason === "length") throw new PlainRuleProviderFailed("provider-truncated");
   if (choice.finish_reason !== "stop") throw new PlainRuleProviderFailed("provider-shape");
-  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0)
+  // Any tool or function-call metadata that could name a call is refused, whatever its shape.
+  if (!noCall(message.tool_calls) || (message.function_call !== undefined && message.function_call !== null))
     throw new PlainRuleProviderFailed("provider-shape");
   if (typeof message.content !== "string") throw new PlainRuleProviderFailed("provider-shape");
   return plainRuleVerdictText(message.content);

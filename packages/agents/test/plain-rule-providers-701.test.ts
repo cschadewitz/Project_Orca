@@ -140,6 +140,34 @@ describe("#701 plain-rule provider: Anthropic", () => {
         }),
     ],
     ["an error body", () => JSON.stringify({ type: "error", error: { type: "overloaded_error" } })],
+    ["no role", (f: Frame) => anthropicReply(answerFor(f, ["covered"]), { role: undefined })],
+    ["a user role", (f: Frame) => anthropicReply(answerFor(f, ["covered"]), { role: "user" })],
+    [
+      "a tool_use block beside the text",
+      (f: Frame) =>
+        anthropicReply("", {
+          content: [
+            { type: "text", text: answerFor(f, ["covered"]) },
+            { type: "tool_use", id: "t", name: "x", input: {} },
+          ],
+        }),
+    ],
+    [
+      "a server tool block beside the text",
+      (f: Frame) =>
+        anthropicReply("", {
+          content: [
+            { type: "server_tool_use", id: "s", name: "web_search", input: {} },
+            { type: "text", text: answerFor(f, ["covered"]) },
+          ],
+        }),
+    ],
+    [
+      "an unknown block type",
+      (f: Frame) =>
+        anthropicReply("", { content: [{ type: "text", text: answerFor(f, ["covered"]) }, { type: "future" }] }),
+    ],
+    ["a non-object block", (f: Frame) => anthropicReply("", { content: [answerFor(f, ["covered"])] })],
     ["not JSON at all", () => "<html>"],
     ["prose around the JSON", (f: Frame) => anthropicReply(`Sure! ${answerFor(f, ["covered"])}`)],
     [
@@ -184,6 +212,19 @@ describe("#701 plain-rule provider: OpenAI-compatible", () => {
         }),
     ],
     ["a tool call", (f: Frame) => openAiReply(answerFor(f, ["covered"]), {}, { tool_calls: [{ id: "t" }] })],
+    ["tool calls as an object", (f: Frame) => openAiReply(answerFor(f, ["covered"]), {}, { tool_calls: { id: "t" } })],
+    ["tool calls as a string", (f: Frame) => openAiReply(answerFor(f, ["covered"]), {}, { tool_calls: "t" })],
+    ["tool calls as false", (f: Frame) => openAiReply(answerFor(f, ["covered"]), {}, { tool_calls: false })],
+    [
+      "a legacy function call",
+      (f: Frame) => openAiReply(answerFor(f, ["covered"]), {}, { function_call: { name: "x", arguments: "{}" } }),
+    ],
+    [
+      "a function call as an empty object",
+      (f: Frame) => openAiReply(answerFor(f, ["covered"]), {}, { function_call: {} }),
+    ],
+    ["no role", (f: Frame) => openAiReply(answerFor(f, ["covered"]), {}, { role: undefined })],
+    ["a tool role", (f: Frame) => openAiReply(answerFor(f, ["covered"]), {}, { role: "tool" })],
     [
       "two choices",
       (f: Frame) =>
@@ -276,6 +317,31 @@ describe("#701 plain-rule provider: the answer must already be valid JSON", () =
       anthropicReply(answerFor(f, ["covered"]).replace('"verdicts":[', '"verdicts" [')),
     );
     expect(await judge(input, signal())).toMatchObject({ outcome: "no-match" });
+  });
+});
+
+describe("#701 plain-rule provider: metadata that means no call", () => {
+  it.each([
+    ["null tool calls", { tool_calls: null }],
+    ["empty tool calls", { tool_calls: [] }],
+    ["null function call", { function_call: null }],
+  ])("still allows a normal completion with %s", async (_name, message) => {
+    const { judge } = judgeWith({ kind: "openai-compatible", model: "gpt-small" }, (_b, f) =>
+      openAiReply(answerFor(f, ["covered"]), {}, message),
+    );
+    expect(await judge(input, signal())).toMatchObject({ outcome: "allow" });
+  });
+
+  it("still allows an Anthropic answer with redacted thinking", async () => {
+    const { judge } = judgeWith({ kind: "anthropic" }, (_b, f) =>
+      anthropicReply("", {
+        content: [
+          { type: "redacted_thinking", data: "x" },
+          { type: "text", text: answerFor(f, ["covered"]) },
+        ],
+      }),
+    );
+    expect(await judge(input, signal())).toMatchObject({ outcome: "allow" });
   });
 });
 
