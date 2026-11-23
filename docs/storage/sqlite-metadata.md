@@ -272,24 +272,34 @@ leaves the file store exactly as it was. Under the file store's format lock:
    (`APP_OWNED`): the app's daemon holds their write fence, which this command cannot.
 2. Announces itself and checks that no registered writer of this ORCA is alive
    (`BUSY`), and that no run is active.
-3. Copies the store whole into `<store>-sqlite.partial-<id>` beside it, checks every
-   copied file's bytes, and checks the store did not change meanwhile (`BUSY`).
+3. Copies the store whole into staging beside it (`<store>-sqlite.staging-<id>/store`,
+   with a record of the store and the process that made it), checks every copied
+   file's bytes, and checks the store did not change meanwhile (`BUSY`).
 4. Switches the copy in place, as below, with no backup (the file store is the
    backup): import, verify, bind, the legacy fence, and the SQLite marker, which also
    records the file store and the signature of its files (`convertedFrom`).
-5. Checks the file store once more, renames the copy to `<store>-sqlite` and, with
-   the file store still unchanged, writes the config: `storeDir` names the new store
-   (relative if it was relative; YAML is edited in place, so comments stay; a
-   workspace with no config gets `orca.config.yaml`). The config's rename is the
+5. Checks the file store once more and renames the copy to `<store>-sqlite`. From then
+   on that store is never removed by ORCA: another config could already name it.
+6. Checks that it is a complete conversion of the file store as the file store is now,
+   under its own format lock: its marker names this store and the signature; no switch
+   of it is half done; the legacy fence is complete; its database is the one it is
+   bound to and verifies. Anything else is refused (`SWITCH_REFUSED`, or
+   `SOURCE_CHANGED` when the file store changed), leaving both stores and the config as
+   they are.
+7. Writes the config, under the config writer's lock (`<config>.lock`, the one
+   `config.set` takes), and only if the config is still the revision read when the
+   conversion began and still names the file store; otherwise `CONFIG_STALE`, and
+   nothing is written. `storeDir` names the new store (relative if it was relative;
+   YAML is edited in place, so comments stay; a workspace with no config gets
+   `orca.config.yaml`, if none has appeared meanwhile). The config's rename is the
    commit: every ORCA started afterwards, released ones included, opens the new store.
 
-A refusal before step 5's config write publishes nothing: the copy goes, and the
-workspace stays on its file store. A conversion killed before the copy is renamed
-leaves only `.partial-` directories, which the next conversion removes. A store at
-`<store>-sqlite` that was renamed but not published (the config write failed, or was
-lost) is never removed, because it may have been opened: the next conversion
-publishes it if the file store is still exactly what was copied, and otherwise
-refuses (`SOURCE_CHANGED`), naming it. Anything else already at `<store>-sqlite` is
+A refusal before step 5 publishes nothing and removes its own staging. Staging an
+interrupted conversion left is removed by the next one only when its record names
+this store and a process on this host that is gone; anything else with a similar name
+is left alone. A conversion that stopped after step 5 (killed, refused, or its config
+write lost) is finished by the next one through steps 6 and 7, or refused and left for
+the operator to move out of the way. Anything else already at `<store>-sqlite` is
 refused.
 
 **A released ORCA that was already running** keeps the file store it opened, and

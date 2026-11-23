@@ -8,14 +8,16 @@
  * conversion never changes what they have open. Under the source's format lock, with this
  * ORCA's own writers refused (store-writers.ts):
  *
- * 1. The source is copied whole into `<store>-sqlite.partial-<id>` beside it, byte-checked, and
- *    must not have changed meanwhile.
+ * 1. The source is copied whole into staging beside it (`<store>-sqlite.staging-<id>/store`,
+ *    with a record of who made it), byte-checked, and must not have changed meanwhile.
  * 2. The copy, which nothing else has open, is switched in place (`switchStoreToSqlite` with
  *    `copyOf`): imported, verified, bound, fenced against released ORCA (sqlite/legacy-fence.ts)
  *    and marked as SQLite, recording the source and the signature of its files.
- * 3. The copy is renamed to `<store>-sqlite`, and the caller publishes it (`publish`: the CLI
- *    names it as the store in the workspace's config). The source must still be unchanged right
- *    before; the published store is never taken back.
+ * 3. With the source still unchanged, the copy is renamed to `<store>-sqlite`; from then on it is
+ *    never removed. It is checked to be a complete conversion of the source as the source is now
+ *    (`checkConverted`), and the caller publishes it (`publish`: the CLI names it in the
+ *    workspace's config, if the config still names the source). A conversion that stopped after
+ *    the rename is finished by the next one, through the same check, or refused and left alone.
  *
  * Nothing opens the new store until it is published, and no released ORCA has ever had it open,
  * so the fence holds for every one of them that reads the config afterwards. One that was already
@@ -23,12 +25,15 @@
  * {@link convertedSourceChanged} reports it.
  */
 import { randomUUID } from "node:crypto";
-import { readdir, rename, rm } from "node:fs/promises";
+import { readdir, readFile, rename, rm } from "node:fs/promises";
+import { hostname } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { createCopy, syncDirectory } from "./durable-file.js";
+import { createCopy, createDurable, syncDirectory } from "./durable-file.js";
 import { withFileLock } from "./file-lock.js";
 import { FileLeaseStore, lapsed } from "./lease-store.js";
-import { readSqliteSwitchJournal } from "./sqlite/legacy-fence.js";
+import { legacyFenceComplete, readSqliteSwitchJournal } from "./sqlite/legacy-fence.js";
+import { boundStoreId, verifySqliteMetadata } from "./sqlite/maintenance.js";
+import { SQLITE_METADATA_FILE } from "./sqlite/stores.js";
 import {
   CarryoverRefused,
   copyStoreInto,
@@ -46,7 +51,7 @@ import {
   switchStoreToSqlite,
 } from "./store-format.js";
 import { SQLITE_STORE_FORMAT_EPOCH, STORE_FORMAT_FILE } from "./store-backend.js";
-import { beginStoreSwitch, liveStoreWriters } from "./store-writers.js";
+import { beginStoreSwitch, liveStoreWriters, storeWriterAlive } from "./store-writers.js";
 
 /** The name a converted store takes beside its source: `.orca` becomes `.orca-sqlite`. */
 export const CONVERTED_STORE_SUFFIX = "-sqlite";
@@ -126,66 +131,56 @@ export async function convertStoreToSqlite(
             .join("; ")}). Stop it, then convert the store again. Nothing was changed.`,
           storeDir,
         );
-      const existing = await readStoreFormat(target).catch(() => "unreadable" as const);
-      if (existing !== undefined || (await present(target))) {
-        // Converted before and not published (interrupted, or the publication was lost): publish
-        // that store, as long as the source is still what was converted. It may have been in use
-        // already, so it is never replaced or removed here.
-        const from =
-          existing !== "unreadable" && existing?.epoch === SQLITE_STORE_FORMAT_EPOCH
-            ? existing.convertedFrom
-            : undefined;
-        if (from?.store !== storeDir)
-          throw refused(
-            storeDir,
-            `${target} already exists and is not this store's conversion. Move it out of the way, then convert again. Nothing was changed.`,
-          );
-        if (storeSnapshotSignature(await snapshotStore(storeDir)) !== from.signature)
-          throw new StoreFormatError(
-            "SOURCE_CHANGED",
-            `${target} was converted from this store, which has changed since, so it was not put in use. Move ${target} out of the way to convert again. Nothing was changed.`,
-            storeDir,
-          );
+      if ((await readStoreFormat(target).catch(() => "unreadable" as const)) !== undefined || (await present(target))) {
+        // Converted before and not published (interrupted, or the publication was refused or
+        // lost). It may already be in use, so it is never replaced or removed: it is published
+        // only once it proves to be a complete conversion of this store as the store is now.
+        await checkConverted(storeDir, target);
         await options.publish(target);
         return { status: "finished", convertedDir: target };
       }
-      await removePartials(target);
+      await reclaimStaging(storeDir, target);
       await refuseActiveRuns(storeDir);
 
       const before = await snapshotStore(storeDir);
-      const partial = `${target}.partial-${randomUUID()}`;
+      // Staging is ours alone: a directory with a record of who made it, and the copy inside it.
+      const staging = `${target}${STAGING_INFIX}${randomUUID()}`;
+      const copy = join(staging, "store");
       try {
-        if (!(await copyStoreInto(storeDir, partial, before, privacy))) throw busy(storeDir);
+        await privacy.mkdir(staging);
+        await createDurable(
+          join(staging, STAGING_RECORD),
+          JSON.stringify({ source: storeDir, pid: process.pid, host: hostname() }) + "\n",
+        );
+        await syncDirectory(dirname(staging));
+        if (!(await copyStoreInto(storeDir, copy, before, privacy))) throw busy(storeDir);
         // The marker is left out of a snapshot; the copy starts in the same format.
-        await createCopy(join(storeDir, STORE_FORMAT_FILE), join(partial, STORE_FORMAT_FILE));
-        await syncDirectory(partial);
+        await createCopy(join(storeDir, STORE_FORMAT_FILE), join(copy, STORE_FORMAT_FILE));
+        await syncDirectory(copy);
         await options.afterCopy?.();
         if (!sameStoreSnapshot(before, await snapshotStore(storeDir))) throw busy(storeDir);
-        const signature = storeSnapshotSignature(before);
-        await switchStoreToSqlite(partial, {
+        await switchStoreToSqlite(copy, {
           appVersion: options.appVersion,
           now: () => now,
           privacy,
           ...(options.platform ? { platform: options.platform } : {}),
-          copyOf: { storeDir, signature },
+          copyOf: { storeDir, signature: storeSnapshotSignature(before) },
         });
+        // The last check of the source before the copy takes its final name: once it has, it
+        // is never taken back.
         if (!sameStoreSnapshot(before, await snapshotStore(storeDir))) throw busy(storeDir);
         if (await present(target)) throw busy(storeDir);
-        await rename(partial, target);
+        await rename(copy, target);
         await syncDirectory(dirname(target));
       } catch (error) {
-        await rm(partial, { recursive: true, force: true });
+        await rm(staging, { recursive: true, force: true });
         throw error;
       }
-      try {
-        await options.beforePublish?.();
-        if (!sameStoreSnapshot(before, await snapshotStore(storeDir))) throw busy(storeDir);
-      } catch (error) {
-        // Not published, so nothing has opened it: it goes, and the store stays as it is.
-        await rm(target, { recursive: true, force: true });
-        await syncDirectory(dirname(target));
-        throw error;
-      }
+      await rm(staging, { recursive: true, force: true });
+      // From here a failure leaves the converted store where it is; the next conversion checks
+      // it again and publishes it, or refuses and leaves it for the operator.
+      await options.beforePublish?.();
+      await checkConverted(storeDir, target);
       await options.publish(target);
       return { status: "converted", convertedDir: target };
     } catch (error) {
@@ -240,16 +235,72 @@ async function refuseActiveRuns(storeDir: string): Promise<void> {
     );
 }
 
-/** Copies an interrupted conversion left behind; never published, so nothing has them open. */
-async function removePartials(target: string): Promise<void> {
-  const prefix = `${basename(target)}.partial-`;
+const STAGING_INFIX = ".staging-";
+const STAGING_RECORD = "staging.json";
+
+/**
+ * Staging an interrupted conversion of this store left behind: only a directory whose record
+ * names this store and a process on this host that is gone. Anything else with a similar name is
+ * left alone (it is not provably ours, or its process may still be at work); staging names are
+ * unique, so it never stands in the way.
+ */
+async function reclaimStaging(storeDir: string, target: string): Promise<void> {
+  const prefix = `${basename(target)}${STAGING_INFIX}`;
   let names: string[];
   try {
     names = await readdir(dirname(target));
   } catch {
     return;
   }
-  for (const name of names) if (name.startsWith(prefix)) await rm(join(dirname(target), name), { recursive: true });
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    const path = join(dirname(target), name);
+    let record: { source?: unknown; pid?: unknown; host?: unknown };
+    try {
+      record = JSON.parse(await readFile(join(path, STAGING_RECORD), "utf8")) as typeof record;
+    } catch {
+      continue;
+    }
+    if (record.source !== storeDir || typeof record.pid !== "number" || typeof record.host !== "string") continue;
+    if (storeWriterAlive({ pid: record.pid, host: record.host })) continue;
+    await rm(path, { recursive: true, force: true });
+  }
+}
+
+/**
+ * `target` is a complete conversion of `storeDir` as `storeDir` is now, safe to name as the
+ * workspace's store: its marker names this store and its files' signature; no switch of it is
+ * half done; the legacy fence is complete; and its database is the one it is bound to, and
+ * verifies. Checked under the target's own format lock. Anything else refuses, leaving both
+ * stores and the config as they are.
+ */
+async function checkConverted(storeDir: string, target: string): Promise<void> {
+  const notConversion = (why: string) =>
+    refused(
+      storeDir,
+      `${target} is not a complete conversion of this store (${why}), so it was not put in use. It was left as it is; move it out of the way to convert again. Nothing else was changed.`,
+    );
+  await withFileLock(join(target, STORE_FORMAT_LOCK), async () => {
+    const marker = await readStoreFormat(target).catch(() => undefined);
+    if (marker?.epoch !== SQLITE_STORE_FORMAT_EPOCH || !marker.sqliteId) throw notConversion("no SQLite marker");
+    if (marker.convertedFrom?.store !== storeDir) throw notConversion("converted from another store");
+    if (await readSqliteSwitchJournal(target).catch(() => true)) throw notConversion("its switch is not finished");
+    if (!(await legacyFenceComplete(target))) throw notConversion("the fence against older ORCA is incomplete");
+    let bound: string | undefined;
+    try {
+      bound = boundStoreId(join(target, SQLITE_METADATA_FILE));
+    } catch {
+      bound = undefined;
+    }
+    if (bound !== marker.sqliteId) throw notConversion("its database is missing or bound to another store");
+    if (!(await verifySqliteMetadata(target)).ok) throw notConversion("its database does not verify");
+    if (storeSnapshotSignature(await snapshotStore(storeDir)) !== marker.convertedFrom.signature)
+      throw new StoreFormatError(
+        "SOURCE_CHANGED",
+        `${target} was converted from this store, which has changed since, so it was not put in use. It was left as it is; move it out of the way to convert again. Nothing else was changed.`,
+        storeDir,
+      );
+  });
 }
 
 async function present(path: string): Promise<boolean> {

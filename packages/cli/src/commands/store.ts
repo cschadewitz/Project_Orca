@@ -21,6 +21,7 @@
  * in the config, leaving the file store as it was (store-convert.ts); `switch`, the same in
  * place, always refuses (`refuseInPlaceSwitch`).
  */
+import { readFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { OrcaError } from "@orca/core";
 import {
@@ -43,7 +44,7 @@ import {
 import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
 import { loadConfig } from "../bootstrap.js";
 import { readOrcaVersion } from "../version.js";
-import { writeConfigStoreDir } from "../config-store-dir.js";
+import { configRevision, writeConfigStoreDir } from "../config-store-dir.js";
 import { storePrivacy } from "../store-privacy.js";
 import type { CommandContext } from "./index.js";
 
@@ -117,13 +118,19 @@ async function convertCommand(
     : join(dirname(workspace.raw), `${basename(workspace.raw)}${CONVERTED_STORE_SUFFIX}`);
   if (resolve(workspace.configDir, raw) !== convertedStoreDir(storeDir))
     throw new OrcaError("CONFIG_INVALID", `cannot name the converted store of ${storeDir} in the config (${raw})`);
+  // The config as it is now, which must still name this store: publication is conditional on it.
+  const saved = workspace.configFile ? await readFile(workspace.configFile, "utf8") : undefined;
+  const revision = configRevision(saved);
   const privacy = storePrivacy();
   let written: string | undefined;
   const outcome = await convertStoreToSqlite(storeDir, {
     appVersion: readOrcaVersion(),
     ...(privacy ? { privacy } : {}),
     publish: async () => {
-      written = await writeConfigStoreDir(workspace.configFile, workspace.configDir, raw);
+      written = await writeConfigStoreDir(workspace.configFile, workspace.configDir, raw, {
+        revision,
+        source: storeDir,
+      });
     },
   });
   if (outcome.status === "current") {
