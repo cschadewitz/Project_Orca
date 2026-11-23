@@ -24,9 +24,10 @@
  * What this covers and what it does not: it is the client-owned ACP file path only. An
  * agent's native tools (its own shell, its own file access, an MCP server it connects to by
  * itself) never pass through ORCA and are not covered; keeping an agent to this path is an
- * operating-system boundary's job (ADR 0009). Paths are compared as written, workspace-
- * relative where they can be, like every rule; a symlink inside the roots that leads
- * elsewhere is the roots check's and the protected-path check's concern, not this one's.
+ * operating-system boundary's job (ADR 0009). The session roots check and rule targets are
+ * lexical: paths are compared as written, workspace-relative where they can be, so a symlink
+ * inside the roots that leads elsewhere is not caught here. The `fs:` decisions logged
+ * through `onPermission` are not a durable authorization or execution record.
  */
 import type * as acp from "@agentclientprotocol/sdk";
 import type { PermissionDecision, PermissionPolicy } from "@orca/core";

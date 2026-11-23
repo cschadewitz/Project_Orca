@@ -32,8 +32,8 @@ const request = (method, params) =>
     send({ jsonrpc: "2.0", id, method, params });
   });
 const perform = (op) => {
-  if (op.write !== undefined) return request("fs/write_text_file", { sessionId: "s1", path: op.write, content: op.content });
-  if (op.read !== undefined) return request("fs/read_text_file", { sessionId: "s1", path: op.read });
+  if (op.write !== undefined) return request("fs/write_text_file", { sessionId: op.session || "s1", path: op.write, content: op.content });
+  if (op.read !== undefined) return request("fs/read_text_file", { sessionId: op.session || "s1", path: op.read });
   return request("session/request_permission", {
     sessionId: "s1",
     toolCall: { toolCallId: "t", title: op.title, kind: op.ask, locations: (op.paths || []).map((path) => ({ path })) },
@@ -62,7 +62,10 @@ rl.on("line", async (line) => {
 setInterval(() => {}, 1000);
 `;
 
-type Op = { write: string; content: string } | { read: string } | { ask: string; title: string; paths?: string[] };
+type Op =
+  | { write: string; content: string; session?: string }
+  | { read: string; session?: string }
+  | { ask: string; title: string; paths?: string[] };
 type Outcome = { result?: unknown; error?: { path?: string; reason?: string } };
 
 const dirs: string[] = [];
@@ -220,6 +223,23 @@ describe("the policy decides ORCA's own file executor (#703)", () => {
     expect(refused(outcomes[0])).toMatch(/denies it now/);
     expect(decisions).toEqual(["fs:ask:allow_once:denied-since"]);
     await expect(readFile(file, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("serves only this session's own ACP session", async () => {
+    const dir = await workspace();
+    const file = join(dir, "src", "a.ts");
+    const { outcomes, decisions } = await turn(
+      dir,
+      [
+        { write: file, content: "x", session: "someone-else" },
+        { read: file, session: "someone-else" },
+      ],
+      { default: "allow" },
+    );
+    expect(refused(outcomes[0])).toBe("not this session");
+    expect(refused(outcomes[1])).toBe("not this session");
+    expect(decisions).toEqual([]);
+    expect(await readFile(file, "utf8")).toBe("export {};\n");
   });
 
   it("lets what the policy allows through without asking", async () => {

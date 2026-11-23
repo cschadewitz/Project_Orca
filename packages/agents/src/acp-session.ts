@@ -283,11 +283,13 @@ async function openPlanned(
    * agent's own earlier ask is not reused: one answer covers one operation (#703 review).
    *
    * Every await is followed by a recheck: the turn must be the same live one, and after a
-   * person answers, the policy is read again and a deny that appeared meanwhile wins. Paths
-   * are compared as written; physical containment is the roots and protected-path checks'.
-   * Each decision is recorded like an ask's, prefixed `fs:`.
+   * person answers, the policy is read again and a deny that appeared meanwhile wins. It
+   * returns the dispatch check, which the handler runs in the same step that starts the I/O.
+   * Paths, the roots check and rule targets are lexical (as written, not resolved). Each
+   * decision is logged like an ask's, prefixed `fs:`; that log is not a durable authorization
+   * or execution record.
    */
-  const authorizeFs = async (path: string, access: FsAccess): Promise<void> => {
+  const authorizeFs = async (path: string, access: FsAccess): Promise<() => void> => {
     const turn = activeTurn;
     const record = (decision: string) => {
       opts.onPermission?.({ title: fsToolCall(path, access).title ?? path, decision: `fs:${decision}` });
@@ -301,10 +303,22 @@ async function openPlanned(
     if (!turn || turn.abort.signal.aborted)
       return refuse("no-turn", "no live turn: ORCA answers file requests only in one");
     const live = () => activeTurn === turn && !turn.abort.signal.aborted;
+    /**
+     * Returned to the handler, which calls it in the same synchronous step that starts the
+     * host I/O: returning from here is not the dispatch boundary (#703 review).
+     */
+    const dispatch = () => {
+      if (live()) return;
+      record("dispatch:turn-ended");
+      throw acp.RequestError.invalidParams({ path, reason: "the turn ended before the file I/O started" });
+    };
     const policy = await policyForAsk();
     if (!live()) return refuse("turn-ended", "the turn ended before the file request was decided");
     const decision = decideFsCall(policy, path, access, evalScope);
-    if (decision === "allow") return record("allow");
+    if (decision === "allow") {
+      record("allow");
+      return dispatch;
+    }
     if (decision !== "ask") return refuse(decision, `not allowed: ${decision}`);
     const invocation: PermissionInvocation = {
       sessionId: id,
@@ -332,6 +346,7 @@ async function openPlanned(
     if (after === "deny") return refuse("ask:allow_once:denied-since", "not allowed: the policy denies it now");
     if (!live()) return refuse("ask:allow_once:turn-ended", "the turn ended while the file request was asked");
     record("ask:allow_once");
+    return dispatch;
   };
 
   /**
@@ -402,9 +417,13 @@ async function openPlanned(
     })
     .onRequest(acp.methods.client.fs.readTextFile, async (ctx) => {
       const { path, line, limit } = ctx.params;
+      // Only this session's own agent session may ask ORCA for file I/O (#703 review).
+      if (ctx.params.sessionId !== acpSessionId)
+        throw acp.RequestError.invalidParams({ path, reason: "not this session" });
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       refuseProtected(path, "read");
-      await authorizeFs(path, "read");
+      const dispatch = await authorizeFs(path, "read");
+      dispatch();
       let content = await opts.host.fs.readFile(path);
       if (line !== undefined && line !== null) {
         const lines = content
@@ -419,9 +438,12 @@ async function openPlanned(
     })
     .onRequest(acp.methods.client.fs.writeTextFile, async (ctx) => {
       const { path, content } = ctx.params;
+      if (ctx.params.sessionId !== acpSessionId)
+        throw acp.RequestError.invalidParams({ path, reason: "not this session" });
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       refuseProtected(path, "write");
-      await authorizeFs(path, "write");
+      const dispatch = await authorizeFs(path, "write");
+      dispatch();
       await opts.host.fs.writeFile(path, content);
       return {};
     });

@@ -159,8 +159,11 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   ask is not reused, so one answer covers one operation. After every await the turn must be
   the same live one, and after the answer the policy is read again and a deny that appeared
   meanwhile wins. A call outside a live turn is refused. Each decision is recorded like an
-  ask's, prefixed `fs:`. Paths are compared as written; a reusable permit waits for physical
-  target verification. This is the
+  ask's, prefixed `fs:`. Both handlers serve only this session's own ACP session id, and the
+  live-turn check runs again in the same step that starts the host I/O. The roots check and
+  rule targets are lexical, compared as written and not resolved, so a reusable permit waits
+  for physical target verification; and the `fs:` log is not a durable authorization or
+  execution record. This is the
   client-owned ACP file path only: an agent's native tools and its own MCP connections do not
   pass through it, and keeping an agent on this path is an operating-system boundary's job.
 - **A wildcard `allow` in this file is ignored**, with a warning. Everything ORCA writes here
