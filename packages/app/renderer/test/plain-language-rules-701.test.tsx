@@ -119,6 +119,19 @@ describe("a plain-language rule in the sidecar", () => {
     expect(parseSidecar(row({}))).toBeDefined();
   });
 
+  it("refuses, rather than repairs, a judged row the daemon's strict v4 schema refuses (#701 review)", () => {
+    const row = (rule: object) => JSON.stringify({ version: 4, agents: { claude: { rules: [rule] } } });
+    const good = { match: { kind: "read" }, judge: { criterion: "Reading." } };
+    expect(parseSidecar(row(good))).toBeDefined();
+    // Rebuilding any of these as `{ criterion }` on an unrelated edit would make a refused row valid.
+    expect(parseSidecar(row({ ...good, judge: { criterion: "Reading.", model: "other" } }))).toBeUndefined();
+    expect(parseSidecar(row({ ...good, judge: { criterion: "   " } }))).toBeUndefined();
+    expect(parseSidecar(row({ ...good, match: { kind: "edit" } }))).toBeUndefined();
+    expect(parseSidecar(row({ ...good, match: { kind: "read", path: "/etc/passwd" } }))).toBeUndefined();
+    expect(parseSidecar(row({ ...good, match: { kind: "read", titlePattern: "(" } }))).toBeUndefined();
+    expect(parseSidecar(row({ ...good, match: { kind: "read", command: "ls" } }))).toBeUndefined();
+  });
+
   it("says what Save would refuse, as the daemon's schema does", () => {
     const rule = handJudgedRule("2026-09-21T12:00:00.000Z");
     expect(judgedRuleProblem(rule)).toMatch(/sentence/);
@@ -234,6 +247,43 @@ describe("the policy panel's plain-language rules", () => {
     expect(doc.agents["claude"]!.rules.slice(0, 2)).toEqual(JSON.parse(PERMISSIONS_TEXT).agents.claude.rules);
   });
 
+  it("holds Save while a plain-language rule the daemon would refuse is in the draft", async () => {
+    const disk = sidecar(PERMISSIONS_TEXT);
+    renderPanel();
+    await region("Plain-language rules");
+    fireEvent.click(screen.getByRole("button", { name: "Add a plain-language rule" }));
+    const save = await screen.findByRole("button", { name: "Save" });
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(save.getAttribute("title")).toMatch(/needs fixing first: Write the rule in a sentence/);
+    fireEvent.click(save);
+    await settled();
+    expect(disk.text).toBe(PERMISSIONS_TEXT);
+    const [row] = await rows("Plain-language rules");
+    fireEvent.change(within(row!).getByLabelText(/^Rule/), { target: { value: CRITERION } });
+    expect(screen.getByRole("button", { name: "Save" }).getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("leaves a sidecar with a malformed judged row alone, with nothing to save", async () => {
+    const malformed = WITH_JUDGED.replace(
+      '"criterion": "Reading the docs."',
+      '"criterion": "Reading the docs.", "x": 1',
+    );
+    const disk = sidecar(malformed);
+    renderPanel();
+    expect(await screen.findByText(/cannot be edited here/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add a plain-language rule" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(disk.text).toBe(malformed);
+  });
+
+  it("says the rules are not active in this build", async () => {
+    sidecar(WITH_JUDGED);
+    renderPanel();
+    const section = await region("Plain-language rules");
+    expect(section.textContent).toContain("Not active in this version of ORCA");
+    expect(section.textContent).toContain("do not change any permission decision yet");
+  });
+
   it("removes one into the draft, and Save writes the file back at the version the rest needs", async () => {
     const disk = sidecar(WITH_JUDGED);
     renderPanel();
@@ -288,6 +338,8 @@ describe("the Config surface's list", () => {
     expect(items).toHaveLength(2);
     expect(items[1]!.textContent).toContain("Reading the docs.");
     expect(items[1]!.textContent).toContain("expires");
+    // Inactive in this build, said on the list itself (#701 review).
+    expect(list.textContent).toContain("Not active in this version of ORCA");
     // The typed rules' numbering is untouched by them.
     expect(agentPolicies(CONFIG_GET.effective)[0]!.judged).toEqual([]);
   });

@@ -282,7 +282,16 @@ export class ConfigModel {
    * before the lock stays, because it refuses the ordinary case sooner; it is no longer the
    * one that decides.
    */
-  async set(params: ConfigSetParams, authorize?: () => Promise<void>): Promise<ConfigSetResult> {
+  async set(
+    params: ConfigSetParams,
+    authorize?: () => Promise<void>,
+    /**
+     * The authority a change to judged (plain-language) rules needs as well (#701 review): the
+     * same `permissions.grant` that `permissions.saveJudgedRule` asks for. Checked whenever the
+     * write would change the judged rules on disk, at the start and again under the lock.
+     */
+    authorizeJudged?: () => Promise<void>,
+  ): Promise<ConfigSetResult> {
     await authorize?.();
     if (params.validateOnly) {
       // Nothing is written, so there is nothing to serialise against: this reports what the
@@ -305,8 +314,8 @@ export class ConfigModel {
 
     const written =
       params.document === "config"
-        ? await this.writeConfigFile(params, authorize)
-        : await this.writeSidecarFile(params, authorize);
+        ? await this.writeConfigFile(params, authorize, authorizeJudged)
+        : await this.writeSidecarFile(params, authorize, authorizeJudged);
     this.publish(written);
     const config = params.document === "config" ? written : await this.read("config");
     await authorize?.();
@@ -408,7 +417,11 @@ export class ConfigModel {
    * happens in here: patching a YAML document is read-modify-write, and a compare made
    * outside the lock is a compare of bytes that may not be the ones being replaced.
    */
-  private async writeConfigFile(params: ConfigSetParams, authorize?: () => Promise<void>): Promise<ConfigDocumentView> {
+  private async writeConfigFile(
+    params: ConfigSetParams,
+    authorize?: () => Promise<void>,
+    authorizeJudged?: () => Promise<void>,
+  ): Promise<ConfigDocumentView> {
     const path = this.pathOf("config");
     await mkdir(dirname(path), { recursive: true });
     return withFileLock(`${path}.lock`, async () => {
@@ -420,7 +433,10 @@ export class ConfigModel {
       const errors = this.validate("config", text);
       if (errors.length)
         throw new OrcaError("CONFIG_INVALID", `${path}: ${errors[0]?.message ?? "invalid"}`, { errors });
-      await writeAtomically(path, text, authorize);
+      // Read under this lock: the bytes being replaced are these.
+      const commit = changesJudgedRules("config", current, text) ? (authorizeJudged ?? authorize) : authorize;
+      await commit?.();
+      await writeAtomically(path, text, commit);
       return this.read("config");
     });
   }
@@ -434,6 +450,7 @@ export class ConfigModel {
   private async writeSidecarFile(
     params: ConfigSetParams,
     authorize?: () => Promise<void>,
+    authorizeJudged?: () => Promise<void>,
   ): Promise<ConfigDocumentView> {
     const current = await this.read("permissions");
     await authorize?.();
@@ -442,10 +459,21 @@ export class ConfigModel {
     const errors = this.validate("permissions", text);
     if (errors.length)
       throw new OrcaError("CONFIG_INVALID", `${current.path}: ${errors[0]?.message ?? "invalid"}`, { errors });
+    const judged = authorizeJudged ?? authorize;
+    // Refused early when the edit as read changes judged rules; decided again under the lock.
+    if (changesJudgedRules("permissions", current, text)) await judged?.();
+    // Under the sidecar's lock, the writer calls this before the compare and again before the
+    // rename: the file read here is the one being replaced, whatever revision the edit quoted.
+    const commit =
+      authorize &&
+      (async () => {
+        const onDisk = await this.read("permissions");
+        await (changesJudgedRules("permissions", onDisk, text) ? judged : authorize)?.();
+      });
     try {
       await replacePermissionPolicyFile(current.path, JSON.parse(text), {
         expectedRevision: params.expectedRevision,
-        authorize,
+        authorize: commit,
       });
     } catch (e) {
       // The writer's stable code, in the wire's words. `details` already carries both hashes.
@@ -657,6 +685,51 @@ function hash(text: string): string {
 }
 
 /** `parsed` is best-effort: a file that does not parse still has `text`, which is what an editor shows. */
+/**
+ * The judged (plain-language) rules a document holds, as one comparable string: each agent's
+ * rows with a `judge`, in order, in the sidecar or the config. `undefined` when the text does not parse.
+ */
+function judgedRulesKey(document: ConfigDocument, text: string | undefined): string | undefined {
+  if (text === undefined || text.trim() === "") return "[]";
+  const value = safeParse(document, text);
+  if (value === undefined) return undefined;
+  const judgedOf = (rules: unknown): unknown[] =>
+    Array.isArray(rules)
+      ? rules.filter((r) => r !== null && typeof r === "object" && (r as { judge?: unknown }).judge !== undefined)
+      : [];
+  const agents = value !== null && typeof value === "object" ? (value as { agents?: unknown }).agents : undefined;
+  // The sidecar keys its agents by id, `{ agents: { <id>: { rules } } }`; the config lists them.
+  const entries: [unknown, unknown][] =
+    document === "permissions"
+      ? agents !== null && typeof agents === "object" && !Array.isArray(agents)
+        ? Object.entries(agents).map(([id, a]) => [id, (a as { rules?: unknown } | null)?.rules])
+        : []
+      : Array.isArray(agents)
+        ? agents.map((a: unknown) => {
+            const agent = (a ?? {}) as { id?: unknown; permissions?: { rules?: unknown } };
+            return [agent.id, agent.permissions?.rules];
+          })
+        : [];
+  return JSON.stringify(
+    entries.flatMap(([id, list]) => {
+      const rules = judgedOf(list);
+      return rules.length ? [{ id, rules }] : [];
+    }),
+  );
+}
+
+/**
+ * Whether writing `next` over `current` changes the judged rules: an add, an edit, a removal
+ * or a move. A file that does not parse holds no judged rule ORCA would consult, so replacing it
+ * with one that holds none changes nothing.
+ */
+function changesJudgedRules(document: ConfigDocument, current: ConfigDocumentView, next: string): boolean {
+  const before = judgedRulesKey(document, current.exists ? current.text : undefined);
+  const after = judgedRulesKey(document, next);
+  if (before === after) return false;
+  return !(before === undefined && after === "[]");
+}
+
 function safeParse(document: ConfigDocument, text: string): unknown {
   try {
     return document === "config" ? parseYaml(text) : JSON.parse(text === "" ? "{}" : text);

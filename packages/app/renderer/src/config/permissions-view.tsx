@@ -32,7 +32,14 @@
  */
 import type { JSX } from "react";
 import { Chip, Text, Time, formatAbsolute, textClass } from "../ui/index.js";
-import { POLICY_LAYERS, rowsFrom, type AgentPolicyView, type JudgedRow } from "./config-model.js";
+import {
+  PLAIN_RULES_ACTIVE,
+  PLAIN_RULES_INACTIVE_NOTE,
+  POLICY_LAYERS,
+  rowsFrom,
+  type AgentPolicyView,
+  type JudgedRow,
+} from "./config-model.js";
 
 export interface PermissionsViewProps {
   policies: readonly AgentPolicyView[];
@@ -148,10 +155,17 @@ function JudgedRules({ rows, live }: { rows: readonly JudgedRow[]; live: boolean
     <div className="orca-config__layer" aria-label="Plain-language rules">
       <div className="orca-config__layer-head">
         <Text style="label-strong">Plain-language rules</Text>
+        {!PLAIN_RULES_ACTIVE && <Chip>inactive</Chip>}
       </div>
+      {!PLAIN_RULES_ACTIVE && (
+        <Text style="caption" className="orca-config__none" data-plain-rules-inactive="">
+          {PLAIN_RULES_INACTIVE_NOTE}
+        </Text>
+      )}
       <Text style="caption" className="orca-config__none">
-        A judge is asked about these only when the rules above answer ask, only for reads and searches, and only in a
-        session given a judge. A yes allows that one call once; anything else goes to a person.
+        {PLAIN_RULES_ACTIVE ? "" : "Once active: "}A judge is asked about these only when the rules above answer ask,
+        only for reads and searches, and only in a session given a judge. A yes allows that one call once; anything else
+        goes to a person.
       </Text>
       <ol className="orca-config__rules">
         {rows.map((row) => (

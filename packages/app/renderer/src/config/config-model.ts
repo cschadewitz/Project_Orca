@@ -571,3 +571,15 @@ export function lineOfPath(text: string, path: string): number | undefined {
   const index = lines.findIndex((line) => pattern.test(line));
   return index === -1 ? undefined : index + 1;
 }
+
+/**
+ * Whether plain-language rules change permission decisions in this build (#701). They do not
+ * yet: the daemon's judge is wired but switched off until a separately reviewed activation, so
+ * a saved rule is kept and shown but every call it would cover still goes to a person. The
+ * activation changes this with the daemon's own switch, and both panels say which it is.
+ */
+export const PLAIN_RULES_ACTIVE = false;
+
+/** Said wherever plain-language rules are listed while they are inactive. */
+export const PLAIN_RULES_INACTIVE_NOTE =
+  "Not active in this version of ORCA. Rules saved here are kept, but they do not change any permission decision yet: every call they would cover still goes to a person.";

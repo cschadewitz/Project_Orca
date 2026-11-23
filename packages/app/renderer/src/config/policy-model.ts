@@ -105,11 +105,45 @@ export function judgedRuleProblem(rule: JudgedSidecarRule): string | undefined {
     return `A rule is at most ${JUDGED_RULE_CRITERION_MAX} characters.`;
   if (!(SAVED_JUDGED_RULE_KINDS as readonly string[]).includes(rule.match.kind ?? ""))
     return `A plain-language rule names its kind, ${SAVED_JUDGED_RULE_KINDS.join(" or ")}. Other calls go to a person.`;
+  if ((rule.match as { command?: unknown }).command !== undefined)
+    return "A plain-language rule cannot match a command. Write a typed deny or ask rule instead.";
   for (const key of ["path", "pathPrefix"] as const) {
     const value = rule.match[key];
     if (value !== undefined && !workspaceRelative(value))
       return "Write paths relative to the workspace, with no '..', home or drive prefix.";
   }
+  const pattern = rule.match.titlePattern;
+  if (pattern !== undefined && !titlePatternIsValid(pattern))
+    return `A title pattern is a regular expression of at most ${SAVED_TITLE_PATTERN_MAX} characters.`;
+  return undefined;
+}
+
+/** `SAVED_TITLE_PATTERN_MAX` in core, mirrored because the renderer cannot import core (ADR 0008). */
+const SAVED_TITLE_PATTERN_MAX = 256;
+
+/** Mirrors `savedTitlePatternIsValid` in core. */
+function titlePatternIsValid(pattern: string): boolean {
+  if (pattern.length === 0 || pattern.length > SAVED_TITLE_PATTERN_MAX) return false;
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The first plain-language rule in a document that the daemon would refuse, with its agent, or
+ * `undefined`. Save is held while there is one (#701 review): a row that says it blocks Save
+ * must actually block it.
+ */
+export function firstJudgedProblem(doc: SidecarDocument): { agentId: string; problem: string } | undefined {
+  for (const [agentId, entry] of Object.entries(doc.agents))
+    for (const rule of entry.rules) {
+      if (!isJudgedRule(rule)) continue;
+      const problem = judgedRuleProblem(rule);
+      if (problem !== undefined) return { agentId, problem };
+    }
   return undefined;
 }
 
@@ -280,10 +314,16 @@ function asRule(value: unknown): SidecarRule | undefined {
   const decision = row["decision"];
   const judge = row["judge"];
   if (judge !== undefined) {
-    // A plain-language rule (#701): a criterion in place of a decision, never both.
+    // A plain-language rule (#701): a criterion in place of a decision, never both. Held to the
+    // daemon's strict v4 rule (#701 review): its `judge` is exactly `{ criterion }`, and a row the
+    // daemon would refuse refuses the document here too. Editing one would otherwise rebuild it
+    // as `{ criterion }` and could turn a refused row into a valid rule during an unrelated edit.
     if (decision !== undefined) return undefined;
     if (typeof judge !== "object" || judge === null || Array.isArray(judge)) return undefined;
+    const keys = Object.keys(judge);
+    if (keys.length !== 1 || keys[0] !== "criterion") return undefined;
     if (typeof (judge as Record<string, unknown>)["criterion"] !== "string") return undefined;
+    if (judgedRuleProblem(row as unknown as JudgedSidecarRule) !== undefined) return undefined;
     return row as unknown as SidecarRule;
   }
   if (typeof decision !== "string" || !(PERMISSION_DECISIONS as readonly string[]).includes(decision)) {

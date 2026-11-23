@@ -178,3 +178,104 @@ describe("permissions.saveJudgedRule", () => {
     expect(saved).toMatchObject({ ok: true, result: { ruleId: "sidecar:0", outcome: "added" } });
   });
 });
+
+describe("config.set and judged rules (#701 review: same authority on both routes)", () => {
+  const typed = { match: { kind: "read", path: "README.md" }, decision: "allow" };
+  const judged = { match: { kind: "read", scope: "workspace" }, judge: { criterion: "Reading the docs." } };
+  const sidecarText = (rules: unknown[], version = 4) => JSON.stringify({ version, agents: { claude: { rules } } });
+  /** config.write and config.read, and a separate judged authority that refuses unless granted. */
+  const authority = (grant: boolean) => {
+    const calls = { plain: 0, judged: 0 };
+    return {
+      calls,
+      plain: async () => void calls.plain++,
+      judged: async () => {
+        calls.judged++;
+        if (!grant) throw new Error("missing-permission:permissions.grant");
+      },
+    };
+  };
+
+  it("needs the grant to add, change or remove a judged rule through the whole document", async () => {
+    const { model, sidecar } = await workspace();
+    const without = authority(false);
+    await expect(
+      model.set(
+        { document: "permissions", expectedRevision: "", text: sidecarText([judged]) },
+        without.plain,
+        without.judged,
+      ),
+    ).rejects.toThrow("permissions.grant");
+    await expect(readFile(sidecar, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    const owner = authority(true);
+    const added = await model.set(
+      { document: "permissions", expectedRevision: "", text: sidecarText([judged]) },
+      owner.plain,
+      owner.judged,
+    );
+    // Before the lock, then under it before the compare and again before the rename.
+    expect(owner.calls.judged).toBeGreaterThanOrEqual(3);
+
+    const edited = sidecarText([{ ...judged, judge: { criterion: "Reading anything." } }]);
+    await expect(
+      model.set(
+        { document: "permissions", expectedRevision: added.document.revision, text: edited },
+        without.plain,
+        without.judged,
+      ),
+    ).rejects.toThrow("permissions.grant");
+    await expect(
+      model.set(
+        { document: "permissions", expectedRevision: added.document.revision, text: sidecarText([], 1) },
+        without.plain,
+        without.judged,
+      ),
+    ).rejects.toThrow("permissions.grant");
+    expect(JSON.parse(await readFile(sidecar, "utf8")).agents.claude.rules).toEqual([judged]);
+  });
+
+  it("keeps ordinary grants and unrelated edits on config.write alone, judged rows untouched", async () => {
+    const { model, sidecar } = await workspace();
+    const owner = authority(true);
+    const first = await model.set(
+      { document: "permissions", expectedRevision: "", text: sidecarText([judged]) },
+      owner.plain,
+      owner.judged,
+    );
+    const without = authority(false);
+    await model.set(
+      { document: "permissions", expectedRevision: first.document.revision, text: sidecarText([typed, judged]) },
+      without.plain,
+      without.judged,
+    );
+    expect(without.calls.judged).toBe(0);
+    expect(JSON.parse(await readFile(sidecar, "utf8")).agents.claude.rules).toEqual([typed, judged]);
+
+    // A typed-only sidecar never needs it either.
+    const fresh = await workspace();
+    await fresh.model.set(
+      { document: "permissions", expectedRevision: "", text: sidecarText([typed], 1) },
+      without.plain,
+      without.judged,
+    );
+    expect(without.calls.judged).toBe(0);
+  });
+
+  it("needs the grant for a judged rule written into the config file too", async () => {
+    const { model } = await workspace();
+    const without = authority(false);
+    const current = await model.read("config");
+    await expect(
+      model.set(
+        {
+          document: "config",
+          expectedRevision: current.revision,
+          text: `${CONFIG}      rules:\n        - match: { kind: read, scope: workspace }\n          judge: { criterion: "Reading the docs." }\n`,
+        },
+        without.plain,
+        without.judged,
+      ),
+    ).rejects.toThrow("permissions.grant");
+  });
+});

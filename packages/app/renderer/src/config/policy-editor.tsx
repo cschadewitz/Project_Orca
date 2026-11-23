@@ -55,13 +55,21 @@ import {
   textClass,
 } from "../ui/index.js";
 import { configUrl } from "../route-table.js";
-import { POLICY_LAYERS, agentPolicies, describeRule, rowsFrom } from "./config-model.js";
+import {
+  PLAIN_RULES_ACTIVE,
+  PLAIN_RULES_INACTIVE_NOTE,
+  POLICY_LAYERS,
+  agentPolicies,
+  describeRule,
+  rowsFrom,
+} from "./config-model.js";
 import { DraftBar } from "./draft-bar.js";
 import {
   JUDGED_RULE_CRITERION_MAX,
   SAVED_JUDGED_RULE_KINDS,
   composeGrants,
   grantKeys,
+  firstJudgedProblem,
   handJudgedRule,
   handRule,
   isJudgedRule,
@@ -145,6 +153,9 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
     () => (onDisk && draft?.kind === "grants" ? composeGrants(onDisk, draft.agents).document : onDisk),
     [draft, onDisk],
   );
+  /* A plain-language rule the daemon would refuse holds Save here, so the row's own note that
+     Save is blocked is true (#701 review). */
+  const judgedProblem = useMemo(() => (held ? firstJudgedProblem(held) : undefined), [held]);
 
   const policy = useMemo(
     () => (data ? agentPolicies(data.effective).find((entry) => entry.agentId === agentId) : undefined),
@@ -334,8 +345,8 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
 
             {held === undefined ? (
               <Text style="caption" className="orca-policy__none">
-                The sidecar is not valid JSON, so it cannot be edited here. Open it in the configuration&apos;s raw view
-                and fix it there.
+                The sidecar cannot be edited here: it is not valid JSON, or a rule in it is one ORCA would refuse. It is
+                left as it is. Open it in the configuration&apos;s raw view and fix it there.
               </Text>
             ) : typed.length === 0 ? (
               <Text style="caption" className="orca-policy__none">
@@ -382,6 +393,7 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
               <div className="orca-policy__section-head">
                 <Text style="label-strong">Plain-language rules</Text>
                 <Chip>sidecar</Chip>
+                {!PLAIN_RULES_ACTIVE && <Chip>inactive</Chip>}
                 <span className="orca-spacer" />
                 {editable && (
                   <Button
@@ -393,10 +405,15 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
                   </Button>
                 )}
               </div>
+              {!PLAIN_RULES_ACTIVE && (
+                <Text style="caption" className="orca-policy__none" data-plain-rules-inactive="">
+                  {PLAIN_RULES_INACTIVE_NOTE}
+                </Text>
+              )}
               <Text style="caption" className="orca-policy__none">
-                A rule in a sentence, for reads and searches. When the rules above answer ask, a judge on your own key
-                decides whether the call fits the sentence. A yes allows that one call once; anything else goes to you.
-                A judge is used only in a session given one.
+                A rule in a sentence, for reads and searches. {PLAIN_RULES_ACTIVE ? "When" : "Once active, when"} the
+                rules above answer ask, a judge on your own key decides whether the call fits the sentence. A yes allows
+                that one call once; anything else goes to you. A judge is used only in a session given one.
               </Text>
               {judged.length === 0 ? (
                 <Text style="caption" className="orca-policy__none">
@@ -482,7 +499,13 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
           busy={save.busy}
           {...(save.conflict === undefined ? {} : { conflict: save.conflict })}
           {...(save.message === undefined ? {} : { message: save.message })}
-          {...(writability.can ? {} : { disabledReason: writability.reason })}
+          {...(!writability.can
+            ? { disabledReason: writability.reason }
+            : judgedProblem !== undefined
+              ? {
+                  disabledReason: `A plain-language rule for ${judgedProblem.agentId} needs fixing first: ${judgedProblem.problem}`,
+                }
+              : {})}
           note="Saving rewrites only the agents you edited. Rules you did not touch keep when they were added and what for."
           /* Save or Discard emptied the draft, and the bar went with the button pressed: focus goes
              to the Written grants, the list the draft was editing, as the Config surface's goes
