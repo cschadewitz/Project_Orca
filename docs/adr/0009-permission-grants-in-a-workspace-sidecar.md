@@ -190,8 +190,10 @@ changes, all on this file and its writer, with no second store:
 - **No remembered native grant.** An automatic allow selects only an agent's `allow_once`
   and refuses (`allow:no-one-time-option`) when none is offered, instead of falling back to
   `allow_always`. A remembered option would have the agent stop asking, so an expired,
-  removed or narrowed rule would never be consulted again. The live human path already
-  offered one-time options only. The deny fallback to `reject_always` is unchanged: it can
+  removed or narrowed rule would never be consulted again. A person is offered one-time
+  options only too: the live card already was, and now a parked ask and one forwarded to an
+  upstream ACP client are as well, so an answer can never hand the agent a remembered grant.
+  The deny fallback to `reject_always` is unchanged: it can
   only stop the agent.
 
 ## Consequences

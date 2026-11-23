@@ -2601,10 +2601,14 @@ export class Orchestrator {
                   emitOwned: (event: Parameters<RunContext["emitOwned"]>[0]) => rc.emitOwned(event),
                 }
               : undefined;
-          const offered = req.options.filter((o) => !live || o.kind === "allow_once" || o.kind === "reject_once");
+          // One-time choices only, live or parked (#702). An agent's remembered option
+          // ("Allow always") would have the agent stop asking for the rest of the session, so
+          // a rule removed or expired later would never be consulted; ORCA's own standing
+          // rules go through the separately authorized writer instead.
+          const offered = req.options.filter((o) => o.kind === "allow_once" || o.kind === "reject_once");
           // A remembered-only ask has no supported one-time decision. Do not park an
-          // impossible-to-answer live card until its turn eventually times out.
-          if (live && offered.length === 0) return undefined;
+          // impossible-to-answer card until its turn eventually times out.
+          if (offered.length === 0) return undefined;
           return askHumanInput({
             port: live ? this.liveInput!.port : humanInput,
             ...(live ? { live } : {}),
