@@ -489,6 +489,19 @@ around the JSON, duplicate keys or alternate escapes are failures (no match), ne
 provider, model, limits, prompt, schema and API version all go into the transport version, so any
 change shows in the decision record.
 
+The daemon wires these together per session (`packages/daemon/src/plain-rule-judge.ts`). In token
+mode, `orca serve` wraps its session factory with `withPlainRuleJudge`. At each open of a session
+for a run, `plainRuleJudgeSource` reads `review.plainRules.judge` from the config. It takes the
+daemon's qualified budget (`qualifiedJudgeBudget`), which must be durable, and binds the owner's
+disclosure grants (`credentialJudgeDisclosure`) and the key's use decision (`secretUseAuthority`,
+`bindSecretUse`) to that run. Then it calls `preparePlainRuleJudge`. Any missing piece gives the
+session no judge, so its plain-language rules are not consulted and the typed rules decide
+alone. A fixed reason is logged for anything except "not configured": not on the local host,
+budget unavailable or not durable, run not authorized, or a preparation refusal. The whole step is
+inactive: `PLAIN_RULE_JUDGE_ACTIVE` is `false`, and while it is, the wrapper returns the factory
+unchanged and prepares nothing. No parameter or setting can turn it on; that is the reviewed
+activation change.
+
 ## 11. Coordination
 
 - **#702 (approval rules thread), agreed:** #702 owns the `judge: { criterion }` rule field, its

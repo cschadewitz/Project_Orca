@@ -45,6 +45,9 @@ import {
   orchestratorResolver,
   credentialCapabilityUse,
   credentialSecretUse,
+  plainRuleJudgeSource,
+  qualifiedJudgeBudget,
+  withPlainRuleJudge,
   loopbackCapabilityUse,
   loopbackSecretUse,
   LOCAL_PRINCIPAL,
@@ -1107,6 +1110,22 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
       })
     : loopbackCapabilityUse(LOCAL_PRINCIPAL);
   const workspaceId = await workspaceIdentity(storeDir);
+  // The plain-rule review judge (#701): prepared per session from the judge config, the run
+  // owner's key and disclosure grants and the qualified budget. Token mode only; it passes
+  // sessions through untouched while PLAIN_RULE_JUDGE_ACTIVE is false.
+  if (authDir)
+    app.orchestrator.sessionFactory = withPlainRuleJudge(
+      app.orchestrator.sessionFactory,
+      plainRuleJudgeSource({
+        config: () => app.config,
+        budget: () => qualifiedJudgeBudget({ storeDir, workspaceId }),
+        resolver: orchestratorResolver(app.orchestrator),
+        ownership: authDir.ownership,
+        credentials: authDir.credentials,
+        audit: authDir.audit,
+      }),
+      (info) => app.logger.warn("plain-language rules are not judged in this session", info),
+    );
   const identity = createDaemonIdentity(workspaceId);
   const liveRuntime =
     !readOnly && authDir
