@@ -8,7 +8,8 @@
  * ORCA's policy decides it then, each request within a deadline, and a server that never
  * finishes starting is stopped on its deadline or when the session closes.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { link, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -597,6 +598,84 @@ describe("ORCA serves a hooked session's MCP servers over ACP (#704)", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(await t.serverLog()).toBe("");
   });
+
+  it("ends the wait for a person at the request's deadline, and retires the ask", async () => {
+    let retired: boolean | undefined;
+    const t = await setup({
+      noList: true,
+      permissions: { default: "ask", rules: [] },
+      requestTimeoutMs: 300,
+      // Nobody answers: the ask is only ever ended by its signal, or the test's own timeout.
+      askPermission: async (_req, invocation) => {
+        if (!invocation) return "reject";
+        retired = await new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 5_000);
+          invocation.signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            resolve(true);
+          });
+        });
+        return "allow";
+      },
+    });
+    const s = await t.open();
+    await t.seen();
+    const started = Date.now();
+    // A parallel turn stays open after its answer, so only the request's own end can retire the ask.
+    const turn = t.turn(s, JSON.stringify(["PARALLEL", ["tools/call", { name: "touch", arguments: {} }]]));
+    for (let i = 0; i < 30 && retired === undefined; i++) await new Promise((r) => setTimeout(r, 50));
+    expect(retired).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1_500);
+    const [call] = await turn;
+    expect(call).toEqual({ acpError: expect.objectContaining({ data: { reason: "deadline" } }) });
+    expect(await t.serverLog()).toBe("");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "lets the line move on when a request ends while its policy is still being read, and never sends it",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "orca-704-sidecar-"));
+      dirs.push(dir);
+      const sidecar = join(dir, "permissions.json");
+      const fifo = join(dir, "fifo");
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      const t = await setup({
+        noList: true,
+        permissionFiles: [sidecar],
+        requestTimeoutMs: 700,
+        host: (inner) => holdingServerInput(inner, '"name":"hold"', held),
+      });
+      const s = await t.open();
+      await t.seen();
+      const first = t.turn(
+        s,
+        JSON.stringify([
+          "PARALLEL",
+          ["tools/call", { name: "hold", arguments: {} }],
+          ["tools/call", { name: "touch", arguments: {} }],
+        ]),
+      );
+      // Both were decided; now the policy file becomes one whose read never finishes.
+      await new Promise((r) => setTimeout(r, 200));
+      execFileSync("mkfifo", [fifo]);
+      // A second name for the same pipe, so the test can open its other end later.
+      await link(fifo, `${sidecar}.new`);
+      await rename(`${sidecar}.new`, sidecar);
+      release();
+      const [, touch] = await first;
+      expect(touch).toEqual({ acpError: expect.objectContaining({ data: { reason: "deadline" } }) });
+      // The read is still stuck; the policy file is readable again for whatever comes next.
+      await writeFile(join(dir, "plain.json"), "");
+      await rename(join(dir, "plain.json"), sidecar);
+      const [next] = await t.turn(s);
+      expect(next).toEqual({ content: [{ type: "text", text: "secret is here" }] });
+      // The stuck read finishes late, with an allow: it dispatches nothing.
+      await writeFile(fifo, "").catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 300));
+      expect((await t.serverLog()).split("\n").filter((l) => l === "tools/call touch")).toHaveLength(1);
+    },
+  );
 
   it("settles a request at its deadline while its server is still starting", async () => {
     const t = await setup({ noList: true, slowInitMs: 3_000, requestTimeoutMs: 300 });

@@ -65,11 +65,13 @@ export interface McpRelayOptions {
   logger: Logger;
   clientInfo: { name: string; version: string };
   /**
-   * Decides one request at dispatch time, after admission. It throws to refuse, and returns
+   * Decides one request at dispatch time, after admission. `request` aborts when the request
+   * is cancelled or its deadline passes: an ask it is waiting on is retired then, and the relay
+   * stops waiting on it at once either way. It throws to refuse, and returns
    * the check to run in the same step the request is written to the server, plus the signal
    * that ends the request with the turn or session it belongs to.
    */
-  authorize: (call: McpRelayCall) => Promise<McpRelayDispatch>;
+  authorize: (call: McpRelayCall, request: AbortSignal) => Promise<McpRelayDispatch>;
   /** How long a server has to answer `initialize` before it is stopped. */
   startTimeoutMs?: number | undefined;
   /** How long one relayed request may take. */
@@ -232,10 +234,14 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
       // The request's deadline runs from its arrival: deciding it, starting its server and
       // the server's answer all count against it.
       const deadline = AbortSignal.timeout(opts.requestTimeoutMs ?? MCP_RELAY_REQUEST_TIMEOUT_MS);
+      // Deciding it is bounded too: cancellation and the deadline end the wait, and retire any
+      // ask it is waiting on.
+      const early = AbortSignal.any([op.signal, stopping.signal, deadline]);
       let gate: McpRelayDispatch;
       try {
-        gate = await opts.authorize(call);
+        gate = await untilAborted(opts.authorize(call, early), early);
       } catch (error) {
+        if (error instanceof RelayFailure && early.aborted) throw failure(error);
         opts.logger.warn("MCP request refused", {
           server: server.name,
           method: op.method,
@@ -265,7 +271,7 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
       if (op.method === "server/discover") {
         // Answered here, from the start: decided now, as a request handed to the server would be.
         try {
-          await gate.recheck();
+          await untilAborted(gate.recheck(), signal);
           if (signal.aborted) throw new RelayFailure(abortFailure(signal));
           gate.dispatch();
         } catch (error) {
@@ -572,9 +578,11 @@ async function startUpstream(
             if (settled || signal.aborted) return false;
             if (authority)
               try {
-                await authority.recheck();
+                // Its slot in line is held only while the request lives: when it ends, the line
+                // moves on, and whatever the policy read says later dispatches nothing.
+                await untilAborted(authority.recheck(), signal);
               } catch (error) {
-                settle(() => reject(new DispatchRefused(describeError(error).message)));
+                if (!signal.aborted) settle(() => reject(new DispatchRefused(describeError(error).message)));
                 return false;
               }
             return !settled && !signal.aborted;

@@ -398,8 +398,10 @@ needs only a live session. A tool call needs the session's live prompt turn and 
 read at that moment, deciding `<server>: <tool>` (kind `other`, the same call the hook decides):
 a deny never reaches the server, and an ask is put to a person as a one-time allow for that
 call. Each call is decided again on the policy as it is when it reaches the head of the line
-to the server, and a request's 10 minutes run from its arrival, so one that ran out while it
-was decided starts no server. Any other MCP request (resources, prompts) is refused. A request ends with
+to the server, and a request's 10 minutes run from its arrival and bound everything it waits on: a person's
+answer (the ask is withdrawn when the request ends), its server's start and the policy read
+before it is sent. One that ran out while it was decided starts no server, and one that ends
+while its policy is being read does not hold up the requests behind it. Any other MCP request (resources, prompts) is refused. A request ends with
 its turn, or at that deadline, and the server is told it was cancelled; only a request ORCA
 has handed to the server can be answered; a server that has not
 answered `initialize` within 30 seconds, or is still starting when the session closes, or

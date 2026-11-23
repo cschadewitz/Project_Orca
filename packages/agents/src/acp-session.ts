@@ -438,7 +438,7 @@ async function openPlanned(
    * The returned check runs in the same step that writes the request to the server, and its
    * signal ends the request with the turn (or, for a listing, the session).
    */
-  const authorizeMcp = async (call: McpRelayCall): Promise<McpRelayDispatch> => {
+  const authorizeMcp = async (call: McpRelayCall, request: AbortSignal): Promise<McpRelayDispatch> => {
     const record = (title: string, decision: string) => {
       opts.onPermission?.({ title, decision: `mcp:${decision}` });
       logger.debug("mcp permission", { server: call.server, method: call.method, decision });
@@ -458,7 +458,8 @@ async function openPlanned(
     const turn = activeTurn;
     if (!turn || turn.abort.signal.aborted)
       return refuse("no-turn", "no live turn: ORCA relays tool calls only in one");
-    const live = () => activeTurn === turn && !turn.abort.signal.aborted && !sessionLive.signal.aborted;
+    const live = () =>
+      activeTurn === turn && !turn.abort.signal.aborted && !sessionLive.signal.aborted && !request.aborted;
     /** How the call was allowed: a person's one-time allow stands until a deny appears. */
     let grantedBy: "allow" | "ask:allow_once" = "allow";
     const gate: McpRelayDispatch = {
@@ -494,11 +495,12 @@ async function openPlanned(
       return gate;
     }
     if (decision !== "ask") return refuse(decision, `ORCA's policy says ${decision}`);
+    // The ask lives only as long as the request: its deadline or cancellation retires it.
     const invocation: PermissionInvocation = {
       sessionId: id,
       turnId: turn.id,
       invocationId: randomUUID(),
-      signal: turn.abort.signal,
+      signal: AbortSignal.any([turn.abort.signal, request]),
     };
     const asked = await resolvePermission(policy, {
       request: {
