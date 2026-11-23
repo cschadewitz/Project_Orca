@@ -6,7 +6,10 @@
  * It belongs to the board's scope (`useRunBoard`), for the same reason the board's snapshots
  * do: an assessment is an answer about one run as read by one caller in one workspace. A new
  * scope drops every assessment in the render that sees it, and an answer that arrives for an
- * older scope, or for a run state that has since moved, is never drawn. A daemon that does not
+ * older scope, for a run state that has since moved, or for a request since replaced (the run
+ * left the board and came back), is never drawn. What a card shows is filtered by the run's
+ * state in the very render it is drawn in, so advice for an earlier state never sits beside a
+ * newer one, even for the render before the reads catch up. A daemon that does not
  * list `runs.recovery` (before protocol 2.5) is never asked.
  */
 import { useEffect, useRef, useState } from "react";
@@ -19,6 +22,11 @@ export type BoardRecovery =
 
 interface Entry {
   key: string;
+  /**
+   * This request's own identity. A run that leaves the board and comes back in the same state
+   * asks again under the same key; only the request that is held now may fill it.
+   */
+  request: object;
   value: BoardRecovery;
 }
 
@@ -66,29 +74,37 @@ export function useBoardRecovery(runs: readonly FollowedRun[], scope: string): R
     const token = same ? held.current.token : {};
     const current = same ? held.current.entries : new Map<string, Entry>();
     const next = new Map<string, Entry>();
-    const ask: [string, string][] = [];
+    const ask: [string, object][] = [];
     for (const [runId, key] of targets) {
       const entry = current.get(runId);
       if (entry?.key === key) next.set(runId, entry);
       else {
-        next.set(runId, { key, value: { phase: "loading" } });
-        ask.push([runId, key]);
+        const request = {};
+        next.set(runId, { key, request, value: { phase: "loading" } });
+        ask.push([runId, request]);
       }
     }
     publish({ scope, token, entries: next });
     if (!read) return;
-    for (const [runId, key] of ask)
+    for (const [runId, request] of ask)
       void read({ runId }).then((result) => {
-        // Only into the scope and the run state it was asked for.
-        if (held.current.token !== token || held.current.entries.get(runId)?.key !== key) return;
+        // Only into the scope and the very request it answers.
+        const entry = held.current.entries.get(runId);
+        if (held.current.token !== token || entry?.request !== request) return;
         const value: BoardRecovery = result.ok
           ? { phase: "ready", assessment: result.result.assessment }
           : { phase: "error", message: result.error.message };
-        publish({ scope, token, entries: new Map(held.current.entries).set(runId, { key, value }) });
+        publish({ scope, token, entries: new Map(held.current.entries).set(runId, { ...entry, value }) });
       });
   }, [bridge, scope, signature]);
 
-  // Nothing from another scope, from the very render that sees the change.
+  // Nothing from another scope, and nothing for a run state other than the one drawn now, from
+  // the very render that sees the change. A run whose read has not caught up yet is loading.
   const entries = state.scope === scope ? state.entries : new Map<string, Entry>();
-  return new Map([...entries].map(([runId, entry]) => [runId, entry.value]));
+  return new Map(
+    wanted.map(([runId, key]): [string, BoardRecovery] => {
+      const entry = entries.get(runId);
+      return [runId, entry?.key === key ? entry.value : { phase: "loading" }];
+    }),
+  );
 }
