@@ -361,42 +361,59 @@ export function broaderCommandPatterns(text: string): string[] {
   return out.filter((p) => parseCommandPattern(p) !== undefined);
 }
 
+/** An MCP tool named by its server and tool, kept as two fields so neither can stand in for the other. */
+export interface McpToolIdentity {
+  readonly server: string;
+  readonly tool: string;
+}
+
 /**
- * The MCP server and tool a call names in its metadata, when its agent puts them there
- * (#1021). Gemini CLI titles an MCP ask `create_issue(title: x)` or `create_issue (github MCP
- * Server)`, and keeps the server and tool only in `_meta["gemini-cli"].mcp`. `invalid` means
- * the agent said it is an MCP call but did not name both plainly.
+ * What a call's own metadata says about the MCP tool it runs (#1021). Gemini CLI titles an
+ * MCP ask `create_issue(title: x)` and keeps the server and tool only in
+ * `_meta["gemini-cli"].mcp`. That metadata is written by the agent and ORCA has no source of
+ * its own to check it against, so it is a claim and never authority: it can bring a deny or
+ * an ask into play, never an allow, and never a standing grant. `identity` is absent when
+ * the metadata says the call is an MCP call but does not name both plainly (a server name
+ * may not contain `:`, so `server: tool` reads back one way only).
  */
+export interface McpToolClaim {
+  readonly source: "gemini-cli-meta";
+  readonly verified: false;
+  readonly identity?: McpToolIdentity;
+}
+
 // eslint-disable-next-line no-control-regex
 const MCP_NAME_CONTROL = /[\u0000-\u001f\u007f]/;
 
-export function mcpToolOf(toolCall: { _meta?: unknown }): { server: string; tool: string } | "invalid" | undefined {
+function plainMcpName(s: unknown, field: "server" | "tool"): s is string {
+  return (
+    typeof s === "string" &&
+    s.trim() === s &&
+    s !== "" &&
+    s.length <= 256 &&
+    !MCP_NAME_CONTROL.test(s) &&
+    !(field === "server" && s.includes(":"))
+  );
+}
+
+/** The MCP tool a call's metadata claims to run, or undefined when it makes no such claim. */
+export function mcpToolClaimOf(toolCall: { _meta?: unknown }): McpToolClaim | undefined {
   const meta = toolCall._meta;
   if (meta === null || typeof meta !== "object") return undefined;
   const gemini = (meta as Record<string, unknown>)["gemini-cli"];
   if (gemini === null || typeof gemini !== "object") return undefined;
   if (!Object.hasOwn(gemini, "mcp")) return undefined;
+  const claim = { source: "gemini-cli-meta", verified: false } as const;
   const mcp = (gemini as Record<string, unknown>)["mcp"];
-  if (mcp === null || typeof mcp !== "object") return "invalid";
+  if (mcp === null || typeof mcp !== "object") return claim;
   const server = (mcp as Record<string, unknown>)["server_name"];
   const tool = (mcp as Record<string, unknown>)["tool_name"];
-  const plain = (s: unknown): s is string =>
-    typeof s === "string" && s.trim() === s && s !== "" && s.length <= 256 && !MCP_NAME_CONTROL.test(s);
-  return plain(server) && plain(tool) ? { server, tool } : "invalid";
+  return plainMcpName(server, "server") && plainMcpName(tool, "tool")
+    ? { ...claim, identity: { server, tool } }
+    : claim;
 }
 
-/**
- * The title a permission rule is matched against and recorded by (#1021): `server: tool` for
- * an MCP call whose agent names both in its metadata, as the Claude adapter titles one; the
- * agent's own title otherwise. Undefined for an MCP call that does not name both plainly:
- * nothing can be allowed or recorded by title for it.
- */
-export function permissionTitleOf(toolCall: {
-  title?: string | null | undefined;
-  _meta?: unknown;
-}): string | undefined {
-  const mcp = mcpToolOf(toolCall);
-  if (mcp === "invalid") return undefined;
-  if (mcp) return `${mcp.server}: ${mcp.tool}`;
-  return toolCall.title ?? "";
+/** `server: tool`, the form a title rule names an MCP tool by (as the Claude adapter titles one). */
+export function mcpToolTitle(identity: McpToolIdentity): string {
+  return `${identity.server}: ${identity.tool}`;
 }

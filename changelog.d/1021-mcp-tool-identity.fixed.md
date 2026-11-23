@@ -1,6 +1,7 @@
-- **agents:** Permission rules now match a Gemini CLI MCP call by its `server: tool`
-  identity, read from the call's `_meta`, instead of Gemini's `tool(args)` title. An
-  operator deny or ask rule for an MCP tool now applies to Gemini, and an allow rule or
-  "always" grant for one server no longer allows the same tool name on another server.
-  Deny and ask rules also still match the raw title. A call with malformed MCP metadata
-  is never allowed by a title rule and cannot be granted "always".
+- **agents:** A Gemini CLI permission ask for an MCP tool names its server and tool only in
+  the call's `_meta`, which the agent writes and ORCA cannot verify. ORCA now treats that
+  as a claim: operator deny and ask rules written as `server: tool` apply to it (as do
+  rules on Gemini's own `tool(args)` title), but no allow rule, default or "always" grant
+  decides such a call. It is asked each time unless a rule denies it, so a grant can no
+  longer reach the same tool name on another server. An "always deny" for it is saved as
+  `server: tool`. Grants recorded earlier from Gemini's MCP titles stop allowing.

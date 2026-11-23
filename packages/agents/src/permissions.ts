@@ -47,7 +47,8 @@ import {
   commandCatches,
   unverifiedExecuteAllowed,
   commandTextOf,
-  permissionTitleOf,
+  mcpToolClaimOf,
+  mcpToolTitle,
   neutralPart,
   parseCommand,
   parseCommandPattern,
@@ -175,13 +176,15 @@ function decideByRules(
   ctx?: PermissionEvalContext,
 ): PermissionExplanation {
   const tc = request.toolCall;
-  // The title rules match (#1021): `server: tool` for an MCP call whose agent names both in its
-  // metadata (Gemini CLI leaves the server out of its title), the agent's title otherwise.
-  // An allow is tested against that alone, so a grant on one server never reaches another; a
-  // deny or ask is also tested against the agent's own title, so a restriction written for
-  // either form still holds. An MCP call that names its server badly matches no allow by title.
-  const title = permissionTitleOf(tc);
-  const rawTitle = tc.title ?? "";
+  // An MCP tool the call's own metadata names (#1021): Gemini CLI leaves the server out of its
+  // title and puts it only there. The agent wrote it and ORCA cannot check it, so it is a
+  // claim: a deny or ask rule is tested against the claimed `server: tool` as well as the
+  // agent's title, so a restriction written for either form holds, but no allow of any kind
+  // decides the call. It stays on the one-time path, asked each time unless something denies
+  // it, and a grant on one server cannot reach the same tool name on another.
+  const claim = mcpToolClaimOf(tc);
+  const claimedTitle = claim?.identity ? mcpToolTitle(claim.identity) : undefined;
+  const title = tc.title ?? "";
   const kind = tc.kind ?? "other";
   // A call the agent did not classify could be a command under another name, and so could one
   // that carries a command in its input whatever kind it claims: the kind is the adapter's
@@ -197,8 +200,8 @@ function decideByRules(
   const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
   const titleMatches = (pattern: string, decision: PermissionDecision): boolean => {
     const re = new RegExp(pattern);
-    if (title !== undefined && re.test(title)) return true;
-    return decision !== "allow" && re.test(rawTitle);
+    if (re.test(title)) return true;
+    return decision !== "allow" && claimedTitle !== undefined && re.test(claimedTitle);
   };
   const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision): boolean => {
     // A command rule also reaches a command-like call of another kind, so its restriction is
@@ -224,7 +227,7 @@ function decideByRules(
   const decide = (part: CommandPart | undefined): PermissionExplanation => {
     for (const [ruleIndex, rule] of policy.rules.entries()) {
       const m = rule.match;
-      if (restricted && rule.decision === "allow") continue;
+      if ((restricted || claim !== undefined) && rule.decision === "allow") continue;
       if (!matchesCall(m, rule.decision)) continue;
       if (m.command !== undefined) {
         // A command is only ever an `execute`'s, and a part that is not there matches no rule.
@@ -236,6 +239,7 @@ function decideByRules(
       }
       return { decision: rule.decision, basis: "rule", ruleIndex };
     }
+    if (claim !== undefined && policy.default === "allow") return { decision: "ask", basis: "unverified-identity" };
     return { decision: policy.default, basis: "default" };
   };
   if (!restricted) return decide(undefined);
@@ -796,20 +800,27 @@ export interface RecordAlwaysResult {
  */
 export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<RecordAlwaysResult> {
   const tc = opts.request.toolCall;
-  const derived: ReturnType<typeof derivePermissionRules> = opts.rules
-    ? { ok: true, rules: opts.rules.map((rule) => ({ match: { ...rule.match }, decision: opts.decision })) }
-    : derivePermissionRules(
-        {
-          kind: tc.kind,
-          // `server: tool` for an MCP call that names them only in metadata (#1021), so the
-          // grant cannot reach the same tool on another server.
-          title: permissionTitleOf(tc),
-          paths: (tc.locations ?? []).map((l) => l.path),
-          command: tc.kind === "execute" ? commandTextOf(tc) : undefined,
-          workspaceCwd: opts.workspaceCwd,
-        },
-        opts.decision,
-      );
+  // An MCP tool the agent claims but ORCA cannot verify is never granted standing (#1021),
+  // whichever way the rules arrive: derived here, or handed in already chosen.
+  const mcpClaim = mcpToolClaimOf(tc);
+  const unverified =
+    mcpClaim !== undefined && opts.decision === "allow" ? derivePermissionRules({ mcpClaim }, "allow") : undefined;
+  const derived: ReturnType<typeof derivePermissionRules> =
+    unverified ??
+    (opts.rules
+      ? { ok: true, rules: opts.rules.map((rule) => ({ match: { ...rule.match }, decision: opts.decision })) }
+      : derivePermissionRules(
+          {
+            kind: tc.kind,
+            title: tc.title,
+            // A standing deny for a claimed MCP tool names it as `server: tool` (#1021).
+            mcpClaim,
+            paths: (tc.locations ?? []).map((l) => l.path),
+            command: tc.kind === "execute" ? commandTextOf(tc) : undefined,
+            workspaceCwd: opts.workspaceCwd,
+          },
+          opts.decision,
+        ));
   if (!derived.ok)
     return {
       file: opts.file,

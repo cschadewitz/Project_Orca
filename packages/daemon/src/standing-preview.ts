@@ -15,7 +15,7 @@ import {
   broaderCommandPatterns,
   commandTextOf,
   derivePermissionRules,
-  permissionTitleOf,
+  mcpToolClaimOf,
   type HumanInputRequest,
   type PermissionRule,
   type RunState,
@@ -36,8 +36,10 @@ export function standingRulePreview(
   const derived = derivePermissionRules(
     {
       kind: typeof tc.kind === "string" ? tc.kind : undefined,
-      // `server: tool` for an MCP call that names them only in metadata (#1021).
-      title: permissionTitleOf({ title: typeof tc.title === "string" ? tc.title : undefined, _meta: tc._meta }),
+      title: typeof tc.title === "string" ? tc.title : undefined,
+      // An MCP tool the agent claims is never offered as a standing allow (#1021), and a
+      // standing deny names it as `server: tool`.
+      mcpClaim: mcpToolClaimOf({ _meta: tc._meta }),
       paths: Array.isArray(tc.locations)
         ? tc.locations.flatMap((l: unknown) =>
             l && typeof l === "object" && typeof (l as { path?: unknown }).path === "string"
