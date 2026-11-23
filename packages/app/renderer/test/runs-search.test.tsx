@@ -52,7 +52,7 @@ function renderRuns(): void {
   );
 }
 
-const searches = () => fake.calls.filter((c) => c.method === "search.query" || c.method === SEARCH_METHOD);
+const searches = () => fake.calls.filter((c) => c.method === SEARCH_METHOD);
 const field = () => screen.getByRole("searchbox", { name: "Search run contents" });
 const settle = () =>
   act(async () => {
