@@ -75,6 +75,14 @@ no rule left                           → default (usually ask → person)
   by an explicit "put this first"? Recommendation: **no.** Saved rules, judged or not, always come
   after hand-written ones, as today.
 
+**Shadowing.** Judged rules only allow, so when several cover a call the outcome is the same
+(allow once). Only the credit differs, and the record lists every rule the batch judged covered,
+not just the first. A broad judged rule placed *above* a typed `ask` or `deny` rule that it could
+overlap would be reached first, so the app warns when saving a judged rule above such a rule (same
+agent, overlapping `match`). If plain-language "ask" or "never" rules are added later, a
+restriction will win over an allow regardless of order, instead of first match, so a broad allow
+can never shadow a specific restriction.
+
 ## 4. The answer ORCA gives
 
 - Only **allow once** (`allow_once`) from the options the agent itself offered. Never
