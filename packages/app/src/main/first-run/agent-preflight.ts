@@ -8,6 +8,7 @@ function configuredRoute(command: string): FirstRunAgentCheck["evidence"]["confi
   const name = win32.basename(command).replace(/\.exe$/i, "");
   if (name === "claude-code-acp") return "claude-code-acp-candidate";
   if (name === "codex-acp") return "codex-acp-candidate";
+  if (name.toLowerCase() === "copilot") return "copilot-cli-acp-candidate";
   return "unverified";
 }
 /** Only a complete known thin Mach-O header can establish this narrow negative observation. */

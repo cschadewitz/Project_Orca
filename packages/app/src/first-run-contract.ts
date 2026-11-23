@@ -6,7 +6,8 @@ export interface FirstRunAgentCheck {
   readonly agentId: string;
   readonly state: "missing" | "unavailable" | "architecture" | "handshake-required";
   readonly evidence: {
-    readonly configuredRoute: "claude-code-acp-candidate" | "codex-acp-candidate" | "unverified";
+    readonly configuredRoute:
+      "claude-code-acp-candidate" | "codex-acp-candidate" | "copilot-cli-acp-candidate" | "unverified";
     readonly support: "unknown";
     readonly version: "unknown";
     readonly architecture: "unknown" | "mismatch";
