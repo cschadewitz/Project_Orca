@@ -69,6 +69,11 @@ export const StandingRulePreviewSchema = z.union([
      * one shown. Opaque to clients.
      */
     ref: z.string().min(1),
+    /**
+     * Wider rules the person may save instead, for a single shell command: `npm run *`, then
+     * `npm *` (#702). Each carries its own `ref`; the save names the one chosen.
+     */
+    broader: z.array(z.object({ rules: z.array(PermissionRuleSchema).min(1), ref: z.string().min(1) })).optional(),
   }),
   z.object({ refused: z.object({ reason: z.string(), detail: z.string() }) }),
 ]);

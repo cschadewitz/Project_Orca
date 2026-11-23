@@ -123,7 +123,7 @@ import { RunContext } from "./run-context.js";
 import type { LiveHumanInput, ExecutionResumeAuthority, ExecutionActivity } from "./live-input.js";
 import { protectExecutionInputs } from "./execution-inputs.js";
 import { checkpointSeed, resumeBlocked } from "./checkpoint-attempt.js";
-import { gitRefRefusal, LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
+import { gitRefMoved, gitRefRefusal, LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 import {
   capabilityRefusal,
   deliveryIssues,
@@ -701,7 +701,7 @@ export class Orchestrator {
         throw gitRefRefusal(opts.gitRef, `the '${provider.name}' workspace does not give runs a checkout of a ref`);
       const gitRefObject = await provider.checkRef(opts.gitRef);
       if (opts.gitRefObject !== undefined && gitRefObject !== opts.gitRefObject)
-        throw gitRefRefusal(opts.gitRef, "it moved after the run was admitted; admit the run again");
+        throw gitRefMoved(opts.gitRef, "it moved after the run was admitted; admit the run again");
       return { definition: def, vars: inputs.vars, ...(generation ? { generation } : {}), gitRefObject };
     }
     return { definition: def, vars: inputs.vars, ...(generation ? { generation } : {}) };

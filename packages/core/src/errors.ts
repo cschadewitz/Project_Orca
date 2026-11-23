@@ -98,6 +98,13 @@ export type OrcaErrorCode =
    * failure: a retry is a new step attempt and so a new remote run.
    */
   | "DELEGATED_RUN_FAILED"
+  /**
+   * A direct admission that named a git ref (#883) whose ref moved between the check that
+   * admitted it and the run's creation (#956). Final: the reserved run is never created under
+   * that idempotency key, and every replay or reconcile of it answers the same. Admit again,
+   * under a new key, to work from where the ref is now.
+   */
+  | "GIT_REF_MOVED"
   | "INTERNAL";
 
 export class OrcaError extends Error {

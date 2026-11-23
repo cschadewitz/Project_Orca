@@ -143,7 +143,11 @@ it("reads a fresh entry/terminal key per multi-record call, authenticates every 
   const result = await f.read();
   expect(result).toEqual(f.expected);
   // Entry + one fresh input read + terminal, rather than one key read per payload.
-  expect(io.opens).toEqual(Array<string>(3).fill(f.path(".execution-key")));
+  expect(io.opens.filter((path) => path.endsWith(".execution-key"))).toEqual(
+    Array<string>(3).fill(f.path(".execution-key")),
+  );
+  // Every ciphertext record is read from disk again; nothing is reused across calls.
+  expect(io.opens.filter((path) => path.endsWith(".payload.json"))).toHaveLength(12);
   (result[0] as { vars: { secret: string } }).vars.secret = "caller mutation";
   expect(await f.read()).toEqual(f.expected);
   expect(io.opens.filter((path) => path.endsWith(".execution-key"))).toHaveLength(6);

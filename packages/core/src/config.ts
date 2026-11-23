@@ -72,9 +72,17 @@ export const HumanInputConfigSchema = z.discriminatedUnion("mode", [
 ]);
 export type HumanInputConfig = z.infer<typeof HumanInputConfigSchema>;
 
+/** The config version that may hold `command` permission rules (#702). */
+export const CONFIG_COMMAND_RULES_VERSION = 2;
+
 export const OrcaConfigSchema = z
   .object({
-    version: z.literal(1).default(1),
+    /**
+     * 1, or 2 when an agent's permission rules use `command` (#702). Releases before 0.8 accept
+     * only 1 and drop keys they do not know, so they would read `{kind: execute, command: "npm *"}`
+     * as every command; asking for 2 makes them refuse the file instead.
+     */
+    version: z.union([z.literal(1), z.literal(CONFIG_COMMAND_RULES_VERSION)]).default(1),
     /** Where event logs, artifacts and indexes are stored (relative to the config file). */
     storeDir: z.string().default(".orca"),
     admissionRetry: z
@@ -156,6 +164,17 @@ export const OrcaConfigSchema = z
         ctx.addIssue({ code: "custom", path: ["remotes", i, "id"], message: `duplicate remote id ${remote.id}` });
       remotes.add(remote.id);
     });
+    if (config.version < CONFIG_COMMAND_RULES_VERSION)
+      config.agents.forEach((agent, i) =>
+        agent.permissions.rules.forEach((rule, j) => {
+          if (rule.match.command !== undefined)
+            ctx.addIssue({
+              code: "custom",
+              path: ["agents", i, "permissions", "rules", j, "match", "command"],
+              message: `a command rule needs version: ${CONFIG_COMMAND_RULES_VERSION} at the top of the config, so releases before 0.8 refuse it rather than read it as every command`,
+            });
+        }),
+      );
     config.agents.forEach((agent, i) => {
       if (agent.type === "orca-daemon" && agent.profile !== undefined && !remotes.has(agent.profile))
         ctx.addIssue({

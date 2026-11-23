@@ -14,7 +14,7 @@ import {
 import type { WorkflowDraftBridge } from "../../src/workflow-draft-bridge.js";
 import type { FakeBridge } from "./fake-bridge.js";
 
-type Doc = {
+export type Doc = {
   id: string;
   name: string;
   version: string;
@@ -44,8 +44,19 @@ const BASE: Doc = {
  * Each batch is one undo step, as in the daemon, so `workflowDrafts.undo` puts back the document
  * and the layout as they were before it.
  */
-export function draftBridge(fake: FakeBridge, options: { owner?: string; issues?: DraftIssue[] } = {}) {
-  let doc: Doc = structuredClone(BASE);
+export function draftBridge(
+  fake: FakeBridge,
+  options: {
+    owner?: string;
+    issues?: DraftIssue[];
+    /** The workflow the draft starts from; `BASE` when absent. */
+    base?: Doc;
+    /** `workflowDrafts.dryRun`'s answer, given the revision and the call's params (#183). */
+    dryRun?: (revision: number, params: Record<string, unknown>) => unknown;
+  } = {},
+) {
+  const BASE_DOC = options.base ?? BASE;
+  let doc: Doc = structuredClone(BASE_DOC);
   let layout: DraftLayout = { graphs: {} };
   let revision = 0;
   const undo: { doc: Doc; layout: DraftLayout }[] = [];
@@ -58,7 +69,7 @@ export function draftBridge(fake: FakeBridge, options: { owner?: string; issues?
     revision,
     createdAt: "2026-10-10T12:00:00.000Z",
     updatedAt: "2026-10-10T12:00:00.000Z",
-    base: { version: "1", revision: "sha256:base", current: true, text: stringify(BASE), document: BASE },
+    base: { version: "1", revision: "sha256:base", current: true, text: stringify(BASE_DOC), document: BASE_DOC },
     text: stringify(doc),
     document: structuredClone(doc),
     layout,
@@ -101,8 +112,18 @@ export function draftBridge(fake: FakeBridge, options: { owner?: string; issues?
     }
   };
 
+  /* A method a test holds answers only once released, computed when it is released. */
+  const held = new Map<string, Promise<void>>();
   const call = async (method: string, params: Record<string, unknown>) => {
     calls.push({ method, params });
+    const wait = held.get(method);
+    if (wait) {
+      held.delete(method);
+      await wait;
+    }
+    return answer(method, params);
+  };
+  const answer = async (method: string, params: Record<string, unknown>) => {
     switch (method) {
       case "workflowDrafts.get":
         return { ok: true, result: { draft: null, layout: { graphs: {} }, editable: true } };
@@ -127,7 +148,7 @@ export function draftBridge(fake: FakeBridge, options: { owner?: string; issues?
             revision,
             baseVersion: "1",
             nextVersion: "2",
-            baseText: stringify(BASE),
+            baseText: stringify(BASE_DOC),
             text: stringify({ ...doc, version: "2" }),
             reviewToken: "token-1",
           },
@@ -153,6 +174,12 @@ export function draftBridge(fake: FakeBridge, options: { owner?: string; issues?
         };
       case "workflowDrafts.discard":
         return { ok: true, result: { discarded: true } };
+      case "workflowDrafts.dryRun":
+        if (params.expectedRevision !== revision)
+          return { ok: false, error: { code: "CONFIG_STALE", message: "The draft moved on." } };
+        return options.dryRun
+          ? { ok: true, result: options.dryRun(revision, params) }
+          : { ok: false, error: { code: "PROTOCOL_METHOD", message: method } };
       default:
         return { ok: false, error: { code: "PROTOCOL_METHOD", message: method } };
     }
@@ -164,6 +191,12 @@ export function draftBridge(fake: FakeBridge, options: { owner?: string; issues?
   });
   return {
     calls,
+    /** Hold the next call of `method` until the returned release is called. */
+    hold: (method: string): (() => void) => {
+      let release!: () => void;
+      held.set(method, new Promise<void>((resolve) => (release = resolve)));
+      return () => release();
+    },
     ops: () =>
       calls.filter((c) => c.method === "workflowDrafts.apply").flatMap((c) => c.params.ops as DraftOperation[]),
   };

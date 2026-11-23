@@ -37,7 +37,7 @@ import { Button, Card, Text, textClass } from "../ui/index.js";
 import { scopeProps } from "../keyboard-map.js";
 import type { OpenInputView } from "@orca/protocol";
 import { bindOptions, defaultSelection, isFreeText, type GateOption } from "./card-model.js";
-import { DEFAULT_RULE_LIFETIME, StandingRuleReview, lifetimeDuration } from "./standing-rule-review.js";
+import { DEFAULT_RULE_LIFETIME, StandingRuleReview, lifetimeDuration, previewRefAt } from "./standing-rule-review.js";
 import { useCardKeys } from "./use-card-keys.js";
 
 /** What a card sends. `optionId` is an option's id, or the text of a free-text answer. */
@@ -215,17 +215,21 @@ export function AnswerCard({
   /* An always-button opens the review (#702); only the review's save sends. */
   const [reviewing, setReviewing] = useState<"allow" | "deny" | undefined>(undefined);
   const [lifetime, setLifetime] = useState(DEFAULT_RULE_LIFETIME);
+  /* 0 is the exact rule; 1.. are the preview's wider command rules, narrowest first. */
+  const [breadth, setBreadth] = useState(0);
   const sendAlways = (decision: "allow" | "deny"): void => {
     const target = always[decision];
     if (blocked !== undefined || !("option" in target)) return;
     const preview = standing?.[decision];
     if (!preview || !("rules" in preview)) return;
     const durationMs = lifetimeDuration(lifetime);
+    const previewRef = previewRefAt(preview, breadth);
+    if (previewRef === undefined) return;
     onAnswer({
       optionId: target.option.id,
       ...(note.trim() ? { note: note.trim() } : {}),
       // The preview's ref binds the save to the rule shown; the daemon refuses a changed one.
-      always: { decision, ...(durationMs === undefined ? {} : { durationMs }), previewRef: preview.ref },
+      always: { decision, ...(durationMs === undefined ? {} : { durationMs }), previewRef },
     });
     setReviewing(undefined);
   };
@@ -331,7 +335,10 @@ export function AnswerCard({
                     disabled={alwaysBlocked("allow") !== undefined}
                     {...(alwaysBlocked("allow") !== undefined ? { disabledReason: alwaysBlocked("allow")! } : {})}
                     aria-expanded={reviewing === "allow"}
-                    onClick={() => setReviewing((open) => (open === "allow" ? undefined : "allow"))}
+                    onClick={() => {
+                      setBreadth(0);
+                      setReviewing((open) => (open === "allow" ? undefined : "allow"));
+                    }}
                   >
                     Always allow
                   </Button>
@@ -341,7 +348,10 @@ export function AnswerCard({
                     disabled={alwaysBlocked("deny") !== undefined}
                     {...(alwaysBlocked("deny") !== undefined ? { disabledReason: alwaysBlocked("deny")! } : {})}
                     aria-expanded={reviewing === "deny"}
-                    onClick={() => setReviewing((open) => (open === "deny" ? undefined : "deny"))}
+                    onClick={() => {
+                      setBreadth(0);
+                      setReviewing((open) => (open === "deny" ? undefined : "deny"));
+                    }}
                   >
                     Always deny
                   </Button>
@@ -356,6 +366,8 @@ export function AnswerCard({
                 agentId={standingAgentId}
                 lifetime={lifetime}
                 onLifetime={setLifetime}
+                breadth={breadth}
+                onBreadth={setBreadth}
                 blocked={alwaysBlocked(reviewing)}
                 onSave={() => sendAlways(reviewing)}
                 onCancel={() => setReviewing(undefined)}

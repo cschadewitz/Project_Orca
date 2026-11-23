@@ -1,6 +1,6 @@
 /** Nonsecret target contract shared by main, preload and the connection dialog. */
 import type { ConnectionState } from "@orca/design";
-import type { DisplayStatus, SessionSlotsSummary } from "@orca/protocol";
+import type { DisplayStatus, RunOperationsView, SessionSlotsSummary } from "@orca/protocol";
 
 export interface DaemonIdentity {
   workspaceId: string;
@@ -162,6 +162,13 @@ export interface FleetRun {
   name: string;
   status: DisplayStatus;
   waitingOn?: string;
+  /** The engine's words for that wait, when it recorded some. */
+  waitingDetail?: string;
+  /**
+   * The run's operations facts (#340, protocol 2.3): step counts, last activity and who holds
+   * it. Absent from a daemon older than 2.3, which says nothing rather than zero.
+   */
+  operations?: Pick<RunOperationsView, "lastActivityAt" | "progress" | "owner">;
 }
 /** A waiting gate or permission ask on a machine. */
 export interface FleetInput {

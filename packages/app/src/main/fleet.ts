@@ -204,6 +204,16 @@ function summarize(runs: RunsListResult, inputs: InputsListResult): FleetWork {
       name: run.name,
       status: run.status,
       ...(run.waitingOn ? { waitingOn: run.waitingOn } : {}),
+      ...(run.waitingDetail ? { waitingDetail: run.waitingDetail } : {}),
+      ...(run.operations
+        ? {
+            operations: {
+              lastActivityAt: run.operations.lastActivityAt,
+              progress: run.operations.progress,
+              ...(run.operations.owner ? { owner: run.operations.owner } : {}),
+            },
+          }
+        : {}),
     })),
     activeTotal: runs.total,
     inputs: inputs.inputs.map((input) => ({
@@ -221,7 +231,9 @@ function summarize(runs: RunsListResult, inputs: InputsListResult): FleetWork {
 
 async function readWork(reader: FleetReader, failedIds: ReadonlySet<string> | undefined): Promise<Work> {
   const [runs, inputs, failed] = await Promise.all([
-    reader.runsList({ status: [...ACTIVE_STATUSES], limit: FLEET_RUN_LIMIT }),
+    // `operations` (#340, protocol 2.3) is each listed row's console line: step counts, last
+    // activity, owner. Read for these rows only; an older daemon ignores it and sends none.
+    reader.runsList({ status: [...ACTIVE_STATUSES], limit: FLEET_RUN_LIMIT, operations: true }),
     reader.inputsList({}),
     failedIds?.size ? reader.runsList({ status: ["failed"], limit: FAILED_LOOKBACK }) : undefined,
   ]);

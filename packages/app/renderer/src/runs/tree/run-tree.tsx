@@ -292,7 +292,7 @@ function RunTreeRow({ row, live, onToggle }: RunTreeRowProps): JSX.Element {
            here as on a chip (runs.css, `.orca-runs__skipped`). */
         <span className={`orca-runs__skipped ${textClass("caption")}`}>{SKIPPED_WORD}</span>
       ) : (
-        <StatusChip status={row.status} aligned />
+        <StatusChip status={row.status} aligned {...(row.dry ? { dry: true } : {})} />
       )}
 
       <span className={`orca-tree-row__name ${textClass("mono-strong")} orca-runs__name`}>{row.name}</span>

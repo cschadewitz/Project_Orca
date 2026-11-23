@@ -40,10 +40,36 @@ endpoint adapter with this service and a deterministic fake endpoint: end-to-end
 revocation between uses, file and env providers, every refusal above, cancellation before and after the
 read, and the agent/MCP refusals. The value is generated per run; no network, real key or paid call.
 
-This makes no sender trusted. A real network sender is separate work with its own review, and nothing here activates one.
+This makes no sender trusted. The HTTPS sender below has its own rules and review, and nothing activates it.
+
+## The HTTPS sender
+
+`packages/agents/src/review-judge/https-sender.ts` (`createHttpsJudgeSender`) is the network sender for a
+hosted judge on the user's key. It is constructed for one destination URL, which must be the same URL
+the secret is pinned to (`destination`), written in canonical form: `https`, no credentials, query or
+fragment, no `.`/`..` or encoded path segments. Construction refuses any other shape before a key is
+touched.
+
+| Rule | How |
+| --- | --- |
+| One POST to the pinned URL, TLS checks always on (TLS 1.2+), on a fresh connection | `agent: false`, `rejectUnauthorized: true`, `minVersion` |
+| No redirects, no retries | any status but 200 is `http-status`; a 3xx is never followed; one request per send |
+| Bounded reply | declared or streamed body past `maxResponseBytes` is cut off (`response-too-large`); non-JSON (`content-type`), compressed (`content-encoding`) and invalid UTF-8 (`malformed-utf8`) are refused |
+| Cancellation | abort destroys the request and settles the send at once, so a slot is never held by a socket nobody waits on |
+| The key | read from the lease inside the call, only for a `judge-secret/v1` credential pinned to this URL; must be printable ASCII with no spaces or line breaks (no header splitting); placed only in `Authorization: Bearer` or `x-api-key`, never in the version, an error or a log |
+| Extra headers | fixed, non-secret, lower-case; auth, cookie, host, framing and encoding headers are refused |
+| Failures | fixed codes (`JudgeSenderFailed`), never a provider message, header or body |
+
+Its tests (`review-judge-https-sender-701.test.ts`) run the sender's real request and response
+handling against a loopback fake through an injected request function, plus one end-to-end run through
+`secretJudgeCredentials`, the connection and the endpoint adapter. No real key, model or paid endpoint.
+
+The sender is **inactive**: nothing constructs one or passes it to `prepareJudgeConnection`. Wiring it
+to a provider (request and reply format for a specific hosted model), registering it, and the plain-rule
+evaluation slot each need their own review before anything is switched on.
 
 ## Still open for #701
 
-- A real sender for an HTTPS endpoint (bounded read, no redirects, no retries, key only in a header).
+- A provider adapter for the first hosted model (its request and reply format), behind the same sender.
 - #363 disclosure grants: the grant service is still the proposed contract with fakes.
 - The profile-level judge floor decision and production registration/activation.

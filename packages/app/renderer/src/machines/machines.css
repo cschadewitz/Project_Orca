@@ -125,6 +125,13 @@
 .orca-machine__row > .orca-truncate {
   min-width: 0;
 }
+/* type: caption. A run's console line (#340): steps, wait, owner, last activity. It is the
+   row's lowest-priority sentence, so it is the part that gives way (rule 15). */
+.orca-machine__console {
+  flex: 1;
+  color: var(--ink-tertiary);
+  text-align: right;
+}
 /* type: caption */
 .orca-machine__question {
   flex: 1;
