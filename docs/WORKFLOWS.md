@@ -317,7 +317,8 @@ again, so a grant you revoke in ORCA, or a rule you add, does not apply to it.
 For the Claude and Codex ACP adapters on the daemon's own machine, ORCA can narrow that gap
 with a `PreToolUse` hook it installs in the agent's sessions (#704, #705).
 
-> **Experimental, not guard-qualified.** The hook is opt-in and off unless you turn it on. No
+> **Experimental, not guard-qualified.** The hook is opt-in per agent: with `nativeToolHook`
+> omitted or `off` it is not installed, `on` is refused, and only `experimental` installs it. No
 > agent has qualified under ORCA's enforcement acceptance suite (#706): the support matrix
 > gives every agent tier `none`. What is known about it comes from acceptance runs against the
 > real agents driven by a scripted stand-in for the model, which show the behaviour below at
