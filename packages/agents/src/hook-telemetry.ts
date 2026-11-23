@@ -6,6 +6,9 @@
  * 1. Before the agent starts, ORCA creates an empty spool file, owner-only and exclusively, in
  *    the private directory it already keeps the hook's context file in
  *    ({@link openHookTelemetrySpool}), and remembers which file it made (device and inode).
+ *    That directory must be inside ORCA's agent-denied paths (`protectedPaths.noAccess`), so
+ *    no agent tool the hook or ACP guards may touch it; owner-only modes alone would not keep
+ *    out a process of the same user.
  *    The path goes to the hook in its context. The option is off by default
  *    (`agents[].diagnostics.toolCalls`); with it off there is no spool and no path.
  * 2. The hook appends one JSON line per decided call with {@link recordHookTelemetry}: after
@@ -23,16 +26,22 @@
  * too long, not JSON, or not a v1 line is dropped and counted. A spool replaced by another
  * file, a link, or something that is not a regular file is not read at all. Nothing in a line
  * says which run, session or step it belongs to; ORCA knows that from whose spool it is.
+ * A spool must stay a regular, owner-only file of ORCA's user with one name; drains check that
+ * every time, on the open handle.
+ *
+ * After a crash, spools are discarded, never ingested ({@link sweepHookTelemetrySpools}): only
+ * the process that made a spool knew whose it was.
  * What a line says the hook decided is stored as reported by the hook, never as observed.
  *
  * This module has no side effects on import, because the hook program imports it and anything
  * a hook prints on stdout becomes its answer.
  */
 import { closeSync, constants, fstatSync, openSync, writeSync, type Stats } from "node:fs";
-import { lstat, open, unlink } from "node:fs/promises";
+import { lstat, open, readdir, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { HOOK_TELEMETRY_LINE_LIMIT, HookTelemetryLineSchema, type HookTelemetryLine } from "@orca/core";
+import { HOOK_TELEMETRY_LINE_LIMIT, HookTelemetryLineSchema, OrcaError, type HookTelemetryLine } from "@orca/core";
+import { protectedPathFor, type ProtectedPaths } from "./permissions.js";
 
 /** The most bytes a spool may hold. The hook stops appending past it; ORCA stops reading. */
 export const HOOK_TELEMETRY_SPOOL_LIMIT = 4 * 1024 * 1024;
@@ -105,10 +114,43 @@ export interface HookTelemetrySpool {
 }
 
 export interface OpenHookTelemetrySpoolOptions {
-  /** ORCA's private directory for the session's hook files, protected from agents. */
+  /**
+   * ORCA's private directory for the session's hook files. It must be inside one of
+   * `protectedPaths.noAccess` (the store's `private-execution`, say), where no agent tool may
+   * read or write, and must be a real directory of this user, not open to group or others.
+   */
   dir: string;
+  /** ORCA's protected paths, as the session is given them (C4-01). */
+  protectedPaths: ProtectedPaths;
   /** Called with each drain's report when anything was rejected, dropped or refused. */
   onReport?: ((report: HookTelemetryDrainReport) => void) | undefined;
+}
+
+/** Spools this process made and has not finished: never swept. */
+const liveSpools = new Set<string>();
+
+const SPOOL_NAME = /^tool-calls-(\d+)-[0-9a-f-]{36}\.spool$/;
+
+const POSIX = process.platform !== "win32";
+
+/** Owner-only, this user's, not a link: what ORCA's own private files and directories are. */
+function privateEnough(stat: Stats): string | undefined {
+  if (POSIX && typeof process.getuid === "function" && stat.uid !== process.getuid())
+    return "is not owned by ORCA's user";
+  if (POSIX && (stat.mode & 0o077) !== 0) return "is open to group or others";
+  return undefined;
+}
+
+async function checkSpoolDir(dir: string, protectedPaths: ProtectedPaths): Promise<void> {
+  if (protectedPathFor(dir, "read", { readOnly: [], noAccess: protectedPaths.noAccess }) === undefined)
+    throw new OrcaError(
+      "CONFIG_INVALID",
+      `tool-call telemetry spools go only in a directory agents may not access; ${dir} is not one`,
+      { dir },
+    );
+  const stat = await lstat(dir);
+  const why = stat.isSymbolicLink() || !stat.isDirectory() ? "is not a directory" : privateEnough(stat);
+  if (why) throw new OrcaError("CONFIG_INVALID", `tool-call telemetry spool directory ${dir} ${why}`, { dir });
 }
 
 const sameFile = (a: Pick<Stats, "dev" | "ino">, b: Pick<Stats, "dev" | "ino">) => a.dev === b.dev && a.ino === b.ino;
@@ -131,7 +173,9 @@ export function parseHookTelemetryLine(line: string): HookTelemetryLine | undefi
  * agent's `diagnostics.toolCalls` is `keep`.
  */
 export async function openHookTelemetrySpool(options: OpenHookTelemetrySpoolOptions): Promise<HookTelemetrySpool> {
-  const file = join(options.dir, `tool-calls-${randomUUID()}.spool`);
+  await checkSpoolDir(options.dir, options.protectedPaths);
+  // The pid names who may still be draining it, for the sweep after a crash.
+  const file = join(options.dir, `tool-calls-${process.pid}-${randomUUID()}.spool`);
   const handle = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
   let made: Stats;
   try {
@@ -139,6 +183,7 @@ export async function openHookTelemetrySpool(options: OpenHookTelemetrySpoolOpti
   } finally {
     await handle.close();
   }
+  liveSpools.add(file);
 
   let consumer: HookTelemetryConsumer | undefined;
   let offset = 0;
@@ -176,8 +221,9 @@ export async function openHookTelemetrySpool(options: OpenHookTelemetrySpoolOpti
         refused = "spool is not the file ORCA made";
         return { ...out, refused };
       }
-      if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
-        refused = "spool is not owned by ORCA's user";
+      const why = privateEnough(stat) ?? (stat.nlink !== 1 ? "has another name" : undefined);
+      if (why) {
+        refused = `spool ${why}`;
         return { ...out, refused };
       }
       const end = Math.min(stat.size, HOOK_TELEMETRY_SPOOL_LIMIT);
@@ -256,6 +302,7 @@ export async function openHookTelemetrySpool(options: OpenHookTelemetrySpoolOpti
     finish() {
       return (finished ??= (async () => {
         const last = await serialized(true);
+        liveSpools.delete(file);
         try {
           const stat = await lstat(file);
           if (stat.isFile() && sameFile(stat, made)) await unlink(file);
@@ -266,4 +313,55 @@ export async function openHookTelemetrySpool(options: OpenHookTelemetrySpoolOpti
       })());
     },
   };
+}
+
+/**
+ * Crash cleanup: remove the spools a process left behind when it stopped without finishing
+ * them. Call it where the spool directory is set up (the session factory, at start), before
+ * any session opens.
+ *
+ * A left-behind spool is discarded, never ingested: the run, session and step it belonged to
+ * were known only to the process that made it, and nothing in the spool may say so (its lines
+ * are untrusted). A spool is left behind when the process its name records has exited, or is
+ * this process and no longer live here. Another live process's spools are not touched. Only
+ * regular files of this user are removed; a link in their place is removed as a link, never
+ * followed. Returns how many were removed. Never throws for one file it cannot remove.
+ */
+export async function sweepHookTelemetrySpools(options: {
+  dir: string;
+  protectedPaths: ProtectedPaths;
+  /** Whether a process is running; injected for tests. */
+  alive?: ((pid: number) => boolean) | undefined;
+}): Promise<number> {
+  await checkSpoolDir(options.dir, options.protectedPaths);
+  const alive = options.alive ?? processAlive;
+  let removed = 0;
+  for (const name of await readdir(options.dir)) {
+    const match = SPOOL_NAME.exec(name);
+    if (!match) continue;
+    const path = join(options.dir, name);
+    const pid = Number(match[1]);
+    if (liveSpools.has(path)) continue;
+    if (pid !== process.pid && alive(pid)) continue;
+    try {
+      const stat = await lstat(path);
+      if (stat.isSymbolicLink() || (stat.isFile() && !privateEnough(stat))) {
+        await unlink(path);
+        removed++;
+      }
+    } catch {
+      // Gone already, or not removable: the next sweep tries again.
+    }
+  }
+  return removed;
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: it exists, under another user.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }

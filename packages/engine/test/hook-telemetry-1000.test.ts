@@ -3,7 +3,7 @@
  * keeps it, stamped with the run and session by ORCA, redacted of the session's secret
  * values, bounded, and marked as reported by the hook.
  */
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -58,8 +58,11 @@ const line = (over: Partial<HookTelemetryLine> = {}): HookTelemetryLine => ({
 });
 
 async function setup(diagnostics: Record<string, unknown> | undefined) {
-  const dir = await mkdtemp(join(tmpdir(), "orca-hook-telemetry-"));
-  dirs.push(dir);
+  const root = await mkdtemp(join(tmpdir(), "orca-hook-telemetry-"));
+  dirs.push(root);
+  const dir = join(root, "private-execution", "tool-hooks");
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const protectedPaths = { readOnly: [root], noAccess: [join(root, "private-execution")] };
   const config = parseOrcaConfig({
     secrets: { token: { host: "local", provider: "env", name: "ORCA_TOKEN" } },
     agents: [
@@ -88,7 +91,7 @@ async function setup(diagnostics: Record<string, unknown> | undefined) {
       o.onSecretValues?.([VALUE]);
       // What the hook session does when the agent keeps tool calls: a spool before the agent
       // starts, handed to the hook, finished when the session ends.
-      const spool = await openHookTelemetrySpool({ dir });
+      const spool = await openHookTelemetrySpool({ dir, protectedPaths });
       spools.push(spool);
       let close!: () => void;
       const closed = new Promise<void>((r) => (close = r));

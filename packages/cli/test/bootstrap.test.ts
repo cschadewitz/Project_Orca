@@ -70,6 +70,7 @@ describe("orcaProtectedPaths", () => {
       join(dir, ".orca", "private-execution"),
       join(dir, ".orca", "private-workflows"),
       join(dir, ".orca", "format-backups"),
+      join(dir, ".orca", "diagnostics"),
     ]);
     // Where the shipped workflows have agents write deliverables, which the store holds when
     // the workspace is the config directory: `.orca/work/…` (ai-sdlc), `.orca/program/…` (program).

@@ -2,7 +2,20 @@
  * The hook telemetry spool (#1000): ORCA makes it, the hook only appends to it, and ORCA
  * reads it back as untrusted input.
  */
-import { appendFile, lstat, mkdtemp, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  chmod,
+  link,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,7 +25,9 @@ import {
   openHookTelemetrySpool,
   parseHookTelemetryLine,
   recordHookTelemetry,
+  sweepHookTelemetrySpools,
   type HookTelemetryDrainReport,
+  type ProtectedPaths,
 } from "@orca/agents";
 
 const dirs: string[] = [];
@@ -20,11 +35,19 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
+const posix = process.platform !== "win32";
+const guarded = new Map<string, ProtectedPaths>();
+
+/** A spool directory as ORCA keeps one: owner-only, inside an agent-denied path. */
 async function tmp(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "orca-spool-"));
-  dirs.push(dir);
+  const root = await mkdtemp(join(tmpdir(), "orca-spool-"));
+  dirs.push(root);
+  const dir = join(root, "private-execution", "tool-hooks");
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  guarded.set(dir, { readOnly: [root], noAccess: [join(root, "private-execution")] });
   return dir;
 }
+const protectedPaths = (dir: string) => guarded.get(dir)!;
 
 const line = (over: Partial<HookTelemetryLine> = {}): HookTelemetryLine => ({
   v: 1,
@@ -38,7 +61,7 @@ const line = (over: Partial<HookTelemetryLine> = {}): HookTelemetryLine => ({
 });
 
 async function collecting(dir: string, onReport?: (r: HookTelemetryDrainReport) => void) {
-  const spool = await openHookTelemetrySpool({ dir, onReport });
+  const spool = await openHookTelemetrySpool({ dir, protectedPaths: protectedPaths(dir), onReport });
   const got: HookTelemetryLine[] = [];
   spool.attach(async (lines) => {
     got.push(...lines);
@@ -53,7 +76,7 @@ describe("hook telemetry spool", () => {
     expect(spool.file.startsWith(dir)).toBe(true);
     const made = await stat(spool.file);
     expect(made.size).toBe(0);
-    if (process.platform !== "win32") expect(made.mode & 0o077).toBe(0);
+    if (posix) expect(made.mode & 0o077).toBe(0);
     expect(recordHookTelemetry(spool.file, line({ tool: "Bash" }))).toBe(true);
     expect(recordHookTelemetry(spool.file, line({ tool: "Edit", decision: "deny", rule: "deny-edit" }))).toBe(true);
     expect(await spool.drain()).toEqual({ accepted: 2, rejected: 0, dropped: 0 });
@@ -171,7 +194,7 @@ describe("hook telemetry spool", () => {
 
   it("drops lines when no consumer is attached or the consumer fails, and never throws", async () => {
     const dir = await tmp();
-    const spool = await openHookTelemetrySpool({ dir });
+    const spool = await openHookTelemetrySpool({ dir, protectedPaths: protectedPaths(dir) });
     recordHookTelemetry(spool.file, line());
     expect(await spool.drain()).toEqual({ accepted: 0, rejected: 0, dropped: 1 });
     spool.attach(async () => {
@@ -193,5 +216,63 @@ describe("hook telemetry spool", () => {
     // After finish, the hook's writes go nowhere and nothing reads.
     expect(recordHookTelemetry(spool.file, line())).toBe(false);
     expect(await spool.drain()).toBe(a);
+  });
+
+  it("goes only in an owner-only directory agents may not access", async () => {
+    const dir = await tmp();
+    const root = join(dir, "..", "..");
+    // Somewhere an agent may read: the store itself is only read-only to agents.
+    const open = join(root, "visible");
+    await mkdir(open, { mode: 0o700 });
+    await expect(openHookTelemetrySpool({ dir: open, protectedPaths: protectedPaths(dir) })).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+    });
+    if (posix) {
+      await chmod(dir, 0o755);
+      await expect(openHookTelemetrySpool({ dir, protectedPaths: protectedPaths(dir) })).rejects.toThrow(
+        /open to group or others/,
+      );
+      await chmod(dir, 0o700);
+    }
+    const linked = join(root, "private-execution", "linked");
+    await symlink(open, linked);
+    await expect(openHookTelemetrySpool({ dir: linked, protectedPaths: protectedPaths(dir) })).rejects.toThrow();
+    expect(await readdir(open)).toEqual([]);
+  });
+
+  it("stops reading a spool that is opened up to others or given a second name", async () => {
+    if (!posix) return;
+    const dir = await tmp();
+    const { spool, got } = await collecting(dir);
+    recordHookTelemetry(spool.file, line());
+    await chmod(spool.file, 0o644);
+    expect((await spool.drain()).refused).toMatch(/open to group or others/);
+    const other = await collecting(dir);
+    recordHookTelemetry(other.spool.file, line());
+    await link(other.spool.file, join(dir, "alias"));
+    expect((await other.spool.drain()).refused).toMatch(/another name/);
+    expect([...got, ...other.got]).toEqual([]);
+  });
+
+  it("after a crash, discards spools whose process is gone, and leaves live ones", async () => {
+    const dir = await tmp();
+    const live = await collecting(dir);
+    const dead = join(dir, "tool-calls-999999-00000000-0000-4000-8000-000000000000.spool");
+    const otherLive = join(dir, "tool-calls-424242-00000000-0000-4000-8000-000000000001.spool");
+    const mine = join(dir, `tool-calls-${process.pid}-00000000-0000-4000-8000-000000000002.spool`);
+    const unrelated = join(dir, "context.json");
+    for (const f of [dead, otherLive, mine, unrelated]) await writeFile(f, "x\n", { mode: 0o600 });
+    const removed = await sweepHookTelemetrySpools({
+      dir,
+      protectedPaths: protectedPaths(dir),
+      alive: (pid) => pid === 424242,
+    });
+    expect(removed).toBe(2);
+    expect((await readdir(dir)).sort()).toEqual(
+      [live.spool.file.slice(dir.length + 1), otherLive.slice(dir.length + 1), "context.json"].sort(),
+    );
+    // A finished spool is no longer live, and is gone anyway.
+    await live.spool.finish();
+    expect(await sweepHookTelemetrySpools({ dir, protectedPaths: protectedPaths(dir), alive: () => true })).toBe(0);
   });
 });

@@ -53,7 +53,9 @@ The hook runs under the agent's runtime and has no access to ORCA's store.
 
 1. Before the agent starts, ORCA creates an empty spool file, exclusively and owner-only, in
    the private directory that already holds the hook's context file, and remembers which file
-   it made. The path goes into the hook's context.
+   it made. That directory must be inside ORCA's agent-denied paths (the store's
+   `private-execution`), and be a real, owner-only directory of ORCA's user; otherwise no
+   spool is made. The path goes into the hook's context.
 2. After the hook has decided a call and written its answer, it appends one JSON line to the
    spool (`recordHookTelemetry`): a single synchronous append to a file that must already
    exist, never creating one and never following a link, at most 8 KiB per line and 4 MiB
@@ -64,15 +66,30 @@ The hook runs under the agent's runtime and has no access to ORCA's store.
 The hook runs in the agent's process tree, so the agent could write the spool as well. ORCA
 treats every line as untrusted: a line that is too long, is not JSON, or is not exactly a v1
 line (`HookTelemetryLineSchema`, which has no field for a run or session) is dropped and
-counted; a spool that is no longer the file ORCA made, is a link, or is owned by another user
-is not read again; at most 20,000 lines are taken from one session. A failed store write
-drops that batch and never fails the step.
+counted; a spool that is no longer the file ORCA made, is a link, has a second name, is owned
+by another user or is open to group or others is not read again; at most 20,000 lines are
+taken from one session. A failed store write drops that batch and never fails the step.
+
+After a crash, a spool left behind is discarded, never ingested: only the process that made
+it knew which run and session it belonged to. `sweepHookTelemetrySpools` removes the spools
+whose process (recorded in the file name) has exited; the session factory runs it where it
+sets up the hook directory, before any session opens.
 
 ## Where they are kept
 
-`<store>/diagnostics/tool-calls/<run>/<session>.jsonl`, owner-only, on either metadata
-backend. It is a new directory: the store's format epoch does not change, an earlier ORCA
-ignores it, and a backup, carryover or SQLite conversion copies it with the rest of the store.
+`<store>/diagnostics/tool-calls/<run>/<session>.jsonl`, on either metadata backend. It is a
+new directory: the store's format epoch does not change, an earlier ORCA ignores it, and a
+backup, carryover or SQLite conversion copies it with the rest of the store.
+
+`diagnostics/` is in the store's agent-denied set, beside `private-execution`: no agent tool
+may read or write it. Owner-only modes do not stop a process of the same user, so every open
+is checked as well: directories must be real, owner-only directories of ORCA's user, and
+files are opened without following links and must be regular, owner-only files of ORCA's
+user with one name. Anything else is refused, not read or written through. (Windows has no
+POSIX modes; there the protected directory and the link refusal are the boundary.)
+
+Every change to a run (appending, deleting, expiring) holds that run's lock, which is kept
+outside the run's directory so removing the directory never removes a held lock.
 
 ## Export, deletion and retention
 
@@ -83,7 +100,12 @@ orca diagnostics tool-calls delete <runId> [sessionId]   # remove a run's or one
 orca diagnostics tool-calls prune                        # remove every expired record
 ```
 
+An expired record is never listed or exported, whether or not a sweep has removed it yet.
 Expired records are also removed while ORCA ingests new ones, at most once an hour.
+
+Deleting is final for what was deleted: a small marker stays, and records that arrive later
+for that run (or session), from a session still running, are refused and dropped. Markers
+are removed by `prune` after 400 days, longer than any record is kept.
 
 ## The hook's side
 

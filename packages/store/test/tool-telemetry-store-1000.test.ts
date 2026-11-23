@@ -2,7 +2,7 @@
  * Tool-call telemetry records (#1000): per run and session, beside the store's other data,
  * with export, deletion and expiry, and no change to the store's format.
  */
-import { appendFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, chmod, link, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -98,6 +98,33 @@ describe.each(backends)("tool telemetry store (%s)", (_name, make) => {
     expect(await store.delete({ runId: "run_a" })).toBe(0);
   });
 
+  it("refuses records that arrive for a run or session after it was deleted", async () => {
+    const { store } = await make();
+    expect(await store.append([record("run_a", "sess_1", 0)])).toBe(1);
+    await store.delete({ runId: "run_a", sessionId: "sess_1" });
+    // A live session's late records do not bring deleted diagnostics back.
+    expect(await store.append([record("run_a", "sess_1", 1)])).toBe(0);
+    expect(await store.append([record("run_a", "sess_2", 0)])).toBe(1);
+    await store.delete({ runId: "run_a" });
+    expect(await store.append([record("run_a", "sess_3", 0)])).toBe(0);
+    expect(await store.list({ runId: "run_a" })).toEqual([]);
+    expect(await store.runs()).toEqual([]);
+  });
+
+  it("never lists or exports an expired record, swept or not", async () => {
+    const { store } = await make();
+    await store.append([
+      record("run_a", "sess_1", 0, "2026-11-01T00:00:00.000Z"),
+      record("run_a", "sess_1", 1, "2026-12-01T00:00:00.000Z"),
+    ]);
+    await store.append([record("run_b", "sess_2", 0, "2026-11-01T00:00:00.000Z")]);
+    const now = new Date("2026-11-23T00:00:00.000Z");
+    expect((await store.list({ runId: "run_a" }, { now })).map((r) => r.id)).toEqual(["sess_1:1"]);
+    expect(await store.list({ runId: "run_b" }, { now })).toEqual([]);
+    expect(await store.runs({ now })).toEqual(["run_a"]);
+    expect(await store.list({ runId: "run_a" }, { now: new Date("2026-12-02T00:00:00.000Z") })).toEqual([]);
+  });
+
   it("expires records past their retention, keeping the rest", async () => {
     const { store } = await make();
     await store.append([
@@ -115,7 +142,7 @@ describe.each(backends)("tool telemetry store (%s)", (_name, make) => {
 });
 
 describe("tool telemetry files", () => {
-  it("lives under diagnostics/tool-calls, owner-only, and leaves nothing behind once deleted", async () => {
+  it("lives under diagnostics/tool-calls, owner-only, and leaves only a marker once deleted", async () => {
     const dir = await tmp();
     const store = new FileToolTelemetryStore(dir);
     await store.append([record("run_a", "sess_1", 0)]);
@@ -127,7 +154,8 @@ describe("tool telemetry files", () => {
       expect((await stat(join(dir, TOOL_TELEMETRY_DIR, "run_a"))).mode & 0o077).toBe(0);
     }
     await store.delete({ runId: "run_a", sessionId: "sess_1" });
-    expect(await readdir(join(dir, TOOL_TELEMETRY_DIR))).toEqual([]);
+    // Only the marker that refuses the session's late records is left.
+    expect(await readdir(join(dir, TOOL_TELEMETRY_DIR, "run_a"))).toEqual(["sess_1.deleted"]);
   });
 
   it("skips a torn or foreign line and keeps reading", async () => {
@@ -154,7 +182,7 @@ describe("tool telemetry files", () => {
     await store.append([record(runId, sessionId, 0)]);
     expect(toolTelemetrySegment(runId)).toMatch(/^x-[0-9a-f]{40}$/);
     expect(await readdir(dir)).toEqual(["diagnostics"]);
-    expect(await readdir(join(dir, TOOL_TELEMETRY_DIR))).toEqual([toolTelemetrySegment(runId)]);
+    expect(await readdir(join(dir, TOOL_TELEMETRY_DIR))).toEqual([".deleted", ".locks", toolTelemetrySegment(runId)]);
     expect((await store.list({ runId, sessionId })).map((r) => r.runId)).toEqual([runId]);
     expect(await store.runs()).toEqual([runId]);
   });
@@ -175,5 +203,72 @@ describe("tool telemetry files", () => {
     } finally {
       sqlite.close?.();
     }
+  });
+
+  it("keeps run locks outside the run's directory, and deleting a run never removes one", async () => {
+    const dir = await tmp();
+    const store = new FileToolTelemetryStore(dir);
+    await store.append([record("run_a", "sess_1", 0)]);
+    const root = join(dir, TOOL_TELEMETRY_DIR);
+    expect((await readdir(root)).sort()).toEqual([".deleted", ".locks", "run_a"]);
+    // Appends, deletes and sweeps of one run take turns.
+    await Promise.all([
+      store.append([record("run_a", "sess_1", 1)]),
+      store.delete({ runId: "run_a" }),
+      store.append([record("run_a", "sess_2", 0)]),
+      store.prune(new Date()),
+    ]);
+    expect(await readdir(join(root, ".locks"))).toEqual([]);
+    expect(await store.list({ runId: "run_a" })).toEqual([]);
+    expect(await readdir(root)).not.toContain("run_a");
+  });
+
+  it("drops deletion markers only after they outlive any retention", async () => {
+    const dir = await tmp();
+    const store = new FileToolTelemetryStore(dir);
+    await store.delete({ runId: "run_a" });
+    await store.prune(new Date(Date.now() + 365 * 24 * 3600 * 1000));
+    expect(await store.append([record("run_a", "sess_1", 0)])).toBe(0);
+    await store.prune(new Date(Date.now() + 401 * 24 * 3600 * 1000));
+    expect(await store.append([record("run_a", "sess_1", 0)])).toBe(1);
+  });
+
+  it("refuses to read or write through a link, a shared mode, a foreign file or a second name", async () => {
+    if (process.platform === "win32") return;
+    const dir = await tmp();
+    const store = new FileToolTelemetryStore(dir);
+    await store.append([record("run_a", "sess_1", 0)]);
+    const root = join(dir, TOOL_TELEMETRY_DIR);
+    const file = join(root, "run_a", "sess_1.jsonl");
+
+    await chmod(file, 0o644);
+    await expect(store.list({ runId: "run_a" })).rejects.toThrow(/open to group or others/);
+    await expect(store.append([record("run_a", "sess_1", 1)])).rejects.toThrow(/open to group or others/);
+    await chmod(file, 0o600);
+
+    await link(file, join(dir, "alias"));
+    await expect(store.list({ runId: "run_a" })).rejects.toThrow(/another name/);
+    await rm(join(dir, "alias"));
+
+    // A session file replaced by a link to somewhere else is not followed, for reads or writes.
+    const outside = join(dir, "outside.jsonl");
+    await writeFile(outside, `${JSON.stringify(record("run_a", "sess_1", 9))}\n`, { mode: 0o600 });
+    await rm(file);
+    await symlink(outside, file);
+    await expect(store.list({ runId: "run_a" })).rejects.toThrow();
+    await expect(store.append([record("run_a", "sess_1", 1)])).rejects.toThrow();
+    expect((await readFile(outside, "utf8")).trim().split("\n")).toHaveLength(1);
+
+    // The run's directory itself replaced by a link.
+    const elsewhere = join(dir, "elsewhere");
+    await mkdir(elsewhere, { mode: 0o700 });
+    await rm(join(root, "run_a"), { recursive: true });
+    await symlink(elsewhere, join(root, "run_a"));
+    await expect(store.append([record("run_a", "sess_1", 1)])).rejects.toThrow(/not a directory/);
+    expect(await readdir(elsewhere)).toEqual([]);
+
+    // The diagnostics directory opened up to others.
+    await chmod(join(dir, "diagnostics"), 0o755);
+    await expect(store.runs()).rejects.toThrow(/open to group or others/);
   });
 });

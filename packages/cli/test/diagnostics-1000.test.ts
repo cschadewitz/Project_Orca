@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { ToolCallTelemetry } from "@orca/core";
+import { protectedPathFor } from "@orca/agents";
 import { FileToolTelemetryStore } from "@orca/store";
+import { orcaProtectedPaths } from "../src/bootstrap.js";
 import { commands, type CommandContext } from "../src/commands/index.js";
 
 const dirs: string[] = [];
@@ -57,7 +59,9 @@ describe("orca diagnostics tool-calls", () => {
     await store.append([record("run_a", "sess_2", 0, "2099-01-01T00:00:00.000Z")]);
     await store.append([record("run_b", "sess_3", 0, "2000-01-01T00:00:00.000Z")]);
 
-    expect(await run(["tool-calls", "runs"])).toEqual({ code: 0, lines: ["run_a", "run_b"] });
+    // run_b's only record has expired: it is not listed or exported even before a sweep.
+    expect(await run(["tool-calls", "runs"])).toEqual({ code: 0, lines: ["run_a"] });
+    expect((await run(["tool-calls", "export", "run_b"])).lines).toEqual([]);
     const exported = await run(["tool-calls", "export", "run_a"]);
     expect(exported.lines.map((l) => (JSON.parse(l) as ToolCallTelemetry).id)).toEqual(["sess_1:0", "sess_2:0"]);
     expect((await run(["tool-calls", "export", "run_a", "sess_2"])).lines).toHaveLength(1);
@@ -74,5 +78,13 @@ describe("orca diagnostics tool-calls", () => {
     await expect(run(["tool-calls", "export"])).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     await expect(run(["tool-calls", "shred"])).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     await expect(run(["everything"])).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+  });
+
+  it("keeps the records where no agent tool may read or write them", () => {
+    const dir = join(tmpdir(), "orca-diagnostics-boundary");
+    const paths = orcaProtectedPaths({ configDir: dir, storeDir: ".orca" });
+    const file = join(dir, ".orca", "diagnostics", "tool-calls", "run_a", "sess_1.jsonl");
+    expect(protectedPathFor(file, "read", paths)).toBe(join(dir, ".orca", "diagnostics"));
+    expect(protectedPathFor(file, "write", paths)).toBe(join(dir, ".orca", "diagnostics"));
   });
 });

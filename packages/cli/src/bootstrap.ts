@@ -12,7 +12,7 @@ import {
 } from "./update-bootstrap.js";
 import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
-import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
+import { DIAGNOSTICS_DIR, FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
 import { enterDaemonStoreFormat } from "./desktop-carryover.js";
 import {
   desktopSqliteSwitch,
@@ -310,7 +310,8 @@ export interface OrcaFileLayout {
  * directory). Not even readable: `auth/`, where `orca serve` keeps the local owner token, and
  * the store's two private directories, which hold its encryption keys and the payloads they
  * protect (`private-execution` and `private-workflows` in `@orca/store`), and the whole-store
- * format backups, which copy them (`format-backups`).
+ * format backups, which copy them (`format-backups`), and the tool-call diagnostics ORCA keeps
+ * about the agent's own calls (`diagnostics`, #1000).
  */
 export function orcaProtectedPaths(layout: OrcaFileLayout): ProtectedPaths {
   const configDir = resolve(layout.configDir);
@@ -328,6 +329,8 @@ export function orcaProtectedPaths(layout: OrcaFileLayout): ProtectedPaths {
       join(storeDir, "private-workflows"),
       // Whole-store copies (#566), private directories included.
       join(storeDir, STORE_FORMAT_BACKUP_DIR),
+      // Tool-call telemetry (#1000): what hooks reported about the agent's own calls.
+      join(storeDir, DIAGNOSTICS_DIR),
     ],
     agentAreas: [join(storeDir, "work"), join(storeDir, "program")],
   };
