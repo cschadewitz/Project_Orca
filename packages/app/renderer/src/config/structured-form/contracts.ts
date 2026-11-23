@@ -40,7 +40,7 @@ export type FieldShape = FieldMetadata &
     | {
         readonly kind: "record";
         readonly value: FieldShape;
-        readonly keyPattern?: string | undefined;
+        readonly keyFormat?: string | undefined;
         readonly valueKind?: "env" | undefined;
       }
     | {

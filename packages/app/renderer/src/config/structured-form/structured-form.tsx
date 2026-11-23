@@ -402,9 +402,9 @@ function RecordEntries({
   const keyInput = useRef<HTMLInputElement>(null);
   const pendingFocus = useRef<string | null | undefined>(undefined);
   const { value, path, label } = form;
-  const issue = recordKeyError(key, value, shape.keyPattern);
+  const issue = recordKeyError(key, value, shape.keyFormat);
   const editableKeys = Object.keys(isObject(value) ? value : {}).filter(
-    (entryKey) => recordKeyError(entryKey, {}, shape.keyPattern) === undefined,
+    (entryKey) => recordKeyError(entryKey, {}, shape.keyFormat) === undefined,
   );
   const deletionForm: StructuredFormProps = {
     ...form,
@@ -433,12 +433,12 @@ function RecordEntries({
       {Object.entries(isObject(value) ? value : {}).map(([entryKey, entry]) => (
         <div key={entryKey} data-record-entry={entryKey}>
           <Card eyebrow={entryKey}>
-            {recordKeyError(entryKey, {}, shape.keyPattern) === undefined ? (
+            {recordKeyError(entryKey, {}, shape.keyFormat) === undefined ? (
               <StructuredForm {...form} shape={shape.value} value={entry} path={[...path, entryKey]} label={entryKey} />
             ) : (
               <Text style="caption">This key requires authorized raw editing.</Text>
             )}
-            {recordKeyError(entryKey, {}, shape.keyPattern) === undefined && (
+            {recordKeyError(entryKey, {}, shape.keyFormat) === undefined && (
               <Action
                 edits={[{ kind: "remove", path: [...path, entryKey] }]}
                 form={deletionForm}
@@ -502,7 +502,7 @@ function EnvEntries({
   const entries = Object.entries(isObject(value) ? value : {});
   const choicesFor = (variable: string): readonly string[] =>
     form.referenceChoices?.([...path, variable, "secret"]) ?? [];
-  const issue = recordKeyError(name, value, shape.keyPattern);
+  const issue = recordKeyError(name, value, shape.keyFormat);
   const newChoices = choicesFor(name === "" ? "variable" : name);
   const addEdits: readonly EditIntent[] = [{ kind: "set", path: [...path, name], value: { secret } }];
   const pick = (variable: string, id: string): void => {
@@ -513,7 +513,7 @@ function EnvEntries({
     <div>
       {entries.length === 0 && <Text style="caption">No variables.</Text>}
       {entries.map(([variable, entry]) => {
-        const keyIssue = recordKeyError(variable, {}, shape.keyPattern);
+        const keyIssue = recordKeyError(variable, {}, shape.keyFormat);
         const choices = choicesFor(variable);
         const current = isSecretRef(entry) ? entry.secret : "";
         const access = form.access([{ kind: "set", path: [...path, variable], value: { secret: current } }]);

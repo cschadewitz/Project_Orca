@@ -54,14 +54,20 @@ function acceptance(node: Node, value: "absent" | "null", seen = new Set<Node>()
   return unknown;
 }
 
-/** The one regex a record's string keys must match; `false` when the checks are anything else. */
-function keyPattern(checks: readonly unknown[]): string | undefined | false {
+/**
+ * Named key rules a client validates with its own fixed code (#335). A client is never sent
+ * a pattern to evaluate: a daemon-supplied expression has no bound on its evaluation time.
+ */
+const KEY_FORMATS: Record<string, string> = { "^[A-Za-z0-9][A-Za-z0-9._-]*$": "catalog-id" };
+
+/** The named rule a record's string keys follow; `false` when the checks are anything else. */
+function keyFormat(checks: readonly unknown[]): string | undefined | false {
   if (checks.length === 0) return undefined;
   if (checks.length !== 1) return false;
   const def = (checks[0] as { _zod?: { def?: { check?: string; format?: string; pattern?: unknown } } })._zod?.def;
   if (def?.check !== "string_format" || def.format !== "regex" || !(def.pattern instanceof RegExp)) return false;
-  // Only a plain pattern: flags would change what it means to a client.
-  return def.pattern.flags === "" ? def.pattern.source : false;
+  if (def.pattern.flags !== "" || !Object.hasOwn(KEY_FORMATS, def.pattern.source)) return false;
+  return KEY_FORMATS[def.pattern.source]!;
 }
 
 function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
@@ -112,11 +118,12 @@ function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
       return node.def.element ? { ...meta, kind: "array", item: child(node.def.element, `${path}[]`) } : unsupported();
     case "record": {
       // Enum/opaque key schemas cannot be described as arbitrary record keys. A string key
-      // with one regex (a catalog id, #335) is described by that pattern; anything else is not.
+      // with one known regex (a catalog id, #335) is described by that rule's name; anything
+      // else is not.
       const key = node.def.keyType;
       if (!node.def.valueType || key?.def.type !== "string" || key.def.coerce) return unsupported();
-      const pattern = keyPattern(key.def.checks ?? []);
-      if (pattern === false) return unsupported();
+      const format = keyFormat(key.def.checks ?? []);
+      if (format === false) return unsupported();
       // An environment map (#336): a literal or a secret reference per variable. The value
       // shape stays opaque; the hint lets a client that knows it pick references.
       const env = (node.def.valueType as unknown) === EnvValueSchema;
@@ -124,7 +131,7 @@ function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
         ...meta,
         kind: "record",
         value: child(node.def.valueType, `${path}.<key>`),
-        ...(pattern === undefined ? {} : { keyPattern: pattern }),
+        ...(format === undefined ? {} : { keyFormat: format }),
         ...(env ? { valueKind: "env" as const } : {}),
       };
     }

@@ -30,21 +30,25 @@ export const pathLabel = (path: DocumentPath): string =>
     "",
   );
 
-export function recordKeyError(key: string, value: unknown, pattern?: string): string | undefined {
+/**
+ * Key rules the daemon names (#335), each checked by fixed code here. A name this build does
+ * not know refuses every key: structured edits of that record need a newer app.
+ */
+const KEY_FORMATS: Readonly<Record<string, (key: string) => boolean>> = {
+  // Core's catalog id. Dots are valid there but refused by the path rule above, so a
+  // dotted id stays raw-only in the structured form.
+  "catalog-id": (key) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(key),
+};
+
+export function recordKeyError(key: string, value: unknown, format?: string): string | undefined {
   if (key === "" || !/^[A-Za-z0-9_-]+$/.test(key) || FORBIDDEN.has(key))
     return "Use a key without dots, brackets, spaces or reserved names.";
-  if (pattern !== undefined && !matches(pattern, key)) return "This key is not one this field accepts.";
+  if (format !== undefined) {
+    if (!Object.hasOwn(KEY_FORMATS, format)) return "This field's key rule needs a newer app. Use raw editing.";
+    if (!KEY_FORMATS[format]!(key)) return "This key is not one this field accepts.";
+  }
   if (isObject(value) && Object.hasOwn(value, key)) return "This key already exists.";
   return undefined;
-}
-
-/** A daemon-described key pattern; one that does not compile refuses every key. */
-function matches(pattern: string, key: string): boolean {
-  try {
-    return new RegExp(pattern).test(key);
-  } catch {
-    return false;
-  }
 }
 
 export function atPath(value: unknown, path: DocumentPath): unknown {

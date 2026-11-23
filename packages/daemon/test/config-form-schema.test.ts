@@ -77,16 +77,22 @@ describe("authoritative rich configuration metadata", () => {
       z.record(z.string().min(2), z.string()),
       z.record(z.string().regex(/^a/).regex(/b$/), z.string()),
       z.record(z.string().regex(/^allowed$/i), z.string()),
+      // A regex the daemon has no name for is never sent for a client to evaluate.
+      z.record(z.string().regex(/^allowed$/), z.string()),
+      z.record(z.string().regex(/^(a+)+$/), z.string()),
     ])
       expect(describeFormNode(schema)).toMatchObject({ kind: "unsupported", visibility: "metadata-unavailable" });
     expect(describeFormNode(z.string().catch("fallback")).acceptsAbsent).toBe("metadata-unavailable");
   });
 
-  it("describes a record whose keys match one plain pattern, such as a catalog id (#335)", () => {
-    expect(describeFormNode(z.record(z.string().regex(/^allowed$/), z.string()))).toMatchObject({
+  it("describes a record whose keys follow a named rule, such as a catalog id (#335)", () => {
+    expect(describeFormNode(z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/), z.string()))).toMatchObject({
       kind: "record",
-      keyPattern: "^allowed$",
+      keyFormat: "catalog-id",
     });
+    expect(describeFormNode(z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/), z.string()))).not.toHaveProperty(
+      "keyPattern",
+    );
     const root = describeConfigFormSchema().root;
     if (root.kind !== "object") throw new Error("root");
     const capabilities = root.fields.capabilities!;
@@ -95,8 +101,16 @@ describe("authoritative rich configuration metadata", () => {
       expect(capabilities.fields[kind]).toMatchObject({
         kind: "record",
         visibility: "non-secret",
-        keyPattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        keyFormat: "catalog-id",
       });
+    expect(root.fields.secrets).toMatchObject({ kind: "record", keyFormat: "catalog-id" });
+    // A rule name from a newer daemon still parses; the client decides what it knows.
+    expect(
+      ConfigFormSchemaSchema.parse({
+        version: 1,
+        root: { ...capabilities.fields.skills, keyFormat: "future-rule" },
+      }).root,
+    ).toMatchObject({ keyFormat: "future-rule" });
     // An MCP server's id and command are shown; its arguments are withheld. Its environment
     // names variables, and each value stays opaque: a literal is never described as shown.
     const server = (capabilities.fields.mcpServers as { value: { fields: Record<string, { visibility: string }> } })

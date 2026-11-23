@@ -163,10 +163,13 @@ export type ConfigFieldShape = ConfigFieldMetadata &
         kind: "record";
         value: ConfigFieldShape;
         /**
-         * When keys are constrained (#335): an ECMAScript pattern every key must match, such
-         * as a catalog id's. Absent: any key the form's own safety rule allows.
+         * When keys are constrained (#335), the named rule they follow, which a client checks
+         * with its own fixed validator; never a pattern for the client to evaluate. Known:
+         * `catalog-id` (a letter or digit, then letters, digits, `.`, `_`, `-`). A client that
+         * does not know the name refuses structured key edits. Absent: any key the form's own
+         * safety rule allows.
          */
-        keyPattern?: string | undefined;
+        keyFormat?: string | undefined;
         /**
          * `env` (#335): every value is an environment value, a literal string (whose text is
          * never shown) or a secret reference `{ secret: <id> }`. Its `value` shape stays
@@ -201,7 +204,7 @@ export const ConfigFieldShapeSchema: z.ZodType<ConfigFieldShape> = z.lazy(() =>
       ...FieldMetadataShape,
       kind: z.literal("record"),
       value: ConfigFieldShapeSchema,
-      keyPattern: z.string().optional(),
+      keyFormat: z.string().max(64).optional(),
       valueKind: z.literal("env").optional(),
     }),
     z.object({

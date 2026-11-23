@@ -491,6 +491,14 @@ describe("authority, redaction, validation and keyboard boundaries", () => {
     expect(form.current()).toEqual({ existing: "value", "legacy.key": "preserve" });
     expect(screen.queryByRole("button", { name: 'Delete fixture["legacy.key"]' })).toBeNull();
   });
+  it("refuses structured key edits for a key rule this app does not know (#335)", () => {
+    const form = renderForm({ ...meta, kind: "record", value: scalar(), keyFormat: "^(a+)+$" }, { existing: "value" });
+    expect(form.container.textContent).toContain("This key requires authorized raw editing.");
+    expect(screen.queryByRole("button", { name: "Delete fixture.existing" })).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^New Fixture key/), { target: { value: "aaaa" } });
+    expect(screen.getByRole("button", { name: "Add key" }).getAttribute("aria-disabled")).toBe("true");
+    expect(form.current()).toEqual({ existing: "value" });
+  });
   it("retains row focus through reorder when integration supplies stable identity", () => {
     const form = renderForm({ ...meta, kind: "array", item: object({ id: scalar() }) }, [
       { id: "first" },
