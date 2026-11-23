@@ -20,10 +20,9 @@
  * once it is over, a store whose marker names the other backend, which both backends refuse).
  *
  * Only a dead process's entry or switch is ignored: same host, and the process is gone. A writer
- * never removes a switch's file; the next switch replaces a dead one. Writers from before this
- * registry cannot take part: the format marker records whether one may have opened the store
- * (`writerRegistry`, store-format.ts), and the switch refuses such a store until the operator
- * states that every older ORCA using it is stopped.
+ * never removes a switch's file; the next switch replaces a dead one (or `clearDeadStoreSwitch`,
+ * under the format lock). Writers from before this registry cannot take part: a switched store
+ * keeps them out with the legacy fence (sqlite/legacy-fence.ts) instead.
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";

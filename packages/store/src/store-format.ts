@@ -597,8 +597,8 @@ const busyWriters = (storeDir: string, writers: StoreWriterEntry[]) =>
 
 /**
  * Switch a store's metadata from files to SQLite (#339): `orca store sqlite switch`, run with
- * every other ORCA process using the store stopped. Refused for now (`LEGACY_UNFENCED`, see
- * {@link IN_PLACE_SQLITE_SWITCH}). Under the format lock:
+ * every other ORCA process using the store stopped. Under the format lock (an earlier switch
+ * that was interrupted is first finished or undone by its journal, `settleSqliteSwitch`):
  *
  * 1. Only a store in this ORCA's current file format is switched (an older one is carried
  *    forward first; an unmarked one is opened once first). A store already on SQLite is left as
@@ -607,9 +607,8 @@ const busyWriters = (storeDir: string, writers: StoreWriterEntry[]) =>
  *    first survives a power cut (#910, #947), exactly as carryover does.
  * 3. No other writer: the switch announces itself (store-writers.ts), so writers from this ORCA
  *    refuse to open the store until it is over, and is refused while any registered writer is
- *    alive, idle or not. A store an older ORCA has opened (no `writerRegistry` in the marker) is
- *    refused unless the operator states every older ORCA using it is stopped
- *    (`olderWritersStopped`), because those writers do not register.
+ *    alive, idle or not. Released ORCA versions do not register; the legacy fence of step 7
+ *    keeps them out instead (sqlite/legacy-fence.ts).
  * 4. A verified whole-store backup into `format-backups/`, refused while a run is active or
  *    while anything writes (store-format-carryover.ts), and a read check of the copy.
  * 5. The import (`importFileMetadata`: read twice, decided and applied in one transaction), a
@@ -618,8 +617,11 @@ const busyWriters = (storeDir: string, writers: StoreWriterEntry[]) =>
  * 6. The file metadata must still be exactly what the backup holds, and no writer registered:
  *    a write that landed after the backup would be missing from the database, so the switch is
  *    refused instead.
- * 7. Only then the marker: {@link SQLITE_STORE_FORMAT_EPOCH}, naming the backup and the
- *    database's id. From here the store opens on SQLite only, on that database only, and an ORCA
+ * 7. A durable journal (`.sqlite-switch/journal.json`), then the legacy fence: the files a
+ *    released ORCA reads first are replaced by markers it cannot open (the originals kept aside),
+ *    and the file metadata is checked again. Only then the marker:
+ *    {@link SQLITE_STORE_FORMAT_EPOCH}, naming the backup and the database's id. A crash before
+ *    the marker is undone by the journal, one after it is finished. From here the store opens on SQLite only, on that database only, and an ORCA
  *    from before this one refuses it as newer. The announcement is withdrawn after the marker.
  *
  * Any refusal before step 7 leaves the store on files, in charge, exactly as before (a database
