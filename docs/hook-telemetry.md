@@ -128,7 +128,9 @@ is a few bytes.
 ## The hook's side
 
 ORCA's pre-tool hook records every call it answers, for Claude Code (#704) and Codex (#705)
-alike:
+alike, once
+the hook itself is installed. It is still off in shipped builds (#704), so until it is turned
+on nothing is recorded, whatever `diagnostics.toolCalls` says. When it is on:
 
 - When the agent keeps tool calls, the session code opens the spool with
   `openHookTelemetrySpool` beside the hook's context file, in the store's

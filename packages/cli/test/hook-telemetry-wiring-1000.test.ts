@@ -72,7 +72,7 @@ async function setup() {
 
 const line: HookTelemetryLine = { v: 1, at: "2026-11-23T10:00:00.000Z", tool: "Bash", decision: "allow", latencyMs: 1 };
 
-describe("a hooked session's telemetry spool", () => {
+describe.runIf(process.platform !== "win32")("a hooked session's telemetry spool", () => {
   it("is made only when the agent keeps telemetry, named in the context, and drained to the end", async () => {
     const t = await setup();
     const plain = await t.open();

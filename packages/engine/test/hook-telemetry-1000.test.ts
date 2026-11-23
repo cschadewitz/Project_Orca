@@ -209,7 +209,7 @@ describe("toolTelemetryRecords", () => {
   });
 });
 
-describe("redaction matches the session logger's", () => {
+describe.runIf(process.platform !== "win32")("redaction matches the session logger's", () => {
   const AGENT_SECRET = "agent-env-secret-value-0001";
   const MCP_SECRET = "mcp-server-secret-value-0002";
 

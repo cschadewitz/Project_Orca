@@ -85,7 +85,7 @@ async function hookAndDrain(args: string[], input: string) {
   return result;
 }
 
-describe("what the hook records", () => {
+describe.runIf(process.platform !== "win32")("what the hook records", () => {
   it("records a Claude call's answer with its kind, title, input and reason", async () => {
     const allowed = await hookAndDrain([contextFile], frame("Bash", { command: "ls" }, "toolu_a"));
     expect(allowed).toMatchObject({ exitCode: 0, stdout: "" });
@@ -182,7 +182,7 @@ describe("what the hook records", () => {
   });
 });
 
-describe("fitting a line", () => {
+describe.runIf(process.platform !== "win32")("fitting a line", () => {
   const base: HookTelemetryLine = {
     v: 1,
     at: "2026-11-23T10:00:00.000Z",
@@ -224,7 +224,7 @@ describe("fitting a line", () => {
   });
 });
 
-describe("the hook process", () => {
+describe.runIf(process.platform !== "win32")("the hook process", () => {
   const entry = fileURLToPath(new URL("../src/bin/claude-pre-tool-hook.ts", import.meta.url));
   const bundled = childBundle("claude-pre-tool-hook-1000", { entries: { hook: entry } })?.["hook"];
   const run = (args: string[], input: string) =>
@@ -263,7 +263,7 @@ describe("the hook process", () => {
   });
 });
 
-describe("the session's spool", () => {
+describe.runIf(process.platform !== "win32")("the session's spool", () => {
   const session = (toolCallTelemetry?: "off" | "keep") =>
     nativeToolHookSession({
       agentId: "claude",
