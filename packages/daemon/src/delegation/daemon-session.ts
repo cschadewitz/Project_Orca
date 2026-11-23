@@ -97,6 +97,8 @@ type PromptInput = Parameters<AgentSession["prompt"]>[0];
 interface DelegatedTask {
   text: string;
   sensitive: boolean;
+  /** The original protected values `text` holds (#363): the worker redacts each one. */
+  protectedValues: readonly string[];
 }
 type ContentBlocks = Exclude<PromptInput, string>;
 type PermissionRequest = Parameters<NonNullable<OpenSessionOptions["askPermission"]>>[0];
@@ -266,12 +268,14 @@ export function takesGitRef(hello: { admitFields?: readonly string[] | undefined
  * `admitFields`, never on the strength of a protocol minor (another 2.6 need not have it).
  */
 /**
- * Whether a daemon takes `runs.admit` `sensitiveVars` (#363): only when its `hello` lists the
- * field in `admitFields`. A task holding a value the parent run protects goes only to one that
- * does, so the worker keeps it encrypted and redacted too; it is never sent as an ordinary var.
+ * Whether a daemon takes a protected task (#363): only when its `hello` lists both
+ * `sensitiveVars` and `protectedValues` in `admitFields`. A task holding a value the parent run
+ * protects goes only to one that does, so the worker keeps the task encrypted and redacts each
+ * original value on its own surfaces; it is never sent as an ordinary var. The admission
+ * re-confirms this on a fresh `hello` immediately before every send (see `submit`).
  */
 export function takesSensitiveVars(hello: { admitFields?: readonly string[] | undefined }): boolean {
-  return hello.admitFields?.includes("sensitiveVars") ?? false;
+  return (hello.admitFields?.includes("sensitiveVars") && hello.admitFields.includes("protectedValues")) ?? false;
 }
 
 export function recordsOrigin(hello: { admitFields?: readonly string[] | undefined }): boolean {
@@ -293,7 +297,9 @@ function artifactMismatch(
   if (got.producedByStepRunId !== listed.producedByStepRunId) return "producing step";
   if (!got.contentHash || got.contentHash !== listed.contentHash) return "no matching digest";
   // A body the worker sent with its run's protected values replaced (#363) is checked against
-  // what it says it sent; the record's own digest names the unredacted original.
+  // the worker's own checksum of what it sent: that proves the copy arrived intact, not that
+  // the worker redacted it completely. The record's own digest names the unredacted original,
+  // and the step collects the copy through this run's own redaction like any other output.
   const expected = redacted ?? { size: got.size, contentHash: got.contentHash };
   const bytes = Buffer.from(text, "utf8");
   if (bytes.length !== expected.size) return "size";
@@ -454,7 +460,7 @@ class DaemonSession implements AgentSession {
     private readonly scope: { principalId: string; workspaceId: string },
     /** The remote's `hello.admitFields` lists `origin`. */
     private readonly takesOrigin = false,
-    /** The remote's `hello.admitFields` lists `sensitiveVars` (#363). */
+    /** The remote's `hello.admitFields` lists `sensitiveVars` and `protectedValues` (#363). */
     private readonly takesSensitive = false,
   ) {
     this.id = newId("sess", clock.now());
@@ -523,13 +529,14 @@ class DaemonSession implements AgentSession {
     const task: DelegatedTask = {
       text: turn.task || (typeof input === "string" ? input : textOf(input)),
       sensitive: turn.sensitive === true,
+      protectedValues: turn.protectedValues ?? [],
     };
     // Refused before any receipt is written: nothing is reserved, so nothing can be sent later.
     if (task.sensitive && !this.takesSensitive)
       throw delegationRefusal(
         this.options.profile,
         "protocol",
-        `This step's task holds a value the run keeps protected, and the daemon on ${this.options.remoteName} cannot take it as a protected input (its hello does not list \`sensitiveVars\` in admitFields). Nothing was sent; update ORCA there.`,
+        `This step's task holds a value the run keeps protected, and the daemon on ${this.options.remoteName} cannot take it as a protected input (its hello does not list \`sensitiveVars\` and \`protectedValues\` in admitFields). Nothing was sent; update ORCA there.`,
       );
     const signal = options.signal;
     let receipt = await this.resolve(turn, task, deadline, signal);
@@ -908,6 +915,36 @@ class DaemonSession implements AgentSession {
 
   // ------------------------------------------------------------------ admission
 
+  /**
+   * Immediately before a protected task is sent (#363): ask the remote's `hello` again, over
+   * the same authenticated channel the admission takes, and refuse unless it is still the
+   * enrolled workspace, still speaks a protocol this daemon delegates to, and still lists both
+   * protected-input fields. No answer throws `RemoteUnreachable`, so the attempt is retried
+   * without anything sent. As a backstop, the admission's params are strict: a daemon that
+   * does not know `protectedValues` refuses the admission rather than admitting it.
+   */
+  private async confirmProtectedInputs(deadline: number, signal?: AbortSignal): Promise<void> {
+    const hello = HelloResultSchema.parse(
+      await this.client.call(
+        "hello",
+        { client: "orca-daemon/delegation", ...helloOffer() },
+        this.bounded(deadline, signal),
+      ),
+    );
+    if (hello.identity && hello.identity.workspaceId !== this.options.binding.workspaceId)
+      throw delegationRefusal(
+        this.options.profile,
+        "scope-changed",
+        `The daemon on ${this.options.remoteName} is no longer the enrolled workspace. This step's protected task was not sent.`,
+      );
+    if (!daemonRelation(hello.protocol) || !takesSensitiveVars(hello))
+      throw delegationRefusal(
+        this.options.profile,
+        "protocol",
+        `The daemon on ${this.options.remoteName} no longer takes a protected task (its hello does not list \`sensitiveVars\` and \`protectedValues\` in admitFields). Nothing was sent; update ORCA there.`,
+      );
+  }
+
   /** Send the receipt's admission (same key every time) until it is accepted; `admitted` after. */
   private async submit(
     receipt: DelegationReceipt,
@@ -925,8 +962,10 @@ class DaemonSession implements AgentSession {
     const params = {
       workflowId: receipt.binding.workflowId,
       vars: { [promptVar]: task.text },
-      // The worker protects the prompt variable as it would a declared sensitive input (#363).
+      // The worker protects the prompt variable as it would a declared sensitive input, and
+      // redacts each original protected value it holds wherever it appears (#363).
       ...(task.sensitive ? { sensitiveVars: [promptVar] } : {}),
+      ...(task.sensitive && task.protectedValues.length ? { protectedValues: [...task.protectedValues] } : {}),
       idempotencyKey: receipt.key,
       expectedScope: scopeOf(receipt),
       ...(receipt.origin ? { origin: receipt.origin } : {}),
@@ -944,6 +983,10 @@ class DaemonSession implements AgentSession {
     for (let attempt = 0; ; attempt++) {
       if (signal?.aborted) return this.abandon(receipt, deadline);
       try {
+        // The capability seen at open may not be the daemon's now (a restart, an update or a
+        // downgrade since): a protected task is sent only right after this target says again
+        // that it takes one. Uncertain is not sent.
+        if (task.sensitive) await this.confirmProtectedInputs(deadline, signal);
         let answer = RunsAdmitResultSchema.parse(
           await this.client.call("runs.admit", params, this.bounded(deadline, signal)),
         );

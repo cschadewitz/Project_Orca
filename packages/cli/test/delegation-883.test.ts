@@ -122,8 +122,39 @@ edges:
   - { from: work, to: done }
 `,
   );
+  // A task's protected value repeated on its own, apart from the rest of the task (#363).
+  writeFileSync(
+    join(wf, "remote-echo.yaml"),
+    `
+id: remote-echo
+name: remote echo
+start: s
+nodes:
+  s: { type: start }
+  work:
+    type: agent
+    agent: { id: scripted }
+    prompt: "{{ vars.prompt }}"
+    produces:
+      - { kind: token, name: token, path: "out/token.md" }
+  done: { type: end }
+edges:
+  - { from: s, to: work }
+  - { from: work, to: done }
+`,
+  );
   const playbook = {
-    kinds: { report: [{ data: { status: "done" }, body: "Remote report for: {prompt}" }] },
+    kinds: {
+      report: [{ data: { status: "done" }, body: "Remote report for: {prompt}" }],
+      token: [
+        {
+          extract: "with (\\S+)",
+          say: "Using {extract} for the deploy",
+          data: { status: "done" },
+          body: "Token in use: {extract}",
+        },
+      ],
+    },
   };
   const agent = {
     id: "scripted",
@@ -1788,6 +1819,7 @@ describe("delegation through a proxy the test controls (#883)", () => {
       ...turn(parent, join(work, "sensitive", "report.md")),
       task: `deploy with ${SECRET}`,
       sensitive: true,
+      protectedValues: [SECRET],
     };
     await expect(session.prompt("ignored", { timeoutMs: 60_000, turn: task })).resolves.toMatchObject({
       stopReason: "end_turn",
@@ -1804,6 +1836,120 @@ describe("delegation through a proxy the test controls (#883)", () => {
     await session.close();
     await proxy.close();
   }, 120_000);
+
+  it("has the worker redact each original protected value on its own, apart from the task around it (#363)", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-echo"));
+    const session = await open(proxy.transport(), receipts, { agent: agentFor("remote-echo") });
+    const parent = "run_01JD0000000000000000000365";
+    const path = join(work, "echo", "token.md");
+    const task = {
+      ...turn(parent, path),
+      task: `deploy with ${SECRET} to prod`,
+      sensitive: true,
+      protectedValues: [SECRET],
+      deliverables: [{ kind: "token", name: "token", path, required: true }],
+    };
+    await expect(session.prompt("ignored", { timeoutMs: 60_000, turn: task })).resolves.toMatchObject({
+      stopReason: "end_turn",
+    });
+    const runId = receipts.read(parent, task.delegationId)!.remoteRunId!;
+    // The worker's agent repeated the value without the task around it: in what it said and in
+    // its artifact's body. No surface shows it, and each shows it redacted.
+    const { events } = (await call(remote, "runs.events", { runId, limit: 500 })) as { events: unknown[] };
+    expect(JSON.stringify(events)).not.toContain(SECRET);
+    expect(JSON.stringify(events)).toContain("Using [REDACTED] for the deploy");
+    for (const [method, params] of [
+      ["runs.get", { runId }],
+      ["runs.list", {}],
+      ["artifacts.list", { runId }],
+    ] as const)
+      expect(JSON.stringify(await call(remote, method, params)), method).not.toContain(SECRET);
+    const listed = (await call(remote, "artifacts.list", { runId })).artifacts as { id: string; name: string }[];
+    const got = await call(remote, "artifacts.get", { artifactId: listed.find((a) => a.name === "token")!.id });
+    expect(JSON.stringify(got)).not.toContain(SECRET);
+    expect(got.text).toContain("Token in use: [REDACTED]");
+    expect(got.redacted).toMatchObject({ size: Buffer.byteLength(got.text as string) });
+    // The parent's copy is the redacted body, checked against the worker's checksum of it.
+    const copy = readFileSync(path, "utf8");
+    expect(copy).not.toContain(SECRET);
+    expect(copy).toContain("Token in use: [REDACTED]");
+    // On the worker's disk the value is only where the agent put it (its own checkout) and in
+    // the artifact blob that holds the agent's bytes, which every read serves redacted. Run
+    // records, the event log, logs and the execution store (encrypted) never hold it.
+    const hits: string[] = [];
+    const scan = (d: string): void => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const f = join(d, e.name);
+        if (e.isDirectory()) scan(f);
+        else if (e.isFile() && readFileSync(f).includes(SECRET)) hits.push(f.slice(remote.dir.length + 1));
+      }
+    };
+    scan(remote.dir);
+    expect(hits.filter((f) => !f.startsWith(".orca/artifacts/blobs/") && !f.startsWith("out/"))).toEqual([]);
+    await session.close();
+    await proxy.close();
+  }, 120_000);
+
+  it("holds the byte limit to an artifact body as sent, after redaction (#363)", async () => {
+    // A value shorter than `[REDACTED]` makes the body it is redacted from longer.
+    const SHORT = "k9x";
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-echo-short"));
+    const session = await open(proxy.transport(), receipts, { agent: agentFor("remote-echo") });
+    const parent = "run_01JD0000000000000000000367";
+    const path = join(work, "echo-short", "token.md");
+    const task = {
+      ...turn(parent, path),
+      task: `deploy with ${SHORT} to prod`,
+      sensitive: true,
+      protectedValues: [SHORT],
+      deliverables: [{ kind: "token", name: "token", path, required: true }],
+    };
+    await session.prompt("ignored", { timeoutMs: 60_000, turn: task });
+    const runId = receipts.read(parent, task.delegationId)!.remoteRunId!;
+    const listed = (await call(remote, "artifacts.list", { runId })).artifacts as {
+      id: string;
+      name: string;
+      size: number;
+    }[];
+    const stored = listed.find((a) => a.name === "token")!;
+    const whole = await call(remote, "artifacts.get", { artifactId: stored.id });
+    const sent = (whole.redacted as { size: number }).size;
+    expect(sent).toBeGreaterThan(stored.size);
+    // The stored body fits the limit; the body as it would be sent does not, so none is sent.
+    const capped = await call(remote, "artifacts.get", { artifactId: stored.id, maxBytes: stored.size });
+    expect(capped.text).toBeUndefined();
+    expect(capped.omitted).toMatchObject({ reason: "tooLarge" });
+    expect(String((capped.omitted as { detail: string }).detail)).toContain(`${sent} bytes as sent`);
+    await session.close();
+    await proxy.close();
+  }, 120_000);
+
+  it("refuses, sending nothing, a protected task when the worker no longer takes one at admission (#363)", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-sensitive-changed"));
+    const session = await open(proxy.transport(), receipts);
+    // The hello at open listed both fields; the one asked again right before the admission
+    // (a restart onto an older build, say) does not.
+    proxy.state.rules.tamper = { method: "hello", from: '"protectedValues"', to: '"protectedValuez"' };
+    const parent = "run_01JD0000000000000000000366";
+    const before = (await runsOf("remote-task")).length;
+    const task = {
+      ...turn(parent, join(work, "sensitive-changed", "report.md")),
+      task: `deploy with ${SECRET}`,
+      sensitive: true,
+      protectedValues: [SECRET],
+    };
+    const error = await session.prompt("ignored", { timeoutMs: 30_000, turn: task }).catch((e: unknown) => e);
+    expect(isOrcaError(error, "DELEGATION_REFUSED")).toBe(true);
+    expect((error as { details: { reason: string } }).details.reason).toBe("protocol");
+    expect(proxy.state.rules.tamper).toBeUndefined();
+    expect(await runsOf("remote-task")).toHaveLength(before);
+    expect(receipts.read(parent, task.delegationId)?.state).not.toBe("admitted");
+    await session.close();
+    await proxy.close();
+  }, 60_000);
 
   it("refuses, sending nothing, a protected task to a worker that cannot protect it (#363)", async () => {
     const proxy = await proxied();

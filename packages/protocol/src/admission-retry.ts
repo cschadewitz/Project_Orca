@@ -35,6 +35,15 @@ export const RunsAdmitParamsSchema = RunsStartParamsSchema.extend({
    * variable here when the task holds a value its own run protects.
    */
   sensitiveVars: z.array(SensitiveVarNameSchema).min(1).max(64).optional(),
+  /**
+   * Protocol 2.11 (#363): values the daemon redacts wherever they appear in the run, as it would
+   * a sensitive input's value, and keeps only in the encrypted execution store. A delegating
+   * daemon sends the original protected values its task holds, so each is redacted on its own
+   * and not only as part of the whole task. Listed in `hello.admitFields` as `protectedValues`.
+   * Strict like the rest of these params: a daemon that does not know the field refuses the
+   * admission rather than admitting the task as ordinary vars.
+   */
+  protectedValues: z.array(z.string().min(1).max(65_536)).min(1).max(256).optional(),
 }).strict();
 export const AdmissionsGetParamsSchema = z.strictObject({
   operationId: z.string().regex(/^retry_[a-f0-9-]{36}$/),

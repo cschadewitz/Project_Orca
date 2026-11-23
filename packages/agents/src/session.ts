@@ -52,6 +52,13 @@ export interface TurnContext {
    * must have it protected there too, or not send it.
    */
   sensitive?: boolean;
+  /**
+   * The protected values that occur in `task`, exactly as the run's redaction matches them
+   * (#363). Present only with `sensitive`. A delegating session hands them to the worker on its
+   * authenticated admission so the worker redacts each value on its own, not only the whole
+   * task. Held in memory for the turn: never logged, stored or shown.
+   */
+  protectedValues?: readonly string[];
   /** Where the step collects its outputs once the turn ends: absolute paths on the agent's host. */
   deliverables: readonly TurnDeliverable[];
 }

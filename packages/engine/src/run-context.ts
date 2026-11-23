@@ -25,6 +25,7 @@ import {
 } from "@orca/core";
 import {
   executionEvents,
+  protectedNeedles,
   redactExecutionValue,
   unavailable,
   type ExecutionInputs,
@@ -150,6 +151,15 @@ export class RunContext {
   holdsProtectedValue(text: string): boolean {
     const secrets = this.redactionInputs()?.secrets;
     return !!secrets?.length && redactExecutionValue(text, secrets) !== text;
+  }
+
+  /**
+   * The protected values that occur in `text`, as redaction matches them (#363): what a worker
+   * that is handed `text` must redact on its own surfaces. Longest first; never logged or stored.
+   */
+  protectedValuesIn(text: string): string[] {
+    const secrets = this.redactionInputs()?.secrets;
+    return secrets?.length ? protectedNeedles(secrets).filter((needle) => text.includes(needle)) : [];
   }
 
   private redactionInputs(): ExecutionInputs | undefined {

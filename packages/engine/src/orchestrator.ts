@@ -309,6 +309,11 @@ export interface StartRunOptions {
    */
   sensitiveVars?: readonly string[];
   /**
+   * Values to redact wherever they appear in this run (#363): the original protected values in
+   * a delegated task, so the worker redacts each one and not only the whole task.
+   */
+  protectedValues?: readonly string[];
+  /**
    * Per-run selection (#186): role -> agent, model, item workflow, template pack. Validated
    * before `run.created` is appended and recorded in it, so a replay resolves the same agents.
    */
@@ -799,6 +804,7 @@ export class Orchestrator {
       vars,
       opts.checkpoint?.inputs ?? parentInputs,
       opts.sensitiveVars,
+      opts.protectedValues,
     );
     const configuredSecrets = generation ? configuredGenerationSecrets(generation) : [];
     if (configuredSecrets.length)

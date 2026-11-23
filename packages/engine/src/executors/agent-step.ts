@@ -363,6 +363,7 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
       try {
         if (followUp === 0 && revisionHandoff) await ctx.revisionInput!.beforeSend(revisionHandoff);
         const task = revisionHandoff ? prompt : await renderTask();
+        const protectedValues = ctx.run.protectedValuesIn(task);
         const turnContext: TurnContext = {
           runId: ctx.run.id,
           stepRunId: ctx.step.id,
@@ -373,7 +374,8 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
           // A revision handoff's prompt is its own (and may be redacted): a delegating session
           // gets the whole prompt then, never a task rendered without the revision.
           task,
-          ...(ctx.run.holdsProtectedValue(task) || ctx.run.holdsProtectedValue(prompt) ? { sensitive: true } : {}),
+          ...(protectedValues.length || ctx.run.holdsProtectedValue(prompt) ? { sensitive: true } : {}),
+          ...(protectedValues.length ? { protectedValues } : {}),
           deliverables: deliverables.map((d) => ({
             kind: d.kind,
             ...(d.name ? { name: d.name } : {}),

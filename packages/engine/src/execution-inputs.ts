@@ -18,12 +18,17 @@ export function protectExecutionInputs(
   parent?: ExecutionInputs,
   /** Names the launch asked to protect though the definition does not declare them (#363). */
   alsoSensitive: readonly string[] = [],
+  /**
+   * Values the launch asked to redact wherever they appear (#363): the original protected values
+   * inside a delegated task, so each is redacted on its own and not only the whole task.
+   */
+  alsoProtected: readonly string[] = [],
 ): ExecutionInputs | undefined {
   const sensitiveNames = new Set([...(parent?.sensitiveNames ?? []), ...alsoSensitive]);
   for (const [name, declaration] of Object.entries(definition.inputSchema?.fields ?? {}))
     if (containsSensitive(declaration)) sensitiveNames.add(name);
-  if (!sensitiveNames.size && !parent?.secrets.length) return undefined;
-  const secrets = [...(parent?.secrets ?? [])];
+  if (!sensitiveNames.size && !parent?.secrets.length && !alsoProtected.length) return undefined;
+  const secrets: unknown[] = [...(parent?.secrets ?? []), ...alsoProtected];
   for (const name of sensitiveNames) {
     if (Object.hasOwn(vars, name)) secrets.push(vars[name]);
     const decl = definition.inputSchema?.fields[name];

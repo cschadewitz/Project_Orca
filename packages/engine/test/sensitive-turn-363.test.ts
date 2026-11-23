@@ -68,11 +68,14 @@ describe("a turn that hands over a protected value (#363)", () => {
     const turn = await turnFor("deploy {{ vars.target }} with {{ vars.token }}");
     expect(turn.task).toContain(SECRET);
     expect(turn.sensitive).toBe(true);
+    // The original value on its own, so a worker can redact it apart from the task around it.
+    expect(turn.protectedValues).toEqual([SECRET]);
   });
 
   it("is not marked when the task holds only ordinary inputs", async () => {
     const turn = await turnFor("deploy {{ vars.target }}");
     expect(turn.task).toBe("deploy prod");
     expect(turn.sensitive).toBeUndefined();
+    expect(turn.protectedValues).toBeUndefined();
   });
 });

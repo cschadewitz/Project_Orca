@@ -394,6 +394,7 @@ export class ConfigurationGenerations {
         gitRef,
         gitRefObject,
         sensitiveVars,
+        protectedValues,
       } = options;
       const requestId = recordedRequestId ?? options.requestId;
       const vars =
@@ -446,6 +447,7 @@ export class ConfigurationGenerations {
         ...(gitRef !== undefined ? { gitRef } : {}),
         ...(gitRefObject !== undefined ? { gitRefObject } : {}),
         ...(sensitiveVars?.length ? { sensitiveVars: [...sensitiveVars] } : {}),
+        ...(protectedValues?.length ? { protectedValues: [...protectedValues] } : {}),
       };
     };
     return Object.freeze({

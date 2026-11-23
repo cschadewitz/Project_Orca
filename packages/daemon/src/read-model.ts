@@ -965,10 +965,23 @@ export class ReadModel {
       };
     const text = await this.protectedArtifactText(artifact);
     const bytes = Buffer.from(text, "utf8");
-    // A body that held a protected value is sent redacted; say so, with what was sent.
+    // The limit holds for what is sent: redaction can make a body longer than the stored one.
+    if (bytes.length > params.maxBytes)
+      return {
+        artifact: view,
+        omitted: {
+          reason: "tooLarge",
+          detail: `${bytes.length} bytes as sent with protected values redacted, past the ${params.maxBytes} this call asked for`,
+        },
+        asOf,
+      };
+    // A body that held a protected value is sent redacted; say so, with this daemon's checksum
+    // of the bytes it sent. That checksum lets a copy be checked against what was sent; it is
+    // not evidence that the redaction was complete.
+    const digest = sha256Hex(bytes);
     const redacted =
-      artifact.contentHash !== undefined && sha256Hex(bytes) !== artifact.contentHash
-        ? { redacted: { size: bytes.length, contentHash: sha256Hex(bytes) } }
+      artifact.contentHash !== undefined && digest !== artifact.contentHash
+        ? { redacted: { size: bytes.length, contentHash: digest } }
         : {};
     return { artifact: view, text, ...redacted, asOf };
   }
