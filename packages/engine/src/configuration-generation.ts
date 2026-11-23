@@ -39,8 +39,12 @@ export interface CapturedLaunch {
   readonly admissionRunIds?: true;
   readonly generationId: string;
   readonly workflow: Readonly<{ id: string; version: string; revision: string }>;
-  validateStartRun(options: BoundLaunchOptions): Promise<void>;
+  /** Resolves to what admission pinned: for a `gitRef`, the object it named when checked (#883). */
+  validateStartRun(options: BoundLaunchOptions): Promise<LaunchCheck | void>;
   startRun(options: BoundLaunchOptions): Promise<string>;
+}
+export interface LaunchCheck {
+  gitRefObject?: string;
 }
 export type CaptureLaunch = (selection: LaunchSelection) => Promise<CapturedLaunch>;
 /** Trusted recovery only: values must come from the authorized, durable Request admission. */
@@ -387,6 +391,8 @@ export class ConfigurationGenerations {
         directAdmissionId,
         admissionRunId,
         origin,
+        gitRef,
+        gitRefObject,
       } = options;
       const requestId = recordedRequestId ?? options.requestId;
       const vars =
@@ -436,6 +442,8 @@ export class ConfigurationGenerations {
         ...(parentStepRunId ? { parentStepRunId } : {}),
         ...(overrides ? { overrides: structuredClone(overrides) } : {}),
         ...(origin ? { origin: structuredClone(origin) } : {}),
+        ...(gitRef !== undefined ? { gitRef } : {}),
+        ...(gitRefObject !== undefined ? { gitRefObject } : {}),
       };
     };
     return Object.freeze({
@@ -443,8 +451,10 @@ export class ConfigurationGenerations {
       admissionRunIds: true as const,
       generationId: material.snapshot.id,
       workflow,
-      validateStartRun: async (options: BoundLaunchOptions) => {
-        await this.options.admission.validateStartRun(bound(options), material);
+      validateStartRun: async (options: BoundLaunchOptions): Promise<LaunchCheck> => {
+        const checked = await this.options.admission.validateStartRun(bound(options), material);
+        const pin = (checked as { gitRefObject?: unknown } | undefined)?.gitRefObject;
+        return typeof pin === "string" ? { gitRefObject: pin } : {};
       },
       startRun: async (options: BoundLaunchOptions) => this.options.admission.startRun(bound(options), material),
     });

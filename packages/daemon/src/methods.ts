@@ -488,7 +488,7 @@ export const hello: Method<HelloParams, HelloResult> = {
 };
 
 /** The optional `runs.admit` fields this daemon takes (`hello.admitFields`). */
-export const ADMIT_FIELDS = ["origin"] as const;
+export const ADMIT_FIELDS = ["origin", "gitRef"] as const;
 
 /** `runs.list`: the run list, newest first. */
 export const runsList: Method<Parameters<ReadModel["runsList"]>[0], RunsListResult> = {

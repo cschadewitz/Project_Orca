@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { LocalHost } from "@orca/agents";
 import { GitWorktreeProvider } from "../src/workspace/git-worktree.js";
 import { OrcaError } from "@orca/core";
@@ -37,6 +37,7 @@ async function fixture(failAt?: "inputs" | "created" | "ownership" | "publicatio
       repo: dir,
       worktreeRoot: join(dir, "trees"),
       isolateRoots: true,
+      allowedRefs: ["refs/heads/*"],
     });
   }
   const faults = {
@@ -226,7 +227,149 @@ it("records a stated origin on the admitted run, and a key replayed with another
   expect(await f.orc.listRuns()).toHaveLength(1);
   // Execution's first-attachment fence checks the origin the admission recorded.
   await f.orc.run(runId);
-  expect((await f.orc.getState(runId)).run.status).not.toBe("created");
+  const after = (await f.orc.getState(runId)).run;
+  expect(after).toMatchObject({ status: "completed" });
+});
+
+it("refuses a named git ref the workspace cannot check out, before anything is admitted (#883)", async () => {
+  const f = await fixture();
+  await expect(
+    f.service.admitRun({ workflowId: "program", gitRef: "refs/heads/feature" }, { idempotencyKey: "ref" }, f.authority),
+  ).rejects.toMatchObject({ code: "NOT_SUPPORTED", details: { gitRef: "refs/heads/feature" } });
+  expect(await f.orc.listRuns()).toEqual([]);
+  expect(f.start).not.toHaveBeenCalled();
+});
+
+const git = (cwd: string, ...args: string[]) =>
+  execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+/** An isolated-roots fixture whose `origin` has `refs/heads/feature`, and a way to move it. */
+async function refFixture() {
+  const f = await fixture(undefined, true);
+  const upstream = join(f.dir, "..", `${f.dir.split("/").pop()}-upstream.git`);
+  dirs.push(upstream);
+  git(f.dir, "clone", "-q", "--bare", f.dir, upstream);
+  git(upstream, "branch", "feature", "main");
+  git(f.dir, "remote", "add", "origin", upstream);
+  const original = git(upstream, "rev-parse", "feature");
+  const moved = git(
+    f.dir,
+    "-c",
+    "user.name=test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit-tree",
+    "HEAD^{tree}",
+    "-p",
+    "HEAD",
+    "-m",
+    "moved",
+  );
+  git(f.dir, "push", "-q", "origin", `${moved}:refs/heads/moved-source`);
+  const moveTo = (commit: string) => git(upstream, "update-ref", "refs/heads/feature", commit);
+  const receipts = () => readdir(join(f.dir, ".git", "orca-root-workspaces")).catch(() => [] as string[]);
+  return { ...f, upstream, original, moved, moveTo, receipts };
+}
+
+it("admits a root run on its own checkout of a named git ref, and attaches it (#883)", async () => {
+  const f = await fixture(undefined, true);
+  const run = git;
+  const upstream = join(f.dir, "..", `${f.dir.split("/").pop()}-upstream.git`);
+  dirs.push(upstream);
+  run(f.dir, "clone", "-q", "--bare", f.dir, upstream);
+  run(upstream, "branch", "feature", "main");
+  run(f.dir, "remote", "add", "origin", upstream);
+  const admitted = await f.service.admitRun(
+    { workflowId: "program", gitRef: "refs/heads/feature" },
+    { idempotencyKey: "ref-ok" },
+    f.authority,
+  );
+  expect(admitted).toMatchObject({ state: "resolved", result: { state: "accepted" } });
+  const runId = (admitted as { result: { runId: string } }).result.runId;
+  const workspace = (await f.orc.getState(runId)).run.workspace;
+  const head = run(upstream, "rev-parse", "feature");
+  expect(workspace.rootProvisioning).toMatchObject({ runId, ref: "refs/heads/feature", refObject: head });
+  expect(run(workspace.cwd, "rev-parse", "HEAD")).toBe(head);
+  await f.orc.run(runId);
+  const after = (await f.orc.getState(runId)).run;
+  expect(after).toMatchObject({ status: "completed" });
+});
+
+it("refuses a run whose ref moved after runs.admit checked it, never checking out the new commit (#883)", async () => {
+  const f = await refFixture();
+  const provider = f.orc.workspaceProvider as GitWorktreeProvider;
+  const checkRef = provider.checkRef.bind(provider);
+  let checks = 0;
+  vi.spyOn(provider, "checkRef").mockImplementation(async (ref) => {
+    const object = await checkRef(ref);
+    // The intake check and the reserved preparation's check pass; then the ref moves on the
+    // remote before creation provisions it.
+    if (++checks === 2) f.moveTo(f.moved);
+    return object;
+  });
+  const admitted = await f.service.admitRun(
+    { workflowId: "program", gitRef: "refs/heads/feature" },
+    { idempotencyKey: "ref-moved" },
+    f.authority,
+  );
+  expect(admitted).toMatchObject({ state: "resolved", result: { state: "recoverable-failure" } });
+  // Creation was asked for exactly the object admission pinned, and refused the moved ref.
+  expect(f.start).toHaveBeenCalledTimes(1);
+  expect(f.start.mock.calls[0]![0]).toMatchObject({ gitRef: "refs/heads/feature", gitRefObject: f.original });
+  expect(await f.orc.listRuns()).toEqual([]);
+  expect(await f.receipts()).toEqual([]);
+  // Reconciling the reserved admission keeps the pin: it never recaptures the moved ref.
+  const again = await f.service.withRetryAuthority(f.authority, () =>
+    f.claims.reconcile(admitted.operationId, f.scope),
+  );
+  expect(again).toMatchObject({ state: "resolved", result: { state: "recoverable-failure" } });
+  expect(f.start.mock.calls.at(-1)![0]).toMatchObject({ gitRefObject: f.original });
+  expect(await f.orc.listRuns()).toEqual([]);
+  // A new admission checks again, and pins what the ref names now.
+  const fresh = await f.service.admitRun(
+    { workflowId: "program", gitRef: "refs/heads/feature" },
+    { idempotencyKey: "ref-moved-again" },
+    f.authority,
+  );
+  expect(fresh).toMatchObject({ state: "resolved", result: { state: "accepted" } });
+  const runId = (fresh as { result: { runId: string } }).result.runId;
+  const workspace = (await f.orc.getState(runId)).run.workspace;
+  expect(workspace.rootProvisioning).toMatchObject({ baseCommit: f.moved, refObject: f.moved });
+});
+
+it("recovers an admission interrupted before its workspace receipt from the pinned ref object (#883)", async () => {
+  const f = await refFixture();
+  // Interrupted after the admission material is reserved, before creation provisions anything.
+  f.start.mockImplementationOnce(async () => {
+    throw new Error("crash");
+  });
+  const first = await f.service.admitRun(
+    { workflowId: "program", gitRef: "refs/heads/feature" },
+    { idempotencyKey: "ref-recover" },
+    f.authority,
+  );
+  expect(first).toMatchObject({ state: "resolved", result: { state: "recoverable-failure" } });
+  expect(await f.receipts()).toEqual([]);
+  const reconcile = () =>
+    f.service.withRetryAuthority(f.authority, () => f.claims.reconcile(first.operationId, f.scope));
+  // The ref moves before recovery: recovery refuses rather than recapture the new commit.
+  f.moveTo(f.moved);
+  expect(await reconcile()).toMatchObject({ state: "resolved", result: { state: "recoverable-failure" } });
+  expect(f.start.mock.calls.at(-1)![0]).toMatchObject({ gitRefObject: f.original });
+  expect(await f.orc.listRuns()).toEqual([]);
+  expect(await f.receipts()).toEqual([]);
+  // Once the ref names the pinned object again, recovery admits exactly that object.
+  f.moveTo(f.original);
+  expect(await reconcile()).toMatchObject({ state: "resolved", result: { state: "accepted" } });
+  const [runId] = await f.orc.listRuns();
+  const workspace = (await f.orc.getState(runId!)).run.workspace;
+  expect(workspace.rootProvisioning).toMatchObject({
+    ref: "refs/heads/feature",
+    refObject: f.original,
+    baseCommit: f.original,
+  });
+  expect(git(workspace.cwd, "rev-parse", "HEAD")).toBe(f.original);
+  await f.orc.run(runId!);
+  expect((await f.orc.getState(runId!)).run).toMatchObject({ status: "completed" });
 });
 
 it("refuses an origin that is not canonical ids before anything is claimed or admitted (#883)", async () => {

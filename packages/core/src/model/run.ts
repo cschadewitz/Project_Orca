@@ -40,7 +40,16 @@ export const WorkspaceSchema = z.object({
   /** Provider that created it (git-worktree, kepler, t3code, ...). */
   provider: z.string().optional(),
   /** Built-in owned root identity, inherited unchanged by children. */
-  rootProvisioning: z.object({ runId: z.string(), baseCommit: z.string() }).optional(),
+  rootProvisioning: z
+    .object({
+      runId: z.string(),
+      baseCommit: z.string(),
+      /** The named git ref the run was given (#883); `baseCommit` is the commit it named. */
+      ref: z.string().optional(),
+      /** The object `ref` named when its admission checked it (an annotated tag's tag object, else `baseCommit`). */
+      refObject: z.string().optional(),
+    })
+    .optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 

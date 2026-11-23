@@ -29,6 +29,7 @@ import {
   openDaemonSession,
   ReceiptConflict,
   recordsOrigin,
+  takesGitRef,
   type DelegationTransport,
   type OpenDaemonSessionOptions,
 } from "@orca/daemon";
@@ -1032,7 +1033,7 @@ describe("delegation through a proxy the test controls (#883)", () => {
   it("states no origin to a daemon whose hello does not list it, whatever its protocol minor", async () => {
     const proxy = await proxied();
     // The remote's hello, with `origin` taken out of admitFields: an independent 2.6 peer.
-    proxy.state.rules.tamper = { method: "hello", from: '"admitFields":["origin"]', to: '"admitFields":["nigiro"]' };
+    proxy.state.rules.tamper = { method: "hello", from: '"admitFields":["origin"', to: '"admitFields":["nigiro"' };
     const receipts = new DelegationReceipts(join(work, "receipts-no-origin"));
     const session = await open(proxy.transport(), receipts, { originWorkspaceId: ORIGIN_WORKSPACE });
     const parent = "run_01JD0000000000000000000001";
@@ -1052,7 +1053,7 @@ describe("delegation through a proxy the test controls (#883)", () => {
 
   it("refuses to replay an admission that stated an origin to a daemon that no longer takes one", async () => {
     const proxy = await proxied();
-    proxy.state.rules.tamper = { method: "hello", from: '"admitFields":["origin"]', to: '"admitFields":["nigiro"]' };
+    proxy.state.rules.tamper = { method: "hello", from: '"admitFields":["origin"', to: '"admitFields":["nigiro"' };
     const receipts = new DelegationReceipts(join(work, "receipts-origin-replay"));
     const parent = "run_01JD0000000000000000000002";
     // A receipt whose admission went out with an origin, its answer never learned.
@@ -1079,6 +1080,45 @@ describe("delegation through a proxy the test controls (#883)", () => {
     await session.close();
     await proxy.close();
   }, 60_000);
+
+  it("fails the step with a typed refusal when the remote cannot check out the named git ref", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-ref"));
+    const agent = AgentSpecSchema.parse({
+      id: "remote",
+      type: "orca-daemon",
+      profile: "direct",
+      workflow: "remote-task",
+      gitRef: "refs/heads/feature/x",
+    });
+    const session = await open(proxy.transport(), receipts, { agent });
+    const before = (await runsOf("remote-task")).length;
+    const error = await session
+      .prompt("ignored", { timeoutMs: 30_000, turn: turn("run_ref", join(work, "ref", "report.md")) })
+      .catch((e: unknown) => e);
+    // The remote's workspace (a shared local checkout) gives no run a checkout of its own.
+    expect(isOrcaError(error, "DELEGATION_REFUSED")).toBe(true);
+    expect((error as { details: { reason: string; gitRef: string } }).details).toMatchObject({
+      reason: "git-ref",
+      gitRef: "refs/heads/feature/x",
+    });
+    expect(await runsOf("remote-task")).toHaveLength(before);
+    await session.close();
+    await proxy.close();
+  }, 60_000);
+
+  it("names a git ref only to a daemon whose hello lists it", () => {
+    expect(takesGitRef({})).toBe(false);
+    expect(takesGitRef({ admitFields: ["origin"] })).toBe(false);
+    expect(takesGitRef({ admitFields: ["origin", "gitRef"] })).toBe(true);
+    expect(
+      AgentSpecSchema.safeParse({ id: "a", type: "orca-daemon", profile: "p", workflow: "w", gitRef: "a..b" }).success,
+    ).toBe(false);
+    expect(
+      AgentSpecSchema.safeParse({ id: "a", type: "orca-daemon", profile: "p", workflow: "w", gitRef: "main" }).success,
+    ).toBe(false);
+    expect(AgentSpecSchema.safeParse({ id: "a", command: "x", gitRef: "refs/heads/main" }).success).toBe(false);
+  });
 
   it("refuses an origin that is not canonical ids, before anything is admitted", async () => {
     const before = (await runsOf("remote-task")).length;

@@ -25,6 +25,9 @@ const BindingSchema = z.strictObject({
   requestId: z.string().min(1).optional(),
   workItemId: z.string().min(1).optional(),
   origin: RunOriginSchema.optional(),
+  gitRef: z.string().min(1).optional(),
+  /** The object admission pinned for `gitRef` (#883); the root's workspace must record it. */
+  gitRefObject: z.string().min(1).optional(),
 });
 export type AdmissionExecutionBinding = z.infer<typeof BindingSchema>;
 const EvidenceSchema = z.strictObject({
@@ -115,6 +118,10 @@ async function validateCreation(stores: AdmissionStores, binding: AdmissionExecu
     payload.requestId !== binding.requestId ||
     payload.workItemId !== binding.workItemId ||
     !equal(payload.origin, binding.origin) ||
+    (payload.workspace as { rootProvisioning?: { ref?: unknown } } | undefined)?.rootProvisioning?.ref !==
+      binding.gitRef ||
+    (payload.workspace as { rootProvisioning?: { refObject?: unknown } } | undefined)?.rootProvisioning?.refObject !==
+      binding.gitRefObject ||
     (binding.kind === "request"
       ? payload.requestAdmissionId !== binding.admissionId ||
         payload.directAdmissionId !== undefined ||

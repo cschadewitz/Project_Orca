@@ -125,6 +125,7 @@ export type DelegationRefusalReason =
   | "protocol"
   | "admission-closed"
   | "workflow"
+  | "git-ref"
   | "scope-changed";
 
 export function delegationRefusal(
@@ -225,6 +226,14 @@ const MAX_CHILD_DEPTH = 8;
 
 /** The workspace and principal every remote mutation for a receipt is scoped to. */
 /**
+ * Whether a daemon takes `runs.admit` `gitRef`: only when its `hello` lists the field in
+ * `admitFields`, never on the strength of a protocol minor.
+ */
+export function takesGitRef(hello: { admitFields?: readonly string[] | undefined }): boolean {
+  return hello.admitFields?.includes("gitRef") ?? false;
+}
+
+/**
  * Whether a daemon takes `runs.admit` `origin`: only when its `hello` lists the field in
  * `admitFields`, never on the strength of a protocol minor (another 2.6 need not have it).
  */
@@ -289,6 +298,13 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
         { missing },
       );
     if (hello.identity && hello.identity.workspaceId !== options.binding.workspaceId) throw changed("workspace");
+    // A named ref is never dropped: a daemon that cannot take one would run the wrong code.
+    if (options.agent.gitRef !== undefined && !takesGitRef(hello))
+      throw refuse(
+        "protocol",
+        `The daemon on ${options.remoteName} speaks protocol ${formatProtocolVersion(hello.protocol)}, and does not take the git ref this agent names (its hello does not list \`gitRef\` in admitFields). Update ORCA there, or remove gitRef.`,
+        { remoteProtocol: formatProtocolVersion(hello.protocol) },
+      );
     const discovery = OperatorDiscoverySchema.parse(
       await client.call("operator.discover", {}).catch((e: unknown) => {
         throw fault(e);
@@ -334,6 +350,16 @@ function classify(profile: string, transport: DelegationTransport, error: unknow
       return delegationRefusal(profile, "protocol", `The remote daemon refused the protocol: ${error.message}`, {
         remoteCode: error.code,
       });
+    if (error.code === "NOT_SUPPORTED" && error.details && typeof error.details.gitRef === "string")
+      return delegationRefusal(
+        profile,
+        "git-ref",
+        `The remote daemon cannot work from that git ref: ${error.message}`,
+        {
+          remoteCode: error.code,
+          gitRef: error.details.gitRef,
+        },
+      );
     if (
       error.code === "WORKFLOW_NOT_FOUND" ||
       error.code === "WORKFLOW_INPUT_INVALID" ||
@@ -766,6 +792,7 @@ class DaemonSession implements AgentSession {
       idempotencyKey: receipt.key,
       expectedScope: scopeOf(receipt),
       ...(receipt.origin ? { origin: receipt.origin } : {}),
+      ...(this.options.agent.gitRef !== undefined ? { gitRef: this.options.agent.gitRef } : {}),
     };
     // The receipt's admission is replayed exactly as it was first sent: an origin it carries is
     // part of that command. A remote that no longer takes one is refused, never sent less.
