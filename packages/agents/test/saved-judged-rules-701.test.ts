@@ -3,9 +3,28 @@
  * sidecar, which becomes version 4; the loader carries it in `policy.judged` after every
  * hand-written rule; and the judged lane can allow one call by it, exactly as by a configured one.
  */
-import { mkdtemp, mkdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { fork, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { readFileSync, readlinkSync } from "node:fs";
+import {
+  chmod,
+  link,
+  lstat,
+  mkdtemp,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as acp from "@agentclientprotocol/sdk";
 import { AgentSpecSchema, PermissionPolicyFileSchema, PERMISSION_JUDGED_VERSION } from "@orca/core";
@@ -35,6 +54,17 @@ afterEach(async () => {
 });
 
 const NOW = new Date("2026-11-23T12:00:00.000Z");
+
+/** This process's liveness domain, computed as the lock does; null where none is established. */
+const DOMAIN = ((): string | null => {
+  if (process.platform !== "linux") return null;
+  try {
+    const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    return `linux:${boot}:${readlinkSync("/proc/self/ns/pid")}`;
+  } catch {
+    return null;
+  }
+})();
 const READS = { kind: "read" as const, scope: "workspace" as const };
 const save = (over: Partial<Parameters<typeof saveJudgedRule>[0]> = {}) =>
   saveJudgedRule({ file, agentId: "a", match: READS, criterion: "Reading source.", now: () => NOW, ...over });
@@ -178,6 +208,148 @@ describe("sidecar ownership", () => {
     expect((await stat(lock)).isDirectory()).toBe(true);
     expect(await readFile(file, "utf8")).toContain("Edited meanwhile.");
     expect(await readFile(file, "utf8")).not.toContain("Reading docs.");
+  });
+});
+
+describe("a lock left by a sidecar writer that is gone", () => {
+  const children: ChildProcess[] = [];
+  afterEach(() => {
+    for (const child of children.splice(0)) child.kill("SIGKILL");
+  });
+  const writer = () => {
+    const child = fork(fileURLToPath(new URL("./sidecar-lock-child.ts", import.meta.url)), [file], {
+      execArgv: ["--import", "tsx"],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
+    children.push(child);
+    return { child, message: () => once(child, "message").then(([value]) => value as { state: string }) };
+  };
+
+  it.skipIf(DOMAIN === null)(
+    "is removed without a person once its process is dead, and the next save goes through",
+    async () => {
+      const child = writer();
+      expect(await child.message()).toMatchObject({ state: "locked" });
+      const exited = once(child.child, "exit");
+      child.child.kill("SIGKILL");
+      await exited;
+      await utimes(`${file}.lock`, new Date(), new Date());
+      expect(await save({ lock: { timeoutMs: 2_000 } })).toMatchObject({ outcome: "added" });
+      await expect(stat(`${file}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await readPermissionPolicyFile(file)).agents["a"]!.rules).toHaveLength(1);
+    },
+  );
+
+  it("is kept while its process is running, however long it waits", async () => {
+    const child = writer();
+    expect(await child.message()).toMatchObject({ state: "locked" });
+    await utimes(`${file}.lock`, new Date(0), new Date(0));
+    await expect(save({ lock: { timeoutMs: 100 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+    const saved = child.message();
+    child.child.send("continue");
+    expect(await saved).toMatchObject({ state: "saved" });
+    expect((await readPermissionPolicyFile(file)).agents["a"]!.rules[0]).toMatchObject({
+      judge: { criterion: "Written by the child." },
+    });
+  });
+
+  const dead = 2 ** 22 + 12345; // above the default pid range, so no process has it
+  const nonce = "0f0f0f0f-0000-4000-8000-000000000000";
+  const valid = () => ({ version: 1, kind: "sidecar", pid: dead, domain: DOMAIN, nonce });
+  const leave = async (name: string, text: string) => {
+    await mkdir(`${file}.lock`, { mode: 0o700 });
+    await writeFile(join(`${file}.lock`, name), text, { mode: 0o600 });
+  };
+
+  it.skipIf(DOMAIN === null)("is removed for a well-formed token of this liveness domain", async () => {
+    await leave(`owner.${dead}.${nonce}.json`, JSON.stringify(valid()));
+    expect(await save({ lock: { timeoutMs: 2_000 } })).toMatchObject({ outcome: "added" });
+  });
+
+  it("is never removed for another owner, another liveness domain, or a token it cannot fully read", async () => {
+    const name = `owner.${dead}.${nonce}.json`;
+    const cases: [string, string][] = [
+      [name, JSON.stringify({ version: 1, pid: dead, nonce })], // a typed or budget owner: no kind
+      [name, JSON.stringify({ ...valid(), domain: "linux:another-boot:pid:[1]" })],
+      [name, JSON.stringify({ ...valid(), domain: null })], // no liveness domain was known
+      [`owner.${dead + 1}.${nonce}.json`, JSON.stringify(valid())], // the name and the token disagree
+      [`owner.${dead}.not-a-uuid.json`, JSON.stringify(valid())],
+      [`owner.${dead}.1f0f0f0f-0000-4000-8000-000000000000.json`, JSON.stringify(valid())], // another nonce
+      [name, JSON.stringify({ ...valid(), nonce: "n" })],
+      [name, JSON.stringify({ ...valid(), version: 2 })],
+      [name, JSON.stringify({ ...valid(), extra: true })],
+      [name, JSON.stringify({ ...valid(), pid: String(dead) })],
+      [name, "{not json"],
+      [name, "[]"],
+    ];
+    for (const [entry, text] of cases) {
+      await leave(entry, text);
+      await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+      expect(await readdir(`${file}.lock`)).toEqual([entry]);
+      await rm(`${file}.lock`, { recursive: true });
+    }
+    // Nor an empty directory (a crash between taking the lock and writing its token), nor two tokens.
+    await mkdir(`${file}.lock`);
+    await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+    expect((await stat(`${file}.lock`)).isDirectory()).toBe(true);
+    await writeFile(join(`${file}.lock`, name), JSON.stringify(valid()));
+    await writeFile(
+      join(`${file}.lock`, `owner.${dead}.1f0f0f0f-0000-4000-8000-000000000000.json`),
+      JSON.stringify(valid()),
+    );
+    await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+    expect(await readdir(`${file}.lock`)).toHaveLength(2);
+  });
+
+  it.skipIf(DOMAIN === null)(
+    "is recovered once while ordinary writers contend for it, and every one of them commits",
+    async () => {
+      await leave(`owner.${dead}.${nonce}.json`, JSON.stringify(valid()));
+      const criteria = Array.from({ length: 6 }, (_, i) => `Reading part ${i}.`);
+      const results = await Promise.all(criteria.map((criterion) => save({ criterion, lock: { timeoutMs: 5_000 } })));
+      expect(results.map((r) => r.outcome)).toEqual(criteria.map(() => "added"));
+      const rules = (await readPermissionPolicyFile(file)).agents["a"]!.rules;
+      expect(rules.map((r) => ("judge" in r ? r.judge?.criterion : undefined)).sort()).toEqual([...criteria].sort());
+      await expect(stat(`${file}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.skipIf(DOMAIN === null)(
+    "is left for a person outside a private workspace: a shared directory, lock or token",
+    async () => {
+      const name = `owner.${dead}.${nonce}.json`;
+      const shared = [
+        () => chmod(ws, 0o775),
+        () => chmod(`${file}.lock`, 0o770),
+        () => chmod(join(`${file}.lock`, name), 0o660),
+      ];
+      for (const share of shared) {
+        await leave(name, JSON.stringify(valid()));
+        await share();
+        await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+        expect(await readdir(`${file}.lock`)).toEqual([name]);
+        await chmod(ws, 0o700);
+        await rm(`${file}.lock`, { recursive: true });
+      }
+    },
+  );
+
+  it.skipIf(DOMAIN === null)("is never removed through a link, for the lock or its token", async () => {
+    const name = `owner.${dead}.${nonce}.json`;
+    // The lock is a symbolic link to a directory holding a dead, well-formed token.
+    const elsewhere = join(ws, "elsewhere");
+    await mkdir(elsewhere);
+    await writeFile(join(elsewhere, name), JSON.stringify(valid()));
+    await symlink(elsewhere, `${file}.lock`);
+    await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+    expect(await readdir(elsewhere)).toEqual([name]);
+    expect((await lstat(`${file}.lock`)).isSymbolicLink()).toBe(true);
+    await rm(`${file}.lock`);
+    // The token is a second link to a file that lives elsewhere too.
+    await mkdir(`${file}.lock`);
+    await link(join(elsewhere, name), join(`${file}.lock`, name));
+    await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+    expect(await readdir(`${file}.lock`)).toEqual([name]);
   });
 });
 

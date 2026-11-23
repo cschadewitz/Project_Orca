@@ -243,7 +243,27 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   that was broken after 30 seconds (age cannot prove a paused writer died, and a writer that
   resumed after a takeover could overwrite its successor's edit, grant or removal). Just
   before its rename a writer also checks that it still owns the lock and that the file is still
-  the bytes it read. A lock left by a writer that crashed stays, and writes refuse
+  the bytes it read. A lock left by a writer that crashed is recovered without a person only
+  when its owner is provably gone: the plain sidecar writers mark their token (`kind:
+  "sidecar"`, pid, and the liveness domain the pid belongs to), and a later writer removes such
+  a lock when the lock is a plain directory (not a link), its one token is a regular file with
+  no other link, exactly that shape, and agrees with its file name in pid and nonce, names the same
+  liveness domain as the writer, and no process with that pid is running (a paused writer is
+  running and keeps its lock; a reused pid errs toward refusing). The liveness domain is
+  positively established only on Linux, as the kernel boot id plus the pid namespace
+  (`/proc/self/ns/pid`); a machine id or host name is not used, because two containers or
+  machines can share one while seeing different pids. Elsewhere (macOS, Windows) there is no
+  domain and recovery stays manual. Recovery is also limited to a trusted local workspace where only
+  cooperating ORCA writers of one user change the lock: the sidecar's directory, the lock
+  directory and its token must all be owned by the writer's user and not writable by group or
+  others (writers create the lock `0700` and the token `0600`). Just before it unlinks that
+  exact token, and again before it removes the then-empty directory, it re-checks that both are
+  the entries it inspected (device and inode). That guards against the cooperating writers'
+  own races, but acting by path after a check is not atomic against an independent process,
+  which is why a shared, group-writable or foreign-owned location, or a platform with no user
+  id, stays manual. Any other leftover (an empty directory, a legacy lock file, a
+  typed-sidecar or judge-budget owner, a malformed or unsupported token, another domain's lock)
+  still refuses writes
   (`STORE_LOCK_TIMEOUT`) until a person removes it after making sure no writer runs; reading
   never takes the lock. An older release's `link()` writer cannot take the directory over, and
   a lock file one of them left is waited on, not removed. The same rule (match and criterion) is never appended twice; one that ends
