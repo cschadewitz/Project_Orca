@@ -7,18 +7,24 @@
  * sent:
  * - the call is a `read` or `search` and names at least one location;
  * - the workspace is an absolute path that exists, and ORCA's protected paths are known (no list, no verification);
- * - every location exists, and its real path (every symlink followed, `..` taken from where a link leads) is the
- *   workspace's real path or below it, segment by segment;
- * - no location falls under a protected path for reading (`protectedPathFor`, the same check that denies ahead of
- *   every rule).
+ * - every location exists and is a single regular file. A directory is refused, because verifying a directory does
+ *   not verify what a recursive read or search under it would reach; a file with more than one hard link is refused,
+ *   because another of its names may sit outside the workspace or under a protected path where no path check sees it;
+ * - containment holds by file-system identity and by text, both: one of the file's real ancestors is the workspace
+ *   itself (same device and inode), and the file's real path is the workspace's real path plus more segments,
+ *   compared exactly. Case is never folded here: whether a file system ignores case is a property of the mount, not
+ *   of the OS, so a target whose real path differs from the workspace's only by case is refused rather than guessed;
+ * - no location is under a protected path for reading: `protectedPathFor` (the same check that denies ahead of every
+ *   rule), and, on top of it, no real ancestor of the file is a no-access path by identity, and no real path matches
+ *   one ignoring case. Protection over-matches on purpose; containment under-matches on purpose.
  *
- * The check runs at decision time. The allow it can lead to is one-time and the slot re-checks protected paths in the
- * same turn it answers, but a link swapped after that, before the agent's own open, is outside what a check on the
- * request can see: that window closes only with ORCA-owned execution (#703), and is why writes and commands stay
- * with the person. Never throws.
+ * The check runs at decision time, and that is its limit. The allow it can lead to is one-time and the slot re-checks
+ * protected paths in the same turn it answers, but a file or link swapped after that, before the agent's own open,
+ * is outside what any check on the request can see: that window closes only with ORCA-owned execution (#703), and is
+ * why writes and commands stay with the person. Never throws.
  */
 import { realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, sep } from "node:path";
+import { dirname, isAbsolute, relative, sep } from "node:path";
 import { protectedPathFor, type ProtectedPaths } from "../permissions.js";
 
 export type PlainRuleTargetRefusal =
@@ -29,21 +35,41 @@ export type PlainRuleTargetRefusal =
   | "no-protected-paths"
   | "missing"
   | "outside-workspace"
-  | "protected";
+  | "protected"
+  | "not-a-file"
+  | "linked-file";
 
 export type PlainRuleTargetCheck =
   | {
       readonly targetsVerified: true;
-      /** Each target's real path, relative to the workspace's real path, `/`-separated. */
+      /** Each target's real path, relative to the workspace's real path, `/`-separated. Always files. */
       readonly locations: readonly string[];
     }
   | { readonly targetsVerified: false; readonly reason: PlainRuleTargetRefusal };
 
-const MAX_LOCATIONS = 32;
-const FOLD_CASE = process.platform === "win32" || process.platform === "darwin";
+/** What the check reads from the file system. Injected only by tests, to stand in for file systems the host lacks. */
+export interface PlainRuleTargetIo {
+  /** The real path, every link followed, as the file system spells it. Throws when missing. */
+  realpath(path: string): string;
+  /** Throws when missing. `dev` and `ino` identify the file; `nlink` counts its hard links. */
+  stat(path: string): {
+    isFile(): boolean;
+    isDirectory(): boolean;
+    readonly dev: bigint;
+    readonly ino: bigint;
+    readonly nlink: bigint;
+  };
+}
 
-function segments(path: string): string[] {
-  return (FOLD_CASE ? path.toLowerCase() : path).split(sep === "\\" ? /[\\/]+/ : /\/+/).filter((s) => s !== "");
+const NODE_IO: PlainRuleTargetIo = {
+  realpath: (path) => realpathSync.native(path),
+  stat: (path) => statSync(path, { bigint: true }),
+};
+
+const MAX_LOCATIONS = 32;
+
+function segments(path: string, foldCase: boolean): string[] {
+  return (foldCase ? path.toLowerCase() : path).split(sep === "\\" ? /[\\/]+/ : /\/+/).filter((s) => s !== "");
 }
 
 function within(inner: readonly string[], outer: readonly string[]): boolean {
@@ -51,13 +77,32 @@ function within(inner: readonly string[], outer: readonly string[]): boolean {
 }
 
 /** The real path of an existing file or directory, or undefined. */
-function real(path: string): string | undefined {
+function real(io: PlainRuleTargetIo, path: string): string | undefined {
   try {
-    const resolved = realpathSync.native(path);
-    statSync(resolved);
+    const resolved = io.realpath(path);
+    io.stat(resolved);
     return resolved;
   } catch {
     return undefined;
+  }
+}
+
+function identity(io: PlainRuleTargetIo, path: string): string | undefined {
+  try {
+    const s = io.stat(path);
+    return `${s.dev}:${s.ino}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The identities of every real ancestor of `path`, nearest first, up to the file system root. */
+function ancestorIdentities(io: PlainRuleTargetIo, path: string): string[] {
+  const ids: string[] = [];
+  for (let dir = dirname(path); ; dir = dirname(dir)) {
+    const id = identity(io, dir);
+    if (id !== undefined) ids.push(id);
+    if (dirname(dir) === dir) return ids;
   }
 }
 
@@ -66,29 +111,59 @@ export function verifyPlainRuleTargets(input: {
   readonly locations: readonly string[] | undefined;
   readonly workspaceCwd: string | undefined;
   readonly protectedPaths: ProtectedPaths | undefined;
+  /** Tests only. */
+  readonly io?: PlainRuleTargetIo;
 }): PlainRuleTargetCheck {
   const refuse = (reason: PlainRuleTargetRefusal): PlainRuleTargetCheck =>
     Object.freeze({ targetsVerified: false as const, reason });
   try {
     const { kind, locations, workspaceCwd, protectedPaths } = input;
+    const io = input.io ?? NODE_IO;
     if (kind !== "read" && kind !== "search") return refuse("kind");
     if (!Array.isArray(locations) || locations.length === 0) return refuse("no-location");
     if (locations.length > MAX_LOCATIONS) return refuse("too-many-locations");
     if (typeof workspaceCwd !== "string" || !isAbsolute(workspaceCwd)) return refuse("no-workspace");
     if (!protectedPaths || !Array.isArray(protectedPaths.noAccess) || !Array.isArray(protectedPaths.readOnly))
       return refuse("no-protected-paths");
-    const root = real(workspaceCwd);
-    if (root === undefined) return refuse("no-workspace");
-    const rootSegments = segments(root);
+    const root = real(io, workspaceCwd);
+    const rootId = root === undefined ? undefined : identity(io, root);
+    if (root === undefined || rootId === undefined || !io.stat(root).isDirectory()) return refuse("no-workspace");
+    const rootSegments = segments(root, false);
+    // No-access paths, by identity where they exist and by case-folded real path either way.
+    const guardIds = new Set<string>();
+    const guardSegments: string[][] = [];
+    for (const guard of protectedPaths.noAccess) {
+      if (typeof guard !== "string" || !isAbsolute(guard)) return refuse("no-protected-paths");
+      const resolved = real(io, guard);
+      const id = resolved === undefined ? undefined : identity(io, resolved);
+      if (id !== undefined) guardIds.add(id);
+      guardSegments.push(segments(resolved ?? guard, true));
+    }
     const verified: string[] = [];
     for (const location of [...locations]) {
       if (typeof location !== "string" || location.length === 0 || location.includes("\0")) return refuse("missing");
       // Joined as text, not with `join`, so `sub/..` is resolved through any link in it, not folded lexically.
-      const target = real(isAbsolute(location) ? location : `${workspaceCwd}${sep}${location}`);
+      const target = real(io, isAbsolute(location) ? location : `${workspaceCwd}${sep}${location}`);
       if (target === undefined) return refuse("missing");
-      if (!within(segments(target), rootSegments)) return refuse("outside-workspace");
-      if (protectedPathFor(target, "read", protectedPaths, workspaceCwd) !== undefined) return refuse("protected");
-      verified.push(relative(root, target).split(sep).join("/") || ".");
+      const targetSegments = segments(target, false);
+      const ancestors = ancestorIdentities(io, target);
+      if (!within(targetSegments, rootSegments)) return refuse("outside-workspace");
+      if (targetSegments.length > rootSegments.length && !ancestors.includes(rootId)) {
+        return refuse("outside-workspace");
+      }
+      const targetId = identity(io, target);
+      if (
+        protectedPathFor(target, "read", protectedPaths, workspaceCwd) !== undefined ||
+        (targetId !== undefined && guardIds.has(targetId)) ||
+        ancestors.some((id) => guardIds.has(id)) ||
+        guardSegments.some((guard) => within(segments(target, true), guard))
+      ) {
+        return refuse("protected");
+      }
+      const stats = io.stat(target);
+      if (!stats.isFile()) return refuse("not-a-file");
+      if (stats.nlink !== 1n) return refuse("linked-file");
+      verified.push(relative(root, target).split(sep).join("/"));
     }
     return Object.freeze({ targetsVerified: true as const, locations: Object.freeze(verified) });
   } catch {
