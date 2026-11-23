@@ -41,6 +41,7 @@
  * as text. The native sandbox and ORCA's protected-path rules for its own file handlers stay
  * in force beside it.
  */
+import { createHmac } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, sep } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -76,6 +77,12 @@ export interface ClaudeHookContext {
   additionalDirectories?: string[] | undefined;
   /** ORCA's own files, which no rule opens to an agent (C4-01). */
   protectedPaths?: ProtectedPaths | undefined;
+  /**
+   * The key the hook signs its startup-probe receipt with (#705), 32 random bytes as hex. It
+   * lives only here, in a file no agent may read, so a receipt that verifies shows ORCA that
+   * this program read this context and decided the probe's call itself.
+   */
+  probeKey?: string | undefined;
 }
 
 /** The part of Claude's `PreToolUse` input the hook decides on. */
@@ -139,6 +146,12 @@ export function parseClaudeHookContext(raw: unknown): ClaudeHookContext {
   };
   if (raw["additionalDirectories"] !== undefined)
     context.additionalDirectories = stringArray(raw["additionalDirectories"], "additionalDirectories");
+  const probeKey = raw["probeKey"];
+  if (probeKey !== undefined) {
+    if (typeof probeKey !== "string" || !/^[0-9a-f]{64}$/.test(probeKey))
+      throw new HookInputError("hook context probeKey must be 64 hex digits");
+    context.probeKey = probeKey;
+  }
   const pp = raw["protectedPaths"];
   if (pp !== undefined) {
     if (!isRecord(pp)) throw new HookInputError("hook context protectedPaths must be an object");
@@ -192,8 +205,23 @@ function mcpToolName(name: string): { server: string; tool: string } | undefined
   return tool ? { server: rest.slice(0, sep), tool } : undefined;
 }
 
-/** Rust's `str::trim` (Unicode White_Space), which Codex's patch parser uses. */
-const rustTrim = (line: string) => line.replace(/^[\s\u0085]+|[\s\u0085]+$/gu, "");
+/** Unicode White_Space, the set Rust's `str::trim` strips (unlike JS `trim`: NEL in, BOM out). */
+const RUST_WHITE_SPACE = new Set([
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0x85, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006,
+  0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000,
+]);
+
+/**
+ * Rust's `str::trim`, which Codex's patch parser uses. Index scans from both ends, so the time
+ * is linear in the line however much whitespace it holds (a patch is agent-written input).
+ */
+function rustTrim(line: string): string {
+  let start = 0;
+  let end = line.length;
+  while (start < end && RUST_WHITE_SPACE.has(line.charCodeAt(start))) start++;
+  while (end > start && RUST_WHITE_SPACE.has(line.charCodeAt(end - 1))) end--;
+  return line.slice(start, end);
+}
 
 /**
  * The files a Codex `apply_patch` touches (#705), read from its file headers the way Codex
@@ -416,6 +444,23 @@ export function codexPreToolHookOutput(verdict: ClaudePreToolVerdict): ClaudePre
   return { exitCode: 2, stdout: "", stderr: `${reason}\n` };
 }
 
+/**
+ * ORCA's startup probe of the Codex hook (#705) sends a frame with this tool-use id: a fixed
+ * prefix and a fresh nonce. Codex makes its own ids; this one only matters with a `probeKey`.
+ */
+export const CODEX_PROBE_TOOL_USE_ID = /^orca-hook-probe:([0-9a-f]{32})$/;
+
+/**
+ * The receipt line the hook adds to its stderr when it blocks the probe's call: an HMAC, under
+ * the context's `probeKey`, of the block and the probe's nonce. Only a program that read the
+ * context file and reached a block for that very frame can write it. Nothing but a decided
+ * block carries one: a hook that fails, or allows, writes none.
+ */
+export function codexProbeReceipt(probeKey: string, nonce: string): string {
+  const mac = createHmac("sha256", Buffer.from(probeKey, "hex")).update(`orca-hook-probe-block:${nonce}`).digest("hex");
+  return `orca-hook-receipt: ${mac}`;
+}
+
 /** Which agent the hook answers, as its command line says (`--codex` before the context file). */
 export type PreToolHookDialect = "claude" | "codex";
 
@@ -450,7 +495,12 @@ export async function runClaudePreToolHook(args: readonly string[], input: strin
     const context = parseClaudeHookContext(raw);
     const frame = parseClaudePreToolFrame(input);
     const verdict = await checkClaudePreTool(context, frame);
-    return dialect === "codex" ? codexPreToolHookOutput(verdict) : claudePreToolHookOutput(verdict);
+    if (dialect === "claude") return claudePreToolHookOutput(verdict);
+    const out = codexPreToolHookOutput(verdict);
+    const nonce = frame.toolUseId === undefined ? undefined : CODEX_PROBE_TOOL_USE_ID.exec(frame.toolUseId)?.[1];
+    if (out.exitCode === 2 && context.probeKey !== undefined && nonce !== undefined)
+      return { ...out, stderr: `${out.stderr}${codexProbeReceipt(context.probeKey, nonce)}\n` };
+    return out;
   } catch (error) {
     return claudePreToolHookFailure(error);
   }

@@ -177,6 +177,8 @@ describe("installing the hook", () => {
           "/opt/orca/claude-pre-tool-hook.mjs",
         ],
       },
+      // A fresh key per session, for the Codex startup probe's receipt.
+      probeKey: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     // The context lives under a directory no agent may read (C4-01).
     expect(orcaProtectedPaths({ configDir: t.dir, storeDir: ".orca" }).noAccess).toContain(

@@ -7,7 +7,7 @@
  *
  * The stand-in is told what to call by the prompt (`SCRIPT:` and a base64 list of tool
  * calls). Each effect is a file the call writes in the workspace, read independently of
- * anything the agent or ORCA says. Codex runs with no sandbox and never asks, so whether a
+ * anything the agent or ORCA says. Codex runs in the adapter's full-access mode, with no sandbox and no asks of its own, so whether a
  * call runs is decided by the hook alone.
  *
  * What is observed:
@@ -216,6 +216,10 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Codex (#705)", () =
       env: {
         CODEX_HOME: codexHome,
         CODEX_CONFIG: JSON.stringify(codexConfig()),
+        // The adapter picks each turn's sandbox and approvals from its session mode, not from
+        // CODEX_CONFIG, and starts in "Auto review" (a workspace sandbox, with Codex's own
+        // reviewer deciding escalations). Full access leaves whether a call runs to the hook.
+        INITIAL_AGENT_MODE: "agent-full-access",
         ORCA_705_KEY: "sk-orca-705-test",
         NO_PROXY: "127.0.0.1",
         no_proxy: "127.0.0.1",
@@ -274,6 +278,9 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Codex (#705)", () =
       expect(await exists("allowed.txt")).toBe("orca-705\n");
       expect(await exists("denied.txt")).toBeUndefined();
       expect(asks).toEqual([]);
+      // It was ORCA's hook that stopped the denied call, and no sandbox of Codex's was in play.
+      expect(model.outputs.some((o) => o.includes("Denied by ORCA"))).toBe(true);
+      expect(model.outputs.join("\n")).not.toContain("bwrap");
     } finally {
       await session.close();
     }

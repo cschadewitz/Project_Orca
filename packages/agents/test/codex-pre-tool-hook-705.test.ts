@@ -18,6 +18,7 @@ import {
   codexHookTrustHash,
   codexPatchFiles,
   codexPreToolHookCommand,
+  codexProbeReceipt,
   permissionPolicyPath,
   probeCodexHook,
   runClaudePreToolHook,
@@ -29,6 +30,8 @@ let root: string;
 let workspace: string;
 let configDir: string;
 let contextFile: string;
+/** The probe key written into each test's context file. */
+const PROBE_KEY = "ab".repeat(32);
 
 const context = (permissions: ClaudeHookContext["permissions"] = { rules: [] }): ClaudeHookContext => ({
   version: 1,
@@ -40,6 +43,7 @@ const context = (permissions: ClaudeHookContext["permissions"] = { rules: [] }):
     readOnly: [join(configDir, "orca.config.yaml"), permissionPolicyPath(configDir), join(configDir, ".orca")],
     noAccess: [join(configDir, "auth"), join(configDir, ".orca", "private-execution")],
   },
+  probeKey: PROBE_KEY,
 });
 
 beforeEach(async () => {
@@ -169,6 +173,45 @@ describe("answering Codex", () => {
     expect(r.stderr).toContain("ORCA's own files");
   });
 
+  describe("the startup probe's receipt", () => {
+    const NONCE = "12".repeat(16);
+    const probeFrame = (toolName: string, toolInput: Record<string, unknown>, id = `orca-hook-probe:${NONCE}`) => {
+      const f = JSON.parse(frame(toolName, toolInput)) as Record<string, unknown>;
+      return JSON.stringify({ ...f, tool_use_id: id });
+    };
+    const receipt = codexProbeReceipt(PROBE_KEY, NONCE);
+
+    it("is signed only for a probe's frame that the hook decided to block", async () => {
+      const blocked = await codex(probeFrame("view_image", { path: contextFile }));
+      expect(blocked.exitCode).toBe(2);
+      expect(blocked.stderr.split("\n")).toContain(receipt);
+    });
+
+    it("is not given for an allow, for another id, or without a key", async () => {
+      await writeFile(contextFile, JSON.stringify(context({ default: "allow", rules: [] })));
+      const allowed = await codex(probeFrame("view_image", { path: join(workspace, "x.png") }));
+      expect(allowed).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+      await writeFile(contextFile, JSON.stringify(context()));
+      for (const id of ["call_1", `orca-hook-probe:${NONCE}x`, "orca-hook-probe:"]) {
+        const r = await codex(probeFrame("view_image", { path: contextFile }, id));
+        expect([id, r.exitCode, r.stderr.includes("orca-hook-receipt")]).toEqual([id, 2, false]);
+      }
+      const { probeKey: _, ...keyless } = context();
+      await writeFile(contextFile, JSON.stringify(keyless));
+      const r = await codex(probeFrame("view_image", { path: contextFile }));
+      expect([r.exitCode, r.stderr.includes("orca-hook-receipt")]).toEqual([2, false]);
+    });
+
+    it("is not given when the hook cannot decide", async () => {
+      const r = await codex(probeFrame("view_image", { path: contextFile }).slice(0, -1));
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr).not.toContain("orca-hook-receipt");
+      await writeFile(contextFile, JSON.stringify({ ...context(), probeKey: "short" }));
+      const bad = await codex(probeFrame("view_image", { path: contextFile }));
+      expect(bad.stderr).not.toContain("orca-hook-receipt");
+    });
+  });
+
   it("blocks when it cannot decide", async () => {
     expect((await codex("not json")).exitCode).toBe(2);
     expect((await runClaudePreToolHook(["--codex"], frame("Bash", { command: "ls" }))).exitCode).toBe(2);
@@ -241,31 +284,51 @@ describe("installing it in Codex", () => {
   describe("the probe", () => {
     const entry = fileURLToPath(new URL("../src/bin/claude-pre-tool-hook.ts", import.meta.url));
     const bundled = childBundle("codex-pre-tool-hook-705", { entries: { hook: entry } })?.["hook"];
+    const probe = (command: string, probeKey = PROBE_KEY) =>
+      probeCodexHook({ command, cwd: workspace, contextFile, probeKey, env: { ...process.env, SHELL: "/bin/sh" } });
 
     it.skipIf(bundled === undefined || process.platform === "win32")(
-      "sees the real hook block a call through the shell",
+      "sees the real hook block a call through the shell, with its receipt",
       async () => {
-        const command = codexPreToolHookCommand(process.execPath, bundled!, contextFile);
-        const r = await probeCodexHook({
-          command,
-          cwd: workspace,
-          contextFile,
-          env: { ...process.env, SHELL: "/bin/sh" },
-        });
-        expect(r.blocked).toBe(true);
+        const r = await probe(codexPreToolHookCommand(process.execPath, bundled!, contextFile));
+        expect(r).toEqual({ blocked: true, detail: "blocked, with the hook's receipt" });
       },
     );
 
-    it.skipIf(process.platform === "win32")("fails when the command cannot block", async () => {
-      for (const command of ["true", "exit 1", "'/no/such/program'"]) {
-        const r = await probeCodexHook({
-          command,
-          cwd: workspace,
-          contextFile,
-          env: { ...process.env, SHELL: "/bin/sh" },
-        });
+    it.skipIf(bundled === undefined || process.platform === "win32")(
+      "does not take the real hook's block as proof under another key",
+      async () => {
+        // The hook signed with the context's key; the probe expects another one.
+        const r = await probe(codexPreToolHookCommand(process.execPath, bundled!, contextFile), "cd".repeat(32));
         expect(r.blocked).toBe(false);
+        expect(r.detail).toContain("without ORCA's hook's receipt");
+      },
+    );
+
+    it.skipIf(process.platform === "win32")("does not take an exit status alone as proof", async () => {
+      for (const command of [
+        "true",
+        "exit 1",
+        "'/no/such/program'",
+        // Exits 2 with a reason, as a block would, but is not ORCA's hook.
+        "cat >/dev/null; echo 'Denied by ORCA: protected' >&2; exit 2",
+        // Echoes the whole frame, nonce and all, back to stderr.
+        "cat >&2; exit 2",
+        // A receipt-shaped line that is not signed for this call.
+        `cat >/dev/null; echo 'orca-hook-receipt: ${"0".repeat(64)}' >&2; exit 2`,
+        // Says far more than the probe reads.
+        "cat >/dev/null; head -c 100000 /dev/zero | tr '\\0' x >&2; exit 2",
+      ]) {
+        const r = await probe(command);
+        expect([command, r.blocked]).toEqual([command, false]);
       }
+    });
+
+    it.skipIf(process.platform === "win32")("does not accept a receipt from an earlier probe", async () => {
+      // A receipt for a nonce of the test's choosing, replayed to a probe that picked its own.
+      const old = codexProbeReceipt(PROBE_KEY, "0".repeat(32));
+      const r = await probe(`cat >/dev/null; echo '${old}' >&2; exit 2`);
+      expect(r.blocked).toBe(false);
     });
   });
 });

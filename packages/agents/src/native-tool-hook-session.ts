@@ -25,7 +25,8 @@
  *   - **The Codex adapter** has had it since it started; ORCA asks the adapter
  *     (`_codex/hooks/list`) and refuses the session unless Codex reports exactly ORCA's hook
  *     as trusted and enabled, and runs the hook once, through the same shell Codex will use,
- *     on a call it must block, and refuses unless it blocks. A Codex that hashed differently,
+ *     on a call it must block, and refuses unless it blocks and signs a receipt for that very
+ *     call with the key in the session's context file (`probeCodexHook`). A Codex that hashed differently,
  *     a config that turned the hook off, or a shell that cannot run it would otherwise let
  *     every call through. ORCA also attests the Codex the adapter actually started, before
  *     the session is created.
@@ -54,13 +55,15 @@ import { spawn } from "node:child_process";
 import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { OrcaError, type ConfiguredPermissionPolicy } from "@orca/core";
 import {
   CLAUDE_PRE_TOOL_TIMEOUT_SECONDS,
   claudePreToolHookSettings,
   claudeRuntimeAttestationFile,
+  CODEX_PROBE_TOOL_USE_ID,
+  codexProbeReceipt,
   type ClaudeHookContext,
   type ClaudeRuntimeAttestation,
 } from "./claude-pre-tool-hook.js";
@@ -291,44 +294,75 @@ export function codexHookListProblem(listed: unknown, command: string): string |
   return undefined;
 }
 
+/** The most stderr the probe reads; a hook that says more than this has not answered it. */
+const PROBE_STDERR_LIMIT = 16 * 1024;
+
 /**
  * Run the hook's command line the way Codex does (`$SHELL -lc`, in the session's directory)
- * on a call that ORCA's own protected paths must block, and say whether it blocked (exit 2).
- * A shell or runtime that cannot run the hook fails here instead of letting calls through.
+ * on a call that ORCA's own protected paths must block, and say whether ORCA's hook blocked
+ * it. An exit status alone is not taken as proof: a profile, an alias or another program on
+ * the shell's path can exit 2 too. The probe's frame carries a fresh nonce, and the session
+ * counts as guarded only if the command exits 2 and its stderr, read up to a fixed bound
+ * within the hook's timeout, carries the receipt line the hook signs with the context's
+ * `probeKey` for that nonce (`codexProbeReceipt`). Only the hook program, having read this
+ * session's context file and decided this very call as a block, can write it. A shell or
+ * runtime that cannot run the hook fails here instead of letting calls through.
  */
 export function probeCodexHook(opts: {
   command: string;
   cwd: string;
   contextFile: string;
+  /** The `probeKey` written into the context file the command names. */
+  probeKey: string;
   env?: NodeJS.ProcessEnv | undefined;
   timeoutMs?: number | undefined;
 }): Promise<{ blocked: boolean; detail: string }> {
   const env = opts.env ?? process.env;
   const shell = env["SHELL"] || "/bin/sh";
+  const nonce = randomBytes(16).toString("hex");
+  const toolUseId = `orca-hook-probe:${nonce}`;
+  if (!CODEX_PROBE_TOOL_USE_ID.test(toolUseId)) throw new Error("probe id does not match the hook's pattern");
   const frame = JSON.stringify({
     session_id: "orca-hook-probe",
     hook_event_name: "PreToolUse",
     tool_name: "view_image",
     // The context file sits under ORCA's private store, which no rule opens to an agent.
     tool_input: { path: opts.contextFile },
-    tool_use_id: "orca-hook-probe",
+    tool_use_id: toolUseId,
     cwd: opts.cwd,
   });
+  const expected = Buffer.from(codexProbeReceipt(opts.probeKey, nonce), "utf8");
+  const receipted = (stderr: string): boolean =>
+    stderr.split("\n").some((line) => {
+      const got = Buffer.from(line, "utf8");
+      return got.length === expected.length && timingSafeEqual(got, expected);
+    });
   return new Promise((resolve) => {
     const child = spawn(shell, ["-lc", opts.command], { cwd: opts.cwd, env, stdio: ["pipe", "ignore", "pipe"] });
     let stderr = "";
+    let overflow = false;
     const timer = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs ?? CODEX_PRE_TOOL_TIMEOUT_SECONDS * 1000);
-    child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+    child.stderr.on("data", (d: Buffer) => {
+      if (overflow) return;
+      stderr += d.toString();
+      if (Buffer.byteLength(stderr, "utf8") > PROBE_STDERR_LIMIT) {
+        overflow = true;
+        child.kill("SIGKILL");
+      }
+    });
     child.on("error", (e) => {
       clearTimeout(timer);
       resolve({ blocked: false, detail: e.message });
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
-      resolve({
-        blocked: code === 2,
-        detail: signal ? `killed by ${signal}` : `exit ${code}: ${stderr.trim().slice(0, 300)}`,
-      });
+      const said = stderr.trim().slice(0, 300);
+      if (overflow) resolve({ blocked: false, detail: "the hook wrote more than the probe reads" });
+      else if (signal) resolve({ blocked: false, detail: `killed by ${signal}` });
+      else if (code !== 2) resolve({ blocked: false, detail: `exit ${code}: ${said}` });
+      else if (!receipted(stderr))
+        resolve({ blocked: false, detail: `exit 2 without ORCA's hook's receipt for this call: ${said}` });
+      else resolve({ blocked: true, detail: "blocked, with the hook's receipt" });
     });
     child.stdin.on("error", () => undefined);
     child.stdin.end(frame);
@@ -463,6 +497,8 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
   let adapterVersion: string | undefined;
   let agentProcess: number | undefined;
   let codexCommand: string | undefined;
+  /** The key the hook signs its probe receipt with; written into the context file only. */
+  let probeKey: string | undefined;
   let codexEnv: string | undefined;
   /** The pinned image for one adapter version, and the digest of what a process really runs. */
   const attest = async (
@@ -538,6 +574,7 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
     },
     prepare: async () => {
       if (opts.script === undefined) throw refuse("ORCA's hook program is missing from this build");
+      probeKey = randomBytes(32).toString("hex");
       const context: ClaudeHookContext = {
         version: 1,
         agentId: opts.agentId,
@@ -551,6 +588,8 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
           noAccess: [...(opts.protectedPaths?.noAccess ?? [])],
           ...(opts.protectedPaths?.agentAreas ? { agentAreas: [...opts.protectedPaths.agentAreas] } : {}),
         },
+        // Signs the hook's receipt for the startup probe of a Codex session.
+        probeKey,
       };
       await mkdir(opts.contextDir, { recursive: true, mode: 0o700 });
       file = join(opts.contextDir, `${randomUUID()}.json`);
@@ -560,8 +599,9 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
       return { env: codexEnv === undefined ? {} : { CODEX_CONFIG: codexEnv } };
     },
     sessionMeta: async (agentInfo, ext, agentPid) => {
-      if (file === undefined || opts.script === undefined || codexCommand === undefined)
+      if (file === undefined || opts.script === undefined || codexCommand === undefined || probeKey === undefined)
         throw refuse("the hook was not prepared before the agent started");
+      const key = probeKey;
       if (!agentInfo) throw refuse("the agent did not say at initialize which adapter it is");
       agentProcess = agentPid;
       const platform = opts.platform ?? process.platform;
@@ -613,6 +653,7 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
           command: codexCommand,
           cwd: opts.workspaceCwd,
           contextFile: file,
+          probeKey: key,
           env: { ...opts.agentEnv, CODEX_CONFIG: codexEnv },
         });
         if (!probe.blocked)

@@ -367,7 +367,8 @@ it unguarded:
 - the agent must run on the daemon's own machine, on Linux x64;
 - for Codex, ORCA also asks the adapter at startup and refuses unless Codex lists ORCA's hook
   as trusted and enabled, and runs the hook once the way Codex will (through `$SHELL -lc`) on
-  a call it must block, and refuses unless it blocks. An agent whose own `CODEX_CONFIG`
+  a call it must block, and refuses unless it blocks with a receipt only ORCA's hook can sign
+  for that call: an exit status alone is not proof. An agent whose own `CODEX_CONFIG`
   already sets hooks is refused.
 
 Each is what ORCA's acceptance tests run against the real agent, including sessions pointed

@@ -41,6 +41,11 @@ ORCA hands Codex its hook through `CODEX_CONFIG`, which the adapter passes to Co
 flags, with Codex's trust for it recorded beside it (`hooks.state`), so nothing is written to
 the user's Codex config. Codex runs the hook through `$SHELL -lc`.
 
+The acceptance suite starts the adapter in its full-access mode (`INITIAL_AGENT_MODE`), with
+no sandbox and no asks of Codex's own, so that each row below is the hook's doing alone. The
+adapter's default mode adds Codex's workspace sandbox and its own reviewer on top; neither
+replaces the hook, which runs before them.
+
 | What | Behaviour | Known by |
 | --- | --- | --- |
 | Shell (`exec_command`) | Hooked, as `tool_name: "Bash"` with the command | installed |
@@ -53,7 +58,7 @@ the user's Codex config. Codex runs the hook through `$SHELL -lc`.
 | ORCA deny, ORCA ask | Exit 2 with the reason on stderr: blocked. Codex's own `ask` answer lets the call run, so ORCA never sends it | installed |
 | Hook exits 1, exits 2 with nothing on stderr, prints output Codex cannot read, times out (ORCA sets 30 s) | **Codex lets the call through.** ORCA's program answers only with exit 0, or exit 2 and a reason, including when it fails | installed (exit codes), source (timeout) |
 | Hook not trusted (hash changed, config turned it off) | Not run, so not blocking. ORCA asks the adapter (`_codex/hooks/list`) at session start and refuses unless ORCA's hook is listed trusted and enabled | installed |
-| Login shell cannot run the hook | Codex lets calls through. ORCA runs the hook once the same way at session start, on a call it must block, and refuses unless it blocks | unit-tested; the shell is the user's |
+| Login shell cannot run the hook, or runs something else | Codex lets calls through. ORCA runs the hook's command once the same way at session start, on a call it must block with a fresh nonce, and refuses unless it exits 2 **and** writes the receipt the hook signs for that nonce with a key only the session's context file holds. Another program that exits 2, or echoes the call back, has no receipt | unit-tested; the shell is the user's |
 | Agent's own `CODEX_CONFIG` sets hooks | Refused: ORCA does not reorder somebody else's hooks | installed |
 | Adapter runs another Codex (`CODEX_PATH`) | Refused before the session is created: ORCA finds the Codex app-server among the agent's own processes and hashes the image it runs, accepting only the digest pinned for the adapter (`CODEX_HOOK_VERIFIED_PAIRS`). Nothing it finds is executed | installed (0.170.0 refused) |
 
