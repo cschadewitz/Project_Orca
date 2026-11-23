@@ -6,6 +6,7 @@ import { OrcaError, literalEnv, type AgentSpec, type LocalHost as LocalHostSpec,
 import { secretText, sourceMissing, sourceNotText, trimSecret, withoutWithheld } from "../secrets.js";
 import {
   collectChildProcess,
+  markHostFileMissing,
   wrapAgentProcess,
   type AgentHost,
   type AgentProcessHandle,
@@ -21,7 +22,16 @@ const exists = (p: string): Promise<boolean> =>
   );
 
 export const localFileSystem: HostFileSystem = {
-  readFile: (p) => readFile(p, "utf8"),
+  readFile: async (p) => {
+    try {
+      return await readFile(p, "utf8");
+    } catch (e) {
+      // Opening the path itself said there is nothing there.
+      const err = e as NodeJS.ErrnoException;
+      if (err.code === "ENOENT" && err.syscall === "open" && err.path === p) throw markHostFileMissing(err);
+      throw e;
+    }
+  },
   writeFile: async (p, c) => {
     await mkdir(join(p, ".."), { recursive: true });
     await writeFile(p, c, "utf8");
