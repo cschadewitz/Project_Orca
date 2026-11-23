@@ -40,6 +40,7 @@ import {
   nativeToolHookSession,
   nativeToolHookUnavailable,
   openAcpSession,
+  withProviderGuards,
   permissionPolicyPath,
   type AgentSession,
   type OpenSessionOptions,
@@ -312,12 +313,14 @@ export function makeSessionFactory(
 ): SessionFactory {
   const permissionFiles = [permissionPolicyPath(layout.configDir)];
   const protectedPaths = orcaProtectedPaths(layout);
+  // Provider-specific launch checks and session guards (#709): Copilot CLI and the like.
+  const guarded = withProviderGuards(open);
   const contextDir = join(resolve(layout.configDir, layout.storeDir), "private-execution", "tool-hooks");
   return async (options: OpenSessionOptions) => {
     const bound = { ...options, permissionFiles, protectedPaths };
     // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
     // says who it is, and the session refused wherever it cannot be put in force.
-    if (options.agent.nativeToolHook !== "on") return open(bound);
+    if (options.agent.nativeToolHook !== "on") return guarded(bound);
     if (hook.activation !== "acceptance-only") throw nativeToolHookUnavailable(options.agent)!;
     // The hook runs where the agent does; ORCA installs it only on its own host.
     if (options.host.spec.type !== "local")
@@ -352,7 +355,7 @@ export function makeSessionFactory(
     }
     let session: AgentSession;
     try {
-      session = await open({
+      session = await guarded({
         ...bound,
         env: { ...(options.env ?? {}), ...hookEnv },
         sessionMeta: installed.sessionMeta,

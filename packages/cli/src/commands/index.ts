@@ -29,7 +29,7 @@ import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { hostname, tmpdir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
-import { agentProfileFindings, openAcpSession, permissionPolicyPath } from "@orca/agents";
+import { agentProfileFindings, openAcpSession, permissionPolicyPath, withProviderGuards } from "@orca/agents";
 import {
   AgentModel,
   ConfigModel,
@@ -441,7 +441,7 @@ export const commands: Record<string, Command> = {
       });
       const { agent, host } = app.agents.resolve(id);
       const started = Date.now();
-      const session = await openAcpSession({
+      const session = await withProviderGuards(openAcpSession)({
         host,
         agent,
         cwd:
