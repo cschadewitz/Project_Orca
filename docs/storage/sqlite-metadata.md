@@ -7,9 +7,9 @@ contracts and passes the same conformance suite as the memory and file backends
 (`packages/store/test/conformance/`), with the capability matrix in
 `docs/contracts/store-contracts-v1.md`.
 
-It is **not the default**. A workspace runs on it only after `orca store sqlite
-switch` has moved that workspace's store onto it (see [Choosing SQLite for a
-workspace](#choosing-sqlite-for-a-workspace)); every other store stays on files.
+It is **not the default**, and no workspace can be moved onto it yet: `orca store
+sqlite switch` is built but not offered (see [Choosing SQLite for a
+workspace](#choosing-sqlite-for-a-workspace)); every store stays on files.
 
 ## What is where
 
@@ -205,7 +205,7 @@ check, and a writer that starts while the announcement stands is refused
 (`SWITCHING`). Each side writes before it reads the other's, so one of them always
 sees the other. Registrations and announcements of processes that are gone are
 ignored. ORCA versions from before the registry do not register; the legacy fence
-below keeps them out instead, whether they are already running or start later.
+below turns them away when they start, but cannot stop one that is already running.
 
 ### The legacy fence
 
@@ -222,18 +222,37 @@ open before they write:
 | `artifacts/index.jsonl` | a marker directory; the blobs beside it stay | reading it fails (`EISDIR`) |
 
 The keys and collection files are each replaced by a single rename, so they are never
-missing. `tools/legacy-fence/run.js` (CI: `legacy-fence.yml`) builds v0.7.0 and
-v0.6.0 from their tags, makes a workspace with v0.7.0's own demo, switches it with
-the current CLI, and runs every released command that opens the store (`runs`,
-`status`, `events`, `plan ...`, `claims ...`, `leases ...`, `admissions`, `answer`,
-`resume`, `submit`, `run`, `serve`). Each must be refused, and each must leave every
-byte of the store as it was. v0.6.0's `serve` opens nothing at start, so it comes up;
-every request that reaches the store fails the same way, and it changes nothing.
-`leases list` in v0.6.0 answers from the lease files both backends keep.
+missing. The directories and the index are renamed aside and then replaced, so for an
+instant nothing stands at their path.
 
-**`orca store sqlite switch`** is the one way from files to SQLite. Stop every ORCA
-app, daemon and command using the workspace; the switch checks for this ORCA's
-own writers and fences the older ones out. Under the store's format lock it:
+`tools/legacy-fence/run.js` (CI: `legacy-fence.yml`, Linux) builds v0.7.0 and v0.6.0
+from their tags, makes workspaces with v0.7.0's own demo, switches one with the
+current CLI, and runs every released command that opens the store (`runs`, `status`,
+`events`, `plan ...`, `claims ...`, `leases ...`, `admissions`, `answer`, `resume`,
+`submit`, `run`, `serve`), first against an unswitched workspace (the baseline) and
+then against the switched one. A command passes only if, in the baseline, it exists
+in that release, takes its arguments and reaches the store without timing out; and,
+on the switched store, exits with one of that release's store refusals (above) that
+its baseline output does not show, leaving every byte of the store as it was. A
+command the release does not have (`admissions` in v0.6.0) is reported as such.
+v0.6.0's `serve` opens nothing at start, so it comes up: it is sent every store
+request (`runs.list`, `runs.get`, `runs.events`, `plans.list`, `inputs.list`,
+`claims.list`, `runs.start`), each answered in the baseline and refused on the switched
+store. Reported apart as answered, never as refused: v0.6.0's `leases list`, from the
+lease files both backends keep, and `workflows.list`, from the workflows a daemon
+registered in memory.
+
+**What the fence does not do.** It turns away a released ORCA that starts, or opens a
+fenced path, after the fence is in place. It does not stop one that is already
+running: an idle v0.7.0 daemon, or a command between two writes, holds what it read
+and may write it back, over a marker. Released versions leave nothing in the store
+while idle that the switch could check for. That is why the switch is not offered.
+
+**`orca store sqlite switch`** is the one way from files to SQLite, and it is **not
+offered yet**: it refuses (`SWITCH_REFUSED`) and changes nothing, because it cannot
+make sure no released ORCA is still running against the store (above). The release
+check and tests opt in, on Linux only, with `ORCA_IN_PLACE_SQLITE_SWITCH=unenforced`;
+that is not for a workspace anyone uses. Under the store's format lock it:
 
 1. Switches only a store in this ORCA's current file format. An older store is
    carried forward first; an unmarked one is opened once first. A store already on
@@ -258,19 +277,25 @@ own writers and fences the older ones out. Under the store's format lock it:
    once more: a released ORCA that wrote while the fence went in is caught here, and
    the switch is refused with every original put back.
 8. Only then writes the SQLite format into the marker, naming the backup and the
-   database's id. That rename is the commit. Then the journal and what it set aside go
-   (the database and the backup hold all of it).
+   database's id. That rename is the commit, and it is flushed before the journal and
+   what it set aside go (the database and the backup hold all of it).
 
 A refusal at any step leaves the store on files and in charge, every marker gone and
-every original back; a database the import built is inert, as after a plain `import`.
+every original back, durably, before the journal goes; a database the import built is
+inert, as after a plain `import`. A failure after the marker's rename (its flush) may
+have published it, so it is not rolled back: the journal stays, and the next start
+settles the store from the marker that is actually there. So does any failure that
+leaves the marker unreadable.
 
 **Interrupted.** If the switch is killed after step 7 began, the journal stays. Until
 the next start of this ORCA, released ORCA versions are already fenced out from the
 first marker on, and this ORCA's read-only opens refuse the store (`INTERRUPTED`).
 The next write-mode start (any command, the daemon, or `switch` again) settles it
 under the format lock: with the marker still on files, every original goes back and
-every marker goes, leaving the store exactly as before the switch; with the marker
-already naming the journal's database, only the journal is dropped.
+every marker goes, durably, leaving the store exactly as before the switch; with the
+marker and the database both naming the journal's switch, the fence is completed and
+the marker flushed again before the journal is dropped. Anything else (a marker or a
+database naming another switch) is refused (`INTERRUPTED`) and left as it is.
 `sqlite-legacy-fence.test.ts` kills a switch at each of these points and checks
 both outcomes byte for byte. The desktop app's own workspaces
 are refused (`APP_OWNED`), as for `carry-forward`: the app's daemon holds their write
@@ -304,6 +329,9 @@ leaves only an unreferenced blob.
 - Reference numbers for the #341 baseline come from the store workload workflow on a
   GitHub-hosted runner (`docs/performance/store-workloads/README.md`); the numbers
   above are from a cloud container.
-- Switching from the desktop app, which holds its workspaces' write fence, and on
-  Windows once store format changes are allowed there (#947).
+- Offering the switch: either a way to keep an already-running released ORCA out,
+  or a conversion into a separate store that leaves the file store untouched for it.
+- Switching from the desktop app, which holds its workspaces' write fence; on
+  Windows once store format changes are allowed there (#947); on macOS once the
+  release check runs there.
 - A switch back from SQLite to files.

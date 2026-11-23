@@ -224,14 +224,61 @@ describe("legacy fence (#339)", () => {
         await expectReadsOnSqlite(dir);
       });
 
-    it("after the marker: the store is on SQLite, and the next start finishes", async () => {
-      const dir = await populated();
-      expect(await killedAt(dir, "afterMarker")).toBeNull();
-      expect(await readStoreFormat(dir)).toMatchObject({ epoch: SQLITE_STORE_FORMAT_EPOCH });
-      expect(await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).toMatchObject({ backend: "sqlite" });
-      await expectFenced(dir);
-      await expectReadsOnSqlite(dir);
-    });
+    for (const point of ["afterMarkerRename", "afterMarker"])
+      it(`after the marker (${point}): the store is on SQLite, and the next start finishes`, async () => {
+        const dir = await populated();
+        expect(await killedAt(dir, point)).toBeNull();
+        expect(await readStoreFormat(dir)).toMatchObject({ epoch: SQLITE_STORE_FORMAT_EPOCH });
+        expect(await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).toMatchObject({
+          backend: "sqlite",
+        });
+        await expectFenced(dir);
+        await expectReadsOnSqlite(dir);
+      });
+  });
+
+  it("keeps the journal when the marker's flush fails after its rename, and the next start finishes", async () => {
+    const dir = await populated();
+    await expect(
+      switchStoreToSqlite(dir, {
+        appVersion: "0.8.0",
+        afterMarkerRename: async () => {
+          throw Object.assign(new Error("EIO: i/o error, fsync"), { code: "EIO" });
+        },
+      }),
+    ).rejects.toThrow("EIO");
+    // The marker may be published, so nothing was rolled back: fenced, with the journal kept.
+    expect(await readStoreFormat(dir)).toMatchObject({ epoch: SQLITE_STORE_FORMAT_EPOCH });
+    for (const fence of LEGACY_FENCES) expect(await isMarker(join(dir, fence.path)), fence.path).toBe(true);
+    expect(await readdir(join(dir, SQLITE_SWITCH_DIR))).toContain("journal.json");
+    await expect(enterStoreFormat(dir, { appVersion: "0.8.0", mode: "read" })).rejects.toMatchObject(
+      refusal("INTERRUPTED"),
+    );
+    expect(await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).toMatchObject({ backend: "sqlite" });
+    expect(await readdir(dir)).not.toContain(SQLITE_SWITCH_DIR);
+    await expectFenced(dir);
+    await expectReadsOnSqlite(dir);
+  });
+
+  it("finishes an interrupted switch only when the database is bound to the switch the journal names", async () => {
+    const dir = await populated();
+    await expect(
+      switchStoreToSqlite(dir, {
+        appVersion: "0.8.0",
+        afterMarkerRename: async () => {
+          throw new Error("EIO");
+        },
+      }),
+    ).rejects.toThrow("EIO");
+    // Another store's database in its place: neither finished nor rolled back.
+    const other = await populated();
+    await switchStoreToSqlite(other, { appVersion: "0.8.0" });
+    await rm(join(dir, SQLITE_METADATA_FILE), { force: true });
+    await writeFile(join(dir, SQLITE_METADATA_FILE), await readFile(join(other, SQLITE_METADATA_FILE)));
+    await expect(enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).rejects.toMatchObject(
+      refusal("INTERRUPTED"),
+    );
+    expect(await readdir(join(dir, SQLITE_SWITCH_DIR))).toContain("journal.json");
   });
 
   it("restores only the store's own database, checked before anything is published", async () => {

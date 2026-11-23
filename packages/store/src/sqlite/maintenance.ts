@@ -605,7 +605,7 @@ export async function verifySqliteMetadata(dir: string): Promise<SqliteVerifyRep
 }
 
 /** The store id a database file is bound to (`store_binding`), read-only; undefined when none. */
-function boundStoreId(file: string): string | undefined {
+export function boundStoreId(file: string): string | undefined {
   const db = new (sqlite().DatabaseSync)(file, { readOnly: true });
   try {
     const table = db.prepare("SELECT 1 AS ok FROM sqlite_schema WHERE type = 'table' AND name = 'store_binding'").get();

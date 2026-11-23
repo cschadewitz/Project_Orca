@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { silentLogger } from "@orca/core";
 import { bootstrap } from "../src/bootstrap.js";
-import { storeCommand } from "../src/commands/store.js";
+import { IN_PLACE_SQLITE_SWITCH_ENV, storeCommand } from "../src/commands/store.js";
 import type { CommandContext } from "../src/commands/index.js";
 
 const dirs: string[] = [];
@@ -98,49 +98,83 @@ describe("orca store", () => {
     await expect(storeCommand(ctx(dir, ["sqlite", "nope"]))).rejects.toMatchObject({ code: "CONFIG_INVALID" });
   });
 
-  it("sqlite switch moves a workspace onto SQLite, and the daemon opens it there from then on", async () => {
+  it("sqlite switch is not offered yet, and changes nothing", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-store-sqlite-switch-"));
     dirs.push(dir);
     await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
-    // Opened once on files (stamps the current format), then given a run.
     (await bootstrap({ cwd: dir, logger: silentLogger })).orchestrator.stores.close?.();
-    await mkdir(join(dir, ".orca", "runs"), { recursive: true });
-    await writeFile(join(dir, ".orca", "runs", "run_old.jsonl"), LOG);
-    const before = ctx(dir, ["format"]);
-    expect(await storeCommand(before)).toBe(0);
-    expect(before.lines).toContain("metadata         files");
-    const switched = ctx(dir, ["sqlite", "switch"]);
-    expect(await storeCommand(switched)).toBe(0);
-    expect(switched.lines[0]).toMatch(/^switched .* to SQLite metadata \(store format .*-sqlite\)$/);
-    expect(switched.lines[1]).toMatch(/format-backups/);
-    // What a released ORCA opens first is a marker now, not the run log it would write to.
-    expect((await readFile(join(dir, ".orca", "runs"), "utf8")).startsWith("{")).toBe(true);
-    const after = ctx(dir, ["format"]);
-    expect(await storeCommand(after)).toBe(0);
-    expect(after.lines).toContain("metadata         SQLite (metadata.sqlite)");
-    expect(after.lines.at(-1)).toContain("opens in place");
-
-    // The run log is no longer on disk at all: the daemon has the run from SQLite.
-    const app = await bootstrap({ cwd: dir, logger: silentLogger });
-    expect(app.orchestrator.stores.capabilities?.backend).toBe("sqlite");
-    expect((await app.orchestrator.stores.events.read("run_old")).map((e) => e.type)).toEqual(["run.created"]);
-    app.orchestrator.stores.close?.();
-
-    // Nothing to import from files any more, and a second switch has nothing to do.
-    await expect(storeCommand(ctx(dir, ["sqlite", "import"]))).rejects.toMatchObject({ code: "CONFIG_INVALID" });
-    const again = ctx(dir, ["sqlite", "switch"]);
-    expect(await storeCommand(again)).toBe(0);
-    expect(again.lines[0]).toContain("nothing to do");
-
-    // Its database lost: startup refuses instead of starting on an empty one.
-    for (const name of await readdir(join(dir, ".orca")))
-      if (name.startsWith("metadata.sqlite")) await rm(join(dir, ".orca", name));
-    await expect(bootstrap({ cwd: dir, logger: silentLogger })).rejects.toMatchObject({
-      code: "STORE_FORMAT",
-      details: { reason: "METADATA_MISSING" },
-    });
-    expect((await readdir(join(dir, ".orca"))).filter((n) => n.startsWith("metadata.sqlite"))).toEqual([]);
+    const before = (await readdir(join(dir, ".orca"))).sort();
+    const saved = process.env[IN_PLACE_SQLITE_SWITCH_ENV];
+    for (const value of [undefined, "1", "yes"]) {
+      if (value === undefined) delete process.env[IN_PLACE_SQLITE_SWITCH_ENV];
+      else process.env[IN_PLACE_SQLITE_SWITCH_ENV] = value;
+      try {
+        await expect(storeCommand(ctx(dir, ["sqlite", "switch"]))).rejects.toMatchObject({
+          code: "STORE_FORMAT",
+          details: { reason: "SWITCH_REFUSED" },
+        });
+      } finally {
+        if (saved === undefined) delete process.env[IN_PLACE_SQLITE_SWITCH_ENV];
+        else process.env[IN_PLACE_SQLITE_SWITCH_ENV] = saved;
+      }
+    }
+    expect((await readdir(join(dir, ".orca"))).sort()).toEqual(before);
   });
+
+  // The release check's opt-in (tools/legacy-fence), Linux only.
+  it.runIf(process.platform === "linux")(
+    "sqlite switch, opted into, moves a workspace onto SQLite, and the daemon opens it there from then on",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "orca-store-sqlite-switch-"));
+      dirs.push(dir);
+      await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
+      // Opened once on files (stamps the current format), then given a run.
+      (await bootstrap({ cwd: dir, logger: silentLogger })).orchestrator.stores.close?.();
+      await mkdir(join(dir, ".orca", "runs"), { recursive: true });
+      await writeFile(join(dir, ".orca", "runs", "run_old.jsonl"), LOG);
+      const before = ctx(dir, ["format"]);
+      expect(await storeCommand(before)).toBe(0);
+      expect(before.lines).toContain("metadata         files");
+      const saved = process.env[IN_PLACE_SQLITE_SWITCH_ENV];
+      process.env[IN_PLACE_SQLITE_SWITCH_ENV] = "unenforced";
+      try {
+        const switched = ctx(dir, ["sqlite", "switch"]);
+        expect(await storeCommand(switched)).toBe(0);
+        expect(switched.lines[0]).toMatch(/^switched .* to SQLite metadata \(store format .*-sqlite\)$/);
+        expect(switched.lines[1]).toMatch(/format-backups/);
+        // What a released ORCA opens first is a marker now, not the run log it would write to.
+        expect((await readFile(join(dir, ".orca", "runs"), "utf8")).startsWith("{")).toBe(true);
+        const after = ctx(dir, ["format"]);
+        expect(await storeCommand(after)).toBe(0);
+        expect(after.lines).toContain("metadata         SQLite (metadata.sqlite)");
+        expect(after.lines.at(-1)).toContain("opens in place");
+
+        // The run log is no longer on disk at all: the daemon has the run from SQLite.
+        const app = await bootstrap({ cwd: dir, logger: silentLogger });
+        expect(app.orchestrator.stores.capabilities?.backend).toBe("sqlite");
+        expect((await app.orchestrator.stores.events.read("run_old")).map((e) => e.type)).toEqual(["run.created"]);
+        app.orchestrator.stores.close?.();
+
+        // Nothing to import from files any more, and a second switch has nothing to do.
+        await expect(storeCommand(ctx(dir, ["sqlite", "import"]))).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+        const again = ctx(dir, ["sqlite", "switch"]);
+        expect(await storeCommand(again)).toBe(0);
+        expect(again.lines[0]).toContain("nothing to do");
+      } finally {
+        if (saved === undefined) delete process.env[IN_PLACE_SQLITE_SWITCH_ENV];
+        else process.env[IN_PLACE_SQLITE_SWITCH_ENV] = saved;
+      }
+
+      // Its database lost: startup refuses instead of starting on an empty one.
+      for (const name of await readdir(join(dir, ".orca")))
+        if (name.startsWith("metadata.sqlite")) await rm(join(dir, ".orca", name));
+      await expect(bootstrap({ cwd: dir, logger: silentLogger })).rejects.toMatchObject({
+        code: "STORE_FORMAT",
+        details: { reason: "METADATA_MISSING" },
+      });
+      expect((await readdir(join(dir, ".orca"))).filter((n) => n.startsWith("metadata.sqlite"))).toEqual([]);
+    },
+  );
 
   it("refuses to switch a desktop app's own store, whose write fence it cannot hold", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-store-sqlite-switch-"));

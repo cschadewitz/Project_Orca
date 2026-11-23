@@ -30,7 +30,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { OrcaError } from "@orca/core";
 import { withFileLock } from "./file-lock.js";
-import { importFileMetadata, verifySqliteMetadata } from "./sqlite/maintenance.js";
+import { boundStoreId, importFileMetadata, verifySqliteMetadata } from "./sqlite/maintenance.js";
 import { SQLITE_METADATA_FILE } from "./sqlite/stores.js";
 import { bindSqliteMetadata, SqliteDatabase } from "./sqlite/database.js";
 import { beginStoreSwitch, clearDeadStoreSwitch, liveStoreWriters, type StoreWriterEntry } from "./store-writers.js";
@@ -306,6 +306,7 @@ async function stamp(
   fields: Pick<StoreFormatMarker, "backup" | "sqliteId">,
   guard: () => void = () => undefined,
   epoch: string = STORE_FORMAT_EPOCH,
+  afterRename?: () => Promise<void>,
 ): Promise<void> {
   const value: StoreFormatMarker = {
     format: 1,
@@ -324,6 +325,12 @@ async function stamp(
     throw error;
   }
   await rename(tmp, join(storeDir, STORE_FORMAT_FILE));
+  await afterRename?.();
+  await syncMarker(storeDir);
+}
+
+/** Flush the marker and its directory entry. */
+async function syncMarker(storeDir: string): Promise<void> {
   if (process.platform === "win32") await syncFile(join(storeDir, STORE_FORMAT_FILE));
   await syncDirectory(storeDir);
 }
@@ -578,6 +585,8 @@ export interface SwitchToSqliteOptions {
   beforeMarker?: () => Promise<void>;
   /** Injected for tests: runs after the marker, before the switch's journal is dropped. */
   afterMarker?: () => Promise<void>;
+  /** Tests: runs between the marker's rename and its flush; a throw stands for a failed flush. */
+  afterMarkerRename?: () => Promise<void>;
 }
 
 export type SwitchToSqliteOutcome =
@@ -733,12 +742,29 @@ async function switchLocked(
           storeDir,
         );
       await options.beforeMarker?.();
-      await stamp(storeDir, options.appVersion, now, { backup, sqliteId }, undefined, SQLITE_STORE_FORMAT_EPOCH);
+      await stamp(
+        storeDir,
+        options.appVersion,
+        now,
+        { backup, sqliteId },
+        undefined,
+        SQLITE_STORE_FORMAT_EPOCH,
+        options.afterMarkerRename,
+      );
     } catch (error) {
-      // Refused or failed before the marker: put every original back. An interruption (a crash)
-      // never gets here; the journal makes the next start do this instead.
-      await unfenceLegacyMetadata(storeDir);
-      await endSqliteSwitchJournal(storeDir);
+      // Refused or failed. Only a store whose marker provably still names files is rolled back
+      // here: a failure after the marker's rename (its flush) may have published it, and one that
+      // leaves the marker unreadable decides nothing. Either keeps the journal, so the next start
+      // reconciles the marker that is actually there (settleSqliteSwitch). An interruption (a
+      // crash) never gets here; the journal makes the next start do this instead.
+      const marker = await readStoreFormat(storeDir).then(
+        (value) => value ?? null,
+        () => undefined,
+      );
+      if (marker !== undefined && marker?.epoch !== SQLITE_STORE_FORMAT_EPOCH) {
+        await unfenceLegacyMetadata(storeDir);
+        await endSqliteSwitchJournal(storeDir);
+      }
       throw error;
     }
     await options.afterMarker?.();
@@ -749,6 +775,15 @@ async function switchLocked(
   }
   await pruneFormatBackups(storeDir, backup, privacy);
   return { status: "switched", epoch: SQLITE_STORE_FORMAT_EPOCH, backup };
+}
+
+/** The id the store's database is bound to; undefined when it has none or cannot be read. */
+function sqliteDatabaseBinding(storeDir: string): string | undefined {
+  try {
+    return boundStoreId(join(storeDir, SQLITE_METADATA_FILE));
+  } catch {
+    return undefined;
+  }
 }
 
 const switchInterrupted = (storeDir: string) =>
@@ -769,8 +804,12 @@ async function settleSqliteSwitch(storeDir: string, marker: StoreFormatMarker | 
   const journal = await readSqliteSwitchJournal(storeDir);
   if (!journal) return;
   if (marker?.epoch === SQLITE_STORE_FORMAT_EPOCH) {
-    if (marker.sqliteId !== journal.sqliteId) throw switchInterrupted(storeDir);
+    // Published: the marker and the database must both name the journal's switch, and the
+    // marker is flushed again (its first flush may be what failed) before the journal goes.
+    if (marker.sqliteId !== journal.sqliteId || sqliteDatabaseBinding(storeDir) !== journal.sqliteId)
+      throw switchInterrupted(storeDir);
     if (!(await legacyFenceComplete(storeDir))) await fenceLegacyMetadata(storeDir);
+    await syncMarker(storeDir);
   } else await unfenceLegacyMetadata(storeDir);
   await endSqliteSwitchJournal(storeDir);
 }

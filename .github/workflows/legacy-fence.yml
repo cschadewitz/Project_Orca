@@ -1,9 +1,10 @@
 # The legacy fence of `orca store sqlite switch` (#339), against the released builds themselves.
 # v0.7.0 and v0.6.0 never read a store's format marker; a switched store keeps them out with
 # markers (packages/store/src/sqlite/legacy-fence.ts). This builds both releases from their
-# tags, makes a workspace with v0.7.0's demo, switches it with this commit's CLI, and runs every
-# released store command against it: each must be refused and change nothing
-# (tools/legacy-fence/run.js). Runs on its own whenever the store, the CLI or the check changes.
+# tags, makes workspaces with v0.7.0's demo, switches one with this commit's CLI (opted in: the
+# switch is not offered to users yet), and runs every released store command against a baseline
+# and then the switched store: each must reach the store in the baseline, be refused by the store
+# when switched, and change nothing (tools/legacy-fence/run.js). Linux only. Runs on its own whenever the store, the CLI or the check changes.
 name: Legacy fence
 
 on:
@@ -87,10 +88,13 @@ jobs:
           [[ -f legacy-fence.json ]] || exit 0
           node -e '
             const r = require("./legacy-fence.json");
-            const rows = r.legacy.flatMap((l) => l.commands.map((c) =>
-              `| ${l.tag} | \`${c.command}\` | ${c.code ?? c.signal} | ${c.changes.length ? c.changes.length + " change(s)" : "none"} |`));
-            console.log(["## Legacy fence", "", r.failures.length ? `**${r.failures.length} failure(s)**` : "Every released store command was refused and changed nothing.", "",
-              "| Release | Command | Exit | Store changes |", "|---|---|---|---|", ...rows].join("\n"));
+            const rows = r.legacy.flatMap((l) => [
+              ...l.commands.map((c) =>
+                `| ${l.tag} | \`${c.command}\` | ${c.baseline.code ?? c.baseline.signal} | ${c.outcome} | ${c.code ?? c.signal} | ${c.refusal ?? ""} | ${c.changes.length ? c.changes.length + " change(s)" : "none"} |`),
+              ...l.absent.map((name) => `| ${l.tag} | \`${name}\` | | not in this release | | | |`),
+            ]);
+            console.log(["## Legacy fence", "", r.failures.length ? `**${r.failures.length} failure(s)**` : "Every covered command reached the store in its baseline and was refused on the switched store, except the read-only answers listed; none changed it.", "",
+              "| Release | Command | Baseline exit | Outcome | Exit | Refusal | Store changes |", "|---|---|---|---|---|---|---|", ...rows].join("\n"));
           ' >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

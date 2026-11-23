@@ -249,7 +249,19 @@ export async function unfenceLegacyMetadata(storeDir: string): Promise<void> {
       else throw conflict(storeDir, path);
     }
   }
-  await syncDirectory(storeDir);
+  // Every directory a rename or unlink above touched, so the rollback is durable before the
+  // caller drops the journal that would otherwise redo it.
+  const touched = new Set([
+    storeDir,
+    join(sqliteSwitchDir(storeDir), ASIDE),
+    ...LEGACY_FENCES.map((fence) => join(storeDir, fence.path, "..")),
+  ]);
+  for (const dir of touched)
+    try {
+      await syncDirectory(dir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
 }
 
 /** Every path holds its marker (or, for a key directory that has none, has nothing). */
