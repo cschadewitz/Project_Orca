@@ -470,8 +470,10 @@ export type ConfigSetResult = z.infer<typeof ConfigSetResultSchema>;
  * A `command` match is refused, and `path` and `pathPrefix` are relative to the workspace.
  * A saved rule always comes after the configuration's rules (decided 2026-11-23).
  *
- * It needs `permissions.grant` and `config.write`: it writes standing permission policy to the
- * workspace's configuration. It returns no document bytes, so it does not need `config.read`.
+ * It needs `permissions.grant` and `config.write`, because it writes standing permission policy
+ * to the workspace's configuration, and `config.read`, because its answer describes the file:
+ * whether an equal rule was already there, its place and its end. That holds on every path,
+ * the duplicate that writes nothing included.
  */
 export const PERMISSIONS_SAVE_JUDGED_RULE_METHOD = "permissions.saveJudgedRule";
 

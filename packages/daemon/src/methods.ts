@@ -805,14 +805,15 @@ export const configSet: Method<ConfigSetParams, ConfigSetResult> = {
 /**
  * `permissions.saveJudgedRule` (protocol 2.12, #701): save a plain-language rule to the
  * permission sidecar. A write of standing policy, so it needs `permissions.grant` and
- * `config.write`, rechecked under the sidecar's lock; it returns no document bytes.
+ * `config.write`, and `config.read` because its answer describes the sidecar (whether an equal
+ * rule is on file, its place and its end); all three are rechecked under the sidecar's lock.
  */
 export const permissionsSaveJudgedRule: Method<PermissionsSaveJudgedRuleParams, PermissionsSaveJudgedRuleResult> = {
   params: PermissionsSaveJudgedRuleParamsSchema,
   handle: (params, ctx) =>
     config(ctx).saveJudgedRule(
       params,
-      ctx.configurationAuthority && (() => ctx.configurationAuthority!(true, false, true)),
+      ctx.configurationAuthority && (() => ctx.configurationAuthority!(true, true, true)),
     ),
 };
 

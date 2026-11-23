@@ -327,8 +327,17 @@ export function callFacts(
   const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
   const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
   const titleMatches = (pattern: string, decision: PermissionDecision, byClaim: boolean): boolean => {
-    if (!byClaim) return new RegExp(pattern).test(title);
-    return decision !== "allow" && claimedTitle !== undefined && new RegExp(pattern).test(claimedTitle);
+    // A pattern that is not a regular expression fails closed (#701 review): it never matches
+    // for an allow, and always matches for a deny or an ask.
+    const test = (text: string): boolean => {
+      try {
+        return new RegExp(pattern).test(text);
+      } catch {
+        return decision !== "allow";
+      }
+    };
+    if (!byClaim) return test(title);
+    return decision !== "allow" && claimedTitle !== undefined && test(claimedTitle);
   };
   const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision, byClaim = false): boolean => {
     // A command rule also reaches a command-like call of another kind, so its restriction is
@@ -999,8 +1008,8 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
   const until = (rule: SidecarPermissionRule): number =>
     rule.expiresAt === undefined ? Infinity : Date.parse(rule.expiresAt);
   const wanted = expiresAt === undefined ? Infinity : Date.parse(expiresAt);
-  return withPolicyLock(opts.file, opts.lock, async () => {
-    const doc = await readPermissionPolicyFile(opts.file);
+  return withPolicyLock(opts.file, opts.lock, async (checkOwnership) => {
+    const { doc, revision } = await readPermissionPolicyFileRevision(opts.file);
     const rules: SidecarPermissionRule[] = [...(doc.agents[opts.agentId]?.rules ?? [])];
     const added: PermissionRule[] = [];
     const alreadyPresent: PermissionRule[] = [];
@@ -1024,7 +1033,11 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
       }
     }
     if (added.length > 0)
-      await writePolicyFile(opts.file, { ...doc, agents: { ...doc.agents, [opts.agentId]: { rules } } });
+      await writePolicyFile(
+        opts.file,
+        { ...doc, agents: { ...doc.agents, [opts.agentId]: { rules } } },
+        { revision, checkOwnership },
+      );
     return { file: opts.file, agentId: opts.agentId, rules: derived.rules, added, alreadyPresent };
   });
 }
@@ -1070,8 +1083,10 @@ export interface SaveJudgedRuleResult {
  * earlier reader refuses rather than reading the rule as a plain allow.
  *
  * Only what the judged lane could ever use is accepted: a kind from `SAVED_JUDGED_KINDS`, no
- * command, and paths written relative to the workspace (ADR 0009), so a saved rule can never
- * be a match-everything rule or name a file outside the workspace. A saved rule allows nothing
+ * command, paths written relative to the workspace (ADR 0009) and a bounded title pattern that
+ * compiles, so a saved rule can never be a match-everything rule or name a file outside the
+ * workspace. The checks are `SidecarJudgedPermissionRuleSchema`'s, so a whole-file
+ * `config.set` and the loader refuse the same rows. A saved rule allows nothing
  * by itself: the lane asks a judge only when a session was given one, only after the typed
  * rules answered `ask`, and only inside its hard boundaries.
  *
@@ -1096,20 +1111,12 @@ export async function saveJudgedRule(opts: SaveJudgedRuleOptions): Promise<SaveJ
       issues: parsed.error.issues,
     });
   const rule = parsed.data;
-  for (const key of ["path", "pathPrefix"] as const) {
-    const value = rule.match[key];
-    if (value !== undefined && !workspaceRelativeText(value))
-      throw new OrcaError(
-        "CONFIG_INVALID",
-        `a saved rule's ${key} is written relative to the workspace, with no '..': ${JSON.stringify(value)} is not`,
-      );
-  }
   const until = (r: { expiresAt?: string | undefined }): number =>
     r.expiresAt === undefined ? Infinity : Date.parse(r.expiresAt);
   const wanted = until(rule);
-  return withPolicyLock(opts.file, opts.lock, async () => {
+  return withPolicyLock(opts.file, opts.lock, async (checkOwnership) => {
     await opts.authorize?.();
-    const doc = await readPermissionPolicyFile(opts.file);
+    const { doc, revision } = await readPermissionPolicyFileRevision(opts.file);
     const rules: SidecarPermissionRule[] = [...(doc.agents[opts.agentId]?.rules ?? [])];
     const same = rules.flatMap((r, index) => (isSidecarJudgedRule(r) && sameJudgedRule(r, rule) ? [index] : []));
     const kept = same.find((index) => until(rules[index]!) >= wanted);
@@ -1131,7 +1138,11 @@ export async function saveJudgedRule(opts: SaveJudgedRuleOptions): Promise<SaveJ
       index = rules.push(rule) - 1;
       outcome = "added";
     }
-    await writePolicyFile(opts.file, { ...doc, agents: { ...doc.agents, [opts.agentId]: { rules } } }, opts.authorize);
+    await writePolicyFile(
+      opts.file,
+      { ...doc, agents: { ...doc.agents, [opts.agentId]: { rules } } },
+      { revision, checkOwnership, authorize: opts.authorize },
+    );
     return result(index, outcome);
   });
 }
@@ -1142,16 +1153,6 @@ function sameJudgedRule(a: SidecarJudgedPermissionRule, b: SidecarJudgedPermissi
     a.judge.criterion === b.judge.criterion &&
     samePermissionRule({ match: a.match, decision: "allow" }, { match: b.match, decision: "allow" })
   );
-}
-
-/**
- * Whether a path written in a saved rule is relative to the workspace: not absolute, no drive
- * or home prefix, no `..` segment. Lexical on purpose; the judged lane verifies the real files.
- */
-function workspaceRelativeText(path: string): boolean {
-  if (path === "" || isAbsolute(path) || /^[A-Za-z]:/.test(path) || path.startsWith("~")) return false;
-  if (path.startsWith("/") || path.startsWith("\\")) return false;
-  return !path.split(/[\\/]+/).includes("..");
 }
 
 /**
@@ -1194,10 +1195,10 @@ export async function replacePermissionPolicyFile(
 ): Promise<PermissionPolicyFile> {
   const parsed = parsePermissionPolicyDocument(doc);
   const expected = opts?.expectedRevision;
-  await withPolicyLock(file, opts?.lock, async () => {
+  await withPolicyLock(file, opts?.lock, async (checkOwnership) => {
     await opts?.authorize?.();
+    const actual = await revisionOf(file);
     if (expected !== undefined) {
-      const actual = await revisionOf(file);
       if (actual !== expected)
         throw new OrcaError(
           "CONFIG_STALE",
@@ -1206,7 +1207,7 @@ export async function replacePermissionPolicyFile(
         );
     }
     await refuseUnsupportedPolicyReplacement(file);
-    await writePolicyFile(file, parsed, opts?.authorize);
+    await writePolicyFile(file, parsed, { revision: actual, checkOwnership, authorize: opts?.authorize });
   });
   return parsed;
 }
@@ -1289,15 +1290,34 @@ function serialize(doc: PermissionPolicyFile): string {
   return `${JSON.stringify({ version: permissionPolicyFileVersion(doc), agents }, null, 2)}\n`;
 }
 
+/**
+ * Write a sidecar, as every writer does. At commit, just before the rename, the writer must
+ * still hold the lock it read under and the file must still be the bytes it read (`revision`,
+ * `""` for no file), so a writer paused past the lock's staleness cannot overwrite a later
+ * edit, grant or removal made by whoever took the lock over (#701 review). Then the caller's
+ * authority is checked again.
+ */
 async function writePolicyFile(
   file: string,
   doc: PermissionPolicyFile,
-  authorize?: () => Promise<void>,
+  commit: {
+    revision: string;
+    checkOwnership: () => Promise<void>;
+    authorize?: (() => Promise<void>) | undefined;
+  },
 ): Promise<void> {
   const tmp = `${file}.${process.pid}.tmp`;
   try {
     await writeFile(tmp, serialize(doc), "utf8");
-    await authorize?.();
+    await commit.checkOwnership();
+    const now = await revisionOf(file);
+    if (now !== commit.revision)
+      throw new OrcaError("CONFIG_STALE", `${file} changed under this write; nothing was written`, {
+        file,
+        expectedRevision: commit.revision,
+        actualRevision: now,
+      });
+    await commit.authorize?.();
     await rename(tmp, file);
   } finally {
     await rm(tmp, { force: true });

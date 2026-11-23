@@ -529,7 +529,51 @@ export const SidecarJudgedPermissionRuleSchema = z
   .refine((rule) => (SAVED_JUDGED_KINDS as readonly string[]).includes(rule.match.kind ?? ""), {
     message: `a saved judged rule names its kind, one of ${SAVED_JUDGED_KINDS.join(" or ")}: other calls go to a person`,
     path: ["match", "kind"],
+  })
+  .superRefine((rule, ctx) => {
+    // The same checks wherever a saved rule comes from: the save method, a whole-file
+    // `config.set`, or the bytes the loader reads (#701 review).
+    for (const key of ["path", "pathPrefix"] as const) {
+      const value = rule.match[key];
+      if (value !== undefined && !savedRulePathIsWorkspaceRelative(value))
+        ctx.addIssue({
+          code: "custom",
+          path: ["match", key],
+          message: `a saved rule's ${key} is written relative to the workspace, with no '..', home or drive prefix`,
+        });
+    }
+    const pattern = rule.match.titlePattern;
+    if (pattern !== undefined && !savedTitlePatternIsValid(pattern))
+      ctx.addIssue({
+        code: "custom",
+        path: ["match", "titlePattern"],
+        message: `a saved rule's titlePattern is a regular expression of at most ${SAVED_TITLE_PATTERN_MAX} characters`,
+      });
   });
+
+/** Longest `titlePattern` a saved judged rule may carry, in characters (#701 review). */
+export const SAVED_TITLE_PATTERN_MAX = 256;
+
+function savedTitlePatternIsValid(pattern: string): boolean {
+  if (pattern.length === 0 || pattern.length > SAVED_TITLE_PATTERN_MAX) return false;
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a path in a saved rule is relative to the workspace (ADR 0009): not absolute, no
+ * drive, UNC or home prefix, no `..` segment. Lexical on purpose, and node-free; the judged
+ * lane verifies the real files it allows.
+ */
+export function savedRulePathIsWorkspaceRelative(path: string): boolean {
+  if (path === "" || path.startsWith("/") || path.startsWith("\\") || path.startsWith("~")) return false;
+  if (/^[A-Za-z]:/.test(path)) return false;
+  return !path.split(/[\\/]+/).includes("..");
+}
 export type SidecarJudgedPermissionRule = z.infer<typeof SidecarJudgedPermissionRuleSchema>;
 
 /**

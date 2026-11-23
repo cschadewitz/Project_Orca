@@ -106,6 +106,7 @@ describe("saving a judged rule", () => {
     ["a path out of the workspace", { match: { kind: "read" as const, pathPrefix: "src/../../x" } }],
     ["a home path", { match: { kind: "read" as const, pathPrefix: "~/.ssh" } }],
     ["a drive path", { match: { kind: "read" as const, path: "C:secrets" } }],
+    ["a title pattern that does not compile", { match: { kind: "read" as const, titlePattern: "[" } }],
     ["an empty criterion", { criterion: "   " }],
     ["an expiry that is not after now", { expiresAt: NOW.toISOString() }],
   ])("refuses %s and writes nothing", async (_name, over) => {
@@ -130,7 +131,56 @@ describe("saving a judged rule", () => {
   });
 });
 
+describe("a writer that lost the lock", () => {
+  it("commits nothing, and leaves the successor's lock and edit in place", async () => {
+    await save();
+    const before = await readFile(file, "utf8");
+    const lock = `${file}.lock`;
+    let calls = 0;
+    // The first authority check runs under the lock: stand in for a writer that paused past
+    // the lock's staleness, whose lock was broken and taken by another that then wrote.
+    const authorize = async () => {
+      if (++calls > 1) return;
+      await rm(lock);
+      await writeFile(lock, "successor");
+      await writeFile(file, before.replace("Reading source.", "Edited meanwhile."));
+    };
+    await expect(save({ criterion: "Reading docs.", authorize })).rejects.toMatchObject({
+      code: "STORE_LOCK_TIMEOUT",
+    });
+    expect(await readFile(lock, "utf8")).toBe("successor");
+    expect(await readFile(file, "utf8")).toContain("Edited meanwhile.");
+    expect(await readFile(file, "utf8")).not.toContain("Reading docs.");
+  });
+});
+
 describe("the version-4 sidecar", () => {
+  it("refuses an invalid saved rule wherever it comes from: the reader and a whole-file replace", async () => {
+    for (const match of [
+      { kind: "read", path: "/etc/passwd" },
+      { kind: "read", pathPrefix: "../x" },
+      { kind: "read", titlePattern: "(" },
+      { kind: "read", titlePattern: "a".repeat(257) },
+    ]) {
+      const doc = { version: 4, agents: { a: { rules: [{ match, judge: { criterion: "x" } }] } } };
+      expect(PermissionPolicyFileSchema.safeParse(doc).success).toBe(false);
+      await writeFile(file, JSON.stringify(doc));
+      await expect(readPermissionPolicyFile(file)).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+      await expect(replacePermissionPolicyFile(file, doc)).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    }
+  });
+
+  it("fails closed on a title pattern that does not compile: no allow, and a deny still denies", async () => {
+    const { decidePermission } = await import("@orca/agents");
+    const request = call("read", join(ws, "src", "a.ts"));
+    const policy = (decision: "allow" | "deny") => ({
+      default: "ask" as const,
+      rules: [{ match: { kind: "read" as const, titlePattern: "(" }, decision }],
+    });
+    expect(decidePermission(policy("allow"), request, ctx)).toBe("ask");
+    expect(decidePermission(policy("deny"), request, ctx)).toBe("deny");
+  });
+
   it("refuses a judged row in a version 1 or 3 file rather than read it", () => {
     const judged = { match: READS, judge: { criterion: "Reading source." } };
     for (const version of [1, 3])

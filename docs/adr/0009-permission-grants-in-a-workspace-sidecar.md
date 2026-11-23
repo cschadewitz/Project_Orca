@@ -226,14 +226,23 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   verdict, the rule's id and the judge's config ref, not the rule's revision. Nothing wires a
   judge yet.
 - **A judged rule can be saved here (#701).** `permissions.saveJudgedRule` (protocol 2.12,
-  `permissions.grant` and `config.write`) is the app's save method: it appends
+  `permissions.grant`, `config.write` and `config.read`, since its answer describes the file) is
+  the app's save method: it appends
   `{ match, judge: { criterion }, addedAt, expiresAt? }` to the agent's list in this file,
   under the same `link()` lock, so it lands after every configured rule (a saved judged rule
   never sits above a hand-written one). A saved rule must name its kind, `read` or `search`,
   the kinds the judged lane can open for, so the app can never write a match-everything judged
-  rule or one that could never apply; it cannot match a command, and its `path` and
-  `pathPrefix` are workspace-relative with no `..`. A row with both a `decision` and a `judge`
-  is refused. The same rule (match and criterion) is never appended twice; one that ends
+  rule or one that could never apply; it cannot match a command, its `path` and `pathPrefix`
+  are workspace-relative with no `..`, and its `titlePattern` compiles and is at most 256
+  characters. These are the version-4 schema's checks, so the save method, a whole-file
+  `config.set` and the loader refuse the same rows; and a title pattern that does not compile
+  and reaches matching anyway fails closed (never matches for an allow, always for a deny or an
+  ask). A row with both a `decision` and a `judge` is refused. **Every writer of this file
+  commits only as the lock's owner and over the bytes it read:** just before the rename it
+  checks that the `link()` lock is still its own (same file, its nonce) and that the file's
+  revision is the one it read, so a writer paused past the lock's staleness cannot overwrite an
+  edit, grant or removal made meanwhile; it answers `CONFIG_STALE` or `STORE_LOCK_TIMEOUT`
+  instead, and a late release never removes a successor's lock. The same rule (match and criterion) is never appended twice; one that ends
   sooner is extended in place. The loader carries saved judged rules in `policy.judged` after
   the configured ones, named `sidecar:N` by their place in the agent's list as written, and
   skips an expired one; the typed rules, and everything that decides synchronously, see none

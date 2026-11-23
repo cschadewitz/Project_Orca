@@ -26,7 +26,9 @@ export async function revisionOf(file: string): Promise<string> {
  * `@orca/store` in the layering, so it cannot import it.
  *
  * Legacy locks retain the old mtime-based recovery behavior. Age cannot prove that a
- * paused owner died. Typed mode uses the same namespace with strict token ownership below.
+ * paused owner died, so `fn` is handed a `checkOwnership` that refuses once the lock is no
+ * longer this holder's (#701 review); a writer calls it, with the source revision check, just
+ * before it commits. Typed mode uses the same namespace with strict token ownership below.
  */
 export async function withPolicyLock<T>(
   file: string,
@@ -39,7 +41,9 @@ export async function withPolicyLock<T>(
   const staleMs = opts?.staleMs ?? 30_000;
   await mkdir(dirname(file), { recursive: true });
   const tmp = `${lock}.${process.pid}.${Math.random().toString(36).slice(2)}`;
-  await writeFile(tmp, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), "utf8");
+  // A nonce makes the lock's bytes this holder's alone, so ownership can be checked (#701 review).
+  const contents = JSON.stringify({ pid: process.pid, at: new Date().toISOString(), nonce: randomUUID() });
+  await writeFile(tmp, contents, "utf8");
   const deadline = Date.now() + timeoutMs;
   try {
     for (let backoff = 1; ; backoff = Math.min(backoff * 2, 32)) {
@@ -57,10 +61,32 @@ export async function withPolicyLock<T>(
   } finally {
     await rm(tmp, { force: true });
   }
+  const identity = await stat(lock);
+  /**
+   * Whether this holder still owns the lock: the same file (device and inode) with this
+   * holder's bytes. A writer paused past `staleMs` can have had its lock broken and taken by
+   * another; this is what it checks before it commits (#701 review).
+   */
+  const owned = async (): Promise<boolean> => {
+    try {
+      const current = await stat(lock);
+      return (
+        current.dev === identity.dev && current.ino === identity.ino && (await readFile(lock, "utf8")) === contents
+      );
+    } catch {
+      return false;
+    }
+  };
   try {
-    return await fn(async () => {});
+    return await fn(async () => {
+      if (!(await owned()))
+        throw new OrcaError("STORE_LOCK_TIMEOUT", `${lock} was taken over by another writer; nothing was written`, {
+          file,
+        });
+    });
   } finally {
-    await rm(lock, { force: true });
+    // Only our own lock is removed: a successor's must survive a late release.
+    if (await owned()) await rm(lock, { force: true });
   }
 }
 

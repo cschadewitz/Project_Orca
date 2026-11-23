@@ -105,6 +105,17 @@ describe("permissions.saveJudgedRule", () => {
     ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
   });
 
+  it("refuses the same invalid rule through a whole-file config.set", async () => {
+    const { model } = await workspace();
+    const text = JSON.stringify({
+      version: 4,
+      agents: { claude: { rules: [{ match: { kind: "read", path: "/etc/passwd" }, judge: { criterion: "x" } }] } },
+    });
+    await expect(model.set({ document: "permissions", expectedRevision: "", text })).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+    });
+  });
+
   it("checks authority before and under the lock", async () => {
     const { model, sidecar } = await workspace();
     let calls = 0;
