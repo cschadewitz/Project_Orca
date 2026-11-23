@@ -438,8 +438,17 @@ export class WorkflowDraftService {
     };
   }
 
+  /**
+   * Without an active generation there is nothing to check templates, agents and workflows
+   * against, and a draft that looks clean here might not be (#182): the schema and graph
+   * findings still show, and one whole-workflow error says why the draft is not validated,
+   * which keeps it from publishing.
+   */
   private issues(text: string, workflowId: string): DraftIssue[] {
-    return validateDraft(text, workflowId, this.options.validationContext() ?? {});
+    const context = this.options.validationContext();
+    const issues = validateDraft(text, workflowId, context ?? {});
+    if (context) return issues;
+    return [{ severity: "error", message: UNVALIDATED, path: "", graph: [] }, ...issues];
   }
 
   /* ---------- files ---------- */
@@ -825,6 +834,9 @@ function trimHistory(entries: Snapshot[]): Snapshot[] {
 
 /* ---------- validation ---------- */
 
+const UNVALIDATED =
+  "ORCA has no active configuration to check this draft against. It can be published once one is active.";
+
 /**
  * The draft's findings, each placed on a graph and a node or edge. The runtime's own schema
  * and graph validator decide errors and warnings, against the active generation, so a clean
@@ -868,12 +880,19 @@ export function validateDraft(text: string, workflowId: string, context: Validat
   }
   for (const issue of result.errors)
     issues.push({ severity: "error", ...fromValidatorPath(issue.path), message: issue.message });
-  for (const issue of result.warnings)
-    issues.push({
-      severity: /is unreachable from start$/.test(issue.message) ? "error" : "warning",
-      ...fromValidatorPath(issue.path),
-      message: issue.message,
-    });
+  // A graph whose start names no node reaches nothing, so every node in it would also be
+  // "unreachable": one row for the cause, not one per node for its echo.
+  const startless = new Set(
+    issues
+      .filter((issue) => issue.path.endsWith("start") && /^start node '.*' does not exist$/.test(issue.message))
+      .map((issue) => draftGraphKey(issue.graph)),
+  );
+  for (const issue of result.warnings) {
+    const unreachable = /is unreachable from start$/.test(issue.message);
+    const placed = fromValidatorPath(issue.path);
+    if (unreachable && startless.has(draftGraphKey(placed.graph))) continue;
+    issues.push({ severity: unreachable ? "error" : "warning", ...placed, message: issue.message });
+  }
   editorFindings(raw, parsed.data, [], [], issues);
   const order = { error: 0, warning: 1, note: 2 } as const;
   return issues.sort((a, b) => order[a.severity] - order[b.severity]);

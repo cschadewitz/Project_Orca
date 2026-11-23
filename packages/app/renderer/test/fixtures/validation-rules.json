@@ -1,0 +1,8022 @@
+[
+  {
+    "rule": "a dangling edge (its target does not exist)",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        },
+        {
+          "from": "choose",
+          "to": "gone",
+          "when": "choice == 'maybe'"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "edges[12]",
+      "graph": [],
+      "edge": 12,
+      "message": "edge target 'gone' does not exist"
+    }
+  },
+  {
+    "rule": "a dangling edge (its source does not exist)",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        },
+        {
+          "from": "gone",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "edges[12]",
+      "graph": [],
+      "edge": 12,
+      "message": "edge source 'gone' does not exist"
+    }
+  },
+  {
+    "rule": "an edge out of an end",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        },
+        {
+          "from": "done",
+          "to": "plan",
+          "when": "false"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "edges[12]",
+      "graph": [],
+      "edge": 12,
+      "message": "end node 'done' cannot have outgoing edges"
+    }
+  },
+  {
+    "rule": "an edge into the start",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        },
+        {
+          "from": "score",
+          "to": "start",
+          "when": "false"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "edges[12]",
+      "graph": [],
+      "edge": 12,
+      "message": "edges cannot target the start node"
+    }
+  },
+  {
+    "rule": "a missing start",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "nowhere",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "start",
+      "graph": [],
+      "message": "start node 'nowhere' does not exist"
+    }
+  },
+  {
+    "rule": "a start that is not a start node",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "begin",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        },
+        "begin": {
+          "type": "set",
+          "vars": {}
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        },
+        {
+          "from": "begin",
+          "to": "start"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "start",
+      "graph": [],
+      "message": "start node 'begin' must have type 'start'"
+    }
+  },
+  {
+    "rule": "a second start node",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        },
+        "restart": {
+          "type": "start"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        },
+        {
+          "from": "note",
+          "to": "restart",
+          "when": "false"
+        },
+        {
+          "from": "restart",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes",
+      "graph": [],
+      "message": "graph must contain exactly one start node (found 2)"
+    }
+  },
+  {
+    "rule": "no end node",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "set",
+          "vars": {}
+        },
+        "done": {
+          "type": "set",
+          "vars": {}
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        },
+        {
+          "from": "done",
+          "to": "note",
+          "when": "false"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes",
+      "graph": [],
+      "message": "graph must contain at least one end node (or a custom node that ends the run)"
+    }
+  },
+  {
+    "rule": "a node with no outgoing edge",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        },
+        {
+          "from": "each",
+          "to": "score",
+          "when": "false"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.sub",
+      "graph": [],
+      "node": "sub",
+      "message": "node 'sub' has no outgoing edges"
+    }
+  },
+  {
+    "rule": "a decision with two unconditional edges",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        },
+        {
+          "from": "choose",
+          "to": "plan"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.choose",
+      "graph": [],
+      "node": "choose",
+      "message": "decision nodes may have at most one unconditional (default) edge"
+    }
+  },
+  {
+    "rule": "a step with two unconditional edges",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        },
+        {
+          "from": "note",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.note",
+      "graph": [],
+      "node": "note",
+      "message": "node 'note' has multiple unconditional outgoing edges; add 'when' conditions or use a parallel node"
+    }
+  },
+  {
+    "rule": "a role with no agent",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "ghost"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.plan.agent",
+      "graph": [],
+      "node": "plan",
+      "message": "agent selector {\"role\":\"ghost\"} cannot be resolved"
+    }
+  },
+  {
+    "rule": "a template that does not exist",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/missing"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.plan.template",
+      "graph": [],
+      "node": "plan",
+      "message": "template 'sdlc/missing' is not registered"
+    }
+  },
+  {
+    "rule": "an agent step with neither template nor prompt",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          }
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.plan",
+      "graph": [],
+      "node": "plan",
+      "message": "agent step needs a 'template' id or an inline 'prompt'"
+    }
+  },
+  {
+    "rule": "a subworkflow that does not exist",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "missing"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.sub.workflow",
+      "graph": [],
+      "node": "sub",
+      "message": "referenced workflow 'missing' is not registered"
+    }
+  },
+  {
+    "rule": "a bad expression on an edge",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice =="
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "edges[2].when",
+      "graph": [],
+      "edge": 2,
+      "message": "unexpected token at 9 in \"choice ==\""
+    }
+  },
+  {
+    "rule": "a bad expression in a node",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt <",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.again.condition",
+      "graph": [],
+      "node": "again",
+      "message": "unexpected token at 14 in \"vars.attempt <\""
+    }
+  },
+  {
+    "rule": "a default option that is not an option",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ],
+          "defaultOption": "maybe"
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.choose.defaultOption",
+      "graph": [],
+      "node": "choose",
+      "message": "defaultOption must be one of options"
+    }
+  },
+  {
+    "rule": "a parallel node with neither branches nor items",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel"
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.fan",
+      "graph": [],
+      "node": "fan",
+      "message": "parallel node needs 'branches' or 'forEach'"
+    }
+  },
+  {
+    "rule": "a custom node its validator refuses",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.score.rubric",
+      "graph": [],
+      "node": "score",
+      "message": "a score node needs a rubric"
+    }
+  },
+  {
+    "rule": "a field the schema refuses",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          },
+          "maxIterations": 0
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "message": "nodes.again: Invalid input",
+      "path": "nodes.again",
+      "graph": [],
+      "node": "again"
+    }
+  },
+  {
+    "rule": "an unreachable node (an error in the editor)",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        },
+        "orphan": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.orphan",
+      "graph": [],
+      "node": "orphan",
+      "message": "node 'orphan' is unreachable from start"
+    }
+  },
+  {
+    "rule": "a node with no outgoing edge, in a loop body",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "s",
+                  "to": "e",
+                  "when": "false"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.again.body.nodes.step",
+      "graph": [
+        {
+          "node": "again"
+        }
+      ],
+      "node": "step",
+      "message": "node 'step' has no outgoing edges"
+    }
+  },
+  {
+    "rule": "an unreachable node, in a parallel branch",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  },
+                  "lost": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.fan.branches.a.nodes.lost",
+      "graph": [
+        {
+          "node": "fan",
+          "branch": "a"
+        }
+      ],
+      "node": "lost",
+      "message": "node 'lost' is unreachable from start"
+    }
+  },
+  {
+    "rule": "an edge out of an end, in a for-each body",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  },
+                  {
+                    "from": "e",
+                    "to": "step",
+                    "when": "false"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "error",
+      "path": "nodes.each.forEach.body.edges[2]",
+      "graph": [
+        {
+          "node": "each",
+          "forEach": true
+        }
+      ],
+      "edge": 2,
+      "message": "end node 'e' cannot have outgoing edges"
+    }
+  },
+  {
+    "rule": "a field the node's type does not use",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          },
+          "prompt": "left from an agent"
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "warning",
+      "message": "'prompt' is not used by a set node. It is kept in the draft and ignored when the workflow runs.",
+      "path": "nodes.note.prompt",
+      "graph": [],
+      "node": "note"
+    }
+  },
+  {
+    "rule": "a decision with no conditional edges",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "warning",
+      "path": "nodes.choose",
+      "graph": [],
+      "node": "choose",
+      "message": "decision node has no conditional edges; every choice goes the same way"
+    }
+  },
+  {
+    "rule": "a parallel node with one branch",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "warning",
+      "message": "This parallel node has one branch; it runs nothing in parallel.",
+      "path": "nodes.fan.branches",
+      "graph": [],
+      "node": "fan"
+    }
+  },
+  {
+    "rule": "a for-each ordered with no key",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "dependsOn": "item.after"
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "warning",
+      "path": "nodes.each.forEach.dependsOn",
+      "graph": [],
+      "node": "each",
+      "message": "forEach.dependsOn without forEach.key compares against item indexes; set 'key' to something stable"
+    }
+  },
+  {
+    "rule": "an agent waiting on no deliverable",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review",
+          "completion": {
+            "mode": "artifact-present"
+          }
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "warning",
+      "path": "nodes.plan.completion.mode",
+      "graph": [],
+      "node": "plan",
+      "message": "completion.mode 'artifact-present' has no required deliverable to wait for; the step behaves like 'turn-end' (mark a deliverable required: true or use mode: turn-end)"
+    }
+  },
+  {
+    "rule": "a custom node its validator warns about",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "loose"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "warning",
+      "path": "nodes.score.rubric",
+      "graph": [],
+      "node": "score",
+      "message": "a loose rubric scores everything the same"
+    }
+  },
+  {
+    "rule": "a gate that approves itself",
+    "document": {
+      "id": "ai-sdlc",
+      "name": "Every node family",
+      "version": "1",
+      "start": "start",
+      "nodes": {
+        "start": {
+          "type": "start"
+        },
+        "plan": {
+          "type": "agent",
+          "agent": {
+            "role": "reviewer"
+          },
+          "template": "sdlc/review"
+        },
+        "choose": {
+          "type": "decision",
+          "source": {
+            "kind": "expression",
+            "expr": "vars.ready"
+          },
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        },
+        "ask": {
+          "type": "gate",
+          "question": "Ship it?",
+          "autoApproveWhen": "vars.trusted"
+        },
+        "note": {
+          "type": "set",
+          "vars": {
+            "attempt": "=1"
+          }
+        },
+        "again": {
+          "type": "loop",
+          "mode": "while",
+          "condition": "vars.attempt < 3",
+          "body": {
+            "graph": {
+              "start": "s",
+              "nodes": {
+                "s": {
+                  "type": "start"
+                },
+                "step": {
+                  "type": "set",
+                  "vars": {
+                    "seen": true
+                  }
+                },
+                "e": {
+                  "type": "end"
+                }
+              },
+              "edges": [
+                {
+                  "from": "s",
+                  "to": "step"
+                },
+                {
+                  "from": "step",
+                  "to": "e"
+                }
+              ]
+            }
+          }
+        },
+        "fan": {
+          "type": "parallel",
+          "branches": {
+            "a": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            },
+            "b": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "each": {
+          "type": "parallel",
+          "forEach": {
+            "items": "vars.items",
+            "body": {
+              "graph": {
+                "start": "s",
+                "nodes": {
+                  "s": {
+                    "type": "start"
+                  },
+                  "step": {
+                    "type": "set",
+                    "vars": {
+                      "seen": true
+                    }
+                  },
+                  "e": {
+                    "type": "end"
+                  }
+                },
+                "edges": [
+                  {
+                    "from": "s",
+                    "to": "step"
+                  },
+                  {
+                    "from": "step",
+                    "to": "e"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sub": {
+          "type": "subworkflow",
+          "workflow": "fix-it"
+        },
+        "score": {
+          "type": "custom:score",
+          "rubric": "strict"
+        },
+        "done": {
+          "type": "end"
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "plan"
+        },
+        {
+          "from": "plan",
+          "to": "choose"
+        },
+        {
+          "from": "choose",
+          "to": "ask",
+          "when": "choice == 'yes'"
+        },
+        {
+          "from": "choose",
+          "to": "done"
+        },
+        {
+          "from": "ask",
+          "to": "note",
+          "when": "choice == 'approve'"
+        },
+        {
+          "from": "ask",
+          "to": "done",
+          "when": "choice == 'reject'"
+        },
+        {
+          "from": "note",
+          "to": "again"
+        },
+        {
+          "from": "again",
+          "to": "fan"
+        },
+        {
+          "from": "fan",
+          "to": "each"
+        },
+        {
+          "from": "each",
+          "to": "sub"
+        },
+        {
+          "from": "sub",
+          "to": "score"
+        },
+        {
+          "from": "score",
+          "to": "done"
+        }
+      ]
+    },
+    "issue": {
+      "severity": "note",
+      "message": "This gate approves itself when vars.trusted.",
+      "path": "nodes.ask.autoApproveWhen",
+      "graph": [],
+      "node": "ask"
+    }
+  }
+]
