@@ -81,6 +81,8 @@ export interface ConfigReview {
 }
 export interface AgentCapabilityPreview {
   readonly agent: string;
+  /** The candidate no longer declares this agent: every entry it had is listed as removed. */
+  readonly agentRemoved?: true;
   readonly entries: readonly {
     readonly kind: "mcpServer" | "skill";
     readonly id: string;

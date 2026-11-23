@@ -18,11 +18,12 @@ export function CapabilityPreview({ agents }: { agents: readonly AgentCapability
       <Text style="label-strong">Capabilities each agent gets once applied</Text>
       <Text style="caption">
         At the agent&apos;s own scope, compared with the running configuration. Workflow and node selections can narrow
-        these further.
+        these, or turn on ones the agent&apos;s scope lists as available.
       </Text>
       {agents.map((agent) => (
         <div key={agent.agent} role="group" aria-label={`Capabilities of ${agent.agent}`}>
           <Text style="mono-id">{agent.agent}</Text>
+          {agent.agentRemoved && <Text style="caption">Agent removed: it loses everything below.</Text>}
           {agent.entries.length === 0 ? (
             <Text style="caption">No MCP servers or skills.</Text>
           ) : (

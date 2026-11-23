@@ -50,6 +50,36 @@ describe("capability preview model", () => {
       { agent: "fresh", entries: [], warnings: [] },
     ]);
   });
+  it("lists a removed or renamed agent's lost capabilities, not only the new name's", () => {
+    const running = {
+      agents: {
+        builder: set([["github", "config.capabilities.workspace"]], [["review", "agents.builder.capabilities"]]),
+      },
+    };
+    const candidate = { agents: { maker: set([["github", "config.capabilities.workspace"]]) } };
+    expect(capabilityPreview(running, candidate)).toEqual([
+      {
+        agent: "builder",
+        agentRemoved: true,
+        entries: [
+          { kind: "mcpServer", id: "github", source: "config.capabilities.workspace", change: "removed" },
+          { kind: "skill", id: "review", source: "agents.builder.capabilities", change: "removed" },
+        ],
+        warnings: [],
+      },
+      {
+        agent: "maker",
+        entries: [{ kind: "mcpServer", id: "github", source: "config.capabilities.workspace", change: "added" }],
+        warnings: [],
+      },
+    ]);
+    expect(capabilityPreview(running, { agents: {} })).toEqual([
+      expect.objectContaining({ agent: "builder", agentRemoved: true }),
+    ]);
+    const view = render(<CapabilityPreview agents={capabilityPreview(running, { agents: {} })!} />);
+    expect(screen.getByRole("group", { name: "Capabilities of builder" }).textContent).toContain("Agent removed");
+    view.unmount();
+  });
   it("reports a new warning, and nothing when either side is unknown", () => {
     const running = { agents: { builder: set([]) } };
     const candidate = { agents: { builder: set([], [], ["agents.builder.capabilities.skills.disable"]) } };

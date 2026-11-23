@@ -5,8 +5,8 @@ import type { AgentCapabilityPreview } from "../../../src/configuration-launch-c
 type AgentSet = ConfigEffectiveCapabilities["agents"][string];
 
 /**
- * Candidate against running, per agent, listing only agents whose set or warnings differ or
- * that are new. `undefined` when either side is unknown: no preview beats a wrong one.
+ * Candidate against running, per agent, over both sides' agents: those whose set or warnings
+ * differ, new agents, and removed agents (with everything they lose). `undefined` when either side is unknown: no preview beats a wrong one.
  */
 export function capabilityPreview(
   running: ConfigEffectiveCapabilities | undefined,
@@ -14,8 +14,11 @@ export function capabilityPreview(
 ): readonly AgentCapabilityPreview[] | undefined {
   if (!running || !candidate) return undefined;
   const out: AgentCapabilityPreview[] = [];
-  for (const agent of Object.keys(candidate.agents).sort()) {
-    const after = candidate.agents[agent]!;
+  const ids = new Set([...Object.keys(running.agents), ...Object.keys(candidate.agents)]);
+  for (const agent of [...ids].sort()) {
+    // A removed (or renamed) agent loses everything it had; the new name shows as new.
+    const removed = !Object.hasOwn(candidate.agents, agent);
+    const after: AgentSet | undefined = removed ? undefined : candidate.agents[agent];
     const before: AgentSet | undefined = Object.hasOwn(running.agents, agent) ? running.agents[agent] : undefined;
     const entries: AgentCapabilityPreview["entries"][number][] = [];
     for (const kind of ["mcpServer", "skill"] as const) {
@@ -33,7 +36,11 @@ export function capabilityPreview(
       }
       for (const [id, source] of was) if (!now.has(id)) entries.push({ kind, id, source, change: "removed" });
     }
-    const warnings = after.warnings.map((warning) => warning.path);
+    if (removed) {
+      out.push({ agent, agentRemoved: true, entries, warnings: [] });
+      continue;
+    }
+    const warnings = (after?.warnings ?? []).map((warning) => warning.path);
     const changed = before === undefined || entries.some((entry) => entry.change !== "unchanged");
     const warned = warnings.join("\0") !== (before?.warnings ?? []).map((warning) => warning.path).join("\0");
     if (changed || warned) out.push({ agent, entries, warnings });
