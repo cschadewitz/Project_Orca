@@ -72,8 +72,14 @@ type Material = z.infer<typeof MaterialSchema>;
  * reserved id that has one), so an older worker on the same store after a rollback still never
  * creates the run; this version also reads it back as the final refusal. One write-once record:
  * the refusal is durable exactly when it is reported.
+ *
+ * The move can also be found later, when provisioning fetches the ref, after `startRun` has
+ * already written the run's own inputs record. That record is the same fence for every version,
+ * so the refusal is then kept beside it, write-once under the material's id, and is read only
+ * while that fence stands.
  */
 const REFUSED_WORKFLOW = "orca:refused-admission";
+const refusalId = (binding: { materialId: string }) => `${binding.materialId}-refused`;
 const RefusalSchema = z.strictObject({ code: z.literal("GIT_REF_MOVED"), message: z.string().min(1) });
 const unavailable = () => new OrcaError("RUN_STATE", "Direct admission is unavailable");
 /** A fence's receipt, bound like any admission: stable for its operation, so a replay answers the same. */
@@ -321,26 +327,48 @@ export class DirectAdmissionService {
     const recorded = await this.refused(binding);
     if (recorded) return recorded;
     const { execution } = this.options.orchestrator.stores;
-    // Anything else under the reserved id (an interrupted creation) is left to reconcile.
-    if (await execution.getInputs(binding.runId)) return undefined;
     const refusal = RefusalSchema.parse({ code: "GIT_REF_MOVED", message: message.slice(0, 500) });
-    await execution.putInputs({
-      runId: binding.runId,
-      workflowId: REFUSED_WORKFLOW,
-      workflowVersion: reserved.workflow.version,
-      vars: refusal,
-      sensitiveNames: [],
-      secrets: [],
-    });
+    const inputs = await execution.getInputs(binding.runId);
+    if (!inputs)
+      await execution.putInputs({
+        runId: binding.runId,
+        workflowId: REFUSED_WORKFLOW,
+        workflowVersion: reserved.workflow.version,
+        vars: refusal,
+        sensitiveNames: [],
+        secrets: [],
+      });
+    // Found at fetch time: `startRun` refuses a reserved id that already has inputs, so the run's
+    // own record was written by the very call that found the move. It already fences the run for
+    // every version; keep the refusal beside it.
+    else if (this.ownInputs(binding, reserved, inputs)) await execution.putGeneration(refusalId(binding), refusal);
+    // Anything else under the reserved id is left to reconcile.
+    else return undefined;
     // Reported as final only once it reads back durable; a failed write stays the transient,
     // reconcilable failure, and the next reconcile decides again.
     return this.refused(binding);
   }
+  private ownInputs(
+    binding: z.infer<typeof BindingSchema>,
+    reserved: Material,
+    inputs: { runId: string; workflowId: string; workflowVersion: string },
+  ): boolean {
+    return (
+      inputs.runId === binding.runId &&
+      inputs.workflowId === reserved.workflow.id &&
+      inputs.workflowVersion === reserved.workflow.version
+    );
+  }
   /** The recorded final refusal for this admission's reserved run, if there is one. */
   private async refused(binding: z.infer<typeof BindingSchema>): Promise<DirectAdmissionResult | undefined> {
-    const inputs = await this.options.orchestrator.stores.execution.getInputs(binding.runId);
-    if (!inputs || inputs.workflowId !== REFUSED_WORKFLOW) return undefined;
-    const refusal = RefusalSchema.parse(inputs.vars);
+    const { execution } = this.options.orchestrator.stores;
+    const inputs = await execution.getInputs(binding.runId);
+    if (!inputs) return undefined;
+    // Read only while a fence stands: the tombstone itself, or the run's own inputs record.
+    const raw =
+      inputs.workflowId === REFUSED_WORKFLOW ? inputs.vars : await execution.getGeneration(refusalId(binding));
+    if (raw === undefined || raw === null) return undefined;
+    const refusal = RefusalSchema.parse(raw);
     return {
       state: "recoverable-failure",
       admissionId: binding.admissionId,

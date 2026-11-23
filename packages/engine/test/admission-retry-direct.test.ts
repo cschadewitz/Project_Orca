@@ -371,6 +371,65 @@ it("refuses a run whose ref moved after runs.admit checked it, finally, never ch
   expect(workspace.rootProvisioning).toMatchObject({ baseCommit: f.moved, refObject: f.moved });
 });
 
+it("refuses finally when the ref is found moved only when provisioning fetches it (#956)", async () => {
+  const f = await refFixture();
+  const provider = f.orc.workspaceProvider as GitWorktreeProvider;
+  const checkRef = provider.checkRef.bind(provider);
+  let checks = 0;
+  vi.spyOn(provider, "checkRef").mockImplementation(async (ref) => {
+    const object = await checkRef(ref);
+    // Every check before creation passes, creation's own included; the ref moves on the remote
+    // after that, so only the fetch while provisioning sees it.
+    if (++checks === 3) f.moveTo(f.moved);
+    return object;
+  });
+  const admitted = await f.service.admitRun(
+    { workflowId: "program", gitRef: "refs/heads/feature" },
+    { idempotencyKey: "ref-moved-at-fetch" },
+    f.authority,
+  );
+  const final = {
+    state: "recoverable-failure",
+    failure: { code: "GIT_REF_MOVED", message: expect.stringContaining("after it was checked") },
+  };
+  expect(admitted).toMatchObject({ state: "resolved", result: final });
+  expect(checks).toBe(3);
+  const reserved = (admitted as { result: { runId: string } }).result.runId;
+  // Creation got as far as the run's own private inputs record; no run was created.
+  expect(await f.orc.stores.execution.getInputs(reserved)).toMatchObject({ runId: reserved, workflowId: "program" });
+  expect(await f.orc.listRuns()).toEqual([]);
+  expect(f.start).toHaveBeenCalledTimes(1);
+  // Same-key reconciliation and replay answer the same final refusal, even with the ref back.
+  const reconcile = () =>
+    f.service.withRetryAuthority(f.authority, () => f.claims.reconcile(admitted.operationId, f.scope));
+  expect(await reconcile()).toMatchObject({ state: "resolved", result: final });
+  f.moveTo(f.original);
+  expect(await reconcile()).toMatchObject({ state: "resolved", result: final });
+  expect(
+    await f.service.admitRun(
+      { workflowId: "program", gitRef: "refs/heads/feature" },
+      { idempotencyKey: "ref-moved-at-fetch" },
+      f.authority,
+    ),
+  ).toMatchObject({ state: "resolved", result: final });
+  expect(f.start).toHaveBeenCalledTimes(1);
+  // A worker that does not read the refusal still never creates the run: the run's own inputs
+  // record is the existing fence.
+  const unaware = vi.spyOn(f.service as unknown as { refused(): Promise<unknown> }, "refused");
+  unaware.mockResolvedValue(undefined);
+  expect(await reconcile()).toMatchObject({
+    state: "resolved",
+    result: { state: "recoverable-failure", runId: reserved, failure: { code: "RUN_STATE" } },
+  });
+  unaware.mockRestore();
+  await expect(f.orc.startRun({ workflowId: "program", admissionRunId: reserved })).rejects.toMatchObject({
+    code: "RUN_STATE",
+  });
+  expect(await reconcile()).toMatchObject({ state: "resolved", result: final });
+  expect(f.start).toHaveBeenCalledTimes(1);
+  expect(await f.orc.listRuns()).toEqual([]);
+});
+
 it("recovers an admission interrupted before its workspace receipt from the pinned ref object (#883)", async () => {
   const f = await refFixture();
   // Interrupted after the admission material is reserved, before creation provisions anything.

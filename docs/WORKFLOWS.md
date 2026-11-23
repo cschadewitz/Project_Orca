@@ -586,7 +586,8 @@ admission with the failure code `GIT_REF_MOVED`, naming the ref (#956). That is 
 is ever created under that idempotency key, and replaying or reconciling it answers the same,
 even if the ref moves back. The delegating step fails at once with `DELEGATION_REFUSED`, reason
 `git-ref`, and a retry of the step admits again under a new key, from where the ref is now. The
-refusal is recorded as the reserved run's own write-once record, so an older worker started on
+same holds whether the move is seen before creation starts or only when provisioning fetches the
+ref. The refusal is kept with the reserved run's own write-once record, so an older worker started on
 the same store also never creates that run. If the worker cannot record the refusal, it answers
 the usual reconcilable failure instead, and the next reconcile decides again. The fetch leaves the rest of the
 repository alone: no remote-tracking refs, pruning, `FETCH_HEAD`, tags, submodules or automatic
