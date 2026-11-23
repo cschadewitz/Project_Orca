@@ -70,6 +70,47 @@ on work, and a busy app simply tries again later.
 
 An external daemon is never stopped or installed by this path, as for a manual restart.
 
+### Automatic go-back after a failed update
+
+Design for #566 part 2. Not built yet; this section is what the pull request implements.
+
+An update that cannot start its own daemon reinstalls the version it replaced, by itself, but
+only while nothing can have been lost: the new version never admitted work and never changed
+the store's format. Otherwise nothing goes back, as today: repair forward with a newer version.
+
+1. **Keep the previous installer (old app, before installing).** electron-builder's NSIS
+   installer leaves a copy of itself as `installer.exe` in the updater's cache directory
+   (`%LOCALAPPDATA%\<updaterCacheDirName>`, named in `resources/app-update.yml`). After the
+   exact stop and the store handoff, and before the installer runs, the updater copies that
+   file to `<userData>/update-rollback/installer.exe` and writes `rollback.json`: `from`,
+   `to`, the copy's SHA-512 and size, the store's format epoch, and the workspace's store
+   directory. The copy must carry `from` as its file version, and an Authenticode signature
+   at least as strong as the running executable's: same signer when the running app is
+   signed, unsigned allowed only when the running app is unsigned (test builds). If any of
+   this fails, the update still installs, just without a go-back.
+2. **Watch the first health check (new app, first start).** When `rollback.json` names this
+   version as `to` and is not yet settled, the first start arms a watch on its bundled daemon.
+   A verified hello from that daemon settles the record: the update worked, and the copy is
+   deleted. If the daemon exits, or gives no verified hello within 120 seconds, the app goes
+   back only if all of these hold:
+   - no verified hello was ever received, so admission never opened and no work was admitted;
+   - the store's format marker still records the epoch in `rollback.json` (no carryover ran);
+   - the copy's SHA-512, size, version and signature still check out;
+   - this record has not gone back before (one attempt per record, written before the
+     installer starts).
+3. **Go back.** The app runs the copy as the updater does (`--updated /S --force-run`) and
+   quits; the previous version starts again. It records `to` as a version it does not install
+   automatically, so the idle scheduler does not take the same update again. A person can
+   still install it by hand, and any newer version installs as usual.
+4. **Anything else** (a daemon that answered and then failed, a format that moved, a copy
+   that no longer verifies) leaves the record unsettled, shows the existing failure and keeps
+   today's behaviour. Nothing is deleted.
+
+Proof: unit tests for each condition, and a Windows job that packages N+1 with a fault that
+stops its bundled daemon before hello (set only by the test job's packaging, never by release
+workflows), installs N, lets the idle install take N+1, and checks that Windows reports N
+again and N is running.
+
 ### Windows failed-update recovery contract (#660, C5a-02)
 
 The user approved this implementation direction on 25 October 2026: treat an installer
