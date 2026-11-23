@@ -44,6 +44,7 @@ import { revisionOf, withPolicyLock } from "./permission-file.js";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   commandCatches,
+  unverifiedExecuteAllowed,
   commandTextOf,
   neutralPart,
   parseCommand,
@@ -108,9 +109,12 @@ export function decidePermission(
  *
  * A `command` rule (#702) is matched per simple command: an `execute` call's command is split
  * on `&&`, `;`, `|` and the like, each part is decided by the first rule that matches *it*,
- * and the call gets the strictest of those answers — one denied part denies the call, one
- * asked part asks. Every other kind of rule matches the call as a whole, as before, so a
- * policy with no `command` rule decides exactly as it did.
+ * and one denied part denies the call. Otherwise the call is asked: once any layer restricts
+ * commands by their words, no `execute` call is allowed without a person, whether the allow
+ * would have come from an older title rule, a kindless rule or the fallthrough, and whether or
+ * not the agent sent the command apart from its title (`unverifiedExecuteAllowed`, #702
+ * review). Every other kind of rule matches the call as a whole, as before, and a policy with
+ * no `command` rule decides exactly as it did.
  */
 function decideByRules(
   policy: PermissionPolicy,
@@ -141,9 +145,13 @@ function decideByRules(
     }
     return true;
   };
+  // Once commands are restricted by their words, no allow decides an `execute` (#702 review):
+  // skipping them lets a restriction later in the list still be reached.
+  const restricted = kind === "execute" && !unverifiedExecuteAllowed(policy);
   const decide = (part: CommandPart | undefined): PermissionDecision => {
     for (const rule of policy.rules) {
       const m = rule.match;
+      if (restricted && rule.decision === "allow") continue;
       if (!matchesCall(m)) continue;
       if (m.command !== undefined) {
         // A command is only ever an `execute`'s, and a part that is not there matches no rule.
@@ -157,14 +165,13 @@ function decideByRules(
     }
     return policy.default;
   };
-  if (kind !== "execute" || !policy.rules.some((r) => r.match.command !== undefined)) return decide(undefined);
+  if (!restricted) return decide(undefined);
+  // A policy with command rules: decide each part, take the strictest, and never allow. An
+  // allow from an older rule, a kindless rule or the fallthrough is unverified (#702 review).
   const text = commandTextOf(tc);
   const parts = text === undefined ? [] : parseCommand(text).parts.filter((p) => !neutralPart(p));
-  if (parts.length === 0) return decide(undefined);
-  const decisions = parts.map(decide);
-  if (decisions.includes("deny")) return "deny";
-  if (decisions.includes("ask")) return "ask";
-  return "allow";
+  const decisions = parts.length === 0 ? [decide(undefined)] : parts.map(decide);
+  return decisions.includes("deny") ? "deny" : "ask";
 }
 
 function pick(options: acp.PermissionOption[], kinds: acp.PermissionOptionKind[]): acp.PermissionOption | undefined {

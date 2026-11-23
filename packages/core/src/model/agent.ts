@@ -221,22 +221,55 @@ export const DEFAULT_PERMISSION_POLICY: PermissionPolicy = {
  * the only moment it is still knowable, so it is resolved at evaluation instead, by
  * `effectivePermissionPolicy`.
  */
-export const PermissionPolicySchema = z.object({
-  default: PermissionDecisionSchema.optional(),
-  rules: z
-    .array(PermissionRuleSchema)
-    .superRefine((rules, ctx) => {
-      rules.forEach((rule, i) => {
-        if (rule.decision === "allow" && rule.match.command !== undefined)
-          ctx.addIssue({
-            code: "custom",
-            path: [i, "match", "command"],
-            message: COMMAND_ALLOW_REFUSED,
-          });
-      });
-    })
-    .default([]),
-});
+export const PermissionPolicySchema = z
+  .object({
+    default: PermissionDecisionSchema.optional(),
+    rules: z
+      .array(PermissionRuleSchema)
+      .superRefine((rules, ctx) => {
+        rules.forEach((rule, i) => {
+          if (rule.decision === "allow" && rule.match.command !== undefined)
+            ctx.addIssue({
+              code: "custom",
+              path: [i, "match", "command"],
+              message: COMMAND_ALLOW_REFUSED,
+            });
+        });
+      })
+      .default([]),
+  })
+  .superRefine((policy, ctx) => {
+    // A policy that restricts commands by their words cannot also allow commands some other
+    // way: a legacy allow would win ahead of a restriction, or approve a command whose words
+    // were never seen (#702 review). Evaluation enforces the same (`unverifiedExecuteAllowed`);
+    // refusing here tells the person what to change.
+    if (!policy.rules.some((rule) => rule.match.command !== undefined)) return;
+    if (policy.default === "allow")
+      ctx.addIssue({ code: "custom", path: ["default"], message: COMMAND_POLICY_PERMISSIVE });
+    policy.rules.forEach((rule, i) => {
+      if (rule.decision === "allow" && (rule.match.kind === undefined || rule.match.kind === "execute"))
+        ctx.addIssue({ code: "custom", path: ["rules", i], message: COMMAND_POLICY_PERMISSIVE });
+    });
+  });
+
+/**
+ * Why a policy with `command` rules refuses `default: allow` and any allow that can match a
+ * shell command (#702 review). Set `default: ask` (or leave it unset), and give an allow rule a
+ * `kind` other than `execute`.
+ */
+export const COMMAND_POLICY_PERMISSIVE =
+  "a policy with command rules cannot also allow shell commands: set default to ask (or leave it unset) and give each allow rule a kind other than execute, so every command not denied is asked";
+
+/**
+ * Whether an `execute` call may be answered `allow` by this evaluated policy (#702 review).
+ * Untouched legacy policies, with no `command` rule anywhere, keep their behaviour. Once any
+ * layer restricts commands by their words, no `execute` call is allowed without a person: a
+ * title or word match proves nothing about what runs, so an allow from an older rule, a
+ * kindless rule or the fallthrough becomes an ask.
+ */
+export function unverifiedExecuteAllowed(policy: { rules: readonly PermissionRule[] }): boolean {
+  return !policy.rules.some((rule) => rule.match.command !== undefined);
+}
 
 /**
  * Why a `command` rule cannot `allow` (#702 review). Shell words are display text, not what

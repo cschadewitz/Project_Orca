@@ -222,7 +222,17 @@ changes, all on this file and its writer, with no second store:
   newlines, and a rule catches a part when the program appears by name and the rule's words
   follow in order with anything between, so `git push` catches `git -C repo push`,
   `sudo git push` and `bash -c "git push"`, and also `git log --grep push`. The call gets the
-  strictest answer any part gets; a `cd` part decides nothing. A sidecar holding a command
+  strictest answer any part gets; a `cd` part decides nothing. **Once any layer holds a
+  command rule, no `execute` call is allowed** (`unverifiedExecuteAllowed`): allow rules are
+  skipped for it, so a legacy title allow ahead of a restriction cannot win, and a call no
+  deny catches is asked, whether the allow would have come from a rule, a kindless rule or
+  `default: allow`, and whether or not the agent sent its command apart from the title. A
+  policy with no command rule anywhere decides as it did. In `orca.config.yaml` an agent
+  whose `permissions` hold a command rule must not also say `default: allow` or carry an
+  allow with no `kind` or `kind: execute`; such a config is refused with what to change
+  (`COMMAND_POLICY_PERMISSIVE`): set `default: ask` or leave it unset, and give each allow a
+  kind other than `execute`. A command rule in the sidecar, from "Always deny", turns the
+  same restriction on for that agent. A sidecar holding a command
   rule is version 3, and a config holding one must say `version: 2`, so 0.7.x refuses them.
   The "Always deny" review offers the exact command plus wider patterns (`npm run *`,
   `npm *`), each with its own preview ref, and says a family rule refuses the whole family.

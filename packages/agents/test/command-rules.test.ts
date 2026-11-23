@@ -88,15 +88,8 @@ describe("parsing a command into parts", () => {
 });
 
 describe("all git except push, and asking before npm publish", () => {
-  // A person who lets everything else through by default, and words the exceptions.
-  const p: PermissionPolicy = { default: "allow", rules: [deny("git push"), ask("npm publish")] };
+  const p = policy(deny("git push"), ask("npm publish"));
   const d = (title: string, rawInput?: unknown) => decidePermission(p, run(title, rawInput));
-
-  it("lets what no rule catches fall to the default", () => {
-    expect(d("npm test")).toBe("allow");
-    expect(d("git status")).toBe("allow");
-    expect(d("git -C repo log --oneline")).toBe("allow");
-  });
 
   it.each([
     "git push",
@@ -113,7 +106,7 @@ describe("all git except push, and asking before npm publish", () => {
     expect(d(title)).toBe("deny");
   });
 
-  it.each(["npm publish", "npm publish --tag next", "npm test && npm publish", "sudo npm publish", "env npm publish"])(
+  it.each(["npm publish", "npm publish --tag next", "npm test && npm publish", "sudo npm publish", "npm test"])(
     "asks for %s",
     (title) => {
       expect(d(title)).toBe("ask");
@@ -122,7 +115,7 @@ describe("all git except push, and asking before npm publish", () => {
 
   it("matches the command the agent will run, not the title it shows", () => {
     expect(d("npm test", { command: "git push" })).toBe("deny");
-    expect(d("Run command", { command: "npm test" })).toBe("allow");
+    expect(d("git push", { command: "npm test" })).toBe("ask");
     expect(d("Run command", { command: ["bash", "-lc", "git push"] })).toBe("deny");
   });
 
@@ -146,7 +139,72 @@ describe("all git except push, and asking before npm publish", () => {
       ...run("git push"),
       toolCall: { toolCallId: "t", title: "git push", kind: "read" },
     };
-    expect(decidePermission(p, req)).toBe("allow");
+    expect(decidePermission({ default: "allow", rules: [deny("git push")] }, req)).toBe("allow");
+  });
+});
+
+describe("a policy that restricts commands allows none (#702 review)", () => {
+  // An evaluated policy layers the config, the sidecar and the defaults, so a legacy allow can
+  // sit beside a command rule written elsewhere. None of them may approve a command.
+  const legacyAllow: PermissionRule = { match: { kind: "execute", titlePattern: "^npm " }, decision: "allow" };
+  const kindless: PermissionRule = { match: { titlePattern: "^npm " }, decision: "allow" };
+
+  it("asks where a legacy title allow comes before a command restriction", () => {
+    const mixed = policy(legacyAllow, deny("git push"));
+    expect(decidePermission(mixed, run("npm test"))).toBe("ask");
+    expect(decidePermission(mixed, run("npm test && rm -rf ~"))).toBe("ask");
+    // A deny still wins, wherever its part is.
+    expect(decidePermission(mixed, run("npm test && git push"))).toBe("deny");
+    // The legacy allow's own title is never proof either.
+    expect(decidePermission(policy(kindless, deny("git push")), run("npm test"))).toBe("ask");
+  });
+
+  it("asks where the fallthrough is allow", () => {
+    const open: PermissionPolicy = { default: "allow", rules: [deny("git push")] };
+    expect(decidePermission(open, run("ls"))).toBe("ask");
+    expect(decidePermission(open, run("git push"))).toBe("deny");
+  });
+
+  it("asks when the agent sent no command apart from its title, or none at all", () => {
+    const open: PermissionPolicy = { default: "allow", rules: [legacyAllow, deny("git push")] };
+    expect(decidePermission(open, run("npm test"))).toBe("ask");
+    expect(decidePermission(open, run("Run command"))).toBe("ask");
+    expect(decidePermission(open, run(""))).toBe("ask");
+    expect(decidePermission(open, run("Run command", { command: "npm test" }))).toBe("ask");
+  });
+
+  it("leaves every other kind of call to the policy as before", () => {
+    const open: PermissionPolicy = { default: "allow", rules: [deny("git push")] };
+    const req: acp.RequestPermissionRequest = {
+      ...run("Read a.ts"),
+      toolCall: { toolCallId: "t", title: "Read a.ts", kind: "read" },
+    };
+    expect(decidePermission(open, req)).toBe("allow");
+  });
+
+  it("refuses a config that pairs command rules with an allow for commands, and says what to change", () => {
+    const withRules = (rules: unknown[], extra: Record<string, unknown> = {}) =>
+      OrcaConfigSchema.safeParse({
+        version: 2,
+        agents: [{ id: "a", type: "acp", command: "agent", permissions: { rules, ...extra } }],
+      });
+    const restriction = { match: { kind: "execute", command: "git push" }, decision: "deny" };
+    for (const parsed of [
+      withRules([restriction], { default: "allow" }),
+      withRules([legacyAllow, restriction]),
+      withRules([kindless, restriction]),
+      withRules([restriction, { match: { kind: "execute" }, decision: "allow" }]),
+    ]) {
+      expect(parsed.success).toBe(false);
+      expect(JSON.stringify(parsed.error?.issues)).toContain("cannot also allow shell commands");
+    }
+    // What it needs instead: ask by default, and allows that name a kind other than execute.
+    expect(
+      withRules([restriction, { match: { kind: "read", scope: "workspace" }, decision: "allow" }], { default: "ask" })
+        .success,
+    ).toBe(true);
+    // An untouched legacy policy is still accepted as it was.
+    expect(withRules([legacyAllow], { default: "allow" }).success).toBe(true);
   });
 });
 
