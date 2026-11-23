@@ -19,6 +19,7 @@ import {
   openCodePolicyProblems,
   openCodeProfileDirProblems,
   openCodeProfileProblems,
+  openCodePathCustodyProblems,
   providerGuardFor,
   openCodeSlashCommand,
   withProviderGuards,
@@ -319,6 +320,25 @@ describe("the profile's own configuration directories", () => {
     await symlink(configPath, linked);
     const viaLink = { ...agent, env: { ...agent.env, OPENCODE_CONFIG: linked } };
     expect((await refusal(guard().prepare(options(viaLink)))).message).toMatch(/is a symbolic link/);
+  });
+
+  it("refuses a profile path that is not written in canonical form, before reading anything", async () => {
+    const { root, agent } = await profile();
+    for (const [name, value] of [
+      ["HOME", join(root, "home") + "/"],
+      ["HOME", `${root}/./home`],
+      ["XDG_CONFIG_HOME", `${root}/xdg/../xdg/config`],
+      ["OPENCODE_CONFIG", `${root}//opencode.isolated.json`],
+    ] as const) {
+      const spec = { ...agent, env: { ...agent.env, [name]: value } };
+      expect(openCodeProfileProblems(spec, {}, "local", "linux", "x64").join()).toMatch(
+        new RegExp(`${name} must be written in canonical form`),
+      );
+      expect((await refusal(guard().prepare(options(spec)))).message).toMatch(/canonical form/);
+    }
+    expect(await openCodePathCustodyProblems(`${root}/home/`, "HOME")).toEqual([
+      "HOME is not written in canonical form",
+    ]);
   });
 
   it("refuses a profile path with a link on it, or a directory on it others can change", async () => {

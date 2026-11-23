@@ -112,8 +112,9 @@ isolated profile, and says exactly what is missing (`CONFIG_INVALID`, `problems`
   differs from the checked ones, or whose image changed, is refused. A control variable that a
   secret fills is refused, since its value is only known at launch. Refusals name variables,
   never values.
-- `HOME`, `XDG_CONFIG_HOME` and `OPENCODE_CONFIG` must be canonical: no link anywhere on the
-  path, and every directory on it the user's or root's and closed to other writers (a
+- `HOME`, `XDG_CONFIG_HOME` and `OPENCODE_CONFIG` must be canonical: written without `.`,
+  `..`, `//` or a trailing `/` (so the path ORCA reads is the exact spelling OpenCode gets,
+  which the start then passes through unchanged), no link anywhere on the path, and every directory on it the user's or root's and closed to other writers (a
   root-owned sticky directory such as `/tmp` counts as closed).
   The config file and every entry of the profile directories must be the expected type, not a
   link, the user's own and not writable by others; a profile directory counts as empty only

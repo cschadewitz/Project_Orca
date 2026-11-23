@@ -367,6 +367,10 @@ export function openCodeProfileProblems(
       problems.push(
         `env: set ${variable} in the agent's env to an absolute path of the OpenCode profile's own, so the person's own OpenCode settings are not read`,
       );
+    // The path ORCA inspects is the exact spelling OpenCode receives: no `.`, `..`, `//` or
+    // trailing `/` that another resolution could read differently.
+    else if (value !== resolvePath(value))
+      problems.push(`env: ${variable} must be written in canonical form (no ".", "..", "//" or trailing "/")`);
   }
   if (literal.OPENCODE_PERMISSION === undefined)
     problems.push("env: set OPENCODE_PERMISSION in the agent's env (the last configuration layer OpenCode applies)");
@@ -561,7 +565,9 @@ export async function openCodePathCustodyProblems(path: string, what: string): P
   if (process.platform === "win32") return [];
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const on = `on the path to ${what}`;
-  let current = resolvePath(path);
+  // Only a canonical path is the path OpenCode opens; anything else is refused unread.
+  if (!isAbsolute(path) || path !== resolvePath(path)) return [`${what} is not written in canonical form`];
+  let current = path;
   let leaf = true;
   for (;;) {
     let info: Stats | undefined;
