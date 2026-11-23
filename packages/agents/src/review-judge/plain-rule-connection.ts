@@ -46,6 +46,8 @@ import {
 import {
   createPlainRuleProviderTransport,
   plainRuleProviderSenderOptions,
+  plainRuleProviderVersion,
+  resolvePlainRuleProvider,
   type PlainRuleProviderConfig,
   type ResolvedPlainRuleProvider,
 } from "./plain-rule-providers.js";
@@ -84,6 +86,35 @@ export interface PlainRuleDisclosureGrant extends PlainRuleDisclosureQuery {
   readonly grantRef: string;
   readonly revision: string;
   readonly expiresAt: string;
+}
+
+/**
+ * The disclosure query a judge prepared from `config` will ask for, or `undefined` when the config is incomplete, its
+ * provider invalid, or its destination not one the HTTPS sender accepts. An owner grants exactly this: the
+ * destination, the provider version (kind, model, the provider's request settings, prompt, output schema and API
+ * version) and the wire format. Preparation asks for the same query from the same normalized provider.
+ *
+ * The judge's own `limits` (per-call timeout and calls per day) are not part of it: they change neither what is sent
+ * nor where, so changing them needs no new grant. Every other change to the judge config does.
+ */
+export function plainRuleDisclosureQuery(config: unknown): PlainRuleDisclosureQuery | undefined {
+  const selected = selectConfig(config);
+  if (selected === undefined) return undefined;
+  const provider = resolvePlainRuleProvider(selected.provider);
+  if (provider === null) return undefined;
+  // The destination must pass the sender's endpoint rules before it can be granted, shown or audited. Nothing is
+  // sent: building the sender only validates.
+  const sender = createHttpsJudgeSender({
+    destination: selected.destination,
+    ...plainRuleProviderSenderOptions(provider.kind),
+  });
+  if (sender.status !== "ready" || sender.sender.destination !== selected.destination) return undefined;
+  return Object.freeze({
+    purpose: JUDGE_DISCLOSURE_PURPOSE,
+    destination: selected.destination,
+    providerVersion: plainRuleProviderVersion(provider),
+    requestSchema: PLAIN_RULE_REQUEST_SCHEMA,
+  });
 }
 
 /** Lookup only: it can neither create nor widen a grant. Null means no approved grant. */

@@ -8,6 +8,7 @@
       "@orca/core": ["./packages/core/src/index.ts"],
       "@orca/core/schemas": ["./packages/core/src/schemas.ts"],
       "@orca/store": ["./packages/store/src/index.ts"],
+      "@orca/agents/review-judge": ["./packages/agents/src/review-judge/index.ts"],
       "@orca/agents": ["./packages/agents/src/index.ts"],
       "@orca/engine": ["./packages/engine/src/index.ts"],
       "@orca/testing/child-bundle": ["./packages/testing/src/child-bundle.ts"],

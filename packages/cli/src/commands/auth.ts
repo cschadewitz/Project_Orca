@@ -13,8 +13,11 @@ import {
   SecretGrantSchema,
   type CapabilityGrant,
   CapabilityGrantSchema,
+  type DisclosureGrant,
+  DisclosureGrantSchema,
 } from "@orca/daemon";
 import { isAbsoluteCommand, mcpServerDefinitionDigest, secretHostBinding, secretSourceBinding } from "@orca/agents";
+import { plainRuleDisclosureQuery } from "@orca/agents/review-judge";
 import { skillDigest } from "@orca/engine";
 import { loadConfig } from "../bootstrap.js";
 import type { CommandContext } from "./index.js";
@@ -77,6 +80,26 @@ function secretGrant(ctx: CommandContext, config: OrcaConfig): SecretGrant | und
     const key = `${g.secret}@${g.host}`;
     return !seen.has(key) && (seen.add(key), true);
   });
+}
+
+/**
+ * `--judge-disclosure`: the owner's approval that this credential's runs may send action evidence
+ * to the plain-rule review judge configured now (#701). The grant is exactly the disclosure the
+ * judge asks for: `review.plainRules.judge`'s destination (which must pass the sender's endpoint
+ * rules), provider version (kind, model, the provider's request settings, prompt, output schema and
+ * API version) and wire format. Changing any of those needs a new grant; the judge's own `limits`
+ * (timeout, calls per day) change neither what is sent nor where, so they do not. No preset
+ * includes it.
+ */
+function disclosureGrant(ctx: CommandContext, config: OrcaConfig): DisclosureGrant | undefined {
+  if (!ctx.flags["judge-disclosure"]) return undefined;
+  const query = plainRuleDisclosureQuery(config.review?.plainRules?.judge);
+  if (!query)
+    throw new OrcaError(
+      "CONFIG_INVALID",
+      "--judge-disclosure needs a complete, valid review.plainRules.judge in the config (provider, credential, and an https destination the judge sender accepts)",
+    );
+  return DisclosureGrantSchema.parse([{ ...query }]);
 }
 
 /**
@@ -203,6 +226,7 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
         throw new OrcaError("CONFIG_INVALID", "--workflow-scope requires workflow ids; omit it for all workflows");
       const secrets = secretGrant(ctx, config);
       const capabilities = capabilityGrant(ctx, config, configDir);
+      const disclosures = disclosureGrant(ctx, config);
       // A grant is only usable with `secrets.use` or `capabilities.use`, so naming one adds
       // that permission to the preset's.
       const added = [
@@ -214,6 +238,7 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
         preset,
         ...(secrets !== undefined ? { secrets } : {}),
         ...(capabilities !== undefined ? { capabilities } : {}),
+        ...(disclosures !== undefined ? { disclosures } : {}),
         ...(added.length ? { permissions: [...new Set([...PRESETS[preset].permissions, ...added])] } : {}),
         scope: { workflows: workflowIds ? [...new Set(workflowIds)] : PRESETS[preset].scope.workflows, runs },
         label: ctx.flags.label as string | undefined,
@@ -234,7 +259,7 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
               ? "expired"
               : "active";
           ctx.out(
-            `${c.id} ${c.principal} ${state} workflows=${c.scope.workflows === "*" ? "*" : c.scope.workflows.join(",")} runs=${c.scope.runs}${c.secrets === undefined ? "" : ` secrets=${c.secrets === "*" ? "*" : c.secrets.map((g) => `${g.secret}(${g.provider})@${g.host}`).join(",")}`}${c.capabilities === undefined ? "" : ` capabilities=${c.capabilities === "*" ? "mcpServer:*" : c.capabilities.map(grantLabel).join(",")}`}${c.expiresAt ? ` expires=${c.expiresAt}` : ""}${c.label ? ` label=${c.label}` : ""}`,
+            `${c.id} ${c.principal} ${state} workflows=${c.scope.workflows === "*" ? "*" : c.scope.workflows.join(",")} runs=${c.scope.runs}${c.secrets === undefined ? "" : ` secrets=${c.secrets === "*" ? "*" : c.secrets.map((g) => `${g.secret}(${g.provider})@${g.host}`).join(",")}`}${c.capabilities === undefined ? "" : ` capabilities=${c.capabilities === "*" ? "mcpServer:*" : c.capabilities.map(grantLabel).join(",")}`}${c.disclosures === undefined ? "" : ` judge-disclosures=${c.disclosures.map((d) => d.destination).join(",")}`}${c.expiresAt ? ` expires=${c.expiresAt}` : ""}${c.label ? ` label=${c.label}` : ""}`,
           );
         }
       return 0;

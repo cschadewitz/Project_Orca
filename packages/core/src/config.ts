@@ -119,6 +119,16 @@ export const OrcaConfigSchema = z
      * name one as `{ secret: <id> }`; the value is read on that host when it is needed.
      */
     secrets: SecretsConfigSchema.optional(),
+    /**
+     * Review judges (#701). `plainRules.judge` configures the hosted judge for plain-language
+     * permission rules; it is validated where it is used (`@orca/agents`), and nothing here turns
+     * a judge on.
+     */
+    review: z
+      .object({
+        plainRules: z.object({ judge: z.unknown().optional() }).optional(),
+      })
+      .optional(),
     hosts: z.array(HostSpecSchema).default([{ id: LOCAL_HOST_ID, type: "local" }]),
     agents: z.array(AgentSpecSchema).default([]),
     /** Other ORCA daemons that `type: orca-daemon` agents delegate steps to (#883). */

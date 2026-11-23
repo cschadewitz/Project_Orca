@@ -11,5 +11,6 @@ export * from "./operations.js";
 export * from "./audit.js";
 export * from "./guard.js";
 export * from "./secret-use.js";
+export * from "./judge-disclosure.js";
 export * from "./transport.js";
 export * from "./bootstrap.js";
