@@ -95,7 +95,7 @@ envelope, and the person is asked otherwise (`outside-envelope`):
 - as a second, lexical line behind that check, every location is workspace-relative (not absolute,
   no `..`, no home or drive prefix).
 
-The check is `verifyPlainRuleTargets` (`review-judge/plain-rule-targets.ts`). It verifies only
+The check is `verifyPlainRuleTargets` (`packages/agents/src/verified-targets.ts`, beside `permissions.ts` so #703's fs gate can reuse it). It verifies only
 individual files, never a directory, because a directory root does not verify what a recursive read
 or search under it would reach (protected paths, links out). A trusted traversal that verifies every
 effective target is a later option; until then a search over a directory goes to the person. For

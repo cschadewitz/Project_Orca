@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createPlainRuleJudge, type PlainRuleJudgeInput } from "../src/review-judge/plain-rule.js";
-import { verifyPlainRuleTargets, type PlainRuleTargetIo } from "../src/review-judge/plain-rule-targets.js";
+import { verifyPlainRuleTargets, type PlainRuleTargetIo } from "../src/verified-targets.js";
 import type { ProtectedPaths } from "../src/permissions.js";
 
 let base: string;

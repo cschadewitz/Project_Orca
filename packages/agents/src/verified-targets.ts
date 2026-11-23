@@ -28,7 +28,7 @@
  */
 import { realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, sep } from "node:path";
-import { protectedPathFor, type ProtectedPaths } from "../permissions.js";
+import { protectedPathFor, type ProtectedPaths } from "./permissions.js";
 
 export type PlainRuleTargetRefusal =
   | "kind"
