@@ -55,6 +55,10 @@ actually does (section 3, "Later stage").
   which older readers refuse instead of silently dropping the `judge` field and turning the rule
   into a plain allow. Hand-written ones go in the
   config. Both are ORCA-protected files, so an agent cannot write itself a rule.
+- **Built (#702):** config judged rules and the evaluation slot (`packages/agents/src/judged-lane.ts`).
+  A rule's id is its place in the config (`config:N`); the decision record carries the verdict,
+  the id and `judgeConfigRef`, and keeps the revision in memory only. Saved (sidecar v4) judged
+  rules are not readable yet.
 - #702 owns the schema and the evaluation slot in `permissions.ts`. This thread owns the judge
   (`judgePermission`, section 5).
 

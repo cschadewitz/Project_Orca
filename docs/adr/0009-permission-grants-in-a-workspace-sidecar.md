@@ -166,6 +166,23 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   execution record. This is the
   client-owned ACP file path only: an agent's native tools and its own MCP connections do not
   pass through it, and keeping an agent on this path is an operating-system boundary's job.
+- **A plain-language rule allows one call at most, inside hard boundaries (#702).** A config
+  rule may carry `judge: { criterion }` in place of a `decision`; a rule with both, or a judged
+  rule that matches a `command`, is refused. The loader carries judged rules apart from the
+  typed ones (`PermissionPolicy.judged`, named `config:N` by their place as written, with a
+  content revision), so everything that decides synchronously, the file gate and the hooks
+  included, decides exactly as if they were not there. Only a session given a judge consults
+  them (`judged-lane.ts`), and only for the agent's own asks: after the typed rules answer
+  `ask` or `deny`, and only when no typed `deny` or `ask` rule matches the call anywhere, no
+  sidecar was unreadable, the call is a `read` or `search` that is not command-like and
+  claims no MCP tool (#1021), and ORCA
+  itself verified every target as a regular file inside the workspace and outside every
+  protected path (`verifyPlainRuleTargets`). A judge's `covered` becomes allow once, never
+  allow always; the policy is read again first and the rule must still be there unchanged, with
+  no new restriction and the targets verified again. Every other outcome leaves the typed
+  answer, and a turn that ended meanwhile is answered as expired. The event records the
+  verdict, the rule's id and the judge's config ref, not the rule's revision. Nothing wires a
+  judge yet; saved judged rules (a version-4 sidecar) come with the app's save method.
 - **Each decision names what decided it (#702).** `explainPermission` is the one evaluation
   and `decidePermission` its decision: it reports whether ORCA's own files, a rule, the
   fallthrough or the command restriction decided, and for a rule its index. The loader records

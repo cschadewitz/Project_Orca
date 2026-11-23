@@ -262,11 +262,20 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
        */
       rule: z
         .object({
-          basis: z.enum(["protected", "rule", "default", "command-restricted", "unverified-identity"]),
+          basis: z.enum(["protected", "rule", "default", "command-restricted", "unverified-identity", "judged"]),
           layer: z.enum(["config", "sidecar", "default"]).optional(),
           index: z.number().int().nonnegative().optional(),
           file: z.number().int().nonnegative().optional(),
           capped: z.boolean().optional(),
+          /** What the judged lane said, when it looked (#702): never the rule's content digest. */
+          judge: z
+            .object({
+              verdict: z.string(),
+              ruleId: z.string().optional(),
+              reasonCode: z.string().optional(),
+              judgeConfigRef: z.string().optional(),
+            })
+            .optional(),
         })
         .optional(),
       /** Explicit standing-rule Save acceptance; protected entry is never public or a callback answer. */

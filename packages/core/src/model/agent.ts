@@ -163,6 +163,58 @@ export const PermissionRuleSchema = z.object({
 });
 export type PermissionRule = z.infer<typeof PermissionRuleSchema>;
 
+/** Longest criterion a judged rule may carry, in characters. */
+export const JUDGED_CRITERION_MAX = 2_048;
+
+/**
+ * A plain-language rule (#702, judged by #701): a deterministic `match` gate and a `judge`
+ * criterion in place of a fixed `decision`. A judge decides whether the criterion covers a
+ * call the match holds for, and the only thing it can do is allow that one call once; on any
+ * other answer the next rule, or the default, decides. It never denies, and it is never asked
+ * when any `deny` or `ask` rule anywhere in the policy matches the call, or when the call is
+ * outside the safe envelope (`plain-language-rules.md` in `docs/preparation/review-judge-701`).
+ *
+ * Hand-written in `agents[].permissions.rules` for now; saved ones go in a version-4 sidecar
+ * later. A release that does not know `judge` refuses the rule (no `decision`) rather than
+ * reading it as something else.
+ */
+export const JudgedPermissionRuleSchema = z
+  .strictObject({
+    match: PermissionRuleSchema.shape.match,
+    judge: z.strictObject({
+      criterion: z
+        .string()
+        .trim()
+        .min(1, { message: "a judged rule needs a criterion" })
+        .max(JUDGED_CRITERION_MAX, { message: `a criterion is at most ${JUDGED_CRITERION_MAX} characters` }),
+    }),
+  })
+  .refine((rule) => rule.match.command === undefined, {
+    // Commands need verified effect evidence before a judge may allow one (#703).
+    message: "a judged rule cannot match a command yet: write a typed deny or ask rule instead",
+    path: ["match", "command"],
+  });
+export type JudgedPermissionRule = z.infer<typeof JudgedPermissionRuleSchema>;
+
+/** A configured rule: a typed one, or a judged one. */
+export type ConfiguredPermissionRule = PermissionRule | JudgedPermissionRule;
+
+/** Whether a configured rule is judged (#702). */
+export function isJudgedPermissionRule(rule: ConfiguredPermissionRule): rule is JudgedPermissionRule {
+  return "judge" in rule && rule.judge !== undefined;
+}
+
+/**
+ * A configured rule as the config parses it: a typed rule that names no `judge`, or a judged
+ * rule that names no `decision`. A rule with both is refused rather than read as either.
+ */
+const ConfiguredPermissionRuleSchema = z.union([
+  PermissionRuleSchema.extend({
+    judge: z.undefined({ error: "a rule has a `decision` or a `judge`, not both" }).optional(),
+  }),
+  JudgedPermissionRuleSchema,
+]);
+
 /**
  * What an agent may do when nobody said — the policy for an agent with no `permissions:`
  * block, or one that leaves `default:` unset (#140).
@@ -233,10 +285,10 @@ export const PermissionPolicySchema = z
   .object({
     default: PermissionDecisionSchema.optional(),
     rules: z
-      .array(PermissionRuleSchema)
+      .array(ConfiguredPermissionRuleSchema)
       .superRefine((rules, ctx) => {
         rules.forEach((rule, i) => {
-          if (rule.decision === "allow" && rule.match.command !== undefined)
+          if (!isJudgedPermissionRule(rule) && rule.decision === "allow" && rule.match.command !== undefined)
             ctx.addIssue({
               code: "custom",
               path: [i, "match", "command"],
@@ -255,6 +307,7 @@ export const PermissionPolicySchema = z
     if (policy.default === "allow")
       ctx.addIssue({ code: "custom", path: ["default"], message: COMMAND_POLICY_PERMISSIVE });
     policy.rules.forEach((rule, i) => {
+      if (isJudgedPermissionRule(rule)) return;
       if (rule.decision === "allow" && (rule.match.kind === undefined || rule.match.kind === "execute"))
         ctx.addIssue({ code: "custom", path: ["rules", i], message: COMMAND_POLICY_PERMISSIVE });
     });
@@ -297,7 +350,11 @@ export const COMMAND_ALLOW_REFUSED =
  * A policy as written: `default` may be absent, meaning nobody chose a fallthrough. This is
  * what `agents[].permissions` parses to and what `config.set` round-trips.
  */
-export type ConfiguredPermissionPolicy = { default?: PermissionDecision | undefined; rules: PermissionRule[] };
+export type ConfiguredPermissionPolicy = {
+  default?: PermissionDecision | undefined;
+  /** Typed and judged rules, in the order written (#702). */
+  rules: ConfiguredPermissionRule[];
+};
 
 /**
  * A policy as *evaluated*: every layer concatenated and the fallthrough decided.
@@ -317,6 +374,25 @@ export type PermissionPolicy = {
    * decision is then recorded without its rule's origin rather than with a wrong one.
    */
   origins?: PermissionRuleOrigin[] | undefined;
+  /**
+   * The judged rules (#702), apart from `rules`: nothing that decides synchronously reads
+   * them, so a caller that does not know them decides exactly as if they were not there, which
+   * is never more permissive. Only the judged lane (`decideWithJudge` in `@orca/agents`) uses
+   * them, and only ever to allow one call once. Where they sit among the typed rules does not
+   * change any outcome: a typed deny or ask anywhere closes the lane, and a typed allow allows
+   * anyway.
+   */
+  judged?: JudgedPolicyRule[] | undefined;
+};
+
+/** A judged rule as the evaluated policy carries it (#702). */
+export type JudgedPolicyRule = {
+  match: PermissionRule["match"];
+  criterion: string;
+  /** Names the rule in its layer, such as `config:3`: the index as written, typed rules counted. */
+  ruleId: string;
+  /** The sha256 of the rule's canonical content: an edit makes it a different rule. */
+  ruleRevision: string;
 };
 
 /**
@@ -345,15 +421,33 @@ export type PermissionRuleOrigin = {
  * - `command-restricted`: commands are restricted by their words and nothing denied it, so
  *   it is asked whatever an allow would have said;
  * - `unverified-identity`: the call claims an MCP tool ORCA cannot verify (#1021) and nothing
- *   denied or asked it, so it is asked whatever an allow would have said.
+ *   denied or asked it, so it is asked whatever an allow would have said;
+ * - `judged`: a judged rule's criterion covered the call, which is allowed once (#702).
  */
-export type PermissionBasis = "protected" | "rule" | "default" | "command-restricted" | "unverified-identity";
+export type PermissionBasis =
+  "protected" | "rule" | "default" | "command-restricted" | "unverified-identity" | "judged";
+
+/**
+ * What the judged lane said about a call (#702). `verdict` is the judge's
+ * (`PlainRuleVerdict` in `@orca/agents`), or the lane's own refusal before any call. With an
+ * allow, `ruleId` and `ruleRevision` name the rule that allowed.
+ */
+export type JudgedDecision = {
+  verdict: string;
+  ruleId?: string | undefined;
+  ruleRevision?: string | undefined;
+  reasonCode?: string | undefined;
+  /** Which judge, schema and limits decided; absent when no judge was called. */
+  judgeConfigRef?: string | undefined;
+};
 
 export type PermissionExplanation = {
   decision: PermissionDecision;
   basis: PermissionBasis;
   ruleIndex?: number | undefined;
   origin?: PermissionRuleOrigin | undefined;
+  /** Set when the judged lane looked at the call, whatever it decided. */
+  judged?: JudgedDecision | undefined;
 };
 
 /* -------------------------------------------------------------------------- *
@@ -522,7 +616,8 @@ export function layerPermissionPolicies(
 ): PermissionPolicy {
   const rules: PermissionRule[] = [];
   const push = (r: PermissionRule) => rules.push({ match: { ...r.match }, decision: r.decision });
-  for (const rule of configured.rules) push(rule);
+  // Judged rules are not typed rules: the loader carries them apart (`PermissionPolicy.judged`).
+  for (const rule of configured.rules) if (!isJudgedPermissionRule(rule)) push(rule);
   for (const overlay of overlays) for (const rule of overlay ?? []) push(rule);
   return { default: configured.default ?? DEFAULT_PERMISSION_POLICY.default, rules };
 }

@@ -36,6 +36,8 @@ import {
   type AuthorizeSecretUse,
 } from "./secrets.js";
 import { explainFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
+import { judgedLane } from "./judged-lane.js";
+import type { JudgePermission } from "./review-judge/plain-rule.js";
 import { processCleanup } from "./process-cleanup.js";
 import * as acpUnstable from "@agentclientprotocol/sdk/unstable";
 import { createMcpRelay, type McpRelay, type McpRelayCall, type McpRelayDispatch } from "./mcp-relay.js";
@@ -164,6 +166,13 @@ export interface OpenSessionOptions {
    * `makeSessionFactory`; omitted, nothing is protected beyond the policy.
    */
   protectedPaths?: ProtectedPaths;
+  /**
+   * The judge for this agent's plain-language rules (#702, #701). Omitted, judged rules are
+   * not consulted and the typed rules decide alone; nothing wires one yet, so the lane is off
+   * until a setting turns it on. Only the agent's own permission asks reach it: ORCA's file
+   * callbacks are decided by the typed rules.
+   */
+  judgePermission?: JudgePermission;
   /**
    * Each decision, with what decided it (#702): the basis and, when the rule's origin is
    * known, its layer, index and sidecar revision. `rule` is absent where no policy was read.
@@ -320,6 +329,8 @@ async function openPlanned(
         });
       },
     );
+  /** The judged lane, when this session has a judge (#702): re-reads the policy after a verdict. */
+  const judged = opts.judgePermission ? judgedLane({ judge: opts.judgePermission, reload: policyForAsk }) : undefined;
 
   /** Rules ORCA writes are workspace-relative; ORCA's own files go ahead of every rule (C4-01). */
   const evalScope = {
@@ -632,6 +643,7 @@ async function openPlanned(
         // of them could ever match the absolute paths an agent reports (ADR 0009).
         // ORCA's own files go ahead of every rule, so no policy can open them (C4-01).
         scope: evalScope,
+        ...(judged ? { judged } : {}),
       });
       opts.onPermission?.({
         ...(ctx.params.toolCall.toolCallId ? { toolCallId: ctx.params.toolCall.toolCallId } : {}),
