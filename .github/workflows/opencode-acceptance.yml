@@ -33,7 +33,7 @@ jobs:
         include:
           - runner: ubuntu-24.04
             package: opencode-linux-x64
-          - runner: macos-14
+          - runner: macos-15
             package: opencode-darwin-arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
