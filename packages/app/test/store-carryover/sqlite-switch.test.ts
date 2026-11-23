@@ -8,7 +8,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { enterFirstRunWriter } from "@orca/protocol/first-run-fence";
-import { recordedStoreBackend, SQLITE_SWITCH_DIR } from "@orca/store";
+import { recordedStoreBackend, SQLITE_SWITCH_DIR, StoreFormatError } from "@orca/store";
 import { desktopSqliteSwitch } from "../../../cli/src/desktop-sqlite-switch.js";
 import { OWNERSHIP_DIRECTORY, reserveFirstRunOwnership } from "../../src/main/first-run/ownership.js";
 import {
@@ -52,23 +52,51 @@ it.runIf(process.platform !== "win32")(
   30000,
 );
 
+const reserveAgain = (path: string) => mkdirSync(join(path, OWNERSHIP_DIRECTORY, nextAttempt(path)), { mode: 0o700 });
+
 it.runIf(process.platform !== "win32")(
-  "undoes everything when the fence is lost before the marker",
+  "undoes everything and aborts the launch when the fence is lost before the marker",
   async () => {
     const { path, store, hold } = await appWorkspace();
     const before = await contents(store);
-    // Another launch reserves the workspace while the legacy fence is in: this writer is no longer
-    // the journal's latest, so it must not publish the switch.
-    const outcome = await desktopSqliteSwitch(store, hold, "0.8.0", {
-      beforeMarker: async () => {
-        mkdirSync(join(path, OWNERSHIP_DIRECTORY, nextAttempt(path)), { mode: 0o700 });
-      },
-    });
-    expect(outcome).toMatchObject({ status: "refused", reason: "FENCE_LOST" });
+    // Another launch reserves the workspace while the legacy fence is in: this writer is no
+    // longer the journal's latest, so it must neither publish the switch nor open the store.
+    await expect(
+      desktopSqliteSwitch(store, hold, "0.8.0", { beforeMarker: async () => reserveAgain(path) }),
+    ).rejects.toMatchObject({ code: "STORE_FORMAT", details: expect.objectContaining({ reason: "FENCE_LOST" }) });
     expect(hold.check()).toBe(false);
     expect(await contents(store)).toEqual(before);
     expect(recordedStoreBackend(store)).toBe("file");
     expect(await readdir(store)).not.toContain(SQLITE_SWITCH_DIR);
+  },
+  30000,
+);
+
+it.runIf(process.platform !== "win32")(
+  "starts on files after a refusal only while the launch still holds the fence",
+  async () => {
+    const busy = () => {
+      throw new StoreFormatError("BUSY", "a write landed", "x");
+    };
+    // Still the writer: the refusal is an outcome, and the daemon goes on on files.
+    const kept = await appWorkspace();
+    expect(
+      await desktopSqliteSwitch(kept.store, kept.hold, "0.8.0", { beforeMarker: async () => busy() }),
+    ).toMatchObject({ status: "refused", reason: "BUSY" });
+    expect(recordedStoreBackend(kept.store)).toBe("file");
+    // No longer the writer when refused: rolled back, and the launch is aborted.
+    const lost = await appWorkspace();
+    const before = await contents(lost.store);
+    await expect(
+      desktopSqliteSwitch(lost.store, lost.hold, "0.8.0", {
+        afterFenceStep: async () => {
+          reserveAgain(lost.path);
+          busy();
+        },
+      }),
+    ).rejects.toMatchObject({ details: expect.objectContaining({ reason: "FENCE_LOST" }) });
+    expect(await contents(lost.store)).toEqual(before);
+    expect(recordedStoreBackend(lost.store)).toBe("file");
   },
   30000,
 );

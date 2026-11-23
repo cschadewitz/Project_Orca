@@ -79,8 +79,9 @@ describe("legacy fence (#339)", () => {
   });
 
   it("switches under a writer fence only while it holds, and undoes everything once it is lost", async () => {
-    // The fence is checked before anything changes, before the journal, and before the marker.
-    for (const lostAfter of [0, 1, 2]) {
+    // The fence is checked before anything changes, before the journal, before the marker is
+    // staged, and at its rename (after the temporary marker was written and flushed).
+    for (const lostAfter of [0, 1, 2, 3]) {
       const dir = await populated();
       const before = await contents(dir);
       let checks = 0;
@@ -92,6 +93,11 @@ describe("legacy fence (#339)", () => {
       expect(await contents(dir), String(lostAfter)).toEqual(before);
       expect(recordedStoreBackend(dir)).toBe("file");
       expect(await readdir(dir)).not.toContain(SQLITE_SWITCH_DIR);
+      // No temporary marker left behind either.
+      expect(
+        (await readdir(dir)).filter((name) => name.endsWith(".tmp")),
+        String(lostAfter),
+      ).toEqual([]);
     }
     const dir = await populated();
     expect(await switchStoreToSqlite(dir, { appVersion: "0.8.0", fence: { check: () => true } })).toMatchObject({

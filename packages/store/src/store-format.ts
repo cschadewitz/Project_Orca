@@ -600,9 +600,9 @@ export interface SwitchToSqliteOptions {
   copyOf?: { storeDir: string; signature: string };
   /**
    * The caller holds the store's exclusive writer fence (the desktop app's daemon, whose fence
-   * every ORCA that may write the app's workspace must hold first): checked before anything is
-   * changed, before the journal, and just before the marker. Once it no longer holds, the switch
-   * is refused (`FENCE_LOST`) and undone, exactly as any other refusal.
+   * every supported ORCA that may write the app's workspace must hold first): checked before
+   * anything is changed, before the journal, before the marker is staged, and at the marker's
+   * rename. Once it no longer holds, the switch is refused (`FENCE_LOST`) and undone.
    */
   fence?: StoreWriteFence;
   /** Injected for tests: runs after the import and its verify, before the last checks. */
@@ -791,7 +791,8 @@ async function switchLocked(
         options.appVersion,
         now,
         { backup, sqliteId, convertedFrom },
-        undefined,
+        // Checked again at the rename itself, after the temporary marker is written and flushed.
+        holdsFence,
         SQLITE_STORE_FORMAT_EPOCH,
         options.afterMarkerRename,
       );

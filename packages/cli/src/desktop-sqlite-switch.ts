@@ -5,10 +5,12 @@
  * In a workspace in general, an in-place switch cannot keep out a released ORCA that is already
  * running (an idle daemon, a command between two writes), so the CLI never offers one and
  * converts into a new store instead (`orca store sqlite convert`). The app's own workspaces are
- * different: every ORCA that may write one (0.7.0 and later; the app's workspaces did not exist
- * before) must first hold the workspace's kernel-lifetime writer fence with a launch the app
+ * different: every supported ORCA that may write one (0.7.0 and later, the versions that know app
+ * workspaces) must first hold the workspace's kernel-lifetime writer fence with a launch the app
  * granted, and only one writer holds it at a time. So the daemon holding that fence knows no
- * other ORCA writes the store, and the switch runs under it, checked throughout. The app's
+ * other supported ORCA writes the store, and the switch runs under it, checked throughout. An
+ * ORCA from before 0.7 pointed at an app workspace by hand is outside what is supported: the
+ * legacy fence turns it away if it starts after the switch, but one already running is not seen. The app's
  * layout (its store is always `.orca`, its config is pinned by its ownership claim) stays as it
  * is. Windows stays refused (#947).
  */
@@ -26,8 +28,10 @@ export type DesktopSqliteSwitchOutcome =
 
 /**
  * Switch `storeDir` to SQLite under `writer`'s fence, or refuse and leave it on files. A refusal
- * is an outcome, not an error: the daemon goes on starting on files. Anything else (a failed
- * write) is thrown, and the switch's journal makes the next start finish or undo it.
+ * while this launch still holds the fence is an outcome, not an error: the daemon goes on
+ * starting on files. A lost fence is thrown (`FENCE_LOST`, after the switch was undone): this
+ * launch is no longer the workspace's writer and must not open the store at all. Anything else
+ * (a failed write) is thrown too, and the switch's journal makes the next start finish or undo it.
  */
 export async function desktopSqliteSwitch(
   storeDir: string,
@@ -52,8 +56,14 @@ export async function desktopSqliteSwitch(
     });
     return { status: outcome.status };
   } catch (error) {
-    if (error instanceof StoreFormatError && error.reason !== "INTERRUPTED")
-      return { status: "refused", reason: error.reason, message: error.message };
-    throw error;
+    if (!(error instanceof StoreFormatError) || error.reason === "INTERRUPTED") throw error;
+    if (error.reason === "FENCE_LOST") throw error;
+    if (!writer.check())
+      throw new StoreFormatError(
+        "FENCE_LOST",
+        `This ORCA no longer provably holds the only write access to ${storeDir}, so it does not open the store. The switch to SQLite was refused (${error.reason}) and the store stays on files. Start ORCA again.`,
+        storeDir,
+      );
+    return { status: "refused", reason: error.reason, message: error.message };
   }
 }
