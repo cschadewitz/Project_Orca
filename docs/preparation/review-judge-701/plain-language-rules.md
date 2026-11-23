@@ -405,7 +405,29 @@ On each call:
     `daemonJudgeBudget` reports `durable: false` (and `durableBudget: false`), which activation
     refuses. Only a reviewed daemon integration that enforces those prerequisites at its
     construction boundary may present a budget as durable. `memoryJudgeBudget` is for tests and is
-    not durable either. Nothing in this step wires the judge into activation;
+    not durable either. Nothing in this step wires the judge into activation.
+  - Qualified (`qualifiedJudgeBudget`, `packages/daemon/src/judge-budget.ts`): the daemon's one
+    budget that may report `durable: true`. It keeps the budget in the store and chooses the anchor
+    directory itself, never from config: a per-user directory, one per workspace identity
+    (`$XDG_STATE_HOME` or `~/.local/state` on Linux, `~/Library/Application Support` on macOS, then
+    `orca-judge-budget-anchors/<workspace id>`), created owner-only and refused if it is a link, not
+    the daemon user's, or open to others. Both directories are resolved to real paths and their
+    device and inode compared up to the root, so no link, bind mount or second name can put the
+    anchor inside the store or the store inside the anchor. The anchor must also lie outside every
+    restore ORCA supports, all of which write inside the store or the store converted beside it
+    (`supportedRestoreRoots`: carry-forward and its `format-backups/`, the SQLite switch back,
+    `orca store sqlite restore`, workspace identity repair, `orca store sqlite convert` into
+    `<store>-sqlite`). Before every reservation both directories, and their `review-judge`
+    subdirectories, must still be the same directories and not links. The two may share a file
+    system: restoring a whole disk or home directory that holds both is the coordinated rollback
+    above, and is not covered. The owner creates the budget with `orca judge budget init` (that UTC
+    day counts as spent), checks it with `orca judge budget status`, and replaces one refused after
+    a restore with `orca judge budget reset` (the new one also starts with that day spent). The CLI
+    does not change the desktop app's own store; that step comes with the app UI.
+  - **Windows has no judge in 0.8.0.** Node cannot sync a directory on Windows, so the replacement
+    protocol is not verified there, and `qualifiedJudgeBudget` answers `unavailable` (`platform`)
+    on Windows and on every platform other than Linux and macOS. Activation requires a durable
+    budget, so the plain-language rule judge cannot be turned on on Windows;
 - the key is leased for that one request (purpose `review-judge`, the pinned destination);
 - the grant is rechecked as the lease's last awaited step. Then, synchronously at the dispatch, in
   the turn that calls the sender, the call's cancellation and the grant's current revision and
