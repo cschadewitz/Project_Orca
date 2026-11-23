@@ -22,6 +22,8 @@ import {
   openAcpSession,
   permissionPolicyPath,
   resolveOwnedFsTarget,
+  type FsOperationRecord,
+  type OpenSessionOptions,
   type PermissionRuleRecord,
 } from "@orca/agents";
 
@@ -104,6 +106,7 @@ async function turn(
   answer?: (request: acp.RequestPermissionRequest) => string | undefined,
   permissionFiles?: string[],
   host: LocalHost = new LocalHost({ id: "local", type: "local" }),
+  extra: Partial<OpenSessionOptions> = {},
 ): Promise<{
   outcomes: Outcome[];
   decisions: string[];
@@ -122,6 +125,7 @@ async function turn(
   const rules: (PermissionRuleRecord | undefined)[] = [];
   const asked: acp.RequestPermissionRequest[] = [];
   const session = await openAcpSession({
+    ...extra,
     host,
     agent,
     cwd: dir,
@@ -480,5 +484,117 @@ describe("a local fs/* request is decided by the file it reaches (#703)", () => 
     expect(resolved).toMatchObject({ ok: true, asWritten: join(via, "src", "new.ts") });
     expect(resolved.ok && resolved.io.endsWith(join("src", "new.ts"))).toBe(true);
     expect(resolveOwnedFsTarget(join(via, "..", "elsewhere"), [via])).toEqual({ ok: false, reason: "outside" });
+  });
+});
+
+describe("ORCA's own file executor records each operation before its I/O (#703)", () => {
+  const local = () => new LocalHost({ id: "local", type: "local" });
+
+  it("records the authorization before the write starts, and the outcome after it", async () => {
+    const dir = await workspace();
+    const file = join(dir, "src", "a.ts");
+    const records: (FsOperationRecord & { seen?: string })[] = [];
+    const { outcomes } = await turn(
+      dir,
+      [{ write: file, content: "new" }],
+      { default: "allow" },
+      undefined,
+      undefined,
+      local(),
+      {
+        recordFsOperation: async (record) => {
+          records.push({ ...record, seen: await readFile(file, "utf8") });
+        },
+      },
+    );
+    expect(outcomes[0]?.result).toEqual({});
+    expect(records).toEqual([
+      expect.objectContaining({
+        phase: "authorized",
+        access: "write",
+        path: file,
+        decision: "allow",
+        rule: { basis: "default" },
+        seen: "export {};\n",
+      }),
+      expect.objectContaining({ phase: "completed", outcome: "completed", seen: "new" }),
+    ]);
+    expect(records[0]!.operationId).toBe(records[1]!.operationId);
+  });
+
+  it("refuses the operation when its authorization cannot be recorded", async () => {
+    const dir = await workspace();
+    const file = join(dir, "src", "a.ts");
+    const records: FsOperationRecord[] = [];
+    const { outcomes } = await turn(
+      dir,
+      [{ write: file, content: "new" }],
+      { default: "allow" },
+      undefined,
+      undefined,
+      local(),
+      {
+        recordFsOperation: async (record) => {
+          records.push(record);
+          throw new Error("store refused");
+        },
+      },
+    );
+    expect(refused(outcomes[0])).toBe("the authorization could not be recorded, so the file I/O did not start");
+    expect(records.map((r) => r.phase)).toEqual(["authorized"]);
+    expect(await readFile(file, "utf8")).toBe("export {};\n");
+  });
+
+  it("records not-dispatched when the path changes while the authorization is written", async () => {
+    const dir = await workspace();
+    const other = join(dir, "src", "b.ts");
+    await writeFile(other, "b\n", "utf8");
+    const alias = join(dir, "alias.ts");
+    await symlink(join(dir, "src", "a.ts"), alias);
+    const records: FsOperationRecord[] = [];
+    const { outcomes } = await turn(
+      dir,
+      [{ write: alias, content: "new" }],
+      { default: "allow" },
+      undefined,
+      undefined,
+      local(),
+      {
+        recordFsOperation: async (record) => {
+          records.push(record);
+          if (record.phase === "authorized") {
+            await rm(alias);
+            await symlink(other, alias);
+          }
+        },
+      },
+    );
+    expect(refused(outcomes[0])).toBe("the path changed before the file I/O started");
+    expect(records.map((r) => (r.phase === "completed" ? r.outcome : r.phase))).toEqual([
+      "authorized",
+      "not-dispatched",
+    ]);
+    expect(await readFile(join(dir, "src", "a.ts"), "utf8")).toBe("export {};\n");
+    expect(await readFile(other, "utf8")).toBe("b\n");
+  });
+
+  it("records a read of a missing file as failed, and still answers Resource not found", async () => {
+    const dir = await workspace();
+    const records: FsOperationRecord[] = [];
+    const { outcomes } = await turn(
+      dir,
+      [{ read: join(dir, "src", "gone.ts") }],
+      { default: "allow" },
+      undefined,
+      undefined,
+      local(),
+      {
+        recordFsOperation: async (record) => {
+          records.push(record);
+        },
+      },
+    );
+    expect(outcomes[0]?.code).toBe(-32002);
+    expect(records.map((r) => (r.phase === "completed" ? r.outcome : r.phase))).toEqual(["authorized", "failed"]);
   });
 });

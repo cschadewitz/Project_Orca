@@ -167,8 +167,13 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   the resolution is checked again in the dispatch step; and the I/O goes to the resolved file.
   That is a check on names at decision and dispatch time, not an operating-system boundary: a
   directory swapped between the check and the open is not caught. A remote host's paths are
-  still compared as written. A reusable permit still waits for physical target verification,
-  and the `fs:` log is not a durable authorization or execution record. This is the
+  still compared as written. A reusable permit still waits for physical target verification.
+  Each operation's authorization is recorded (`agent.fs.authorized`) and that record awaited
+  before its I/O can start; a record that cannot be written refuses the operation. Its outcome
+  follows (`agent.fs.completed`: completed, failed, or not dispatched when a dispatch check
+  refused). An authorization with no outcome, as after a crash, is execution-unknown
+  (`ownedFsExecutions`): ORCA never repeats the operation, and no transaction spans the file
+  and the record. The `fs:` decision log is written alongside and not awaited. This is the
   client-owned ACP file path only: an agent's native tools and its own MCP connections do not
   pass through it, and keeping an agent on this path is an operating-system boundary's job.
 - **A plain-language rule allows one call at most, inside hard boundaries (#702).** A config

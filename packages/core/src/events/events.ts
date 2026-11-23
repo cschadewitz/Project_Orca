@@ -283,6 +283,42 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       entry: z.record(z.string(), z.unknown()).optional(),
     }),
   ),
+  /**
+   * ORCA's own file executor authorized one `fs/*` operation (#703), written and awaited
+   * before its I/O may start. `operationId` pairs it with `agent.fs.completed`; an
+   * authorization with no outcome is execution-unknown (`ownedFsExecutions`).
+   */
+  base(
+    "agent.fs.authorized",
+    z.object({
+      stepRunId: z.string(),
+      sessionId: z.string(),
+      operationId: z.string(),
+      access: z.enum(["read", "write"]),
+      path: z.string(),
+      target: z.string().optional(),
+      decision: z.string(),
+      rule: z
+        .object({
+          basis: z.enum(["protected", "rule", "default", "command-restricted", "unverified-identity"]),
+          layer: z.enum(["config", "sidecar", "default"]).optional(),
+          index: z.number().int().nonnegative().optional(),
+          file: z.number().int().nonnegative().optional(),
+          capped: z.boolean().optional(),
+        })
+        .optional(),
+    }),
+  ),
+  /** What happened to an authorized `fs/*` operation (#703): `not-dispatched` when a dispatch check refused it. */
+  base(
+    "agent.fs.completed",
+    z.object({
+      stepRunId: z.string(),
+      sessionId: z.string(),
+      operationId: z.string(),
+      outcome: z.enum(["completed", "failed", "not-dispatched"]),
+    }),
+  ),
   base(
     "agent.turn.completed",
     z.object({ stepRunId: z.string(), sessionId: z.string(), stopReason: z.string(), durationMs: z.number() }),

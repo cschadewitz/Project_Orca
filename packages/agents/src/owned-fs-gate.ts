@@ -30,8 +30,13 @@
  * answer stands), the resolution is checked again in the dispatch step, and the I/O goes to the
  * resolved file. That is a decision-time and dispatch-time check on names, not an
  * operating-system boundary: a directory swapped between the check and the open is not caught,
- * and a remote host's paths are still compared as written. The `fs:` decisions logged through
- * `onPermission` are not a durable authorization or execution record.
+ * and a remote host's paths are still compared as written.
+ *
+ * The durable record is separate (`recordFsOperation`, `agent.fs.authorized` and
+ * `agent.fs.completed`): each authorized operation is recorded, and that record awaited,
+ * before its I/O can start, and its outcome after. An authorization with no outcome is
+ * execution-unknown (`ownedFsExecutions`), never replayed. The `fs:` decisions logged through
+ * `onPermission` remain the decision log, written alongside and not awaited.
  */
 import { isAbsolute, join, relative } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
