@@ -3,6 +3,20 @@ import { OrcaError } from "../errors.js";
 import type { HumanInputRequest, RunState, RunSummary, StepRun } from "../model/run.js";
 import type { OrcaEvent } from "./events.js";
 
+// Event-indexed dictionaries (steps, artifacts, human inputs, vars) are plain objects keyed by
+// ids and names that arrive in events. Read them by own key only and write them by defining an
+// own property, so a key such as "__proto__" or "constructor" is an ordinary record and can never
+// reach or replace a prototype.
+function own<T>(dict: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(dict, key) ? dict[key] : undefined;
+}
+function put<T>(dict: Record<string, T>, key: string, value: T): void {
+  Object.defineProperty(dict, key, { value, writable: true, enumerable: true, configurable: true });
+}
+function putAll<T>(dict: Record<string, T>, from: Record<string, T>): void {
+  for (const [key, value] of Object.entries(from)) put(dict, key, value);
+}
+
 export function reduceRun(events: readonly OrcaEvent[]): RunState {
   const first = events[0];
   if (!first || first.type !== "run.created") {
@@ -39,10 +53,10 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
   if (checkpoint) {
     // A checkpoint attempt (#357) starts from the source's state at its checkpoint: the reused
     // steps completed, in history order, and the run continues by routing from the last one.
-    Object.assign(state.run.vars, checkpoint.vars);
-    for (const artifact of checkpoint.artifacts) state.artifacts[artifact.id] = artifact;
+    putAll(state.run.vars, checkpoint.vars);
+    for (const artifact of checkpoint.artifacts) put(state.artifacts, artifact.id, artifact);
     for (const reused of checkpoint.steps) {
-      state.steps[reused.stepRunId] = {
+      put(state.steps, reused.stepRunId, {
         id: reused.stepRunId,
         runId: first.runId,
         nodeId: reused.nodeId,
@@ -60,7 +74,7 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
         completedAt: reused.completedAt,
         reusedFrom: reused.from,
         ...(reused.iteration !== undefined ? { iteration: reused.iteration } : {}),
-      };
+      });
       state.stepOrder.push(reused.stepRunId);
     }
   }
@@ -72,7 +86,7 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
 export function applyEvent(state: RunState, e: OrcaEvent): RunState {
   state.lastSeq = e.seq;
   const step = (id: string): StepRun => {
-    const s = state.steps[id];
+    const s = own(state.steps, id);
     if (!s) throw new OrcaError("RUN_STATE", `event ${e.type} refers to unknown step ${id}`, { seq: e.seq });
     return s;
   };
@@ -87,7 +101,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       state.run.status = "paused";
       // The open attempt paused on purpose; resume re-attempts it by design (#357).
       for (const id of state.stepOrder) {
-        const open = state.steps[id];
+        const open = own(state.steps, id);
         if (open && (open.status === "scheduled" || open.status === "running" || open.status === "waiting"))
           open.parked = true;
       }
@@ -112,7 +126,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       state.run.completedAt = e.at;
       break;
     case "vars.set":
-      Object.assign(state.run.vars, e.payload.vars);
+      putAll(state.run.vars, e.payload.vars);
       break;
     case "step.scheduled": {
       const s: StepRun = {
@@ -129,7 +143,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
         scheduledAt: e.at,
         ...(e.payload.iteration !== undefined ? { iteration: e.payload.iteration } : {}),
       };
-      state.steps[s.id] = s;
+      put(state.steps, s.id, s);
       state.stepOrder.push(s.id);
       break;
     }
@@ -223,8 +237,8 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
     case "loop.iteration":
       break;
     case "artifact.recorded": {
-      state.artifacts[e.payload.artifact.id] = e.payload.artifact;
-      const s = state.steps[e.payload.stepRunId];
+      put(state.artifacts, e.payload.artifact.id, e.payload.artifact);
+      const s = own(state.steps, e.payload.stepRunId);
       if (s) {
         s.result ??= { artifactIds: [], data: {} };
         if (!s.result.artifactIds.includes(e.payload.artifact.id)) s.result.artifactIds.push(e.payload.artifact.id);
@@ -282,14 +296,14 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
         ...(e.payload.liveDecision ? { liveDecision: e.payload.liveDecision } : {}),
         requestedAt: e.at,
       };
-      state.humanInputs[r.id] = r;
+      put(state.humanInputs, r.id, r);
       break;
     }
     case "continuation.recorded":
     case "revision.recorded": {
       const decision = e.payload.decision;
       if (decision) {
-        const input = state.humanInputs[decision.requestId];
+        const input = own(state.humanInputs, decision.requestId);
         if (!input || input.stepRunId !== decision.stepRunId || input.answer !== undefined)
           throw new OrcaError("RUN_STATE", "journal gate decision does not match its boundary");
         input.answer = decision.answer;
@@ -298,7 +312,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       break;
     }
     case "human.answered": {
-      const r = state.humanInputs[e.payload.requestId];
+      const r = own(state.humanInputs, e.payload.requestId);
       if (r) {
         r.answer = e.payload.answer;
         r.answeredAt = e.at;
@@ -323,14 +337,14 @@ export function pendingHumanInputs(state: RunState): HumanInputRequest[] {
   const { status } = state.run;
   if (status === "completed" || status === "failed" || status === "cancelled") return [];
   return Object.values(state.humanInputs).filter(
-    (h) => h.answer === undefined && state.steps[h.stepRunId]?.status === "waiting",
+    (h) => h.answer === undefined && own(state.steps, h.stepRunId)?.status === "waiting",
   );
 }
 
 /** Latest step run for a node (highest attempt / most recently scheduled). */
 export function latestStepForNode(state: RunState, nodeId: string): StepRun | undefined {
   for (let i = state.stepOrder.length - 1; i >= 0; i--) {
-    const s = state.steps[state.stepOrder[i]!];
+    const s = own(state.steps, state.stepOrder[i]!);
     if (s && s.nodeId === nodeId) return s;
   }
   return undefined;
