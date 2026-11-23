@@ -575,7 +575,7 @@ function Grant({
         path={`${base}.match.command`}
         value={rule.match.command}
         editable={editable}
-        help="An execute call's command by its words, such as npm * or git push. A final * is any further words. An allow needs every part of a compound command (&&, ;, |) to be allowed, and never covers sudo, bash -c, a variable or a redirection. A deny or ask also catches the words with options between them, so git push catches git -C repo push."
+        help="An execute call's command by its words, such as npm * or git push. A final * is any further words. A command rule can deny or ask, not allow: the words don't prove what runs. It also catches the words with options between them, inside a compound command or under sudo or bash -c, so git push catches git -C repo push."
         onChange={(value) => onMatch("command", value)}
       />
     </li>

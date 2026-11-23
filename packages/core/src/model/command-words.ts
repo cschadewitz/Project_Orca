@@ -2,32 +2,33 @@
  * Command-word permission rules (#702): match a shell command by its words, not its text.
  *
  * A `titlePattern` is a regular expression over whatever the agent wrote as the title, so
- * "all git except push" written as a deny `^git push` misses `git -C repo push`, and an allow
- * `^npm ` also allows `npm test && curl … | sh`. A `command` rule is matched against the parsed
- * command instead, and the two directions are matched differently on purpose:
+ * "all git except push" written as a deny `^git push` misses `git -C repo push`. A `command`
+ * rule is matched against the parsed command instead.
  *
- * - An **allow** is strict. The command is split into its simple commands (`&&`, `||`, `;`, `|`,
- *   `&`, newlines), and *each* has to be allowed. A part ORCA cannot read with certainty —
- *   command substitution, a variable or glob in a fixed position, a redirection, an environment
- *   assignment, or a wrapper such as `sudo`, `env`, `bash -c` or `eval` — is never allowed by a
- *   command rule, so it falls through to the next rule and in the end to a person.
- * - A **deny** or **ask** is lenient. It matches when the rule's program appears anywhere in a
- *   part (by name, so `/usr/bin/git` is `git`) and the rule's later words follow it in order,
- *   with anything in between: `git push` catches `git -C repo push`, `sudo git push`,
- *   `bash -c "git push"`, and also `git log --grep push`. A lenient match that is wrong only
- *   ever asks or refuses.
+ * A command rule can **deny** or **ask**, never **allow** (`COMMAND_ALLOW_REFUSED`, #702
+ * review). Words are what the agent shows, not what runs: the executable a word resolves to,
+ * the working directory, an alias, an npm script or a config file decide that, and ORCA
+ * attests none of them while the agent runs the command in its own process. So a word match
+ * is a hint, good for refusing or asking and never proof for an automatic yes.
+ *
+ * The match is lenient. The command is split into its simple commands (`&&`, `||`, `;`, `|`,
+ * `&`, newlines), and a rule matches a part when the rule's program appears anywhere in it (by
+ * name, so `/usr/bin/git` is `git`) and the rule's later words follow in order, with anything
+ * in between: `git push` catches `git -C repo push`, `sudo git push`, `bash -c "git push"`,
+ * and also `git log --grep push`. A wrong match only ever asks or refuses. The call gets the
+ * strictest answer any part gets.
  *
  * A rule's `command` is written like a command: words separated by spaces, quoted where a word
  * holds a space. A final bare `*` means "and any further words": `npm *` is every npm command,
  * `git push` is `git push` and nothing else. Nothing here runs a shell.
  */
 
-/** One simple command as words, plus what makes it uncertain for an allow. */
+/** One simple command as words, plus what makes it uncertain to name exactly. */
 export interface CommandPart {
   readonly words: readonly string[];
   /** Every word broken on whitespace and quotes, for the lenient match. */
   readonly loose: readonly string[];
-  /** Why an allow may not match this part, if anything. */
+  /** Why no rule can name this part exactly, if anything. */
   readonly unsure?: string;
 }
 
@@ -297,15 +298,6 @@ export function parseCommandPattern(text: string): CommandPattern | undefined {
   return { words, rest };
 }
 
-/** The strict match an allow uses: same words, in place, and nothing uncertain. */
-export function commandAllows(pattern: CommandPattern, part: CommandPart): boolean {
-  if (part.unsure !== undefined) return false;
-  const w = part.words;
-  if (w.length < pattern.words.length) return false;
-  if (!pattern.rest && w.length !== pattern.words.length) return false;
-  return pattern.words.every((p, i) => p === w[i]);
-}
-
 /** The lenient match a deny or ask uses: the program by name, then the rest in order. */
 export function commandCatches(pattern: CommandPattern, part: CommandPart): boolean {
   const want = pattern.words;
@@ -323,11 +315,6 @@ export function commandCatches(pattern: CommandPattern, part: CommandPart): bool
 /** Whether a part decides nothing by itself (`cd dir`). */
 export function neutralPart(part: CommandPart): boolean {
   return part.unsure === undefined && part.words.length <= 2 && NEUTRAL.has(programName(part.words[0] ?? ""));
-}
-
-/** Whether an allow pattern allows everything a wrapper or shell could run. */
-export function commandPatternIsWildcard(pattern: CommandPattern): boolean {
-  return pattern.rest && pattern.words.length === 1 && WRAPPERS.has(programName(pattern.words[0]!));
 }
 
 /**
@@ -356,9 +343,10 @@ export function quoteWord(word: string): string {
 }
 
 /**
- * Wider command patterns a person may save instead of the exact command (#702), narrowest
- * first: `npm run build` offers `npm run *` and `npm *`. Only for one certain simple command
- * whose program is not a shell or wrapper, and never a pattern that would be a wildcard.
+ * Wider command patterns a person may save as a standing deny instead of the exact command
+ * (#702), narrowest first: `npm run build` offers `npm run *` and `npm *`. Only for one
+ * certain simple command whose program is not a shell or wrapper. Never an allow: see
+ * `COMMAND_ALLOW_REFUSED`.
  */
 export function broaderCommandPatterns(text: string): string[] {
   const parsed = parseCommand(text);
@@ -370,8 +358,5 @@ export function broaderCommandPatterns(text: string): string[] {
   const out: string[] = [];
   if (part.words.length > 2 && !sub.startsWith("-")) out.push(`${quoteWord(program)} ${quoteWord(sub)} *`);
   out.push(`${quoteWord(program)} *`);
-  return out.filter((p) => {
-    const pattern = parseCommandPattern(p);
-    return pattern !== undefined && !commandPatternIsWildcard(pattern);
-  });
+  return out.filter((p) => parseCommandPattern(p) !== undefined);
 }

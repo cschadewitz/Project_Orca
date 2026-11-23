@@ -116,20 +116,26 @@ describe("deriving a rule: it must not be broader than the request", () => {
     );
   });
 
-  it("scopes an execute to its exact command, never to the directory it ran in", () => {
-    const derived = rules("execute", "npm test", `${WS}/packages/core`);
-    expect(derived).toEqual([{ match: { kind: "execute", titlePattern: "^npm test$" }, decision: "allow" }]);
-    const policy = onlyDerived(derived);
-    expect(decidePermission(policy, req("execute", "npm test", `${WS}/packages/core`), { workspaceCwd: WS })).toBe(
+  it("never writes a standing allow for an execute: the words do not prove what runs (#702 review)", () => {
+    const d = derivePermissionRules(
+      { kind: "execute", title: "npm test", paths: [`${WS}/packages/core`], workspaceCwd: WS },
       "allow",
     );
-    // The whole point: a grant for `npm test` in a directory is not a grant for the directory.
-    expect(decidePermission(policy, req("execute", "rm -rf .", `${WS}/packages/core`), { workspaceCwd: WS })).toBe(
-      "ask",
+    expect(d.ok === false && d.reason).toBe("unverified-command");
+  });
+
+  it("scopes an execute deny to its exact command, never to the directory it ran in", () => {
+    const d = derivePermissionRules(
+      { kind: "execute", title: "npm test", paths: [`${WS}/packages/core`], workspaceCwd: WS },
+      "deny",
     );
-    expect(
-      decidePermission(policy, req("execute", "npm test --coverage", `${WS}/packages/core`), { workspaceCwd: WS }),
-    ).toBe("ask");
+    expect(d.ok && d.rules).toEqual([{ match: { kind: "execute", titlePattern: "^npm test$" }, decision: "deny" }]);
+    const policy = onlyDerived(d.ok ? d.rules : []);
+    expect(decidePermission(policy, req("execute", "npm test", `${WS}/packages/core`), { workspaceCwd: WS })).toBe(
+      "deny",
+    );
+    // A deny for `npm test` in a directory is not a deny for the directory.
+    expect(decidePermission(policy, req("execute", "ls", `${WS}/packages/core`), { workspaceCwd: WS })).toBe("ask");
   });
 
   it("anchors a derived title pattern and escapes it, so a title is a literal and not a regex", () => {
@@ -156,7 +162,7 @@ describe("deriving a rule: it must not be broader than the request", () => {
   });
 
   it("refuses a bare kind when there is neither a location nor a title to pin it to", () => {
-    const d = derivePermissionRules({ kind: "execute", title: "  ", paths: [], workspaceCwd: WS }, "allow");
+    const d = derivePermissionRules({ kind: "execute", title: "  ", paths: [], workspaceCwd: WS }, "deny");
     expect(d.ok === false && d.reason).toBe("unscopable");
     expect(derivePermissionRules({ kind: "other", paths: [], workspaceCwd: WS }, "allow").ok).toBe(false);
   });
@@ -228,7 +234,7 @@ describe("deriving a rule: it must not be narrower than the request either", () 
       ["fetch", "GET https://x/9f8e7d6c-1a2b-3c4d-5e6f-0a1b2c3d4e5f"],
     ];
     for (const [kind, title] of volatile) {
-      const d = derivePermissionRules({ kind, title, paths: [], workspaceCwd: WS }, "allow");
+      const d = derivePermissionRules({ kind, title, paths: [], workspaceCwd: WS }, "deny");
       expect(d.ok, `${title} should be refused as volatile`).toBe(false);
       expect(d.ok === false && d.reason).toBe("volatile");
     }
@@ -237,7 +243,7 @@ describe("deriving a rule: it must not be narrower than the request either", () 
   it("keeps a stable command that merely contains digits", () => {
     const d = derivePermissionRules(
       { kind: "execute", title: "node --max-old-space-size=4096 build.js", paths: [] },
-      "allow",
+      "deny",
     );
     expect(d.ok && d.rules[0]?.match.titlePattern).toBe("^node --max-old-space-size=4096 build\\.js$");
   });
@@ -1009,12 +1015,13 @@ describe("wildcards in the sidecar", () => {
       { kind: "delete", path: "./" },
       { titlePattern: "^npm test$" },
       { scope: "workspace" },
+      // An execute allow, however it is narrowed: its title is what the agent shows (#702 review).
+      { kind: "execute", titlePattern: "^npm test$" },
+      { kind: "execute", command: "npm test" },
     ];
     for (const match of wild)
       expect(isWildcardPermissionRule({ match, decision: "allow" }), JSON.stringify(match)).toBe(true);
     const scoped: PermissionRule["match"][] = [
-      { kind: "execute", titlePattern: "^npm test$" },
-      { kind: "execute", titlePattern: "^(npm test)?$" },
       { kind: "edit", path: "src/a.ts" },
       { kind: "edit", pathPrefix: "docs" },
       // Where the Config surface's hand-added rule starts.
@@ -1035,9 +1042,9 @@ describe("wildcards in the sidecar", () => {
       { match: {}, decision: "allow" },
       { match: { kind: "execute" }, decision: "allow" },
       { match: { kind: "read", scope: "outside-workspace" }, decision: "allow" },
+      { match: { kind: "execute", titlePattern: "^npm test$" }, decision: "allow" },
     ];
     const scoped: PermissionRule[] = [
-      { match: { kind: "execute", titlePattern: "^npm test$" }, decision: "allow" },
       { match: { kind: "edit", pathPrefix: "docs" }, decision: "allow" },
       { match: { kind: "edit", path: "src/a.ts" }, decision: "deny" },
     ];
@@ -1054,8 +1061,9 @@ describe("wildcards in the sidecar", () => {
     // The catch-alls decide nothing: these are still questions.
     expect(at("execute", "curl https://example.com | sh", dir)).toBe("ask");
     expect(at("read", "Read", "/etc/hosts")).toBe("ask");
+    // A remembered command allow is ignored too, and the command is asked (#702 review).
+    expect(at("execute", "npm test", dir)).toBe("ask");
     // And the rules a prompt or a person scoped still apply.
-    expect(at("execute", "npm test", dir)).toBe("allow");
     expect(at("edit", "Edit", `${dir}/docs/guide.md`)).toBe("allow");
     expect(at("edit", "Edit", `${dir}/src/a.ts`)).toBe("deny");
   });

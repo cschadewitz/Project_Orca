@@ -43,7 +43,6 @@ import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { revisionOf, withPolicyLock } from "./permission-file.js";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
-  commandAllows,
   commandCatches,
   commandTextOf,
   neutralPart,
@@ -148,10 +147,11 @@ function decideByRules(
       if (!matchesCall(m)) continue;
       if (m.command !== undefined) {
         // A command is only ever an `execute`'s, and a part that is not there matches no rule.
-        if (kind !== "execute" || part === undefined) continue;
+        // A command rule never allows (`COMMAND_ALLOW_REFUSED`): the loaders refuse or ignore
+        // one, and this skips any that got here another way.
+        if (kind !== "execute" || part === undefined || rule.decision === "allow") continue;
         const pattern = parseCommandPattern(m.command);
-        if (pattern === undefined) continue;
-        if (!(rule.decision === "allow" ? commandAllows(pattern, part) : commandCatches(pattern, part))) continue;
+        if (pattern === undefined || !commandCatches(pattern, part)) continue;
       }
       return rule.decision;
     }

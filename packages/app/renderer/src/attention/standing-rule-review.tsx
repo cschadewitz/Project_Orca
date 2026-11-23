@@ -92,7 +92,7 @@ export function StandingRuleReview({
       ) : (
         <>
           {choices.length > 1 && onBreadth && (
-            // A single shell command can be saved wider: `npm run build` as `npm run *` or `npm *`.
+            // A standing deny for one shell command can be saved wider: `npm run build` as `npm run *` or `npm *`.
             <div className="orca-card__options" role="group" aria-label="Rule scope">
               {choices.map((choice, i) => (
                 <Button
@@ -117,9 +117,9 @@ export function StandingRuleReview({
           </ul>
           {breadth > 0 && (
             <p className={`orca-card__hint ${textClass("caption")}`}>
-              A command rule allows each part of a compound command only when every part is allowed, and never covers
-              sudo, bash -c, a variable or a redirection. Tools like npm run scripts the project defines, so a wide rule
-              trusts those scripts too.
+              A family rule refuses the whole family: any command naming this program and these words, also inside a
+              compound command or under sudo or bash -c. It can catch lookalikes such as git log --grep push, which are
+              refused too.
             </p>
           )}
           <div className="orca-card__options" role="group" aria-label="Rule lifetime">

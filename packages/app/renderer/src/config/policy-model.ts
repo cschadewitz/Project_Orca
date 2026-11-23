@@ -73,12 +73,8 @@ export interface SidecarRule {
 export function sidecarRuleWarning(rule: SidecarRule): string | undefined {
   if (rule.decision !== "allow") return undefined;
   const match = rule.match;
-  if (match.command !== undefined)
-    return /^\s*(?:sudo|doas|su|env|command|builtin|exec|eval|source|\.|xargs|nohup|time|nice|ionice|timeout|stdbuf|chroot|watch|parallel|script|unbuffer|sh|bash|zsh|dash|ksh|fish|csh|tcsh|busybox|pwsh|powershell|cmd|npx|pnpx|bunx|nix-shell|ssh)\s+\*\s*$/i.test(
-      match.command,
-    )
-      ? "This sidecar allow is ignored by ORCA because it is a wildcard: a shell or wrapper followed by * runs any command. Name the command it may run instead."
-      : undefined;
+  if (match.command !== undefined || match.kind === "execute")
+    return "This sidecar allow is ignored by ORCA: a shell command's title and words are what the agent shows, not proof of what runs, so ORCA asks for each command. A command rule can deny or ask instead. Saving keeps the rule but does not make it effective.";
   let byTitle = false;
   if (match.titlePattern !== undefined) {
     try {
@@ -90,11 +86,9 @@ export function sidecarRuleWarning(rule: SidecarRule): string | undefined {
     }
   }
   const byPath = [match.path, match.pathPrefix].some((path) => path !== undefined && hasSidecarPath(path));
-  const ignored =
-    match.kind === undefined ||
-    (match.kind === "execute" ? !byTitle : !byTitle && !byPath && match.scope !== "workspace");
+  const ignored = match.kind === undefined || (!byTitle && !byPath && match.scope !== "workspace");
   return ignored
-    ? "This sidecar allow is ignored by ORCA because it is a wildcard. It must name a tool kind and narrow it by a path, path prefix, workspace scope or title pattern. Execute rules require a narrowing title pattern; paths and scope do not narrow commands. Saving keeps the rule but does not make it effective."
+    ? "This sidecar allow is ignored by ORCA because it is a wildcard. It must name a tool kind and narrow it by a path, path prefix, workspace scope or title pattern. Saving keeps the rule but does not make it effective."
     : undefined;
 }
 

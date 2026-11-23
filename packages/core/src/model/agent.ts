@@ -8,13 +8,7 @@
 import { z } from "zod";
 import { AuthorityCapabilityScopeSchema } from "./capabilities.js";
 import { EnvSchema } from "./secrets.js";
-import {
-  commandPatternIsWildcard,
-  neutralPart,
-  parseCommand,
-  parseCommandPattern,
-  quoteWord,
-} from "./command-words.js";
+import { neutralPart, parseCommand, parseCommandPattern, quoteWord } from "./command-words.js";
 
 // Scoped capabilities (#335) belong with the agent model they select for.
 export * from "./capabilities.js";
@@ -146,9 +140,9 @@ export const PermissionRuleSchema = z.object({
     scope: z.enum(["workspace", "outside-workspace"]).optional(),
     /**
      * A shell command by its words (#702), such as `npm *` or `git push`; a final bare `*` is
-     * "and any further words". Only an `execute` call has one. An `allow` is matched strictly,
-     * part by part of a compound command; a `deny` or `ask` leniently, so `git push` also
-     * catches `git -C repo push`. See `command-words.ts`.
+     * "and any further words". Only an `execute` call has one. It can `deny` or `ask`, never
+     * `allow` (`COMMAND_ALLOW_REFUSED`), and it matches leniently, so `git push` also catches
+     * `git -C repo push`. See `command-words.ts`.
      */
     command: z
       .string()
@@ -229,8 +223,30 @@ export const DEFAULT_PERMISSION_POLICY: PermissionPolicy = {
  */
 export const PermissionPolicySchema = z.object({
   default: PermissionDecisionSchema.optional(),
-  rules: z.array(PermissionRuleSchema).default([]),
+  rules: z
+    .array(PermissionRuleSchema)
+    .superRefine((rules, ctx) => {
+      rules.forEach((rule, i) => {
+        if (rule.decision === "allow" && rule.match.command !== undefined)
+          ctx.addIssue({
+            code: "custom",
+            path: [i, "match", "command"],
+            message: COMMAND_ALLOW_REFUSED,
+          });
+      });
+    })
+    .default([]),
 });
+
+/**
+ * Why a `command` rule cannot `allow` (#702 review). Shell words are display text, not what
+ * runs: the program a word names, the working directory, an alias, an npm script or a
+ * config file decide what a command does, and ORCA attests none of them while the agent runs
+ * the command in its own process. So a word match is a hint that can refuse or ask, never
+ * proof for an automatic yes. An allow waits for an executor ORCA runs itself (#703).
+ */
+export const COMMAND_ALLOW_REFUSED =
+  "a command rule can deny or ask, not allow: ORCA cannot prove what a command will run from its words, so it asks each time";
 
 /**
  * A policy as written: `default` may be absent, meaning nobody chose a fallthrough. This is
@@ -469,9 +485,9 @@ export function samePermissionRule(a: PermissionRule, b: PermissionRule): boolea
  * title. Neither writes an `allow` that names no kind (`{}`), or names one and nothing that
  * narrows it: `{kind: execute}`, `{kind: read, scope: outside-workspace}`, a title pattern that
  * matches any title, a path or prefix that normalises to nothing — the workspace root, which
- * `derivePermissionRules` refuses for the same reason. And an `execute` is a command, not a
- * place, so only its title narrows it — a path or a scope on one is the directory it ran in,
- * and grants every command run there.
+ * `derivePermissionRules` refuses for the same reason. And an `execute` allow is a wildcard
+ * whatever it names: a path or a scope is only the directory it ran in, and a title or
+ * command words are display text that does not prove what runs (#702 review).
  *
  * In the sidecar such a rule is far likelier to be something an agent wrote than something a
  * person meant, and it is the shape that turns one written file into "approve everything". So
@@ -482,15 +498,12 @@ export function samePermissionRule(a: PermissionRule, b: PermissionRule): boolea
 export function isWildcardPermissionRule(rule: PermissionRule): boolean {
   if (rule.decision !== "allow") return false;
   const m = rule.match;
-  if (m.command !== undefined) {
-    // A command names its program, so it narrows by itself, unless that program is a shell or
-    // wrapper and the rule allows any words after it: `bash *` is every command there is.
-    const pattern = parseCommandPattern(m.command);
-    return pattern === undefined || commandPatternIsWildcard(pattern);
-  }
+  // A standing allow for a command is never narrow enough (#702 review): its title and its
+  // words are what the agent shows, not what runs, so neither proves the grant covers only
+  // the command a person approved. Such a sidecar rule is ignored and the call is asked.
+  if (m.command !== undefined || m.kind === "execute") return true;
   if (m.kind === undefined) return true;
   const byTitle = m.titlePattern !== undefined && !matchesEveryTitle(m.titlePattern);
-  if (m.kind === "execute") return !byTitle;
   const byPath = [m.path, m.pathPrefix].some((p) => p !== undefined && normalizePermissionPath(p) !== "");
   return !byTitle && !byPath && m.scope !== "workspace";
 }
@@ -590,7 +603,7 @@ export interface PermissionRequestFacts {
  * than writing nothing: the caller falls back to allowing this one call.
  */
 export type PermissionDeriveRefusal =
-  "outside-workspace" | "whole-workspace" | "volatile" | "unscopable" | "not-recordable";
+  "outside-workspace" | "whole-workspace" | "volatile" | "unscopable" | "not-recordable" | "unverified-command";
 
 export type PermissionDeriveResult =
   { ok: true; rules: PermissionRule[] } | { ok: false; reason: PermissionDeriveRefusal; detail: string };
@@ -675,9 +688,18 @@ export function derivePermissionRules(
 
   // `execute` is a command, not a place. Scope it to the command.
   if (kind === "execute") {
+    // A standing allow needs proof of what will run, and ORCA has none while the agent runs
+    // the command itself: the title and the words are display text (#702 review). So a person
+    // answers each command once; a standing deny or ask is only ever stricter.
+    if (decision === "allow")
+      return {
+        ok: false,
+        reason: "unverified-command",
+        detail: "ORCA cannot prove what a shell command will run from what the agent shows, so it asks each time",
+      };
     const command = facts.command?.trim();
-    // Where the title is not the command ("Run command"), anchoring the title would allow
-    // every command shown under it. The command's own words are the rule instead (#702).
+    // Where the title is not the command ("Run command"), anchoring the title would catch only
+    // that title. The command's own words are the rule instead (#702).
     if (command === undefined || command === "" || command === title) return byTitle();
     const parsed = parseCommand(command);
     const parts = parsed.parts.filter((p) => !neutralPart(p));

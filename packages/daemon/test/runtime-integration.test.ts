@@ -414,7 +414,7 @@ describe("standing permission acceptance", () => {
     await live.done;
     expect(live.answers).toEqual(["allow"]);
   });
-  it("offers wider command rules for one shell command and saves the one chosen (#702)", async () => {
+  it("offers no standing allow for a shell command, and wider deny rules, saving the one chosen (#702)", async () => {
     const h = await fixture();
     const live = await permissionGate(h, {
       toolCallId: "tool",
@@ -422,18 +422,21 @@ describe("standing permission acceptance", () => {
       kind: "execute",
       rawInput: { command: "npm run build" },
     });
+    // The words don't prove what runs, so "Always allow" is refused with the reason.
     const allow = live.input.standing?.allow;
-    if (!allow || !("rules" in allow)) throw new Error("no allow preview");
+    expect(allow && "refused" in allow && allow.refused.reason).toBe("unverified-command");
+    const deny = live.input.standing?.deny;
+    if (!deny || !("rules" in deny)) throw new Error("no deny preview");
     // The title is not the command, so the exact rule names the command, not the title.
-    expect(allow.rules).toEqual([{ match: { kind: "execute", command: "npm run build" }, decision: "allow" }]);
-    expect(allow.broader?.map((b) => b.rules)).toEqual([
-      [{ match: { kind: "execute", command: "npm run *" }, decision: "allow" }],
-      [{ match: { kind: "execute", command: "npm *" }, decision: "allow" }],
+    expect(deny.rules).toEqual([{ match: { kind: "execute", command: "npm run build" }, decision: "deny" }]);
+    expect(deny.broader?.map((b) => b.rules)).toEqual([
+      [{ match: { kind: "execute", command: "npm run *" }, decision: "deny" }],
+      [{ match: { kind: "execute", command: "npm *" }, decision: "deny" }],
     ]);
     const reply = await h.rpc(h.owner, "inputs.answer", {
       ...live.params,
-      optionId: "allow",
-      always: { decision: "allow", previewRef: allow.broader![1]!.ref },
+      optionId: "deny",
+      always: { decision: "deny", previewRef: deny.broader![1]!.ref },
       resume: true,
     });
     expect(reply.ok).toBe(true);
@@ -441,13 +444,13 @@ describe("standing permission acceptance", () => {
       version: number;
       agents: Record<string, { rules: { match: unknown; decision: string }[] }>;
     };
-    // A command rule is version 3, so a release that would read it as every command refuses it.
+    // A command rule is version 3, so a release that would drop `command` refuses it.
     expect(saved.version).toBe(3);
     expect(Object.values(saved.agents)[0]!.rules.map((r) => [r.match, r.decision])).toEqual([
-      [{ kind: "execute", command: "npm *" }, "allow"],
+      [{ kind: "execute", command: "npm *" }, "deny"],
     ]);
     await live.done;
-    expect(live.answers).toEqual(["allow"]);
+    expect(live.answers).toEqual(["deny"]);
   });
   it("saves only the reviewed rule: a missing or stale preview is refused before anything is answered (#702)", async () => {
     const h = await fixture();

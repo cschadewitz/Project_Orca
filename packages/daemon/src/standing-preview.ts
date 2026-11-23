@@ -52,8 +52,10 @@ export function standingRulePreview(
     decision,
   );
   if (!derived.ok) return { refused: { reason: derived.reason, detail: derived.detail } };
+  // Wider command patterns are offered only for a standing deny: a family rule refuses the
+  // whole family, and an allow for one is refused anyway (`COMMAND_ALLOW_REFUSED`).
   const text =
-    tc.kind === "execute"
+    tc.kind === "execute" && decision === "deny"
       ? commandTextOf({ title: typeof tc.title === "string" ? tc.title : undefined, rawInput: tc.rawInput })
       : undefined;
   const broader = (text === undefined ? [] : broaderCommandPatterns(text)).map((command) => {
