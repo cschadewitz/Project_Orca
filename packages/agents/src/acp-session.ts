@@ -22,6 +22,7 @@ import {
   type AgentSpec,
   type Clock,
   type Logger,
+  type PermissionPolicy,
   type SecretsConfig,
   type SessionConfigOption,
 } from "@orca/core";
@@ -35,7 +36,13 @@ import {
   type AgentSecretDelivery,
   type AuthorizeSecretUse,
 } from "./secrets.js";
-import { explainFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
+import {
+  explainFsCall,
+  fsToolCall,
+  resolveOwnedFsTarget,
+  stricterExplanation,
+  type FsAccess,
+} from "./owned-fs-gate.js";
 import { judgedLane } from "./judged-lane.js";
 import type { JudgePermission } from "./review-judge/plain-rule.js";
 import { processCleanup } from "./process-cleanup.js";
@@ -47,6 +54,7 @@ import { isHostFileMissing, type AgentHost, type AgentProcessHandle } from "./ho
 import {
   decidePermission,
   loadEffectivePermissionPolicy,
+  physicalPathOf,
   protectedPathFor,
   permissionRuleRecord,
   resolvePermission,
@@ -382,11 +390,19 @@ async function openPlanned(
    * Every await is followed by a recheck: the turn must be the same live one, and after a
    * person answers, the policy is read again and a deny that appeared meanwhile wins. It
    * returns the dispatch check, which the handler runs in the same step that starts the I/O.
-   * Paths, the roots check and rule targets are lexical (as written, not resolved). Each
-   * decision is logged like an ask's, prefixed `fs:`; that log is not a durable authorization
-   * or execution record.
+   * `resolved` is the file the path reaches on a local host, named under its session root
+   * (`resolveOwnedFsTarget`): when it differs from the path as written, both are decided and
+   * the stricter answer stands, so a link cannot carry a write past a rule on the file it
+   * leads to. Each decision is logged like an ask's, prefixed `fs:`; that log is not a
+   * durable authorization or execution record.
    */
-  const authorizeFs = async (path: string, access: FsAccess): Promise<() => void> => {
+  const authorizeFs = async (path: string, access: FsAccess, resolved?: string): Promise<() => void> => {
+    const explain = (policy: PermissionPolicy) => {
+      const written = explainFsCall(policy, path, access, evalScope);
+      return resolved === undefined || resolved === path
+        ? written
+        : stricterExplanation(written, explainFsCall(policy, resolved, access, evalScope));
+    };
     const turn = activeTurn;
     const record = (decision: string, rule?: PermissionRuleRecord) => {
       opts.onPermission?.({
@@ -415,7 +431,7 @@ async function openPlanned(
     };
     const policy = await policyForAsk();
     if (!live()) return refuse("turn-ended", "the turn ended before the file request was decided");
-    const explained = explainFsCall(policy, path, access, evalScope);
+    const explained = explain(policy);
     const decision = explained.decision;
     const rule = permissionRuleRecord(explained);
     if (decision === "allow") {
@@ -432,7 +448,7 @@ async function openPlanned(
     const asked = await resolvePermission(policy, {
       request: {
         sessionId: acpSessionId,
-        toolCall: fsToolCall(path, access, `orca-fs-${randomUUID()}`),
+        toolCall: fsToolCall(resolved ?? path, access, `orca-fs-${randomUUID()}`),
         options: [
           { optionId: "allow", name: "Allow once", kind: "allow_once" },
           { optionId: "reject", name: "Reject", kind: "reject_once" },
@@ -445,7 +461,7 @@ async function openPlanned(
     // Only a person's one-time allow for this very operation.
     if (asked.decision !== "ask:allow_once") return refuse(asked.decision, `not allowed: ${asked.decision}`, rule);
     // The wait may have been long: read the policy again, and the turn must still be live.
-    const after = explainFsCall(await policyForAsk(), path, access, evalScope);
+    const after = explain(await policyForAsk());
     if (after.decision === "deny")
       return refuse(
         "ask:allow_once:denied-since",
@@ -578,6 +594,31 @@ async function openPlanned(
     throw acp.RequestError.invalidParams({ path, reason: "the session was not admitted" });
   };
 
+  /**
+   * Where a local `fs/*` request really lands (#703): links followed, and inside a session
+   * root once they are. A remote host's paths are compared as written. The returned check
+   * runs in the dispatch step and refuses when the path no longer resolves to the same file.
+   */
+  const localHost = opts.host.spec.type === "local";
+  const ownedTarget = (path: string): { io: string; resolved?: string; unchanged: () => void } => {
+    if (!localHost) return { io: path, unchanged: () => undefined };
+    const target = resolveOwnedFsTarget(path, roots);
+    if (!target.ok)
+      throw acp.RequestError.invalidParams({
+        path,
+        reason:
+          target.reason === "outside" ? "outside session roots once links are followed" : "the path cannot be resolved",
+      });
+    return {
+      io: target.io,
+      resolved: target.asWritten,
+      unchanged: () => {
+        if (physicalPathOf(path) !== target.io)
+          throw acp.RequestError.invalidParams({ path, reason: "the path changed before the file I/O started" });
+      },
+    };
+  };
+
   const refuseProtected = (path: string, access: "read" | "write"): void => {
     if (protectedPathFor(path, access, opts.protectedPaths) === undefined) return;
     logger.warn("agent file request refused: the path is ORCA's own", { path, access });
@@ -669,11 +710,13 @@ async function openPlanned(
         throw acp.RequestError.invalidParams({ path, reason: "not this session" });
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       refuseProtected(path, "read");
-      const dispatch = await authorizeFs(path, "read");
+      const target = ownedTarget(path);
+      const dispatch = await authorizeFs(path, "read", target.resolved);
       dispatch();
+      target.unchanged();
       let content: string;
       try {
-        content = await opts.host.fs.readFile(path);
+        content = await opts.host.fs.readFile(target.io);
       } catch (e) {
         // A missing file is an answer, not a failure: agents (Gemini CLI among them) find out
         // whether a file exists by reading it, and only "Resource not found" reads as missing.
@@ -699,9 +742,11 @@ async function openPlanned(
         throw acp.RequestError.invalidParams({ path, reason: "not this session" });
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       refuseProtected(path, "write");
-      const dispatch = await authorizeFs(path, "write");
+      const target = ownedTarget(path);
+      const dispatch = await authorizeFs(path, "write", target.resolved);
       dispatch();
-      await opts.host.fs.writeFile(path, content);
+      target.unchanged();
+      await opts.host.fs.writeFile(target.io, content);
       return {};
     });
 

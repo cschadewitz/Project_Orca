@@ -7,8 +7,8 @@
  * real ACP agent over stdio makes the calls, and each is decided by the policy just before
  * the I/O: a deny refuses, an ask needs a one-time allow, and that allow is good once.
  */
-import { writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, writeFileSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,6 +21,7 @@ import {
   fsToolCall,
   openAcpSession,
   permissionPolicyPath,
+  resolveOwnedFsTarget,
   type PermissionRuleRecord,
 } from "@orca/agents";
 
@@ -385,5 +386,99 @@ describe("an fs call as the policy sees it", () => {
     };
     expect(decideFsCall(policy, "/w/a.ts", "write", { workspaceCwd: "/w" })).toBe("deny");
     expect(decideFsCall(policy, "/w/a.ts", "read", { workspaceCwd: "/w" })).toBe("ask");
+  });
+});
+
+describe("a local fs/* request is decided by the file it reaches (#703)", () => {
+  it("refuses a link inside the roots that leads outside them, existing target or not", async () => {
+    const dir = await workspace();
+    const outside = await temp("orca-owned-fs-outside-");
+    const victim = join(outside, "victim.txt");
+    await writeFile(victim, "safe", "utf8");
+    await symlink(victim, join(dir, "src", "link.txt"));
+    await symlink(join(outside, "created.txt"), join(dir, "src", "dangling.txt"));
+    await symlink(outside, join(dir, "out"));
+    const { outcomes } = await turn(
+      dir,
+      [
+        { write: join(dir, "src", "link.txt"), content: "pwned" },
+        { write: join(dir, "src", "dangling.txt"), content: "pwned" },
+        { write: join(dir, "out", "new.txt"), content: "pwned" },
+        { read: join(dir, "src", "link.txt") },
+      ],
+      { default: "allow" },
+    );
+    for (const o of outcomes) expect(refused(o)).toBe("outside session roots once links are followed");
+    expect(await readFile(victim, "utf8")).toBe("safe");
+    expect(existsSync(join(outside, "created.txt"))).toBe(false);
+    expect(existsSync(join(outside, "new.txt"))).toBe(false);
+  });
+
+  it("holds a link to a file inside the roots to the rules for that file: the stricter answer stands", async () => {
+    const dir = await workspace();
+    const target = join(dir, "src", "a.ts");
+    await mkdir(join(dir, "docs"));
+    await symlink(target, join(dir, "docs", "notes.md"));
+    const { outcomes, decisions, rules } = await turn(dir, [{ write: join(dir, "docs", "notes.md"), content: "x" }], {
+      default: "allow",
+      rules: [
+        { match: { kind: "edit", path: "docs/notes.md" }, decision: "allow" },
+        { match: { kind: "edit", path: "src/a.ts" }, decision: "deny" },
+      ],
+    });
+    expect(refused(outcomes[0])).toMatch(/not allowed: deny/);
+    expect(decisions).toEqual(["fs:deny"]);
+    expect(rules[0]).toMatchObject({ basis: "rule", index: 1 });
+    expect(await readFile(target, "utf8")).toBe("export {};\n");
+  });
+
+  it("asks about the file the link reaches, and a one-time allow writes that file", async () => {
+    const dir = await workspace();
+    const target = join(dir, "src", "a.ts");
+    await symlink(target, join(dir, "alias.ts"));
+    const { outcomes, asked } = await turn(
+      dir,
+      [{ write: join(dir, "alias.ts"), content: "changed" }],
+      { default: "ask" },
+      () => "allow",
+    );
+    expect(outcomes[0]?.result).toEqual({});
+    expect(asked[0]?.toolCall.locations).toEqual([{ path: target }]);
+    expect(await readFile(target, "utf8")).toBe("changed");
+  });
+
+  it("reads and writes through links that stay inside the roots", async () => {
+    const dir = await workspace();
+    await symlink(join(dir, "src"), join(dir, "lib"));
+    const { outcomes } = await turn(
+      dir,
+      [{ read: join(dir, "lib", "a.ts") }, { write: join(dir, "lib", "b.ts"), content: "b" }],
+      { default: "allow" },
+    );
+    expect(outcomes[0]?.result).toEqual({ content: "export {};\n" });
+    expect(await readFile(join(dir, "src", "b.ts"), "utf8")).toBe("b");
+  });
+
+  it("matches the workspace's own rules when the workspace is reached through a linked directory", async () => {
+    const real = await workspace();
+    const via = join(await temp("orca-owned-fs-via-"), "ws");
+    await symlink(real, via);
+    const { outcomes, decisions } = await turn(via, [{ write: join(via, "src", "a.ts"), content: "ok" }], {
+      default: "ask",
+      rules: [{ match: { kind: "edit", path: "src/a.ts" }, decision: "allow" }],
+    });
+    expect(outcomes[0]?.result).toEqual({});
+    expect(decisions).toEqual(["fs:allow"]);
+    expect(await readFile(join(real, "src", "a.ts"), "utf8")).toBe("ok");
+  });
+
+  it("resolves a target under the root it is in, as that root is written", async () => {
+    const real = await workspace();
+    const via = join(await temp("orca-owned-fs-via-"), "ws");
+    await symlink(real, via);
+    const resolved = resolveOwnedFsTarget(join(via, "src", "new.ts"), [via]);
+    expect(resolved).toMatchObject({ ok: true, asWritten: join(via, "src", "new.ts") });
+    expect(resolved.ok && resolved.io.endsWith(join("src", "new.ts"))).toBe(true);
+    expect(resolveOwnedFsTarget(join(via, "..", "elsewhere"), [via])).toEqual({ ok: false, reason: "outside" });
   });
 });

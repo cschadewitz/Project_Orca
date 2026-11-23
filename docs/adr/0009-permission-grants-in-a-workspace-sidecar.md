@@ -160,10 +160,15 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   the same live one, and after the answer the policy is read again and a deny that appeared
   meanwhile wins. A call outside a live turn is refused. Each decision is recorded like an
   ask's, prefixed `fs:`. Both handlers serve only this session's own ACP session id, and the
-  live-turn check runs again in the same step that starts the host I/O. The roots check and
-  rule targets are lexical, compared as written and not resolved, so a reusable permit waits
-  for physical target verification; and the `fs:` log is not a durable authorization or
-  execution record. This is the
+  live-turn check runs again in the same step that starts the host I/O. On a local host the
+  target is resolved physically, links followed (a dangling one too) (`resolveOwnedFsTarget`):
+  a path that leads outside every session root once resolved is refused; when the file it
+  reaches is not the path as written, the policy decides both and the stricter answer stands;
+  the resolution is checked again in the dispatch step; and the I/O goes to the resolved file.
+  That is a check on names at decision and dispatch time, not an operating-system boundary: a
+  directory swapped between the check and the open is not caught. A remote host's paths are
+  still compared as written. A reusable permit still waits for physical target verification,
+  and the `fs:` log is not a durable authorization or execution record. This is the
   client-owned ACP file path only: an agent's native tools and its own MCP connections do not
   pass through it, and keeping an agent on this path is an operating-system boundary's job.
 - **A plain-language rule allows one call at most, inside hard boundaries (#702).** A config

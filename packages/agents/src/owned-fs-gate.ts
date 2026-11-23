@@ -24,14 +24,19 @@
  * What this covers and what it does not: it is the client-owned ACP file path only. An
  * agent's native tools (its own shell, its own file access, an MCP server it connects to by
  * itself) never pass through ORCA and are not covered; keeping an agent to this path is an
- * operating-system boundary's job (ADR 0009). The session roots check and rule targets are
- * lexical: paths are compared as written, workspace-relative where they can be, so a symlink
- * inside the roots that leads elsewhere is not caught here. The `fs:` decisions logged
- * through `onPermission` are not a durable authorization or execution record.
+ * operating-system boundary's job (ADR 0009). On a local host the target is resolved
+ * physically (`resolveOwnedFsTarget`): a link inside the roots that leads outside them is
+ * refused, the policy decides both the path as written and the file it reaches (the stricter
+ * answer stands), the resolution is checked again in the dispatch step, and the I/O goes to the
+ * resolved file. That is a decision-time and dispatch-time check on names, not an
+ * operating-system boundary: a directory swapped between the check and the open is not caught,
+ * and a remote host's paths are still compared as written. The `fs:` decisions logged through
+ * `onPermission` are not a durable authorization or execution record.
  */
+import { isAbsolute, join, relative } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { PermissionDecision, PermissionExplanation, PermissionPolicy } from "@orca/core";
-import { explainPermission, type PermissionEvalContext } from "./permissions.js";
+import { explainPermission, physicalPathOf, type PermissionEvalContext } from "./permissions.js";
 
 export type FsAccess = "read" | "write";
 
@@ -63,4 +68,36 @@ export function explainFsCall(
   ctx: PermissionEvalContext,
 ): PermissionExplanation {
   return explainPermission(policy, { sessionId: "", toolCall: fsToolCall(path, access), options: [] }, ctx);
+}
+
+/**
+ * Where a local `fs/*` request really lands (#703). `io` is the file the request reaches,
+ * links followed, and is what the I/O is done on. `asWritten` is that same file named under
+ * the session root it is in, as that root is written, so the policy reads it like any other
+ * path in the workspace (a workspace reached through a linked directory, such as macOS's
+ * `/tmp`, still matches its own rules).
+ *
+ * `outside` when the file is not inside any session root once resolved, which is a link
+ * leading out of them; `unresolvable` when the path or a root cannot be resolved for any reason
+ * but absence. Both are refused: neither can be shown to be inside the roots.
+ */
+export type OwnedFsTarget =
+  { ok: true; io: string; asWritten: string } | { ok: false; reason: "outside" | "unresolvable" };
+
+export function resolveOwnedFsTarget(path: string, roots: readonly string[]): OwnedFsTarget {
+  const io = physicalPathOf(path);
+  if (io === undefined) return { ok: false, reason: "unresolvable" };
+  for (const root of roots) {
+    const physicalRoot = physicalPathOf(root);
+    if (physicalRoot === undefined) return { ok: false, reason: "unresolvable" };
+    const rel = relative(physicalRoot, io);
+    if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return { ok: true, io, asWritten: join(root, rel) };
+  }
+  return { ok: false, reason: "outside" };
+}
+
+/** The stricter of two answers: deny over ask over allow. On a tie, the first. */
+export function stricterExplanation(a: PermissionExplanation, b: PermissionExplanation): PermissionExplanation {
+  const rank = (d: PermissionDecision) => (d === "deny" ? 2 : d === "ask" ? 1 : 0);
+  return rank(b.decision) > rank(a.decision) ? b : a;
 }

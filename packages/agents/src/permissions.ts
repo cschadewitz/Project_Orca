@@ -595,6 +595,20 @@ function protectedLocation(
     .find((p) => protectedPathFor(p, access, ctx.protectedPaths, ctx.workspaceCwd) !== undefined);
 }
 
+/**
+ * `path` as the local file system resolves it, links followed (dangling ones included) and the
+ * part that does not exist yet appended (#703). Undefined when it cannot be resolved for any
+ * reason but absence: no permission, a loop of links, a component that is not a directory.
+ */
+export function physicalPathOf(path: string): string | undefined {
+  try {
+    return physicalPath(path);
+  } catch (error) {
+    if (error instanceof UnresolvablePathError) return undefined;
+    throw error;
+  }
+}
+
 /** How many links `physicalPath` follows before giving up, as the kernel's `ELOOP` does. */
 const MAX_LINK_HOPS = 40;
 
