@@ -120,6 +120,7 @@ wrapper's postinstall.
 | Web fetch and search | Denied natively; a canary URL in the test's own server is never hit | installed |
 | Cancellation | A cancel while an ask is pending ends the turn `cancelled`, and a late answer runs nothing | installed |
 | A command with a `workdir` outside the workspace | Nothing lands outside: OpenCode's `external_directory` is denied natively. ORCA could not have decided it — an `execute` ask carries the command text only, with no location and no cwd, so an ORCA title rule matches the same command in any directory | installed |
+| A file path given through a link to the workspace (macOS `/var` → `/private/var`) | Treated by OpenCode as outside the project and denied natively, with no ask. Configure the workspace by its real path | installed (macOS) |
 | A prompt starting with `/` | Refused before it is sent: OpenCode would run it as one of its own commands | installed |
 | Switching the session's agent ("mode") | Refused, and a session that opens in another mode is closed: another agent brings its own native permissions | unit-tested |
 | Another build of the executable | Refused before anything starts | installed |
