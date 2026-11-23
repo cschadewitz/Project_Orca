@@ -21,6 +21,8 @@ import {
   codexProbeReceipt,
   permissionPolicyPath,
   probeCodexHook,
+  codexHookEnvironment,
+  codexHookShell,
   runClaudePreToolHook,
   type ClaudeHookContext,
 } from "@orca/agents";
@@ -32,6 +34,8 @@ let configDir: string;
 let contextFile: string;
 /** The probe key written into each test's context file. */
 const PROBE_KEY = "ab".repeat(32);
+/** The shell the probe runs a command in, as Codex runs a hook in a `sh` login shell. */
+const SH = { program: "/bin/sh", args: ["-c"] };
 
 const context = (permissions: ClaudeHookContext["permissions"] = { rules: [] }): ClaudeHookContext => ({
   version: 1,
@@ -285,13 +289,24 @@ describe("installing it in Codex", () => {
     const entry = fileURLToPath(new URL("../src/bin/claude-pre-tool-hook.ts", import.meta.url));
     const bundled = childBundle("codex-pre-tool-hook-705", { entries: { hook: entry } })?.["hook"];
     const probe = (command: string, probeKey = PROBE_KEY) =>
-      probeCodexHook({ command, cwd: workspace, contextFile, probeKey, env: { ...process.env, SHELL: "/bin/sh" } });
+      probeCodexHook({ command, cwd: workspace, contextFile, probeKey, shell: SH, env: process.env });
 
     it.skipIf(bundled === undefined || process.platform === "win32")(
       "sees the real hook block a call through the shell, with its receipt",
       async () => {
         const r = await probe(codexPreToolHookCommand(process.execPath, bundled!, contextFile));
-        expect(r).toEqual({ blocked: true, detail: "blocked, with the hook's receipt" });
+        expect(r).toEqual({
+          blocked: true,
+          detail: "blocked, with the hook's receipt",
+          diagnostics: {
+            outcome: "blocked",
+            shell: "/bin/sh",
+            exitCode: 2,
+            stderrBytes: expect.any(Number),
+            receipt: "matched",
+            elapsedMs: expect.any(Number),
+          },
+        });
       },
     );
 
@@ -306,21 +321,26 @@ describe("installing it in Codex", () => {
     );
 
     it.skipIf(process.platform === "win32")("does not take an exit status alone as proof", async () => {
-      for (const command of [
-        "true",
-        "exit 1",
-        "'/no/such/program'",
+      for (const [command, outcome, receipt] of [
+        ["true", "exit", "absent"],
+        ["exit 1", "exit", "absent"],
+        ["'/no/such/program'", "exit", "absent"],
         // Exits 2 with a reason, as a block would, but is not ORCA's hook.
-        "cat >/dev/null; echo 'Denied by ORCA: protected' >&2; exit 2",
+        ["cat >/dev/null; echo 'Denied by ORCA: protected' >&2; exit 2", "no-receipt", "absent"],
         // Echoes the whole frame, nonce and all, back to stderr.
-        "cat >&2; exit 2",
+        ["cat >&2; exit 2", "no-receipt", "absent"],
         // A receipt-shaped line that is not signed for this call.
-        `cat >/dev/null; echo 'orca-hook-receipt: ${"0".repeat(64)}' >&2; exit 2`,
+        [`cat >/dev/null; echo 'orca-hook-receipt: ${"0".repeat(64)}' >&2; exit 2`, "no-receipt", "mismatched"],
         // Says far more than the probe reads.
-        "cat >/dev/null; head -c 100000 /dev/zero | tr '\\0' x >&2; exit 2",
-      ]) {
+        ["cat >/dev/null; head -c 100000 /dev/zero | tr '\\0' x >&2; exit 2", "overflow", "absent"],
+      ] as const) {
         const r = await probe(command);
-        expect([command, r.blocked]).toEqual([command, false]);
+        expect([command, r.blocked, r.diagnostics.outcome, r.diagnostics.receipt]).toEqual([
+          command,
+          false,
+          outcome,
+          receipt,
+        ]);
       }
     });
 
@@ -342,12 +362,14 @@ describe("installing it in Codex", () => {
             cwd: workspace,
             contextFile,
             probeKey: PROBE_KEY,
-            env: { ...process.env, SHELL: "/bin/sh" },
+            shell: SH,
+            env: process.env,
             timeoutMs: 500,
           });
           const took = Date.now() - started;
           expect([command, r.blocked]).toEqual([command, false]);
           expect(r.detail).toContain("did not answer within 500 ms");
+          expect(r.diagnostics.outcome).toBe("timeout");
           // The caller is released at the deadline, not when the descendant finally lets go.
           expect(took).toBeLessThan(5_000);
         }
@@ -362,6 +384,27 @@ describe("installing it in Codex", () => {
         expect(["gone", "Z"]).toContain(state);
       },
       30_000,
+    );
+
+    it.skipIf(process.platform === "win32")(
+      "never quotes what the command wrote: fixed reason codes and bounded numbers only",
+      async () => {
+        const r = await probe(
+          `cat >/dev/null; printf 'profile-secret-words \\033[31mred\\033[0m\\norca-hook-receipt: ${"1".repeat(64)}\\n' >&2; exit 1`,
+        );
+        expect(r.detail).toBe("exit 1");
+        expect(JSON.stringify(r)).not.toContain("profile-secret-words");
+        expect(r.diagnostics).toMatchObject({ outcome: "exit", exitCode: 1, receipt: "mismatched" });
+        const missing = await probeCodexHook({
+          command: "true",
+          cwd: tmpdir(),
+          contextFile: join(tmpdir(), "none"),
+          probeKey: PROBE_KEY,
+          shell: { program: join(tmpdir(), "orca-no-such-shell"), args: ["-c"] },
+        });
+        expect(missing.detail).toBe("the shell could not be started (ENOENT)");
+        expect(missing.diagnostics.outcome).toBe("spawn-error");
+      },
     );
 
     it.skipIf(process.platform === "win32")("does not accept a receipt from an earlier probe", async () => {
@@ -400,5 +443,41 @@ describe("the hook process for Codex", () => {
     expect(asked.stdout).toBe("");
     await writeFile(contextFile, JSON.stringify(context({ default: "allow", rules: [] })));
     expect(await run(frame("Bash", { command: "ls" }))).toEqual({ code: 0, stdout: "", stderr: "" });
+  });
+});
+
+/** What ORCA reads off a running process as the environment Codex gives its hooks. */
+describe("the environment Codex runs its hooks in", () => {
+  it.skipIf(process.platform !== "linux")("is the process's own environment, read from the system", async () => {
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 10000)"], {
+      env: { PATH: "/usr/bin:/bin", ONLY_HERE: "a=b=c", EMPTY: "" },
+      stdio: "ignore",
+    });
+    try {
+      await new Promise((r) => child.once("spawn", r));
+      const env = await codexHookEnvironment(child.pid!);
+      // No `codex-path` beside this program, so PATH is as it was.
+      expect(env).toEqual({ PATH: "/usr/bin:/bin", ONLY_HERE: "a=b=c", EMPTY: "" });
+    } finally {
+      child.kill();
+    }
+  });
+
+  it.skipIf(process.platform !== "linux")("is refused, not guessed, when it cannot be read", async () => {
+    expect(await codexHookEnvironment(2 ** 22 + 12345)).toEqual({ error: expect.stringContaining("cannot be read") });
+  });
+});
+
+/** The shell Codex starts a hook in: the account's login shell, with `-c`. */
+describe("the shell Codex runs its hooks in", () => {
+  it("is the login shell Codex knows, run with -c and not as a login shell", () => {
+    expect(codexHookShell("/bin/bash")).toEqual({ program: "/bin/bash", args: ["-c"] });
+    expect(codexHookShell("/usr/bin/zsh")).toEqual({ program: "/usr/bin/zsh", args: ["-c"] });
+    expect(codexHookShell("/bin/sh")).toEqual({ program: "/bin/sh", args: ["-c"] });
+  });
+
+  it("is refused for a login shell ORCA does not know Codex's choice for", () => {
+    expect(codexHookShell("/usr/bin/fish")).toEqual({ error: expect.stringContaining("/usr/bin/fish") });
+    expect(codexHookShell("")).toEqual({ error: "this account has no login shell" });
   });
 });

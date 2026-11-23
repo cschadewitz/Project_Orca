@@ -6,7 +6,7 @@
  * cannot guard is refused, never opened without the hook. The real adapter and Claude Code are in
  * `claude-hook-acceptance-704.test.ts`; this is the wiring around them, with no agent.
  */
-import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,6 +68,10 @@ async function setup(
     codex?: { pid: number; image: { sha256: string } | { error: string } } | { error: string } | undefined;
     /** The program the hook command runs; the real `node` where the test runs the hook. */
     runtimeBin?: string;
+    /** The environment ORCA reads off the Codex process for its startup probe. */
+    environment?: (pid: number) => Promise<NodeJS.ProcessEnv | { error: string }>;
+    /** The shell ORCA runs its startup probe in, as Codex would run the hook. */
+    shell?: () => { program: string; args: string[] } | { error: string };
   } = {},
 ) {
   const ext =
@@ -124,6 +128,11 @@ async function setup(
         return { error: "not under the agent" };
       },
       codexProcess: async (pid) => (pid === AGENT_PID ? codex : { error: "not the agent" }),
+      codexEnvironment:
+        codexOpts.environment ??
+        (async (pid) =>
+          "pid" in codex && pid === codex.pid ? { ...process.env } : { error: "not the Codex process" }),
+      codexShell: codexOpts.shell ?? (() => ({ program: "/bin/sh", args: ["-c"] })),
     },
   );
   const open = (host: AgentHost = new LocalHost({ id: "local", type: "local" })) =>
@@ -220,6 +229,16 @@ describe("installing the hook", () => {
         },
       },
     });
+    // ORCA serves a Claude session's MCP servers itself (#704); a Codex session keeps its own.
+    const relay = t.seen.options?.relayMcpServers;
+    expect(typeof relay).toBe("function");
+    if (typeof relay === "function") {
+      expect(relay(CLAUDE)).toBe(true);
+      expect(relay({ name: "@agentclientprotocol/codex-acp", version: "2.9.0" })).toBe(false);
+      expect(relay(undefined)).toBe(false);
+    }
+    // The session's host services wait on the factory's admission.
+    expect(t.seen.options?.admission).toBeInstanceOf(Promise);
     await session.close();
     expect(await readdir(t.hookDir)).toEqual([]);
   });
@@ -352,6 +371,8 @@ describe("installing the hook in Codex (#705)", () => {
       info?: { name: string; version: string };
       script?: string;
       codex?: { pid: number; image: { sha256: string } | { error: string } } | { error: string };
+      environment?: (pid: number) => Promise<NodeJS.ProcessEnv | { error: string }>;
+      shell?: () => { program: string; args: string[] } | { error: string };
     } = {},
   ) => {
     const seen: { options?: OpenSessionOptions } = {};
@@ -376,6 +397,8 @@ describe("installing the hook in Codex (#705)", () => {
         },
         codex: opts.codex,
         runtimeBin: process.execPath,
+        ...(opts.environment ? { environment: opts.environment } : {}),
+        ...(opts.shell ? { shell: opts.shell } : {}),
       },
     );
     await mkdir(join(t.dir, "work"), { recursive: true });
@@ -428,6 +451,75 @@ describe("installing the hook in Codex (#705)", () => {
     });
     expect(await t.left()).toEqual([]);
   });
+
+  it.skipIf(script === undefined || process.platform === "win32")(
+    "runs its startup check in the environment read off the Codex process, not the daemon's",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "orca-705-env-"));
+      dirs.push(dir);
+      const shell = join(dir, "sh");
+      const seenEnv = join(dir, "seen");
+      // A shell that notes the variable only Codex's environment has, and the arguments it was
+      // given, then runs the real one.
+      await writeFile(shell, `#!/bin/sh\nprintf '%s %s' "$ONLY_IN_CODEX" "$1" > '${seenEnv}'\nexec /bin/sh "$@"\n`, {
+        mode: 0o755,
+      });
+      const asked: number[] = [];
+      const t = await codexSetup(
+        {},
+        {
+          environment: async (pid) => {
+            asked.push(pid);
+            return { ...process.env, ONLY_IN_CODEX: "from-codex" };
+          },
+          shell: () => ({ program: shell, args: ["-c"] }),
+        },
+      );
+      const session = await t.open();
+      expect(asked).toEqual([CODEX_PID]);
+      expect(await readFile(seenEnv, "utf8")).toBe("from-codex -c");
+      await session.close();
+    },
+  );
+
+  it("refuses when ORCA does not know which shell Codex would run the hook in", async () => {
+    const t = await codexSetup({}, { shell: () => ({ error: "this account's login shell is /usr/bin/fish" }) });
+    await expect(t.open()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringMatching(/could not run its startup check[\s\S]*fish[\s\S]*nativeToolHook: on/),
+    });
+    expect(await t.left()).toEqual([]);
+  });
+
+  it("refuses when the Codex process's environment cannot be read", async () => {
+    const t = await codexSetup(
+      {},
+      { environment: async () => ({ error: "the Codex process's environment cannot be read (EACCES)" }) },
+    );
+    await expect(t.open()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringMatching(/could not run its startup check[\s\S]*EACCES[\s\S]*nativeToolHook: on/),
+    });
+    expect(await t.left()).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "says how the startup check failed, in the refusal and its details",
+    async () => {
+      const t = await codexSetup({}, { script: join(tmpdir(), "orca-705-no-such-hook.mjs") });
+      const error = (await t.open().then(
+        () => ({ message: "it opened" }),
+        (e: unknown) => e,
+      )) as { message: string; details?: Record<string, unknown> };
+      expect(error.details?.["probe"]).toMatchObject({
+        outcome: "exit",
+        exitCode: 1,
+        receipt: "absent",
+        shell: expect.any(String),
+      });
+      expect(error.message).toMatch(/did not block[\s\S]*exit 1/);
+    },
+  );
 
   it.each([
     [
