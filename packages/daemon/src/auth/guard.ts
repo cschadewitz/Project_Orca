@@ -35,6 +35,8 @@ import {
   RUN_CHANGED,
   STEP_CHANGED,
   WORKFLOWS_CHANGED,
+  isAfterRunsListCursor,
+  runsListCursor,
   type ArtifactView,
   type ClaimView,
   type HelloResult,
@@ -587,13 +589,14 @@ export class Authorizer {
   }
 
   private async runsList(principal: Principal, params: Params, original: (p: Params) => unknown): Promise<unknown> {
-    type Page = { runs: RunSummaryView[]; total: number; asOf: string };
+    type Page = { runs: RunSummaryView[]; total: number; asOf: string; nextCursor?: string };
     const rows: RunSummaryView[] = [];
     const seen = new Set<string>();
     let last: Page;
     // Visibility first, on plain rows: the operations facts (the log's tail, the lease) are
     // read only for the rows this principal is then shown, never for a hidden run (#340).
-    const { operations, ...plain } = params;
+    // The cursor is applied here, after visibility, so it walks the rows this caller sees.
+    const { operations, cursor, ...plain } = params;
     for (let offset = 0; ;) {
       last = (await original({ ...plain, limit: PAGE, offset })) as Page;
       for (const row of last.runs) {
@@ -606,7 +609,10 @@ export class Authorizer {
       if (last.runs.length === 0 || offset >= last.total) break;
     }
     const visible = await this.visible(principal, rows, (r) => r.id);
-    let page = visible.slice(params.offset as number, (params.offset as number) + (params.limit as number));
+    const after = cursor === undefined ? visible : visible.filter((r) => isAfterRunsListCursor(r, cursor as string));
+    let page = after.slice(params.offset as number, (params.offset as number) + (params.limit as number));
+    const more = (params.offset as number) + page.length < after.length && page.length > 0;
+    const nextCursor = more ? runsListCursor(page[page.length - 1]!) : undefined;
     if (operations === true && page.length) {
       const detailed = (await original({
         ...plain,
@@ -619,7 +625,8 @@ export class Authorizer {
       // A row that moved out of the filter between the two reads keeps its plain form.
       page = page.map((r) => byId.get(r.id) ?? r);
     }
-    return { ...last, runs: page, total: visible.length };
+    const { nextCursor: _inner, ...rest } = last;
+    return { ...rest, runs: page, total: visible.length, ...(nextCursor ? { nextCursor } : {}) };
   }
 
   /**
