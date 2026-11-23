@@ -26,7 +26,7 @@ import type {
   WorkflowDraftView,
 } from "@orca/protocol";
 import { useAnnounce } from "../../a11y/announce-context.js";
-import { useMethodPresent } from "../../chrome/use-connection.js";
+import { useAuthority, useMethodPresent } from "../../chrome/use-connection.js";
 import { diffText, gutterFor } from "../../artifacts/diff.js";
 import { PaneSplitter } from "../../chrome/pane-splitter.js";
 import { useWritability } from "../../chrome/use-connection.js";
@@ -140,9 +140,11 @@ function Editor({
      for a superseded request or another target is dropped, never shown. Within its scope it
      is kept when the draft moves on, marked stale, and no longer drawn on the canvas. */
   const canDryRun = useMethodPresent("workflowDrafts.dryRun");
+  const authority = useAuthority();
   const [dryOpen, setDryOpen] = useState(false);
   const [dryResult, setDryResult] = useState<
-    { value: WorkflowDraftDryRunResult; request: number; epoch: number | undefined } | undefined
+    | { value: WorkflowDraftDryRunResult; request: number; epoch: number | undefined; authority: number | undefined }
+    | undefined
   >(undefined);
   const [dryNotice, setDryNotice] = useState<string | undefined>(undefined);
   const dryRequest = useRef(0);
@@ -151,7 +153,7 @@ function Editor({
     setDryResult(undefined);
     setDryNotice(undefined);
   }, []);
-  useEffect(invalidateDry, [draft.workflowId, draft.owner.principalId, readOnly, canDryRun, invalidateDry]);
+  useEffect(invalidateDry, [draft.workflowId, draft.owner.principalId, readOnly, canDryRun, authority, invalidateDry]);
   useEffect(
     () => () => {
       dryRequest.current += 1;
@@ -160,7 +162,11 @@ function Editor({
   );
   const currentEpoch = window.orca.daemonConnection?.read().epoch;
   const shownDry =
-    dryResult && dryResult.request === dryRequest.current && dryResult.epoch === currentEpoch
+    dryResult &&
+    dryResult.request === dryRequest.current &&
+    dryResult.epoch === currentEpoch &&
+    dryResult.authority === authority &&
+    authority === window.orca.connection.read().authority
       ? dryResult.value
       : undefined;
   const workflows = useWorkflowIds();
@@ -366,30 +372,39 @@ function Editor({
   };
 
   /* The fixtures were chosen against the revision on screen, so that is the revision asked
-     for; the answer is kept only if nothing changed the scope while it was out. */
+     for. The press is bound to its scope - this workflow's draft and owner, the daemon target
+     (its epoch) and the grant on it (its authority, which moves on the same target when access
+     is refused or re-granted) - and that binding is checked again just before the call goes
+     out and when its answer comes back; an answer from outside it is never shown. */
   const dryRun = async (fixtures: DryRunFixtures) => {
     if (readOnly || !canDryRun) return;
     const request = ++dryRequest.current;
-    const epoch = window.orca.daemonConnection?.read().epoch;
-    const scope = { workflowId: draft.workflowId, owner: draft.owner.principalId };
+    const scope = {
+      workflowId: draft.workflowId,
+      owner: draft.owner.principalId,
+      epoch: window.orca.daemonConnection?.read().epoch,
+      authority: window.orca.connection.read().authority,
+    };
+    const current = (): boolean => {
+      const now = latest.current;
+      return (
+        request === dryRequest.current &&
+        scope.epoch === window.orca.daemonConnection?.read().epoch &&
+        scope.authority === window.orca.connection.read().authority &&
+        !now.readOnly &&
+        now.draft.workflowId === scope.workflowId &&
+        now.draft.owner.principalId === scope.owner
+      );
+    };
     setDryNotice(undefined);
-    const answer = await controller.dryRun(fixtures, draft.revision);
-    const now = latest.current;
-    if (
-      !answer ||
-      request !== dryRequest.current ||
-      epoch !== window.orca.daemonConnection?.read().epoch ||
-      now.readOnly ||
-      now.draft.workflowId !== scope.workflowId ||
-      now.draft.owner.principalId !== scope.owner
-    )
-      return;
+    const answer = await controller.dryRun(fixtures, draft.revision, current);
+    if (!answer || !current()) return;
     if (answer.kind === "moved") {
       setDryNotice("The draft changed before the dry run started. Check the choices, then run it again.");
       return;
     }
     if (answer.result.run.dryRun?.draftRevision === undefined) return;
-    setDryResult({ value: answer.result, request, epoch });
+    setDryResult({ value: answer.result, request, epoch: scope.epoch, authority: scope.authority });
     const outcome = answer.result.report.outcome;
     announce(
       `Dry run ${outcome === "failure" ? "ended in failure" : outcome === "success" ? "ended in success" : "stopped"}.`,

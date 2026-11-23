@@ -52,10 +52,16 @@ export interface WorkflowDraftController {
    * past `revision`, nothing is sent and the answer is `moved`, so the choices can be checked
    * against the new revision first. Answers once the simulation has stopped; a refusal is said
    * in the bar like any other.
+   *
+   * `current` is the caller's binding of the press to its scope - the draft, the daemon target
+   * and the grant it was pressed under. It is asked again immediately before the call goes out
+   * and when the answer comes back: if the scope moved while the run waited in the queue,
+   * nothing is sent; if it moved while the run was out, the answer (or refusal) is dropped.
    */
   dryRun(
     fixtures: DryRunFixtures,
     revision: number,
+    current: () => boolean,
   ): Promise<{ kind: "result"; result: WorkflowDraftDryRunResult } | { kind: "moved" } | undefined>;
   reload(): Promise<void>;
   clearMessage(): void;
@@ -223,17 +229,23 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
   );
 
   const dryRun = useCallback(
-    (fixtures: DryRunFixtures, revision: number) =>
+    (fixtures: DryRunFixtures, revision: number, current: () => boolean) =>
       enqueue(
         async (
           draft,
         ): Promise<{ kind: "result"; result: WorkflowDraftDryRunResult } | { kind: "moved" } | undefined> => {
+          // Rechecked here, at dispatch: the press may have waited behind edits while the
+          // app was pointed elsewhere or its grant changed.
+          if (!current() || draft.workflowId !== workflowId) return undefined;
           if (draft.revision !== revision) return { kind: "moved" };
-          const result = await window.orca.workflowDrafts!.call("workflowDrafts.dryRun", {
+          const bridge = window.orca.workflowDrafts;
+          if (!bridge) return undefined;
+          const result = await bridge.call("workflowDrafts.dryRun", {
             workflowId,
             expectedRevision: revision,
             fixtures,
           });
+          if (!current()) return undefined;
           if (result.ok) {
             setMessage(undefined);
             return { kind: "result", result: result.result };

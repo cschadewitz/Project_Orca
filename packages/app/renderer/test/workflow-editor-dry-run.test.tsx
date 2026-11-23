@@ -102,7 +102,13 @@ async function openEditor(options: { dryRunMethod?: boolean } = {}) {
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const canvas = await screen.findByRole("listbox", { name: "ai-sdlc draft graph" });
   await act(async () => {});
-  return { canvas, drafts, retarget: () => (epoch += 1) };
+  return {
+    canvas,
+    drafts,
+    retarget: () => (epoch += 1),
+    // The grant on the same daemon moves (refused, then given back): a new authority, same target.
+    regrant: () => fake.connect({ ...fake.connection, authority: (fake.connection.authority ?? 0) + 1 }),
+  };
 }
 
 async function openPanel() {
@@ -183,6 +189,58 @@ describe("the editor's dry run, against a moving draft or target", () => {
     expect(within(panel).queryByText("failed · dry")).toBeNull();
     expect(within(panel).queryByRole("button", { name: "Open in Runs" })).toBeNull();
     expect(document.querySelectorAll(".orca-node--untaken")).toHaveLength(0);
+  });
+
+  it("sends nothing when the app is pointed at another daemon while the dry run waits in the queue", async () => {
+    const { drafts, retarget } = await openEditor();
+    const panel = await openPanel();
+    const release = drafts.hold("workflowDrafts.dryRun");
+    // Pressed twice before either is answered, on the same revision: the second waits behind
+    // the first, and the scope moves while it waits.
+    const run = within(panel).getByRole("button", { name: "Run a dry run" });
+    fireEvent.click(run);
+    fireEvent.click(run);
+    await waitFor(() => expect(drafts.calls.some((c) => c.method === "workflowDrafts.dryRun")).toBe(true));
+    retarget();
+    await act(async () => release());
+    await act(async () => {});
+    expect(drafts.calls.filter((c) => c.method === "workflowDrafts.dryRun")).toHaveLength(1);
+    expect(within(panel).queryByText("failed · dry")).toBeNull();
+  });
+
+  it("sends nothing when the grant on the same daemon changes while the dry run waits in the queue", async () => {
+    const { drafts, regrant } = await openEditor();
+    const panel = await openPanel();
+    const release = drafts.hold("workflowDrafts.dryRun");
+    // Pressed twice before either is answered, on the same revision: the second waits behind
+    // the first, and the scope moves while it waits.
+    const run = within(panel).getByRole("button", { name: "Run a dry run" });
+    fireEvent.click(run);
+    fireEvent.click(run);
+    await waitFor(() => expect(drafts.calls.some((c) => c.method === "workflowDrafts.dryRun")).toBe(true));
+    await act(async () => regrant());
+    await act(async () => release());
+    await act(async () => {});
+    expect(drafts.calls.filter((c) => c.method === "workflowDrafts.dryRun")).toHaveLength(1);
+    expect(within(panel).queryByText("failed · dry")).toBeNull();
+  });
+
+  it("drops a result that answers after the grant on the same daemon changed", async () => {
+    const { drafts, regrant } = await openEditor();
+    const panel = await openPanel();
+    const release = drafts.hold("workflowDrafts.dryRun");
+    fireEvent.click(within(panel).getByRole("button", { name: "Run a dry run" }));
+    await waitFor(() => expect(drafts.calls.some((c) => c.method === "workflowDrafts.dryRun")).toBe(true));
+    await act(async () => regrant());
+    await act(async () => release());
+    await act(async () => {});
+    expect(within(panel).queryByText("failed · dry")).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "Open in Runs" })).toBeNull();
+    expect(document.querySelectorAll(".orca-node--untaken")).toHaveLength(0);
+
+    // Pressed again under the new grant: that one is shown.
+    fireEvent.click(within(panel).getByRole("button", { name: "Run a dry run" }));
+    await waitFor(() => expect(within(panel).getByText("failed · dry")).toBeTruthy());
   });
 
   it("offers no dry run on a daemon that does not have it, and says why", async () => {
