@@ -21,7 +21,6 @@ import {
   codexProbeReceipt,
   permissionPolicyPath,
   probeCodexHook,
-  probeExcerpt,
   codexHookEnvironment,
   codexHookShell,
   runClaudePreToolHook,
@@ -388,13 +387,23 @@ describe("installing it in Codex", () => {
     );
 
     it.skipIf(process.platform === "win32")(
-      "says what the command said, without receipts, control characters or escape sequences",
+      "never quotes what the command wrote: fixed reason codes and bounded numbers only",
       async () => {
         const r = await probe(
-          `cat >/dev/null; printf 'profile: \\033[31mred\\033[0m\\nline two\\norca-hook-receipt: ${"1".repeat(64)}\\n' >&2; exit 1`,
+          `cat >/dev/null; printf 'profile-secret-words \\033[31mred\\033[0m\\norca-hook-receipt: ${"1".repeat(64)}\\n' >&2; exit 1`,
         );
-        expect(r.detail).toBe("exit 1: profile: ?[31mred?[0m line two");
-        expect(probeExcerpt("x".repeat(500), 10)).toBe("xxxxxxxxxx…");
+        expect(r.detail).toBe("exit 1");
+        expect(JSON.stringify(r)).not.toContain("profile-secret-words");
+        expect(r.diagnostics).toMatchObject({ outcome: "exit", exitCode: 1, receipt: "mismatched" });
+        const missing = await probeCodexHook({
+          command: "true",
+          cwd: tmpdir(),
+          contextFile: join(tmpdir(), "none"),
+          probeKey: PROBE_KEY,
+          shell: { program: join(tmpdir(), "orca-no-such-shell"), args: ["-c"] },
+        });
+        expect(missing.detail).toBe("the shell could not be started (ENOENT)");
+        expect(missing.diagnostics.outcome).toBe("spawn-error");
       },
     );
 

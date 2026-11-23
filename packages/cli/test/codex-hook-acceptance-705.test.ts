@@ -248,6 +248,9 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Codex (#705)", () =
     makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
       runtime: process.execPath,
       script: hookScript,
+      // The hook is off in every shipped build until activation is approved; this suite is
+      // what proves it.
+      activation: "acceptance-only",
     })({
       host: new LocalHost({ id: "local", type: "local" }),
       agent: agent(permissions, env),
@@ -415,6 +418,9 @@ createInterface({ input: process.stdin }).on("line", (l) => {
     const session = await makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
       runtime: process.execPath,
       script: hookScript,
+      // The hook is off in every shipped build until activation is approved; this suite is
+      // what proves it.
+      activation: "acceptance-only",
       codexProcess: async (agentPid) => {
         const r = await codexRuntimeProcess(agentPid);
         if ("pid" in r) found.push({ pid: r.pid, agentPid: agentPid! });

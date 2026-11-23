@@ -12,6 +12,14 @@
  * version: ORCA opens it with `initialize` and answers `server/discover` from what it said.
  * Requests the server makes of its client (sampling, roots, elicitation) are refused; ORCA
  * has no model or person to put them to on the agent's behalf.
+ *
+ * Admission is only the first gate. Every request is checked again when it is dispatched
+ * (`authorize`, which the session supplies): the session must still be live, and a request
+ * that acts (`tools/call`) must belong to the session's live turn and be allowed by ORCA's
+ * policy for that tool, read at that moment. A request ORCA does not relay is refused. Each
+ * request has a deadline and ends with the turn or the session; a server that does not
+ * finish starting within its own deadline is stopped, and closing the relay stops a server
+ * even while it is still starting.
  */
 import * as acpUnstable from "@agentclientprotocol/sdk/unstable";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -37,14 +45,44 @@ export interface McpRelayOptions {
   admitted: Promise<boolean>;
   logger: Logger;
   clientInfo: { name: string; version: string };
+  /**
+   * Decides one request at dispatch time, after admission. It throws to refuse, and returns
+   * the check to run in the same step the request is written to the server, plus the signal
+   * that ends the request with the turn or session it belongs to.
+   */
+  authorize: (call: McpRelayCall) => Promise<McpRelayDispatch>;
+  /** How long a server has to answer `initialize` before it is stopped. */
+  startTimeoutMs?: number | undefined;
+  /** How long one relayed request may take. */
+  requestTimeoutMs?: number | undefined;
   exitGraceMs?: number | undefined;
 }
+
+/** One request the agent sent a relayed server, as `authorize` sees it. */
+export type McpRelayCall =
+  | { server: string; method: (typeof MCP_RELAY_LISTING_METHODS)[number] }
+  | { server: string; method: "tools/call"; tool: string; arguments: unknown };
+
+export interface McpRelayDispatch {
+  /** Throws if the request may no longer go out; run in the same step that sends it. */
+  dispatch(): void;
+  /** Aborts when the turn or session the request belongs to ends. */
+  signal: AbortSignal;
+}
+
+/** Requests that only describe the server and act on nothing: allowed in a live session. */
+export const MCP_RELAY_LISTING_METHODS = ["server/discover", "tools/list", "ping"] as const;
+/** The default for `startTimeoutMs`. */
+export const MCP_RELAY_START_TIMEOUT_MS = 30_000;
+/** The default for `requestTimeoutMs`. */
+export const MCP_RELAY_REQUEST_TIMEOUT_MS = 10 * 60_000;
 
 /** The MCP protocol version ORCA opens a real server with. Servers answer with theirs. */
 export const RELAY_UPSTREAM_PROTOCOL_VERSION = "2025-06-18";
 /** What ORCA tells the agent it speaks, over ACP. */
 export const RELAY_PROTOCOL_VERSION = "2026-07-28";
 const NOT_ADMITTED = -32002;
+const REFUSED = -32001;
 const UPSTREAM_FAILED = -32603;
 const METHOD_NOT_FOUND = -32601;
 /** Per-request metadata MCP 2026-07-28 adds; a stdio server of an older version has no use for it. */
@@ -56,7 +94,13 @@ const REQUEST_META_KEYS = [
 
 interface Upstream {
   initialized: { capabilities: unknown; serverInfo: unknown; instructions?: unknown };
-  request(method: string, params: Record<string, unknown> | undefined, signal: AbortSignal): Promise<unknown>;
+  /** `dispatch` runs in the same step that writes the request; if it throws, nothing is sent. */
+  request(
+    method: string,
+    params: Record<string, unknown> | undefined,
+    signal: AbortSignal,
+    dispatch: () => void,
+  ): Promise<unknown>;
   close(): Promise<void>;
 }
 
@@ -74,11 +118,14 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
   const started = new Map<string, Promise<Upstream>>();
   const registrations: acpUnstable.McpServerRegistration[] = [];
   let closing = false;
+  /** Aborted by `close`: stops servers that are running and servers still starting. */
+  const stopping = new AbortController();
+  const running = new Set<() => Promise<void>>();
 
   const upstreamFor = (server: RelayedMcpServer): Promise<Upstream> => {
     let up = started.get(server.name);
     if (!up) {
-      up = startUpstream(server, opts);
+      up = startUpstream(server, opts, stopping.signal, running);
       started.set(server.name, up);
       // A server that failed to start is started again on the next request.
       void up.catch(() => started.delete(server.name));
@@ -97,17 +144,43 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
         throw new acpUnstable.McpProtocolError(NOT_ADMITTED, "the session was not admitted");
       }
       if (closing) throw new acpUnstable.McpProtocolError(UPSTREAM_FAILED, "the session is closing");
-      if (op.method === "initialize")
-        throw new acpUnstable.McpProtocolError(METHOD_NOT_FOUND, "initialize is ORCA's to send");
+      const call = relayCall(server.name, op.method, op.params);
+      if (!call) {
+        opts.logger.warn("MCP request refused: ORCA does not relay this method", {
+          server: server.name,
+          method: op.method,
+        });
+        throw new acpUnstable.McpProtocolError(METHOD_NOT_FOUND, `${op.method} is not relayed by ORCA`);
+      }
+      let gate: McpRelayDispatch;
+      try {
+        gate = await opts.authorize(call);
+      } catch (error) {
+        opts.logger.warn("MCP request refused", {
+          server: server.name,
+          method: op.method,
+          reason: describeError(error).message,
+        });
+        throw new acpUnstable.McpProtocolError(REFUSED, `not allowed: ${describeError(error).message}`);
+      }
+      if (closing) throw new acpUnstable.McpProtocolError(UPSTREAM_FAILED, "the session is closing");
+      const signal = AbortSignal.any([
+        op.signal,
+        gate.signal,
+        stopping.signal,
+        AbortSignal.timeout(opts.requestTimeoutMs ?? MCP_RELAY_REQUEST_TIMEOUT_MS),
+      ]);
       let up: Upstream;
       try {
         up = await upstreamFor(server);
       } catch (error) {
         throw new acpUnstable.McpProtocolError(UPSTREAM_FAILED, `the MCP server "${server.name}" did not start`, {
-          reason: describeError(error),
+          reason: describeError(error).message,
         });
       }
+      if (signal.aborted) throw new acpUnstable.McpProtocolError(REFUSED, `the request ended: ${abortReason(signal)}`);
       if (op.method === "server/discover") {
+        gate.dispatch();
         const { capabilities, serverInfo, instructions } = up.initialized;
         return {
           result: {
@@ -118,9 +191,17 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
           },
         };
       }
-      return {
-        result: (await up.request(op.method, withoutRequestMeta(op.params), op.signal)) as Record<string, unknown>,
-      };
+      try {
+        return {
+          result: (await up.request(op.method, withoutRequestMeta(op.params), signal, () => gate.dispatch())) as Record<
+            string,
+            unknown
+          >,
+        };
+      } catch (error) {
+        if (error instanceof acpUnstable.McpProtocolError) throw error;
+        throw new acpUnstable.McpProtocolError(UPSTREAM_FAILED, describeError(error).message);
+      }
     };
 
   return {
@@ -134,10 +215,33 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
     },
     async close() {
       closing = true;
+      stopping.abort(new Error("the session closed"));
       await Promise.allSettled(registrations.map((r) => r.dispose()));
-      await Promise.allSettled([...started.values()].map((up) => up.then((u) => u.close())));
+      // Every server that was spawned, whether or not it finished starting.
+      await Promise.allSettled([...running].map((stop) => stop()));
     },
   };
+}
+
+function relayCall(
+  server: string,
+  method: string,
+  params: Record<string, unknown> | undefined,
+): McpRelayCall | undefined {
+  if ((MCP_RELAY_LISTING_METHODS as readonly string[]).includes(method))
+    return { server, method: method as McpRelayCall["method"] } as McpRelayCall;
+  if (method === "tools/call") {
+    const tool = params?.["name"];
+    if (typeof tool !== "string" || tool === "") return undefined;
+    return { server, method, tool, arguments: params?.["arguments"] };
+  }
+  return undefined;
+}
+
+function abortReason(signal: AbortSignal): string {
+  const r: unknown = signal.reason;
+  if (r instanceof Error && r.name === "TimeoutError") return "the request's deadline passed";
+  return r instanceof Error ? r.message : typeof r === "string" ? r : "cancelled";
 }
 
 function withoutRequestMeta(params: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
@@ -154,12 +258,30 @@ function withoutRequestMeta(params: Record<string, unknown> | undefined): Record
 
 type Message = { jsonrpc?: string; id?: unknown; method?: string; params?: unknown; result?: unknown; error?: unknown };
 
-async function startUpstream(server: RelayedMcpServer, opts: McpRelayOptions): Promise<Upstream> {
+async function startUpstream(
+  server: RelayedMcpServer,
+  opts: McpRelayOptions,
+  stopping: AbortSignal,
+  running: Set<() => Promise<void>>,
+): Promise<Upstream> {
+  if (stopping.aborted) throw new Error("the session closed");
   const proc: AgentProcessHandle = await opts.host.spawnAgent(
     AgentSpecSchema.parse({ id: `mcp-${server.name}`, command: server.command, args: server.args, env: server.env }),
     { cwd: opts.cwd, ...(opts.env ? { env: opts.env } : {}) },
   );
   const cleanup = processCleanup(proc, opts.exitGraceMs);
+  // Registered before anything can wait on the server, so `close` stops it even mid-start.
+  let stopped: Promise<void> | undefined;
+  const stop = (): Promise<void> => {
+    stopped ??= (async () => {
+      running.delete(stop);
+      end(new Error(`the MCP server "${server.name}" was stopped`));
+      await writer.close().catch(() => undefined);
+      await cleanup();
+    })();
+    return stopped;
+  };
+  running.add(stop);
   const writer = proc.stream.writable.getWriter();
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   let nextId = 0;
@@ -214,9 +336,13 @@ async function startUpstream(server: RelayedMcpServer, opts: McpRelayOptions): P
   const request = (
     method: string,
     params: Record<string, unknown> | undefined,
-    signal?: AbortSignal,
+    signal: AbortSignal,
+    dispatch: () => void = () => undefined,
   ): Promise<unknown> => {
     if (ended) return Promise.reject(ended);
+    if (signal.aborted) return Promise.reject(new Error(abortReason(signal)));
+    // The last check, in the same step as the write: a turn that ended since is refused here.
+    dispatch();
     const id = ++nextId;
     return new Promise<unknown>((resolve, reject) => {
       const onAbort = () => {
@@ -224,19 +350,19 @@ async function startUpstream(server: RelayedMcpServer, opts: McpRelayOptions): P
         void send({ method: "notifications/cancelled", params: { requestId: id, reason: "cancelled" } }).catch(
           () => undefined,
         );
-        reject(new Error("cancelled"));
+        reject(new Error(abortReason(signal)));
       };
       pending.set(id, {
         resolve: (v) => {
-          signal?.removeEventListener("abort", onAbort);
+          signal.removeEventListener("abort", onAbort);
           resolve(v);
         },
         reject: (e) => {
-          signal?.removeEventListener("abort", onAbort);
+          signal.removeEventListener("abort", onAbort);
           reject(e);
         },
       });
-      signal?.addEventListener("abort", onAbort, { once: true });
+      signal.addEventListener("abort", onAbort, { once: true });
       send({ id, method, ...(params ? { params } : {}) }).catch((error: unknown) => {
         pending.delete(id);
         reject(new Error(`could not write to the MCP server "${server.name}": ${describeError(error).message}`));
@@ -245,25 +371,22 @@ async function startUpstream(server: RelayedMcpServer, opts: McpRelayOptions): P
   };
 
   try {
-    const init = (await request("initialize", {
-      protocolVersion: RELAY_UPSTREAM_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: opts.clientInfo,
+    const startTimeoutMs = opts.startTimeoutMs ?? MCP_RELAY_START_TIMEOUT_MS;
+    const init = (await request(
+      "initialize",
+      { protocolVersion: RELAY_UPSTREAM_PROTOCOL_VERSION, capabilities: {}, clientInfo: opts.clientInfo },
+      AbortSignal.any([stopping, AbortSignal.timeout(startTimeoutMs)]),
+    ).catch((error: unknown) => {
+      if (stopping.aborted) throw new Error("the session closed");
+      if (error instanceof Error && error.message === "the request's deadline passed")
+        throw new Error(`it did not answer initialize within ${startTimeoutMs} ms`);
+      throw error;
     })) as Upstream["initialized"];
     await send({ method: "notifications/initialized" });
     opts.logger.debug("relayed MCP server started", { server: server.name });
-    return {
-      initialized: init,
-      request: (method, params, signal) => request(method, params, signal),
-      close: async () => {
-        end(new Error("closed"));
-        await writer.close().catch(() => undefined);
-        await cleanup();
-      },
-    };
+    return { initialized: init, request, close: stop };
   } catch (error) {
-    end(error instanceof Error ? error : new Error(String(error)));
-    await cleanup().catch(() => undefined);
+    await stop().catch(() => undefined);
     throw error;
   }
 }

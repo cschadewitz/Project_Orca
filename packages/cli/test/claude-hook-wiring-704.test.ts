@@ -59,6 +59,8 @@ async function setup(
     pid: RUNTIME_PID,
     image: { sha256: PINNED },
   },
+  /** `off`: a shipped build, where activation is unavailable. */
+  activation: "acceptance-only" | "off" = "acceptance-only",
   codexOpts: {
     /** The adapter's ACP extension method, which the Codex path asks for its hook listing. */
     ext?: (method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -117,6 +119,7 @@ async function setup(
       script: script ?? undefined,
       platform,
       arch: "x64",
+      activation: activation === "off" ? undefined : activation,
       // ORCA's own evidence, faked: only the attested process under the agent ORCA started.
       imageDigest: async (pid, agentPid) => {
         if (agentPid !== AGENT_PID) return { error: "not under the agent" };
@@ -240,28 +243,6 @@ describe("installing the hook", () => {
     expect(await readdir(t.hookDir)).toEqual([]);
   });
 
-  it("is installed by the session factory every build ships, with no switch to turn it on", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "orca-704-shipped-"));
-    dirs.push(dir);
-    let seen: OpenSessionOptions | undefined;
-    // The shape of the shipped default: a runtime and the hook program beside the daemon,
-    // and nothing else (tests run the sources, where that program is not built).
-    const factory = makeSessionFactory(
-      { configDir: dir, storeDir: ".orca" },
-      async (options) => {
-        seen = options;
-        throw new Error("stop before anything starts");
-      },
-      { runtime: process.execPath, script: "/opt/orca/claude-pre-tool-hook.mjs" },
-    );
-    const agent = AgentSpecSchema.parse({ id: "claude", command: "claude-agent-acp", nativeToolHook: "on" });
-    await expect(factory({ host: new LocalHost({ id: "local", type: "local" }), agent, cwd: dir })).rejects.toThrow(
-      "stop before anything starts",
-    );
-    expect(seen?.sessionMeta).toBeTypeOf("function");
-    expect(seen?.admission).toBeInstanceOf(Promise);
-  });
-
   it("removes the context file when the agent's connection ends without a close", async () => {
     const t = await setup(CLAUDE);
     await t.open();
@@ -307,6 +288,15 @@ describe("installing the hook", () => {
     expect(t.opened()).toBe(1);
     expect(t.closedByFactory()).toBe(1);
     expect(await readdir(t.hookDir)).toEqual([]);
+  });
+
+  it("refuses every opted-in session while activation is unavailable, before anything starts", async () => {
+    const t = await setup(CLAUDE, {}, "/opt/orca/claude-pre-tool-hook.mjs", "linux", undefined, "off");
+    await expect(t.open()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringMatching(/not available in this build yet[\s\S]*nativeToolHook: on/),
+    });
+    expect(t.opened()).toBe(0);
   });
 
   it("refuses a platform the acceptance test does not cover", async () => {
@@ -393,6 +383,7 @@ describe("installing the hook in Codex (#705)", () => {
       "linux",
       // Codex has no session-start hook: nothing reports a runtime process in.
       null,
+      "acceptance-only",
       {
         ext: (method, params) => {
           if (t.seen.options) seen.options = t.seen.options;

@@ -37,11 +37,12 @@ import {
 import { decideFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
 import { processCleanup } from "./process-cleanup.js";
 import * as acpUnstable from "@agentclientprotocol/sdk/unstable";
-import { createMcpRelay, type McpRelay } from "./mcp-relay.js";
+import { createMcpRelay, type McpRelay, type McpRelayCall, type McpRelayDispatch } from "./mcp-relay.js";
 import { nativeToolHookUnavailable } from "./native-tool-hook-session.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import { isHostFileMissing, type AgentHost, type AgentProcessHandle } from "./host.js";
 import {
+  decidePermission,
   loadEffectivePermissionPolicy,
   protectedPathFor,
   resolvePermission,
@@ -120,6 +121,10 @@ export interface OpenSessionOptions {
    * once the agent has said at `initialize` who it is.
    */
   relayMcpServers?: boolean | ((agentInfo: { name: string; version: string } | undefined) => boolean) | undefined;
+  /** How long a relayed MCP server has to finish starting (`MCP_RELAY_START_TIMEOUT_MS`). */
+  mcpStartTimeoutMs?: number | undefined;
+  /** How long one relayed MCP request may take (`MCP_RELAY_REQUEST_TIMEOUT_MS`). */
+  mcpRequestTimeoutMs?: number | undefined;
   /** Handed every resolved secret value, before anything else happens, so the caller can redact it. */
   onSecretValues?: (values: readonly string[]) => void;
   host: AgentHost;
@@ -414,6 +419,99 @@ async function openPlanned(
     return dispatch;
   };
 
+  /** Aborted when the session ends, however it ends: what a relayed listing request lives by. */
+  const sessionLive = new AbortController();
+
+  /**
+   * Decide one request to a relayed MCP server at dispatch time (#704 review). Admission is
+   * only the first gate: it says the runtime was checked, not that a later request is wanted.
+   *
+   * - A listing (`server/discover`, `tools/list`, `ping`) acts on nothing and goes ahead in a
+   *   live session, turn or not: an agent lists its tools when the session starts.
+   * - `tools/call` must belong to the session's live prompt turn, and is decided by ORCA's
+   *   policy, read fresh, as `<server>: <tool>` of kind `other`, the same call the pre-tool
+   *   hook decides. An allow proceeds; an ask is put to a person through the host as a
+   *   one-time allow for this exact call, and the policy is read again after the answer;
+   *   anything else refuses. An answer the agent got for its own earlier ask is not reused.
+   *
+   * The returned check runs in the same step that writes the request to the server, and its
+   * signal ends the request with the turn (or, for a listing, the session).
+   */
+  const authorizeMcp = async (call: McpRelayCall): Promise<McpRelayDispatch> => {
+    const record = (title: string, decision: string) => {
+      opts.onPermission?.({ title, decision: `mcp:${decision}` });
+      logger.debug("mcp permission", { server: call.server, method: call.method, decision });
+    };
+    if (sessionLive.signal.aborted) throw new Error("the session has ended");
+    if (call.method !== "tools/call") {
+      return {
+        signal: sessionLive.signal,
+        dispatch: () => {
+          if (sessionLive.signal.aborted) throw new Error("the session ended before the request was sent");
+        },
+      };
+    }
+    const title = `${call.server}: ${call.tool}`;
+    const refuse = (decision: string, reason: string): never => {
+      record(title, decision);
+      throw new Error(reason);
+    };
+    const turn = activeTurn;
+    if (!turn || turn.abort.signal.aborted)
+      return refuse("no-turn", "no live turn: ORCA relays tool calls only in one");
+    const live = () => activeTurn === turn && !turn.abort.signal.aborted && !sessionLive.signal.aborted;
+    const gate: McpRelayDispatch = {
+      signal: turn.abort.signal,
+      dispatch: () => {
+        if (live()) return;
+        record(title, "dispatch:turn-ended");
+        throw new Error("the turn ended before the tool call was sent");
+      },
+    };
+    const toolCall = (toolCallId: string): acp.RequestPermissionRequest["toolCall"] => ({
+      toolCallId,
+      title,
+      kind: "other",
+      locations: [],
+      rawInput: call.arguments,
+    });
+    const decide = (policy: Awaited<ReturnType<typeof policyForAsk>>) =>
+      decidePermission(policy, { sessionId: acpSessionId, toolCall: toolCall(""), options: [] }, evalScope);
+    const policy = await policyForAsk();
+    if (!live()) return refuse("turn-ended", "the turn ended before the tool call was decided");
+    const decision = decide(policy);
+    if (decision === "allow") {
+      record(title, "allow");
+      return gate;
+    }
+    if (decision !== "ask") return refuse(decision, `ORCA's policy says ${decision}`);
+    const invocation: PermissionInvocation = {
+      sessionId: id,
+      turnId: turn.id,
+      invocationId: randomUUID(),
+      signal: turn.abort.signal,
+    };
+    const asked = await resolvePermission(policy, {
+      request: {
+        sessionId: acpSessionId,
+        toolCall: toolCall(`orca-mcp-${randomUUID()}`),
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      },
+      signal: invocation.signal,
+      ...askThrough(turn, invocation),
+      scope: evalScope,
+    });
+    if (asked.decision !== "ask:allow_once") return refuse(asked.decision, `not allowed: ${asked.decision}`);
+    if (decide(await policyForAsk()) === "deny")
+      return refuse("ask:allow_once:denied-since", "ORCA's policy denies it now");
+    if (!live()) return refuse("ask:allow_once:turn-ended", "the turn ended while the tool call was asked");
+    record(title, "ask:allow_once");
+    return gate;
+  };
+
   /**
    * Refuse an `fs/*` request for one of ORCA's own files. These handlers read and write with
    * no permission ask at all, so this is the only check ORCA makes on them.
@@ -454,8 +552,11 @@ async function openPlanned(
           env: opts.env,
           servers: mcpServers.map((m) => ({ name: m.name, command: m.command, args: m.args, env: literalEnv(m.env) })),
           admitted,
+          authorize: authorizeMcp,
           logger,
           clientInfo: { ...ORCA_CLIENT_INFO },
+          ...(opts.mcpStartTimeoutMs !== undefined ? { startTimeoutMs: opts.mcpStartTimeoutMs } : {}),
+          ...(opts.mcpRequestTimeoutMs !== undefined ? { requestTimeoutMs: opts.mcpRequestTimeoutMs } : {}),
           exitGraceMs: opts.exitGraceMs,
         })
       : undefined;
@@ -556,11 +657,17 @@ async function openPlanned(
   if (relay) app.onRequest(acpUnstable.methods.client.mcp.message, mcpMessageParams, relay.handleRequest);
   const conn = app.connect(proc.stream);
   const closed = conn.closed.then(() => undefined);
-  void closed.then(() => activeTurn?.abort.abort("agent connection closed"));
+  void closed.then(() => {
+    activeTurn?.abort.abort("agent connection closed");
+    sessionLive.abort("agent connection closed");
+  });
   // A handle whose exit cannot be observed rejects; that ends no turn, and must not surface as
   // an unhandled rejection either.
   void proc.exited.then(
-    () => activeTurn?.abort.abort("agent process exited"),
+    () => {
+      activeTurn?.abort.abort("agent process exited");
+      sessionLive.abort("agent process exited");
+    },
     () => undefined,
   );
   const cleanupProcess = processCleanup(proc, opts.exitGraceMs);
@@ -574,6 +681,7 @@ async function openPlanned(
     if (terminating) return terminating;
     terminating = (async () => {
       activeTurn?.abort.abort("session closed");
+      sessionLive.abort("session closed");
       if (activeTurn?.grace) clearTimeout(activeTurn.grace);
       listeners.clear();
       try {

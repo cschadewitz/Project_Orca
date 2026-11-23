@@ -39,6 +39,7 @@ import {
   claudePreToolHookScript,
   CLAUDE_ADAPTER_NAMES,
   nativeToolHookSession,
+  nativeToolHookUnavailable,
   openAcpSession,
   permissionPolicyPath,
   type AgentSession,
@@ -298,6 +299,12 @@ export function makeSessionFactory(
     arch?: string | undefined;
     imageDigest?:
       ((pid: number, agentPid: number | undefined) => Promise<{ sha256: string } | { error: string }>) | undefined;
+    /**
+     * Whether `nativeToolHook: on` may install the hook at all. Off in every build ORCA ships
+     * until activation is approved on its own (#704 review): the admission hold, the relay's
+     * per-dispatch checks and the probe are in place, but only the hook's own tests turn it on.
+     */
+    activation?: "acceptance-only" | undefined;
     codexProcess?: ((agentPid: number | undefined) => Promise<{ pid: number } | { error: string }>) | undefined;
     codexEnvironment?: ((pid: number) => Promise<NodeJS.ProcessEnv | { error: string }>) | undefined;
     codexShell?: (() => { program: string; args: string[] } | { error: string }) | undefined;
@@ -314,6 +321,7 @@ export function makeSessionFactory(
     // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
     // says who it is, and the session refused wherever it cannot be put in force.
     if (options.agent.nativeToolHook !== "on") return open(bound);
+    if (hook.activation !== "acceptance-only") throw nativeToolHookUnavailable(options.agent)!;
     // The hook runs where the agent does; ORCA installs it only on its own host.
     if (options.host.spec.type !== "local")
       throw new OrcaError(
@@ -358,6 +366,8 @@ export function makeSessionFactory(
       admit = resolve;
       refuseAdmission = reject;
     });
+    // A refusal is an answer to whoever waits on it; with nobody waiting it is not an error.
+    admission.catch(() => undefined);
     let session: AgentSession;
     try {
       session = await open({

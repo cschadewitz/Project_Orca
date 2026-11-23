@@ -3,10 +3,11 @@
  * the Claude ACP adapter (#704) or the Codex ACP adapter (#705).
  *
  * `nativeToolHook: on` is a promise that the agent's tool calls are checked, so every session
- * this cannot guard is refused, never opened without the hook. Only the session factory
- * installs it; every other way of starting agent work refuses such an agent
- * (`nativeToolHookUnavailable`). The factory holds the session away from ORCA's host services,
- * and from the MCP servers ORCA runs for it, until its runtime is admitted.
+ * this cannot guard is refused, never opened without the hook. It is also unavailable in every
+ * build ORCA ships (`nativeToolHookUnavailable`) until activation is approved on its own; only
+ * the hook's own suites install it. When installed, the session factory holds the session away
+ * from ORCA's host services, and from the MCP servers ORCA runs for it, until its runtime is
+ * admitted, and ORCA checks every relayed MCP request again when it is dispatched.
  *
  * The two adapters take the hook at different moments, and ORCA knows which adapter it runs,
  * and at what version, only once the agent has answered `initialize`:
@@ -72,9 +73,11 @@ import {
 import type { ProtectedPaths } from "./permissions.js";
 
 /**
- * The refusal for `nativeToolHook: on` wherever ORCA cannot install its hook (#704): only the
- * session factory installs it, so `openAcpSession` called without the factory's hook (as
- * `orca ping` calls it) and remote delegation refuse such an agent before anything starts.
+ * Whether `nativeToolHook: on` can be used at all. It cannot, in any build ORCA ships, until
+ * activation is approved on its own (#704): every entry point that starts agent work refuses
+ * such an agent before anything starts, the session factory, `openAcpSession` itself, and
+ * remote delegation. Only the hook's own test suites turn it on, through the session factory's
+ * `activation`, which no config reaches.
  */
 export function nativeToolHookUnavailable(agent: {
   id: string;
@@ -83,7 +86,7 @@ export function nativeToolHookUnavailable(agent: {
   if (agent.nativeToolHook !== "on") return undefined;
   return new OrcaError(
     "NOT_SUPPORTED",
-    `agent ${agent.id} has nativeToolHook: on, but ORCA cannot install its native tool hook when the agent is started this way (#704). ` +
+    `agent ${agent.id} has nativeToolHook: on, but ORCA's native tool hook is not available in this build yet (#704). ` +
       `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
     { agentId: agent.id },
   );
@@ -361,25 +364,13 @@ export interface CodexProbeDiagnostics {
   elapsedMs: number;
 }
 
+/** An errno name as Node reports it (`ENOENT`), or `unknown`: never free text. */
+function errnoCode(code: unknown): string {
+  return typeof code === "string" && /^E[A-Z0-9]{1,15}$/.test(code) ? code : "unknown";
+}
+
 /** A receipt-shaped line, whoever wrote it. */
 const RECEIPT_LINE = /^orca-hook-receipt:/;
-
-/**
- * At most `max` characters of what a command said, for a person reading a refusal: receipt
- * lines left out (they mean nothing to a reader), control characters and escape sequences
- * shown as `?`, and runs of white space folded. A login shell's profile writes here too.
- */
-export function probeExcerpt(stderr: string, max = 200): string {
-  const text = stderr
-    .split("\n")
-    .filter((line) => !RECEIPT_LINE.test(line))
-    .join(" ")
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, "?")
-    .replace(/\s+/g, " ")
-    .trim();
-  return text.length > max ? `${text.slice(0, max)}…` : text;
-}
 
 /**
  * Run the hook's command line the way Codex does (`codexHookShell`, in the session's directory)
@@ -484,14 +475,16 @@ export function probeCodexHook(opts: {
         settle("overflow", "the hook wrote more than the probe reads");
     });
     child.stderr.on("error", () => undefined);
-    child.on("error", (e) => settle("spawn-error", `${shell} could not be started: ${e.message}`));
+    // What the command wrote is never quoted: a login shell's profile writes there too, and a
+    // refusal is shown and stored. The detail is a fixed phrase per outcome plus bounded numbers.
+    child.on("error", (e: NodeJS.ErrnoException) =>
+      settle("spawn-error", `the shell could not be started (${errnoCode(e.code)})`),
+    );
     child.on("close", (code, signal) => {
-      const said = probeExcerpt(stderr);
-      const saying = said === "" ? "" : `: ${said}`;
-      if (signal) settle("signal", `killed by ${signal}${saying}`, { signal });
-      else if (code !== 2) settle("exit", `exit ${code}${saying}`, { exitCode: code });
+      if (signal) settle("signal", `killed by ${signal}`, { signal });
+      else if (code !== 2) settle("exit", `exit ${code}`, { exitCode: code });
       else if (receipt(stderr) !== "matched")
-        settle("no-receipt", `exit 2 without ORCA's hook's receipt for this call${saying}`, { exitCode: code });
+        settle("no-receipt", "exit 2 without ORCA's hook's receipt for this call", { exitCode: code });
       else settle("blocked", "blocked, with the hook's receipt", { exitCode: code });
     });
     child.stdin.on("error", () => undefined);
