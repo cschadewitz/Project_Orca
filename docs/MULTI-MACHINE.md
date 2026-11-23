@@ -120,10 +120,15 @@ agents:
   - { id: remote-builder, type: orca-daemon, profile: build-box, workflow: build }
 ```
 
-One-time enrollment, from the parent's workspace:
+One-time enrollment. First get the worker's host key fingerprint from a source you already
+trust, not over the connection you are about to trust: the worker's console, or its
+administrator. An `ssh` command to the worker is not a check yet, because nothing has
+verified that endpoint.
 
 ```sh
-ssh ci@build-box.example ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub   # or read it on the console
+# on build-box itself (console, or a session already pinned to its key)
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+# on the parent, in its workspace
 orca remote enroll build-box --host-key SHA256:...
 ```
 
@@ -167,7 +172,7 @@ request that touches the daemon, CLI, protocol, host or delegation code:
   sshd. These are the enrollment, refusal and recovery cases from
   `packages/cli/test/delegation-883.test.ts`.
 - **Two machines in containers:** `packages/cli/test/delegation-machines-885.test.ts`
-  builds this checkout's server bundle and installs it in separate Ubuntu 24.04 containers
+  builds this checkout's server bundle (unsigned) and installs it in separate Ubuntu 24.04 containers
   (`packages/testing/machine/Dockerfile`) on a private network. A parent and a second parent
   each enroll with the worker's host key and an issued credential. The test then checks
   delegation with the artifact brought back, a forwarded gate, cancellation, the parent
@@ -178,5 +183,11 @@ To run the container test locally: `pnpm run build`, then
 `ORCA_TWO_MACHINES=1 pnpm exec vitest run packages/cli/test/delegation-machines-885.test.ts`
 with Docker running. `ORCA_SERVER_BUNDLE` reuses a built bundle, and `ORCA_MACHINE_BASE` names
 a base image that already has the packages, for a host without the Ubuntu archive.
-Acceptance on real machines follows the project's release-testing approach. It is not part
-of CI.
+Both jobs run on pull requests that change the paths listed in that workflow:
+the daemon, CLI, protocol, engine, core, store and agent sources, the testing fixtures, the
+bundle build, and the lockfile and package manifests. A change outside those paths does not
+start them.
+
+This container test is not release acceptance. It installs an unsigned bundle built from the
+checkout and does not verify a signature or a native install. Signed bundles and installs on
+real hosts are accepted separately, with the project's release-testing approach.

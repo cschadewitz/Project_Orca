@@ -14,15 +14,25 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - packages/testing/src/two-daemons.ts
-      - packages/testing/src/two-machines.ts
       - packages/testing/machine/**
       - packages/testing/test/two-daemons.test.ts
       - packages/cli/test/delegation-883.test.ts
       - packages/cli/test/delegation-machines-885.test.ts
-      - packages/engine/src/session-slots.ts
+      # What a daemon runs: shared schemas (agents, remotes), the store (admissions, receipts,
+      # locks) and the engine (slots, orchestrator), plus how the bundle is built and locked.
+      - packages/core/src/**
+      - packages/store/src/**
+      - packages/engine/src/**
+      - packages/testing/src/**
+      - packages/testing/package.json
       - packages/app/scripts/build-daemon.js
       - tools/deploy/server-bundle.py
+      - package.json
+      - pnpm-lock.yaml
+      - packages/*/package.json
+      - tsconfig.json
+      - tsconfig.build.json
+      - packages/*/tsconfig*.json
       - packages/app/test/server-update-ssh.test.ts
       - packages/app/src/server-update.ts
       - packages/app/src/main/server-update.ts
@@ -30,9 +40,7 @@ on:
       - packages/daemon/src/**
       - packages/cli/src/**
       - packages/protocol/src/**
-      - packages/agents/src/hosts/**
-      - packages/agents/src/acp-session.ts
-      - packages/agents/src/secrets.ts
+      - packages/agents/src/**
       - packages/agents/test/secrets-ssh-native-336.test.ts
       - .github/workflows/two-daemons.yml
   workflow_dispatch:
