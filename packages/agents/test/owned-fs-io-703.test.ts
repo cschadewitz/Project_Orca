@@ -166,18 +166,42 @@ describe("bound I/O", () => {
   });
 });
 
-describe("new files where creation cannot be bound to the directory", () => {
-  it("refuses to create one, and makes nothing", async () => {
-    const d = await dir();
-    const file = join(d, "x", "new");
-    const binding = bindOwnedFs(file)!;
-    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { value: "darwin" });
+describe("new files outside the bound path (best effort, #1034)", () => {
+  const asPlatform = async (platform: string, work: () => Promise<void>) => {
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: platform });
     try {
-      await expect(writeBound(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+      await work();
     } finally {
-      Object.defineProperty(process, "platform", platform);
+      Object.defineProperty(process, "platform", original);
     }
-    expect(existsSync(join(d, "x"))).toBe(false);
+  };
+
+  it("creates a new file on a platform with no directory-bound creation", async () => {
+    const d = await dir();
+    const file = join(d, "new");
+    await asPlatform("darwin", () => writeBound(bindOwnedFs(file)!, "new"));
+    expect(await readFile(file, "utf8")).toBe("new");
+  });
+
+  it("makes no directory when the directory it goes under was replaced", async () => {
+    const d = await dir();
+    const under = join(d, "under");
+    await mkdir(under);
+    const binding = bindOwnedFs(join(under, "x", "new"))!;
+    await rename(under, join(d, "moved"));
+    await mkdir(under);
+    await asPlatform("darwin", () => expect(writeBound(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched));
+    expect(existsSync(join(under, "x"))).toBe(false);
+    expect(existsSync(join(d, "moved", "x"))).toBe(false);
+  });
+
+  it("refuses a file that appeared meanwhile, and leaves it alone", async () => {
+    const d = await dir();
+    const file = join(d, "new");
+    const binding = bindOwnedFs(file)!;
+    await writeFile(file, "someone else's");
+    await asPlatform("darwin", () => expect(writeBound(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched));
+    expect(await readFile(file, "utf8")).toBe("someone else's");
   });
 });

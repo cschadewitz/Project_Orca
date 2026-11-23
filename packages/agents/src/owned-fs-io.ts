@@ -12,13 +12,15 @@
  *   open follows no final link (`O_NOFOLLOW`), never waits (`O_NONBLOCK`) and never takes a
  *   terminal (`O_NOCTTY`), where the platform has them. The descriptor is then checked to be
  *   that same ordinary file before a byte is read or written.
- * - A new file on Linux is bound. The anchor is opened as a directory and checked by identity,
- *   and each directory and then the file are made through `/proc/self/fd/N/name`, which the
- *   kernel resolves through that open directory, as `openat`/`mkdirat` would. Nothing is made
- *   anywhere but under the checked directory.
- * - A new file on macOS and Windows is refused (`not-dispatched`, nothing made): Node offers
- *   neither `openat` nor `/proc/self/fd` there, and a creation by names alone could land
- *   outside the checked directory. A directory-bound way there is tracked in #1034.
+ * - A new file is bound only on Linux, and only when its parent directory exists: the parent
+ *   is opened as a directory and checked by identity, and the file is created exclusively
+ *   through `/proc/self/fd/N/name`, which the kernel resolves through that open directory, as
+ *   `openat` would. Linux without a usable `/proc/self/fd` refuses a new file.
+ * - Every other new file is best effort and outside the identity-bound guarantee (#1034): one
+ *   whose directories must be made first, and any new file on macOS and Windows, where Node
+ *   has no directory-bound creation. Each directory an effect happens in is checked just before
+ *   it; a change found before the first effect refuses the operation, one after it (if found
+ *   at all) is reported as an unknown effect. Nothing is removed afterwards.
  * - A write that fails once it may have changed something (a truncate, a write, a directory
  *   made) is not "failed": its effect is unknown, and it is not safe to retry as if nothing
  *   happened. Only `OwnedFsFailedWithoutEffect` and `OwnedFsNotDispatched` say nothing changed.
@@ -27,9 +29,9 @@
  *   paths are compared as written, as `owned-fs-gate.ts` says; verifying them is tracked
  *   separately (#1032).
  */
-import { constants, statSync } from "node:fs";
+import { constants, lstatSync, statSync } from "node:fs";
 import { lstat, mkdir, open, type FileHandle } from "node:fs/promises";
-import { dirname, relative, sep } from "node:path";
+import { basename, dirname } from "node:path";
 import { markHostFileMissing } from "./host.js";
 import { physicalPathOf } from "./permissions.js";
 
@@ -172,23 +174,26 @@ export async function writeBound(binding: OwnedFsBinding, content: string): Prom
     }
     return;
   }
-  // No directory-bound creation here: refused, never done through names alone (#1034).
-  if (!procFdUsable())
-    throw new OwnedFsNotDispatched(
-      "creating a new file is not supported on this platform: ORCA cannot bind the creation to the checked directory",
-    );
-  return createBound(binding, content);
+  // The guarantee: on Linux, a file created directly in its existing, checked parent, through
+  // that parent's descriptor. Linux without a usable /proc/self/fd refuses rather than claim it.
+  const parentExists = binding.anchor === dirname(binding.io);
+  if (process.platform === "linux") {
+    if (!procFdUsable())
+      throw new OwnedFsNotDispatched(
+        "creating a new file needs /proc/self/fd on Linux, so the creation can be bound to the checked directory",
+      );
+    if (parentExists) return createBound(binding, content);
+  }
+  return createBestEffort(binding, content);
 }
 
 /**
- * Linux: a new file and its directories are made through `/proc/self/fd/N/name`, where N is a
- * descriptor of the directory already checked to be the authorized one. The kernel resolves
- * that path through the open directory itself, so what is made cannot land anywhere else,
- * whatever happens to the names meanwhile: the creation is bound, as `openat` would bind it.
+ * Linux, the guaranteed path: the new file's parent exists and was checked. It is opened as a
+ * directory, checked by identity on the descriptor, and the file is created exclusively through
+ * `/proc/self/fd/N/name`, which the kernel resolves through that open directory, as `openat`
+ * would. The file cannot be created anywhere but in the checked directory.
  */
 async function createBound(binding: OwnedFsBinding, content: string): Promise<void> {
-  const names = relative(binding.anchor, binding.io).split(sep);
-  const file = names.pop()!;
   let dir: FileHandle;
   try {
     dir = await open(binding.anchor, constants.O_RDONLY | DIRECTORY | NOFOLLOW);
@@ -197,41 +202,24 @@ async function createBound(binding: OwnedFsBinding, content: string): Promise<vo
       throw new OwnedFsNotDispatched("the directory changed before the file was created");
     throw new OwnedFsFailedWithoutEffect(error);
   }
-  let made = false;
-  const changed = (reason: string): Error =>
-    made ? new Error(`${reason}, after a directory was made for it`) : new OwnedFsNotDispatched(reason);
   try {
     const anchor = await dir.stat({ bigint: true });
     if (!anchor.isDirectory() || idOf(anchor) !== binding.identity)
       throw new OwnedFsNotDispatched("the directory changed before the file was created");
-    // The descriptor must really be reachable as a directory through /proc: else nothing is made.
+    // The descriptor must really be reachable as that directory through /proc: else nothing is made.
     if (identityNow(`/proc/self/fd/${dir.fd}`) !== binding.identity)
       throw new OwnedFsFailedWithoutEffect(new Error("the open directory cannot be reached through /proc/self/fd"));
-    for (const name of names) {
-      const at = `/proc/self/fd/${dir.fd}/${name}`;
-      try {
-        await mkdir(at);
-      } catch (error) {
-        if (errorCode(error) === "EEXIST") throw changed("a directory appeared before the file was created");
-        if (made) throw error;
-        throw new OwnedFsFailedWithoutEffect(error);
-      }
-      made = true;
-      const next = await open(at, constants.O_RDONLY | DIRECTORY | NOFOLLOW);
-      await dir.close();
-      dir = next;
-    }
     let handle: FileHandle;
     try {
       handle = await open(
-        `/proc/self/fd/${dir.fd}/${file}`,
+        `/proc/self/fd/${dir.fd}/${basename(binding.io)}`,
         constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | SAFE_OPEN,
         0o666,
       );
     } catch (error) {
+      // An exclusive create that failed made nothing.
       if (errorCode(error) === "EEXIST" || errorCode(error) === "ELOOP")
-        throw changed("a file appeared before it was created");
-      if (made) throw error;
+        throw new OwnedFsNotDispatched("a file appeared before it was created");
       throw new OwnedFsFailedWithoutEffect(error);
     }
     try {
@@ -247,6 +235,87 @@ async function createBound(binding: OwnedFsBinding, content: string): Promise<vo
 /** Whether this process can create through `/proc/self/fd/N/name` (Linux with /proc mounted). */
 function procFdUsable(): boolean {
   return process.platform === "linux" && identityNow("/proc/self/fd") !== undefined;
+}
+
+/**
+ * Best effort, outside the identity-bound guarantee (#1034): a new file whose directories must
+ * be made first (any platform), or any new file on macOS and Windows, where Node offers no
+ * directory-bound creation. Each directory an effect happens in is checked by identity and
+ * physical path just before the effect. A change found before the first effect refuses the
+ * operation; one in the instant between a check and its effect may be found only afterwards,
+ * if at all, and is then reported as an unknown effect. Nothing is cleaned up.
+ */
+export async function createBestEffort(binding: OwnedFsBinding, content: string): Promise<void> {
+  const parent = dirname(binding.io);
+  // Every directory between the anchor and the new file, nearest the anchor first.
+  const missing: string[] = [];
+  for (let dir = parent; dir !== binding.anchor; dir = dirname(dir)) {
+    if (dirname(dir) === dir)
+      throw new OwnedFsNotDispatched("the file is not under the directory it was authorized for");
+    missing.unshift(dir);
+  }
+  // Nothing is changed until the directory it goes in is shown to be the authorized one, and
+  // each directory made is checked the same way before anything is made in it. Once one is
+  // made, no later failure is "no effect".
+  let made = false;
+  const refuse = (reason: string): never => {
+    if (made) throw new Error(`${reason}, after a directory was made for it`);
+    throw new OwnedFsNotDispatched(reason);
+  };
+  let expected = binding.identity;
+  for (const dir of missing) {
+    if (!directoryIs(dirname(dir), expected)) refuse("the directory changed before the file was created");
+    try {
+      await mkdir(dir);
+    } catch (error) {
+      if (errorCode(error) === "EEXIST") refuse("a directory appeared before the file was created");
+      if (made) throw error;
+      throw new OwnedFsFailedWithoutEffect(error);
+    }
+    made = true;
+    const id = directoryIdentity(dir);
+    if (id === undefined) throw new Error("a directory made for the file cannot be identified");
+    expected = id;
+  }
+  if (!directoryIs(parent, expected)) refuse("the directory changed before the file was created");
+  let handle;
+  try {
+    handle = await open(binding.io, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o666);
+  } catch (error) {
+    // An exclusive create that failed made nothing.
+    if (errorCode(error) === "EEXIST" || errorCode(error) === "ELOOP") refuse("a file appeared before it was created");
+    if (made) throw error;
+    throw new OwnedFsFailedWithoutEffect(error);
+  }
+  try {
+    const created = idOf(await handle.stat({ bigint: true }));
+    // Checked again after the create, as a best effort: a change found here means the file may
+    // have been created somewhere else. Nothing is removed (that would be another unbound effect
+    // by name); the outcome is reported as unknown and no content is written.
+    const placed = created !== undefined && directoryIs(parent, expected) && identityNow(binding.io) === created;
+    if (!placed)
+      throw new Error(
+        "the directory changed while the file was created: where the empty file was created is unknown, and nothing was written",
+      );
+    await writeAll(handle, content);
+  } finally {
+    await handle?.close();
+  }
+}
+
+/** The identity of the directory `dir` itself (a link is not one), or undefined. */
+function directoryIdentity(dir: string): string | undefined {
+  try {
+    const stats = lstatSync(dir, { bigint: true });
+    return stats.isDirectory() ? idOf(stats) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether `dir` is, right now, the directory `identity` names, reached by its own physical path. */
+function directoryIs(dir: string, identity: string): boolean {
+  return directoryIdentity(dir) === identity && physicalPathOf(dir) === dir;
 }
 
 /** Write all of `content` from the start of the file: a short write is continued, never taken as done. */

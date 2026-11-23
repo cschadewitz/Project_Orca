@@ -169,12 +169,17 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   before the open it must still be an ordinary file with that identity, the open follows no
   final link and neither waits nor takes a terminal (`O_NOFOLLOW`, `O_NONBLOCK`, `O_NOCTTY`
   where the platform has them), and the descriptor's identity and type are compared before a
-  byte is read or written. A new file on Linux is bound too: its nearest existing ancestor is
-  opened as a directory and checked by identity, and each directory and then the file are
-  made through `/proc/self/fd/N/name`, which resolves through that open directory as
-  `openat`/`mkdirat` would. On macOS and Windows, where Node has neither, creating a new file
-  this way is refused, with nothing made: a creation by names alone could land outside the
-  checked directory, so it is not done at all until a directory-bound way exists (#1034). A write is complete only when all of its content was written. A
+  byte is read or written. A new file is bound only on Linux and only when its parent
+  directory exists: the parent is opened as a directory and checked by identity on the
+  descriptor, and the file is created exclusively through `/proc/self/fd/N/name`, which
+  resolves through that open directory as `openat` would; Linux without a usable
+  `/proc/self/fd` refuses a new file. Every other new file is best effort and outside the
+  identity-bound guarantee (#1034): one whose directories must be made first, and any new file
+  on macOS and Windows, where Node has no directory-bound creation. There each directory an
+  effect happens in is checked by identity and physical path just before the effect; a change
+  found before the first effect refuses the operation, and one in the instant between a check
+  and its effect is found only afterwards, if at all, and then reported as an unknown effect.
+  Nothing is removed afterwards. A write is complete only when all of its content was written. A
   path whose identity cannot be established, or that is not an ordinary file, is
   refused. This is still not an operating-system boundary. Remote (SSH) hosts are explicitly
   outside this: their paths are compared as written and their I/O is not identity-bound, as

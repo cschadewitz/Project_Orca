@@ -29,11 +29,12 @@
  * refused, the policy decides both the path as written and the file it reaches (the stricter
  * answer stands), and the I/O goes to the resolved file (`owned-fs-io.ts`). Only an ordinary
  * file is read or written. An existing file is bound to the identity the decision saw (checked
- * before a safe open and again on the descriptor). A new file is bound on Linux (made through
- * the checked, open directory) and refused elsewhere, where no directory-bound creation is
- * available (#1034). A path whose identity cannot be established is refused. This is still
- * not an operating-system boundary. Remote (SSH) hosts are explicitly outside it: their paths
- * are compared as written with no identity binding (#1032).
+ * before a safe open and again on the descriptor). A new file is bound only on Linux when its
+ * parent exists (created through the checked, open directory); any other new file is best
+ * effort, outside the identity-bound guarantee (#1034). A path whose identity cannot be
+ * established is refused. This is still not an operating-system boundary. Remote (SSH) hosts
+ * are explicitly outside it: their paths are compared as written with no identity binding
+ * (#1032).
  *
  * The durable record is separate (`recordFsOperation`, `agent.fs.authorized` and
  * `agent.fs.completed`): each authorized operation is recorded, durably (the store's exact-event
