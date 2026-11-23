@@ -78,6 +78,29 @@ describe("legacy fence (#339)", () => {
     }
   });
 
+  it("switches under a writer fence only while it holds, and undoes everything once it is lost", async () => {
+    // The fence is checked before anything changes, before the journal, and before the marker.
+    for (const lostAfter of [0, 1, 2]) {
+      const dir = await populated();
+      const before = await contents(dir);
+      let checks = 0;
+      const fence = { check: () => checks++ < lostAfter };
+      await expect(switchStoreToSqlite(dir, { appVersion: "0.8.0", fence })).rejects.toMatchObject(
+        refusal("FENCE_LOST"),
+      );
+      expect(checks, String(lostAfter)).toBe(lostAfter + 1);
+      expect(await contents(dir), String(lostAfter)).toEqual(before);
+      expect(recordedStoreBackend(dir)).toBe("file");
+      expect(await readdir(dir)).not.toContain(SQLITE_SWITCH_DIR);
+    }
+    const dir = await populated();
+    expect(await switchStoreToSqlite(dir, { appVersion: "0.8.0", fence: { check: () => true } })).toMatchObject({
+      status: "switched",
+    });
+    await expectFenced(dir);
+    await expectReadsOnSqlite(dir);
+  });
+
   it("refuses, and puts everything back, when a released ORCA writes while the fence goes in", async () => {
     const dir = await populated();
     await expect(
