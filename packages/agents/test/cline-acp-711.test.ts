@@ -707,4 +707,14 @@ describe("the environment Cline is started with", () => {
     expect(fake.spawn).not.toHaveBeenCalled();
     await expect(guarded.spawnAgent(spec(), { cwd: workspace })).resolves.toBeDefined();
   });
+
+  it("starts Cline with exactly the config directory, home and directory it checked", async () => {
+    const peer = new ScriptedClinePeer();
+    const { spawn } = await connect(peer);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const [agent, options] = spawn.mock.calls[0]!;
+    expect(agent.args).toEqual(["--acp", "--config", configDir]);
+    expect(clineLaunchEnv(agent, options).values.HOME).toBe(home);
+    expect(options.cwd).toBe(workspace);
+  });
 });
