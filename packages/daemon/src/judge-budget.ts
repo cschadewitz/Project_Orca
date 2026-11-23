@@ -31,9 +31,18 @@
  * - **Read-only status.** `inspectJudgeBudget` runs the same checks without creating the anchor directory or taking
  *   the lock, and reports whether the budget is uninitialized, ready, or refused.
  *
- * Not covered, and documented as such: rolling back both the store and the anchor to the same earlier pair (for
- * example restoring a whole disk or home directory from an image or snapshot that holds both). This is the same
- * boundary as #1029's coordinated rollback. The two may share a file system.
+ * What `durable` claims, and its scope. A budget file put back by any restore ORCA supports, or by copying an older
+ * store or budget file into place, is refused, and so is a clock moved back before a day the anchor records. This
+ * holds for the supported topology: the store and the anchor directory are ordinary local directories, the anchor
+ * directory is the one ORCA chose under the user's own state directory, and nothing other than ORCA rearranges their
+ * directories while the daemon runs. The storage check is a check at points in time (before the directories are
+ * created, once the lock is held, just before each rename), not a hold on the directories: Node cannot open a
+ * directory and write relative to it. So it does not claim to defend against a process of the same user swapping a
+ * ledger directory for a link, or mounting something over it, in the instant between the last check and the rename,
+ * nor against mounts added above either directory while the daemon runs; such a process can rewrite the files
+ * directly anyway. Also not covered: rolling back both the store and the anchor to the same earlier pair (for example
+ * restoring a whole disk or home directory from an image or snapshot that holds both), the same boundary as #1029's
+ * coordinated rollback. The two may share a file system.
  *
  * Nothing here turns the judge on. Activation (item 3a) prepares the judge with this budget and refuses unless it is
  * `durable`.
@@ -396,12 +405,12 @@ export async function inspectJudgeBudget(options: QualifiedJudgeBudgetOptions): 
     return Object.freeze({
       ...base,
       anchorCreated: false,
-      budget: budgetExists ? ({ state: "refused" } as const) : ({ state: "uninitialized" } as const),
+      budget: budgetExists ? ({ state: "refused", reason: "anchor" } as const) : ({ state: "uninitialized" } as const),
     });
   }
   const budget = await daemonJudgeBudget(
     { stateDir: storage.storeDir, anchorDir: storage.anchorDir },
-    { check: () => ledgerSeparated(storage) },
+    { check: () => ledgerSeparated(storage), ...(options.now ? { now: options.now } : {}) },
   ).inspect();
   return Object.freeze({ ...base, anchorCreated: true, budget });
 }

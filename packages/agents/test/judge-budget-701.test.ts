@@ -309,3 +309,65 @@ describe("#701 judge budget: durable commit before acknowledgement", () => {
     expect(await memory.reserve(KEY, 1)).toBe(false);
   });
 });
+
+describe("#701 judge budget: replace, the day floor and read-only inspection", () => {
+  it("replace keeps the old budget on refusal and never starts before a recorded day", async () => {
+    await initializedYesterday(); // DAY1 initialized, now DAY2
+    expect(await budget().reserve(KEY, 3)).toBe(true);
+    const before = readFileSync(file, "utf8");
+    // The clock moved back to the day before a recorded day: refused, nothing changed.
+    now = DAY1;
+    expect(await budget().replace()).toEqual({ status: "refused", reason: "clock" });
+    expect(readFileSync(file, "utf8")).toBe(before);
+    // The budget file gone, the anchor still records DAY2: initialize refuses the earlier day too.
+    rmSync(file);
+    expect(await budget().initialize()).toEqual({ status: "refused", reason: "clock" });
+    now = DAY2;
+    expect(await budget().initialize()).toEqual({ status: "initialized", day: "2026-11-23" });
+    expect(await budget().reserve(KEY, 3)).toBe(false); // the new budget's first day is spent
+    now = DAY3;
+    expect(await budget().reserve(KEY, 3)).toBe(true);
+    expect(JSON.parse(readFileSync(anchorFile, "utf8"))).toMatchObject({ day: "2026-11-24", sequence: 1 });
+  });
+
+  it("an unreadable anchor cannot vouch for a floor: replace refuses and leaves both files", async () => {
+    await initializedYesterday();
+    const before = readFileSync(file, "utf8");
+    writeFileSync(anchorFile, "{");
+    expect(await budget().replace()).toEqual({ status: "refused", reason: "anchor" });
+    expect(readFileSync(file, "utf8")).toBe(before);
+    expect(readFileSync(anchorFile, "utf8")).toBe("{");
+  });
+
+  it("a reservation refuses a clock before the anchor's day", async () => {
+    await initializedYesterday();
+    expect(await budget().reserve(KEY, 3)).toBe(true);
+    now = DAY1;
+    expect(await budget().reserve(KEY, 3)).toBe(false);
+  });
+
+  it("inspect is read-only and checks the clock as a reservation does", async () => {
+    now = DAY1;
+    expect(await budget().inspect()).toEqual({ state: "uninitialized" });
+    await budget().initialize();
+    expect(await budget().inspect()).toEqual({
+      state: "ready",
+      day: "2026-11-22",
+      initializedDay: "2026-11-22",
+      firstDaySpent: true,
+    });
+    now = DAY2;
+    const files = [readFileSync(file, "utf8"), readFileSync(anchorFile, "utf8")];
+    expect(await budget().inspect()).toMatchObject({ state: "ready", firstDaySpent: false });
+    expect([readFileSync(file, "utf8"), readFileSync(anchorFile, "utf8")]).toEqual(files);
+    now = Date.parse("2026-11-21T10:00:00Z");
+    expect(await budget().inspect()).toEqual({ state: "refused", reason: "clock" });
+    now = Number.NaN;
+    expect(await budget().inspect()).toEqual({ state: "refused", reason: "clock" });
+    now = DAY2;
+    rmSync(anchorFile);
+    expect(await budget().inspect()).toEqual({ state: "refused", reason: "anchor" });
+    writeFileSync(file, "{");
+    expect(await budget().inspect()).toEqual({ state: "refused", reason: "unreadable" });
+  });
+});

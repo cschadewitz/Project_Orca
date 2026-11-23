@@ -78,7 +78,9 @@ describe.skipIf(process.platform === "win32")("orca judge budget", () => {
 
     const ready = ctx(workspace, ["budget", "status"]);
     expect(await judgeCommand(ready)).toBe(0);
-    expect(ready.lines.join("\n")).toMatch(/budget {2}ready: started \d{4}-\d{2}-\d{2}/);
+    expect(ready.lines.join("\n")).toMatch(
+      /budget {2}ready: agrees with its anchor and the clock; started \d{4}-\d{2}-\d{2} .*today is its first day/,
+    );
 
     // A budget restored from an earlier copy: status reports it refused, reset replaces it under the lock.
     await writeFile(join(workspace, ".orca", JUDGE_BUDGET_FILENAME), "{");

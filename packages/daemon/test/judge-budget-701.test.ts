@@ -315,7 +315,7 @@ describe.skipIf(process.platform === "win32")("#701 judge budget: qualified on t
   });
 
   it("inspection is read-only and tells uninitialized, ready and refused apart", async () => {
-    const inspect = () => inspectJudgeBudget({ storeDir, workspaceId: WORKSPACE, anchorDir, platform });
+    const inspect = () => inspectJudgeBudget({ storeDir, workspaceId: WORKSPACE, anchorDir, platform, now: clock });
     expect(await inspect()).toMatchObject({
       status: "eligible",
       anchorCreated: false,

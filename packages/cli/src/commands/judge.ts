@@ -62,7 +62,7 @@ export async function judgeCommand(ctx: CommandContext): Promise<number> {
       return 0;
     case "uncertain":
       ctx.err(
-        "The budget's replacement began but did not finish, so the budget and its anchor may disagree. The judge refuses every call until `orca judge budget reset` succeeds.",
+        "Writing the new budget began but did not finish, so either the old budget or the new one may now be in place. Run `orca judge budget status` to see which; if it reports the budget refused, run `orca judge budget reset` again.",
       );
       return 1;
     case "refused":
@@ -70,10 +70,12 @@ export async function judgeCommand(ctx: CommandContext): Promise<number> {
         result.reason === "exists"
           ? "A budget already exists, so nothing was changed. Use `orca judge budget reset` only if `orca judge budget status` reports it as refused."
           : result.reason === "clock"
-            ? "The system clock could not be read, so nothing was changed."
-            : result.reason === "storage"
-              ? "The budget's folders changed or are no longer separate from the store, so nothing was changed."
-              : "The budget could not be written, so nothing was changed.",
+            ? "The system clock could not be read, or is before a day the budget already recorded, so nothing was changed."
+            : result.reason === "anchor"
+              ? `The budget's anchor in ${qualified.anchorDir} cannot be read, so the day it protects cannot be trusted and nothing was changed. Remove that anchor file yourself only if you accept that the budget may restart from the budget file's own day.`
+              : result.reason === "storage"
+                ? "The budget's folders changed or are no longer separate from the store, so nothing was changed."
+                : "The budget could not be written, so nothing was changed.",
       );
       return 1;
   }
@@ -100,12 +102,18 @@ async function status(ctx: CommandContext, storeDir: string): Promise<number> {
       return 0;
     case "ready":
       ctx.out(
-        `budget  ready: started ${inspected.budget.initializedDay} (UTC, counted as spent), last counted ${inspected.budget.day}`,
+        `budget  ready: agrees with its anchor and the clock; started ${inspected.budget.initializedDay} (UTC), last counted ${inspected.budget.day}${
+          inspected.budget.firstDaySpent
+            ? "; today is its first day, which counts as spent, so calls start tomorrow (UTC)"
+            : ""
+        }. Each call still needs the budget's lock and room in today's limit.`,
       );
       return 0;
     case "refused":
       ctx.out(
-        "budget  refused: it is unreadable or disagrees with its anchor (for example after the store was restored). Run `orca judge budget reset`; the new budget starts with today spent.",
+        inspected.budget.reason === "clock"
+          ? "budget  refused: the system clock is before a day the budget already recorded. Fix the clock, or wait for that day; a reset cannot start before it."
+          : "budget  refused: it is unreadable or disagrees with its anchor (for example after the store was restored). Run `orca judge budget reset`; the new budget starts with today spent.",
       );
       return 1;
   }

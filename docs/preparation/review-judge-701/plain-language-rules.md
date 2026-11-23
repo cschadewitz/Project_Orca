@@ -422,15 +422,28 @@ On each call:
     covers the actual parents of both ledger files (`review-judge`): plain directories at their
     real paths, the store and anchor directories still the ones qualified, no supported restore
     root (by device and inode, `<store>-sqlite` included) above the anchor's ledger, and no anchor
-    above the store's. A failed check leaves the ledger as it was. The two may share a file
+    above the store's. A failed check leaves the ledger as it was. The scope of `durable` is
+    narrower than "any file system": the check runs at points in time (before directories are
+    created, once the lock is held, just before each rename), not as a hold on the directories,
+    which Node cannot open and write relative to. It holds for the supported topology, ordinary
+    local directories with the anchor where ORCA chose it and nothing but ORCA rearranging them
+    while the daemon runs. It does not claim to defend against a process of the same user swapping
+    a ledger directory or mounting over it between the last check and the rename, or mounts added
+    above either directory while the daemon runs; such a process can rewrite the files anyway. The two may share a file
     system: restoring a whole disk or home directory that holds both is the coordinated rollback
     above, and is not covered. The owner creates the budget with `orca judge budget init` (that UTC
     day counts as spent). `orca judge budget status` is read-only: it creates nothing, takes no
     lock, and reports whether the storage is eligible and whether the budget is not created yet,
-    ready, or refused. `orca judge budget reset` replaces a refused budget under the budget lock.
-    The old budget stays as it was on any failure before its replacement, a failure after the
-    replacement began is reported as uncertain (calls stay refused until a reset succeeds), and the
-    new budget also starts with that day spent. The CLI
+    ready (it agrees with its anchor and with the clock as a reservation checks them; the lock and
+    the rest of today's limit are not checked), or refused (unreadable, anchor missing or behind,
+    or a clock before a recorded day). The anchor also records the budget's day, a day floor kept
+    outside the store: a reservation refuses a clock before it, and `orca judge budget reset`
+    (and `init`) never start a new budget before it, so moving the clock back and resetting
+    cannot make a spent day available again. An anchor that exists but cannot be read vouches for
+    no floor, so reset refuses. Reset replaces the budget under the budget lock, and the old budget
+    stays as it was on any failure before a rename. If a rename had begun, the outcome is reported
+    as uncertain, with no promise about which budget is in place; status says. The new budget
+    also starts with that day spent. The CLI
     does not change the desktop app's own store; that step comes with the app UI.
   - **Windows has no judge in 0.8.0.** Node cannot sync a directory on Windows, so the replacement
     protocol is not verified there, and `qualifiedJudgeBudget` answers `unavailable` (`platform`)
