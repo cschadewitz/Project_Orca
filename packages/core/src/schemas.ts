@@ -31,5 +31,6 @@ export * from "./model/run-provenance.js";
 export * from "./model/recovery.js";
 
 export * from "./model/revision-input.js";
+export * from "./model/tool-telemetry.js";
 
 export { OrcaConfigSchema } from "./config.js";

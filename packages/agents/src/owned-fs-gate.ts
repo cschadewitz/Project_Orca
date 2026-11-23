@@ -30,8 +30,8 @@
  * through `onPermission` are not a durable authorization or execution record.
  */
 import type * as acp from "@agentclientprotocol/sdk";
-import type { PermissionDecision, PermissionPolicy } from "@orca/core";
-import { decidePermission, type PermissionEvalContext } from "./permissions.js";
+import type { PermissionDecision, PermissionExplanation, PermissionPolicy } from "@orca/core";
+import { explainPermission, type PermissionEvalContext } from "./permissions.js";
 
 export type FsAccess = "read" | "write";
 
@@ -52,5 +52,15 @@ export function decideFsCall(
   access: FsAccess,
   ctx: PermissionEvalContext,
 ): PermissionDecision {
-  return decidePermission(policy, { sessionId: "", toolCall: fsToolCall(path, access), options: [] }, ctx);
+  return explainFsCall(policy, path, access, ctx).decision;
+}
+
+/** `decideFsCall` with what decided it, for the `fs:` record (#702). */
+export function explainFsCall(
+  policy: PermissionPolicy,
+  path: string,
+  access: FsAccess,
+  ctx: PermissionEvalContext,
+): PermissionExplanation {
+  return explainPermission(policy, { sessionId: "", toolCall: fsToolCall(path, access), options: [] }, ctx);
 }

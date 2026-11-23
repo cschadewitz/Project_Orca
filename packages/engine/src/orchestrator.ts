@@ -5,6 +5,7 @@
  * Concurrency comes from `parallel` nodes, which spawn child runs. Every state
  * transition is an event; a run can be resumed from its log at any time.
  */
+import { attachHookTelemetry } from "./hook-telemetry-ingest.js";
 import { ConfigurationGenerations, type GenerationMaterial } from "./configuration-generation.js";
 import { configuredGenerationSecrets, launchProvenance } from "./configuration-provenance.js";
 
@@ -80,6 +81,7 @@ import {
   type WorkflowDefinition,
   type WorkflowGraph,
   type Workspace,
+  type SecretRef,
 } from "@orca/core";
 import { reduceRun } from "@orca/core";
 import {
@@ -125,10 +127,12 @@ import { protectExecutionInputs } from "./execution-inputs.js";
 import { checkpointSeed, resumeBlocked } from "./checkpoint-attempt.js";
 import { gitRefMoved, gitRefRefusal, LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 import {
+  agentInstructions,
   capabilityRefusal,
   deliveryIssues,
   nodeCapabilityScope,
   preflightCapabilities,
+  preflightSecretInputs,
   preflightSecretReferences,
   readSkillForDelivery,
   resolveNodeCapabilities,
@@ -301,6 +305,16 @@ export interface StartRunOptions {
    * provisioning fetches exactly it. Absent, the check made here is the pin.
    */
   gitRefObject?: string;
+  /**
+   * Launch vars to protect as if the workflow declared them `sensitive` (#363): a delegating
+   * daemon names its prompt variable when the task holds a value its own run protects.
+   */
+  sensitiveVars?: readonly string[];
+  /**
+   * Values to redact wherever they appear in this run (#363): the original protected values in
+   * a delegated task, so the worker redacts each one and not only the whole task.
+   */
+  protectedValues?: readonly string[];
   /**
    * Per-run selection (#186): role -> agent, model, item workflow, template pack. Validated
    * before `run.created` is appended and recorded in it, so a replay resolves the same agents.
@@ -578,6 +592,12 @@ export class Orchestrator {
       returnSlot: () => Promise<void>;
       /** `capabilityManifestKey` of what the session was opened with (#335). */
       capabilities: string;
+      /** Steps holding it right now: an incompatible step retires it only once this is 0 (#363). */
+      active: number;
+      /** Taken out of the pool: close it when the last step holding it lets go. */
+      retiring?: { stepRunId: string };
+      /** Its slot is being given up, so a waiting step does not count it as held for good. */
+      slotClosing: () => void;
     }
   >();
   private readonly maxAgentSessions: number | undefined;
@@ -687,6 +707,13 @@ export class Orchestrator {
         { errors, warnings },
       );
     }
+    // A step's `secretEnv` names a configured secret bound to its agent's host (#363).
+    preflightSecretInputs(
+      (generation?.agents ?? this.agents).withOverrides(opts.overrides),
+      def,
+      inputs.vars,
+      this.secretUse !== undefined,
+    );
     if (opts.gitRefObject !== undefined && (opts.gitRef === undefined || !/^[a-f0-9]{40,64}$/.test(opts.gitRefObject)))
       throw new OrcaError("RUN_STATE", "a pinned git ref object needs its ref");
     if (opts.gitRef !== undefined) {
@@ -779,7 +806,14 @@ export class Orchestrator {
     const workflowStored = this.dryRun ? false : await this.recordDefinition(def);
     if (this.dryRun) await this.stores.execution.putGeneration(dryRunDefinitionKey(runId), def);
     // A checkpoint attempt keeps everything its source treated as sensitive, overlays included.
-    let protectedInputs = protectExecutionInputs(runId, def, vars, opts.checkpoint?.inputs ?? parentInputs);
+    let protectedInputs = protectExecutionInputs(
+      runId,
+      def,
+      vars,
+      opts.checkpoint?.inputs ?? parentInputs,
+      opts.sensitiveVars,
+      opts.protectedValues,
+    );
     const configuredSecrets = generation ? configuredGenerationSecrets(generation) : [];
     if (configuredSecrets.length)
       protectedInputs = {
@@ -787,7 +821,10 @@ export class Orchestrator {
         secrets: [...(protectedInputs?.secrets ?? []), ...configuredSecrets],
       };
     // Authenticate actor and lineage even for public application inputs.
-    if (!protectedInputs && (opts.actor || opts.parentRunId || generation || opts.checkpoint))
+    // A step's `secretEnv` reads its secret's id from the launch record (#363), so a run that has
+    // one keeps that record even when nothing else needs it.
+    const launchSelectsSecrets = agentInstructions(def).some((step) => step.secretEnv !== undefined);
+    if (!protectedInputs && (opts.actor || opts.parentRunId || generation || opts.checkpoint || launchSelectsSecrets))
       protectedInputs = {
         runId,
         workflowId: def.id,
@@ -2357,7 +2394,15 @@ export class Orchestrator {
                   }),
               parentRunId: rc.id,
               parentStepRunId: step.id,
-              ...(options.vars ? { vars: { ...rc.state.run.vars, ...options.vars } } : { vars: rc.state.run.vars }),
+              // An inline graph is part of this run's launch (#363): the secrets its steps hand
+              // their agents are the ones this run's launch chose, sealed in its record, never
+              // whatever the working vars or a loop or branch overlay say by now. A registered
+              // child workflow is admitted on its own inputs instead.
+              vars: {
+                ...rc.state.run.vars,
+                ...(options.vars ?? {}),
+                ...("workflow" in target ? {} : self.launchSecretSelection(rc, target.graph)),
+              },
               ...(options.workspace
                 ? { workspace: options.workspace }
                 : options.workItemId
@@ -2548,6 +2593,39 @@ export class Orchestrator {
    * the launch recorded, is refused before any process starts: a run is pinned to its config
    * generation, so only skill files on disk can change under it.
    */
+  /**
+   * The environment a step's `secretEnv` adds (#363): each variable as a reference to the
+   * secret its `secret` launch input names, sorted by variable. Never a value: the reference is
+   * read on the agent's host at session open, under the run owner's grant. A step whose input
+   * names no secret, or whose agent delegates to another daemon, is refused before anything starts.
+   */
+  private stepSecretEnv(rc: RunContext, step: StepRun, agent: AgentSpec): Record<string, SecretRef> | undefined {
+    const node = rc.definition.nodes[step.nodeId];
+    const mapping = node?.type === "agent" ? node.secretEnv : undefined;
+    if (!mapping || Object.keys(mapping).length === 0) return undefined;
+    if (agent.type === "orca-daemon")
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `step '${step.nodeId}' hands its agent secret environment variables, which a step delegated to another daemon cannot take`,
+        { nodeId: step.nodeId, reason: "unsupported" },
+      );
+    const env: Record<string, SecretRef> = {};
+    for (const name of Object.keys(mapping).sort()) {
+      const input = mapping[name]!;
+      // The selection recorded with the launch, in the private execution store: never the run's
+      // working vars, which steps may change after the launch was checked.
+      const id = rc.launchVar(input);
+      if (typeof id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id))
+        throw new OrcaError(
+          "CONFIG_INVALID",
+          `step '${step.nodeId}' maps ${name} to launch input '${input}', which names no secret`,
+          { nodeId: step.nodeId, variable: name, input, reason: "missing" },
+        );
+      env[name] = { secret: id };
+    }
+    return env;
+  }
+
   private stepCapabilities(
     rc: RunContext,
     step: StepRun,
@@ -2710,6 +2788,68 @@ export class Orchestrator {
    * pooled session is retired, never handed to another step; the session itself is not
    * changed.
    */
+  /**
+   * The `secret` inputs an inline graph's steps map in `secretEnv` (#363), with the ids this
+   * run's launch sealed for them. An input the launch recorded no value for is left absent, so
+   * the child's own preflight refuses it rather than taking a working var's.
+   */
+  private launchSecretSelection(rc: RunContext, graph: WorkflowGraph): Record<string, unknown> {
+    const selection: Record<string, unknown> = {};
+    for (const step of agentInstructions(graph))
+      for (const input of Object.values(step.secretEnv ?? {})) selection[input] = rc.launchVar(input);
+    return selection;
+  }
+
+  /** Hand a pooled session to a step; it counts as held until the step lets go (#363). */
+  private leasePooled(
+    rc: RunContext,
+    step: StepRun,
+    key: string,
+    pooled: NonNullable<ReturnType<Orchestrator["sessions"]["get"]>>,
+  ): { session: AgentSession; release: () => Promise<void> } {
+    pooled.active++;
+    let released = false;
+    return {
+      session: pooled.session,
+      release: async () => {
+        if (released) return;
+        released = true;
+        pooled.active--;
+        if (pooled.retiring && pooled.active === 0) await this.closeRetired(rc, pooled);
+      },
+    };
+  }
+
+  /**
+   * Take a pooled session out of the pool (#335, #363). Its slot is marked as being given up
+   * at once; the session itself closes now if no step holds it, or when the last one lets go.
+   */
+  private async retireFromPool(
+    rc: RunContext,
+    step: StepRun,
+    key: string,
+    pooled: NonNullable<ReturnType<Orchestrator["sessions"]["get"]>>,
+  ): Promise<void> {
+    if (this.sessions.get(key) === pooled) this.sessions.delete(key);
+    pooled.retiring ??= { stepRunId: step.id };
+    if (pooled.active === 0) await this.closeRetired(rc, pooled);
+    else pooled.slotClosing();
+  }
+
+  private async closeRetired(
+    rc: RunContext,
+    pooled: NonNullable<ReturnType<Orchestrator["sessions"]["get"]>>,
+  ): Promise<void> {
+    await pooled.close().catch(() => undefined);
+    void pooled.returnSlot();
+    await rc
+      .emit({
+        type: "agent.session.closed",
+        payload: { stepRunId: pooled.retiring?.stepRunId ?? pooled.current.step.id, sessionId: pooled.session.id },
+      })
+      .catch(() => undefined);
+  }
+
   private guardCatalogUse(
     rc: RunContext,
     step: StepRun,
@@ -2806,6 +2946,37 @@ export class Orchestrator {
     })();
   }
 
+  /**
+   * Store what the session's native pre-tool hook reports about each tool call (#1000), when
+   * the agent keeps it. Off by default: with `diagnostics.toolCalls` unset or `off`, or a
+   * session with no spool, or a store without telemetry, nothing is attached and nothing kept.
+   */
+  private keepHookTelemetry(
+    rc: RunContext,
+    agent: { id: string; diagnostics?: { toolCalls: "off" | "keep"; retainDays: number } | undefined },
+    session: AgentSession,
+    current: { step: StepRun },
+  ): void {
+    const spool = session.hookTelemetry;
+    const store = this.stores.toolTelemetry;
+    if (!spool || !store || agent.diagnostics?.toolCalls !== "keep" || rc.state.run.dryRun) return;
+    const stop = attachHookTelemetry({
+      spool,
+      store,
+      scope: {
+        runId: rc.id,
+        sessionId: session.id,
+        agentId: agent.id,
+        stepRunId: () => current.step.id,
+        retainDays: agent.diagnostics.retainDays,
+      },
+      redact: (value) => rc.redactSecrets(value),
+      clock: this.clock,
+      logger: rc.logger,
+    });
+    void session.closed.then(stop, stop);
+  }
+
   /** A child's values redact its ancestors too: a child's result is written to its parent's log. */
   private rememberSecrets(rc: RunContext, values: readonly string[]): void {
     const seen = new Set<string>();
@@ -2832,21 +3003,34 @@ export class Orchestrator {
     const key = `${rc.id}:${agent.id}`;
     const model = selectedModel(rc.state.run.overrides, agent);
     const capabilities = this.stepCapabilities(rc, step, agent);
+    // `secret` launch inputs the step hands its agent as environment variables (#363).
+    const secretEnv = this.stepSecretEnv(rc, step, agent);
+    // A pooled session carries the servers it was opened with.
+    const sessionShape = capabilities.key;
+    // A step that hands its agent a secret gets a process of its own, opened for that step
+    // under the grant and the value as they are now, and closed with it (#363): it neither
+    // takes a pooled session nor leaves its own in the pool for the next step.
+    const pooling = agent.sessionMode === "per-run" && !secretEnv;
     // Asked at every open, pooled or not: a revoked grant stops the next step (#337).
     const delivered = await this.deliverCatalog(rc, step, agent, host, capabilities);
     const { mcpServers, authorize } = delivered;
-    let pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
-    if (pooled && pooled.capabilities !== capabilities.key) {
+    let pooled = pooling ? this.sessions.get(key) : undefined;
+    if (pooled && pooled.capabilities !== sessionShape) {
       // A per-run session carries the MCP servers it was opened with. A step whose scope
       // differs gets its own session rather than a broader or narrower one (#335).
       rc.logger.info("pooled session has other capabilities; reopening it", { agent: agent.id });
-      this.sessions.delete(key);
-      await pooled.close().catch(() => undefined);
-      void pooled.returnSlot();
-      await rc
-        .emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: pooled.session.id } })
-        .catch(() => undefined);
+      await this.retireFromPool(rc, step, key, pooled);
       pooled = undefined;
+    }
+    // A step that gets a process of its own retires an idle pooled one first, so the run's
+    // ordinary pool never holds the slot that step needs; a pool still in a turn is retired
+    // when that turn lets go, never closed under it (#363).
+    if (!pooling && agent.sessionMode === "per-run") {
+      const idle = this.sessions.get(key);
+      if (idle) {
+        rc.logger.info("this step gets a session of its own; retiring the pooled one", { agent: agent.id });
+        await this.retireFromPool(rc, step, key, idle);
+      }
     }
     if (pooled) {
       pooled.current.step = step;
@@ -2858,7 +3042,7 @@ export class Orchestrator {
           step,
           agent,
           key,
-          this.guardCatalogUse(rc, step, key, { session: pooled.session, release: async () => {} }, authorize),
+          this.guardCatalogUse(rc, step, key, this.leasePooled(rc, step, key, pooled), authorize),
           delivered.skills,
         );
       // It drifted (the agent switched model itself): re-apply rather than run a step on a
@@ -2878,7 +3062,7 @@ export class Orchestrator {
           step,
           agent,
           key,
-          this.guardCatalogUse(rc, step, key, { session: pooled.session, release: async () => {} }, authorize),
+          this.guardCatalogUse(rc, step, key, this.leasePooled(rc, step, key, pooled), authorize),
           delivered.skills,
         );
       } catch (e) {
@@ -2892,7 +3076,7 @@ export class Orchestrator {
           .catch(() => undefined);
       }
     }
-    const slot = await this.takeSessionSlot(rc, step, agent, host);
+    const slot = await this.takeSessionSlot(rc, step, agent, host, pooling);
     // The slot wait can be long: ask again now that the session is about to open.
     if (authorize)
       try {
@@ -2916,7 +3100,9 @@ export class Orchestrator {
       session = await this.sessionFactory({
         host,
         // Only the step's resolved MCP servers reach `session/new` (#335).
-        agent: { ...agent, mcpServers },
+        // Secret launch inputs join the agent's env as references, read on its host like any
+        // other (#336): the use decision, host binding, redaction and no fallback all apply.
+        agent: { ...agent, mcpServers, ...(secretEnv ? { env: { ...agent.env, ...secretEnv } } : {}) },
         // An agent that cannot take the step's skills is refused right after `initialize`,
         // before `session/new` configures its servers (#337).
         ...(delivered.skills.length
@@ -3037,6 +3223,19 @@ export class Orchestrator {
                 title: info.title,
                 decision: info.decision,
                 ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}),
+                // Which rule decided it (#702), when the session knows: the basis and the rule's
+                // place, field by field, so nothing else (a file digest) reaches the public log.
+                ...(info.rule
+                  ? {
+                      rule: {
+                        basis: info.rule.basis,
+                        ...(info.rule.layer !== undefined ? { layer: info.rule.layer } : {}),
+                        ...(info.rule.index !== undefined ? { index: info.rule.index } : {}),
+                        ...(info.rule.file !== undefined ? { file: info.rule.file } : {}),
+                        ...(info.rule.capped ? { capped: true } : {}),
+                      },
+                    }
+                  : {}),
               },
             })
             .catch((error: unknown) =>
@@ -3103,6 +3302,7 @@ export class Orchestrator {
           ...(continuity ? { continuity } : {}),
         },
       });
+      this.keepHookTelemetry(rc, agent, session, current);
       for (const listener of this.sessionOpenedListeners) {
         try {
           listener({ runId: rc.id, agentId: agent.id, session });
@@ -3120,8 +3320,16 @@ export class Orchestrator {
           .emit({ type: "agent.session.closed", payload: { stepRunId: current.step.id, sessionId: session.id } })
           .catch(() => undefined);
       };
-      if (agent.sessionMode === "per-run") {
-        const pooled = { session, current, close: closeOnce, returnSlot, capabilities: capabilities.key };
+      if (pooling) {
+        const pooled = {
+          session,
+          current,
+          close: closeOnce,
+          returnSlot,
+          capabilities: sessionShape,
+          active: 0,
+          slotClosing: () => slot.closing(),
+        };
         this.sessions.set(key, pooled);
         // A pooled session whose connection went away (wedged agent killed after a cancel, or a
         // crash) must not be handed to the next step; let that step open a fresh one instead.
@@ -3133,7 +3341,7 @@ export class Orchestrator {
           step,
           agent,
           key,
-          this.guardCatalogUse(rc, step, key, { session, release: async () => {} }, authorize),
+          this.guardCatalogUse(rc, step, key, this.leasePooled(rc, step, key, pooled), authorize),
           delivered.skills,
         );
       }
@@ -3168,6 +3376,8 @@ export class Orchestrator {
     step: StepRun,
     agent: { id: string; maxSessions?: number | undefined; sessionMode: "per-step" | "per-run" },
     host: AgentHost,
+    /** The session will be pooled for the run: its slot is held until the run ends. */
+    pinned: boolean,
   ): Promise<SessionSlot> {
     const remoteId = this.delegatedRemote(agent);
     const request = {
@@ -3178,7 +3388,9 @@ export class Orchestrator {
       signal: rc.abort.signal,
       runs: this.runAncestry(rc),
       deadlineMs: this.sessionSlotWaitMs(),
-      ...(agent.sessionMode === "per-run" ? { pinnedTo: rc.id } : {}),
+      // Pinned by the session's effective lifetime: a per-run agent's step that gets a process
+      // of its own (#363) holds its slot only for that step.
+      ...(pinned ? { pinnedTo: rc.id } : {}),
     };
     const immediate = this.sessionSlots.tryAcquire(request);
     if (immediate) {

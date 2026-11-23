@@ -12,7 +12,7 @@ import {
 } from "./update-bootstrap.js";
 import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
-import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
+import { DIAGNOSTICS_DIR, FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
 import { enterDaemonStoreFormat } from "./desktop-carryover.js";
 import {
   desktopSqliteSwitch,
@@ -36,8 +36,8 @@ import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import {
   AgentRegistry,
-  claudeHookSession,
   claudePreToolHookScript,
+  nativeToolHookSession,
   nativeToolHookUnavailable,
   openAcpSession,
   permissionPolicyPath,
@@ -47,6 +47,7 @@ import {
 } from "@orca/agents";
 import {
   consoleLogger,
+  literalEnv,
   loadTemplates,
   loadWorkflows,
   OrcaError,
@@ -303,6 +304,7 @@ export function makeSessionFactory(
      * only the hook's own tests turn it on.
      */
     activation?: "acceptance-only" | undefined;
+    codexProcess?: ((agentPid: number | undefined) => Promise<{ pid: number } | { error: string }>) | undefined;
   } = {
     runtime: process.execPath,
     script: claudePreToolHookScript(),
@@ -313,7 +315,8 @@ export function makeSessionFactory(
   const contextDir = join(resolve(layout.configDir, layout.storeDir), "private-execution", "tool-hooks");
   return async (options: OpenSessionOptions) => {
     const bound = { ...options, permissionFiles, protectedPaths };
-    // ORCA's pre-tool hook (#704): decided per session, once the agent says who it is.
+    // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
+    // says who it is, and the session refused wherever it cannot be put in force.
     if (options.agent.nativeToolHook !== "on") return open(bound);
     if (hook.activation !== "acceptance-only") throw nativeToolHookUnavailable(options.agent)!;
     // The hook runs where the agent does; ORCA installs it only on its own host.
@@ -324,7 +327,7 @@ export function makeSessionFactory(
           `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
         { agentId: options.agent.id, host: options.host.spec.id },
       );
-    const installed = claudeHookSession({
+    const installed = nativeToolHookSession({
       agentId: options.agent.id,
       permissions: options.agent.permissions,
       permissionFiles,
@@ -337,10 +340,23 @@ export function makeSessionFactory(
       platform: hook.platform,
       arch: hook.arch,
       imageDigest: hook.imageDigest,
+      codexProcess: hook.codexProcess,
+      agentEnv: { ...process.env, ...literalEnv(options.agent.env), ...(options.env ?? {}) },
     });
+    let hookEnv: Record<string, string>;
+    try {
+      ({ env: hookEnv } = await installed.prepare());
+    } catch (error) {
+      await installed.cleanup();
+      throw error;
+    }
     let session: AgentSession;
     try {
-      session = await open({ ...bound, sessionMeta: installed.sessionMeta });
+      session = await open({
+        ...bound,
+        env: { ...(options.env ?? {}), ...hookEnv },
+        sessionMeta: installed.sessionMeta,
+      });
     } catch (error) {
       await installed.cleanup();
       throw error;
@@ -387,7 +403,8 @@ export interface OrcaFileLayout {
  * directory). Not even readable: `auth/`, where `orca serve` keeps the local owner token, and
  * the store's two private directories, which hold its encryption keys and the payloads they
  * protect (`private-execution` and `private-workflows` in `@orca/store`), and the whole-store
- * format backups, which copy them (`format-backups`).
+ * format backups, which copy them (`format-backups`), and the tool-call diagnostics ORCA keeps
+ * about the agent's own calls (`diagnostics`, #1000).
  */
 export function orcaProtectedPaths(layout: OrcaFileLayout): ProtectedPaths {
   const configDir = resolve(layout.configDir);
@@ -405,6 +422,8 @@ export function orcaProtectedPaths(layout: OrcaFileLayout): ProtectedPaths {
       join(storeDir, "private-workflows"),
       // Whole-store copies (#566), private directories included.
       join(storeDir, STORE_FORMAT_BACKUP_DIR),
+      // Tool-call telemetry (#1000): what hooks reported about the agent's own calls.
+      join(storeDir, DIAGNOSTICS_DIR),
     ],
     agentAreas: [join(storeDir, "work"), join(storeDir, "program")],
   };

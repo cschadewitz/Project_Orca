@@ -21,6 +21,7 @@ import {
   fsToolCall,
   openAcpSession,
   permissionPolicyPath,
+  type PermissionRuleRecord,
 } from "@orca/agents";
 
 /**
@@ -102,7 +103,12 @@ async function turn(
   answer?: (request: acp.RequestPermissionRequest) => string | undefined,
   permissionFiles?: string[],
   host: LocalHost = new LocalHost({ id: "local", type: "local" }),
-): Promise<{ outcomes: Outcome[]; decisions: string[]; asked: acp.RequestPermissionRequest[] }> {
+): Promise<{
+  outcomes: Outcome[];
+  decisions: string[];
+  rules: (PermissionRuleRecord | undefined)[];
+  asked: acp.RequestPermissionRequest[];
+}> {
   const log = join(await temp("orca-owned-fs-log-"), "results.json");
   const agent = AgentSpecSchema.parse({
     id: "prober",
@@ -112,13 +118,17 @@ async function turn(
     permissions: { rules: [], ...policy },
   });
   const decisions: string[] = [];
+  const rules: (PermissionRuleRecord | undefined)[] = [];
   const asked: acp.RequestPermissionRequest[] = [];
   const session = await openAcpSession({
     host,
     agent,
     cwd: dir,
     ...(permissionFiles ? { permissionFiles } : {}),
-    onPermission: (info) => void decisions.push(info.decision),
+    onPermission: (info) => {
+      decisions.push(info.decision);
+      rules.push(info.rule);
+    },
     ...(answer
       ? {
           askPermission: async (request: acp.RequestPermissionRequest) => {
@@ -133,7 +143,7 @@ async function turn(
   } finally {
     await session.close();
   }
-  return { outcomes: JSON.parse(await readFile(log, "utf8")) as Outcome[], decisions, asked };
+  return { outcomes: JSON.parse(await readFile(log, "utf8")) as Outcome[], decisions, rules, asked };
 }
 
 const refused = (o: Outcome | undefined) => o?.error?.reason;
@@ -322,6 +332,46 @@ describe("a read of a file that is not there", () => {
     expect(outcomes[0]?.code).toBe(outcomes[1]?.code);
     expect(refused(outcomes[0])).toBe("not allowed: deny");
     expect(refused(outcomes[1])).toBe("not allowed: deny");
+  });
+});
+
+describe("each decision records the rule that made it (#702)", () => {
+  it("names the config rule, the sidecar rule by its place in the file, and the fallthrough", async () => {
+    const dir = await workspace();
+    const sidecar = permissionPolicyPath(dir);
+    await writeFile(
+      sidecar,
+      JSON.stringify({
+        version: 1,
+        agents: {
+          prober: {
+            rules: [
+              { match: { kind: "edit", path: "src/x.ts" }, decision: "ask" },
+              { match: { kind: "edit", path: "src/b.ts" }, decision: "deny" },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const { decisions, rules } = await turn(
+      dir,
+      [
+        { read: join(dir, "src", "a.ts") },
+        { write: join(dir, "src", "b.ts"), content: "no" },
+        { ask: "fetch", title: "Fetch https://example.test" },
+      ],
+      { default: "deny", rules: [{ match: { kind: "read", scope: "workspace" }, decision: "allow" }] },
+      () => "allow",
+      [sidecar],
+    );
+    expect(decisions).toEqual(["fs:allow", "fs:deny", "deny"]);
+    expect(rules).toEqual([
+      { basis: "rule", layer: "config", index: 0 },
+      // No revision: the file's digest stays out of the public run log (#702 review).
+      { basis: "rule", layer: "sidecar", index: 1, file: 0 },
+      { basis: "default" },
+    ]);
   });
 });
 

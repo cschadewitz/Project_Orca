@@ -49,8 +49,8 @@ inputSchema:
     tokenRef: { type: string, sensitive: true, description: "Name of the secret holding the token" }
 ```
 
-A declaration has a `type` - `string`, `number`, `integer`, `boolean`, `object` or
-`array` - and optionally:
+A declaration has a `type` - `string`, `number`, `integer`, `boolean`, `object`, `array`,
+or `secret` (the id of a configured secret, top level only; see below) - and optionally:
 
 - `description`; `required` (the resolved value must be present); `nullable` (`null` is
   accepted; otherwise `null` is an error); `sensitive` (see below);
@@ -176,7 +176,10 @@ daemon's declaration instead of failing.
 ## Sensitive inputs and secrets
 
 Prefer a **reference** to a secret over the secret itself: declare `tokenRef` (the name
-of an environment variable or a vault path) and resolve it where it is used. On the combined runtime integration, sensitive vars use protected execution storage;
+of an environment variable or a vault path) and resolve it where it is used. For a
+configured secret that a step's agent should receive, declare a `type: secret` input: its
+value is the secret's id, and the step hands it to the agent only as an environment variable
+(see [Choosing the secret at launch](WORKFLOWS.md#choosing-the-secret-at-launch), #363). On the combined runtime integration, sensitive vars use protected execution storage;
 ordinary vars remain in public run history. See [protected storage](protected-execution-storage.md).
 
 `sensitive: true` on a declaration, inherited by everything beneath it, means:
