@@ -24,6 +24,7 @@ import type {
   DaemonConnectionBridge,
   FleetBridge,
   FleetMachine,
+  FleetRun,
   FleetSnapshot,
   RemoteProfileView,
 } from "../../../src/daemon-connection.js";
@@ -40,6 +41,7 @@ import {
   type MenuItem,
 } from "../ui/index.js";
 import { fleetSummary, isStale, slotsLabel } from "./machine-model.js";
+import { ownerText, progressText, waitText } from "../runs/board/board-model.js";
 import "./machines.css";
 
 export interface MachinesSurfaceProps {
@@ -170,6 +172,15 @@ function Machines({
       )}
     </div>
   );
+}
+
+/**
+ * A run's console line on its machine (#340): steps, the wait, the owner. The same words the
+ * Runs board uses, read from what the machine last said; nothing when it said nothing.
+ */
+function consoleLine(run: FleetRun): string | undefined {
+  const parts = [progressText(run), waitText(run), ownerText(run)].filter((p): p is string => p !== undefined);
+  return parts.length ? parts.join(" · ") : undefined;
 }
 
 /** Rows listed per machine before "and N more": the count beside the heading is the whole of it. */
@@ -346,25 +357,37 @@ function Runs({
         Active runs
       </Text>
       <ul className="orca-machine__list">
-        {work.runs.slice(0, ROWS).map((run) => (
-          <li key={run.id} className="orca-machine__row">
-            <StatusChip status={run.status} aligned />
-            {open ? (
-              <button
-                type="button"
-                className={`orca-machine__link ${textClass("body")} orca-truncate`}
-                title={run.name}
-                onClick={() => onOpenRun(run.id)}
-              >
-                {run.name}
-              </button>
-            ) : (
-              <Text style="body" className="orca-truncate" title={run.name}>
-                {run.name}
-              </Text>
-            )}
-          </li>
-        ))}
+        {work.runs.slice(0, ROWS).map((run) => {
+          const line = consoleLine(run);
+          return (
+            <li key={run.id} className="orca-machine__row">
+              <StatusChip status={run.status} aligned />
+              {open ? (
+                <button
+                  type="button"
+                  className={`orca-machine__link ${textClass("body")} orca-truncate`}
+                  title={run.name}
+                  onClick={() => onOpenRun(run.id)}
+                >
+                  {run.name}
+                </button>
+              ) : (
+                <Text style="body" className="orca-truncate" title={run.name}>
+                  {run.name}
+                </Text>
+              )}
+              {(line || run.operations?.lastActivityAt) && (
+                <Text style="caption" className="orca-machine__console orca-truncate" title={line}>
+                  {line}
+                  {line && run.operations?.lastActivityAt ? " · " : ""}
+                  {run.operations?.lastActivityAt && (
+                    <Time at={new Date(run.operations.lastActivityAt)} show="relative" />
+                  )}
+                </Text>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {more > 0 && <Text style="caption">and {counted(more, "more run")}</Text>}
     </div>
