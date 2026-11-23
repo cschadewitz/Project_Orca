@@ -86,6 +86,7 @@ describe("store format marker (#566)", () => {
     expect(await enterStoreFormat(dir, { appVersion: "0.7.1", mode: "write" })).toEqual({
       status: "fresh",
       epoch: STORE_FORMAT_EPOCH,
+      backend: "file",
     });
     expect(await readStoreFormat(dir)).toMatchObject({ epoch: STORE_FORMAT_EPOCH, writtenBy: "0.7.1" });
     expect(await backups(dir)).toEqual([]);

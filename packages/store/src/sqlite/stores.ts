@@ -37,6 +37,7 @@ import { SQLITE_STORE_CAPABILITIES } from "../store-contracts.js";
 import { FileWorkflowVersionStore } from "../workflow-store.js";
 import { SqliteArtifactStore } from "./artifacts.js";
 import { SqliteDatabase, type SqliteOptions } from "./database.js";
+import { refuseOtherBackend } from "../store-backend.js";
 import { SqliteDocumentStore, type SqliteCollection } from "./documents.js";
 import { SqliteEventStore } from "./events.js";
 import { SqlitePlanJournal } from "./journal.js";
@@ -47,11 +48,18 @@ export const SQLITE_METADATA_FILE = "metadata.sqlite";
 export interface SqliteStoresOptions extends SqliteOptions {
   clock?: Clock;
   logger?: Logger;
+  /**
+   * Open the database even though the store records file metadata: only for maintenance that
+   * builds or checks a database beside the files (an import before the switch, the benchmark).
+   * A workspace never runs on such a database (store-backend.ts).
+   */
+  unselected?: boolean;
 }
 
 /** A new connection on every call: two handles behave like two processes sharing the file. */
 export function sqliteStores(dir: string, options: SqliteStoresOptions = {}): Stores {
-  const { clock, logger: _logger, ...db } = options;
+  const { clock, logger: _logger, unselected, ...db } = options;
+  if (!unselected) refuseOtherBackend(dir, "sqlite");
   const database = new SqliteDatabase(join(dir, SQLITE_METADATA_FILE), db);
   const execution = new FileExecutionStore(dir);
   const workflows = new FileWorkflowVersionStore(dir);
@@ -90,7 +98,9 @@ export function sqliteCollection<T extends { id: string }>(
   dir: string,
   name: string,
   schema: import("zod").ZodType<T>,
-  options: SqliteOptions = {},
+  options: SqliteOptions & { unselected?: boolean } = {},
 ): SqliteDocumentStore<T> {
-  return new SqliteDocumentStore(new SqliteDatabase(join(dir, SQLITE_METADATA_FILE), options), name, schema);
+  const { unselected, ...db } = options;
+  if (!unselected) refuseOtherBackend(dir, "sqlite");
+  return new SqliteDocumentStore(new SqliteDatabase(join(dir, SQLITE_METADATA_FILE), db), name, schema);
 }

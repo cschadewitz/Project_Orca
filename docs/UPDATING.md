@@ -905,7 +905,13 @@ converts a store:
 | A format it does not know (a newer ORCA) | Refuses for reads and writes alike and changes nothing. The message names the version that wrote it and, when there is one, the backup that version made. |
 | A damaged marker | Refuses until the marker is restored or repaired with ORCA stopped. |
 
-`orca store format` prints the recorded format and what startup would do.
+`orca store format` prints the recorded format, whether the store's metadata is in files or
+SQLite, and what startup would do.
+
+A store switched to SQLite with `orca store sqlite switch` (#339) records a format of its own,
+`operator-journals-v4-sqlite`. This ORCA opens it in place, on SQLite; an ORCA from before
+it treats it as a format it does not know (the row above) and refuses it, naming the backup
+the switch took. See [the SQLite metadata backend](storage/sqlite-metadata.md#choosing-sqlite-for-a-workspace).
 
 **`orca store carry-forward`** is the explicit, offline conversion. Stop every ORCA app,
 daemon and command using the workspace first. Writers from before 0.7.1 take no lock the

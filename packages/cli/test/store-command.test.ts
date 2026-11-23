@@ -97,4 +97,55 @@ describe("orca store", () => {
     expect(restored.lines.find((l) => l.startsWith("counts"))).toContain("runs 1, events 1");
     await expect(storeCommand(ctx(dir, ["sqlite", "nope"]))).rejects.toMatchObject({ code: "CONFIG_INVALID" });
   });
+
+  it("sqlite switch moves a workspace onto SQLite, and the daemon opens it there from then on", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-store-sqlite-switch-"));
+    dirs.push(dir);
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
+    // Opened once on files (stamps the current format), then given a run.
+    await bootstrap({ cwd: dir, logger: silentLogger });
+    await mkdir(join(dir, ".orca", "runs"), { recursive: true });
+    await writeFile(join(dir, ".orca", "runs", "run_old.jsonl"), LOG);
+
+    const before = ctx(dir, ["format"]);
+    expect(await storeCommand(before)).toBe(0);
+    expect(before.lines).toContain("metadata         files");
+
+    const switched = ctx(dir, ["sqlite", "switch"]);
+    expect(await storeCommand(switched)).toBe(0);
+    expect(switched.lines[0]).toMatch(/^switched .* to SQLite metadata \(store format .*-sqlite\)$/);
+    expect(switched.lines[1]).toMatch(/format-backups/);
+    const after = ctx(dir, ["format"]);
+    expect(await storeCommand(after)).toBe(0);
+    expect(after.lines).toContain("metadata         SQLite (metadata.sqlite)");
+    expect(after.lines.at(-1)).toContain("opens in place");
+
+    // The run log left on disk is no longer what the workspace reads: without it, the daemon
+    // still has the run, from SQLite.
+    await rm(join(dir, ".orca", "runs", "run_old.jsonl"));
+    const app = await bootstrap({ cwd: dir, logger: silentLogger });
+    expect(app.orchestrator.stores.capabilities?.backend).toBe("sqlite");
+    expect((await app.orchestrator.stores.events.read("run_old")).map((e) => e.type)).toEqual(["run.created"]);
+    app.orchestrator.stores.close?.();
+
+    // Nothing to import from files any more, and a second switch has nothing to do.
+    await expect(storeCommand(ctx(dir, ["sqlite", "import"]))).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    const again = ctx(dir, ["sqlite", "switch"]);
+    expect(await storeCommand(again)).toBe(0);
+    expect(again.lines[0]).toContain("nothing to do");
+  });
+
+  it("refuses to switch a desktop app's own store, whose write fence it cannot hold", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-store-sqlite-switch-"));
+    dirs.push(dir);
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
+    await mkdir(join(dir, ".orca", "runs"), { recursive: true });
+    await writeFile(join(dir, ".orca", "runs", "run_old.jsonl"), LOG);
+    await mkdir(join(dir, ".orca-first-run-ownership"), { mode: 0o700 });
+    await expect(storeCommand(ctx(dir, ["sqlite", "switch"]))).rejects.toMatchObject({
+      code: "STORE_FORMAT",
+      details: { reason: "APP_OWNED" },
+    });
+    expect(await readdir(join(dir, ".orca"))).toEqual(["runs"]);
+  });
 });

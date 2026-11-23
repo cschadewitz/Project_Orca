@@ -29,6 +29,12 @@ export interface SqliteOptions {
   busyDeadlineMs?: number;
   /** When the write-ahead log is copied back into the database. Defaults: `SQLITE_CHECKPOINT`. */
   checkpoint?: SqliteCheckpointOptions;
+  /**
+   * Open read-only, for checks that must change nothing (closed update validation): the database
+   * must already exist at this build's schema version (no migration runs), no setting is
+   * written, and every write fails.
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -120,8 +126,25 @@ export class SqliteDatabase {
   ) {
     this.busyDeadlineMs = options.busyDeadlineMs ?? 10_000;
     this.checkpointSettings = { ...SQLITE_CHECKPOINT, ...options.checkpoint };
-    mkdirSync(dirname(file), { recursive: true });
     const { DatabaseSync } = sqlite();
+    if (options.readOnly) {
+      this.db = new DatabaseSync(file, { readOnly: true });
+      try {
+        this.db.exec("PRAGMA busy_timeout = 50");
+        this.refuseNewer();
+        if (this.schemaVersion() !== SQLITE_MIGRATIONS.length)
+          throw new OrcaError(
+            "STORE_FORMAT",
+            `SQLite metadata schema ${this.schemaVersion()} needs migrating to ${SQLITE_MIGRATIONS.length}, which a read-only open does not do`,
+            { reason: "NEEDS_MIGRATION", file, schema: this.schemaVersion(), supported: SQLITE_MIGRATIONS.length },
+          );
+      } catch (error) {
+        this.db.close();
+        throw error;
+      }
+      return;
+    }
+    mkdirSync(dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
     try {
       this.db.exec("PRAGMA busy_timeout = 50");

@@ -3,6 +3,7 @@
  *
  *   store format                 print the store's recorded format and what this ORCA would do
  *   store carry-forward          convert an older-format store, with every other ORCA stopped
+ *   store sqlite switch          move the store's metadata from files to SQLite, with every other ORCA stopped (#339)
  *   store sqlite import          mirror the file-backed metadata into <store>/metadata.sqlite (#339)
  *   store sqlite backup <file>   a consistent copy of the SQLite metadata, taken while it is in use
  *   store sqlite restore <file>  put a backup in place in a store that has no SQLite metadata
@@ -13,14 +14,17 @@
  * step: it backs the whole store up into `format-backups/`, confirms nothing else wrote
  * meanwhile and that this ORCA can read everything, and only then stamps the current format.
  *
- * The SQLite metadata database is not what a workspace runs on yet: nothing reads it until the
- * backend can be selected (after the store format gates #897, #905, #910). `import` builds it
- * beside the files, as often as wanted; the files stay the authority meanwhile.
+ * A store runs on the backend its format marker records (store-backend.ts). `import` builds a
+ * SQLite database beside the files, as often as wanted, and the files stay the authority;
+ * `switch` makes SQLite the authority, after a verified backup, an import and a verify, and is
+ * refused on Windows while store format changes are (#910, #947).
  */
 import { resolve } from "node:path";
 import { OrcaError } from "@orca/core";
 import {
   backupSqliteMetadata,
+  recordedStoreBackend,
+  switchStoreToSqlite,
   carryStoreForward,
   enterStoreFormat,
   importFileMetadata,
@@ -46,6 +50,7 @@ export async function storeCommand(ctx: CommandContext): Promise<number> {
       ctx.out(`store            ${storeDir}`);
       ctx.out(`recorded format  ${marker ? `${marker.epoch} (written by ORCA ${marker.writtenBy})` : "none"}`);
       ctx.out(`this ORCA        ${STORE_FORMAT_EPOCH} (ORCA ${readOrcaVersion()})`);
+      ctx.out(`metadata         ${recordedStoreBackend(storeDir) === "sqlite" ? "SQLite (metadata.sqlite)" : "files"}`);
       try {
         const outcome = await enterStoreFormat(storeDir, { appVersion: readOrcaVersion(), mode: "read" });
         ctx.out(
@@ -70,20 +75,39 @@ export async function storeCommand(ctx: CommandContext): Promise<number> {
       return 0;
     }
     case "sqlite":
-      return sqliteCommand(ctx, storeDir);
+      return sqliteCommand(ctx, configDir, storeDir);
     default:
       throw new OrcaError("CONFIG_INVALID", `unknown store subcommand '${sub}' (format | carry-forward | sqlite)`);
   }
 }
 
-async function sqliteCommand(ctx: CommandContext, storeDir: string): Promise<number> {
+async function sqliteCommand(ctx: CommandContext, configDir: string, storeDir: string): Promise<number> {
   const [, action, file] = ctx.positionals;
   const needFile = () => {
     if (!file) throw new OrcaError("CONFIG_INVALID", `store sqlite ${action} needs a file path`);
     return resolve(ctx.cwd, file);
   };
   switch (action) {
+    case "switch": {
+      refuseAppOwned(configDir, storeDir);
+      const privacy = storePrivacy();
+      const outcome = await switchStoreToSqlite(storeDir, {
+        appVersion: readOrcaVersion(),
+        ...(privacy ? { privacy } : {}),
+      });
+      if (outcome.status === "switched") {
+        ctx.out(`switched ${storeDir} to SQLite metadata (store format ${outcome.epoch})`);
+        ctx.out(`backup of the store as it was on files: ${outcome.backup}`);
+        ctx.out("ORCA versions from before this one now refuse this store as newer than they can open");
+      } else ctx.out(`${storeDir} already keeps its metadata in SQLite; nothing to do`);
+      return 0;
+    }
     case "import": {
+      if (recordedStoreBackend(storeDir) === "sqlite")
+        throw new OrcaError(
+          "CONFIG_INVALID",
+          `${storeDir} already runs on SQLite metadata; its file metadata is no longer current, so there is nothing to import`,
+        );
       const report = await importFileMetadata(storeDir);
       const docs = Object.entries(report.documents)
         .map(([name, n]) => `${name} ${n}`)
@@ -128,7 +152,7 @@ async function sqliteCommand(ctx: CommandContext, storeDir: string): Promise<num
     default:
       throw new OrcaError(
         "CONFIG_INVALID",
-        `unknown store sqlite action '${action ?? ""}' (import | backup <file> | restore <file> | verify)`,
+        `unknown store sqlite action '${action ?? ""}' (switch | import | backup <file> | restore <file> | verify)`,
       );
   }
 }

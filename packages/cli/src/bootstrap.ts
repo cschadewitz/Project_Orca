@@ -74,7 +74,7 @@ import {
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
 import { delegatingSessionFactory, validateRemotes } from "@orca/daemon";
-import { fileStores, memoryStores, workspaceIdentity, type Stores } from "@orca/store";
+import { fileStores, memoryStores, sqliteStores, workspaceIdentity, type StoreBackend, type Stores } from "@orca/store";
 import { bindLocalAdmissionExecution } from "./admission-execution-authority.js";
 import { cliHumanInput } from "./human-input-cli.js";
 import { localSecretUse } from "./local-secret-use.js";
@@ -351,13 +351,14 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   // an older format, which only `orca store carry-forward` converts, or the desktop app's daemon
   // on the first start after an update while it holds the store's writer fence (#897). Closed
   // update validation only checks; an ephemeral bootstrap never opens the store at all.
+  let backend: StoreBackend = "file";
   if (!opts.ephemeral) {
-    await enterDaemonStoreFormat(
+    ({ backend } = await enterDaemonStoreFormat(
       resolve(configDir, config.storeDir),
       writer,
       storeWriterVersion(),
       isClosedUpdateBootstrap() ? "read" : "write",
-    );
+    ));
   }
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config, { configDir: resolve(configDir) });
@@ -386,9 +387,17 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   );
   let pluginWorkspaceProvider = false;
   let pluginHumanInput = false;
+  // The store's own marker says which metadata backend it runs on (#339, store-backend.ts):
+  // files, or SQLite once `orca store sqlite switch` has moved it. Closed update validation
+  // opens a SQLite store read-only, as it opens everything else.
   const stores = opts.ephemeral
     ? memoryStores()
-    : fileStores(resolve(configDir, config.storeDir), undefined, logger.child({ component: "store" }));
+    : backend === "sqlite"
+      ? sqliteStores(resolve(configDir, config.storeDir), {
+          logger: logger.child({ component: "store" }),
+          ...(isClosedUpdateBootstrap() ? { readOnly: true } : {}),
+        })
+      : fileStores(resolve(configDir, config.storeDir), undefined, logger.child({ component: "store" }));
   const plan = new PlanService({
     stores,
     logger: logger.child({ component: "plan" }),

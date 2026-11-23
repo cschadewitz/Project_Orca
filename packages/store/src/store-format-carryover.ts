@@ -156,13 +156,19 @@ async function privateDirectory(privacy: PrivateCopyBackend, path: string): Prom
   if (!(await privacy.privateEntry(path, "dir").catch(() => false))) throw unsafeCopy(path);
 }
 
-interface Entry {
+export interface StoreSnapshotEntry {
   type: "dir" | "file";
   mode: number;
   /** Only what a writer changes: size, mtime and inode for files. */
   state: string;
 }
-type Snapshot = Map<string, Entry>;
+export type StoreSnapshot = Map<string, StoreSnapshotEntry>;
+type Snapshot = StoreSnapshot;
+
+/** Every file and directory under `root` (backups and lock files excluded), with what identifies its content. */
+export async function snapshotStore(root: string): Promise<Snapshot> {
+  return snapshot(root);
+}
 
 async function snapshot(root: string): Promise<Snapshot> {
   const out: Snapshot = new Map();
@@ -191,6 +197,8 @@ async function snapshot(root: string): Promise<Snapshot> {
   await walk(root, "");
   return out;
 }
+
+export const sameStoreSnapshot = (a: Snapshot, b: Snapshot): boolean => sameSnapshot(a, b);
 
 const sameSnapshot = (a: Snapshot, b: Snapshot) =>
   a.size === b.size &&

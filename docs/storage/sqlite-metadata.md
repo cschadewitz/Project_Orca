@@ -7,10 +7,9 @@ contracts and passes the same conformance suite as the memory and file backends
 (`packages/store/test/conformance/`), with the capability matrix in
 `docs/contracts/store-contracts-v1.md`.
 
-It is **not the default** and nothing opens it unless asked. Making it a
-workspace's backend is a store format change, so the default switch and the
-store format epoch bump wait for the format carry-over gates: #897 (updater write
-fence), #905 (Linux package hand-off) and #910 (Windows durability).
+It is **not the default**. A workspace runs on it only after `orca store sqlite
+switch` has moved that workspace's store onto it (see [Choosing SQLite for a
+workspace](#choosing-sqlite-for-a-workspace)); every other store stays on files.
 
 ## What is where
 
@@ -159,10 +158,58 @@ settings, separate `--scale` runs from the table above):
 Every workload invariant held on all backends. These are observations, not the
 baseline: the #341 ADR records its budgets and the reference machine first.
 
+## Choosing SQLite for a workspace
+
+A store records which metadata backend it runs on in its format marker
+(`store-format.json`, `packages/store/src/store-backend.ts`):
+
+- **Files** (every store until it is switched): the marker carries the file format,
+  `operator-journals-v4`.
+- **SQLite**: the marker carries `operator-journals-v4-sqlite`, a store format of its
+  own. ORCA opens such a store on SQLite only.
+
+That keeps one populated workspace from ever being opened by both backends:
+
+- An ORCA from before this one does not know the SQLite format, so it refuses the
+  store as newer than it can open (naming the backup below), instead of reading the
+  file metadata the switch left behind, which no longer keeps up.
+- This ORCA's file backend refuses a store recorded for SQLite, and its SQLite backend
+  refuses a store recorded for files (`STORE_FORMAT`, `reason: "OTHER_BACKEND"`). Only
+  maintenance that builds or checks a database beside the files (`import`, `backup`,
+  `verify`, the benchmark) opens one there, and says so.
+- The daemon opens whichever backend the marker records, after the same format
+  check as always. Closed update validation opens a SQLite store read-only (no
+  migration, no setting written).
+
+**`orca store sqlite switch`** is the one way from files to SQLite. Stop every ORCA
+app, daemon and command using the workspace, as for `carry-forward`. Under the
+store's format lock it:
+
+1. Switches only a store in this ORCA's current file format. An older store is
+   carried forward first; an unmarked one is opened once first. A store already on
+   SQLite is left as it is.
+2. **Refuses on Windows** (`UNDURABLE`), changing nothing, for as long as store format
+   changes are refused there (#910: until the power-cut test in #947 proves the
+   backup taken first survives).
+3. Takes a verified whole-store backup into `format-backups/`, exactly as
+   `carry-forward` does: refused while a run is active or while anything writes, and
+   read back under this ORCA before it counts.
+4. Imports (`orca store sqlite import`, below) and verifies (`orca store sqlite
+   verify`); a problem leaves the store on files.
+5. Checks that no file of the store changed since the backup; a write that landed
+   meanwhile would be missing from the database, so the switch is refused instead.
+6. Only then writes the SQLite format into the marker, naming the backup.
+
+A refusal at any step leaves the store on files and in charge; a database the
+import built is inert, as after a plain `import`. The desktop app's own workspaces
+are refused (`APP_OWNED`), as for `carry-forward`: the app's daemon holds their write
+fence, which this command cannot. There is no switch back to files yet: the backup
+from step 3 is the store as it was.
+
 ## Operations
 
-All four commands work on the configured store directory and never touch the
-file-backed metadata they read from.
+`import`, `backup`, `restore` and `verify` work on the configured store directory and
+never touch the file-backed metadata they read from.
 
 | Command | What it does |
 |---|---|
@@ -171,8 +218,8 @@ file-backed metadata they read from.
 | `orca store sqlite restore <file>` | Accepts only a sealed backup (refuses a WAL-mode file or one with a `-wal`/`-journal` beside it). Copies it into a staging file in the store, syncs it, checks the **staged** bytes (integrity, ORCA application id, a known schema version with exactly its tables, indexes, views and triggers, still standalone), then publishes with a hard link under a restore lock: if a database (or `-wal`) appeared meanwhile the link fails and nothing is replaced. A crash leaves no database or the whole backup. |
 | `orca store sqlite verify` | Read-only: a read-only connection (no migration; a schema this build does not verify is refused), one read snapshot, blobs only read. Checks integrity, per-run and per-plan sequence gaps, every stored event, journal entry and artifact record, and every artifact row's blob (present, matching its hash). Blobs no row references (an interrupted `put`) are listed, not deleted. Exit 1 on any problem. The only files that can appear are SQLite's own WAL coordination files (an empty `-wal` and the `-shm`), which SQLite creates when a reader opens a WAL database nobody else has open; the next writer's clean close removes them. |
 
-Until a workspace can select SQLite, the database is inert: nothing reads it, and
-older ORCA versions ignore the file.
+Until a store is switched, the database is inert: nothing reads it, and older ORCA
+versions ignore the file.
 
 **Crash behaviour.** `sqlite-recovery.test.ts` kills a writer with `SIGKILL` at
 random points, four times on one database, and checks that every acknowledged
@@ -186,9 +233,6 @@ leaves only an unreferenced blob.
 - Reference numbers for the #341 baseline come from the store workload workflow on a
   GitHub-hosted runner (`docs/performance/store-workloads/README.md`); the numbers
   above are from a cloud container.
-- Making SQLite selectable for a workspace, after the format gates above. That
-  switch is also when the daemon serves history from it to #255. **Precondition
-  for that change:** a populated workspace can never be opened by both backends.
-  The selection records the backend in the store, each backend refuses a store
-  recorded for the other, and the only way from file to SQLite is the supported
-  import-then-switch migration.
+- Switching from the desktop app, which holds its workspaces' write fence, and on
+  Windows once store format changes are allowed there (#947).
+- A switch back from SQLite to files.
