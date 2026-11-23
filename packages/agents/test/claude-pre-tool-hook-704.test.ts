@@ -9,7 +9,9 @@
  * every failure it can see.
  */
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +28,7 @@ import {
   recordAlwaysDecision,
   replacePermissionPolicyFile,
   claudeRuntimeAttestationFile,
+  processImageDigest,
   runClaudePreToolHook,
   runClaudeRuntimeAttestation,
   type ClaudeHookContext,
@@ -375,27 +378,24 @@ describe("settings", () => {
 
 describe("the runtime attestation", () => {
   const start = JSON.stringify({ hook_event_name: "SessionStart", source: "startup" });
-  const parent = (executable: string) => ({ pid: 42, executable: async () => executable });
+  const parent = (pid: number) => ({ pid });
 
-  it("records, owner-only, the executable that ran it when the session starts", async () => {
-    const r = await runClaudeRuntimeAttestation(["--attest", contextFile], start, parent("/opt/claude/claude"));
+  it("records, owner-only, only the process id of the program that ran it", async () => {
+    const r = await runClaudeRuntimeAttestation(["--attest", contextFile], start, parent(4343));
     expect(r).toEqual({ exitCode: 0, stdout: "", stderr: "" });
     const file = claudeRuntimeAttestationFile(contextFile);
-    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ version: 1, executable: "/opt/claude/claude", pid: 42 });
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ version: 1, pid: 4343 });
     if (process.platform !== "win32") expect((await stat(file)).mode & 0o777).toBe(0o600);
   });
 
-  it("keeps the first record when the session starts again, and fails under another runtime", async () => {
-    await runClaudeRuntimeAttestation(["--attest", contextFile], start, parent("/opt/claude/claude"));
+  it("keeps the first record when the session starts again, and fails in another process", async () => {
+    await runClaudeRuntimeAttestation(["--attest", contextFile], start, parent(4343));
     const resume = JSON.stringify({ hook_event_name: "SessionStart", source: "resume" });
-    expect(
-      (await runClaudeRuntimeAttestation(["--attest", contextFile], resume, parent("/opt/claude/claude"))).exitCode,
-    ).toBe(0);
-    expect(
-      (await runClaudeRuntimeAttestation(["--attest", contextFile], resume, parent("/opt/other/claude"))).exitCode,
-    ).toBe(2);
-    expect(JSON.parse(await readFile(claudeRuntimeAttestationFile(contextFile), "utf8"))).toMatchObject({
-      executable: "/opt/claude/claude",
+    expect((await runClaudeRuntimeAttestation(["--attest", contextFile], resume, parent(4343))).exitCode).toBe(0);
+    expect((await runClaudeRuntimeAttestation(["--attest", contextFile], resume, parent(5555))).exitCode).toBe(2);
+    expect(JSON.parse(await readFile(claudeRuntimeAttestationFile(contextFile), "utf8"))).toEqual({
+      version: 1,
+      pid: 4343,
     });
   });
 
@@ -405,9 +405,43 @@ describe("the runtime attestation", () => {
     ["input that is not JSON", ["--attest", "/x/ctx.json"], "not json"],
     ["another event", ["--attest", "/x/ctx.json"], JSON.stringify({ hook_event_name: "PreToolUse" })],
   ])("records nothing for %s", async (_what, args, input) => {
-    const r = await runClaudeRuntimeAttestation(args, input, parent("/opt/claude/claude"));
+    const r = await runClaudeRuntimeAttestation(args, input, parent(4343));
     expect(r.exitCode).toBe(2);
     await expect(readFile(claudeRuntimeAttestationFile("/x/ctx.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("ORCA's own evidence for a runtime's image", () => {
+  const sha = async (file: string) =>
+    createHash("sha256")
+      .update(await readFile(file))
+      .digest("hex");
+
+  it("hashes the image a process under the agent runs, without running anything", async () => {
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      await once(child, "spawn");
+      const image = await processImageDigest(child.pid!, process.pid);
+      expect(image).toEqual({ sha256: await sha(await realpath(await readlink(`/proc/${child.pid!}/exe`))) });
+    } finally {
+      child.kill();
+    }
+  });
+
+  it("refuses a process that is not under the agent, or the agent itself", async () => {
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      await once(child, "spawn");
+      // The agent here is another process: this test's child is not under it.
+      expect(await processImageDigest(child.pid!, child.pid! + 100_000)).toMatchObject({
+        error: expect.stringContaining("not running under the agent"),
+      });
+      expect(await processImageDigest(process.pid, process.pid)).toHaveProperty("error");
+      expect(await processImageDigest(1, process.pid)).toHaveProperty("error");
+      expect(await processImageDigest(child.pid!, undefined)).toHaveProperty("error");
+    } finally {
+      child.kill();
+    }
   });
 });
 

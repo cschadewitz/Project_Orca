@@ -314,8 +314,15 @@ An agent asks ORCA only when its own permission check has no answer. Once it rem
 grant (Claude's "always allow", a rule in its own settings), the same call never reaches ORCA
 again, so a grant you revoke in ORCA, or a rule you add, does not apply to it.
 
-For the Claude ACP adapter on the daemon's own machine, ORCA can close that gap with a
-`PreToolUse` hook it installs in the agent's sessions (#704). It is opt-in, per agent:
+For the Claude ACP adapter on the daemon's own machine, ORCA will close that gap with a
+`PreToolUse` hook it installs in the agent's sessions (#704).
+
+> **Not available yet.** The hook is built and tested against the real Claude Code, but this
+> build refuses every session with `nativeToolHook: on`. It is turned on once ORCA also holds
+> a session away from its host services until its runtime is admitted. What follows is how it
+> will work.
+
+It is opt-in, per agent:
 
 ```yaml
   - id: claude
@@ -346,12 +353,14 @@ it unguarded:
 
 - the adapter must be `@agentclientprotocol/claude-agent-acp` at a version ORCA has verified,
   and must say so when it starts;
-- the Claude Code the session actually runs must be the one verified with that adapter. The
-  adapter's word is not enough (an environment variable can point it at another Claude Code),
-  so the hook records which executable started the session, and ORCA reads that executable's
-  version before giving the session any work. Today the one verified pair is **adapter
-  0.109.1 with Claude Code 2.1.330**, exactly;
-- the agent must run on the daemon's own machine, on Linux.
+- the Claude Code the session actually runs must be the exact build verified with that
+  adapter. The adapter's word is not enough (an environment variable can point it at another
+  Claude Code), and so is anything the runtime says about itself: the hook only names the
+  runtime's process, and ORCA checks from its own side that the process runs under the agent
+  ORCA started and hashes the image it actually runs, accepting only the digest pinned for
+  the pair. Nothing the record names is executed. Today the one verified pair is **adapter
+  0.109.1 with Claude Code 2.1.330 (linux-x64)**, exactly;
+- the agent must run on the daemon's own machine, on Linux x64.
 
 Each is what ORCA's acceptance test runs against the real Claude Code, including a session
 pointed at another Claude Code, which is refused. Without

@@ -6,12 +6,14 @@
 #
 # CLAUDE_ADAPTER_VERSION and the Claude Code it bundles (fixed by the adapter's exact SDK
 # dependency) are the one pair ORCA has verified; ORCA installs the hook with that pair only,
-# and only on Linux (CLAUDE_HOOK_VERIFIED_PAIRS and CLAUDE_HOOK_VERIFIED_PLATFORMS in
-# packages/agents/src/claude-hook-session.ts; the suite fails if they disagree). ORCA reads
-# the version of the Claude Code a session actually runs before giving it work, so the run
-# also points the adapter at another Claude Code (OTHER_CLAUDE_SDK_VERSION, Claude Code
-# 2.1.329) and checks that session is refused. Moving to another pair is a reviewed change to
-# both. Weekly runs catch a change in behaviour behind the same pin.
+# and only on Linux x64 (CLAUDE_HOOK_VERIFIED_PAIRS, with the pinned SHA-256 of that Claude
+# Code's image, and CLAUDE_HOOK_VERIFIED_PLATFORMS in packages/agents/src/claude-hook-session.ts;
+# the suite fails if they disagree). ORCA hashes the image the session's runtime process
+# actually runs before giving it work, so the run also points the adapter at another Claude
+# Code (OTHER_CLAUDE_SDK_VERSION, Claude Code 2.1.329) and checks that session is refused.
+# Moving to another pair is a reviewed change to both. Weekly runs catch a change in
+# behaviour behind the same pin. Shipped builds refuse nativeToolHook: on until activation is
+# complete; this suite turns it on for itself only.
 name: Claude hook acceptance
 
 on:

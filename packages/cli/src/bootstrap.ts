@@ -293,7 +293,15 @@ export function makeSessionFactory(
     runtime: string;
     script: string | undefined;
     platform?: NodeJS.Platform | undefined;
-    runtimeVersion?: ((executable: string) => Promise<{ version: string } | { error: string }>) | undefined;
+    arch?: string | undefined;
+    imageDigest?:
+      ((pid: number, agentPid: number | undefined) => Promise<{ sha256: string } | { error: string }>) | undefined;
+    /**
+     * Whether `nativeToolHook: on` may install the hook at all. Off in every build ORCA ships
+     * until the session can be held from host services until its runtime is admitted (#704);
+     * only the hook's own tests turn it on.
+     */
+    activation?: "acceptance-only" | undefined;
   } = {
     runtime: process.execPath,
     script: claudePreToolHookScript(),
@@ -306,6 +314,13 @@ export function makeSessionFactory(
     const bound = { ...options, permissionFiles, protectedPaths };
     // ORCA's pre-tool hook (#704): decided per session, once the agent says who it is.
     if (options.agent.nativeToolHook !== "on") return open(bound);
+    if (hook.activation !== "acceptance-only")
+      throw new OrcaError(
+        "NOT_SUPPORTED",
+        `agent ${options.agent.id} has nativeToolHook: on, but ORCA's native tool hook is not available in this build yet (#704). ` +
+          `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
+        { agentId: options.agent.id },
+      );
     // The hook runs where the agent does; ORCA installs it only on its own host.
     if (options.host.spec.type !== "local")
       throw new OrcaError(
@@ -325,7 +340,8 @@ export function makeSessionFactory(
       runtime: hook.runtime,
       script: hook.script,
       platform: hook.platform,
-      runtimeVersion: hook.runtimeVersion,
+      arch: hook.arch,
+      imageDigest: hook.imageDigest,
     });
     let session: AgentSession;
     try {

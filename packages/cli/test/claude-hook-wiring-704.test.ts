@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AgentSpecSchema, SshHostSchema } from "@orca/core";
 import {
   CLAUDE_HOOK_VERIFIED_ADAPTERS,
+  CLAUDE_HOOK_VERIFIED_PAIRS,
   LocalHost,
   runClaudeRuntimeAttestation,
   SshHost,
@@ -28,6 +29,9 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
 
+const AGENT_PID = 4242;
+const RUNTIME_PID = 4343;
+const PINNED = CLAUDE_HOOK_VERIFIED_PAIRS[0]!.images["linux-x64"]!;
 const CLAUDE = { name: "@agentclientprotocol/claude-agent-acp", version: CLAUDE_HOOK_VERIFIED_ADAPTERS[0]! };
 
 /** A factory over a fake `open` that calls `sessionMeta` the way `openAcpSession` does. */
@@ -38,10 +42,16 @@ async function setup(
   script: string | null = "/opt/orca/claude-pre-tool-hook.mjs",
   platform: NodeJS.Platform = "linux",
   /**
-   * What the runtime reports when the session starts: the executable that ran the
-   * attestation and the version it says it is; `null`, nothing (the attestation never ran).
+   * The runtime process the session-start attestation names, and the digest of the image
+   * ORCA finds that process running (`error`: ORCA cannot attest it); `null`, nothing (the
+   * attestation never ran).
    */
-  runtime: { executable: string; version: string } | null = { executable: "/opt/claude/claude", version: "2.1.330" },
+  runtime: { pid: number; image: { sha256: string } | { error: string } } | null = {
+    pid: RUNTIME_PID,
+    image: { sha256: PINNED },
+  },
+  /** `off`: a shipped build, where activation is unavailable. */
+  activation: "acceptance-only" | "off" = "acceptance-only",
 ) {
   const dir = await mkdtemp(join(tmpdir(), "orca-704-wiring-"));
   dirs.push(dir);
@@ -55,7 +65,7 @@ async function setup(
     async (options) => {
       opened++;
       seen.options = options;
-      seen.meta = await options.sessionMeta?.(agentInfo);
+      seen.meta = await options.sessionMeta?.(agentInfo, AGENT_PID);
       // Claude Code runs the session-start attestation before `session/new` returns.
       const attest = (
         seen.meta as {
@@ -66,10 +76,7 @@ async function setup(
         const r = await runClaudeRuntimeAttestation(
           attest.slice(1),
           JSON.stringify({ hook_event_name: "SessionStart" }),
-          {
-            pid: 1,
-            executable: async () => runtime.executable,
-          },
+          { pid: runtime.pid },
         );
         expect(r.exitCode).toBe(0);
       }
@@ -84,10 +91,11 @@ async function setup(
       runtime: "/usr/bin/node",
       script: script ?? undefined,
       platform,
-      runtimeVersion: async (executable) =>
-        runtime && executable === runtime.executable && !executable.startsWith("/opt/other/")
-          ? { version: runtime.version }
-          : { error: "no such program" },
+      arch: "x64",
+      activation: activation === "off" ? undefined : activation,
+      // ORCA's own evidence, faked: only the attested process under the agent ORCA started.
+      imageDigest: async (pid, agentPid) =>
+        runtime && pid === runtime.pid && agentPid === AGENT_PID ? runtime.image : { error: "not under the agent" },
     },
   );
   const open = (host: AgentHost = new LocalHost({ id: "local", type: "local" })) =>
@@ -207,18 +215,27 @@ describe("installing the hook", () => {
 
   it.each([
     ["did not report itself", null, "did not report itself"],
+    ["runs another image", { pid: RUNTIME_PID, image: { sha256: "0".repeat(64) } }, "is not the one ORCA verified"],
     [
-      "is another Claude Code",
-      { executable: "/opt/claude/claude", version: "2.1.329" },
-      "Claude Code 2.1.329 under adapter",
+      "is not a process under the agent ORCA started",
+      { pid: RUNTIME_PID, image: { error: "process 4343 is not running under the agent ORCA started" } },
+      "could not attest",
     ],
-    ["cannot say its version", { executable: "/opt/other/claude", version: "2.1.330" }, "could not read the version"],
   ] as const)("refuses the started session, before any work, when the runtime %s", async (_what, runtime, why) => {
     const t = await setup(CLAUDE, {}, "/opt/orca/claude-pre-tool-hook.mjs", "linux", runtime);
     await expect(t.open()).rejects.toMatchObject({ code: "NOT_SUPPORTED", message: expect.stringContaining(why) });
     expect(t.opened()).toBe(1);
     expect(t.closedByFactory()).toBe(1);
     expect(await readdir(t.hookDir)).toEqual([]);
+  });
+
+  it("refuses every opted-in session while activation is unavailable, before anything starts", async () => {
+    const t = await setup(CLAUDE, {}, "/opt/orca/claude-pre-tool-hook.mjs", "linux", undefined, "off");
+    await expect(t.open()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringMatching(/not available in this build yet[\s\S]*nativeToolHook: on/),
+    });
+    expect(t.opened()).toBe(0);
   });
 
   it("refuses a platform the acceptance test does not cover", async () => {

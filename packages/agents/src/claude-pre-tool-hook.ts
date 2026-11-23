@@ -391,25 +391,26 @@ export async function runClaudePreToolHook(args: readonly string[], input: strin
 /** Where the session-start hook records the runtime it ran under, beside the context file. */
 export const claudeRuntimeAttestationFile = (contextFile: string): string => `${contextFile}.runtime.json`;
 
-/** What the session-start hook records: the program that ran it, which is Claude Code itself. */
+/**
+ * What the session-start hook records: the process id of the program that ran it, which is
+ * meant to be Claude Code itself. It is only a pointer. ORCA never runs or trusts anything
+ * the record names: it checks from its own side that the process is one the agent it started
+ * runs, and that the image that process actually runs is a pinned one.
+ */
 export interface ClaudeRuntimeAttestation {
   version: 1;
-  /** The runtime's executable, as the operating system reports the hook's parent's. */
-  executable: string;
   pid: number;
 }
 
 /**
  * The session-start half of the hook (`--attest <context file>`): Claude Code runs it when the
- * session starts, before `session/new` returns. It records which executable ran it (its parent
- * process, read from `/proc`), so ORCA can check the Claude Code the session actually uses,
- * not the version the adapter reports, before it hands the session any work. Every failure
- * records nothing, which ORCA reads as an unverified runtime.
+ * session starts, before `session/new` returns. It records its parent's process id. Every
+ * failure records nothing, which ORCA reads as an unverified runtime.
  */
 export async function runClaudeRuntimeAttestation(
   args: readonly string[],
   input: string,
-  parent: { pid: number; executable: () => Promise<string> },
+  parent: { pid: number },
 ): Promise<ClaudePreToolHookResult> {
   try {
     const file = args[1];
@@ -423,21 +424,17 @@ export async function runClaudeRuntimeAttestation(
     }
     if (!isRecord(frame) || frame["hook_event_name"] !== "SessionStart")
       throw new HookInputError("not a SessionStart event");
-    const attestation: ClaudeRuntimeAttestation = {
-      version: 1,
-      executable: await parent.executable(),
-      pid: parent.pid,
-    };
+    const attestation: ClaudeRuntimeAttestation = { version: 1, pid: parent.pid };
     const target = claudeRuntimeAttestationFile(file);
     try {
       await writeFile(target, JSON.stringify(attestation), { mode: 0o600, flag: "wx" });
     } catch (error) {
-      // A session that resumes or compacts starts again under the runtime it was checked
-      // with; the first record stands, and a different runtime is reported, never recorded.
+      // A session that resumes or compacts starts again in the process it was checked in;
+      // the first record stands, and another process is reported, never recorded.
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const first = JSON.parse(await readFile(target, "utf8")) as Partial<ClaudeRuntimeAttestation>;
-      if (first.executable !== attestation.executable)
-        throw new HookInputError("the session restarted under another Claude Code than it was checked with");
+      if (first.pid !== attestation.pid)
+        throw new HookInputError("the session restarted in another process than the one it was checked in");
     }
     return { exitCode: 0, stdout: "", stderr: "" };
   } catch (error) {

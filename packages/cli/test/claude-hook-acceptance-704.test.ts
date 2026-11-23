@@ -22,10 +22,11 @@
  *   hook program cannot produce it: its output guard keeps anything but its answer off stdout
  *   and blocks instead, which is observed here too, through the real Claude Code.
  *
- * - the session's Claude Code reports itself at session start, and ORCA accepts the session
- *   only when that executable's version and the adapter's are a pair in
- *   `CLAUDE_HOOK_VERIFIED_PAIRS`; pointed at another Claude Code (`CLAUDE_CODE_EXECUTABLE`,
- *   `ORCA_CLAUDE_OTHER_RUNTIME`), the session is refused before it is given any work.
+ * - the session's Claude Code names its process at session start, and ORCA, checking that
+ *   process is under the agent it started and hashing the image it runs, accepts the session
+ *   only when that is the image pinned in `CLAUDE_HOOK_VERIFIED_PAIRS`; pointed at another
+ *   Claude Code (`CLAUDE_CODE_EXECUTABLE`, `ORCA_CLAUDE_OTHER_RUNTIME`), the session is
+ *   refused before it is given any work. Both variables are required: the suite is exact.
  *
  * It runs on Linux against the pairs in `CLAUDE_HOOK_VERIFIED_PAIRS`, which are the only
  * adapter and Claude Code versions, and the only platform, ORCA installs the hook with.
@@ -33,6 +34,7 @@
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -44,7 +46,6 @@ import {
   CLAUDE_HOOK_VERIFIED_ADAPTERS,
   CLAUDE_HOOK_VERIFIED_PAIRS,
   CLAUDE_HOOK_VERIFIED_PLATFORMS,
-  claudeRuntimeVersion,
   LocalHost,
   claudePreToolHookSettings,
   openAcpSession,
@@ -63,6 +64,12 @@ const ADAPTER = process.env["ORCA_CLAUDE_ADAPTER"];
 const OTHER_RUNTIME = process.env["ORCA_CLAUDE_OTHER_RUNTIME"];
 const COMMAND = "echo orca-704 >> marker.txt";
 const CALL = `CALL:${JSON.stringify({ name: "Bash", input: { command: COMMAND, description: "mark" } })}`;
+
+async function sha256(file: string): Promise<string> {
+  return createHash("sha256")
+    .update(await readFile(file))
+    .digest("hex");
+}
 
 /** The Claude Code the adapter runs by default: the binary of the SDK it depends on exactly. */
 function bundledRuntime(adapterPkg: string): string {
@@ -179,7 +186,7 @@ function modelStandIn(): Promise<{ server: Server; url: string }> {
 
 /* ---------------------------------- the setup ---------------------------------- */
 
-describe.skipIf(ADAPTER === undefined)("the hook in the real Claude Code (#704)", () => {
+describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("the hook in the real Claude Code (#704)", () => {
   let model: { server: Server; url: string };
   let hookScript: string;
   /** ORCA's output guard with something printing on stdout before an "allow" answer. */
@@ -254,6 +261,9 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Claude Code (#704)"
     makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
       runtime: process.execPath,
       script: hookScript,
+      // The hook is off in every shipped build until activation is complete; this suite is
+      // what proves it.
+      activation: "acceptance-only",
     })({
       host: new LocalHost({ id: "local", type: "local" }),
       agent: agent(permissions, env),
@@ -271,39 +281,27 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Claude Code (#704)"
     expect(CLAUDE_HOOK_VERIFIED_PLATFORMS).toContain(process.platform);
   });
 
-  it("runs the verified adapter with the Claude Code it is paired with", async () => {
+  it("runs the verified adapter with the Claude Code image pinned for it, and the factory admits it", async () => {
     const adapterPkg = join(ADAPTER!, "..", "..");
     const pkg = JSON.parse(await readFile(join(adapterPkg, "package.json"), "utf8")) as { version: string };
-    const runtime = await claudeRuntimeVersion(bundledRuntime(adapterPkg));
-    expect(runtime).toHaveProperty("version");
-    expect(CLAUDE_HOOK_VERIFIED_PAIRS).toContainEqual({
-      adapter: pkg.version,
-      runtime: (runtime as { version: string }).version,
-    });
-    // The factory reads the session's runtime itself and accepts it.
+    const pair = CLAUDE_HOOK_VERIFIED_PAIRS.find((p) => p.adapter === pkg.version);
+    expect(pair?.images[`${process.platform}-${process.arch}`]).toBe(await sha256(bundledRuntime(adapterPkg)));
+    // The factory finds the session's runtime process itself and hashes its image.
     const session = await factorySession();
     await session.close();
   });
 
-  it.skipIf(OTHER_RUNTIME === undefined)(
-    "refuses the session, before any work, when the adapter runs another Claude Code",
-    async () => {
-      const other = await claudeRuntimeVersion(OTHER_RUNTIME!);
-      expect(other).toHaveProperty("version");
-      expect(CLAUDE_HOOK_VERIFIED_PAIRS.map((p) => p.runtime)).not.toContain((other as { version: string }).version);
-      await expect(factorySession(undefined, { CLAUDE_CODE_EXECUTABLE: OTHER_RUNTIME! })).rejects.toMatchObject({
-        code: "NOT_SUPPORTED",
-        message: expect.stringMatching(
-          new RegExp(
-            `Claude Code ${(other as { version: string }).version.replaceAll(".", "\\.")} under adapter[\\s\\S]*nativeToolHook: on`,
-          ),
-        ),
-      });
-      expect(await marks()).toBe(0);
-      // Nothing of the refused session is left in ORCA's private directory.
-      expect(await readdir(join(configDir, ".orca", "private-execution", "tool-hooks")).catch(() => [])).toEqual([]);
-    },
-  );
+  it("refuses the session, before any work, when the adapter runs another Claude Code", async () => {
+    const pinned = CLAUDE_HOOK_VERIFIED_PAIRS.flatMap((p) => Object.values(p.images));
+    expect(pinned).not.toContain(await sha256(OTHER_RUNTIME!));
+    await expect(factorySession(undefined, { CLAUDE_CODE_EXECUTABLE: OTHER_RUNTIME! })).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringMatching(/is not the one ORCA verified[\s\S]*nativeToolHook: on/),
+    });
+    expect(await marks()).toBe(0);
+    // Nothing of the refused session is left in ORCA's private directory.
+    expect(await readdir(join(configDir, ".orca", "private-execution", "tool-hooks")).catch(() => [])).toEqual([]);
+  });
 
   it("checks a remembered call every time, and asks through ORCA once the grant is revoked", async () => {
     asks.length = 0;

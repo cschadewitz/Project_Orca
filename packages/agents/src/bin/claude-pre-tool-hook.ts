@@ -13,7 +13,6 @@
  * the answer off stdout, and makes every way out other than the answer exit 2.
  */
 import { answer } from "./hook-output-guard.js";
-import { readlink } from "node:fs/promises";
 import {
   CLAUDE_PRE_TOOL_FRAME_LIMIT,
   claudePreToolHookFailure,
@@ -44,11 +43,8 @@ const args = process.argv.slice(2);
 const result = await readInput().then(
   (input) =>
     args[0] === "--attest"
-      ? runClaudeRuntimeAttestation(args, input, {
-          pid: process.ppid,
-          // Linux: the hook's parent is the Claude Code process that ran it.
-          executable: () => readlink(`/proc/${process.ppid}/exe`),
-        })
+      ? // The hook's parent is the Claude Code process that ran it.
+        runClaudeRuntimeAttestation(args, input, { pid: process.ppid })
       : runClaudePreToolHook(args, input),
   (error: unknown) =>
     error instanceof InputTooLarge

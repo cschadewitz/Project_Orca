@@ -81,7 +81,11 @@ export interface OpenSessionOptions {
    * A throw fails the open, and startup cleanup stops the process.
    */
   sessionMeta?:
-    | ((agentInfo: { name: string; version: string } | undefined) => Promise<Record<string, unknown> | undefined>)
+    | ((
+        agentInfo: { name: string; version: string } | undefined,
+        /** The agent process's id, so the hook can tell its runtime's processes from others. */
+        agentPid: number | undefined,
+      ) => Promise<Record<string, unknown> | undefined>)
     | undefined;
   /** Handed every resolved secret value, before anything else happens, so the caller can redact it. */
   onSecretValues?: (values: readonly string[]) => void;
@@ -454,6 +458,7 @@ async function openPlanned(
     if (opts.additionalDirectories) newSession.additionalDirectories = opts.additionalDirectories;
     const meta = await opts.sessionMeta?.(
       init.agentInfo ? { name: init.agentInfo.name, version: init.agentInfo.version } : undefined,
+      proc.pid,
     );
     if (meta) newSession._meta = meta;
     let loaded = false;
