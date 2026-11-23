@@ -26,6 +26,7 @@ import {
   childExitStatus,
   collectChildProcess,
   killIfRunning,
+  markHostFileMissing,
   StderrTail,
   type PipedChildProcess,
   shellQuote,
@@ -380,7 +381,12 @@ class SftpFileSystem implements HostFileSystem {
         () => this.fallback.readFile(path),
       );
     } catch (e) {
-      throw this.transportError("read", path, e);
+      const error = this.transportError("read", path, e);
+      // The server's own "no such file" status for this read; a lost session, a failed ssh or
+      // any other status stays a transport error. The per-command fallback cannot tell a
+      // missing file from a failed `cat`, so it never marks one.
+      if (e instanceof SftpStatusError && e.status === SSH_FX_NO_SUCH_FILE) throw markHostFileMissing(error);
+      throw error;
     }
   }
 

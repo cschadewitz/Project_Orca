@@ -215,7 +215,12 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * out unless asked, so a 2.8 client never lists one as work; new method names, and a 2.8 client
  * strips the field.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 9 };
+/**
+ * 2.10 (#335) adds an optional `capabilities` on the `setWorkflow` draft operation: the
+ * workflow-level capability scope, or `null` to remove it. Draft operations are strict, so a
+ * 2.9 daemon refuses the field; the app offers the control only to a 2.10 daemon.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 10 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is
