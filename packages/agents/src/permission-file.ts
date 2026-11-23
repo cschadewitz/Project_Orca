@@ -1,6 +1,8 @@
 /** Shared sidecar file mechanics. All policy writers use this lock and exact byte revision. */
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { mkdir, readdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { OrcaError } from "@orca/core";
@@ -30,6 +32,10 @@ export async function revisionOf(file: string): Promise<string> {
  * later writes refuse (`STORE_LOCK_TIMEOUT`) until a person removes `<file>.lock` after
  * making sure no writer is running. Reading the file never takes the lock.
  *
+ * The plain sidecar writers (`recoverDeadOwner`) recover one case without a person: a lock
+ * their own kind left on this machine whose process is no longer running is removed
+ * (`removeDeadSidecarLock`). That is not a takeover by age; a paused writer is still running.
+ *
  * Releases before this one created the lock as a file with `link()` and broke one older than
  * 30 seconds. Such a writer cannot take this lock either: its `link()` finds the directory,
  * and its stale-lock `unlink` cannot remove a directory. A lock *file* one of them left is
@@ -40,10 +46,119 @@ export async function revisionOf(file: string): Promise<string> {
  */
 export async function withPolicyLock<T>(
   file: string,
-  opts: { timeoutMs?: number; staleMs?: number; strictOwnership?: boolean } | undefined,
+  opts:
+    | {
+        timeoutMs?: number;
+        staleMs?: number;
+        strictOwnership?: boolean;
+        /**
+         * The plain sidecar writers (`permissions.ts`): their lock is marked as theirs, and a
+         * lock one of them left is removed once its process is provably gone
+         * (`removeDeadSidecarLock`). Never set by the typed sidecar or the judge budget, whose
+         * dead owners stay closed for a person to reconcile.
+         */
+        recoverDeadOwner?: boolean;
+      }
+    | undefined,
   fn: (checkOwnership: () => Promise<void>) => Promise<T>,
 ): Promise<T> {
-  return withStrictPolicyLock(file, fn, opts?.timeoutMs ?? 10_000);
+  return withStrictPolicyLock(file, fn, opts?.timeoutMs ?? 10_000, opts?.recoverDeadOwner === true);
+}
+
+/** Who a sidecar lock token says took it; written only by a writer that recovers dead owners. */
+interface SidecarOwner {
+  version: 1;
+  kind: "sidecar";
+  pid: number;
+  /** The machine, as `machineIdentity()` names it. */
+  machine: string;
+  nonce: string;
+}
+
+let machineCache: string | undefined;
+/**
+ * This machine's identity: `/etc/machine-id` (or the D-Bus copy) where there is one, which two
+ * machines do not share, else the host name. A lock is only ever judged by a writer on the
+ * machine that took it; a config directory reached from two machines with the same host name
+ * and no machine id is outside what this can tell apart.
+ */
+function machineIdentity(): string {
+  if (machineCache !== undefined) return machineCache;
+  for (const path of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
+    try {
+      const id = readFileSync(path, "utf8").trim();
+      if (id !== "") return (machineCache = `machine-id:${id}`);
+    } catch {
+      // Not on this platform; try the next.
+    }
+  }
+  return (machineCache = `host:${hostname()}`);
+}
+
+/** Whether a process with this pid is running here. A pid we may not signal is running. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+/**
+ * Remove a sidecar lock whose owner is provably gone, so a crash in the middle of a write does
+ * not need a person (#701 follow-up). This is not a takeover by age: a writer that is paused,
+ * however long, is a running process and keeps its lock. The lock is removed only when all of
+ * these hold:
+ *
+ * - it holds exactly one owner token, and that token is a plain sidecar writer's
+ *   (`kind: "sidecar"`); a typed or budget owner, an empty directory (a crash between `mkdir`
+ *   and the token) and a legacy lock file are never touched;
+ * - the token names this machine; a lock taken on another machine is never judged here;
+ * - no process with its pid is running. A pid reused since is running, so the lock stays: that
+ *   errs toward refusing.
+ *
+ * Only that exact token is unlinked, and the directory is removed only if it is then empty, so a
+ * writer that took the lock meanwhile keeps it, and one that made the directory but had not yet
+ * written its token fails its own token write and ownership check rather than proceed.
+ */
+async function removeDeadSidecarLock(lock: string): Promise<boolean> {
+  let names: string[];
+  try {
+    names = await readdir(lock);
+  } catch {
+    return false;
+  }
+  if (names.length !== 1 || !/^owner\.[0-9]+\.[0-9a-f-]+\.json$/.test(names[0]!)) return false;
+  const token = `${lock}/${names[0]!}`;
+  let owner: Partial<SidecarOwner>;
+  try {
+    owner = JSON.parse(await readFile(token, "utf8")) as Partial<SidecarOwner>;
+  } catch {
+    return false;
+  }
+  if (
+    owner.version !== 1 ||
+    owner.kind !== "sidecar" ||
+    typeof owner.pid !== "number" ||
+    !Number.isInteger(owner.pid) ||
+    owner.pid <= 0 ||
+    owner.machine !== machineIdentity() ||
+    owner.pid === process.pid ||
+    processAlive(owner.pid)
+  )
+    return false;
+  try {
+    await unlink(token);
+  } catch {
+    return false;
+  }
+  try {
+    await rmdir(lock);
+  } catch {
+    // Not empty: somebody else's lock now. Leave it.
+  }
+  return true;
 }
 
 /** Same .lock namespace, using the store's exact-owner-token idiom without automatic
@@ -54,10 +169,21 @@ async function withStrictPolicyLock<T>(
   file: string,
   fn: (checkOwnership: () => Promise<void>) => Promise<T>,
   timeoutMs: number,
+  recoverDeadOwner = false,
 ): Promise<T> {
   const lock = `${file}.lock`;
   const token = `${lock}/owner.${process.pid}.${randomUUID()}.json`;
-  const contents = JSON.stringify({ version: 1, pid: process.pid, nonce: randomUUID() });
+  const contents = JSON.stringify(
+    recoverDeadOwner
+      ? ({
+          version: 1,
+          kind: "sidecar",
+          pid: process.pid,
+          machine: machineIdentity(),
+          nonce: randomUUID(),
+        } satisfies SidecarOwner)
+      : { version: 1, pid: process.pid, nonce: randomUUID() },
+  );
   await mkdir(dirname(file), { recursive: true });
   const deadline = Date.now() + timeoutMs;
   for (let backoff = 1; ; backoff = Math.min(backoff * 2, 32)) {
@@ -66,6 +192,9 @@ async function withStrictPolicyLock<T>(
       break;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      // A lock left by a plain sidecar writer that is provably gone is removed, and the mkdir
+      // tried again straight away (#701 follow-up).
+      if (recoverDeadOwner && (await removeDeadSidecarLock(lock))) continue;
       if (Date.now() >= deadline)
         throw new OrcaError(
           "STORE_LOCK_TIMEOUT",

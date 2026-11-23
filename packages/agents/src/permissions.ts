@@ -1008,7 +1008,7 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
   const until = (rule: SidecarPermissionRule): number =>
     rule.expiresAt === undefined ? Infinity : Date.parse(rule.expiresAt);
   const wanted = expiresAt === undefined ? Infinity : Date.parse(expiresAt);
-  return withPolicyLock(opts.file, opts.lock, async (checkOwnership) => {
+  return withPolicyLock(opts.file, { ...opts.lock, recoverDeadOwner: true }, async (checkOwnership) => {
     const { doc, revision } = await readPermissionPolicyFileRevision(opts.file);
     const rules: SidecarPermissionRule[] = [...(doc.agents[opts.agentId]?.rules ?? [])];
     const added: PermissionRule[] = [];
@@ -1114,7 +1114,7 @@ export async function saveJudgedRule(opts: SaveJudgedRuleOptions): Promise<SaveJ
   const until = (r: { expiresAt?: string | undefined }): number =>
     r.expiresAt === undefined ? Infinity : Date.parse(r.expiresAt);
   const wanted = until(rule);
-  return withPolicyLock(opts.file, opts.lock, async (checkOwnership) => {
+  return withPolicyLock(opts.file, { ...opts.lock, recoverDeadOwner: true }, async (checkOwnership) => {
     await opts.authorize?.();
     const { doc, revision } = await readPermissionPolicyFileRevision(opts.file);
     const rules: SidecarPermissionRule[] = [...(doc.agents[opts.agentId]?.rules ?? [])];
@@ -1195,7 +1195,7 @@ export async function replacePermissionPolicyFile(
 ): Promise<PermissionPolicyFile> {
   const parsed = parsePermissionPolicyDocument(doc);
   const expected = opts?.expectedRevision;
-  await withPolicyLock(file, opts?.lock, async (checkOwnership) => {
+  await withPolicyLock(file, { ...opts?.lock, recoverDeadOwner: true }, async (checkOwnership) => {
     await opts?.authorize?.();
     const actual = await revisionOf(file);
     if (expected !== undefined) {

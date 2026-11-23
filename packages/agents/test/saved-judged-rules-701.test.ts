@@ -3,9 +3,12 @@
  * sidecar, which becomes version 4; the loader carries it in `policy.judged` after every
  * hand-written rule; and the judged lane can allow one call by it, exactly as by a configured one.
  */
-import { mkdtemp, mkdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { fork, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { mkdtemp, mkdir, readdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as acp from "@agentclientprotocol/sdk";
 import { AgentSpecSchema, PermissionPolicyFileSchema, PERMISSION_JUDGED_VERSION } from "@orca/core";
@@ -178,6 +181,65 @@ describe("sidecar ownership", () => {
     expect((await stat(lock)).isDirectory()).toBe(true);
     expect(await readFile(file, "utf8")).toContain("Edited meanwhile.");
     expect(await readFile(file, "utf8")).not.toContain("Reading docs.");
+  });
+});
+
+describe("a lock left by a sidecar writer that is gone", () => {
+  const children: ChildProcess[] = [];
+  afterEach(() => {
+    for (const child of children.splice(0)) child.kill("SIGKILL");
+  });
+  const writer = () => {
+    const child = fork(fileURLToPath(new URL("./sidecar-lock-child.ts", import.meta.url)), [file], {
+      execArgv: ["--import", "tsx"],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
+    children.push(child);
+    return { child, message: () => once(child, "message").then(([value]) => value as { state: string }) };
+  };
+
+  it("is removed without a person once its process is dead, and the next save goes through", async () => {
+    const child = writer();
+    expect(await child.message()).toMatchObject({ state: "locked" });
+    const exited = once(child.child, "exit");
+    child.child.kill("SIGKILL");
+    await exited;
+    await utimes(`${file}.lock`, new Date(), new Date());
+    expect(await save({ lock: { timeoutMs: 2_000 } })).toMatchObject({ outcome: "added" });
+    await expect(stat(`${file}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await readPermissionPolicyFile(file)).agents["a"]!.rules).toHaveLength(1);
+  });
+
+  it("is kept while its process is running, however long it waits", async () => {
+    const child = writer();
+    expect(await child.message()).toMatchObject({ state: "locked" });
+    await utimes(`${file}.lock`, new Date(0), new Date(0));
+    await expect(save({ lock: { timeoutMs: 100 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+    const saved = child.message();
+    child.child.send("continue");
+    expect(await saved).toMatchObject({ state: "saved" });
+    expect((await readPermissionPolicyFile(file)).agents["a"]!.rules[0]).toMatchObject({
+      judge: { criterion: "Written by the child." },
+    });
+  });
+
+  it("is never removed when the dead owner is not a plain sidecar writer, or not of this machine", async () => {
+    const lock = `${file}.lock`;
+    const dead = 2 ** 22 + 12345; // above the default pid range, so no process has it
+    for (const owner of [
+      { version: 1, pid: dead, nonce: "n" }, // a typed or budget owner: no kind
+      { version: 1, kind: "sidecar", pid: dead, machine: "host:another-machine", nonce: "n" },
+    ]) {
+      await mkdir(lock);
+      await writeFile(join(lock, `owner.${dead}.0f0f0f0f-0000-4000-8000-000000000000.json`), JSON.stringify(owner));
+      await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+      expect(await readdir(lock)).toHaveLength(1);
+      await rm(lock, { recursive: true });
+    }
+    // Nor an empty directory: a crash between taking the lock and writing its token.
+    await mkdir(lock);
+    await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+    expect((await stat(lock)).isDirectory()).toBe(true);
   });
 });
 

@@ -243,7 +243,13 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   that was broken after 30 seconds (age cannot prove a paused writer died, and a writer that
   resumed after a takeover could overwrite its successor's edit, grant or removal). Just
   before its rename a writer also checks that it still owns the lock and that the file is still
-  the bytes it read. A lock left by a writer that crashed stays, and writes refuse
+  the bytes it read. A lock left by a writer that crashed is recovered without a person only
+  when its owner is provably gone: the plain sidecar writers mark their token (`kind:
+  "sidecar"`, pid, this machine's id), and a later writer removes such a lock when it names
+  this machine and no process with that pid is running (a paused writer is running and keeps
+  its lock; a reused pid errs toward refusing). It unlinks that exact token and removes the
+  directory only if it is then empty. Any other leftover (an empty directory, a legacy lock
+  file, a typed-sidecar or judge-budget owner, another machine's lock) still refuses writes
   (`STORE_LOCK_TIMEOUT`) until a person removes it after making sure no writer runs; reading
   never takes the lock. An older release's `link()` writer cannot take the directory over, and
   a lock file one of them left is waited on, not removed. The same rule (match and criterion) is never appended twice; one that ends

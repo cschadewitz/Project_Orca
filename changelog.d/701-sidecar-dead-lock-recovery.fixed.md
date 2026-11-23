@@ -1,0 +1,1 @@
+- **agents:** If ORCA stops in the middle of writing `orca.permissions.json`, the lock it leaves is now cleared automatically by the next write once the process that took it is no longer running on this machine (#701). A writer that is only slow keeps its lock. Locks that cannot be attributed this way still need removing by hand.
