@@ -42,7 +42,7 @@
  * in force beside it.
  */
 import { readFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, sep } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import { PermissionPolicySchema, type ConfiguredPermissionPolicy, type PermissionDecision } from "@orca/core";
 import {
@@ -204,7 +204,11 @@ function mcpToolName(name: string): { server: string; tool: string } | undefined
  */
 export function claudeToolCall(frame: ClaudePreToolFrame): ClaudePreToolVerdict["toolCall"] {
   const input = frame.toolInput;
-  const at = (p: string | undefined) => (p === undefined ? [] : [{ path: isAbsolute(p) ? p : resolve(frame.cwd, p) }]);
+  // A relative path is joined to the call's cwd as text, never folded with `resolve`: folding
+  // `link/..` before the link is followed names a different file from the one the tool opens,
+  // and `protectedPathFor` resolves the components physically, in order, as the open would.
+  const at = (p: string | undefined) =>
+    p === undefined ? [] : [{ path: isAbsolute(p) ? p : `${frame.cwd}${sep}${p}` }];
   switch (frame.toolName) {
     case "Bash":
     case "PowerShell":
@@ -301,7 +305,7 @@ export async function checkClaudePreTool(
       : toolCall.kind === "delete" || toolCall.kind === "move"
         ? "remove"
         : "write";
-  if (toolCall.locations.some((l) => protectedPathFor(l.path, access, context.protectedPaths, context.workspaceCwd)))
+  if (toolCall.locations.some((l) => protectedPathFor(l.path, access, context.protectedPaths, frame.cwd)))
     return { decision: "deny", reason: "protected", toolCall };
 
   let unreadable = false;

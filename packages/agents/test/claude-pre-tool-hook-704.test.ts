@@ -9,9 +9,9 @@
  * every failure it can see.
  */
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as acp from "@agentclientprotocol/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -191,6 +191,26 @@ describe("decisions", () => {
     expect(decisionOf(relative.stdout)).toBe("deny");
   });
 
+  it("follows a link before `..`, as the tool's own open would", async () => {
+    // `lnk` leads into the store, so `lnk/../orca.permissions.json` is the sidecar beside it.
+    // Folded as text first it would be `work/orca.permissions.json`, which is not protected.
+    await mkdir(join(configDir, ".orca"));
+    await symlink(join(configDir, ".orca"), join(workspace, "lnk"));
+    await writeContext({ ...context, permissions: { default: "allow", rules: [] } });
+    const write = await hook(frame("Write", { file_path: "lnk/../orca.permissions.json", content: "{}" }));
+    expect(decisionOf(write.stdout)).toBe("deny");
+    expect(write.stdout).toContain("ORCA's own files");
+    // The projection keeps the path as written, joined to the cwd, for the shared checker.
+    expect(
+      claudeToolCall({ toolName: "Write", toolInput: { file_path: "lnk/../x" }, cwd: workspace }).locations,
+    ).toEqual([{ path: `${workspace}${sep}lnk/../x` }]);
+    // An absolute path through the link is the same file.
+    const absolute = await hook(
+      frame("Write", { file_path: `${workspace}${sep}lnk${sep}..${sep}orca.permissions.json`, content: "{}" }),
+    );
+    expect(decisionOf(absolute.stdout)).toBe("deny");
+  });
+
   it("asks when an allowed call runs outside the workspace", async () => {
     await writeContext({ ...context, permissions: { default: "allow", rules: [] } });
     expect(decisionOf((await hook(frame("Bash", { command: "ls" }))).stdout)).toBe("no-decision");
@@ -240,7 +260,7 @@ describe("the frame and the context", () => {
     });
     expect(claudeToolCall(f("Write", { file_path: "src/a.ts" }))).toMatchObject({
       kind: "edit",
-      locations: [{ path: "/w/src/a.ts" }],
+      locations: [{ path: `/w${sep}src/a.ts` }],
     });
     expect(claudeToolCall(f("Grep", { pattern: "x" }))).toMatchObject({ kind: "search", locations: [{ path: "/w" }] });
     expect(claudeToolCall(f("WebFetch", { url: "https://a.example" }))).toMatchObject({
@@ -383,8 +403,20 @@ describe("the hook process", () => {
     expect(broken.stdout).toBe("");
   });
 
-  it("blocks stdin over the limit without reading all of it", async () => {
-    const big = "x".repeat(CLAUDE_PRE_TOOL_FRAME_LIMIT + 1024);
-    expect((await run([contextFile], big)).code).toBe(2);
+  it("refuses stdin over the limit at the read, before deciding anything", async () => {
+    // A frame whose first bytes are a complete, allowed call, padded past the limit with
+    // whitespace: a reader that kept only what fitted would hand on a decidable frame.
+    const allowed = frame("Read", { file_path: join(workspace, "a") });
+    const padded = allowed + " ".repeat(CLAUDE_PRE_TOOL_FRAME_LIMIT);
+    const result = await run([contextFile], padded);
+    expect(result.code).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("too large");
+  });
+
+  it("decides a frame exactly at the limit", async () => {
+    const allowed = frame("Read", { file_path: join(workspace, "a") });
+    const exact = allowed + " ".repeat(CLAUDE_PRE_TOOL_FRAME_LIMIT - Buffer.byteLength(allowed));
+    expect(await run([contextFile], exact)).toEqual({ code: 0, stdout: "", stderr: "" });
   });
 });
