@@ -292,15 +292,18 @@ it("checks out an allowed ref fetched from the remote into a run's own root, run
     runId: f.input.runId,
     baseCommit: f.feature,
     ref: "refs/heads/feature",
+    refObject: f.feature,
   });
   expect(git(workspace.cwd, "rev-parse", "HEAD")).toBe(f.feature);
   await expect(fs.stat(ran)).rejects.toMatchObject({ code: "ENOENT" });
   // The run-private fetch ref is gone; the run's own branch holds the commit.
   expect(git(f.repo, "for-each-ref", "refs/orca")).toBe("");
-  // Reuse is from the receipt, never a second fetch, and only for the same ref.
-  expect(await new GitWorktreeProvider(f.options).provision({ ...f.input, gitRef: "refs/heads/feature" })).toEqual(
-    workspace,
-  );
+  // Reuse is from the receipt, never a second fetch, and only for the same ref and pin.
+  const reuse = { ...f.input, gitRef: "refs/heads/feature", gitRefObject: object };
+  expect(await new GitWorktreeProvider(f.options).provision(reuse)).toEqual(workspace);
+  await expect(
+    new GitWorktreeProvider(f.options).provision({ ...reuse, gitRefObject: git(f.repo, "rev-parse", "main") }),
+  ).rejects.toThrow("unavailable");
   await expect(new GitWorktreeProvider(f.options).provision(f.input)).rejects.toThrow("unavailable");
 });
 
@@ -352,17 +355,16 @@ it("writes an allowed ref's files as stored, running no filter driver the reposi
   git(f.repo, "config", "filter.evil.smudge", `sh -c 'touch ${ran}; echo smudged'`);
   git(f.repo, "config", "filter.evil.process", `sh -c 'touch ${ran}'`);
   git(f.repo, "config", "filter.evil.required", "true");
-  const workspace = await f.provider.provision({
+  const input = {
     ...f.input,
     gitRef: "refs/heads/feature",
     gitRefObject: await f.provider.checkRef("refs/heads/feature"),
-  });
+  };
+  const workspace = await f.provider.provision(input);
   expect(await fs.readFile(join(workspace.cwd, "a.x"), "utf8")).toBe("stored\n");
   await expect(fs.stat(ran)).rejects.toMatchObject({ code: "ENOENT" });
   // The worktree is registered and pristine: reuse validates it.
-  expect(await new GitWorktreeProvider(f.options).provision({ ...f.input, gitRef: "refs/heads/feature" })).toEqual(
-    workspace,
-  );
+  expect(await new GitWorktreeProvider(f.options).provision(input)).toEqual(workspace);
 });
 
 it("refuses a ref when its remote does not answer in time or cannot be reached (#883)", async () => {

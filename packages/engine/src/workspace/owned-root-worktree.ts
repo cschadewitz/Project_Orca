@@ -289,7 +289,8 @@ export class OwnedRootWorktree {
     // Freeze before any external Git mutation; the receipt is the only source on retry.
     if (await exists(receiptPath)) {
       const receipt = await this.readReceipt(input.runId);
-      if (receipt.ref !== input.gitRef) throw refuse();
+      // The receipt freezes what was provisioned; a retry must name the same ref and pin.
+      if (receipt.ref !== input.gitRef || (input.gitRef && receipt.refObject !== input.gitRefObject)) throw refuse();
       const workspace = this.workspace(receipt);
       await this.validate(workspace);
       return workspace;
@@ -349,6 +350,7 @@ export class OwnedRootWorktree {
         runId: receipt.runId,
         baseCommit: receipt.baseCommit,
         ...(receipt.ref ? { ref: receipt.ref } : {}),
+        ...(receipt.refObject ? { refObject: receipt.refObject } : {}),
       },
     };
   }
@@ -378,7 +380,8 @@ export class OwnedRootWorktree {
       workspace.hostId !== this.o.host.id ||
       workspace.provider !== "git-worktree" ||
       workspace.rootProvisioning.baseCommit !== receipt.baseCommit ||
-      workspace.rootProvisioning.ref !== receipt.ref
+      workspace.rootProvisioning.ref !== receipt.ref ||
+      workspace.rootProvisioning.refObject !== receipt.refObject
     )
       throw refuse();
     const { receiptPath } = await this.identity(receipt.runId);

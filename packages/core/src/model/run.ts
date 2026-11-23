@@ -46,6 +46,8 @@ export const WorkspaceSchema = z.object({
       baseCommit: z.string(),
       /** The named git ref the run was given (#883); `baseCommit` is the commit it named. */
       ref: z.string().optional(),
+      /** The object `ref` named when its admission checked it (an annotated tag's tag object, else `baseCommit`). */
+      refObject: z.string().optional(),
     })
     .optional(),
 });

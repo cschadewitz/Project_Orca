@@ -260,6 +260,12 @@ export interface StartRunOptions {
    */
   gitRef?: string;
   /**
+   * The object a durable admission pinned for `gitRef` when it checked it (#883). The ref is
+   * still checked (allowed, advertised), and the run is refused unless it names this object;
+   * provisioning fetches exactly it. Absent, the check made here is the pin.
+   */
+  gitRefObject?: string;
+  /**
    * Per-run selection (#186): role -> agent, model, item workflow, template pack. Validated
    * before `run.created` is appended and recorded in it, so a replay resolves the same agents.
    */
@@ -605,6 +611,8 @@ export class Orchestrator {
         { errors, warnings },
       );
     }
+    if (opts.gitRefObject !== undefined && (opts.gitRef === undefined || !/^[a-f0-9]{40,64}$/.test(opts.gitRefObject)))
+      throw new OrcaError("RUN_STATE", "a pinned git ref object needs its ref");
     if (opts.gitRef !== undefined) {
       // Only a root run with no inherited or supplied workspace gets a checkout of its own.
       if (opts.workspace || opts.parentRunId || opts.workItemId || opts.requestId || opts.inline || opts.checkpoint)
@@ -616,6 +624,8 @@ export class Orchestrator {
       if (!provider.checkRef)
         throw gitRefRefusal(opts.gitRef, `the '${provider.name}' workspace does not give runs a checkout of a ref`);
       const gitRefObject = await provider.checkRef(opts.gitRef);
+      if (opts.gitRefObject !== undefined && gitRefObject !== opts.gitRefObject)
+        throw gitRefRefusal(opts.gitRef, "it moved after the run was admitted; admit the run again");
       return { definition: def, vars: inputs.vars, ...(generation ? { generation } : {}), gitRefObject };
     }
     return { definition: def, vars: inputs.vars, ...(generation ? { generation } : {}) };
@@ -713,8 +723,11 @@ export class Orchestrator {
         parent: opts.parentRunId ? (await this.executionState(opts.parentRunId)).run.workspace : undefined,
         ...(opts.gitRef !== undefined ? { gitRef: opts.gitRef, gitRefObject } : {}),
       }));
-    // A provider that ignored the ref must not leave the run on some other checkout.
-    if (opts.gitRef !== undefined && workspace.rootProvisioning?.ref !== opts.gitRef)
+    // A provider that ignored the ref, or the pin, must not leave the run on some other checkout.
+    if (
+      opts.gitRef !== undefined &&
+      (workspace.rootProvisioning?.ref !== opts.gitRef || workspace.rootProvisioning.refObject !== gitRefObject)
+    )
       throw gitRefRefusal(opts.gitRef, "the workspace provider did not check it out");
     const created: Extract<OrcaEventInput, { type: "run.created" }> = {
       type: "run.created",

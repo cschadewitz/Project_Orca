@@ -529,7 +529,9 @@ workspace:
 The remote checks the ref under exactly its name on the fetch remote (never Git's suffix
 matching) and remembers the object it names (for an annotated tag, the tag object). It then
 fetches only that ref, into a run-private ref, and refuses the run if the fetched object is
-not the one it checked (the ref moved: admit the run again). The fetch leaves the rest of the
+not the one it checked (the ref moved: admit the run again). The admission keeps that object
+with its own record, so creating the run, and recovering an interrupted admission, use exactly
+it rather than looking the ref up again. The fetch leaves the rest of the
 repository alone: no remote-tracking refs, pruning, `FETCH_HEAD`, tags, submodules or automatic
 maintenance. Listing and fetching run
 with no prompts (no terminal, askpass or credential-manager prompt, and batch-mode SSH unless

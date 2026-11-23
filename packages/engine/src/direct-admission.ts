@@ -52,7 +52,16 @@ const MaterialSchema = z.object({
   workspaceId: z.string(),
   generationId: z.string(),
   workflow: z.object({ id: z.string(), version: z.string(), revision: z.string() }),
+  /**
+   * The object `command.gitRef` named when this admission checked it (#883), captured with the
+   * rest of the material: creation and recovery provision exactly it, never a later lookup.
+   */
+  gitRefObject: z
+    .string()
+    .regex(/^[a-f0-9]{40,64}$/)
+    .optional(),
 });
+type Material = z.infer<typeof MaterialSchema>;
 const unavailable = () => new OrcaError("RUN_STATE", "Direct admission is unavailable");
 /** A fence's receipt, bound like any admission: stable for its operation, so a replay answers the same. */
 async function fenced(context: RetryContext): Promise<DirectAdmissionResult> {
@@ -138,8 +147,13 @@ export class DirectAdmissionService {
   ): Promise<RetryResult<DirectAdmissionResult>> {
     return this.admitRun({ workflowId, fence: true }, retry, authority);
   }
-  /** Read-only preflight, repeated during preparation after the retry claim is published. */
-  private async validateLaunch(command: DirectAdmissionCommand): Promise<DirectCapturedLaunch> {
+  /**
+   * Read-only preflight, repeated during preparation after the retry claim is published; that
+   * repetition's `gitRefObject` is the pin the admission persists.
+   */
+  private async validateLaunch(
+    command: DirectAdmissionCommand,
+  ): Promise<{ launch: DirectCapturedLaunch; gitRefObject?: string }> {
     const { workflowId, workflowVersion, expectedWorkflowRevision, expectedConfigGeneration } = command;
     const launch = await this.options.captureLaunch({
       purpose: "workflow",
@@ -150,11 +164,14 @@ export class DirectAdmissionService {
     });
     if (!launch.admissionRunIds)
       throw new OrcaError("NOT_SUPPORTED", "Direct launch provider must support reserved run identities");
-    await launch.validateStartRun(this.launchOptions(command, this.authority().actor));
-    return launch;
+    const checked = await launch.validateStartRun(this.launchOptions(command, this.authority().actor));
+    const gitRefObject = checked ? checked.gitRefObject : undefined;
+    // A ref is admitted only with the object it named: there is nothing else to bind creation to.
+    if ((command.gitRef !== undefined) !== (gitRefObject !== undefined)) throw unavailable();
+    return { launch, ...(gitRefObject !== undefined ? { gitRefObject } : {}) };
   }
   private async prepare(command: DirectAdmissionCommand, context: RetryContext): Promise<DirectAdmissionResult> {
-    const launch = await this.validateLaunch(command);
+    const { launch, gitRefObject } = await this.validateLaunch(command);
     const binding = {
       admissionId: `direct_${randomUUID()}`,
       runId: `run_${randomUUID()}`,
@@ -164,16 +181,22 @@ export class DirectAdmissionService {
     // Bind before any admission effects. An interrupted unsealed reservation stays recoverable,
     // never recaptures current defaults or substitutes a different run.
     await context.bind(binding);
-    await this.options.orchestrator.stores.execution.putGeneration(binding.materialId, {
+    const material: Material = {
       command,
       actor: authority.actor,
       workspaceId: authority.workspaceId,
       generationId: launch.generationId,
       workflow: launch.workflow,
-    });
-    return this.admit(command, context, binding, launch, authority.actor);
+      ...(gitRefObject !== undefined ? { gitRefObject } : {}),
+    };
+    await this.options.orchestrator.stores.execution.putGeneration(binding.materialId, material);
+    return this.admit(command, context, binding, launch, material);
   }
-  private launchOptions(command: DirectAdmissionCommand, actor: MutationActor): BoundLaunchOptions {
+  private launchOptions(
+    command: DirectAdmissionCommand,
+    actor: MutationActor,
+    gitRefObject?: string,
+  ): BoundLaunchOptions {
     return {
       actor,
       vars: command.vars ?? {},
@@ -181,6 +204,7 @@ export class DirectAdmissionService {
       ...(command.workItemId ? { workItemId: command.workItemId } : {}),
       ...(command.origin ? { origin: command.origin } : {}),
       ...(command.gitRef !== undefined ? { gitRef: command.gitRef } : {}),
+      ...(gitRefObject !== undefined ? { gitRefObject } : {}),
     };
   }
   private async recover(command: DirectAdmissionCommand, context: RetryContext): Promise<DirectAdmissionResult> {
@@ -200,16 +224,13 @@ export class DirectAdmissionService {
         canonicalJson(launch.workflow) !== canonicalJson(material.workflow)
       )
         throw unavailable();
-      return this.admit(command, context, binding, launch, material.actor);
+      return this.admit(command, context, binding, launch, material);
     } catch {
       return { state: "recoverable-failure", admissionId: binding.admissionId, runId: binding.runId, failure };
     }
   }
 
-  private async findRun(
-    binding: z.infer<typeof BindingSchema>,
-    material: z.infer<typeof MaterialSchema>,
-  ): Promise<boolean> {
+  private async findRun(binding: z.infer<typeof BindingSchema>, material: Material): Promise<boolean> {
     const { stores } = this.options.orchestrator;
     const first = (await stores.events.readRange(binding.runId, { limit: 1 }))[0];
     if (!first) return false;
@@ -235,7 +256,8 @@ export class DirectAdmissionService {
       root.requestId !== material.command.requestId ||
       root.workItemId !== material.command.workItemId ||
       canonicalJson(root.origin ?? null) !== canonicalJson(material.command.origin ?? null) ||
-      root.workspace.rootProvisioning?.ref !== material.command.gitRef
+      root.workspace.rootProvisioning?.ref !== material.command.gitRef ||
+      root.workspace.rootProvisioning?.refObject !== material.gitRefObject
     )
       throw unavailable();
     return true;
@@ -245,27 +267,20 @@ export class DirectAdmissionService {
     context: RetryContext,
     binding: z.infer<typeof BindingSchema>,
     launch: DirectCapturedLaunch,
-    actor: MutationActor,
+    reserved: Material,
   ): Promise<DirectAdmissionResult> {
     try {
       await context.reauthorize();
+      // Creation is bound to the reserved material, including the pinned ref object.
       const runId = await launch.startRun({
-        ...this.launchOptions(command, actor),
+        ...this.launchOptions(command, reserved.actor, reserved.gitRefObject),
         admissionRunId: binding.runId,
         directAdmissionId: binding.admissionId,
       });
       if (runId !== binding.runId) throw unavailable();
-      if (
-        !(await this.findRun(binding, {
-          command,
-          actor,
-          workspaceId: this.authority().workspaceId,
-          generationId: launch.generationId,
-          workflow: launch.workflow,
-        }))
-      )
-        throw unavailable();
+      if (!(await this.findRun(binding, reserved))) throw unavailable();
       const material = await this.material(binding, command);
+      if (material.gitRefObject !== reserved.gitRefObject) throw unavailable();
       await context.reauthorize();
       await publishAdmissionExecutionPolicy(this.options.orchestrator.stores, this.policyBinding(binding, material));
       return await this.accept(binding, context, material);
@@ -281,15 +296,13 @@ export class DirectAdmissionService {
     if (
       material.actor.principalId !== this.authority().actor.principalId ||
       material.workspaceId !== this.authority().workspaceId ||
-      canonicalJson(material.command) !== canonicalJson(command)
+      canonicalJson(material.command) !== canonicalJson(command) ||
+      (command.gitRef !== undefined) !== (material.gitRefObject !== undefined)
     )
       throw unavailable();
     return material;
   }
-  private policyBinding(
-    binding: z.infer<typeof BindingSchema>,
-    material: z.infer<typeof MaterialSchema>,
-  ): AdmissionExecutionBinding {
+  private policyBinding(binding: z.infer<typeof BindingSchema>, material: Material): AdmissionExecutionBinding {
     return {
       kind: "direct",
       admissionId: binding.admissionId,
@@ -302,6 +315,7 @@ export class DirectAdmissionService {
       ...(material.command.workItemId ? { workItemId: material.command.workItemId } : {}),
       ...(material.command.origin ? { origin: material.command.origin } : {}),
       ...(material.command.gitRef !== undefined ? { gitRef: material.command.gitRef } : {}),
+      ...(material.gitRefObject !== undefined ? { gitRefObject: material.gitRefObject } : {}),
     };
   }
   private async verifyAccepted(
