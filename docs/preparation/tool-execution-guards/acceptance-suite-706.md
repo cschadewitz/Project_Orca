@@ -43,24 +43,30 @@ synthetic results never count toward a tier.
 ## Support tiers
 
 The same tiers the #705 and #709-#711 streams report in, defined once in
-`support-matrix.json` and enforced by the checker. Every tier above `none` needs a pinned
-agent version and host on the row, and, **for each of its routes**, a committed receipt
-(`orca-enforcement-receipt/1`) whose agent, version, host and route match the pin, that names
-the exact 40-hex ORCA build it ran, and in which every case passed. A file path, a workflow's
-existence or a named residual risk is not proof.
+`support-matrix.json` and checked by `check-support-matrix.js`.
 
-| Tier | Claim | Receipt per route |
+**Promotion is disabled.** The receipt checks below are structural only: a receipt file says
+what it says, and nothing yet binds it to an independently trusted run (who ran it, on which
+machine, and that the file was not written by hand). Until that binding exists, the checker
+refuses every tier above `none`, whatever receipts a row lists (`PROMOTION_ENABLED = false`).
+
+What a receipt must show once promotion is enabled: the row pins agent version, adapter
+version, host and the exact 40-hex ORCA build. For **each route**, a committed
+`orca-enforcement-receipt/1` must match that pin and route, list no case twice, pass every case
+it lists, and carry `checks.connects` and `checks.uncoveredRoutesRefused` passing. Tiers are
+cumulative: each needs the receipts of every tier below it. A file path, a workflow's existence
+or a named residual risk is not proof.
+
+| Tier | Claim | Receipts per route (cumulative) |
 | --- | --- | --- |
 | none | Nothing verified about policy coverage | — |
-| A | Connects and fails closed | `installed`, with `checks.connects` and `checks.uncoveredRoutesRefused` passing |
-| B | Approvals validated | `installed`, with every case the route can run passing against the real agent |
-| C | Execution guard certified | `connected`, with every case the route can run passing; and no lifecycle or bypass case excluded on any of the agent's routes |
+| A | Connects and fails closed | `installed`, with the two connectivity checks passing |
+| B | Approvals validated | A, plus `installed` with every case the route can run passing against the real agent |
+| C | Execution guard certified | B, plus `connected` with every case the route can run passing; and no lifecycle or bypass case excluded on any of the agent's routes |
 
 Today every agent is `none`. Claude and Codex connect and are recognised by first-run
-preflight, but no receipt backs that, so the matrix lists it as unverified. #980's installed
-workflow is the first candidate receipt (Claude, A/B); Codex follows with #705. Each stream
-edits only its own agent's row, adds its own path adapter, and commits its receipts under
-`tools/guard-qualification/receipts/`.
+preflight, but no receipt backs that, so the matrix lists it as unverified. Each stream edits
+only its own agent's row and adds its own path adapter.
 
 ## Adding a path
 
@@ -119,9 +125,10 @@ have created the sidecar. After review, `protectedPathFor` now:
 Regression tests are in `packages/agents/test/permissions.test.ts`. They are decision-time
 evidence on Linux and macOS, not physical confinement and not Windows qualification.
 
-The Claude hook's own "is this cwd inside the workspace" check reuses `protectedPathFor`, so
-with fail-closed errors an unresolvable cwd would count as inside. `pathWithin`, added here,
-answers no when it cannot tell; switching the hook to it belongs to the hook's owner (#980).
+The Claude hook's own "is this cwd inside the workspace" check reused `protectedPathFor`, so
+with fail-closed errors an unresolvable cwd would have counted as inside. It now uses
+`existingDirectoryWithin`, which proves both are existing directories that resolve, and
+answers no on any doubt.
 
 ## Not covered here, and where it goes
 

@@ -6,8 +6,9 @@
  *
  * Exit 0 with nothing printed when the matrix holds; otherwise one line per problem, exit 1.
  * Whether the synthetic cases *pass* is the suite's job (tools/test/enforcement-acceptance-706.test.js),
- * and synthetic results never count toward a tier. A tier above `none` stands only on committed
- * installed or connected receipts for the row's exact pinned agent, version and host, per route.
+ * and synthetic results never count toward a tier. The receipt checks are structural only, and
+ * promotion above `none` is refused outright (`PROMOTION_ENABLED`) until receipts are bound to
+ * an independently trusted run.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -16,13 +17,22 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "..", "..");
 const TIERS = ["none", "A", "B", "C"];
+/**
+ * Off until a receipt is bound to an independently trusted run (who ran it, on what, and that
+ * the file was not written by hand). Until then the receipt checks are structural only and
+ * every promotion above `none` is refused.
+ */
+export const PROMOTION_ENABLED = false;
+export const PROMOTION_DISABLED =
+  "tier promotion is disabled: receipt checks are structural only until a receipt is bound to an independently trusted run (#706)";
+
 /** Categories a tier C claim may not exclude on any of its routes. A named residual is not proof. */
 const MUST_COVER_FOR_C = ["lifecycle", "bypass"];
 
 /**
  * Why `receipt` does not back a claim for `agent` on `route`: wrong kind, another agent,
- * version, host or route, no exact build, a failed case, a missing case or, for tier A, a
- * missing connectivity check. Empty when it does.
+ * adapter version, host, route or build, a duplicate, failed or missing case, or a missing
+ * connectivity check (every tier needs tier A's). Structural only. Empty when it holds.
  */
 export function receiptProblems(receipt, agent, route, kind, neededCases) {
   const problems = [];
@@ -30,17 +40,18 @@ export function receiptProblems(receipt, agent, route, kind, neededCases) {
   if (receipt.kind !== kind) problems.push(`kind ${receipt.kind}, needs ${kind}`);
   if (receipt.agent !== agent.id) problems.push(`agent ${receipt.agent}`);
   if (receipt.agentVersion !== agent.pin?.agentVersion) problems.push(`agentVersion ${receipt.agentVersion}`);
+  if (receipt.adapterVersion !== agent.pin?.adapterVersion) problems.push(`adapterVersion ${receipt.adapterVersion}`);
   if (receipt.host !== agent.pin?.host) problems.push(`host ${receipt.host}`);
   if (receipt.route !== route) problems.push(`route ${receipt.route}`);
-  if (typeof receipt.build !== "string" || !/^[0-9a-f]{40}$/.test(receipt.build)) problems.push("no exact build");
+  if (receipt.build !== agent.pin?.build) problems.push(`build ${receipt.build}, expected ${agent.pin?.build}`);
+  const ids = (receipt.cases ?? []).map((c) => c.id);
+  const duplicates = ids.filter((id, i) => ids.indexOf(id) !== i);
+  if (duplicates.length) problems.push(`duplicate case ${[...new Set(duplicates)].join(",")}`);
   const results = new Map((receipt.cases ?? []).map((c) => [c.id, c.result]));
   if ([...results.values()].some((r) => r !== "pass")) problems.push("a case did not pass");
   const missing = neededCases.filter((id) => results.get(id) !== "pass");
   if (missing.length) problems.push(`missing ${missing.join(",")}`);
-  if (
-    neededCases.length === 0 &&
-    !(receipt.checks?.connects === "pass" && receipt.checks?.uncoveredRoutesRefused === "pass")
-  )
+  if (!(receipt.checks?.connects === "pass" && receipt.checks?.uncoveredRoutesRefused === "pass"))
     problems.push("needs checks.connects and checks.uncoveredRoutesRefused passing");
   return problems;
 }
@@ -111,28 +122,38 @@ export function checkSupportMatrix(
       receipts.push({ file, receipt: readReceipt(file) });
     }
     if (tier === 0) continue;
+    // The checks below are structural: a receipt file says what it says. Until a receipt is
+    // bound to an independently trusted run, no structure is enough to promote a row.
+    if (!PROMOTION_ENABLED) problems.push(`${at}: ${PROMOTION_DISABLED}`);
 
     const pin = agent.pin;
-    if (!pin || !pin.agentVersion || !pin.host) {
-      problems.push(`${at}: tier ${agent.tier} needs a pinned agent version and host`);
+    if (!pin || !pin.agentVersion || !pin.adapterVersion || !pin.host || !/^[0-9a-f]{40}$/.test(pin.build ?? "")) {
+      problems.push(`${at}: tier ${agent.tier} needs a pinned agent version, adapter version, host and exact build`);
       continue;
     }
     if (agent.routes.length === 0) problems.push(`${at}: tier ${agent.tier} needs at least one enforcement route`);
     if ((agent.unsupportedRoutes ?? []).length === 0)
       problems.push(`${at}: a tier claim must list the uncovered routes`);
     if ((agent.residualRisks ?? []).length === 0) problems.push(`${at}: a tier claim must list its residual risks`);
-    const kind = tier === 3 ? "connected" : "installed";
     for (const route of agent.routes) {
       const path = paths.get(route);
       if (!path) continue;
-      const needed = tier === 1 ? [] : casesFor(path, catalogue);
-      const good = receipts.filter(({ receipt }) => receiptProblems(receipt, agent, route, kind, needed).length === 0);
-      if (good.length === 0) {
+      // Tiers are cumulative: each one needs the receipt of every tier below it too.
+      const required = [
+        { tier: 1, kind: "installed", cases: [] },
+        { tier: 2, kind: "installed", cases: casesFor(path, catalogue) },
+        { tier: 3, kind: "connected", cases: casesFor(path, catalogue) },
+      ].filter((r) => r.tier <= tier);
+      for (const need of required) {
+        const good = receipts.filter(
+          ({ receipt }) => receiptProblems(receipt, agent, route, need.kind, need.cases).length === 0,
+        );
+        if (good.length > 0) continue;
         const why = receipts.flatMap(({ file, receipt }) =>
-          receiptProblems(receipt, agent, route, kind, needed).map((p) => `${file}: ${p}`),
+          receiptProblems(receipt, agent, route, need.kind, need.cases).map((p) => `${file}: ${p}`),
         );
         problems.push(
-          `${at}: tier ${agent.tier} on ${route} needs a passing ${kind} receipt for ${agent.id} ${pin.agentVersion} on ${pin.host}` +
+          `${at}: tier ${TIERS[need.tier]} on ${route} needs a passing ${need.kind} receipt for ${agent.id} ${pin.agentVersion} on ${pin.host}` +
             (why.length ? ` (${why.join("; ")})` : ""),
         );
       }

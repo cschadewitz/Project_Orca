@@ -47,6 +47,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import { PermissionPolicySchema, type ConfiguredPermissionPolicy, type PermissionDecision } from "@orca/core";
 import {
   decidePermission,
+  existingDirectoryWithin,
   loadEffectivePermissionPolicy,
   protectedPathFor,
   type ProtectedPaths,
@@ -274,8 +275,9 @@ export function claudeToolCall(frame: ClaudePreToolFrame): ClaudePreToolVerdict[
 
 /** Whether `dir` is `root` or below it, compared as the file system resolves both. */
 function inside(dir: string, root: string): boolean {
-  // `protectedPathFor` already compares physically and segment by segment; reuse it.
-  return protectedPathFor(dir, "read", { readOnly: [], noAccess: [root] }) !== undefined;
+  // Not `protectedPathFor`: there a path it cannot resolve counts as protected, which here would
+  // mean "inside" (#706 review). This check proves both are existing directories, or says no.
+  return existingDirectoryWithin(dir, root);
 }
 
 /**

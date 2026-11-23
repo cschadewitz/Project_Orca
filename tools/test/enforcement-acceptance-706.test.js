@@ -11,6 +11,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  PROMOTION_DISABLED,
+  PROMOTION_ENABLED,
   REPO_ROOT,
   casesFor,
   checkSupportMatrix,
@@ -52,7 +54,8 @@ describe("the catalogue, the scenarios and the matrix agree", () => {
 });
 
 describe("the matrix checker refuses claims beyond the evidence", () => {
-  const pin = { agentVersion: "2.1.330", adapterVersion: "0.109.1", host: "linux-x64" };
+  const build = "0123456789abcdef0123456789abcdef01234567";
+  const pin = { agentVersion: "2.1.330", adapterVersion: "0.109.1", host: "linux-x64", build };
   const claude = (extra = {}) => ({
     ...structuredClone(matrix.agents.find((a) => a.id === "claude")),
     pin,
@@ -67,9 +70,10 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     kind: "installed",
     agent: "claude",
     agentVersion: "2.1.330",
+    adapterVersion: "0.109.1",
     host: "linux-x64",
     route: "acp-ask",
-    build: "0123456789abcdef0123456789abcdef01234567",
+    build,
     checks: { connects: "pass", uncoveredRoutesRefused: "pass" },
     cases: acpCases.map((id) => ({ id, result: "pass" })),
     ...extra,
@@ -81,44 +85,71 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       (p) => p in files,
       (p) => files[p],
     );
-  const needs = (tier, route = "acp-ask") =>
-    `agent claude: tier ${tier} on ${route} needs a passing ${tier === "C" ? "connected" : "installed"} receipt for claude 2.1.330 on linux-x64`;
+  /** Every promotion is refused today, so each result leads with that; the rest is structure. */
+  const structural = (problems) => {
+    expect(problems[0]).toBe(`agent claude: ${PROMOTION_DISABLED}`);
+    return problems.slice(1);
+  };
+  const needs = (tier, kind = tier === "C" ? "connected" : "installed", route = "acp-ask") =>
+    `agent claude: tier ${tier} on ${route} needs a passing ${kind} receipt for claude 2.1.330 on linux-x64`;
 
-  it("any tier without a pinned version and host", () => {
-    expect(check(claude({ tier: "A", pin: null }))).toEqual([
-      "agent claude: tier A needs a pinned agent version and host",
-    ]);
+  it("refuses every promotion while receipts are not bound to a trusted run", () => {
+    expect(PROMOTION_ENABLED).toBe(false);
+    for (const tier of ["A", "B", "C"])
+      expect(
+        check(claude({ tier }), { "r.json": receipt({ kind: tier === "C" ? "connected" : "installed" }) })[0],
+      ).toBe(`agent claude: ${PROMOTION_DISABLED}`);
+  });
+
+  it("any tier without a pinned version, adapter version, host and exact build", () => {
+    for (const bad of [null, { ...pin, adapterVersion: undefined }, { ...pin, build: "main" }])
+      expect(structural(check(claude({ tier: "A", pin: bad })))).toEqual([
+        "agent claude: tier A needs a pinned agent version, adapter version, host and exact build",
+      ]);
   });
 
   it("any tier without a receipt: a file path or a named residual is not proof", () => {
-    expect(check(claude({ tier: "A" }))).toEqual([needs("A")]);
-    expect(check(claude({ tier: "B" }))).toEqual([needs("B")]);
+    expect(structural(check(claude({ tier: "A" })))).toEqual([needs("A")]);
+    expect(structural(check(claude({ tier: "B" })))).toEqual([needs("A"), needs("B")]);
   });
 
-  it("a receipt for another version, host, route or build, or a synthetic one", () => {
+  it("a receipt for another version, adapter, host, route or build, or a synthetic one", () => {
     for (const [extra, why] of [
       [{ agentVersion: "2.1.329" }, "agentVersion 2.1.329"],
+      [{ adapterVersion: "0.109.0" }, "adapterVersion 0.109.0"],
       [{ host: "darwin-arm64" }, "host darwin-arm64"],
       [{ route: "claude-native-hook" }, "route claude-native-hook"],
-      [{ build: "main" }, "no exact build"],
+      [{ build: "f".repeat(40) }, `build ${"f".repeat(40)}, expected ${build}`],
       [{ kind: "synthetic" }, "kind synthetic, needs installed"],
     ])
-      expect(check(claude({ tier: "B" }), { "r.json": receipt(extra) })).toEqual([`${needs("B")} (r.json: ${why})`]);
+      expect(structural(check(claude({ tier: "A" }), { "r.json": receipt(extra) }))).toEqual([
+        `${needs("A")} (r.json: ${why})`,
+      ]);
   });
 
-  it("a receipt with a failed or missing case, or tier A without its connectivity checks", () => {
+  it("a receipt with a duplicate, failed or missing case, or without the connectivity checks", () => {
+    const dup = receipt({ cases: [...receipt().cases, { id: "L01", result: "pass" }] });
+    expect(structural(check(claude({ tier: "B" }), { "r.json": dup }))[0]).toContain("duplicate case L01");
     const failed = receipt({ cases: [{ id: "L01", result: "fail" }] });
-    expect(check(claude({ tier: "B" }), { "r.json": failed })[0]).toContain("a case did not pass");
-    expect(check(claude({ tier: "B" }), { "r.json": receipt({ cases: [] }) })[0]).toContain("missing L01,");
-    expect(check(claude({ tier: "A" }), { "r.json": receipt({ checks: {} }) })[0]).toContain(
-      "needs checks.connects and checks.uncoveredRoutesRefused passing",
-    );
+    expect(structural(check(claude({ tier: "B" }), { "r.json": failed }))[0]).toContain("a case did not pass");
+    expect(structural(check(claude({ tier: "B" }), { "r.json": receipt({ cases: [] }) }))).toEqual([
+      expect.stringContaining("missing L01,"),
+    ]);
+    // Cumulative: tier B without tier A's checks fails A, even with every case passing.
+    expect(structural(check(claude({ tier: "B" }), { "r.json": receipt({ checks: {} }) }))).toEqual([
+      expect.stringContaining(`${needs("A")} (r.json: needs checks.connects`),
+      expect.stringContaining(`${needs("B")} (r.json: needs checks.connects`),
+    ]);
   });
 
-  it("accepts a tier exactly backed by receipts", () => {
-    expect(check(claude({ tier: "A" }), { "r.json": receipt() })).toEqual([]);
-    expect(check(claude({ tier: "B" }), { "r.json": receipt() })).toEqual([]);
-    expect(check(claude({ tier: "C" }), { "r.json": receipt({ kind: "connected" }) })).toEqual([]);
+  it("tier C needs the installed receipts below it as well as the connected one", () => {
+    expect(structural(check(claude({ tier: "C" }), { "c.json": receipt({ kind: "connected" }) }))).toEqual([
+      `${needs("A")} (c.json: kind connected, needs installed)`,
+      `${needs("B")} (c.json: kind connected, needs installed)`,
+    ]);
+    expect(
+      structural(check(claude({ tier: "C" }), { "i.json": receipt(), "c.json": receipt({ kind: "connected" }) })),
+    ).toEqual([]);
   });
 
   it("tier C over a route that excludes a lifecycle case, named residual or not", () => {
@@ -131,12 +162,9 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       routes: ["claude-native-hook"],
       residualRisks: ["L08: the hook's ask is not followed"],
     });
-    const connected = receipt({
-      kind: "connected",
-      route: "claude-native-hook",
-      cases: hookCases.map((id) => ({ id, result: "pass" })),
-    });
-    expect(check(agent, { "r.json": connected })).toEqual([
+    const on = (kind) =>
+      receipt({ kind, route: "claude-native-hook", cases: hookCases.map((id) => ({ id, result: "pass" })) });
+    expect(structural(check(agent, { "i.json": on("installed"), "c.json": on("connected") }))).toEqual([
       "agent claude: tier C on claude-native-hook excludes lifecycle case L08",
     ]);
   });

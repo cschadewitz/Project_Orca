@@ -29,7 +29,7 @@ import {
   loadEffectivePermissionPolicy,
   permissionOverlayFor,
   permissionPolicyPath,
-  pathWithin,
+  existingDirectoryWithin,
   protectedPathFor,
   readPermissionPolicyFile,
   recordAlwaysDecision,
@@ -1008,15 +1008,24 @@ describe("protected paths", () => {
     expect(protectedPathFor(join(f.dir, "src", "new", "file.ts"), "write", f.protectedPaths)).toBeUndefined();
   });
 
-  it.skipIf(process.platform === "win32")("pathWithin says no when it cannot tell", async () => {
+  it.skipIf(process.platform === "win32")("existingDirectoryWithin says no on any doubt", async () => {
     const f = await configDir();
-    expect(pathWithin(join(f.dir, "src"), f.dir)).toBe(true);
-    expect(pathWithin(join(f.dir, "src", "not-yet"), f.dir)).toBe(true);
-    expect(pathWithin(f.dir, join(f.dir, "src"))).toBe(false);
+    expect(existingDirectoryWithin(join(f.dir, "src"), f.dir)).toBe(true);
+    expect(existingDirectoryWithin(f.dir, f.dir)).toBe(true);
+    await symlink(join(f.dir, "src"), join(f.dir, "src-link"), "junction");
+    expect(existingDirectoryWithin(join(f.dir, "src-link"), f.dir)).toBe(true);
+    expect(existingDirectoryWithin(f.dir, join(f.dir, "src"))).toBe(false);
+    // A directory that does not exist yet is not inside anything, and neither is a file.
+    expect(existingDirectoryWithin(join(f.dir, "src", "not-yet"), f.dir)).toBe(false);
+    expect(existingDirectoryWithin(join(f.dir, "src", "a.ts"), f.dir)).toBe(false);
+    expect(existingDirectoryWithin(join(f.dir, "src"), join(f.dir, "missing"))).toBe(false);
     await symlink(join(f.dir, "src", "loop-b"), join(f.dir, "src", "loop-a"));
     await symlink(join(f.dir, "src", "loop-a"), join(f.dir, "src", "loop-b"));
-    expect(pathWithin(join(f.dir, "src", "loop-a"), f.dir)).toBe(false);
-    expect(pathWithin(join(f.dir, "src", "a.ts", "x"), f.dir)).toBe(false);
+    expect(existingDirectoryWithin(join(f.dir, "src", "loop-a"), f.dir)).toBe(false);
+    // A link pointing outside is judged by where it leads.
+    const outside = await workspace();
+    await symlink(outside, join(f.dir, "src", "away"), "junction");
+    expect(existingDirectoryWithin(join(f.dir, "src", "away"), f.dir)).toBe(false);
   });
 
   it("is not overridden by any rule: configured, written to the sidecar, or `default: allow`", async () => {

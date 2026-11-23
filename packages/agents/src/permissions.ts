@@ -37,7 +37,7 @@
  * (`model/agent.ts`), which is node-free; the reading, writing, locking and the physical
  * path checks are here.
  */
-import { readlinkSync, realpathSync } from "node:fs";
+import { readlinkSync, realpathSync, statSync } from "node:fs";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { revisionOf, withPolicyLock } from "./permission-file.js";
@@ -372,15 +372,19 @@ export function protectedPathFor(
 }
 
 /**
- * Whether `dir` is `root` or below it, compared as the file system resolves both. False when
- * either cannot be resolved: unlike `protectedPathFor`, "cannot tell" here must not mean yes.
+ * Whether the existing directory `dir` is the existing directory `root` or below it, both
+ * resolved by the file system. False on any doubt: either missing, either not a directory, or
+ * any error resolving them. Unlike `protectedPathFor`, where "cannot tell" means protected,
+ * "cannot tell" here must mean no, because a yes grants something (a cwd inside the workspace).
+ * No prospective-file resolution: a directory that does not exist is not inside anything.
  */
-export function pathWithin(dir: string, root: string): boolean {
+export function existingDirectoryWithin(dir: string, root: string): boolean {
   try {
-    return within(pathSegments(physicalPath(dir)), pathSegments(physicalPath(root)));
-  } catch (error) {
-    if (error instanceof UnresolvablePathError) return false;
-    throw error;
+    const [d, r] = [realpathSync.native(dir), realpathSync.native(root)];
+    if (!statSync(d).isDirectory() || !statSync(r).isDirectory()) return false;
+    return within(pathSegments(d), pathSegments(r));
+  } catch {
+    return false;
   }
 }
 

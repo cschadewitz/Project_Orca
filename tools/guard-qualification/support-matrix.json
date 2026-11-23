@@ -157,6 +157,6 @@
   ],
   "receipts": {
     "format": "orca-enforcement-receipt/1",
-    "note": "A receipt is a JSON file committed under tools/guard-qualification/receipts/. It names kind (installed or connected), agent, agentVersion, host, route, build (the 40-hex ORCA commit it ran) and per-case results; tier A receipts also carry checks.connects and checks.uncoveredRoutesRefused. Synthetic receipts from the CI suite never count toward a tier. A file path or a named residual risk is not proof."
+    "note": "A receipt is a JSON file committed under tools/guard-qualification/receipts/. It names kind (installed or connected), agent, agentVersion, adapterVersion, host, route, build (the 40-hex ORCA commit it ran), checks.connects, checks.uncoveredRoutesRefused and per-case results, with no case listed twice. It must match the row's pin (agentVersion, adapterVersion, host, build). Tiers are cumulative. These checks are structural only: promotion above none is disabled until a receipt is bound to an independently trusted run. Synthetic receipts never count. A file path or a named residual risk is not proof."
   }
 }
