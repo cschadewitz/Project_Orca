@@ -219,7 +219,9 @@ describe("executable identity and Copilot's profile", () => {
     )}\n`;
 
   it("accepts a fresh or signed-in profile and the state Copilot writes during ORCA's sessions", async () => {
-    expect(await copilotHomeProblems("/nonexistent/copilot-profile")).toEqual([]);
+    const fresh = await mkdtemp(join(tmpdir(), "orca-copilot-fresh-"));
+    await chmod(fresh, 0o700);
+    expect(await copilotHomeProblems(join(fresh, "copilot-profile"))).toEqual([]);
     const dir = await home(
       {
         "config.json": config({
@@ -315,7 +317,7 @@ describe("answers", () => {
       }),
     ])({
       host: new LocalHost({ id: "local", type: "local" }),
-      agent: good({ command: join(dir, "copilot") }),
+      agent: good({ command: join(dir, "copilot"), env: { ...good().env, COPILOT_HOME: join(dir, "profile") } }),
       cwd: dir,
       askPermission: ask,
     });
