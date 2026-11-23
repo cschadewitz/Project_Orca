@@ -420,3 +420,45 @@ describe("the hook process", () => {
     expect(await run([contextFile], exact)).toEqual({ code: 0, stdout: "", stderr: "" });
   });
 });
+
+describe("the hook process's output guard", () => {
+  const names = ["stray-log", "stray-write", "early-exit", "crash", "answers"] as const;
+  const entries = Object.fromEntries(
+    names.map((n) => [n, fileURLToPath(new URL(`./fixtures/hook-output-guard/${n}.ts`, import.meta.url))]),
+  );
+  const bundled = childBundle("hook-output-guard-704", { entries });
+
+  const run = (name: (typeof names)[number], args: string[] = []) =>
+    new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+      const built = bundled?.[name];
+      const child = spawn(process.execPath, built ? [built, ...args] : ["--import", "tsx", entries[name]!, ...args], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+      child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+      child.on("error", reject);
+      child.on("close", (code) => resolve({ code, stdout, stderr }));
+    });
+
+  // Claude Code lets a call through when a hook exits 0 with stdout that is not JSON, and
+  // when it exits 0 with nothing; neither may happen except as the hook's own answer.
+  it.each(["stray-log", "stray-write"] as const)("blocks, printing nothing, when %s reaches stdout", async (name) => {
+    const r = await run(name);
+    expect(r.code).toBe(2);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("Blocked by ORCA");
+  });
+
+  it.each(["early-exit", "crash"] as const)("blocks when the process leaves without answering (%s)", async (name) => {
+    const r = await run(name);
+    expect(r.code).toBe(2);
+    expect(r.stdout).toBe("");
+  });
+
+  it("passes the hook's own answer through untouched", async () => {
+    expect(await run("answers")).toEqual({ code: 0, stdout: "", stderr: "" });
+    expect(await run("answers", ['{"x":1}\n'])).toEqual({ code: 0, stdout: '{"x":1}\n', stderr: "" });
+  });
+});

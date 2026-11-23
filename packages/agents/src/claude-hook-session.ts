@@ -6,21 +6,24 @@
  * send it once the agent has answered `initialize`, because only then does it know which
  * adapter it is talking to and at what version:
  *
- * - **Not the Claude adapter**: nothing is sent. Another agent would not know the key and the
- *   hook would not run.
- * - **The Claude adapter, older than `CLAUDE_HOOK_MIN_ADAPTER`**: refused. The minimum is the
- *   version whose installed behaviour the acceptance test (`claude-hook-acceptance.yml`)
- *   observes against the real Claude Code: the hook runs on remembered calls, `ask` reaches
- *   ORCA, and a hook that cannot start, crashes, times out or prints garbage blocks the call.
- *   Older adapters bundle an older Claude Code, where `onFailure: "block"` may be ignored,
- *   so a session there would only look guarded.
- * - **A qualifying adapter**: ORCA writes the session's context file (the rules, sidecars,
+ * - **Not the Claude adapter, or an agent that does not say who it is**: refused. The agent
+ *   opted in to the hook, and no other agent here takes it, so the session would run without
+ *   the check it asked for.
+ * - **The Claude adapter at a version the acceptance test has not covered**: refused. Each
+ *   version in `CLAUDE_HOOK_VERIFIED_ADAPTERS` is one `claude-hook-acceptance.yml` installs and
+ *   runs against the real Claude Code it bundles: the hook runs on remembered calls, `ask`
+ *   reaches ORCA, and a hook that cannot start, crashes, times out or answers JSON Claude
+ *   cannot read blocks the call. Another version may behave differently (an older Claude Code
+ *   may ignore `onFailure: "block"`), so a session there would only look guarded.
+ * - **A platform the acceptance test does not run on**: refused, for the same reason
+ *   (`CLAUDE_HOOK_VERIFIED_PLATFORMS`).
+ * - **A covered adapter**: ORCA writes the session's context file (the rules, sidecars,
  *   workspace and protected paths the hook decides with) with owner-only permissions into a
  *   private directory ORCA protects from agents, and sends the settings that run the hook
  *   with that file. `cleanup` removes the file when the session ends.
  *
  * The hook runs on the agent's machine, so this applies to agents on the daemon's own host.
- * An agent on an SSH host gets no hook; the factory says so in the log.
+ * The factory refuses an opted-in agent on an SSH host before anything starts.
  */
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -37,18 +40,14 @@ export const CLAUDE_ADAPTER_NAMES: readonly string[] = [
   "@zed-industries/claude-code-acp",
 ];
 
-/** The oldest adapter whose installed hook behaviour is observed by the acceptance test. */
-export const CLAUDE_HOOK_MIN_ADAPTER = "0.109.1";
+/**
+ * The adapter versions whose installed hook behaviour `claude-hook-acceptance.yml` observes,
+ * each one installed and run there. Adding a version is a reviewed change to both.
+ */
+export const CLAUDE_HOOK_VERIFIED_ADAPTERS: readonly string[] = ["0.109.1"];
 
-/** Whether `version` (`x.y.z`, any suffix ignored) is at least `min`. Unparseable is not. */
-export function versionAtLeast(version: string, min: string): boolean {
-  const parse = (v: string) => /^(\d+)\.(\d+)\.(\d+)/.exec(v)?.slice(1, 4).map(Number);
-  const a = parse(version);
-  const b = parse(min);
-  if (!a || !b) return false;
-  for (let i = 0; i < 3; i++) if (a[i]! !== b[i]!) return a[i]! > b[i]!;
-  return true;
-}
+/** The platforms (`process.platform`) that workflow runs the acceptance test on. */
+export const CLAUDE_HOOK_VERIFIED_PLATFORMS: readonly NodeJS.Platform[] = ["linux"];
 
 /**
  * Where the hook program is, as built: `bin/claude-pre-tool-hook.js` beside this module in
@@ -76,9 +75,11 @@ export interface ClaudeHookSessionOptions {
   /** The runtime and the hook program, both absolute. No program: a Claude session is refused. */
   runtime: string;
   script: string | undefined;
+  /** The platform the agent runs on; `process.platform` unless a test says otherwise. */
+  platform?: NodeJS.Platform | undefined;
 }
 
-export type ClaudeHookStatus = "pending" | "installed" | "not-claude";
+export type ClaudeHookStatus = "pending" | "installed";
 
 export interface ClaudeHookSession {
   /** For `OpenSessionOptions.sessionMeta`. */
@@ -104,28 +105,30 @@ export function claudeHookSession(opts: ClaudeHookSessionOptions): ClaudeHookSes
       await rm(f, { force: true });
     },
     sessionMeta: async (agentInfo) => {
-      if (!agentInfo || !CLAUDE_ADAPTER_NAMES.includes(agentInfo.name)) {
-        status = "not-claude";
-        return undefined;
-      }
-      if (!versionAtLeast(agentInfo.version, CLAUDE_HOOK_MIN_ADAPTER))
-        throw new OrcaError(
+      const refuse = (why: string, details: Record<string, unknown> = {}) =>
+        new OrcaError(
           "NOT_SUPPORTED",
-          `agent ${opts.agentId} runs ${agentInfo.name} ${agentInfo.version}; ORCA's tool-call hook needs ${CLAUDE_HOOK_MIN_ADAPTER} or later. ` +
-            `Upgrade the adapter, or remove nativeToolHook: on from this agent to run it without ORCA checking every call.`,
+          `agent ${opts.agentId} has nativeToolHook: on, but ${why}, so ORCA cannot check its tool calls. ` +
+            `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
+          { agentId: opts.agentId, ...details },
+        );
+      if (!agentInfo) throw refuse("the agent did not say at initialize which adapter it is");
+      if (!CLAUDE_ADAPTER_NAMES.includes(agentInfo.name))
+        throw refuse(`it runs ${agentInfo.name}, which does not take ORCA's hook`, { adapter: agentInfo.name });
+      if (!CLAUDE_HOOK_VERIFIED_ADAPTERS.includes(agentInfo.version))
+        throw refuse(
+          `it runs ${agentInfo.name} ${agentInfo.version}, and ORCA has verified the hook only with ${CLAUDE_HOOK_VERIFIED_ADAPTERS.join(", ")}`,
+          { adapter: agentInfo.name, version: agentInfo.version, verified: [...CLAUDE_HOOK_VERIFIED_ADAPTERS] },
+        );
+      const platform = opts.platform ?? process.platform;
+      if (!CLAUDE_HOOK_VERIFIED_PLATFORMS.includes(platform))
+        throw refuse(
+          `ORCA has verified the hook only on ${CLAUDE_HOOK_VERIFIED_PLATFORMS.join(", ")}, not ${platform}`,
           {
-            agentId: opts.agentId,
-            adapter: agentInfo.name,
-            version: agentInfo.version,
-            minimum: CLAUDE_HOOK_MIN_ADAPTER,
+            platform,
           },
         );
-      if (opts.script === undefined)
-        throw new OrcaError(
-          "NOT_SUPPORTED",
-          `ORCA's tool-call hook program is missing from this build, so agent ${opts.agentId} cannot be guarded; remove nativeToolHook: on to run it without the hook`,
-          { agentId: opts.agentId },
-        );
+      if (opts.script === undefined) throw refuse("ORCA's hook program is missing from this build");
       const context: ClaudeHookContext = {
         version: 1,
         agentId: opts.agentId,
@@ -133,7 +136,12 @@ export function claudeHookSession(opts: ClaudeHookSessionOptions): ClaudeHookSes
         permissionFiles: [...opts.permissionFiles],
         workspaceCwd: opts.workspaceCwd,
         ...(opts.additionalDirectories?.length ? { additionalDirectories: [...opts.additionalDirectories] } : {}),
-        ...(opts.protectedPaths ? { protectedPaths: opts.protectedPaths } : {}),
+        // The hook program is read-only to the agent's native tools too, beside ORCA's own files.
+        protectedPaths: {
+          readOnly: [...(opts.protectedPaths?.readOnly ?? []), opts.script],
+          noAccess: [...(opts.protectedPaths?.noAccess ?? [])],
+          ...(opts.protectedPaths?.agentAreas ? { agentAreas: [...opts.protectedPaths.agentAreas] } : {}),
+        },
       };
       await mkdir(opts.contextDir, { recursive: true, mode: 0o700 });
       file = join(opts.contextDir, `${randomUUID()}.json`);

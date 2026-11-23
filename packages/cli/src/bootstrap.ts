@@ -289,7 +289,7 @@ export function makeWorkspaceProvider(
 export function makeSessionFactory(
   layout: OrcaFileLayout,
   open: SessionFactory = openAcpSession,
-  hook: { runtime: string; script: string | undefined } = {
+  hook: { runtime: string; script: string | undefined; platform?: NodeJS.Platform | undefined } = {
     runtime: process.execPath,
     script: claudePreToolHookScript(),
   },
@@ -300,7 +300,15 @@ export function makeSessionFactory(
   return async (options: OpenSessionOptions) => {
     const bound = { ...options, permissionFiles, protectedPaths };
     // ORCA's pre-tool hook (#704): decided per session, once the agent says who it is.
-    if (options.agent.nativeToolHook !== "on" || options.host.spec.type !== "local") return open(bound);
+    if (options.agent.nativeToolHook !== "on") return open(bound);
+    // The hook runs where the agent does; ORCA installs it only on its own host.
+    if (options.host.spec.type !== "local")
+      throw new OrcaError(
+        "NOT_SUPPORTED",
+        `agent ${options.agent.id} has nativeToolHook: on, but it runs on ${options.host.spec.type} host ${options.host.spec.id}, where ORCA cannot install its hook. ` +
+          `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
+        { agentId: options.agent.id, host: options.host.spec.id },
+      );
     const installed = claudeHookSession({
       agentId: options.agent.id,
       permissions: options.agent.permissions,
@@ -311,6 +319,7 @@ export function makeSessionFactory(
       contextDir,
       runtime: hook.runtime,
       script: hook.script,
+      platform: hook.platform,
     });
     let session: AgentSession;
     try {

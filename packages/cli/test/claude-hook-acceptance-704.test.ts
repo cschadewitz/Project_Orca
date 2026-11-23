@@ -17,8 +17,13 @@
  * - a hook that cannot start, crashes, exits with a code other than 0 or 2, times out, or
  *   prints JSON Claude Code cannot validate blocks the call (`onFailure: "block"` on the
  *   installed Claude Code);
- * - one gap, pinned rather than hidden: stdout that is not JSON at all, with exit 0, is read as
- *   plain text and the call goes ahead. ORCA's hook never prints that.
+ * - stdout that is not JSON at all, with exit 0, is read as plain text and the call goes
+ *   ahead. That is Claude Code's behaviour and is pinned here so a change is noticed; ORCA's
+ *   hook program cannot produce it: its output guard keeps anything but its answer off stdout
+ *   and blocks instead, which is observed here too, through the real Claude Code.
+ *
+ * It runs on Linux against each adapter version in `CLAUDE_HOOK_VERIFIED_ADAPTERS`, which are
+ * the only versions and the only platform ORCA installs the hook on.
  */
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -30,6 +35,8 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AgentSpecSchema, silentLogger } from "@orca/core";
 import {
+  CLAUDE_HOOK_VERIFIED_ADAPTERS,
+  CLAUDE_HOOK_VERIFIED_PLATFORMS,
   LocalHost,
   claudePreToolHookSettings,
   openAcpSession,
@@ -156,6 +163,8 @@ function modelStandIn(): Promise<{ server: Server; url: string }> {
 describe.skipIf(ADAPTER === undefined)("the hook in the real Claude Code (#704)", () => {
   let model: { server: Server; url: string };
   let hookScript: string;
+  /** ORCA's output guard with something printing on stdout before an "allow" answer. */
+  let strayScript: string;
   let root: string;
   let configDir: string;
   let workspace: string;
@@ -164,9 +173,13 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Claude Code (#704)"
   beforeAll(async () => {
     model = await modelStandIn();
     const entry = fileURLToPath(new URL("../../agents/src/bin/claude-pre-tool-hook.ts", import.meta.url));
-    const built = childBundle("claude-pre-tool-hook-acceptance-704", { entries: { hook: entry } })?.["hook"];
-    if (!built) throw new Error("the hook program could not be built for this run");
-    hookScript = built;
+    const stray = fileURLToPath(
+      new URL("../../agents/test/fixtures/hook-output-guard/stray-write.ts", import.meta.url),
+    );
+    const built = childBundle("claude-pre-tool-hook-acceptance-704", { entries: { hook: entry, stray } });
+    if (!built?.["hook"] || !built["stray"]) throw new Error("the hook program could not be built for this run");
+    hookScript = built["hook"];
+    strayScript = built["stray"];
   });
 
   afterAll(async () => {
@@ -230,6 +243,12 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Claude Code (#704)"
     });
 
   /* --------------------------------- the runs --------------------------------- */
+
+  it("runs an adapter version and a platform ORCA installs the hook on", async () => {
+    const pkg = JSON.parse(await readFile(join(ADAPTER!, "..", "..", "package.json"), "utf8")) as { version: string };
+    expect(CLAUDE_HOOK_VERIFIED_ADAPTERS).toContain(pkg.version);
+    expect(CLAUDE_HOOK_VERIFIED_PLATFORMS).toContain(process.platform);
+  });
 
   it("checks a remembered call every time, and asks through ORCA once the grant is revoked", async () => {
     asks.length = 0;
@@ -320,12 +339,34 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Claude Code (#704)"
     120_000,
   );
 
+  it("blocks a remembered call when something in ORCA's hook program prints on stdout", async () => {
+    const session = await openAcpSession({
+      host: new LocalHost({ id: "local", type: "local" }),
+      agent: agent({ default: "allow", rules: [] }),
+      cwd: workspace,
+      askPermission,
+      logger: silentLogger,
+      handshakeTimeoutMs: 60_000,
+      sessionMeta: async () => ({
+        claudeCode: {
+          options: { settings: claudePreToolHookSettings({ command: process.execPath, args: [strayScript] }) },
+        },
+      }),
+    });
+    try {
+      await session.prompt(CALL);
+      expect(await marks()).toBe(0);
+    } finally {
+      await session.close();
+    }
+  }, 120_000);
+
   /**
-   * Observed, not wanted: Claude Code reads stdout that does not parse as JSON as plain text,
-   * not as a failure, so a hook that exits 0 with garbage lets the call through. ORCA's hook
-   * never does that: it prints exactly one JSON decision or nothing, and every error of its
-   * own exits 2 (`claude-pre-tool-hook-704.test.ts`). This pins the installed behaviour so a
-   * change in it is noticed.
+   * Claude Code's own behaviour, pinned so a change in it is noticed: stdout that does not
+   * parse as JSON is read as plain text, not as a failure, so a program that exits 0 with
+   * garbage lets the call through. ORCA's hook program cannot do that: its output guard
+   * (`bin/hook-output-guard.ts`) turns any stdout but its answer into exit 2, as the test
+   * above shows through this same Claude Code.
    */
   it.each([
     ["truncated JSON", `process.stdout.write('{"continue": ')`],

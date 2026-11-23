@@ -4,10 +4,12 @@
 # the unit tests cannot: a natively remembered call still reaches ORCA's policy, a revoked
 # grant becomes a permission ask, and a failing hook blocks the call.
 #
-# CLAUDE_ADAPTER_VERSION is the adapter ORCA has qualified. Raising it is a reviewed change:
-# move the pin, see this pass, then raise CLAUDE_HOOK_MIN_ADAPTER in
-# packages/agents/src/claude-hook-session.ts to match. Weekly runs catch a change in behaviour
-# behind the same pin (its Claude Code is fixed by the adapter's exact SDK dependency).
+# CLAUDE_ADAPTER_VERSION is the adapter ORCA has verified; ORCA installs the hook with that
+# version only, and only on Linux (CLAUDE_HOOK_VERIFIED_ADAPTERS and
+# CLAUDE_HOOK_VERIFIED_PLATFORMS in packages/agents/src/claude-hook-session.ts; the suite
+# fails if the two disagree). Moving to another version is a reviewed change to both. Weekly
+# runs catch a change in behaviour behind the same pin (its Claude Code is fixed by the
+# adapter's exact SDK dependency).
 name: Claude hook acceptance
 
 on:
@@ -17,6 +19,8 @@ on:
       - packages/agents/src/claude-pre-tool-hook.ts
       - packages/agents/src/claude-hook-session.ts
       - packages/agents/src/bin/claude-pre-tool-hook.ts
+      - packages/agents/src/bin/hook-output-guard.ts
+      - packages/agents/test/fixtures/hook-output-guard/**
       - packages/agents/src/acp-session.ts
       - packages/agents/src/permissions.ts
       - packages/cli/src/bootstrap.ts

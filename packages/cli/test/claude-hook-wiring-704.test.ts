@@ -1,8 +1,9 @@
 /**
  * The session factory installs ORCA's Claude pre-tool hook (#704): it hands every local
- * session a `sessionMeta` that, once the agent turns out to be the Claude ACP adapter at a
- * qualified version, writes the hook's context file into the store's private directory and
- * returns the settings that run the hook with it. The real adapter and Claude Code are in
+ * session of an opted-in agent a `sessionMeta` that, once the agent turns out to be the Claude
+ * ACP adapter at a verified version, writes the hook's context file into the store's private
+ * directory and returns the settings that run the hook with it. Every opted-in session it
+ * cannot guard is refused, never opened without the hook. The real adapter and Claude Code are in
  * `claude-hook-acceptance-704.test.ts`; this is the wiring around them, with no agent.
  */
 import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
@@ -11,11 +12,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentSpecSchema, SshHostSchema } from "@orca/core";
 import {
-  CLAUDE_HOOK_MIN_ADAPTER,
+  CLAUDE_HOOK_VERIFIED_ADAPTERS,
   LocalHost,
   SshHost,
   permissionPolicyPath,
-  versionAtLeast,
   type AgentHost,
   type AgentSession,
   type OpenSessionOptions,
@@ -27,7 +27,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
 
-const CLAUDE = { name: "@agentclientprotocol/claude-agent-acp", version: CLAUDE_HOOK_MIN_ADAPTER };
+const CLAUDE = { name: "@agentclientprotocol/claude-agent-acp", version: CLAUDE_HOOK_VERIFIED_ADAPTERS[0]! };
 
 /** A factory over a fake `open` that calls `sessionMeta` the way `openAcpSession` does. */
 async function setup(
@@ -35,20 +35,23 @@ async function setup(
   agent: Record<string, unknown> = {},
   /** `null`: a build with no hook program. */
   script: string | null = "/opt/orca/claude-pre-tool-hook.mjs",
+  platform: NodeJS.Platform = "linux",
 ) {
   const dir = await mkdtemp(join(tmpdir(), "orca-704-wiring-"));
   dirs.push(dir);
+  let opened = 0;
   let resolveClosed!: () => void;
   const closed = new Promise<void>((r) => (resolveClosed = r));
   const seen: { options?: OpenSessionOptions; meta?: Record<string, unknown> | undefined } = {};
   const factory = makeSessionFactory(
     { configDir: dir, storeDir: ".orca" },
     async (options) => {
+      opened++;
       seen.options = options;
       seen.meta = await options.sessionMeta?.(agentInfo);
       return { closed, close: async () => undefined } as unknown as AgentSession;
     },
-    { runtime: "/usr/bin/node", script: script ?? undefined },
+    { runtime: "/usr/bin/node", script: script ?? undefined, platform },
   );
   const open = (host: AgentHost = new LocalHost({ id: "local", type: "local" })) =>
     factory({
@@ -63,7 +66,7 @@ async function setup(
       cwd: join(dir, "work"),
     });
   const hookDir = join(dir, ".orca", "private-execution", "tool-hooks");
-  return { dir, open, seen, hookDir, resolveClosed };
+  return { dir, open, seen, hookDir, resolveClosed, opened: () => opened };
 }
 
 describe("installing the hook", () => {
@@ -80,7 +83,14 @@ describe("installing the hook", () => {
       permissions: { rules: [{ match: { kind: "execute", titlePattern: "^ls$" }, decision: "allow" }] },
       permissionFiles: [permissionPolicyPath(t.dir)],
       workspaceCwd: join(t.dir, "work"),
-      protectedPaths: orcaProtectedPaths({ configDir: t.dir, storeDir: ".orca" }),
+      protectedPaths: {
+        ...orcaProtectedPaths({ configDir: t.dir, storeDir: ".orca" }),
+        // The hook program itself is read-only to the agent's native tools.
+        readOnly: [
+          ...orcaProtectedPaths({ configDir: t.dir, storeDir: ".orca" }).readOnly,
+          "/opt/orca/claude-pre-tool-hook.mjs",
+        ],
+      },
     });
     // The context lives under a directory no agent may read (C4-01).
     expect(orcaProtectedPaths({ configDir: t.dir, storeDir: ".orca" }).noAccess).toContain(
@@ -123,18 +133,33 @@ describe("installing the hook", () => {
     expect(await readdir(t.hookDir)).toEqual([]);
   });
 
-  it("sends nothing to an agent that is not the Claude adapter", async () => {
-    const t = await setup({ name: "orca-scripted-agent", version: "1.0.0" });
-    await t.open();
-    expect(t.seen.meta).toBeUndefined();
+  it.each([
+    ["another adapter", { name: "orca-scripted-agent", version: "1.0.0" }, "does not take ORCA's hook"],
+    ["an agent that does not say who it is", undefined, "did not say"],
+    [
+      "a Claude adapter older than the verified one",
+      { name: "@agentclientprotocol/claude-agent-acp", version: "0.95.0" },
+      "verified the hook only with",
+    ],
+    [
+      "a Claude adapter newer than the verified one",
+      { name: "@agentclientprotocol/claude-agent-acp", version: "9.0.0" },
+      "verified the hook only with",
+    ],
+  ])("refuses %s, writes nothing, and says how to opt out", async (_what, info, why) => {
+    const t = await setup(info);
+    await expect(t.open()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringMatching(new RegExp(`${why}[\\s\\S]*nativeToolHook: on`)),
+    });
     await expect(readdir(t.hookDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("refuses an adapter older than the qualified minimum, and says how to opt out", async () => {
-    const t = await setup({ name: CLAUDE.name, version: "0.95.0" });
+  it("refuses a platform the acceptance test does not cover", async () => {
+    const t = await setup(CLAUDE, {}, "/opt/orca/claude-pre-tool-hook.mjs", "win32");
     await expect(t.open()).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      message: expect.stringContaining("nativeToolHook: on"),
+      message: expect.stringContaining("not win32"),
     });
     await expect(readdir(t.hookDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -144,29 +169,24 @@ describe("installing the hook", () => {
     await expect(t.open()).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
   });
 
-  it("installs nothing unless the agent opts in, or for one on another host", async () => {
-    for (const choice of [{ nativeToolHook: "off" }, { nativeToolHook: undefined }]) {
-      const off = await setup(CLAUDE, choice);
-      await off.open();
-      expect(off.seen.options?.sessionMeta).toBeUndefined();
-    }
-
+  it("refuses an opted-in agent on another host before anything starts", async () => {
     const remote = await setup(CLAUDE);
-    await remote.open(new SshHost(SshHostSchema.parse({ id: "box", type: "ssh", host: "box.example" })));
-    expect(remote.seen.options?.sessionMeta).toBeUndefined();
+    await expect(
+      remote.open(new SshHost(SshHostSchema.parse({ id: "box", type: "ssh", host: "box.example" }))),
+    ).rejects.toMatchObject({ code: "NOT_SUPPORTED", message: expect.stringContaining("nativeToolHook: on") });
+    expect(remote.opened()).toBe(0);
   });
-});
 
-describe("versionAtLeast", () => {
-  it.each([
-    ["0.109.1", "0.109.1", true],
-    ["0.110.0", "0.109.1", true],
-    ["1.0.0", "0.109.1", true],
-    ["0.109.0", "0.109.1", false],
-    ["0.95.9", "0.109.1", false],
-    ["0.109.1-beta.1", "0.109.1", true],
-    ["garbage", "0.109.1", false],
-  ])("%s >= %s is %s", (v, min, expected) => {
-    expect(versionAtLeast(v, min)).toBe(expected);
+  it("installs nothing and refuses nothing unless the agent opts in", async () => {
+    for (const choice of [{ nativeToolHook: "off" }, { nativeToolHook: undefined }]) {
+      for (const info of [CLAUDE, { name: "orca-scripted-agent", version: "1.0.0" }, undefined]) {
+        const off = await setup(info, choice);
+        await off.open();
+        expect(off.seen.options?.sessionMeta).toBeUndefined();
+      }
+      const remote = await setup(CLAUDE, choice);
+      await remote.open(new SshHost(SshHostSchema.parse({ id: "box", type: "ssh", host: "box.example" })));
+      expect(remote.seen.options?.sessionMeta).toBeUndefined();
+    }
   });
 });

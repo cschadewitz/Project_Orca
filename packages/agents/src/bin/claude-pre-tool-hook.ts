@@ -7,7 +7,11 @@
  * go wrong ends in exit 2, which Claude Code treats as a block: stdin larger than the limit
  * (refused as soon as the count passes it, before anything is parsed), a read error, or
  * anything thrown that the run did not already turn into an answer.
+ *
+ * `hook-output-guard.js` comes first, before any other module runs: it keeps everything but
+ * the answer off stdout, and makes every way out other than the answer exit 2.
  */
+import { answer } from "./hook-output-guard.js";
 import {
   CLAUDE_PRE_TOOL_FRAME_LIMIT,
   claudePreToolHookFailure,
@@ -40,6 +44,4 @@ const result = await readInput().then(
       ? { exitCode: 2 as const, stdout: "", stderr: `Blocked by ORCA: ${error.message}.\n` }
       : claudePreToolHookFailure(error),
 );
-process.stdout.write(result.stdout);
-process.stderr.write(result.stderr);
-process.exitCode = result.exitCode;
+answer(result);

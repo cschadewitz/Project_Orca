@@ -332,19 +332,27 @@ call against the same three layers as above, read fresh each time:
 | `ask` | Claude asks even if it remembers a grant, and the ask comes to ORCA like any other |
 | `deny` | The call does not run |
 
-ORCA's own files are refused to Claude's built-in tools as well, and a hook that cannot
-decide (it cannot start, crashes, times out or answers garbage) blocks the call. An allowed
-call whose working directory is outside the workspace is asked about.
+ORCA's own files, and the hook program itself, are refused to Claude's built-in tools as
+well, and a hook that cannot decide (it cannot start, crashes, times out, or prints anything
+but its answer) blocks the call. An allowed call whose working directory is outside the
+workspace is asked about.
 
 With the hook on, calls Claude used to run by its own allow rules follow ORCA's instead, so
 an unattended run may meet asks it did not before; give the agent `rules:` for them.
 
-The hook needs `@agentclientprotocol/claude-agent-acp` **0.109.1** or later: with
-`nativeToolHook: on`, ORCA refuses to open a session with an older adapter rather than run it
-looking guarded. Without it (or with `off`), no hook is installed.
+`nativeToolHook: on` is a promise that the agent's calls are checked, so ORCA opens the
+session only where it has tested the hook and **refuses it everywhere else**, rather than run
+it unguarded:
 
-Other agents (Codex, Gemini, pi) and agents on SSH hosts get no hook yet: ORCA decides only
-what they ask about (#705).
+- the adapter must be `@agentclientprotocol/claude-agent-acp` at a version ORCA has verified
+  (today **0.109.1** exactly), and must say so when it starts;
+- the agent must run on the daemon's own machine, on Linux.
+
+Each is what ORCA's acceptance test runs against the real Claude Code. Without
+`nativeToolHook: on` (or with `off`), no hook is installed and nothing is refused.
+
+Other agents (Codex, Gemini, pi) take no hook yet (#705): with `nativeToolHook: on` they are
+refused; without it, ORCA decides only what they ask about.
 
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive
