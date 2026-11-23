@@ -591,6 +591,10 @@ function applyOne(document: Document, graphs: DraftLayout["graphs"], op: DraftOp
     if (op.name !== undefined) document.set("name", op.name);
     if (op.description === null) document.delete("description");
     else if (op.description !== undefined) document.set("description", op.description);
+    // An empty scope is no scope: removing it keeps the file what a person would write.
+    if (op.capabilities === null || (op.capabilities && Object.keys(op.capabilities).length === 0))
+      document.delete("capabilities");
+    else if (op.capabilities !== undefined) document.set("capabilities", op.capabilities);
     return;
   }
   const prefix = graphPrefix(document, op.graph);

@@ -10,7 +10,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConfigModel } from "../src/config-model.js";
 import { nextWorkflowVersion, WorkflowDraftService, type DraftCaller } from "../src/workflow-drafts.js";
-import type { ConfigApplyResult } from "@orca/protocol";
+import { parse } from "yaml";
+import { DraftOperationSchema, type ConfigApplyResult } from "@orca/protocol";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -238,6 +239,35 @@ describe("editing", () => {
     ]);
     expect(view.issues[0]).not.toHaveProperty("node");
     expect(view.publishBlocked).toBe("1 validation error to fix before publishing.");
+  });
+
+  it("sets and removes the workflow's capability scope, keeping the rest of the file (#335)", async () => {
+    const f = await fixture();
+    await f.service.open("tiny", casey);
+    const scoped = await f.service.apply(
+      {
+        workflowId: "tiny",
+        expectedRevision: 0,
+        ops: [{ op: "setWorkflow", capabilities: { skills: { disable: ["review"] } } }],
+      },
+      casey,
+    );
+    expect(parse(scoped.text)).toMatchObject({ capabilities: { skills: { disable: ["review"] } } });
+    expect(scoped.text).toContain("# The one step.");
+    const cleared = await f.service.apply(
+      { workflowId: "tiny", expectedRevision: scoped.revision, ops: [{ op: "setWorkflow", capabilities: null }] },
+      casey,
+    );
+    expect(cleared.text).toBe(TINY);
+    const emptied = await f.service.apply(
+      { workflowId: "tiny", expectedRevision: cleared.revision, ops: [{ op: "setWorkflow", capabilities: {} }] },
+      casey,
+    );
+    expect(parse(emptied.text)).not.toHaveProperty("capabilities");
+    // Shape is checked at the wire: an unknown selection verb is refused, not written.
+    expect(
+      DraftOperationSchema.safeParse({ op: "setWorkflow", capabilities: { skills: { available: ["x"] } } }).success,
+    ).toBe(false);
   });
 
   it("keeps a drag in the layout and out of the workflow text", async () => {

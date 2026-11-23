@@ -215,6 +215,11 @@
   gap: var(--space-2);
   padding: var(--space-1) 0;
 }
+/* A capability scope (#335): one block per kind, its id lists as rows. */
+.orca-wfedit__capabilities {
+  display: grid;
+  gap: var(--space-2);
+}
 .orca-wfedit__textarea {
   width: 100%;
   resize: vertical;

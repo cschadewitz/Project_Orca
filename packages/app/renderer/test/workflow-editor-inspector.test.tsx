@@ -62,8 +62,10 @@ function mount(
     graph?: EditorGraph;
     path?: DraftGraphPath;
     issues?: DraftIssue[];
-    workflow?: { name?: string; description?: string } | undefined;
+    workflow?: { name?: string; description?: string; capabilities?: unknown } | undefined;
     apply?: boolean;
+    capabilityChoices?: { mcpServers: string[]; skills: string[] };
+    workflowScope?: boolean;
   } = {},
 ) {
   const onApply = vi.fn(async () => options.apply ?? true);
@@ -92,6 +94,8 @@ function mount(
         readOnly={options.readOnly ?? false}
         workflow={"workflow" in options ? options.workflow : { name: "Flow" }}
         workflows={["other", "triage"]}
+        {...(options.capabilityChoices ? { capabilityChoices: options.capabilityChoices } : {})}
+        {...(options.workflowScope === undefined ? {} : { workflowScope: options.workflowScope })}
         onApply={onApply}
         onSelect={onSelect}
         onOpenNested={onOpenNested}
@@ -401,6 +405,81 @@ describe("a node", () => {
     expect(document.activeElement).toBe(field("Id"));
     act(() => ref.current!.openConnect());
     expect(screen.getByRole("menu", { name: "Connect to" })).toBeTruthy();
+  });
+});
+
+describe("capability scopes (#335)", () => {
+  const choices = { mcpServers: ["db", "github"], skills: ["review"] };
+  it("turns a catalog server on for an agent step, and removes it again", () => {
+    const { onApply } = node("plan", { capabilityChoices: choices });
+    choose("Add to plan MCP servers Turn on", "github");
+    expect(onApply).toHaveBeenLastCalledWith([
+      { op: "updateNode", id: "plan", set: { capabilities: { mcpServers: { enable: ["github"] } } } },
+    ]);
+  });
+  it("edits an existing node scope by removal and typed ids, unsetting an emptied scope", () => {
+    const graph = editorGraph(
+      {
+        ...draft,
+        nodes: { ...draft.nodes, plan: { ...draft.nodes.plan, capabilities: { skills: { disable: ["review"] } } } },
+      },
+      published,
+      [],
+    )!;
+    const { onApply } = node("plan", { graph });
+    enter(screen.getByRole("textbox", { name: "Type an id for plan MCP servers Turn off" }), "notes");
+    expect(onApply).toHaveBeenLastCalledWith([
+      {
+        op: "updateNode",
+        id: "plan",
+        set: { capabilities: { mcpServers: { disable: ["notes"] }, skills: { disable: ["review"] } } },
+      },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Remove review from plan Skills Turn off" }));
+    expect(onApply).toHaveBeenLastCalledWith([{ op: "updateNode", id: "plan", unset: ["capabilities"] }]);
+  });
+  it("leaves a scope it cannot show faithfully to YAML", () => {
+    const graph = editorGraph(
+      { ...draft, nodes: { ...draft.nodes, plan: { ...draft.nodes.plan, capabilities: { tools: ["x"] } } } },
+      published,
+      [],
+    )!;
+    node("plan", { graph });
+    expect(screen.queryByRole("group", { name: "plan capabilities" })).toBeNull();
+    expect((field("Capabilities") as HTMLTextAreaElement).value).toContain("tools");
+  });
+  it("sets and clears the workflow's own scope, and says when the daemon cannot take it", () => {
+    const { onApply } = mount({
+      workflow: { name: "Flow", capabilities: { skills: { replace: ["review"] } } },
+      capabilityChoices: choices,
+    });
+    choose("Add to Workflow MCP servers Turn off", "db");
+    expect(onApply).toHaveBeenLastCalledWith([
+      { op: "setWorkflow", capabilities: { mcpServers: { disable: ["db"] }, skills: { replace: ["review"] } } },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Remove review from Workflow Skills Use only" }));
+    expect(onApply).toHaveBeenLastCalledWith([{ op: "setWorkflow", capabilities: null }]);
+    cleanup();
+    mount({ workflowScope: false });
+    expect(screen.getByText(/needs a newer daemon/)).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Workflow capabilities" })).toBeNull();
+  });
+  it("shows scopes read-only on somebody else's draft", () => {
+    node("plan", {
+      readOnly: true,
+      graph: editorGraph(
+        {
+          ...draft,
+          nodes: { ...draft.nodes, plan: { ...draft.nodes.plan, capabilities: { mcpServers: { enable: ["db"] } } } },
+        },
+        published,
+        [],
+      )!,
+    });
+    const group = screen.getByRole("group", { name: "plan capabilities" });
+    expect(group.textContent).toContain("db");
+    expect(within(group).queryAllByRole("button")).toHaveLength(0);
+    expect(within(group).queryAllByRole("textbox")).toHaveLength(0);
   });
 });
 
