@@ -17,6 +17,8 @@ const route: Record<FirstRunAgentCheck["evidence"]["configuredRoute"], string> =
   "claude-code-acp-candidate":
     "Configured command name suggests a Claude Code ACP adapter; installed identity is unverified.",
   "codex-acp-candidate": "Configured command name suggests a Codex ACP bridge; installed identity is unverified.",
+  "opencode-acp-candidate":
+    "Configured command suggests OpenCode's ACP server. ORCA opens only the exact OpenCode 1.19.4 build with an isolated profile and checks both when the agent starts; see the agent support guide.",
   unverified:
     "Configured agent route is unverified. Review the command and required ACP adapter in Config with an operator.",
 };

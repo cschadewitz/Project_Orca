@@ -264,7 +264,7 @@ describe("inactive launch profile", () => {
     expect(profile.permissions.default).toBeUndefined();
     expect(profile.mcpServers).toEqual([]);
     for (const loaded of ["examples/orca.config.yaml", "packages/app/src/first-run-contract.ts"])
-      expect(readFileSync(new URL(loaded, repoRoot), "utf8").toLowerCase(), loaded).not.toContain("opencode-acp");
+      expect(readFileSync(new URL(loaded, repoRoot), "utf8").toLowerCase(), loaded).not.toContain("opencode-acp-710");
   });
 
   it("isolates every configuration layer it can and neutralizes inherited overrides", () => {

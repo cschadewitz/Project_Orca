@@ -4,10 +4,15 @@ import { access, lstat, open, realpath } from "node:fs/promises";
 import { delimiter, isAbsolute, join, win32 } from "node:path";
 import type { FirstRunAgentCheck } from "../../first-run-contract.js";
 /** Configured basename is a routing hint, never executable/artifact/source correspondence. */
-function configuredRoute(command: string): FirstRunAgentCheck["evidence"]["configuredRoute"] {
+function configuredRoute(
+  command: string,
+  args: readonly string[] = [],
+): FirstRunAgentCheck["evidence"]["configuredRoute"] {
   const name = win32.basename(command).replace(/\.exe$/i, "");
   if (name === "claude-code-acp") return "claude-code-acp-candidate";
   if (name === "codex-acp") return "codex-acp-candidate";
+  // OpenCode is one executable; only its `acp` subcommand speaks ACP (#710).
+  if (name === "opencode" && args[0] === "acp") return "opencode-acp-candidate";
   return "unverified";
 }
 /** Only a complete known thin Mach-O header can establish this narrow negative observation. */
@@ -21,13 +26,14 @@ export function machOArchitectureMismatch(header: Buffer, platform: string, arch
 export async function inspectLocalTool(agent: {
   id: string;
   command: string;
+  args?: readonly string[];
   env: Record<string, string>;
 }): Promise<FirstRunAgentCheck> {
   const result = (state: FirstRunAgentCheck["state"]): FirstRunAgentCheck => ({
     agentId: agent.id,
     state,
     evidence: {
-      configuredRoute: configuredRoute(agent.command),
+      configuredRoute: configuredRoute(agent.command, agent.args),
       support: "unknown",
       version: "unknown",
       architecture: state === "architecture" ? "mismatch" : "unknown",

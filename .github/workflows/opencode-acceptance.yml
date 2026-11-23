@@ -1,0 +1,74 @@
+# OpenCode acceptance (#710): ORCA's ACP session and the OpenCode provider guard against the real
+# OpenCode 1.19.4 binary, on each platform the guard admits. The binary is the npm platform
+# package, checked against the integrity pinned in docs/preparation/opencode-acp-710/source-pins.json
+# and extracted without running any package script. The model is a scripted stand-in on loopback
+# (packages/agents/test/opencode-acceptance-710.test.ts): no account, key or spend.
+name: OpenCode acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/agents/src/providers/**
+      - packages/agents/src/acp-session.ts
+      - packages/agents/src/permissions.ts
+      - packages/agents/test/opencode-acceptance-710.test.ts
+      - docs/preparation/opencode-acp-710/**
+      - .github/workflows/opencode-acceptance.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  accept:
+    name: opencode 1.19.4 (${{ matrix.package }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            package: opencode-linux-x64
+          - runner: macos-14
+            package: opencode-darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Download and verify the pinned OpenCode build
+        shell: bash
+        env:
+          PKG: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          want=$(node -e 'const p=require("./docs/preparation/opencode-acp-710/source-pins.json");const x=(p.npm?.packages??p.provider?.npm?.packages??[]).find(e=>e.name===process.env.PKG);if(!x)process.exit(1);console.log(x.integrity)')
+          dir="$RUNNER_TEMP/opencode"; mkdir -p "$dir/x"
+          curl -fsSL -o "$dir/pkg.tgz" "https://registry.npmjs.org/$PKG/-/$PKG-1.19.4.tgz"
+          got="sha512-$(openssl dgst -sha512 -binary "$dir/pkg.tgz" | base64 | tr -d '\n')"
+          if [ "$got" != "$want" ]; then echo "::error::$PKG integrity mismatch: $got"; exit 1; fi
+          tar -xzf "$dir/pkg.tgz" -C "$dir/x"
+          install -m 0555 "$dir/x/package/bin/opencode" "$dir/opencode"
+          shasum -a 256 "$dir/opencode"
+          echo "ORCA_OPENCODE_BIN=$dir/opencode" >> "$GITHUB_ENV"
+
+      - name: Run the acceptance suite
+        shell: bash
+        env:
+          ORCA_REQUIRE_OPENCODE: "1"
+        run: |
+          set -euo pipefail
+          npx vitest run packages/agents/test/opencode-acceptance-710.test.ts --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/opencode.json"
+          node -e 'const r=require(process.argv[1]);const s=r.numPendingTests+r.numTodoTests;if(s||!r.numPassedTests){console.error(`skipped ${s}, passed ${r.numPassedTests}`);process.exit(1)}' "$RUNNER_TEMP/opencode.json"

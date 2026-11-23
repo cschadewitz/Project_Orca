@@ -37,6 +37,7 @@ import { parse as parseYaml } from "yaml";
 import {
   AgentRegistry,
   openAcpSession,
+  withProviderGuards,
   permissionPolicyPath,
   type OpenSessionOptions,
   type ProtectedPaths,
@@ -286,7 +287,9 @@ export function makeWorkspaceProvider(
 export function makeSessionFactory(layout: OrcaFileLayout, open: SessionFactory = openAcpSession): SessionFactory {
   const permissionFiles = [permissionPolicyPath(layout.configDir)];
   const protectedPaths = orcaProtectedPaths(layout);
-  return (options: OpenSessionOptions) => open({ ...options, permissionFiles, protectedPaths });
+  // Provider-specific launch checks and session guards (#709): Copilot CLI and the like.
+  const guarded = withProviderGuards(open);
+  return (options: OpenSessionOptions) => guarded({ ...options, permissionFiles, protectedPaths });
 }
 
 /** Where one config directory keeps ORCA's own files. */
