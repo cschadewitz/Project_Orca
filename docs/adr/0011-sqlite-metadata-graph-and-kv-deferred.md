@@ -56,7 +56,7 @@ on behalf of agents. The budgets follow from that, not from what any backend hap
 | Metadata writes, 16 concurrent writers | ≥ 500 committed ops/s, p95 ≤ 50 ms | large |
 | Streamed appends, sustained | ≥ 1,000 appends/s, no append over 250 ms | all |
 | Projection rebuild after cache loss | ≤ 5 s (≤ 1 s at medium) | large |
-| Write-ahead log under ORCA's own reads | ≤ 64 MiB (`walLimitBytes`) | all |
+| Write-ahead log file peak, the daemon's own read patterns (as benchmarked) | ≤ 64 MiB | all |
 | Memory growth of a workload (RSS delta) | ≤ 512 MB | large |
 | Durability | An acknowledged write survives process kill and power loss on storage that honours flushes | — |
 | Recovery | Reopening after a kill needs no manual step; ≤ 5 s | large |
@@ -108,8 +108,12 @@ phase the store's idle checkpoint reported copying the whole log back. The slowe
 in any phase at any scale was 201 ms (small scale, short reads back to back), inside the 250 ms
 budget but close enough to watch. Only a reader that holds a
 snapshot open essentially all the time keeps the log from ever starting over; once it stops, the
-idle checkpoint copies everything back and the next write cuts the file to `walLimitBytes`. No
-ORCA component reads that way: the daemon's reads are synchronous and never overlap a commit.
+idle checkpoint copies everything back and the next write cuts the file back to `walLimitBytes`
+(the size SQLite keeps after the log starts over; it does not limit the peak). The daemon's own
+reads are synchronous and never overlap a commit. A supported `orca store sqlite backup` does hold
+one snapshot for as long as its `VACUUM INTO` runs, so a long backup during heavy writes grows the
+log for that long ([SQLite guide, Engine and settings: Checkpoints](../storage/sqlite-metadata.md#engine-and-settings)); that
+case is not benchmarked here.
 
 **Against the budgets:**
 
@@ -123,8 +127,9 @@ ORCA component reads that way: the daemon's reads are synchronous and never over
   process, so garbage collection can move it either way; it is an indication, not a peak.
 - **Checkpoints.** In run 45139685534's reports, every `walUnderLoad` phase at every scale has
   `afterLoad.fullyCheckpointed: true` (the store's own idle checkpoint reported, not busy, as many
-  pages checkpointed as were in the log) and every check true. The log budget holds for every
-  read pattern ORCA produces.
+  pages checkpointed as were in the log) and every check true. The log budget holds for the
+  daemon read patterns benchmarked (none, polling, short reads back to back, 100 ms snapshots
+  10 ms apart). It is not shown for a backup running during heavy writes.
 - **Durability, demonstrated only for process kill.** The #339 kill-at-each-commit-boundary tests
   show no acknowledged write is lost and reopening needs no manual step when the process is
   killed. Surviving power loss rests on `synchronous = FULL` and storage that honours flushes; no
@@ -175,15 +180,24 @@ is added.
   cache adopted then must be rebuildable from SQLite and tested after deletion, as the
   `projectionRebuild` workload already does for the current cache.
 
-### SQLite's write-ahead log under a pinned outside reader: a recorded limit
+### SQLite's write-ahead log while a snapshot is pinned: a recorded limit
 
-The log stays within `walLimitBytes` under every read pattern ORCA produces. A reader in another
-process holding a snapshot open without pause can grow it without bound (1.1 GB in 20 s on the
-reference machine) until it stops. This is SQLite's documented behaviour, not a defect, and no
-ORCA command reads that way. It is recorded here as an operating limit. **Reconsider when** an
-ORCA component or supported tool reads the store from another process for longer than the idle
-window at a time; the remedy then is a restart checkpoint once the log passes `walLimitBytes`
-(waiting for readers, never on the write path), scoped as its own change.
+Under the daemon read patterns benchmarked, the log file peaks at 4 to 16 MB. While a reader holds
+a snapshot open, the log cannot start over and grows for as long as writes continue;
+`walLimitBytes` only sets the size kept after it does start over, not a ceiling on the peak. The
+synthetic `pinnedSnapshot` phase (a reader on another connection holding 100 ms snapshots with no
+pause) shows the scale of it: 1.1 GB in 20 s at the large scale's append rate. That figure is an
+illustration of the mechanism, **not a disk budget for backups**: a supported
+`orca store sqlite backup` pins the log for the length of its `VACUUM INTO`, and how far the log
+grows then depends on the backup's length and the write rate at the time, which no workload here
+measures (see the [SQLite guide, Engine and settings: Checkpoints](../storage/sqlite-metadata.md#engine-and-settings)).
+This is SQLite's documented behaviour, not a defect, and is recorded as an operating limit.
+
+**Reconsider when** a backup-during-writes workload is added and shows the log growing past what
+a host can spare, or an ORCA component or supported tool starts reading the store from another
+process for longer than the idle window at a time. The remedy then is a restart checkpoint once
+the log passes `walLimitBytes` (waiting for readers, never on the write path), or bounding a
+backup's snapshot, scoped as its own change.
 
 ## Consequences
 

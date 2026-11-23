@@ -73,10 +73,11 @@ files.
     log back, and the next write starts the log over and cuts the file back to
     `walLimitBytes`.
 
-  Nothing in ORCA reads that way today: the daemon's own reads never overlap a commit, and
-  `orca store sqlite backup` holds one snapshot only while `VACUUM INTO` runs. A long backup
-  or another tool reading continuously beside a busy daemon would grow the log for that
-  long. The size is measured on the reference machine in every benchmark run, and
+  The daemon's own reads never overlap a commit. `orca store sqlite backup` does hold one
+  snapshot for as long as its `VACUUM INTO` runs, so a long backup during heavy writes grows
+  the log for that long, by an amount that depends on the backup's length and the write rate;
+  no workload measures that case yet, and the synthetic figures above are not a disk budget
+  for it. The benchmarked patterns are measured on the reference machine in every run, and
   [ADR 0011](../adr/0011-sqlite-metadata-graph-and-kv-deferred.md) records it as an operating
   limit with the trigger for bounding it (a restart checkpoint once the log passes
   `walLimitBytes`, at the cost of waiting for readers).
