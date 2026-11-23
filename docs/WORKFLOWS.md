@@ -408,6 +408,8 @@ another ORCA daemon, which runs a named workflow there as one of its own runs (#
 remote is reached over SSH with the same tunnel the desktop app's SSH profiles use (#874):
 typed fields only, no ssh config file read. A remote takes delegated steps only once it is
 enrolled, and only over the host keys and with the credential enrollment recorded.
+[Running across machines](MULTI-MACHINE.md) compares this with SSH-hosted agents and the
+app watching several daemons, with a worked worker and parent config.
 
 ```yaml
 remotes:

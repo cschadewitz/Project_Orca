@@ -4,6 +4,10 @@
 # against a stand-in updater. The main check runs the same files but skips the SSH cases where the
 # runner has no sshd; this job, on a GitHub-hosted Linux runner, installs it and sets
 # ORCA_REQUIRE_SSHD=1 so a missing or broken sshd fails instead of skipping.
+#
+# The machines job (#885 phase 2) runs the same delegation across separate machines: it builds
+# this checkout's server bundle, installs it in Ubuntu 24.04 containers on a private Docker
+# network, and has a parent daemon delegate to a worker over the worker's own sshd.
 name: Two daemons
 
 on:
@@ -11,8 +15,14 @@ on:
     branches: [main]
     paths:
       - packages/testing/src/two-daemons.ts
+      - packages/testing/src/two-machines.ts
+      - packages/testing/machine/**
       - packages/testing/test/two-daemons.test.ts
       - packages/cli/test/delegation-883.test.ts
+      - packages/cli/test/delegation-machines-885.test.ts
+      - packages/engine/src/session-slots.ts
+      - packages/app/scripts/build-daemon.js
+      - tools/deploy/server-bundle.py
       - packages/app/test/server-update-ssh.test.ts
       - packages/app/src/server-update.ts
       - packages/app/src/main/server-update.ts
@@ -64,3 +74,26 @@ jobs:
         env:
           ORCA_REQUIRE_SSHD: "1"
         run: pnpm exec vitest run packages/cli/test/delegation-883.test.ts
+
+  machines:
+    name: two machines in containers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      # The fixture bundles the daemon from the compiled packages, as the release does.
+      - run: pnpm run build
+      - name: A parent and a worker on separate machines, over the worker's sshd
+        env:
+          ORCA_TWO_MACHINES: "1"
+        run: pnpm exec vitest run packages/cli/test/delegation-machines-885.test.ts
