@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { AuthorityCapabilityScopeSchema } from "./capabilities.js";
 import { EnvSchema } from "./secrets.js";
+import { AgentDiagnosticsSchema } from "./tool-telemetry.js";
 import { neutralPart, parseCommand, parseCommandPattern, quoteWord } from "./command-words.js";
 
 // Scoped capabilities (#335) belong with the agent model they select for.
@@ -944,6 +945,11 @@ export const AgentSpecSchema = z
      * provider or account that limits concurrent use. Absent means unlimited, the default.
      */
     maxSessions: z.number().int().positive().optional(),
+    /**
+     * Diagnostics ORCA keeps about this agent's work (#1000). Absent, or every option `off`,
+     * keeps nothing beyond the run log. See `AgentDiagnosticsSchema`.
+     */
+    diagnostics: AgentDiagnosticsSchema.optional(),
   })
   .superRefine((agent, ctx) => {
     if (agent.type === "acp") {
@@ -977,6 +983,12 @@ export const AgentSpecSchema = z
         code: "custom",
         path: [agent.mcpServers.length > 0 ? "mcpServers" : "capabilities"],
         message: "an orca-daemon agent runs the remote daemon's own agents; give capabilities to those",
+      });
+    if (agent.diagnostics?.toolCalls === "keep")
+      ctx.addIssue({
+        code: "custom",
+        path: ["diagnostics", "toolCalls"],
+        message: "an orca-daemon agent runs the remote daemon's own agents; keep their tool calls on the remote daemon",
       });
   });
 export type AgentSpec = z.infer<typeof AgentSpecSchema>;
