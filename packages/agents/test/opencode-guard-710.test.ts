@@ -17,6 +17,7 @@ import {
   openCodeConfigProblems,
   openCodeGuard,
   openCodePolicyProblems,
+  openCodeProfileDirProblems,
   openCodeProfileProblems,
   providerGuardFor,
   openCodeSlashCommand,
@@ -220,6 +221,38 @@ describe("OpenCode's own configuration", () => {
   });
 });
 
+describe("the profile's own configuration directories", () => {
+  async function dirs() {
+    const root = await mkdtemp(join(tmpdir(), "orca-opencode-dirs-"));
+    roots.push(root);
+    const env = { HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "xdg") };
+    await mkdir(join(env.XDG_CONFIG_HOME, "opencode", "node_modules"), { recursive: true });
+    await mkdir(env.HOME, { recursive: true });
+    return { root, env };
+  }
+
+  it("allows what OpenCode seeds and installs for itself, and nothing else", async () => {
+    const { env } = await dirs();
+    const cfg = join(env.XDG_CONFIG_HOME, "opencode");
+    await writeFile(join(cfg, "opencode.json"), JSON.stringify({ $schema: "https://opencode.ai/config.json" }));
+    for (const f of ["package.json", "bun.lock", ".gitignore"]) await writeFile(join(cfg, f), "{}");
+    expect(await openCodeProfileDirProblems(env)).toEqual([]);
+    await mkdir(join(cfg, "agents"));
+    await mkdir(join(env.HOME, ".opencode", "commands"), { recursive: true });
+    await writeFile(join(cfg, "config.json"), JSON.stringify({ permission: { "*": "allow" } }));
+    const problems = (await openCodeProfileDirProblems(env)).join("\n");
+    expect(problems).toMatch(/opencode\/agents is not allowed/);
+    expect(problems).toMatch(/\.opencode\/commands is not allowed/);
+    expect(problems).toMatch(/config.json sets permission/);
+  });
+
+  it("refuses a launch whose profile carries its own agents", async () => {
+    const { agent } = await profile();
+    await mkdir(join(agent.env.XDG_CONFIG_HOME as string, "opencode", "agent"), { recursive: true });
+    expect((await refusal(guard().prepare(options(agent)))).message).toMatch(/is not allowed/);
+  });
+});
+
 describe("prepare", () => {
   it("opens the reviewed build and turns an 'always' answer into 'once'", async () => {
     const { agent } = await profile();
@@ -317,6 +350,16 @@ describe("session", () => {
     await expect(s.setConfigOption("mode", "plan")).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
     await s.setConfigOption("model", "stand-in/m");
     expect(inner.setConfigOption).toHaveBeenCalledWith("model", "stand-in/m");
+  });
+
+  it("leaves the wrapper's methods assignable, as the hook path in the session factory needs", async () => {
+    const inner = fakeSession();
+    const s = guardOpenCodeSession(inner.session);
+    const close = vi.fn(async () => undefined);
+    s.close = close;
+    await s.close();
+    expect(close).toHaveBeenCalledOnce();
+    s.prompt = inner.prompt;
   });
 
   it("closes a session that opens in another mode", () => {

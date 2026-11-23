@@ -38,8 +38,8 @@
  */
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, readFile, realpath, stat } from "node:fs/promises";
-import { isAbsolute, win32 } from "node:path";
+import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { isAbsolute, join, win32 } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import { OrcaError, effectivePermissionPolicy, literalEnv, type AgentSpec, type SessionConfigOption } from "@orca/core";
 import type { OpenSessionOptions } from "../acp-session.js";
@@ -323,6 +323,67 @@ async function checkConfigFile(agent: AgentSpec, permissionEnv: string | undefin
   return openCodeConfigProblems(parsed, permissionEnv);
 }
 
+/**
+ * What OpenCode may find, and has written for itself, in a profile's own configuration
+ * directory. Everything else is refused: a directory there can hold agents and modes with
+ * their own permissions, commands that run shell text, tools and plugins, all loaded with no
+ * ask, and `--pure` keeps out only plugins.
+ */
+const PROFILE_CONFIG_FILES = new Set(["config.json", "opencode.json", "opencode.jsonc"]);
+const PROFILE_DEPENDENCY_ENTRIES = new Set([
+  "package.json",
+  "package-lock.json",
+  "bun.lock",
+  ".gitignore",
+  "node_modules",
+]);
+
+/**
+ * Deny by default over OpenCode's per-profile configuration directories (#710): the global one
+ * (`$XDG_CONFIG_HOME/opencode`) and `~/.opencode`, which OpenCode always reads. Only the
+ * schema-only file OpenCode seeds and the plugin-dependency install it runs in every config
+ * directory may be there.
+ */
+export async function openCodeProfileDirProblems(env: Readonly<Record<string, string>>): Promise<string[]> {
+  const problems: string[] = [];
+  const dirs = [
+    ...(env.XDG_CONFIG_HOME ? [join(env.XDG_CONFIG_HOME, "opencode")] : []),
+    ...(env.HOME ? [join(env.HOME, ".opencode")] : []),
+  ];
+  for (const dir of dirs) {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      problems.push(`profile: ${dir} cannot be read`);
+      continue;
+    }
+    for (const entry of entries) {
+      if (PROFILE_DEPENDENCY_ENTRIES.has(entry)) continue;
+      if (!PROFILE_CONFIG_FILES.has(entry)) {
+        problems.push(
+          `profile: ${join(dir, entry)} is not allowed (agents, commands, modes, tools and plugins there run without an ask)`,
+        );
+        continue;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await readFile(join(dir, entry), "utf8"));
+      } catch {
+        problems.push(`profile: ${join(dir, entry)} is not plain JSON`);
+        continue;
+      }
+      const keys = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? Object.keys(parsed) : ["?"];
+      if (keys.some((k) => k !== "$schema"))
+        problems.push(
+          `profile: ${join(dir, entry)} sets ${keys.join(", ")}; keep OpenCode's settings in the OPENCODE_CONFIG file only`,
+        );
+    }
+  }
+  return problems;
+}
+
 async function managedConfigPresent(platform: string): Promise<string[]> {
   const found: string[] = [];
   for (const path of OPENCODE_MANAGED_DIRS[platform] ?? [])
@@ -383,8 +444,10 @@ export function guardOpenCodeSession(session: AgentSession): AgentSession {
     );
   }
   const guarded: AgentSession = Object.create(session) as AgentSession;
+  // Writable, as a plain session's are: the hook path in the session factory wraps `close`.
   Object.defineProperties(guarded, {
     prompt: {
+      writable: true,
       value: async (input: Parameters<AgentSession["prompt"]>[0], options?: Parameters<AgentSession["prompt"]>[1]) => {
         if (openCodeSlashCommand(input))
           throw new OrcaError(
@@ -402,6 +465,7 @@ export function guardOpenCodeSession(session: AgentSession): AgentSession {
       },
     },
     setConfigOption: {
+      writable: true,
       value: async (configId: string, value: string | boolean) => {
         if (configId === "mode" && value !== REVIEWED_MODE)
           throw new OrcaError(
@@ -448,6 +512,7 @@ export function openCodeGuard(opts: OpenCodeGuardOptions = {}): ProviderGuard {
       ];
       if (!problems.length)
         problems.push(...(await checkConfigFile(launched, literalEnv(launched.env).OPENCODE_PERMISSION)));
+      if (!problems.length) problems.push(...(await openCodeProfileDirProblems(literalEnv(launched.env))));
       if (!problems.length)
         for (const path of await managed(platform))
           problems.push(`machine: ${path} holds a managed OpenCode configuration that ORCA cannot override`);

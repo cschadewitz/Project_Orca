@@ -14,7 +14,19 @@
  * stand-in, for web fetches) rather than taken from what OpenCode reports.
  */
 import { createServer, type IncomingMessage, type Server } from "node:http";
-import { appendFile, chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -284,6 +296,20 @@ describe.skipIf(!BIN)(`OpenCode ${OPENCODE_VERIFIED_VERSION}, installed binary, 
     expect(result.stopReason).toBe("end_turn");
     expect(seen.requests.length).toBeGreaterThan(before);
     expect(updates.some((u) => u.raw.sessionUpdate === "agent_message_chunk")).toBe(true);
+  }, 180_000);
+
+  it("the same profile opens again after OpenCode has written its own files into it", async () => {
+    const { agent, ws, dir } = await agentIn("reopen");
+    const first = await open(agent, ws, pick("reject_once"));
+    expect((await first.session.prompt(script())).stopReason).toBe("end_turn");
+    await first.session.close();
+    // What OpenCode left in the profile's config directory must still pass the guard.
+    const second = await open(agent, ws, pick("reject_once"));
+    expect((await second.session.prompt(script())).stopReason).toBe("end_turn");
+    console.warn(
+      "profile config dir after two sessions:",
+      await readdir(join(dir, "xdg/config/opencode")).catch(() => []),
+    );
   }, 180_000);
 
   it("explicit denial: a rejected shell command does not run", async () => {
