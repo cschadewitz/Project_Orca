@@ -1,0 +1,357 @@
+{
+  "format": "orca-706-assertions/1",
+  "paths": {
+    "claude-connected": {
+      "L01": [
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["ask"]
+        }
+      ],
+      "L02": [
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["ask"]
+        }
+      ],
+      "L03": [
+        {
+          "tool": "Write",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["allow"]
+        }
+      ],
+      "L04": [
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["deny"]
+        }
+      ],
+      "L05": [
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["allow"],
+          "calls": 16
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["ask"],
+          "calls": 16
+        }
+      ],
+      "L06": [
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "mcp__slack__post",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["ask"]
+        }
+      ],
+      "L07": [
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["ask"]
+        }
+      ],
+      "L08": [
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["ask"]
+        }
+      ],
+      "F05": [
+        {
+          "tool": "SomeToolFromTheFuture",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "mcp__onlyserver",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "mcp____x",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "mcp__a__b__c",
+          "expected": ["ask"]
+        }
+      ],
+      "A01": [
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "mcp__github__delete_repo",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "mcp__gitlab__create_issue",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "mcp__github__create_issue_comment",
+          "expected": ["ask"]
+        }
+      ],
+      "A02": [
+        {
+          "tool": "Write",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "Edit",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "Read",
+          "expected": ["ask"]
+        }
+      ],
+      "A03": [
+        {
+          "tool": "Bash",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Bash",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Bash",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Bash",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Bash",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "Bash",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "Bash",
+          "expected": ["ask"]
+        }
+      ],
+      "B01": [
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Edit",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Edit",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Edit",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Edit",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Edit",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Read",
+          "expected": ["allow"]
+        }
+      ],
+      "B02": [
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        }
+      ],
+      "B03": [
+        {
+          "tool": "Bash",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "Bash",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "Bash",
+          "expected": ["ask"]
+        }
+      ],
+      "B04": [
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "Bash",
+          "expected": ["ask"]
+        }
+      ],
+      "B05": [
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        }
+      ],
+      "P01": [
+        {
+          "tool": "Bash",
+          "expected": ["ask", "deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["ask", "deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["ask", "deny"]
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["ask", "deny"]
+        },
+        {
+          "tool": "Read",
+          "expected": ["ask", "deny"]
+        },
+        {
+          "tool": "Read",
+          "expected": ["ask", "deny"]
+        }
+      ],
+      "P03": [
+        {
+          "tool": "Bash",
+          "expected": ["allow", "ask", "deny", "block"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["allow", "ask", "deny", "block"]
+        },
+        {
+          "tool": "mcp__s__t",
+          "expected": ["allow", "ask", "deny", "block"]
+        },
+        {
+          "tool": "Toolzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+          "expected": ["allow", "ask", "deny", "block"]
+        }
+      ],
+      "P04": [
+        {
+          "tool": "Read",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Read",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Read",
+          "expected": ["deny"]
+        }
+      ]
+    }
+  }
+}

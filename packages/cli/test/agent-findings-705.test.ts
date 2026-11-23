@@ -1,4 +1,4 @@
-/** `orca agents` names the Gemini CLI settings that let calls run without asking ORCA (#705). */
+/** `orca agents` names the agent settings that let calls run without asking ORCA (#705): Gemini CLI, pi. */
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +18,7 @@ beforeAll(async () => {
       "  - { id: careful, command: gemini, args: [--acp], env: { GEMINI_CLI_HOME: /srv/gemini-home } }",
       "  - { id: loose, command: gemini, args: [--acp, --yolo] }",
       "  - { id: other, command: /bin/false, args: [--acp, --yolo] }",
+      "  - { id: pi, command: pi-acp, env: { PI_CODING_AGENT_DIR: /srv/pi-agent } }",
       "",
     ].join("\n"),
     "utf8",
@@ -44,4 +45,5 @@ it("lists each Gemini setting that lets calls run without asking ORCA, under its
   expect(block("loose")).toMatch(/^ {4}runs without asking ORCA: YOLO mode/m);
   expect(block("loose")).toMatch(/^ {4}outside ORCA: no GEMINI_CLI_HOME/m);
   expect(block("other")).not.toMatch(/ORCA/);
+  expect(block("pi")).toMatch(/^ {4}runs without asking ORCA: pi runs every tool call without asking/m);
 });

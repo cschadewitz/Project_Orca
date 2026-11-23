@@ -46,7 +46,6 @@ Code: `packages/agents/src/providers/copilot-cli.ts`.
 | Options offered on an ask | `allow_once`, `allow_always`, `reject_once` (no `reject_always`) | installed |
 | ORCA deny (rule or person) | `reject_once`: the command does not run | installed |
 | ORCA allow | `allow_once`: the command runs | installed |
-| Answers | Only one-time answers reach Cline: "always" becomes "once"; with no one-time option offered, or an answer that is not one of the offered options, the ask is cancelled | offline |
 | "Always" answers | Sent as `allow_once`; the next call with the same command name is asked again; Copilot saves nothing (`permissions-config.json` absent) | installed |
 | File writes (`create`, `edit`) | Asked about as `edit`; denied, no file. Written by Copilot itself, not through ACP `fs/*`, so ORCA's protected-path check applies only through the policy | installed |
 | Subagents (`task`) | Their commands are asked about on the parent session; denied, they do not run | installed |
@@ -95,6 +94,7 @@ below is about that ask being made, being decided on the right facts, and holdin
 | Skills (#337) | Cline does not accept embedded context, so ORCA's existing check refuses a session that carries skills | source |
 | Permission options | `allow_once`, `allow_always`, `reject_once` | installed |
 | "Allow always" | Approves that one call in this version. ORCA answers "Allow once" anyway; the next identical call is asked again | installed |
+| Answers | Only one-time answers reach Cline: "always" becomes "once"; with no one-time option offered, or an answer that is not one of the offered options, the ask is cancelled | offline |
 | What an ask carries | Cline sends the tool's input and no `locations`. ORCA reads the paths an edit, read or patch touches, and a command's text, from the input, as Cline's tool will use them, before its policy decides | source; installed |
 | Path rules, protected paths | Apply to Cline edits, reads and patches through those paths | installed |
 | Command rules | A command's words are matched (`run_commands` input, joined with `;`) | installed (rule-matched deny, no ask, file untouched) |
