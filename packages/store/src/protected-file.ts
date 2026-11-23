@@ -29,36 +29,13 @@ async function keyFileOf(dir: string): Promise<string> {
   }
 }
 const syncedDirectories = new Set<string>();
-// Immutable ciphertext bytes only; callers still authenticate and parse every record.
-// Keys are always reread: same-size in-place rewrites can share a kernel timestamp tick.
-// Every hit revalidates the current path, owner-only mode and nanosecond change metadata.
-// Metadata cannot see a same-size in-place rewrite inside one filesystem timestamp tick,
-// so a file is only cached once it has been unchanged for SETTLED_NS of wall-clock time:
-// any later rewrite then necessarily carries a newer mtime/ctime than the cached stamp.
-const byteCache = new Map<string, { directory: string; file: string; bytes: Buffer }>();
-const MAX_CACHED_BYTES = 8 * 1024 * 1024;
-let cachedBytes = 0;
-const SETTLED_NS = 2_000_000_000n;
-const settled = (info: BigIntStats) =>
-  BigInt(Date.now()) * 1_000_000n - (info.mtimeNs > info.ctimeNs ? info.mtimeNs : info.ctimeNs) >= SETTLED_NS;
+// Protected reads never reuse bytes from an earlier call: metadata (inode, size,
+// nanosecond mtime/ctime) cannot prove a same-size in-place rewrite did not happen,
+// so every integrity decision authenticates the current on-disk contents.
 const directoryIdentity = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.mode}:${info.uid}:${info.gid}`;
 const fileIdentity = (info: BigIntStats) =>
   `${directoryIdentity(info)}:${info.nlink}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
 
-function forgetBytes(path: string): void {
-  const previous = byteCache.get(path);
-  if (previous) cachedBytes -= previous.bytes.length;
-  byteCache.delete(path);
-}
-
-function rememberBytes(path: string, directory: string, file: string, bytes: Buffer): void {
-  forgetBytes(path);
-  if (bytes.length > MAX_CACHED_BYTES) return;
-  while (byteCache.size >= 256 || cachedBytes + bytes.length > MAX_CACHED_BYTES)
-    forgetBytes(byteCache.keys().next().value!);
-  byteCache.set(path, { directory, file, bytes });
-  cachedBytes += bytes.length;
-}
 const EnvelopeSchema = z.strictObject({
   version: z.literal(1),
   algorithm: z.literal("aes-256-gcm"),
@@ -122,7 +99,7 @@ interface PrivateObservation {
   active: boolean;
   failure?: OrcaError;
 }
-// Async context owns capture. Neither the ciphertext cache nor a store instance holds
+// Async context owns capture. No module state nor a store instance holds
 // observations, plaintext, keys, or an authority reusable by another request.
 const privateObservation = new AsyncLocalStorage<PrivateObservation>();
 class ObservationLimitError extends OrcaError {
@@ -433,30 +410,18 @@ async function privateBytes(dir: string, name: string): Promise<Buffer | undefin
       throw unreadable();
     const info = await lstat(path, { bigint: true });
     if (!info.isFile() || (process.platform !== "win32" && (info.mode & 0o077n) !== 0n)) throw unreadable();
-    const directoryStamp = directoryIdentity(directory);
-    const fileStamp = fileIdentity(info);
-    const cacheable = !isKey(name);
-    const cached = cacheable ? byteCache.get(path) : undefined;
-    if (cached?.directory === directoryStamp && cached.file === fileStamp) return cached.bytes;
-    forgetBytes(path);
     const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
-      // Never cache a record replaced between the path check/open, or changed while
-      // reading. Publication can legitimately change nlink/ctime when its temporary
-      // hard link is removed, so those reads use the open file but do not seed reuse.
       const opened = await handle.stat({ bigint: true });
       if (!opened.isFile() || (process.platform !== "win32" && (opened.mode & 0o077n) !== 0n)) throw unreadable();
       const bytes = await handle.readFile();
       const after = await handle.stat({ bigint: true });
       if (!after.isFile() || (process.platform !== "win32" && (after.mode & 0o077n) !== 0n)) throw unreadable();
-      if (cacheable && fileIdentity(opened) === fileStamp && fileIdentity(after) === fileStamp && settled(after))
-        rememberBytes(path, directoryStamp, fileStamp, bytes);
       return bytes;
     } finally {
       await handle.close();
     }
   } catch (error) {
-    forgetBytes(path);
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw unreadable();
   }
@@ -556,7 +521,7 @@ export async function readPrivateJson(dir: string, name: string): Promise<unknow
   }
 }
 
-/** A fresh, stable key observation for one replay call; never enters the ciphertext cache. */
+/** A fresh, stable key observation for one replay call. */
 async function replayKey(dir: string): Promise<{ bytes: Buffer; directory: string; file: string }> {
   const scope = privateObservation.getStore();
   if (scope) {

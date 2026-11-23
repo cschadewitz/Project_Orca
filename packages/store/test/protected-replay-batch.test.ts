@@ -52,7 +52,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 const dirs: string[] = [];
 afterEach(async () => {
-  vi.restoreAllMocks();
   io.beforeStat = io.beforeOpen = io.afterRead = undefined;
   io.frozenTimes.clear();
   io.denied.clear();
@@ -139,15 +138,16 @@ function pauseBeforeTerminal(f: Fixture) {
 
 it("reads a fresh entry/terminal key per multi-record call, authenticates every record and isolates results", async () => {
   const f = await fixture(12);
-  // Payload bytes are only reused once unchanged for two seconds of wall clock.
-  const now = Date.now();
-  vi.spyOn(Date, "now").mockReturnValue(now + 3_000);
   await f.read();
   io.opens = [];
   const result = await f.read();
   expect(result).toEqual(f.expected);
   // Entry + one fresh input read + terminal, rather than one key read per payload.
-  expect(io.opens).toEqual(Array<string>(3).fill(f.path(".execution-key")));
+  expect(io.opens.filter((path) => path.endsWith(".execution-key"))).toEqual(
+    Array<string>(3).fill(f.path(".execution-key")),
+  );
+  // Every ciphertext record is read from disk again; nothing is reused across calls.
+  expect(io.opens.filter((path) => path.endsWith(".payload.json"))).toHaveLength(12);
   (result[0] as { vars: { secret: string } }).vars.secret = "caller mutation";
   expect(await f.read()).toEqual(f.expected);
   expect(io.opens.filter((path) => path.endsWith(".execution-key"))).toHaveLength(6);

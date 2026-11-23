@@ -28,7 +28,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 const dirs: string[] = [];
 const realNow = Date.now.bind(Date);
-// Reads only seed reuse once a file has been unchanged for two seconds of wall clock.
+// Move the wall clock past any "settled file" window an optimisation could rely on.
 const settle = () => vi.spyOn(Date, "now").mockImplementation(() => realNow() + 3_000);
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -55,7 +55,7 @@ async function fixture() {
   return { directory, store, read, path: (name: string) => join(directory, "private-execution", name) };
 }
 
-it("reuses unchanged ciphertext bytes while rereading the key and returns isolated decoded values", async () => {
+it("rereads the key and every ciphertext record on each call and returns isolated decoded values", async () => {
   const f = await fixture();
   calls.open = [];
   for (let index = 0; index < 8; index++) {
@@ -63,8 +63,24 @@ it("reuses unchanged ciphertext bytes while rereading the key and returns isolat
     expect(payload.vars.secret).toBe("secret-value");
     payload.vars.secret = "caller mutation";
   }
-  expect(calls.open.length).toBeGreaterThan(0);
-  expect(calls.open.every((path) => path.endsWith(".execution-key"))).toBe(true);
+  for (const name of [".execution-key", "run.inputs.json", "payload.payload.json"])
+    expect(calls.open.filter((path) => path === f.path(name)).length).toBeGreaterThanOrEqual(8);
+});
+
+it("authenticates current bytes after an earlier read of a settled record rewritten within one timestamp tick", async () => {
+  const f = await fixture();
+  const path = f.path("payload.payload.json");
+  const before = await stat(path, { bigint: true });
+  calls.frozenTimes.set(path, { mtimeNs: before.mtimeNs, ctimeNs: before.ctimeNs });
+  await expect(f.read()).resolves.toEqual({ vars: { secret: "secret-value" } });
+  // Same-size tamper: swap one base64 character of the ciphertext in place.
+  const tampered = await readFile(path);
+  const at = tampered.indexOf('"ciphertext":"') + '"ciphertext":"'.length;
+  tampered[at] = tampered[at] === 0x41 ? 0x42 : 0x41;
+  expect(BigInt(tampered.length)).toBe(before.size);
+  await writeFile(path, tampered);
+  expect((await stat(path, { bigint: true })).ino).toBe(before.ino);
+  await expect(f.read()).rejects.toMatchObject({ code: "RUN_STATE" });
 });
 
 it.each([".execution-key", "run.inputs.json", "payload.payload.json"])(
@@ -146,7 +162,7 @@ it("rejects an in-place key rewrite when the filesystem reports identical nanose
   expect(await readFile(path)).toEqual(key);
 });
 
-it("does not seed reuse from a fresh record rewritten in place within one timestamp tick", async () => {
+it("authenticates current bytes after a fresh record is rewritten in place within one timestamp tick", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orca-private-cache-"));
   dirs.push(directory);
   const store = new FileExecutionStore(directory);
