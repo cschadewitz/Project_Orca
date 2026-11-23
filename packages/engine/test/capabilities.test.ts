@@ -15,9 +15,11 @@ import {
   type OpenSessionOptions,
 } from "@orca/agents";
 import {
+  capabilityManifestKey,
   OrcaError,
   parseOrcaConfig,
   parseWorkflow,
+  sha256,
   silentLogger,
   TemplateRegistry,
   validateWorkflow,
@@ -37,6 +39,7 @@ import {
   Orchestrator,
   PausingHumanInput,
   skillDigest,
+  startDryRun,
   type GenerationMaterial,
 } from "@orca/engine";
 import { memoryStores } from "@orca/store";
@@ -462,6 +465,30 @@ describe("scoped capabilities in child runs", () => {
     await second.orchestrator.answer(request!.id, "approve", request!.runId);
     expect((await second.orchestrator.resume(request!.runId)).run.status).toBe("completed");
     expect(second.opened.map((o) => o.mcp)).toEqual([preview["loop::b"], ["notes", "files", "shell"]]);
+  });
+});
+
+describe("scoped capabilities in a dry run (#335, #183)", () => {
+  it("fingerprints exactly the manifests the launch preview records, nested steps included", async () => {
+    const stores = memoryStores();
+    const made = await withGenerations({}, { workflow: [nested, plain], stores, pause: true });
+    const launch = await made.generations.captureLaunch({ purpose: "workflow", workflowId: "nested" });
+    const root = await made.orchestrator.getState(await launch.startRun({}));
+    const preview = (root.run.provenance?.selections ?? [])
+      .filter((s) => s.capabilities)
+      .map((s) => `${s.nodeId}=${capabilityManifestKey(s.capabilities!)}`)
+      .sort();
+    expect(preview).toHaveLength(2);
+    const dry = await startDryRun(made.orchestrator, { definition: made.workflows.get("nested") });
+    await dry.cancel();
+    await dry.done.catch(() => {});
+    expect(dry.dryRun.capabilities).toBe(`sha256:${sha256(preview.join("\n"))}`);
+    // A different scope is a different fingerprint, so a dry run cannot vouch for another set.
+    const narrowed = parseWorkflow(nested.replace("disable: [shell]", "disable: [shell, notes]"));
+    const other = await startDryRun(made.orchestrator, { definition: narrowed });
+    await other.cancel();
+    await other.done.catch(() => {});
+    expect(other.dryRun.capabilities).not.toBe(dry.dryRun.capabilities);
   });
 });
 
