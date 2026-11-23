@@ -7,7 +7,7 @@
     "failure": "Anything ORCA cannot read or decide ends in a block or an ask, never in a run",
     "arguments": "A changed tool, resource, command or directory is a new decision",
     "bypass": "Routes around the policy: ORCA's own files, links, shell grants, slipped-in wildcards",
-    "privacy": "What ORCA hands back to the agent or a log never carries the call's input"
+    "privacy": "What a route's answer hands back to the agent never carries the call's input. Events, logs and stored records are not checked here"
   },
   "cases": [
     {

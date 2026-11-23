@@ -5,8 +5,9 @@
  *   node tools/guard-qualification/check-support-matrix.js
  *
  * Exit 0 with nothing printed when the matrix holds; otherwise one line per problem, exit 1.
- * Whether the cases *pass* is the suite's job (tools/test/enforcement-acceptance-706.test.js);
- * this checks what the matrix may claim given which cases exist and which files back it.
+ * Whether the synthetic cases *pass* is the suite's job (tools/test/enforcement-acceptance-706.test.js),
+ * and synthetic results never count toward a tier. A tier above `none` stands only on committed
+ * installed or connected receipts for the row's exact pinned agent, version and host, per route.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -15,8 +16,34 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "..", "..");
 const TIERS = ["none", "A", "B", "C"];
-/** Categories a tier C claim may not exclude without naming the gap as a residual risk. */
+/** Categories a tier C claim may not exclude on any of its routes. A named residual is not proof. */
 const MUST_COVER_FOR_C = ["lifecycle", "bypass"];
+
+/**
+ * Why `receipt` does not back a claim for `agent` on `route`: wrong kind, another agent,
+ * version, host or route, no exact build, a failed case, a missing case or, for tier A, a
+ * missing connectivity check. Empty when it does.
+ */
+export function receiptProblems(receipt, agent, route, kind, neededCases) {
+  const problems = [];
+  if (receipt?.format !== "orca-enforcement-receipt/1") return ["not an orca-enforcement-receipt/1"];
+  if (receipt.kind !== kind) problems.push(`kind ${receipt.kind}, needs ${kind}`);
+  if (receipt.agent !== agent.id) problems.push(`agent ${receipt.agent}`);
+  if (receipt.agentVersion !== agent.pin?.agentVersion) problems.push(`agentVersion ${receipt.agentVersion}`);
+  if (receipt.host !== agent.pin?.host) problems.push(`host ${receipt.host}`);
+  if (receipt.route !== route) problems.push(`route ${receipt.route}`);
+  if (typeof receipt.build !== "string" || !/^[0-9a-f]{40}$/.test(receipt.build)) problems.push("no exact build");
+  const results = new Map((receipt.cases ?? []).map((c) => [c.id, c.result]));
+  if ([...results.values()].some((r) => r !== "pass")) problems.push("a case did not pass");
+  const missing = neededCases.filter((id) => results.get(id) !== "pass");
+  if (missing.length) problems.push(`missing ${missing.join(",")}`);
+  if (
+    neededCases.length === 0 &&
+    !(receipt.checks?.connects === "pass" && receipt.checks?.uncoveredRoutesRefused === "pass")
+  )
+    problems.push("needs checks.connects and checks.uncoveredRoutesRefused passing");
+  return problems;
+}
 
 export function loadCatalogue() {
   return JSON.parse(readFileSync(join(here, "cases.json"), "utf8"));
@@ -32,7 +59,12 @@ export function casesFor(path, catalogue) {
 }
 
 /** @returns {string[]} one message per problem; empty when the matrix holds */
-export function checkSupportMatrix(matrix, catalogue, exists = (p) => existsSync(join(REPO_ROOT, p))) {
+export function checkSupportMatrix(
+  matrix,
+  catalogue,
+  exists = (p) => existsSync(join(REPO_ROOT, p)),
+  readReceipt = (p) => JSON.parse(readFileSync(join(REPO_ROOT, p), "utf8")),
+) {
   const problems = [];
   const ids = new Set(catalogue.cases.map((c) => c.id));
   const byId = new Map(catalogue.cases.map((c) => [c.id, c]));
@@ -70,28 +102,46 @@ export function checkSupportMatrix(matrix, catalogue, exists = (p) => existsSync
       continue;
     }
     for (const r of agent.routes) if (!paths.has(r)) problems.push(`${at}: route ${r} has no path in the suite`);
-    const ev = agent.evidence ?? {};
-    for (const p of [...(ev.connectivity ?? []), ev.installed, ev.connected].filter(Boolean))
-      if (!exists(p)) problems.push(`${at}: evidence ${p} does not exist`);
-    if (tier >= 1) {
-      if ((ev.connectivity ?? []).length === 0) problems.push(`${at}: tier A needs connectivity evidence`);
-      if (agent.routes.length === 0) problems.push(`${at}: tier A needs at least one enforcement route`);
-      if ((agent.unsupportedRoutes ?? []).length === 0)
-        problems.push(`${at}: tier A must list the routes ORCA does not cover`);
-      if ((agent.residualRisks ?? []).length === 0) problems.push(`${at}: a tier claim must list its residual risks`);
-    }
-    if (tier >= 2 && !ev.installed)
-      problems.push(`${at}: tier B needs an installed acceptance run (evidence.installed)`);
-    if (tier >= 3) {
-      if (!ev.connected) problems.push(`${at}: tier C needs a connected proof receipt (evidence.connected)`);
-      for (const r of agent.routes) {
-        const path = paths.get(r);
-        for (const id of Object.keys(path?.excluded ?? {})) {
-          const c = byId.get(id);
-          if (c && MUST_COVER_FOR_C.includes(c.category) && !(agent.residualRisks ?? []).some((x) => x.includes(id)))
-            problems.push(`${at}: tier C on ${r} excludes ${c.category} case ${id}; name it in residualRisks`);
-        }
+    const receipts = [];
+    for (const file of agent.receipts ?? []) {
+      if (!exists(file)) {
+        problems.push(`${at}: receipt ${file} does not exist`);
+        continue;
       }
+      receipts.push({ file, receipt: readReceipt(file) });
+    }
+    if (tier === 0) continue;
+
+    const pin = agent.pin;
+    if (!pin || !pin.agentVersion || !pin.host) {
+      problems.push(`${at}: tier ${agent.tier} needs a pinned agent version and host`);
+      continue;
+    }
+    if (agent.routes.length === 0) problems.push(`${at}: tier ${agent.tier} needs at least one enforcement route`);
+    if ((agent.unsupportedRoutes ?? []).length === 0)
+      problems.push(`${at}: a tier claim must list the uncovered routes`);
+    if ((agent.residualRisks ?? []).length === 0) problems.push(`${at}: a tier claim must list its residual risks`);
+    const kind = tier === 3 ? "connected" : "installed";
+    for (const route of agent.routes) {
+      const path = paths.get(route);
+      if (!path) continue;
+      const needed = tier === 1 ? [] : casesFor(path, catalogue);
+      const good = receipts.filter(({ receipt }) => receiptProblems(receipt, agent, route, kind, needed).length === 0);
+      if (good.length === 0) {
+        const why = receipts.flatMap(({ file, receipt }) =>
+          receiptProblems(receipt, agent, route, kind, needed).map((p) => `${file}: ${p}`),
+        );
+        problems.push(
+          `${at}: tier ${agent.tier} on ${route} needs a passing ${kind} receipt for ${agent.id} ${pin.agentVersion} on ${pin.host}` +
+            (why.length ? ` (${why.join("; ")})` : ""),
+        );
+      }
+      if (tier === 3)
+        for (const id of Object.keys(path.excluded ?? {})) {
+          const c = byId.get(id);
+          if (c && MUST_COVER_FOR_C.includes(c.category))
+            problems.push(`${at}: tier C on ${route} excludes ${c.category} case ${id}`);
+        }
     }
   }
   return problems;

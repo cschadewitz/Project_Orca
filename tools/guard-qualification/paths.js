@@ -9,8 +9,9 @@
  * - `deny`: ORCA refuses it.
  * - `block`: ORCA could not decide and the call does not run.
  *
- * `surfaces` are the strings the path hands to anything outside ORCA's own process (the agent,
- * its transcript, a log line), which the privacy cases search for leaked input.
+ * `surfaces` are the strings the route's answer hands back to the agent, which the privacy cases
+ * search for leaked input. Events, logs and stored records are not surfaces here and are not
+ * checked by this suite.
  *
  * `capabilities` say which kinds of case a path can be asked about at all. A case that needs a
  * capability a path lacks must be excluded for that path in `support-matrix.json`, with the
@@ -26,7 +27,10 @@ import {
 } from "@orca/agents";
 import { claudeShape, permissionRequest } from "./world.js";
 
-/** ORCA's own answer to an ACP permission ask, through `resolvePermission` (`acp-session.ts`). */
+/**
+ * ORCA's own answer to an ACP permission ask, through `resolvePermission` (`acp-session.ts`).
+ * Verifies the answer to an ask that reaches ORCA; not that the agent asks, or obeys.
+ */
 export const acpAsk = {
   id: "acp-ask",
   capabilities: ["answerer", "offered-options"],
@@ -63,7 +67,11 @@ function acpOutcome(decision) {
   return "block";
 }
 
-/** ORCA's Claude `PreToolUse` hook (#704), run as its process runs it (`runClaudePreToolHook`). */
+/**
+ * ORCA's Claude `PreToolUse` hook (#704), run as its process runs it (`runClaudePreToolHook`).
+ * Verifies the hook program's answer to a frame; not that Claude runs it, obeys it, or sends
+ * its `ask` on to ORCA for the same call.
+ */
 export const claudeNativeHook = {
   id: "claude-native-hook",
   capabilities: ["raw-input", "context-file", "cwd", "hook-settings"],

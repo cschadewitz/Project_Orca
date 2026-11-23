@@ -10,8 +10,8 @@ after #703 (PR #993) and #704 (PR #980) merge, and runs against these same cases
 | [scenarios.js](../../../tools/guard-qualification/scenarios.js) | One function per case, written in provider-neutral actions (a shell command, a write, an MCP call, …) |
 | [world.js](../../../tools/guard-qualification/world.js) | A throwaway config directory and workspace laid out like the daemon's, changed only through the daemon's own writers (`recordAlwaysDecision`, `replacePermissionPolicyFile`) |
 | [paths.js](../../../tools/guard-qualification/paths.js) | The enforcement paths: each turns an action into what its route really receives and reports `allow`, `ask`, `deny` or `block` |
-| [support-matrix.json](../../../tools/guard-qualification/support-matrix.json) | Per path: capabilities and reasoned exclusions. Per agent: tier, routes, evidence, uncovered routes, residual risks |
-| [check-support-matrix.js](../../../tools/guard-qualification/check-support-matrix.js) | Refuses a tier beyond its evidence and a case neither run nor excluded |
+| [support-matrix.json](../../../tools/guard-qualification/support-matrix.json) | Per path: what it verifies, what it leaves unverified, capabilities and reasoned exclusions. Per agent: pinned tuple, tier, routes, receipts, unverified statements, uncovered routes, residual risks |
+| [check-support-matrix.js](../../../tools/guard-qualification/check-support-matrix.js) | Refuses a tier not backed by passing installed or connected receipts for the exact pinned tuple, and a case neither run nor excluded |
 | [enforcement-acceptance-706.test.js](../../../tools/test/enforcement-acceptance-706.test.js) | Runs every case on every path that can run it, in ordinary CI |
 
 ```sh
@@ -24,28 +24,43 @@ ORCA_ENFORCEMENT_RECEIPT_DIR=/tmp/receipts pnpm vitest run tools/test/enforcemen
 ## What a pass means
 
 A case runs ORCA's real decision code for one route, against files the daemon's own writers
-wrote, and checks ORCA's answer. It does **not** show what the agent then did with that
-answer: that a denied call did not run, that an allowed one ran with the same arguments, or
-what it touched. Those are the connected proof's (#706 scope bullets 3, 5 and 6). A path that
-cannot be asked a case says so in the matrix, with a reason; absence of a case is never
-counted as coverage.
+wrote, and checks ORCA's answer at decision time. It does **not** show:
+
+- that the agent sends an ask, or runs the hook, for every call;
+- that a hook's `ask` reaches ORCA as an ACP ask for the same call;
+- that the agent obeys the answer: a denied call did not run, an allowed one ran with the same
+  arguments, and what it touched;
+- that events, logs and stored records about the call are redacted (the privacy cases check
+  only the answer a route hands back to the agent);
+- physical confinement: the files can change between the check and the agent's open, and
+  the path tests do not run on Windows.
+
+Each path lists these as `unverified` in the matrix. The connected proof (#706 scope bullets
+3, 5 and 6) and installed runs are where they get verified. A path that cannot be asked a
+case says so in the matrix, with a reason; absence of a case is never counted as coverage, and
+synthetic results never count toward a tier.
 
 ## Support tiers
 
 The same tiers the #705 and #709-#711 streams report in, defined once in
-`support-matrix.json` and enforced by the checker:
+`support-matrix.json` and enforced by the checker. Every tier above `none` needs a pinned
+agent version and host on the row, and, **for each of its routes**, a committed receipt
+(`orca-enforcement-receipt/1`) whose agent, version, host and route match the pin, that names
+the exact 40-hex ORCA build it ran, and in which every case passed. A file path, a workflow's
+existence or a named residual risk is not proof.
 
-| Tier | Claim | The checker requires |
+| Tier | Claim | Receipt per route |
 | --- | --- | --- |
-| none | Nothing about policy coverage | — |
-| A | Connects and fails closed | Connectivity evidence that exists in the repo, at least one enforcement route, the uncovered routes listed, residual risks listed |
-| B | Approvals validated | A, plus an installed acceptance run against the pinned real agent (`evidence.installed`); the synthetic cases for its routes run in CI |
-| C | Execution guard certified | B, plus a connected proof receipt for the exact agent, version and host (`evidence.connected`), and no lifecycle or bypass case excluded on its routes unless named in its residual risks |
+| none | Nothing verified about policy coverage | — |
+| A | Connects and fails closed | `installed`, with `checks.connects` and `checks.uncoveredRoutesRefused` passing |
+| B | Approvals validated | `installed`, with every case the route can run passing against the real agent |
+| C | Execution guard certified | `connected`, with every case the route can run passing; and no lifecycle or bypass case excluded on any of the agent's routes |
 
-Today: Claude and Codex are tier A on the ACP ask route. Claude's hook route moves it to B
-when #980 merges (its `claude-hook-acceptance.yml` is the installed run); Codex follows with
-#705. Gemini, pi, Copilot, OpenCode and Cline are `none` until their streams add a row's
-evidence. Each stream edits only its own agent's row and adds its own path adapter.
+Today every agent is `none`. Claude and Codex connect and are recognised by first-run
+preflight, but no receipt backs that, so the matrix lists it as unverified. #980's installed
+workflow is the first candidate receipt (Claude, A/B); Codex follows with #705. Each stream
+edits only its own agent's row, adds its own path adapter, and commits its receipts under
+`tools/guard-qualification/receipts/`.
 
 ## Adding a path
 
@@ -92,8 +107,21 @@ can check, or the checker fails.
 only as far as its deepest existing ancestor, so a link whose target did not exist yet was
 taken as a new file in the workspace. A default-allowed write through
 `work/innocent.json -> ../orca.permissions.json`, before anybody had answered "always", would
-have created the sidecar. `physicalPath` now follows such a link (bounded, like the kernel's
-`ELOOP`), with a regression test in `packages/agents/test/permissions.test.ts`.
+have created the sidecar. After review, `protectedPathFor` now:
+
+- follows a link whose target does not exist yet (bounded, like the kernel's `ELOOP`);
+- judges a read by where the path leads, a delete or rename by the directory entry itself
+  (its directory resolved, its last name kept), and a write by both, since a write may open
+  through the link or replace the entry by rename. A protected root is held in both forms;
+- treats any error other than "not there yet" (a loop of links, no permission, a component
+  that is a file) as protected.
+
+Regression tests are in `packages/agents/test/permissions.test.ts`. They are decision-time
+evidence on Linux and macOS, not physical confinement and not Windows qualification.
+
+The Claude hook's own "is this cwd inside the workspace" check reuses `protectedPathFor`, so
+with fail-closed errors an unresolvable cwd would count as inside. `pathWithin`, added here,
+answers no when it cannot tell; switching the hook to it belongs to the hook's owner (#980).
 
 ## Not covered here, and where it goes
 

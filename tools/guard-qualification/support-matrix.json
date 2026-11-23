@@ -2,10 +2,10 @@
   "format": "orca-enforcement-support-matrix/1",
   "issue": 706,
   "tiers": {
-    "none": "Nothing is claimed. The agent may work, but ORCA says nothing about what its policy covers.",
-    "A": "Connects and fails closed: the agent connects, first-run preflight recognises it, its docs exist, and every route ORCA does not cover is listed and refused or asked about, never silently allowed.",
-    "B": "Approvals validated: tier A, plus every synthetic case runs on each of the agent's enforcement paths (or is excluded with a reason), and an unattended installed acceptance run against the pinned real agent proves ORCA's answers take effect there.",
-    "C": "Execution guard certified: tier B, plus a connected proof receipt for this exact agent, version and host shows that what ran is what was approved, with no lifecycle or bypass case excluded unless it is listed as a residual risk."
+    "none": "Nothing is claimed. The agent may work, but ORCA says nothing verified about what its policy covers.",
+    "A": "Connects and fails closed: for each route, a passing installed receipt for the pinned agent, version and host shows the agent connects and that the uncovered routes listed are refused or asked about.",
+    "B": "Approvals validated: for each route, a passing installed receipt for the pinned agent, version and host runs every case the route can run against the real agent.",
+    "C": "Execution guard certified: for each route, a passing connected receipt for the pinned agent, version and host runs every case the route can run, and no lifecycle or bypass case is excluded on any of its routes."
   },
   "paths": [
     {
@@ -18,36 +18,48 @@
         "F03": "Nothing is installed in the agent for this route.",
         "P02": "No raw input or context file on this route (see F01 and F02).",
         "A04": "An ACP ask carries no working directory; the session's directory is fixed when the session opens."
-      }
+      },
+      "verifies": "ORCA's answer to an ask that reaches it, from the policy read at that ask",
+      "unverified": [
+        "That the agent sends an ask for every call it makes",
+        "That the agent honours the answer it gets",
+        "That events, logs and stored records about the ask are redacted"
+      ]
     },
     {
       "id": "claude-native-hook",
       "what": "ORCA's Claude Code PreToolUse hook (#704), run as its process runs it (runClaudePreToolHook)",
       "capabilities": ["raw-input", "context-file", "cwd", "hook-settings"],
       "excluded": {
-        "L08": "The hook's ask is handed to Claude, which sends it to ORCA as an ACP ask: covered on acp-ask.",
-        "F04": "The hook never answers allow and offers no options; Claude's own options reach ORCA on acp-ask."
-      }
+        "L08": "The hook only hands an ask back to Claude. Whether that ask reaches ORCA's answerer for the same call is unverified until an installed receipt shows it; the answerer cases run on acp-ask.",
+        "F04": "The hook never answers allow and offers no options, so there is no option for ORCA to pick on this route."
+      },
+      "verifies": "The hook program's answer to a PreToolUse frame, with the context ORCA wrote",
+      "unverified": [
+        "That Claude runs the hook on every call, remembered grants included",
+        "That a hook ask reaches ORCA as an ACP ask for the same call",
+        "That Claude blocks on deny, on a block, on a timeout and when the hook cannot start",
+        "That events, logs and stored records about the call are redacted"
+      ]
     }
   ],
   "agents": [
     {
       "id": "claude",
       "tuple": "Claude ACP adapter with Claude Code, Linux; no version pinned on main yet (#980 pins adapter 0.109.1 with Claude Code 2.1.330)",
-      "tier": "A",
+      "pin": null,
+      "tier": "none",
       "routes": ["acp-ask"],
       "pendingRoutes": {
         "claude-native-hook": "Turned on per agent by #980 (nativeToolHook: on); until it merges the hook is not reachable from a run"
       },
-      "evidence": {
-        "connectivity": [
-          "packages/app/src/main/first-run/agent-preflight.ts",
-          "packages/app/test/agent-preflight.test.ts",
-          "docs/INTEGRATIONS.md"
-        ],
-        "installed": null,
-        "connected": null
-      },
+      "receipts": [],
+      "unverified": [
+        "Connects and first-run preflight recognises it (packages/app/src/main/first-run/agent-preflight.ts); no installed receipt",
+        "The uncovered routes below are refused or asked about",
+        "A hook ask reaches ORCA as an ACP ask for the same call (#980's installed workflow is the candidate receipt)",
+        "Events and logs about its calls are redacted"
+      ],
       "unsupportedRoutes": [
         "Tool calls Claude does not ask about (remembered grants, its own allow rules) until the hook is on",
         "What a shell command touches beyond its own text",
@@ -56,23 +68,22 @@
       "residualRisks": [
         "A hook is not an operating-system boundary; Claude's sandbox and ORCA's protected-path rules stay in force beside it"
       ],
-      "next": "B once #980 merges: its claude-hook-acceptance.yml is the installed run. C after the #706 connected proof."
+      "next": "Pin the tuple and commit an installed receipt per route from #980's claude-hook-acceptance.yml for A/B; C after the #706 connected proof."
     },
     {
       "id": "codex",
       "tuple": "Codex ACP adapter with Codex, Linux; #705 pins codex-acp 2.9.0 with Codex 0.171.0",
-      "tier": "A",
+      "pin": null,
+      "tier": "none",
       "routes": ["acp-ask"],
-      "pendingRoutes": { "codex-native-hook": "#705 Codex adapter, after #980" },
-      "evidence": {
-        "connectivity": [
-          "packages/app/src/main/first-run/agent-preflight.ts",
-          "packages/app/test/agent-preflight.test.ts",
-          "docs/INTEGRATIONS.md"
-        ],
-        "installed": null,
-        "connected": null
+      "pendingRoutes": {
+        "codex-native-hook": "#705 Codex adapter, after #980"
       },
+      "receipts": [],
+      "unverified": [
+        "Connects and first-run preflight recognises it; no installed receipt",
+        "The uncovered routes below are refused or asked about"
+      ],
       "unsupportedRoutes": [
         "Tool calls Codex does not ask about until the #705 hook is on",
         "Text typed into a running command (write_stdin) is never hooked",
@@ -81,14 +92,16 @@
       "residualRisks": [
         "Codex lets a call through when its hook runner fails; #705 must prove its probe before claiming B"
       ],
-      "next": "#705 Codex adds its path adapter here and an installed workflow for B."
+      "next": "#705 Codex adds its path adapter and an installed receipt per route."
     },
     {
       "id": "gemini",
       "tuple": "Gemini CLI (native ACP)",
+      "pin": null,
       "tier": "none",
       "routes": [],
-      "evidence": { "connectivity": [], "installed": null, "connected": null },
+      "receipts": [],
+      "unverified": [],
       "unsupportedRoutes": [],
       "residualRisks": [],
       "next": "#705 Gemini (stream 7): tiers A and B"
@@ -96,9 +109,11 @@
     {
       "id": "pi",
       "tuple": "pi with pi-acp",
+      "pin": null,
       "tier": "none",
       "routes": [],
-      "evidence": { "connectivity": [], "installed": null, "connected": null },
+      "receipts": [],
+      "unverified": [],
       "unsupportedRoutes": [],
       "residualRisks": [],
       "next": "#705 pi (stream 7): tiers A and B"
@@ -106,9 +121,11 @@
     {
       "id": "copilot",
       "tuple": "GitHub Copilot CLI, copilot --acp --stdio",
+      "pin": null,
       "tier": "none",
       "routes": [],
-      "evidence": { "connectivity": [], "installed": null, "connected": null },
+      "receipts": [],
+      "unverified": [],
       "unsupportedRoutes": [],
       "residualRisks": [],
       "next": "#709 tiers A and B; docs/preparation/copilot-cli-acp-709 holds the offline preparation"
@@ -116,9 +133,11 @@
     {
       "id": "opencode",
       "tuple": "OpenCode (ACP)",
+      "pin": null,
       "tier": "none",
       "routes": [],
-      "evidence": { "connectivity": [], "installed": null, "connected": null },
+      "receipts": [],
+      "unverified": [],
       "unsupportedRoutes": [],
       "residualRisks": [],
       "next": "#710 tiers A and B"
@@ -126,12 +145,18 @@
     {
       "id": "cline",
       "tuple": "Cline (ACP)",
+      "pin": null,
       "tier": "none",
       "routes": [],
-      "evidence": { "connectivity": [], "installed": null, "connected": null },
+      "receipts": [],
+      "unverified": [],
       "unsupportedRoutes": [],
       "residualRisks": [],
       "next": "#711 tiers A and B"
     }
-  ]
+  ],
+  "receipts": {
+    "format": "orca-enforcement-receipt/1",
+    "note": "A receipt is a JSON file committed under tools/guard-qualification/receipts/. It names kind (installed or connected), agent, agentVersion, host, route, build (the 40-hex ORCA commit it ran) and per-case results; tier A receipts also carry checks.connects and checks.uncoveredRoutesRefused. Synthetic receipts from the CI suite never count toward a tier. A file path or a named residual risk is not proof."
+  }
 }

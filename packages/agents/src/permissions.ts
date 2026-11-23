@@ -307,6 +307,27 @@ export interface ProtectedPaths {
  * would — and segment by segment. So a link to `auth/` is `auth/`,
  * `sub/../orca.permissions.json` is the sidecar, and `.orca-notes` is not `.orca`. A relative
  * path is taken against the workspace, as a rule's is; the ACP session always passes one.
+ *
+ * What a path *is* depends on the access (#706 review):
+ *
+ * - a **read** opens what the path leads to, links followed, a link whose target does not
+ *   exist yet included;
+ * - a **remove** (delete, move, rename) acts on the directory entry itself: its directory is
+ *   resolved, its last name is not. Removing a link to the sidecar removes the link; removing
+ *   or renaming over a sidecar that *is* a link replaces the sidecar's entry, whatever it
+ *   points at;
+ * - a **write** is both: an open follows the last link, and a write by temporary file and
+ *   rename replaces the entry. It is refused when either is protected.
+ *
+ * A protected root is held in both forms too, so neither a link standing at a protected name
+ * nor what it leads to is free.
+ *
+ * Only "not there yet" is an answer. Any other error resolving either side (no permission,
+ * a loop of links, a component that is a file) cannot be shown to be free, so the path is
+ * reported as protected: `path` itself is returned.
+ *
+ * This is a decision-time check on names. It is not an operating-system boundary: the files
+ * can change between this check and the agent's open, which is ADR 0009's to answer.
  */
 export function protectedPathFor(
   path: string,
@@ -317,24 +338,50 @@ export function protectedPathFor(
   if (!protectedPaths) return undefined;
   if (!isAbsolute(path) && !workspaceCwd) return undefined;
   // Joined as text, not with `join`: that would fold `sub/..` lexically before the links in it are followed.
-  const target = pathSegments(physicalPath(isAbsolute(path) ? path : `${workspaceCwd}${sep}${path}`));
-  const hit = (roots: readonly string[]) =>
-    roots.find((root) => {
-      const guard = pathSegments(physicalPath(root));
-      return within(target, guard) || (access === "remove" && within(guard, target));
-    });
-  const unreadable = hit(protectedPaths.noAccess);
-  if (unreadable !== undefined || access === "read") return unreadable;
-  const areas = (protectedPaths.agentAreas ?? []).map((area) =>
-    pathSegments(join(physicalPath(dirname(area)), basename(area))),
-  );
-  return protectedPaths.readOnly.find((root) => {
-    const guard = pathSegments(physicalPath(root));
-    if (!within(target, guard) && !(access === "remove" && within(guard, target))) return false;
-    // An area exempts its enclosing store, never an explicit authority path inside it.
-    // Config/sidecar paths may themselves live (or resolve through a link) under work/.
-    return !areas.some((area) => guard.length < area.length && within(area, guard) && within(target, area));
-  });
+  const full = isAbsolute(path) ? path : `${workspaceCwd}${sep}${path}`;
+  try {
+    const targets =
+      access === "read"
+        ? [pathSegments(physicalPath(full))]
+        : access === "remove"
+          ? [pathSegments(entryPath(full))]
+          : [pathSegments(physicalPath(full)), pathSegments(entryPath(full))];
+    const forms = (root: string) => [pathSegments(physicalPath(root)), pathSegments(entryPath(root))];
+    const covers = (guard: readonly string[], target: readonly string[]) =>
+      within(target, guard) || (access === "remove" && within(guard, target));
+    const unreadable = protectedPaths.noAccess.find((root) =>
+      forms(root).some((guard) => targets.some((target) => covers(guard, target))),
+    );
+    if (unreadable !== undefined || access === "read") return unreadable;
+    const areas = (protectedPaths.agentAreas ?? []).map((area) => pathSegments(entryPath(area)));
+    return protectedPaths.readOnly.find((root) =>
+      forms(root).some((guard) =>
+        targets.some(
+          (target) =>
+            covers(guard, target) &&
+            // An area exempts its enclosing store, never an explicit authority path inside it.
+            // Config/sidecar paths may themselves live (or resolve through a link) under work/.
+            !areas.some((area) => guard.length < area.length && within(area, guard) && within(target, area)),
+        ),
+      ),
+    );
+  } catch (error) {
+    if (error instanceof UnresolvablePathError) return path;
+    throw error;
+  }
+}
+
+/**
+ * Whether `dir` is `root` or below it, compared as the file system resolves both. False when
+ * either cannot be resolved: unlike `protectedPathFor`, "cannot tell" here must not mean yes.
+ */
+export function pathWithin(dir: string, root: string): boolean {
+  try {
+    return within(pathSegments(physicalPath(dir)), pathSegments(physicalPath(root)));
+  } catch (error) {
+    if (error instanceof UnresolvablePathError) return false;
+    throw error;
+  }
 }
 
 /** Whether `inner` is `outer` or below it, segment by segment. */
@@ -363,6 +410,12 @@ function protectedLocation(
 /** How many links `physicalPath` follows before giving up, as the kernel's `ELOOP` does. */
 const MAX_LINK_HOPS = 40;
 
+/** A path that could not be resolved for a reason other than "not there yet". */
+class UnresolvablePathError extends Error {}
+
+const errorCode = (error: unknown): unknown =>
+  typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+
 /**
  * `path` as the file system resolves it. The part that does not exist yet — a file about to be
  * created — is appended to the deepest ancestor that does, which is what an open of it reaches.
@@ -371,15 +424,20 @@ const MAX_LINK_HOPS = 40;
  * but an open that creates a file follows it and creates the target. Taking the link's own name
  * as "a file about to be created" would let a write through `work/innocent.json ->
  * ../orca.permissions.json` create the sidecar while being judged a write inside the workspace.
+ *
+ * Throws `UnresolvablePathError` for anything but absence: no permission, too many links, a
+ * component that is not a directory.
  */
 function physicalPath(path: string, hops = 0): string {
   const missing: string[] = [];
   for (let head = path; ;) {
     try {
       return join(realpathSync.native(head), ...missing);
-    } catch {
-      const link = hops < MAX_LINK_HOPS ? linkTarget(head) : undefined;
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") throw new UnresolvablePathError(head, { cause: error });
+      const link = linkTarget(head);
       if (link !== undefined) {
+        if (hops >= MAX_LINK_HOPS) throw new UnresolvablePathError(head);
         // Joined as text, like the caller's path: the target's own `..` is resolved physically.
         const target = isAbsolute(link) ? link : `${dirname(head)}${sep}${link}`;
         return physicalPath(missing.length === 0 ? target : `${target}${sep}${missing.join(sep)}`, hops + 1);
@@ -392,12 +450,25 @@ function physicalPath(path: string, hops = 0): string {
   }
 }
 
-/** Where the link at `path` points, or undefined when `path` is not a link. */
+/**
+ * The directory entry `path` names: its directory resolved, its last name kept as written.
+ * A last name of `.` or `..` names no entry of its own, so the whole path is resolved.
+ */
+function entryPath(path: string): string {
+  const name = basename(path);
+  const parent = dirname(path);
+  if (name === "" || name === "." || name === ".." || parent === path) return physicalPath(path);
+  return join(physicalPath(parent), name);
+}
+
+/** Where the link at `path` points, or undefined when there is no link there. */
 function linkTarget(path: string): string | undefined {
   try {
     return readlinkSync(path);
-  } catch {
-    return undefined;
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "ENOENT" || code === "EINVAL") return undefined;
+    throw new UnresolvablePathError(path, { cause: error });
   }
 }
 

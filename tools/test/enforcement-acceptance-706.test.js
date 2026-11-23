@@ -52,37 +52,102 @@ describe("the catalogue, the scenarios and the matrix agree", () => {
 });
 
 describe("the matrix checker refuses claims beyond the evidence", () => {
-  const claude = () => structuredClone(matrix.agents.find((a) => a.id === "claude"));
-  const check = (agents, paths = matrix.paths) => checkSupportMatrix({ ...matrix, agents, paths }, catalogue);
-
-  it("tier B without an installed run", () => {
-    expect(check([{ ...claude(), tier: "B" }])).toContain(
-      "agent claude: tier B needs an installed acceptance run (evidence.installed)",
+  const pin = { agentVersion: "2.1.330", adapterVersion: "0.109.1", host: "linux-x64" };
+  const claude = (extra = {}) => ({
+    ...structuredClone(matrix.agents.find((a) => a.id === "claude")),
+    pin,
+    ...extra,
+  });
+  const acpCases = casesFor(
+    matrix.paths.find((p) => p.id === "acp-ask"),
+    catalogue,
+  );
+  const receipt = (extra = {}) => ({
+    format: "orca-enforcement-receipt/1",
+    kind: "installed",
+    agent: "claude",
+    agentVersion: "2.1.330",
+    host: "linux-x64",
+    route: "acp-ask",
+    build: "0123456789abcdef0123456789abcdef01234567",
+    checks: { connects: "pass", uncoveredRoutesRefused: "pass" },
+    cases: acpCases.map((id) => ({ id, result: "pass" })),
+    ...extra,
+  });
+  const check = (agent, files = {}, paths = matrix.paths) =>
+    checkSupportMatrix(
+      { ...matrix, agents: [{ ...agent, receipts: Object.keys(files) }], paths },
+      catalogue,
+      (p) => p in files,
+      (p) => files[p],
     );
-  });
+  const needs = (tier, route = "acp-ask") =>
+    `agent claude: tier ${tier} on ${route} needs a passing ${tier === "C" ? "connected" : "installed"} receipt for claude 2.1.330 on linux-x64`;
 
-  it("tier C without a connected receipt", () => {
-    const agent = { ...claude(), tier: "C" };
-    agent.evidence.installed = "tools/guard-qualification/cases.json";
-    expect(check([agent])).toContain("agent claude: tier C needs a connected proof receipt (evidence.connected)");
-  });
-
-  it("tier C over an excluded lifecycle case not named as a residual risk", () => {
-    const agent = { ...claude(), tier: "C", routes: ["claude-native-hook"] };
-    agent.evidence.installed = "tools/guard-qualification/cases.json";
-    agent.evidence.connected = "tools/guard-qualification/cases.json";
-    expect(check([agent])).toContain(
-      "agent claude: tier C on claude-native-hook excludes lifecycle case L08; name it in residualRisks",
-    );
-  });
-
-  it("evidence that does not exist, and tier A without listed gaps", () => {
-    const agent = { ...claude(), unsupportedRoutes: [] };
-    agent.evidence.connectivity = ["docs/no-such-file.md"];
-    expect(check([agent])).toEqual([
-      "agent claude: evidence docs/no-such-file.md does not exist",
-      "agent claude: tier A must list the routes ORCA does not cover",
+  it("any tier without a pinned version and host", () => {
+    expect(check(claude({ tier: "A", pin: null }))).toEqual([
+      "agent claude: tier A needs a pinned agent version and host",
     ]);
+  });
+
+  it("any tier without a receipt: a file path or a named residual is not proof", () => {
+    expect(check(claude({ tier: "A" }))).toEqual([needs("A")]);
+    expect(check(claude({ tier: "B" }))).toEqual([needs("B")]);
+  });
+
+  it("a receipt for another version, host, route or build, or a synthetic one", () => {
+    for (const [extra, why] of [
+      [{ agentVersion: "2.1.329" }, "agentVersion 2.1.329"],
+      [{ host: "darwin-arm64" }, "host darwin-arm64"],
+      [{ route: "claude-native-hook" }, "route claude-native-hook"],
+      [{ build: "main" }, "no exact build"],
+      [{ kind: "synthetic" }, "kind synthetic, needs installed"],
+    ])
+      expect(check(claude({ tier: "B" }), { "r.json": receipt(extra) })).toEqual([`${needs("B")} (r.json: ${why})`]);
+  });
+
+  it("a receipt with a failed or missing case, or tier A without its connectivity checks", () => {
+    const failed = receipt({ cases: [{ id: "L01", result: "fail" }] });
+    expect(check(claude({ tier: "B" }), { "r.json": failed })[0]).toContain("a case did not pass");
+    expect(check(claude({ tier: "B" }), { "r.json": receipt({ cases: [] }) })[0]).toContain("missing L01,");
+    expect(check(claude({ tier: "A" }), { "r.json": receipt({ checks: {} }) })[0]).toContain(
+      "needs checks.connects and checks.uncoveredRoutesRefused passing",
+    );
+  });
+
+  it("accepts a tier exactly backed by receipts", () => {
+    expect(check(claude({ tier: "A" }), { "r.json": receipt() })).toEqual([]);
+    expect(check(claude({ tier: "B" }), { "r.json": receipt() })).toEqual([]);
+    expect(check(claude({ tier: "C" }), { "r.json": receipt({ kind: "connected" }) })).toEqual([]);
+  });
+
+  it("tier C over a route that excludes a lifecycle case, named residual or not", () => {
+    const hookCases = casesFor(
+      matrix.paths.find((p) => p.id === "claude-native-hook"),
+      catalogue,
+    );
+    const agent = claude({
+      tier: "C",
+      routes: ["claude-native-hook"],
+      residualRisks: ["L08: the hook's ask is not followed"],
+    });
+    const connected = receipt({
+      kind: "connected",
+      route: "claude-native-hook",
+      cases: hookCases.map((id) => ({ id, result: "pass" })),
+    });
+    expect(check(agent, { "r.json": connected })).toEqual([
+      "agent claude: tier C on claude-native-hook excludes lifecycle case L08",
+    ]);
+  });
+
+  it("a receipt that does not exist", () => {
+    expect(
+      checkSupportMatrix(
+        { ...matrix, agents: [claude({ receipts: ["tools/guard-qualification/receipts/nope.json"] })] },
+        catalogue,
+      ),
+    ).toEqual(["agent claude: receipt tools/guard-qualification/receipts/nope.json does not exist"]);
   });
 
   it("a case neither run nor excluded, and an exclusion of a case the path can run", () => {
@@ -90,7 +155,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     const hook = paths.find((p) => p.id === "claude-native-hook");
     delete hook.excluded.L08;
     hook.excluded.L01 = "Not run here for a reason somebody made up.";
-    expect(check(matrix.agents, paths)).toEqual([
+    expect(checkSupportMatrix({ ...matrix, paths }, catalogue)).toEqual([
       "path claude-native-hook: excludes L01, which it can run; run it instead",
       "path claude-native-hook: case L08 is neither run nor excluded with a reason",
     ]);
