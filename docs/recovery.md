@@ -247,7 +247,7 @@ resolve differently and is shown for review, not refused.
 
 ## Not yet
 
-Recovery previews on the operations board (#340), reconciling an
+Reconciling an
 uncertain effect automatically, the operations console (#340), host-specific orphan handling
 (#344), and agent-context recovery for approvals (the Approved, then Continue contract recorded
 on #357).
@@ -293,3 +293,11 @@ none of it and a `--read-only` daemon shows the assessment without buttons.
 - A checkpoint attempt's summary names the run and step it started after, and a reused step
   says which run it came from. A step with a recorded review says what was decided.
 
+On the Runs board, a card whose run has stopped (any status but running, waiting or succeeded)
+previews recovery from the same `runs.recovery` answer: the steps to review first, the first
+option that is not blocked with exactly which steps it would run again, or the daemon's sentence
+for why every way back is blocked. **Open recovery** selects the run in the tree, where this
+section and its controls are. The preview is read again when the run moves, belongs to the
+board's scope (workspace, connection generation and grants), and an answer asked before the
+scope changed, or before the connection ended and came back, is never drawn. A daemon that does
+not list `runs.recovery` is never asked.

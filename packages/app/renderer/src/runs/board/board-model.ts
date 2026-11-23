@@ -6,7 +6,16 @@
  * wait named by what it waits on, and the per-run host load and usage the daemon does not
  * measure said to be unavailable rather than drawn as zero (rule 12).
  */
-import type { DisplayStatus, FollowPhase, RunOperationsView, RunSummaryView } from "@orca/protocol";
+import {
+  RECOVERY_BLOCKER_TEXT,
+  type DisplayStatus,
+  type FollowPhase,
+  type RecoveryAssessment,
+  type RecoveryOption,
+  type RecoveryStep,
+  type RunOperationsView,
+  type RunSummaryView,
+} from "@orca/protocol";
 
 /**
  * What the words below read from a run: a board card's `RunSummaryView`, or a machine's run
@@ -84,4 +93,49 @@ export function boardRuns(visible: readonly RunSummaryView[], following: readonl
   const ids = active.map((run) => run.id);
   const kept = following.filter((id) => shown.has(id) && !ids.includes(id));
   return [...ids, ...kept].slice(0, BOARD_LIMIT);
+}
+
+/** Statuses with nothing to recover: moving, or finished well. The run summary uses the same rule. */
+export const RECOVERY_QUIET: ReadonlySet<string> = new Set(["running", "waiting", "succeeded"]);
+
+const OPTION_LABEL: Record<RecoveryOption["kind"], string> = {
+  resume: "Resume",
+  "checkpoint-attempt": "Checkpoint attempt",
+  "new-run": "New run",
+};
+/** The order a card names options in: continuing the same run first, a fresh run last. */
+const OPTION_ORDER: readonly RecoveryOption["kind"][] = ["resume", "checkpoint-attempt", "new-run"];
+
+const nodes = (steps: readonly RecoveryStep[]): string => [...new Set(steps.map((s) => s.nodeId))].join(", ");
+
+/**
+ * A card's recovery preview (#357), from the daemon's own assessment and never guessed: the
+ * steps that need review before anything repeats them, the first option that is not blocked
+ * with exactly which steps it would run again, or, when every way back is blocked, the
+ * daemon's sentence for why. The full options, checkpoints and controls are in the run's own
+ * recovery section, one click away.
+ */
+export function recoveryLines(assessment: RecoveryAssessment): string[] {
+  const lines: string[] = [];
+  if (assessment.uncertain.length)
+    lines.push(`Review first: ${nodes(assessment.uncertain)} may have acted outside ORCA`);
+  const options = OPTION_ORDER.map((kind) => assessment.options.find((o) => o.kind === kind)).filter(
+    (o): o is RecoveryOption => o !== undefined,
+  );
+  const open = options.find((o) => o.readiness !== "blocked");
+  if (!open) {
+    const blocker = options.flatMap((o) => o.blockers)[0];
+    lines.push(blocker ? `No way back: ${RECOVERY_BLOCKER_TEXT[blocker]}` : "No way back offered");
+    return lines;
+  }
+  const from =
+    open.kind === "checkpoint-attempt"
+      ? assessment.checkpoints.find((c) => c.stepRunId === open.checkpointStepRunId)?.nodeId
+      : undefined;
+  lines.push(
+    `${OPTION_LABEL[open.kind]}${from ? ` after ${from}` : ""}${open.readiness === "unverified" ? " (unverified)" : ""}`,
+  );
+  if (open.kind !== "new-run")
+    lines.push(open.runsAgain.length ? `Runs again: ${nodes(open.runsAgain)}` : "Runs nothing again");
+  return lines;
 }

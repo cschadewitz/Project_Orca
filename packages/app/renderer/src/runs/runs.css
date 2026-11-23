@@ -309,6 +309,18 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.orca-board__recovery {
+  display: grid;
+  gap: var(--space-1);
+  justify-items: start;
+  padding-top: var(--space-2);
+  border-top: var(--stroke-hairline) solid var(--border-subtle);
+}
+.orca-board__recovery p,
+.orca-board__recovery-title {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 
 /* ---------- search (#340 over #255) ----------
    In the tree's place, like the board: a field, then the hits, which scroll here and nowhere
