@@ -47,6 +47,27 @@ describe("capability selections (#335)", () => {
     );
   });
 });
+describe("secret references in a catalog server's environment (#335)", () => {
+  it("offers the draft's secret ids only at a variable's secret", () => {
+    const value = { secrets: { "gh-token": {}, "db.password": {} }, capabilities: { mcpServers: { github: {} } } };
+    expect(
+      configurationReferenceChoices(value, undefined, [
+        "capabilities",
+        "mcpServers",
+        "github",
+        "env",
+        "TOKEN",
+        "secret",
+      ]),
+    ).toEqual(["db.password", "gh-token"]);
+    expect(
+      configurationReferenceChoices(value, undefined, ["capabilities", "mcpServers", "github", "env", "TOKEN"]),
+    ).toBeUndefined();
+    expect(
+      configurationReferenceChoices({}, undefined, ["capabilities", "mcpServers", "github", "env", "TOKEN", "secret"]),
+    ).toEqual([]);
+  });
+});
 describe("three-way configuration reconciliation", () => {
   it("retains independent scalar edits and detects overlapping values", () => {
     const edits = [{ kind: "set" as const, path: ["roles", "builder"], value: "next" }];

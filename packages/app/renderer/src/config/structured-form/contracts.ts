@@ -37,7 +37,12 @@ export type FieldShape = FieldMetadata &
     | { readonly kind: "scalar"; readonly field: ConfigFieldDescription }
     | { readonly kind: "object"; readonly fields: Readonly<Record<string, FieldShape>> }
     | { readonly kind: "array"; readonly item: FieldShape }
-    | { readonly kind: "record"; readonly value: FieldShape; readonly keyPattern?: string | undefined }
+    | {
+        readonly kind: "record";
+        readonly value: FieldShape;
+        readonly keyPattern?: string | undefined;
+        readonly valueKind?: "env" | undefined;
+      }
     | {
         readonly kind: "union";
         readonly discriminator: string;

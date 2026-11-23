@@ -1,5 +1,5 @@
 /** Authoritative rich form metadata; no renderer schema copy and no plugin execution. */
-import { OrcaConfigSchema } from "@orca/core";
+import { EnvValueSchema, OrcaConfigSchema } from "@orca/core";
 import type { ConfigFieldMetadata, ConfigFieldShape, ConfigFormSchema, ConfigFieldType } from "@orca/protocol";
 import type { z } from "zod";
 import { configFieldVisibility } from "./config-form-visibility.js";
@@ -117,11 +117,15 @@ function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
       if (!node.def.valueType || key?.def.type !== "string" || key.def.coerce) return unsupported();
       const pattern = keyPattern(key.def.checks ?? []);
       if (pattern === false) return unsupported();
+      // An environment map (#336): a literal or a secret reference per variable. The value
+      // shape stays opaque; the hint lets a client that knows it pick references.
+      const env = (node.def.valueType as unknown) === EnvValueSchema;
       return {
         ...meta,
         kind: "record",
         value: child(node.def.valueType, `${path}.<key>`),
         ...(pattern === undefined ? {} : { keyPattern: pattern }),
+        ...(env ? { valueKind: "env" as const } : {}),
       };
     }
     case "union": {

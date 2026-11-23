@@ -167,6 +167,12 @@ export type ConfigFieldShape = ConfigFieldMetadata &
          * as a catalog id's. Absent: any key the form's own safety rule allows.
          */
         keyPattern?: string | undefined;
+        /**
+         * `env` (#335): every value is an environment value, a literal string (whose text is
+         * never shown) or a secret reference `{ secret: <id> }`. Its `value` shape stays
+         * `unsupported`, so a client that does not know this hint edits nothing inside it.
+         */
+        valueKind?: "env" | undefined;
       }
     | { kind: "union"; discriminator: string; branches: Record<string, ConfigFieldShape> }
     | { kind: "unsupported"; reason: "opaque" | "metadata-unavailable" }
@@ -196,6 +202,7 @@ export const ConfigFieldShapeSchema: z.ZodType<ConfigFieldShape> = z.lazy(() =>
       kind: z.literal("record"),
       value: ConfigFieldShapeSchema,
       keyPattern: z.string().optional(),
+      valueKind: z.literal("env").optional(),
     }),
     z.object({
       ...FieldMetadataShape,

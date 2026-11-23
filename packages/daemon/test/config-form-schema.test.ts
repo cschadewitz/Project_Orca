@@ -97,12 +97,26 @@ describe("authoritative rich configuration metadata", () => {
         visibility: "non-secret",
         keyPattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$",
       });
-    // An MCP server's id and command are shown; its arguments and environment are withheld.
+    // An MCP server's id and command are shown; its arguments are withheld. Its environment
+    // names variables, and each value stays opaque: a literal is never described as shown.
     const server = (capabilities.fields.mcpServers as { value: { fields: Record<string, { visibility: string }> } })
       .value.fields;
     expect(server.command!.visibility).toBe("non-secret");
     expect(server.args!.visibility).toBe("withheld");
-    expect(server.env!.visibility).toBe("withheld");
+    expect(server.env).toMatchObject({
+      kind: "record",
+      visibility: "non-secret",
+      valueKind: "env",
+      value: { kind: "unsupported", visibility: "metadata-unavailable" },
+    });
+    // Agent environments keep their withheld classification.
+    const agent = (root.fields.agents as { item: { fields: Record<string, { visibility: string }> } }).item.fields;
+    expect(agent.env!.visibility).toBe("withheld");
+    // Only the audited environment value schema carries the hint.
+    expect(
+      describeFormNode(z.record(z.string(), z.union([z.string(), z.object({ secret: z.string() })]))),
+    ).not.toHaveProperty("valueKind");
+    expect(ConfigFormSchemaSchema.parse(describeConfigFormSchema())).toBeTruthy();
   });
 
   it("fails closed for prefault/coercion rather than guessing input acceptance", () => {

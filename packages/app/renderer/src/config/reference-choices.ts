@@ -45,5 +45,14 @@ export function configurationReferenceChoices(
         ];
     }
   }
+  // A secret reference in a catalog MCP server's environment (#335) names a `secrets:` entry.
+  if (
+    path.length === 6 &&
+    path[0] === "capabilities" &&
+    path[1] === "mcpServers" &&
+    path[3] === "env" &&
+    path[5] === "secret"
+  )
+    choices = isObject(value.secrets) ? Object.keys(value.secrets) : [];
   return choices ? [...new Set(choices)].sort() : undefined;
 }

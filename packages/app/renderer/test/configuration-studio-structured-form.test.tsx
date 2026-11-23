@@ -317,6 +317,57 @@ describe("pending variant review identity", () => {
   });
 });
 
+describe("environment maps with secret references (#335)", () => {
+  const opaque: FieldShape = {
+    ...meta,
+    acceptsAbsent: "metadata-unavailable",
+    acceptsNull: "metadata-unavailable",
+    visibility: "metadata-unavailable",
+    kind: "unsupported",
+    reason: "opaque",
+  };
+  const env: FieldShape = { ...meta, kind: "record", value: opaque, valueKind: "env" };
+  const choices = { referenceChoices: () => ["db-password", "gh-token"] };
+  it("never draws a literal and replaces it with a picked reference", () => {
+    const form = renderForm(env, { TOKEN: "SYNTHETIC_LITERAL_VALUE", DB: { secret: "db-password" } }, choices);
+    expect(form.container.textContent).not.toContain("SYNTHETIC_LITERAL_VALUE");
+    expect(form.container.textContent).toContain("Literal value withheld");
+    const db = screen.getByLabelText<HTMLSelectElement>(/^DB secret/);
+    expect(db.value).toBe("db-password");
+    const token = screen.getByLabelText<HTMLSelectElement>(/^TOKEN secret/);
+    expect(token.value).toBe("");
+    fireEvent.change(token, { target: { value: "gh-token" } });
+    expect(form.current()).toEqual({ TOKEN: { secret: "gh-token" }, DB: { secret: "db-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Delete fixture.DB" }));
+    expect(form.current()).toEqual({ TOKEN: { secret: "gh-token" } });
+  });
+  it("adds variables only as references to known secrets", () => {
+    const form = renderForm(env, {}, choices);
+    const add = () => screen.getByRole("button", { name: "Add Fixture variable" });
+    fireEvent.change(screen.getByLabelText(/^New Fixture variable$|^New Fixture variablefixture/), {
+      target: { value: "GITHUB_TOKEN" },
+    });
+    expect(add().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.change(screen.getByLabelText(/^New Fixture variable secret/), { target: { value: "gh-token" } });
+    fireEvent.click(add());
+    expect(form.current()).toEqual({ GITHUB_TOKEN: { secret: "gh-token" } });
+    expect(form.container.querySelectorAll("input[type=password]")).toHaveLength(0);
+  });
+  it("marks a reference to a secret the draft no longer defines", () => {
+    renderForm(env, { TOKEN: { secret: "removed" } }, choices);
+    expect(screen.getByRole("option", { name: "removed (unavailable reference)" })).toBeTruthy();
+  });
+  it("asks for a secret definition when the draft has none", () => {
+    renderForm(env, {}, { referenceChoices: () => [] });
+    expect(screen.getByText(/Define a secret under secrets first/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add Fixture variable" }).getAttribute("aria-disabled")).toBe("true");
+  });
+  it("leaves an environment map opaque to a form without the hint", () => {
+    const form = renderForm({ ...env, valueKind: undefined }, { TOKEN: "SYNTHETIC_LITERAL_VALUE" }, choices);
+    expect(form.container.textContent).not.toContain("SYNTHETIC_LITERAL_VALUE");
+    expect(form.container.querySelector("select")).toBeNull();
+  });
+});
 describe("authority, redaction, validation and keyboard boundaries", () => {
   it.each([
     { visibility: "withheld" as const },

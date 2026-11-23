@@ -197,6 +197,8 @@ export function StructuredForm(form: StructuredFormProps): JSX.Element {
         </>
       ) : shape.kind === "array" && Array.isArray(value) ? (
         <ArrayEntries form={form} shape={shape} entries={value} />
+      ) : shape.kind === "record" && shape.valueKind === "env" && isObject(value) ? (
+        <EnvEntries form={form} shape={shape} />
       ) : shape.kind === "record" && isObject(value) ? (
         <RecordEntries form={form} shape={shape} />
       ) : (
@@ -473,6 +475,154 @@ function RecordEntries({
       ) : (
         <Button disabled disabledReason={issue}>
           Add key
+        </Button>
+      )}
+    </div>
+  );
+}
+
+const isSecretRef = (value: unknown): value is { secret: string } =>
+  isObject(value) && Object.keys(value).length === 1 && typeof value.secret === "string";
+
+/**
+ * An environment map (#335/#336): each variable is a secret reference picked from the draft's
+ * `secrets:` ids, or a literal whose text is never drawn. A literal can be replaced by a
+ * reference or deleted; new variables are added as references only.
+ */
+function EnvEntries({
+  form,
+  shape,
+}: {
+  form: StructuredFormProps;
+  shape: Extract<FieldShape, { kind: "record" }>;
+}): JSX.Element {
+  const [name, setName] = useState("");
+  const [secret, setSecret] = useState("");
+  const { value, path, label } = form;
+  const entries = Object.entries(isObject(value) ? value : {});
+  const choicesFor = (variable: string): readonly string[] =>
+    form.referenceChoices?.([...path, variable, "secret"]) ?? [];
+  const issue = recordKeyError(name, value, shape.keyPattern);
+  const newChoices = choicesFor(name === "" ? "variable" : name);
+  const addEdits: readonly EditIntent[] = [{ kind: "set", path: [...path, name], value: { secret } }];
+  const pick = (variable: string, id: string): void => {
+    const edits: EditIntent[] = [{ kind: "set", path: [...path, variable], value: { secret: id } }];
+    if (id !== "" && form.access(edits).allowed) form.onEdit(edits);
+  };
+  return (
+    <div>
+      {entries.length === 0 && <Text style="caption">No variables.</Text>}
+      {entries.map(([variable, entry]) => {
+        const keyIssue = recordKeyError(variable, {}, shape.keyPattern);
+        const choices = choicesFor(variable);
+        const current = isSecretRef(entry) ? entry.secret : "";
+        const access = form.access([{ kind: "set", path: [...path, variable], value: { secret: current } }]);
+        return (
+          <div key={variable} data-record-entry={variable}>
+            <Card eyebrow={variable}>
+              {keyIssue !== undefined ? (
+                <Text style="caption">This variable requires authorized raw editing.</Text>
+              ) : (
+                <>
+                  <Text style="caption">
+                    {isSecretRef(entry)
+                      ? "Secret reference: the value is read on the secret's host when the server starts."
+                      : typeof entry === "string"
+                        ? "Literal value withheld. Replace it with a secret reference to keep it out of config."
+                        : "This value requires authorized raw editing."}
+                  </Text>
+                  {(isSecretRef(entry) || typeof entry === "string") && (
+                    <ConfigField
+                      label={`${variable} secret`}
+                      path={pathLabel([...path, variable])}
+                      {...(!access.allowed ? { help: access.reason } : {})}
+                    >
+                      {(control) => (
+                        <select
+                          {...control}
+                          className={`orca-input ${textClass("mono-body")}`}
+                          value={current}
+                          disabled={!access.allowed}
+                          onChange={(event) => pick(variable, event.target.value)}
+                        >
+                          <option value="">Choose secret</option>
+                          {current !== "" && !choices.includes(current) && (
+                            <option value={current}>{current} (unavailable reference)</option>
+                          )}
+                          {choices.map((choice) => (
+                            <option key={choice} value={choice}>
+                              {choice}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </ConfigField>
+                  )}
+                  <Action
+                    edits={[{ kind: "remove", path: [...path, variable] }]}
+                    form={form}
+                    aria-label={`Delete ${pathLabel([...path, variable])}`}
+                  >
+                    Delete variable
+                  </Action>
+                </>
+              )}
+            </Card>
+          </div>
+        );
+      })}
+      <ConfigField
+        label={`New ${label} variable`}
+        path={pathLabel(path)}
+        {...(name === "" || issue === undefined ? {} : { error: issue })}
+      >
+        {(control) => (
+          <input
+            {...control}
+            className={`orca-input ${textClass("mono-body")}`}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        )}
+      </ConfigField>
+      {newChoices.length === 0 ? (
+        <Text style="caption">Define a secret under secrets first, then reference it here.</Text>
+      ) : (
+        <ConfigField label={`New ${label} variable secret`} path={pathLabel(path)}>
+          {(control) => (
+            <select
+              {...control}
+              className={`orca-input ${textClass("mono-body")}`}
+              value={secret}
+              onChange={(event) => setSecret(event.target.value)}
+            >
+              <option value="">Choose secret</option>
+              {newChoices.map((choice) => (
+                <option key={choice} value={choice}>
+                  {choice}
+                </option>
+              ))}
+            </select>
+          )}
+        </ConfigField>
+      )}
+      {issue === undefined && secret !== "" && newChoices.includes(secret) ? (
+        <Action
+          edits={addEdits}
+          form={{
+            ...form,
+            onEdit: (edits) => {
+              setName("");
+              setSecret("");
+              form.onEdit(edits);
+            },
+          }}
+        >
+          {`Add ${label} variable`}
+        </Action>
+      ) : (
+        <Button disabled disabledReason={issue ?? "Choose a secret."}>
+          {`Add ${label} variable`}
         </Button>
       )}
     </div>
