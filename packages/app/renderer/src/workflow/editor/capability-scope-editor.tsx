@@ -12,7 +12,9 @@ import {
   SCOPE_KINDS,
   SCOPE_OPS,
   addToScope,
+  clearInherited,
   normalizeScope,
+  stopReplacing,
   removeFromScope,
   type CapabilityChoices,
   type Scope,
@@ -46,7 +48,7 @@ export function CapabilityScopeEditor({
       </Text>
       {SCOPE_KINDS.map((kind) => {
         const selection = scope[kind] ?? {};
-        const conflict = !!selection.replace?.length && !!(selection.enable?.length || selection.disable?.length);
+        const conflict = selection.replace !== undefined && !!(selection.enable?.length || selection.disable?.length);
         return (
           <div key={kind} role="group" aria-label={`${label} ${KIND_LABEL[kind]}`}>
             <Text style="label-strong">{KIND_LABEL[kind]}</Text>
@@ -56,6 +58,15 @@ export function CapabilityScopeEditor({
                 name={`${label} ${KIND_LABEL[kind]} ${OP_LABEL[op]}`}
                 title={OP_LABEL[op]}
                 ids={selection[op] ?? []}
+                {...(op === "replace"
+                  ? {
+                      replace: {
+                        set: selection.replace !== undefined,
+                        onClear: () => commit(clearInherited(scope, kind)),
+                        onStop: () => commit(stopReplacing(scope, kind)),
+                      },
+                    }
+                  : {})}
                 choices={choices?.[kind]}
                 readOnly={readOnly}
                 onAdd={(id) => commit(addToScope(scope, kind, op, id))}
@@ -78,6 +89,7 @@ function IdList({
   name,
   title,
   ids,
+  replace,
   choices,
   readOnly,
   onAdd,
@@ -86,6 +98,8 @@ function IdList({
   name: string;
   title: string;
   ids: readonly string[];
+  /** For "Use only": whether `replace` is written at all, and its two distinct removals. */
+  replace?: { set: boolean; onClear: () => void; onStop: () => void };
   choices: readonly string[] | undefined;
   readOnly: boolean;
   onAdd: (id: string) => void;
@@ -97,7 +111,11 @@ function IdList({
   return (
     <div className="orca-wfedit__row">
       <Text style="caption">{title}:</Text>
-      {ids.length === 0 && <Text style="caption">none</Text>}
+      {ids.length === 0 && (
+        <Text style="caption">
+          {replace === undefined ? "none" : replace.set ? "none (clears inherited)" : "not set (inherits)"}
+        </Text>
+      )}
       {ids.map((id) => (
         <span key={id} className="orca-wfedit__row">
           <span className={textClass("mono-body")}>{id}</span>
@@ -108,6 +126,16 @@ function IdList({
           )}
         </span>
       ))}
+      {!readOnly && replace && !replace.set && (
+        <Button size="sm" aria-label={`Clear inherited: ${name}`} onClick={replace.onClear}>
+          Use none
+        </Button>
+      )}
+      {!readOnly && replace?.set && (
+        <Button size="sm" aria-label={`Stop overriding: ${name}`} onClick={replace.onStop}>
+          Inherit again
+        </Button>
+      )}
       {!readOnly && offered.length > 0 && (
         <Menu
           label={`Add to ${name}`}

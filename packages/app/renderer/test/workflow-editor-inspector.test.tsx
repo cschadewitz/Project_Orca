@@ -458,11 +458,51 @@ describe("capability scopes (#335)", () => {
       { op: "setWorkflow", capabilities: { mcpServers: { disable: ["db"] }, skills: { replace: ["review"] } } },
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Remove review from Workflow Skills Use only" }));
-    expect(onApply).toHaveBeenLastCalledWith([{ op: "setWorkflow", capabilities: null }]);
+    expect(onApply).toHaveBeenLastCalledWith([{ op: "setWorkflow", capabilities: { skills: { replace: [] } } }]);
     cleanup();
     mount({ workflowScope: false });
     expect(screen.getByText(/needs a newer daemon/)).toBeTruthy();
     expect(screen.queryByRole("group", { name: "Workflow capabilities" })).toBeNull();
+  });
+  const withPlanScope = (capabilities: unknown) =>
+    editorGraph({ ...draft, nodes: { ...draft.nodes, plan: { ...draft.nodes.plan, capabilities } } }, published, [])!;
+  it("round-trips an explicit empty replace at step scope through unrelated and last-entry edits", () => {
+    const { onApply } = node("plan", { graph: withPlanScope({ mcpServers: { replace: [] } }) });
+    expect(screen.getByRole("group", { name: "plan MCP servers" }).textContent).toContain("none (clears inherited)");
+    enter(screen.getByRole("textbox", { name: "Type an id for plan Skills Turn off" }), "review");
+    expect(onApply).toHaveBeenLastCalledWith([
+      {
+        op: "updateNode",
+        id: "plan",
+        set: { capabilities: { mcpServers: { replace: [] }, skills: { disable: ["review"] } } },
+      },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Stop overriding: plan MCP servers Use only" }));
+    expect(onApply).toHaveBeenLastCalledWith([{ op: "updateNode", id: "plan", unset: ["capabilities"] }]);
+    cleanup();
+    const second = node("plan", { graph: withPlanScope({ skills: { replace: ["review"] } }) });
+    fireEvent.click(screen.getByRole("button", { name: "Remove review from plan Skills Use only" }));
+    expect(second.onApply).toHaveBeenLastCalledWith([
+      { op: "updateNode", id: "plan", set: { capabilities: { skills: { replace: [] } } } },
+    ]);
+    cleanup();
+    const third = node("plan");
+    fireEvent.click(screen.getByRole("button", { name: "Clear inherited: plan Skills Use only" }));
+    expect(third.onApply).toHaveBeenLastCalledWith([
+      { op: "updateNode", id: "plan", set: { capabilities: { skills: { replace: [] } } } },
+    ]);
+  });
+  it("round-trips an explicit empty replace at workflow scope", () => {
+    const { onApply } = mount({
+      workflow: { name: "Flow", capabilities: { skills: { replace: [] } } },
+      capabilityChoices: choices,
+    });
+    choose("Add to Workflow MCP servers Turn on", "db");
+    expect(onApply).toHaveBeenLastCalledWith([
+      { op: "setWorkflow", capabilities: { mcpServers: { enable: ["db"] }, skills: { replace: [] } } },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Stop overriding: Workflow Skills Use only" }));
+    expect(onApply).toHaveBeenLastCalledWith([{ op: "setWorkflow", capabilities: null }]);
   });
   it("shows scopes read-only on somebody else's draft", () => {
     node("plan", {

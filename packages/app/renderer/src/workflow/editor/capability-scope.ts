@@ -39,14 +39,18 @@ export function readScope(value: unknown): Scope | undefined {
   return scope;
 }
 
-/** Empty lists and kinds dropped; `undefined` when nothing is left, so the key is removed. */
+/**
+ * Empty `enable`/`disable` lists and empty kinds dropped; `undefined` when nothing is left, so
+ * the key is removed. An explicit `replace` is kept even when empty: `replace: []` clears what
+ * the scope inherits, which is a different policy from no `replace` at all (inherit).
+ */
 export function normalizeScope(scope: Scope): DraftCapabilityScope | undefined {
   const out: DraftCapabilityScope = {};
   for (const kind of SCOPE_KINDS) {
     const selection: { [O in ScopeOp]?: string[] } = {};
     for (const op of SCOPE_OPS) {
       const ids = scope[kind]?.[op];
-      if (ids && ids.length) selection[op] = ids;
+      if (ids && (ids.length || op === "replace")) selection[op] = ids;
     }
     if (Object.keys(selection).length) out[kind] = selection;
   }
@@ -59,6 +63,18 @@ export function addToScope(scope: Scope, kind: ScopeKind, op: ScopeOp, id: strin
   return { ...scope, [kind]: { ...scope[kind], [op]: [...ids, id] } };
 }
 
+/** Set `replace` to the empty list: this scope clears everything it would inherit. */
+export function clearInherited(scope: Scope, kind: ScopeKind): Scope {
+  return { ...scope, [kind]: { ...scope[kind], replace: [] } };
+}
+
+/** Drop `replace` entirely: this scope inherits again. */
+export function stopReplacing(scope: Scope, kind: ScopeKind): Scope {
+  const { replace: _dropped, ...rest } = scope[kind] ?? {};
+  return { ...scope, [kind]: rest };
+}
+
+/** Removing the last `replace` id leaves `replace: []` (still clearing); `stopReplacing` removes it. */
 export function removeFromScope(scope: Scope, kind: ScopeKind, op: ScopeOp, id: string): Scope {
   const ids = scope[kind]?.[op] ?? [];
   return { ...scope, [kind]: { ...scope[kind], [op]: ids.filter((other) => other !== id) } };

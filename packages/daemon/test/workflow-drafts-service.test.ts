@@ -264,6 +264,16 @@ describe("editing", () => {
       casey,
     );
     expect(parse(emptied.text)).not.toHaveProperty("capabilities");
+    // An explicit empty replace clears what the workflow inherits, so it is written as is.
+    const clearing = await f.service.apply(
+      {
+        workflowId: "tiny",
+        expectedRevision: emptied.revision,
+        ops: [{ op: "setWorkflow", capabilities: { mcpServers: { replace: [] } } }],
+      },
+      casey,
+    );
+    expect(parse(clearing.text)).toMatchObject({ capabilities: { mcpServers: { replace: [] } } });
     // Shape is checked at the wire: an unknown selection verb is refused, not written.
     expect(
       DraftOperationSchema.safeParse({ op: "setWorkflow", capabilities: { skills: { available: ["x"] } } }).success,

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   addToScope,
   catalogChoices,
+  clearInherited,
+  stopReplacing,
   normalizeScope,
   readScope,
   removeFromScope,
@@ -35,6 +37,20 @@ describe("capability scope model", () => {
     expect(normalizeScope(scope)).toEqual({ skills: { enable: ["review"] }, mcpServers: { disable: ["db"] } });
     scope = removeFromScope(removeFromScope(scope, "skills", "enable", "review"), "mcpServers", "disable", "db");
     expect(normalizeScope(scope)).toBeUndefined();
+  });
+  it("keeps an explicit empty replace distinct from no replace", () => {
+    const cleared = readScope({ mcpServers: { replace: [] } })!;
+    expect(normalizeScope(cleared)).toEqual({ mcpServers: { replace: [] } });
+    // An unrelated edit keeps the clearing.
+    expect(normalizeScope(addToScope(cleared, "skills", "disable", "review"))).toEqual({
+      mcpServers: { replace: [] },
+      skills: { disable: ["review"] },
+    });
+    // Removing the last replaced id still clears; only stopReplacing inherits again.
+    const one = addToScope({}, "skills", "replace", "review");
+    expect(normalizeScope(removeFromScope(one, "skills", "replace", "review"))).toEqual({ skills: { replace: [] } });
+    expect(normalizeScope(stopReplacing(one, "skills"))).toBeUndefined();
+    expect(normalizeScope(clearInherited({}, "mcpServers"))).toEqual({ mcpServers: { replace: [] } });
   });
   it("offers the workflow scope from protocol 2.10, and catalog ids from the config", () => {
     expect(workflowScopeSupported(undefined)).toBe(true);
