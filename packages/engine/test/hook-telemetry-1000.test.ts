@@ -127,7 +127,7 @@ async function setup(diagnostics: Record<string, unknown> | undefined) {
   return { orchestrator, stores, spools, dir };
 }
 
-describe("hook telemetry through a run", () => {
+describe.runIf(process.platform !== "win32")("hook telemetry through a run", () => {
   it("keeps nothing unless the agent keeps tool calls", async () => {
     for (const diagnostics of [undefined, { toolCalls: "off" }]) {
       const { orchestrator, stores, spools, dir } = await setup(diagnostics);

@@ -65,8 +65,10 @@ const backends: [string, () => Promise<{ store: ToolTelemetryStore; dir?: string
     },
   ],
 ];
+// The file store is POSIX only; on Windows it refuses, below.
+const hostBackends = process.platform === "win32" ? backends.slice(0, 1) : backends;
 
-describe.each(backends)("tool telemetry store (%s)", (_name, make) => {
+describe.each(hostBackends)("tool telemetry store (%s)", (_name, make) => {
   it("keeps records per run and session, in order, and exports them", async () => {
     const { store } = await make();
     await store.append([record("run_a", "sess_1", 0), record("run_a", "sess_1", 1)]);
@@ -142,7 +144,7 @@ describe.each(backends)("tool telemetry store (%s)", (_name, make) => {
   });
 });
 
-describe("tool telemetry files", () => {
+describe.runIf(process.platform !== "win32")("tool telemetry files", () => {
   it("lives under diagnostics/tool-calls, owner-only, and leaves only a marker once deleted", async () => {
     const dir = await tmp();
     const store = new FileToolTelemetryStore(dir);
@@ -329,12 +331,12 @@ describe("tool telemetry files", () => {
   });
 });
 
-describe("on Windows", () => {
-  it("keeps no telemetry store, and the file store refuses every operation", async () => {
+const supported = process.platform !== "win32";
+
+describe("where tool-call diagnostics are not supported", () => {
+  it("a store told to refuse refuses every operation and writes nothing", async () => {
     const dir = await tmp();
-    expect(fileToolTelemetryStore(dir, "win32")).toBeUndefined();
-    expect(fileToolTelemetryStore(dir, "linux")).toBeInstanceOf(FileToolTelemetryStore);
-    const store = new FileToolTelemetryStore(dir, { platform: "win32" });
+    const store = new FileToolTelemetryStore(dir, { unsupported: true });
     const refused = { code: "NOT_SUPPORTED", message: expect.stringContaining("not supported on Windows") };
     await expect(store.append([record("run_a", "sess_1", 0)])).rejects.toMatchObject(refused);
     await expect(store.list({ runId: "run_a" })).rejects.toMatchObject(refused);
@@ -342,5 +344,9 @@ describe("on Windows", () => {
     await expect(store.delete({ runId: "run_a" })).rejects.toMatchObject(refused);
     await expect(store.prune(new Date())).rejects.toMatchObject(refused);
     expect(await readdir(dir)).toEqual([]);
+  });
+
+  it.runIf(supported)("a supported host gets a file store", async () => {
+    expect(fileToolTelemetryStore(await tmp())).toBeInstanceOf(FileToolTelemetryStore);
   });
 });

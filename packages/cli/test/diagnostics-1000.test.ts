@@ -42,7 +42,7 @@ const record = (runId: string, sessionId: string, seq: number, expiresAt: string
   latencyMs: 1,
 });
 
-describe("orca diagnostics tool-calls", () => {
+describe.runIf(process.platform !== "win32")("orca diagnostics tool-calls", () => {
   it("lists runs, exports JSON lines, deletes a session or run, and prunes expired records", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-diagnostics-cli-"));
     dirs.push(dir);

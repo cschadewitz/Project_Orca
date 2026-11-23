@@ -274,36 +274,40 @@ async function writeMarker(path: string, dir: string, at: Date): Promise<void> {
 export const withToolTelemetry = (store: ToolTelemetryStore | undefined): { toolTelemetry?: ToolTelemetryStore } =>
   store ? { toolTelemetry: store } : {};
 
-/** Whether the file store can keep telemetry here: everywhere but Windows. */
-export const toolTelemetrySupported = (platform: NodeJS.Platform = process.platform): boolean => platform !== "win32";
+/**
+ * Whether this host can keep telemetry: everywhere but Windows. Always the real host; nothing
+ * a caller passes can make an unsupported host look supported.
+ */
+export const toolTelemetrySupported = (): boolean => process.platform !== "win32";
 
 export const TOOL_TELEMETRY_UNSUPPORTED =
   "tool-call diagnostics are not supported on Windows: ORCA cannot open their files there without following links";
 
-/** The file store for a backend, or none where it is not supported, so nothing is recorded. */
-export function fileToolTelemetryStore(
-  storeDir: string,
-  platform: NodeJS.Platform = process.platform,
-): FileToolTelemetryStore | undefined {
-  return toolTelemetrySupported(platform) ? new FileToolTelemetryStore(storeDir, { platform }) : undefined;
+/** The file store for a backend, or none on a host where it is not supported, so nothing is recorded. */
+export function fileToolTelemetryStore(storeDir: string): FileToolTelemetryStore | undefined {
+  return toolTelemetrySupported() ? new FileToolTelemetryStore(storeDir) : undefined;
 }
 
 export class FileToolTelemetryStore implements ToolTelemetryStore {
   private readonly diagnostics: string;
   private readonly root: string;
+  private readonly denied: boolean;
 
-  private readonly platform: NodeJS.Platform;
-
-  constructor(storeDir: string, options: { platform?: NodeJS.Platform | undefined } = {}) {
+  /**
+   * `unsupported: true` refuses as an unsupported host does, for tests of that path on a
+   * supported one. It can only deny: on an unsupported host the store refuses whatever is
+   * passed.
+   */
+  constructor(storeDir: string, options: { unsupported?: true | undefined } = {}) {
     this.diagnostics = join(storeDir, DIAGNOSTICS_DIR);
     this.root = join(storeDir, TOOL_TELEMETRY_DIR);
-    this.platform = options.platform ?? process.platform;
+    this.denied = options.unsupported === true;
   }
 
   /** Fail closed where the file checks have no equivalent (see the module comment). */
   private refuseUnsupported(): void {
-    if (!toolTelemetrySupported(this.platform))
-      throw new OrcaError("NOT_SUPPORTED", TOOL_TELEMETRY_UNSUPPORTED, { platform: this.platform });
+    if (this.denied || !toolTelemetrySupported())
+      throw new OrcaError("NOT_SUPPORTED", TOOL_TELEMETRY_UNSUPPORTED, { platform: process.platform });
   }
 
   private runDir(runId: string): string {

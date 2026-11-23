@@ -71,7 +71,7 @@ async function collecting(dir: string, onReport?: (r: HookTelemetryDrainReport) 
   return { spool, got };
 }
 
-describe("hook telemetry spool", () => {
+describe.runIf(process.platform !== "win32")("hook telemetry spool", () => {
   it("is made empty and owner-only by ORCA, and hands the hook's lines over in order", async () => {
     const dir = await tmp();
     const { spool, got } = await collecting(dir);
