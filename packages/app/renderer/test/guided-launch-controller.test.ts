@@ -389,6 +389,10 @@ describe("guided launch exact review and admission", () => {
     await controller.preview();
     expect(ports.preflight).not.toHaveBeenCalled();
   });
+  it("takes a secret input as the id of a configured secret, as plain text (#363)", () => {
+    expect(parseInput({ type: "secret" }, "deploy-token")).toEqual({ ok: true, value: "deploy-token" });
+    expect(inputSensitive({ type: "secret" })).toBe(false);
+  });
   it("requires explicit abandonment for new work without cancelling a run", async () => {
     const ports = launchPorts();
     const controller = new GuidedLaunchController(launchContext(), launchDraft(), ports);
