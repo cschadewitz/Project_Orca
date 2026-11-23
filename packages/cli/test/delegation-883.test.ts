@@ -747,6 +747,29 @@ edges:
     expect((await readAutoRecord()).credentialId).toBe(before.credentialId);
   }, 180_000);
 
+  it("holds a delegation that starts while the remote is being enrolled until the enrollment ends", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const lock = `${autoRecord()}.lock`;
+    const before = ((await call(remote, "runs.list", {})).runs as { workflowId: string }[]).filter(
+      (r) => r.workflowId === "remote-auto",
+    ).length;
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, host: hostname(), since: new Date().toISOString() }));
+    let runId: string;
+    try {
+      runId = await admit(parent, "delegate-auto", { city: "Hammerfest" });
+      await new Promise((r) => setTimeout(r, 2_000));
+      // Nothing was sent, and nothing was recorded that a new enrollment could strand.
+      const now = ((await call(remote, "runs.list", {})).runs as { workflowId: string }[]).filter(
+        (r) => r.workflowId === "remote-auto",
+      ).length;
+      expect(now).toBe(before);
+      expect(new DelegationReceipts(join(parent.dir, ".orca", "delegations")).unsettled("auto-box")).toBe(0);
+    } finally {
+      rmSync(lock, { force: true });
+    }
+    expect(await finished(parent, runId)).toMatchObject({ status: "succeeded" });
+  }, 180_000);
+
   it("refuses a second enrollment of the same remote while one is running", async (ctx) => {
     if (!sshd) return ctx.skip();
     const lock = `${autoRecord()}.lock`;
@@ -1036,6 +1059,51 @@ describe("delegation through a proxy the test controls (#883)", () => {
     ).resolves.toMatchObject({ stopReason: "end_turn" });
     expect(proxy.state.rules.drop).toBeUndefined();
     await expect(readFile(path, "utf8")).resolves.toContain("Remote report for: task run_latch");
+    await session.close();
+    await proxy.close();
+  }, 60_000);
+
+  it("backs out a new receipt and waits while the remote is being enrolled, then goes on under the same record", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-gate"));
+    let enrolling = true;
+    const seen: (ReturnType<DelegationReceipts["read"]> | "checked")[] = [];
+    const session = await open(proxy.transport(), receipts, {
+      enrollment: {
+        inProgress: () => {
+          // What a running enrollment would see: the receipt was backed out at once.
+          if (enrolling) seen.push(receipts.read("run_gate", "run_gate_step1") ?? "checked");
+          return enrolling;
+        },
+        current: () => true,
+      },
+    });
+    const before = (await runsOf("remote-task")).length;
+    const path = join(work, "gate", "report.md");
+    const running = session.prompt("ignored", { timeoutMs: 60_000, turn: turn("run_gate", path) });
+    await until("the gate to be met", async () => (seen.length >= 2 ? true : undefined));
+    expect(seen.slice(1).every((r) => r === "checked")).toBe(true);
+    expect(await runsOf("remote-task")).toHaveLength(before);
+    enrolling = false;
+    await expect(running).resolves.toMatchObject({ stopReason: "end_turn" });
+    expect(await runsOf("remote-task")).toHaveLength(before + 1);
+    await session.close();
+    await proxy.close();
+  }, 60_000);
+
+  it("refuses, sending nothing and leaving no receipt, when the remote was enrolled again as the step started", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-gate-moved"));
+    const session = await open(proxy.transport(), receipts, {
+      enrollment: { inProgress: () => false, current: () => false },
+    });
+    const before = (await runsOf("remote-task")).length;
+    await expect(
+      session.prompt("ignored", { timeoutMs: 30_000, turn: turn("run_moved", join(work, "moved", "report.md")) }),
+    ).rejects.toMatchObject({ code: "DELEGATION_REFUSED", details: { reason: "scope-changed" } });
+    // Recovery after a restart finds nothing bound to the replaced generation.
+    expect(receipts.read("run_moved", "run_moved_step1")).toBeUndefined();
+    expect(await runsOf("remote-task")).toHaveLength(before);
     await session.close();
     await proxy.close();
   }, 60_000);

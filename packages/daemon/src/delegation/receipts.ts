@@ -209,6 +209,33 @@ export class DelegationReceipts {
   }
 
   /**
+   * Remove a receipt that nothing was ever sent under, if it is still the revision written:
+   * a delegation that backed out before submitting leaves no receipt to strand. Anything else
+   * throws `ReceiptConflict` and removes nothing.
+   */
+  discard(receipt: Pick<DelegationReceipt, "parentRunId" | "delegationId" | "revision">): void {
+    const target = this.file(receipt.parentRunId, receipt.delegationId);
+    const lock = this.lock(target);
+    try {
+      const current = this.read(receipt.parentRunId, receipt.delegationId);
+      if (current?.revision !== receipt.revision || !lock.held()) throw new ReceiptConflict();
+      rmSync(target);
+      try {
+        const dir = openSync(this.dir, "r");
+        try {
+          fsyncSync(dir);
+        } finally {
+          closeSync(dir);
+        }
+      } catch {
+        // Directory fsync is not available everywhere (Windows); the removal stands.
+      }
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
    * An exclusive lock file beside the receipt, naming its owner (a random token, this process
    * and host). It is created with its owner already in it (written aside, then hard-linked into
    * place), so there is never an ownerless lock. Released only by its owner and only while it

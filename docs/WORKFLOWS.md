@@ -445,7 +445,12 @@ The enrollment record is written last, so an enrollment that fails or is cut off
 leaves the previous one in use. Only one enrollment of a remote runs at a time
 (`auth/remotes/<id>.json.lock`; a lock left by a process that is gone is taken over), and none
 runs while delegations to that remote are still in progress, since a new enrollment would
-strand them.
+strand them. The other way round, a delegated step that starts while its remote is being
+enrolled waits for the enrollment to finish before it sends anything; if the enrollment
+replaced the record it was about to use, the step is refused with nothing sent and can be
+retried. Each file enrollment writes is flushed together with its directory, so the order holds
+across a power loss. Windows cannot flush a directory, so there enrollment does not issue
+credentials: save one by hand, as below.
 
 Every credential enrollment issues carries a label unique to that request, and is listed in
 `auth/remotes/<id>.json.pending-revoke` before the request is sent and again before a newer

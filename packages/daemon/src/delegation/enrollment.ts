@@ -154,7 +154,12 @@ export function readEnrollment(file: string): Enrollment | undefined {
   return EnrollmentSchema.parse(JSON.parse(text));
 }
 
-function writeAtomic(file: string, text: string): void {
+/**
+ * Replace `file` with `text`: written aside and flushed, renamed into place, and the directory
+ * flushed so the rename itself survives power loss. With `durable`, a directory that cannot be
+ * flushed throws: the caller's ordering depends on it. Without, it is best effort.
+ */
+function writeAtomic(file: string, text: string, durable = false): void {
   mkdirSync(dirname(file), { recursive: true });
   const temp = `${file}.${randomUUID()}.tmp`;
   const fd = openSync(temp, "wx", 0o600);
@@ -165,6 +170,30 @@ function writeAtomic(file: string, text: string): void {
     closeSync(fd);
   }
   renameSync(temp, file);
+  syncDir(dirname(file), durable);
+}
+
+/** Flush a directory's entries (a rename or removal in it). */
+function syncDir(dir: string, durable: boolean): void {
+  try {
+    const fd = openSync(dir, "r");
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    if (durable) throw error;
+  }
+}
+
+/**
+ * Whether this platform can order enrollment's files across power loss (a flushed directory
+ * after each rename). Issuing and rotating credentials depend on it; Windows cannot flush a
+ * directory, so there enrollment uses only a credential the person saved.
+ */
+export function durableEnrollment(): boolean {
+  return process.platform !== "win32";
 }
 
 /** A fingerprint as the person may type it: `SHA256:<base64>`, padding optional. */
@@ -269,8 +298,11 @@ const PendingRevokeSchema = z
       .string()
       .regex(/^[A-Za-z0-9_-]{12}$/)
       .optional(),
-    /** Its generation file, kept until it is revoked. */
-    tokenFile: z.string().optional(),
+    /** Its generation file (`<remote>.<credential id>.token`), kept until it is revoked. */
+    tokenFile: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9-]{0,62}\.[A-Za-z0-9_-]{12}\.token$/)
+      .optional(),
     route: EnrolledRouteSchema,
     keys: z.string().min(1),
     /** Unknown when enrollment stopped before the daemon named its workspace. */
@@ -280,7 +312,12 @@ const PendingRevokeSchema = z
     /** Why the last attempt left it here, for the person. */
     unresolved: z.string().optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (p) =>
+      p.tokenFile === undefined || (p.credentialId !== undefined && p.tokenFile.endsWith(`.${p.credentialId}.token`)),
+    "tokenFile names another credential",
+  );
 type PendingRevoke = z.infer<typeof PendingRevokeSchema>;
 const PendingRevokesSchema = z.object({ version: z.literal(1), entries: z.array(PendingRevokeSchema) }).strict();
 
@@ -301,8 +338,26 @@ export function readPendingRevokes(file: string): PendingRevoke[] {
 }
 
 function writePendingRevokes(file: string, entries: readonly PendingRevoke[]): void {
-  if (entries.length) writeAtomic(pendingRevokeFile(file), JSON.stringify({ version: 1, entries }, null, 2));
-  else rmSync(pendingRevokeFile(file), { force: true });
+  if (entries.length) writeAtomic(pendingRevokeFile(file), JSON.stringify({ version: 1, entries }, null, 2), true);
+  else {
+    rmSync(pendingRevokeFile(file), { force: true });
+    syncDir(dirname(file), durableEnrollment());
+  }
+}
+
+/**
+ * Whether an enrollment of this remote is under way: its lock is held by a live process (or
+ * by one this host cannot judge). Delegation does not start new work while it is, so nothing
+ * new binds the generation the enrollment may replace.
+ */
+export function enrollmentInProgress(file: string): boolean {
+  let text: string;
+  try {
+    text = readFileSync(`${file}.lock`, "utf8");
+  } catch {
+    return false;
+  }
+  return !deadOwner(text);
 }
 
 /**
@@ -408,6 +463,10 @@ export async function enrollRemote(options: EnrollOptions): Promise<Enrollment> 
     throw new OrcaError("INTERNAL", "enrollRemote needs a token or an issue request, not both");
   if (options.issue && !options.workflows.length)
     throw refuse(`No agent delegates to remote ${id}, so there is no workflow to issue a credential for.`);
+  if (options.issue && !durableEnrollment())
+    throw refuse(
+      `Issuing the credential for remote ${id} during enrollment is not available on this platform yet: it cannot order the files it writes across a power loss. On the remote run \`orca auth issue <name> --preset client --json\`, save the token beside this config, then enroll again.`,
+    );
   const unlock = lockEnrollment(options.file, id);
   try {
     return await enrollLocked(options, refuse);
@@ -525,6 +584,9 @@ async function enrollLocked(
     });
   let issuing: PendingRevoke | undefined;
   let committed = false;
+  // Once the record's publication has begun, whether it is the active one is not known until
+  // it is read back: what it names is never revoked on that doubt.
+  let publishing = false;
   let keys: string | undefined;
   let workspaceId: string | undefined;
   const journal = () => writePendingRevokes(options.file, pending);
@@ -631,7 +693,7 @@ async function enrollLocked(
       journal();
       // The new generation's own token file: never the file the previous record names, so the
       // previous generation keeps working until the record below replaces it.
-      writeAtomic(join(dir, tokenFile), `${token}\n`);
+      writeAtomic(join(dir, tokenFile), `${token}\n`, true);
     }
     if (!proven) {
       token = options.token!;
@@ -686,8 +748,14 @@ async function enrollLocked(
       ];
     journal();
     await options.beforeCommit?.();
-    // Commit: the one rename that makes this generation the active one.
-    writeAtomic(options.file, JSON.stringify(record, null, 2));
+    // Commit: the one rename that makes this generation the active one. The journal and the
+    // generation file above were flushed, directory and all, before it.
+    publishing = true;
+    writeAtomic(
+      options.file,
+      JSON.stringify(record, null, 2),
+      options.issue !== undefined || previous?.issued === true,
+    );
     committed = true;
     await options.afterCommit?.();
     pending = pending.filter((p) => p.credentialId !== credentialId);
@@ -697,7 +765,11 @@ async function enrollLocked(
   } finally {
     // Cut off before the commit: the credential it issued must not stay valid. It is taken
     // back only through the journal's proof of its issuer, like any other.
-    if (issuing && !committed && keys && pending.includes(issuing)) {
+    if (issuing && !committed && publishing)
+      options.warn?.(
+        `Enrollment of remote ${id} stopped while publishing its record, so whether credential ${issuing.credentialId ?? issuing.label} is now the active one is not known. It was left in ${pendingRevokeFile(options.file)}; the next \`orca remote enroll ${id}\` settles it against whichever record is active.`,
+      );
+    else if (issuing && !committed && keys && pending.includes(issuing)) {
       try {
         pending = await settlePending(tunnel, options, receipts, pending, {
           route,
@@ -814,7 +886,9 @@ async function settlePending(
       keep(entry, "the daemon refused to revoke it");
       continue;
     }
-    if (entry.tokenFile) rmSync(join(dir, entry.tokenFile), { force: true });
+    // Only the exact generation file of this remote and this credential is ever removed.
+    if (entry.tokenFile && entry.credentialId && entry.tokenFile === tokenFileName(id, entry.credentialId))
+      rmSync(join(dir, entry.tokenFile), { force: true });
   }
   writePendingRevokes(options.file, left);
   return left;

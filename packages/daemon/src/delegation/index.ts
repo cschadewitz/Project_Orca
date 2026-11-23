@@ -32,7 +32,15 @@ import {
   type TunnelRefusalCode,
 } from "@orca/protocol/remote-access";
 import { delegationRefusal, openDaemonSession, type DelegationTransport } from "./daemon-session.js";
-import { credentialIdOf, enrollmentFile, readEnrollment, routeOf, sameRoute, type Enrollment } from "./enrollment.js";
+import {
+  credentialIdOf,
+  enrollmentFile,
+  enrollmentInProgress,
+  readEnrollment,
+  routeOf,
+  sameRoute,
+  type Enrollment,
+} from "./enrollment.js";
 import { DelegationReceipts, type DelegationBinding } from "./receipts.js";
 
 export {
@@ -57,6 +65,8 @@ export {
 export {
   credentialIdOf,
   enrollmentFile,
+  durableEnrollment,
+  enrollmentInProgress,
   enrollRemote,
   EnrollmentSchema,
   pendingRevokeFile,
@@ -248,6 +258,8 @@ export interface DelegationOptions {
   tunnel?: (profile: ConnectionProfile, files: RemoteFiles, enrollment: Enrollment) => SshTunnel;
   /** Test seam: how often a running remote run is read. */
   pollMs?: number;
+  /** How long a session open waits for an enrollment of its remote to finish. Default 2 min. */
+  enrollmentWaitMs?: number;
   /** This daemon's workspace id, stated as each delegated run's origin (#883). */
   workspaceId?: () => Promise<string>;
 }
@@ -274,6 +286,18 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
     if (!remote) throw delegationRefusal(id, "profile-invalid", `no remotes[] entry has id ${id}`);
     const profile = remoteProfile(remote);
     const files = remoteFiles(options.configDir, remote);
+    // An enrollment under way may replace the record: wait for it, so this session binds the
+    // generation it leaves active.
+    const waitUntil = Date.now() + (options.enrollmentWaitMs ?? 120_000);
+    while (enrollmentInProgress(files.enrollmentFile)) {
+      if (Date.now() > waitUntil)
+        throw delegationRefusal(
+          id,
+          "enrollment-in-progress",
+          `Remote ${id} is being enrolled (${files.enrollmentFile}.lock) and that has not finished. Nothing was sent.`,
+        );
+      await new Promise((r) => setTimeout(r, 250));
+    }
     // The record first: it names the credential generation (an issued one's own file), so a
     // re-enrollment that has not committed yet never changes what this session sends.
     const enrollment = enrolled(remote, files);
@@ -316,6 +340,7 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
     }
     // A workspace id that cannot be read leaves the origin out; the run is still delegated.
     const originWorkspaceId = await options.workspaceId?.().catch(() => undefined);
+    const binding = delegationBinding(enrollment, profile, open.agent, open.origin?.generationId ?? "unversioned");
     return openDaemonSession({
       agent: open.agent,
       host: open.host,
@@ -324,8 +349,21 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
       remoteName: profile.name,
       transport: tunnelTransport(tunnel),
       token,
-      binding: delegationBinding(enrollment, profile, open.agent, open.origin?.generationId ?? "unversioned"),
+      binding,
       receipts,
+      enrollment: {
+        inProgress: () => enrollmentInProgress(files.enrollmentFile),
+        current: () => {
+          try {
+            const now = readEnrollment(files.enrollmentFile);
+            return (
+              now !== undefined && delegationBinding(now, profile, open.agent, "-").enrollment === binding.enrollment
+            );
+          } catch {
+            return false;
+          }
+        },
+      },
       ...(originWorkspaceId ? { originWorkspaceId } : {}),
       ...(open.askPermission ? { askPermission: (req, invocation) => open.askPermission!(req, invocation) } : {}),
       ...(open.logger ? { logger: open.logger } : {}),

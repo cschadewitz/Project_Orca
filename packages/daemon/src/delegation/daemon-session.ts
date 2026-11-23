@@ -126,7 +126,8 @@ export type DelegationRefusalReason =
   | "admission-closed"
   | "workflow"
   | "git-ref"
-  | "scope-changed";
+  | "scope-changed"
+  | "enrollment-in-progress";
 
 export function delegationRefusal(
   profile: string,
@@ -177,6 +178,17 @@ export interface OpenDaemonSessionOptions {
    * the parent run and the step) to a remote whose `hello.admitFields` lists `origin` (#883).
    */
   originWorkspaceId?: string;
+  /**
+   * The remote's enrollment, as this session sees it (#883 part 4). New work is not submitted
+   * while an enrollment is under way, nor once the record no longer is the one `binding` was
+   * made from: either could publish a generation that strands the receipt.
+   */
+  enrollment?: {
+    /** An enrollment of this remote is running now. */
+    inProgress(): boolean;
+    /** The active record is still the one `binding` names. */
+    current(): boolean;
+  };
 }
 
 /** The turn in flight: its remote run, and what its forwarded questions are bound to. */
@@ -638,6 +650,7 @@ class DaemonSession implements AgentSession {
         state: "submitting",
         ...this.originOf(turn),
       });
+      if (!(await this.enrollmentGate(fresh, undefined, wait))) return undefined;
       return this.submit(fresh, task, deadline, signal);
     }
     switch (receipt.state) {
@@ -673,9 +686,39 @@ class DaemonSession implements AgentSession {
           state: "submitting",
           ...this.originOf(turn),
         });
+        if (!(await this.enrollmentGate(next, receipt, wait))) return undefined;
         return this.submit(next, task, deadline, signal);
       }
     }
+  }
+
+  /**
+   * After a new generation's receipt is durable and before anything is sent under it: proceed
+   * only while no enrollment of the remote is running and the record is still the one this
+   * session is bound to. An enrollment checks for unsettled receipts after taking its lock, and
+   * this checks its lock after writing the receipt, so one of the two always sees the other.
+   * Otherwise the receipt is backed out (nothing was sent under it), the enrollment is waited
+   * out, and the turn goes on only if the record did not change.
+   */
+  private async enrollmentGate(
+    stored: DelegationReceipt,
+    prior: DelegationReceipt | undefined,
+    wait: (what: string) => Promise<void>,
+  ): Promise<boolean> {
+    const gate = this.options.enrollment;
+    if (!gate || (!gate.inProgress() && gate.current())) return true;
+    if (prior) {
+      const { version: _v, updatedAt: _u, ...rest } = prior;
+      this.store({ ...rest, revision: stored.revision });
+    } else this.options.receipts.discard(stored);
+    while (gate.inProgress()) await wait(`the enrollment of remote ${this.options.remoteName}`);
+    if (!gate.current())
+      throw delegationRefusal(
+        this.options.profile,
+        "scope-changed",
+        `Remote ${this.options.remoteName} was enrolled again while this step was starting. Nothing was sent; retry the step to delegate under the new enrollment.`,
+      );
+    return false;
   }
 
   /**
