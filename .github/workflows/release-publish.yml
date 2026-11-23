@@ -27,18 +27,18 @@
 #
 # `dry_run` rehearses all of it without releasing anything (#863, after T3 Code's preview
 # train). The same checks, builds, smoke and type proof run against any ref, and the
-# artifacts go to a **draft** prerelease named `vX.Y.Z-dryrun.<run number>`. Nothing is
-# tagged (a draft has no tag until it is published), nothing is marked latest, no feed is
-# touched, and the "tag already exists" refusal does not apply, so it can rehearse a
-# version that is already released. Delete the draft when you are done with it.
+# artifacts are checked as release assets of version `vX.Y.Z-dryrun.<run number>`. Nothing
+# is tagged, published or marked latest, no release or draft is created (so nothing needs
+# cleaning up; the files stay in the run's artifacts), no feed is touched, and the "tag
+# already exists" refusal does not apply, so it can rehearse a version already released.
 #
 # The rehearsed ref is untrusted, so it never meets a write token. The workflow's token is
 # read-only; every job that runs the ref's code (check, and the desktop and app-smoke calls)
 # checks out without persisted credentials, both calls pick runners with this workflow
 # revision's tooling, and a rehearsal runs GitHub-hosted only, without the runner health
-# endpoint. The one job that writes, `rehearsal`, checks out this workflow's own revision (which
-# must be the default branch), runs only that revision's tooling, and treats the built
-# artifacts and the version as data. `publish`, the real release, keeps its write grant to
+# endpoint. A rehearsal writes nothing: its last job, `rehearsal`, checks out this workflow's
+# own revision (which must be the default branch), runs only that revision's tooling, and
+# treats the built artifacts and the version as data. `publish`, the real release, keeps its write grant to
 # itself and runs the released commit's tooling only once `check` has proved that commit is
 # on the default branch, i.e. reviewed.
 name: Release (publish)
@@ -54,7 +54,7 @@ on:
         type: string
         default: main
       dry_run:
-        description: "Rehearse only: build everything and upload a draft prerelease; never tag, publish or feed."
+        description: "Rehearse only: build and check everything; never create a release, tag, publish or feed."
         required: false
         type: boolean
         default: false
@@ -464,18 +464,16 @@ jobs:
           VERSION: ${{ needs.check.outputs.version }}
         run: gh workflow run release-sync-main.yml --repo "$GITHUB_REPOSITORY" --ref main -f version="$VERSION"
 
-  # The rehearsal's writer. It runs none of the rehearsed ref's code: it checks out this
-  # workflow's own revision (the default branch, checked in `check`), takes the artifacts
-  # and the version as data, and runs the same asset checks a release runs before uploading
-  # them to a draft prerelease. `gh release create --draft` creates no tag, and nothing here
-  # edits the draft to published, so no updater sees it and nothing becomes latest.
+  # The rehearsal's last step. It runs none of the rehearsed ref's code: it checks out this
+  # workflow's own revision (the default branch, checked in `check`), takes the artifacts and
+  # the version as data, and runs the same asset checks a release runs. It creates no release
+  # and no draft, so there is nothing to tag, publish or clean up; the checked files stay in
+  # this run's `desktop-*` artifacts. It keeps the workflow's read-only token.
   rehearsal:
-    name: upload the rehearsal to a draft
+    name: check the rehearsal's release assets
     needs: [check, desktop, app-verification]
     if: ${{ inputs.dry_run }}
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -489,33 +487,25 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Upload the rehearsal to a draft prerelease
+      - name: Check the rehearsal's release assets
         env:
-          GH_TOKEN: ${{ github.token }}
           SHA: ${{ needs.check.outputs.sha }}
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           set -euo pipefail
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dryrun\.[0-9]+$ ]] || ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::not a dry-run version and commit; nothing uploaded"
+            echo "::error::not a dry-run version and commit; nothing checked"
             exit 1
           fi
           python3 tools/deploy/release-assets.py artifacts "$VERSION"
-          printf '%s\n' \
-            "> **Dry run, not a release.** Built from \`$SHA\` by run $GITHUB_RUN_ID. Delete this draft when done." \
-            "" \
-            "The notes a release would carry are in [CHANGELOG.md at that commit]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$SHA/CHANGELOG.md)." \
-            > "$RUNNER_TEMP/notes.md"
           shopt -s nullglob
           assets=(artifacts/*)
           if [ ${#assets[@]} -eq 0 ]; then
             echo "::error::the desktop workflow produced no artifacts"
             exit 1
           fi
-          gh release create "v$VERSION" --draft --prerelease --latest=false \
-            --target "$SHA" \
-            --title "v$VERSION (dry run)" \
-            --notes-file "$RUNNER_TEMP/notes.md" \
-            "${assets[@]}"
-          echo "Dry run uploaded to draft v$VERSION with ${#assets[@]} artifacts. Nothing was tagged or published." \
-            >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "Dry run v$VERSION of \`$SHA\`: ${#assets[@]} release assets checked. No release or draft was created;"
+            echo "the files are in this run's \`desktop-*\` artifacts."
+            printf -- '- %s\n' "${assets[@]#artifacts/}"
+          } >> "$GITHUB_STEP_SUMMARY"

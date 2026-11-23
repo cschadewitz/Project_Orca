@@ -66,7 +66,7 @@ it.skipIf(process.platform === "win32")(
 it("keeps signing authority in one protected, main-only, unpublished job", () => {
   expect(Object.keys(signed.on)).toEqual(["workflow_dispatch"]);
   expect(signed.permissions).toEqual({ contents: "read" });
-  expect(Object.keys(signed.jobs)).toEqual(["resolve", "prepare", "sign"]);
+  expect(Object.keys(signed.jobs)).toEqual(["resolve", "prepare", "sign", "hand-off"]);
   const job = signed.jobs.sign;
   expect(job.needs).toEqual(["resolve", "prepare"]);
   expect(job.if).toBe("github.ref == 'refs/heads/main'");
