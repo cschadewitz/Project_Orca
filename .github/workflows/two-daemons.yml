@@ -114,6 +114,11 @@ jobs:
           path: ${{ runner.temp }}/orca-machine-base.tar
           key: orca-machine-base-${{ runner.os }}-${{ hashFiles('packages/testing/machine/base.Dockerfile') }}
       - name: Load or build the machine base image
+        env:
+          # TEMPORARY (#1015 review receipt, removed before merge): a first mirror whose signed
+          # release file answers but which has no amd64 indexes, so attempts 1-2 fail and
+          # attempt 3 falls back to the next mirror.
+          ORCA_UBUNTU_MIRRORS: http://ports.ubuntu.com/ubuntu-ports http://azure.archive.ubuntu.com/ubuntu http://archive.ubuntu.com/ubuntu
         run: packages/testing/machine/build-base.sh "$RUNNER_TEMP/orca-machine-base.tar"
       # The fixture bundles the daemon from the compiled packages, as the release does.
       - run: pnpm run build

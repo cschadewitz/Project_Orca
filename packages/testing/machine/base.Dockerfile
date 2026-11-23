@@ -10,7 +10,9 @@ FROM ${BASE}
 # build-base.sh passes the mirror the build host's own apt uses. Packages are still checked
 # against the image's own Ubuntu archive keys, so a mirror only changes where they come from.
 ARG UBUNTU_MIRROR=
-# The archive can be slow or drop connections; retry each download instead of hanging. The host
+# The archive can be slow or drop connections; retry each download instead of hanging. A refresh
+# that fails for any index fails the step (--error-on=any), so a partly refreshed mirror moves the
+# build on to the next one instead of installing from stale or missing lists. The host
 # keys openssh-server makes on install are removed in this same layer, so the cached and shared
 # image holds none; each machine makes its own when it starts.
 RUN if [ -n "$UBUNTU_MIRROR" ]; then \
@@ -18,7 +20,7 @@ RUN if [ -n "$UBUNTU_MIRROR" ]; then \
       && sed -i -E "s#https?://(archive|security)\.ubuntu\.com/ubuntu/?#${UBUNTU_MIRROR%/}/#g" \
          /etc/apt/sources.list.d/ubuntu.sources; \
     fi \
- && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update -q \
+ && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update -q --error-on=any \
  && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
     install -yq --no-install-recommends \
     openssh-server openssh-client git procps xz-utils ca-certificates \

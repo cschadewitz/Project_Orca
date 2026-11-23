@@ -18,17 +18,24 @@ build_timeout="${ORCA_BASE_BUILD_TIMEOUT:-300}"
 if [ -s "$tar_path" ] && docker load -i "$tar_path"; then exit 0; fi
 # Which Ubuntu mirror to take packages from. Hosted runners do not always come with a nearby
 # one configured, so each candidate (this host's own apt source first) is timed fetching the
-# release file, and attempts go to the fastest first. Packages are verified against the image's
-# archive keys whichever mirror serves them.
+# release file, and attempts go to the fastest first. ORCA_UBUNTU_MIRRORS, a space-separated list,
+# replaces the candidates and is tried in its own order (still dropping any that do not answer).
+# Packages are verified against the image's archive keys whichever mirror serves them.
 candidates=()
-for list in /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list; do
-  [ -r "$list" ] || continue
-  while read -r uri; do candidates+=("${uri%/}"); done < <(
-    grep -oE 'https?://[A-Za-z0-9.-]+/ubuntu/?' "$list" | grep -v '//security\.ubuntu\.com/' | sort -u
-  )
-done
-candidates+=(http://azure.archive.ubuntu.com/ubuntu http://us-east-1.ec2.archive.ubuntu.com/ubuntu
-  https://mirrors.edge.kernel.org/ubuntu http://archive.ubuntu.com/ubuntu)
+if [ -n "${ORCA_UBUNTU_MIRRORS:-}" ]; then
+  read -r -a candidates <<<"$ORCA_UBUNTU_MIRRORS"
+  order=(cat)
+else
+  for list in /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list; do
+    [ -r "$list" ] || continue
+    while read -r uri; do candidates+=("${uri%/}"); done < <(
+      grep -oE 'https?://[A-Za-z0-9.-]+/ubuntu/?' "$list" | grep -v '//security\.ubuntu\.com/' | sort -u
+    )
+  done
+  candidates+=(http://azure.archive.ubuntu.com/ubuntu http://us-east-1.ec2.archive.ubuntu.com/ubuntu
+    https://mirrors.edge.kernel.org/ubuntu http://archive.ubuntu.com/ubuntu)
+  order=(sort -rn -k1,1)
+fi
 ranked=()
 while read -r speed uri; do
   echo "mirror $uri: ${speed} B/s"
@@ -36,9 +43,10 @@ while read -r speed uri; do
 done < <(
   for uri in $(printf '%s\n' "${candidates[@]}" | awk '!seen[$0]++'); do
     speed="$(curl -fsS -o /dev/null --max-time 20 -w '%{speed_download}' "$uri/dists/noble/InRelease" 2>/dev/null)" || speed=0
-    echo "${speed:-0} $uri"
-  done | sort -rn -k1,1
+    echo "${speed:-0} ${uri%/}"
+  done | "${order[@]}"
 )
+echo "mirror order: ${ranked[*]:-none answered}"
 [ "${#ranked[@]}" -gt 0 ] || ranked=(http://archive.ubuntu.com/ubuntu)
 for attempt in 1 2 3; do
   # The fastest mirror twice, then the next one, in case the fastest is the one that stalls.
