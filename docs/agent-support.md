@@ -104,6 +104,12 @@ isolated profile, and says exactly what is missing (`CONFIG_INVALID`, `problems`
   the last rule whose permission and pattern match, over the top-level `permission` and then
   `agent.build.permission`, so ORCA rebuilds that ordered list and refuses a later rule that
   reopens a denial (a wildcard key such as `"t*"`, a pattern entry, or an agent-level `"*"`).
+- The checks read the environment the process will actually get: the daemon's own, less exactly
+  what the host withholds for secrets, then the agent's env, then the session's. A control
+  variable given as a secret reference is refused, since its value is only known at launch.
+  The config file and every entry of the profile directories must be the expected type, not a
+  link, the user's own and not writable by others; a profile directory counts as empty only
+  when it does not exist.
 - `OPENCODE_PERMISSION` equal to that file's `permission`. It is the last layer OpenCode
   applies, after a machine-wide or MDM configuration, which is why ORCA also refuses to start
   when `/etc/opencode` or the macOS managed equivalent exists: a per-agent rule delivered there

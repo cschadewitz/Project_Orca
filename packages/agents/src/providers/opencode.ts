@@ -38,12 +38,21 @@
  */
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
+import type { Stats } from "node:fs";
+import { access, lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, win32 } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import { OrcaError, effectivePermissionPolicy, literalEnv, type AgentSpec, type SessionConfigOption } from "@orca/core";
+import {
+  OrcaError,
+  effectivePermissionPolicy,
+  isSecretRef,
+  literalEnv,
+  type AgentSpec,
+  type SessionConfigOption,
+} from "@orca/core";
 import type { OpenSessionOptions } from "../acp-session.js";
 import { decidePermission } from "../permissions.js";
+import { planSessionSecrets } from "../secrets.js";
 import type { AgentSession } from "../session.js";
 import type { ProviderGuard } from "./guard.js";
 
@@ -76,6 +85,19 @@ const UNREVIEWED_VARIABLES = [
   "OPENCODE_EXPERIMENTAL_REFERENCES",
   "OPENCODE_PLUGIN_META_FILE",
   "OPENCODE_FAKE_VCS",
+] as const;
+/** Every variable whose value the guard checks; none may come from a secret. */
+const CONTROL_VARIABLES = [
+  "OPENCODE_DISABLE_PROJECT_CONFIG",
+  "OPENCODE_PURE",
+  "OPENCODE_DISABLE_AUTOUPDATE",
+  "OPENCODE_CONFIG_DIR",
+  "OPENCODE_CONFIG_CONTENT",
+  "HOME",
+  "XDG_CONFIG_HOME",
+  "OPENCODE_CONFIG",
+  "OPENCODE_PERMISSION",
+  ...UNREVIEWED_VARIABLES,
 ] as const;
 /** Machine-wide configuration directories OpenCode reads after every layer ORCA controls. */
 export const OPENCODE_MANAGED_DIRS: Readonly<Record<string, readonly string[]>> = {
@@ -319,6 +341,11 @@ export function openCodeProfileProblems(
   if (agent.mcpServers.length > 0)
     problems.push("mcpServers: OpenCode shares a client's MCP servers with every session in the process; pass none");
 
+  // A control variable given as a secret reference is filled in only at launch, so its value
+  // cannot be checked here; it must be written out.
+  for (const variable of CONTROL_VARIABLES)
+    if (isSecretRef(agent.env[variable]))
+      problems.push(`env: ${variable} comes from a secret, so ORCA cannot check it; write it out`);
   const literal = literalEnv(agent.env);
   const effective: Record<string, string | undefined> = { ...ambient, ...literal };
   for (const variable of ["OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_PURE", "OPENCODE_DISABLE_AUTOUPDATE"])
@@ -408,6 +435,8 @@ async function checkConfigFile(agent: AgentSpec, permissionEnv: string | undefin
   if (!path || !isAbsolute(path)) return [];
   let text: string;
   try {
+    const owned = ownership(`OPENCODE_CONFIG ${path}`, await lstat(path), "file");
+    if (owned.length) return owned;
     text = await readFile(path, "utf8");
   } catch {
     return ["OPENCODE_CONFIG: the file cannot be read"];
@@ -428,12 +457,12 @@ async function checkConfigFile(agent: AgentSpec, permissionEnv: string | undefin
  * ask, and `--pure` keeps out only plugins.
  */
 const PROFILE_CONFIG_FILES = new Set(["config.json", "opencode.json", "opencode.jsonc"]);
-const PROFILE_DEPENDENCY_ENTRIES = new Set([
-  "package.json",
-  "package-lock.json",
-  "bun.lock",
-  ".gitignore",
-  "node_modules",
+const PROFILE_DEPENDENCY_ENTRIES: ReadonlyMap<string, "file" | "directory"> = new Map([
+  ["package.json", "file"],
+  ["package-lock.json", "file"],
+  ["bun.lock", "file"],
+  [".gitignore", "file"],
+  ["node_modules", "directory"],
 ]);
 
 /**
@@ -451,13 +480,32 @@ export async function openCodeProfileDirProblems(env: Readonly<Record<string, st
   for (const dir of dirs) {
     let entries: string[];
     try {
+      const owned = ownership(`profile: ${dir}`, await lstat(dir), "directory");
+      if (owned.length) {
+        problems.push(...owned);
+        continue;
+      }
       entries = await readdir(dir);
     } catch (error) {
+      // Only a confirmed absence counts as empty.
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       problems.push(`profile: ${dir} cannot be read`);
       continue;
     }
-    for (const entry of entries) {
+    for (const entry of entries.sort()) {
+      const kind = PROFILE_DEPENDENCY_ENTRIES.get(entry) ?? (PROFILE_CONFIG_FILES.has(entry) ? "file" : undefined);
+      if (kind) {
+        try {
+          const owned = ownership(`profile: ${join(dir, entry)}`, await lstat(join(dir, entry)), kind);
+          if (owned.length) {
+            problems.push(...owned);
+            continue;
+          }
+        } catch {
+          problems.push(`profile: ${join(dir, entry)} cannot be read`);
+          continue;
+        }
+      }
       if (PROFILE_DEPENDENCY_ENTRIES.has(entry)) continue;
       if (!PROFILE_CONFIG_FILES.has(entry)) {
         problems.push(
@@ -478,6 +526,19 @@ export async function openCodeProfileDirProblems(env: Readonly<Record<string, st
           `profile: ${join(dir, entry)} sets ${keys.join(", ")}; keep OpenCode's settings in the OPENCODE_CONFIG file only`,
         );
     }
+  }
+  return problems;
+}
+
+/** Not a link, the expected type, the user's own and not writable by anybody else. */
+function ownership(what: string, info: Stats, kind: "file" | "directory"): string[] {
+  if (info.isSymbolicLink()) return [`${what} is a symbolic link`];
+  if (kind === "directory" ? !info.isDirectory() : !info.isFile()) return [`${what} is not a ${kind}`];
+  const problems: string[] = [];
+  if (process.platform !== "win32") {
+    if (typeof process.getuid === "function" && info.uid !== process.getuid())
+      problems.push(`${what} belongs to another user`);
+    if (info.mode & 0o022) problems.push(`${what} can be written by other users`);
   }
   return problems;
 }
@@ -586,6 +647,8 @@ export interface OpenCodeGuardOptions {
   arch?: string;
   /** Machine-wide configuration found; the real check by default. */
   managedConfig?: (platform: string) => Promise<string[]>;
+  /** The daemon's environment, which a local agent inherits; `process.env` by default. */
+  environment?: () => Readonly<Record<string, string | undefined>>;
 }
 
 export function openCodeGuard(opts: OpenCodeGuardOptions = {}): ProviderGuard {
@@ -593,17 +656,15 @@ export function openCodeGuard(opts: OpenCodeGuardOptions = {}): ProviderGuard {
   const platform = opts.platform ?? process.platform;
   const arch = opts.arch ?? process.arch;
   const managed = opts.managedConfig ?? managedConfigPresent;
+  const environment = opts.environment ?? (() => process.env);
   return {
     id: "opencode",
     matches: (agent) => isOpenCodeAgent(agent),
     async prepare(options: OpenSessionOptions): Promise<OpenSessionOptions> {
       const { agent, host } = options;
-      const withheld = new Set(
-        Object.values(options.secrets ?? {})
-          .filter((d) => d.host === host.id && d.provider === "env")
-          .map((d) => (d.provider === "env" ? d.name : "")),
-      );
-      const ambient = Object.fromEntries(Object.entries(process.env).filter(([k]) => !withheld.has(k)));
+      // Exactly what the host will withhold from the process (#336), so the check sees what it gets.
+      const withheld = new Set(planSessionSecrets(host, agent, options.secrets).withheldEnv);
+      const ambient = Object.fromEntries(Object.entries(environment()).filter(([k]) => !withheld.has(k)));
       // The host lays the session's own env over the agent's, so both are checked as one.
       const launched: AgentSpec = { ...agent, env: { ...agent.env, ...(options.env ?? {}) } };
       const problems = [

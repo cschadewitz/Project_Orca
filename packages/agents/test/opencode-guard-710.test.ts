@@ -3,7 +3,7 @@
  * `providers/opencode.ts`, with synthetic files and an injected digest. No OpenCode process is
  * started here; the installed binary is exercised by `opencode-acceptance-710.test.ts` in CI.
  */
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -286,10 +286,75 @@ describe("the profile's own configuration directories", () => {
     expect(problems).toMatch(/config.json sets permission/);
   });
 
+  it("checks every entry's type, links, owner and write access, and counts only absence as empty", async () => {
+    const { root, env } = await dirs();
+    const cfg = join(env.XDG_CONFIG_HOME, "opencode");
+    await writeFile(join(root, "elsewhere.json"), JSON.stringify({ $schema: "x" }));
+    await symlink(join(root, "elsewhere.json"), join(cfg, "opencode.json"));
+    await mkdir(join(cfg, "package.json"));
+    await writeFile(join(cfg, "bun.lock"), "{}");
+    await chmod(join(cfg, "bun.lock"), 0o666);
+    const problems = (await openCodeProfileDirProblems(env)).join("\n");
+    expect(problems).toMatch(/opencode.json is a symbolic link/);
+    expect(problems).toMatch(/package.json is not a file/);
+    expect(problems).toMatch(/bun.lock can be written by other users/);
+    // The directory itself: writable by others, then not a directory at all.
+    await rm(cfg, { recursive: true });
+    await mkdir(cfg);
+    await chmod(cfg, 0o777);
+    expect((await openCodeProfileDirProblems(env)).join()).toMatch(/opencode can be written by other users/);
+    await rm(cfg, { recursive: true });
+    await writeFile(cfg, "not a directory");
+    expect((await openCodeProfileDirProblems(env)).join()).toMatch(/opencode is not a directory/);
+  });
+
+  it("refuses a config file that is a link or writable by others", async () => {
+    const { root, agent, configPath } = await profile();
+    await chmod(configPath, 0o666);
+    expect((await refusal(guard().prepare(options(agent)))).message).toMatch(/OPENCODE_CONFIG .* can be written/);
+    await chmod(configPath, 0o644);
+    const linked = join(root, "linked.json");
+    await symlink(configPath, linked);
+    const viaLink = { ...agent, env: { ...agent.env, OPENCODE_CONFIG: linked } };
+    expect((await refusal(guard().prepare(options(viaLink)))).message).toMatch(/is a symbolic link/);
+  });
+
   it("refuses a launch whose profile carries its own agents", async () => {
     const { agent } = await profile();
     await mkdir(join(agent.env.XDG_CONFIG_HOME as string, "opencode", "agent"), { recursive: true });
     expect((await refusal(guard().prepare(options(agent)))).message).toMatch(/is not allowed/);
+  });
+});
+
+describe("the environment the process receives", () => {
+  it("refuses control variables given as secret references, which cannot be checked", async () => {
+    const { agent } = await profile();
+    for (const variable of ["OPENCODE_CONFIG_CONTENT", "OPENCODE_PURE", "OPENCODE_PERMISSION", "HOME"]) {
+      const spec = { ...agent, env: { ...agent.env, [variable]: { secret: "s" } } };
+      expect(openCodeProfileProblems(spec, {}, "local", "linux", "x64").join()).toMatch(
+        new RegExp(`${variable} comes from a secret`),
+      );
+    }
+  });
+
+  it("checks the daemon environment less exactly what the host withholds for secrets", async () => {
+    const { agent } = await profile();
+    const env = { ...agent.env } as Record<string, unknown>;
+    delete env.OPENCODE_CONFIG_CONTENT;
+    const bare = { ...agent, env } as AgentSpec;
+    const daemon = { OPENCODE_CONFIG_CONTENT: '{"permission":{"*":"allow"}}' };
+    const withEnv = openCodeGuard({
+      digest: async () => LINUX,
+      platform: "linux",
+      arch: "x64",
+      managedConfig: async () => [],
+      environment: () => daemon,
+    });
+    // Inherited, it adds an unreviewed layer.
+    expect((await refusal(withEnv.prepare(options(bare)))).message).toMatch(/OPENCODE_CONFIG_CONTENT must be empty/);
+    // Defined as a secret delivered by env on this host, the host withholds it, so it never arrives.
+    const secrets = { c: { host: "local", provider: "env" as const, name: "OPENCODE_CONFIG_CONTENT" } };
+    await expect(withEnv.prepare(options(bare, { secrets }))).resolves.toBeDefined();
   });
 });
 
