@@ -33,10 +33,14 @@ agents:
   - id: claude
     permissions:
       rules:
-        - match: { kind: execute, scope: workspace }   # deterministic gate, kind required
+        - match: { kind: read, scope: workspace }   # deterministic gate, kind required
           judge:
-            criterion: "Read-only git commands (status, log, diff, show, branch listing)."
+            criterion: "Reading source, tests and docs, but never .env files, keys or credentials."
 ```
+
+The first rollout judges known read-only operations only (section 3). Rules about commands, such as
+"read-only git commands", are the goal of a later stage once ORCA can verify what a command
+actually does (section 3, "Later stage").
 
 - `match` is the deterministic gate: the existing `kind`, `scope`, `path`, `pathPrefix`,
   `titlePattern` fields, plus #702's typed `command` match. A **saved** judged rule must name a
@@ -78,16 +82,28 @@ judged lane is closed for that ask (`hard-boundary`). A person who wrote "always
 sits above it. A model can never turn an action a person reserved for themselves, or explicitly
 denied, into an automatic allow.
 
-**Safe action envelope.** A judged rule can only allow inside a deterministic envelope derived from
-the tool call's own facts (`outside-envelope` otherwise, and the person is asked):
-- the kind is one of `read`, `search`, `edit`, `execute`. Delete, move, fetch, mode switches and
-  unknown kinds always go to the person;
-- the call is inside the workspace, and every location is workspace-relative (not absolute, no
-  `..`, no home or drive prefix);
-- anything but a command names at least one location;
-- the kind, locations and workspace flag were derived by ORCA from the tool call's own fields
-  (`factsFromTool`), not inferred from the title or reported loosely. Absent or ambiguous facts go
-  to the person.
+**Safe action envelope (first rollout).** A judged rule can only allow inside a deterministic
+envelope, and the person is asked otherwise (`outside-envelope`):
+- the kind is a known read-only operation: `read` or `search`. Commands (`execute`) and writes
+  (`edit`, `delete`, `move`) always go to the person for now, as do fetch, mode switches and unknown
+  kinds;
+- the call names at least one target;
+- ORCA itself verified every target (`targetsVerified`): it resolved the real path the read will
+  open (symlinks followed) and found it inside the workspace and outside every protected path. A
+  tool-reported working directory or a lexically relative path does not establish containment, so
+  neither counts;
+- as a second, lexical line behind that check, every location is workspace-relative (not absolute,
+  no `..`, no home or drive prefix).
+
+`restrictions` and `targetsVerified` passed to `judgePermission` are the **output** of the slot's
+trusted checks, never a substitute for them. The helper refuses without them, but it cannot verify
+them itself.
+
+**Later stage: commands and writes.** These need effect evidence ORCA verifies, not a judge's
+reading of a title: for example #703's ORCA-owned executor (the real argv and working directory,
+resolved), #702's typed command words, and a known read-only command set whose targets are
+verified like reads. That stage gets its own design and review before any command or write can be
+allowed by a judged rule.
 
 These checks are the authorization boundary. The judge, the tripwires in section 6 and the
 canonical reply shape only decide whether an action *inside* them is covered; none of them is a
@@ -133,7 +149,7 @@ judgePermission(
     rules: { ruleId: string; ruleRevision: string; criterion: string }[]; // in first-match order
     restrictions: { deny: boolean; ask: boolean };  // any deterministic deny / ask match, anywhere
     action: { kind: string; title: string; locations: string[]; inWorkspace: boolean;
-              factsFromTool: boolean };
+              targetsVerified: boolean };  // the slot's own real-path check
   },
   signal: AbortSignal,
 ): Promise<{
@@ -247,7 +263,7 @@ ruleRevision, judgeConfigRef, verdict, reasonCode, latencyMs, costUnits }`. Noth
 model prose, and no command text beyond what the existing permission event already records.
 
 In the app:
-- An automatic allow shows "Allowed by your rule: *Allow read-only git commands…*" with a link
+- An automatic allow shows "Allowed by your rule: *Reading source, tests and docs…*" with a link
   to the rule.
 - When the judge declined, the prompt shows ORCA's wording for the reason code ("Your rule doesn't
   cover this.").
@@ -326,9 +342,11 @@ replay shows exactly what the rule would cover.
    the prompt files until then. The decision record lands with #702's acp-session work, after
    #946 and #948.
 4. Offline evaluation set and report. Turning it on stays behind a setting that is off by default.
-5. Suggestions from repeated approvals and "Tidy my rules", with replay diffs (section 9) and the
+5. Later stage: commands and writes, with verified effect evidence (section 3), separately designed
+   and reviewed.
+6. Suggestions from repeated approvals and "Tidy my rules", with replay diffs (section 9) and the
    shadowing warning (section 3).
-6. Plain-language "always ask me" rules: judged in the same batch, a match closes the judged lane.
+7. Plain-language "always ask me" rules: judged in the same batch, a match closes the judged lane.
    Needs the `judge` field to accept an `ask` effect (#702's schema).
 
 ## 13. Decisions for Casey

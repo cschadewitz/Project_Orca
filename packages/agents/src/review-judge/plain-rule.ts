@@ -9,9 +9,10 @@
  * that is `no-match`, so the next typed rule or the default decides. This module:
  *
  * - asks nothing when a deterministic deny or mandatory-human rule matches the action anywhere in the policy
- *   (`hard-boundary`), or when the action is outside the safe envelope this lane may allow at all, or its facts did
- *   not come from the tool call itself (`outside-envelope`). These are code checks, not model judgement: the judge
- *   can only allow inside them;
+ *   (`hard-boundary`), or when the action is outside the first-rollout envelope: a known read-only kind whose real
+ *   targets ORCA verified inside the workspace and outside protected paths (`outside-envelope`). Commands and writes
+ *   always go to the person for now. The flags are the output of the slot's trusted checks, never a substitute for
+ *   them; the judge can only allow inside them;
  * - builds the request itself from the rule and the action, carrying the agent-controlled command as a JSON string,
  *   never as instructions, capped in size, and refuses obvious injection tripwires without asking the judge;
  * - decodes a closed reply that must echo this request id, rule id and revision;
@@ -44,21 +45,27 @@ export interface PlainRuleJudgeInput {
   readonly restrictions: { readonly deny: boolean; readonly ask: boolean };
   readonly action: {
     readonly kind: string;
-    /** The tool call title: for `execute`, the command text. Agent-controlled. */
+    /** The tool call title. Agent-controlled. */
     readonly title: string;
-    /** Workspace-relative paths, resolved by ORCA. */
+    /** The call's targets, workspace-relative. */
     readonly locations: readonly string[];
     readonly inWorkspace: boolean;
     /**
-     * True only when `kind`, `locations` and `inWorkspace` were derived by ORCA from the tool call's own fields,
-     * not inferred from the title or reported loosely by the agent. Anything else goes to the person.
+     * The output of the slot's trusted check, never a claim from the agent or the tool: true only when ORCA itself
+     * resolved every target's real path (symlinks followed, as the read will open it) and found it inside the
+     * workspace and outside every protected path. A tool-reported working directory or a lexically relative path
+     * is not enough. Anything else goes to the person.
      */
-    readonly factsFromTool: boolean;
+    readonly targetsVerified: boolean;
   };
 }
 
-/** Tool kinds a judged rule may ever allow. Delete, move, fetch, mode switches and unknown kinds go to the person. */
-export const PLAIN_RULE_JUDGED_KINDS: ReadonlySet<string> = new Set(["read", "search", "edit", "execute"]);
+/**
+ * Tool kinds a judged rule may allow in the first rollout: known read-only operations only. Commands (`execute`)
+ * and writes (`edit`, `delete`, `move`) have no verified effect evidence yet and always go to the person, as do
+ * fetches, mode switches and unknown kinds.
+ */
+export const PLAIN_RULE_JUDGED_KINDS: ReadonlySet<string> = new Set(["read", "search"]);
 
 /**
  * Fixed reasons a judge may give, one family per verdict. Never model prose: the wording a person sees is ORCA's
@@ -230,16 +237,16 @@ function snapshot(input: PlainRuleJudgeInput, limits: PlainRuleJudgeLimits) {
   if (restrictions === null || typeof restrictions !== "object") return null;
   const { deny, ask } = restrictions as Record<string, unknown>;
   if (typeof deny !== "boolean" || typeof ask !== "boolean") return null;
-  const { kind, title, locations, inWorkspace, factsFromTool } = input.action;
+  const { kind, title, locations, inWorkspace, targetsVerified } = input.action;
   if (!text(kind) || typeof title !== "string" || typeof inWorkspace !== "boolean") return null;
-  if (typeof factsFromTool !== "boolean") return null;
+  if (typeof targetsVerified !== "boolean") return null;
   if (!Array.isArray(locations) || locations.length > MAX_LOCATIONS) return null;
   const copied = [...(locations as unknown[])];
   if (!copied.every((l): l is string => typeof l === "string" && bytes(l) <= limits.maxCommandBytes)) return null;
   return {
     rules,
     restricted: deny || ask,
-    factsFromTool,
+    targetsVerified,
     action: { kind, title, locations: copied, inWorkspace },
   };
 }
@@ -251,15 +258,15 @@ function workspaceRelative(path: string): boolean {
 }
 
 /**
- * The deterministic envelope a judged rule may allow in, from the tool call's own facts: a judged kind, inside the
- * workspace, every location workspace-relative, and at least one location for anything but a command. Absent or
- * ambiguous facts are outside it.
+ * The first-rollout envelope: a known read-only kind, at least one target, every target verified by ORCA, and (as
+ * a second, lexical line behind that check) every location workspace-relative. Absent or ambiguous facts are
+ * outside it.
  */
 function insideEnvelope(selected: NonNullable<ReturnType<typeof snapshot>>): boolean {
   const { action } = selected;
-  if (selected.factsFromTool !== true || action.inWorkspace !== true) return false;
+  if (selected.targetsVerified !== true || action.inWorkspace !== true) return false;
   if (!PLAIN_RULE_JUDGED_KINDS.has(action.kind)) return false;
-  if (action.kind !== "execute" && action.locations.length === 0) return false;
+  if (action.locations.length === 0) return false;
   return action.locations.every(workspaceRelative);
 }
 

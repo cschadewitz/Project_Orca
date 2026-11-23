@@ -29,7 +29,7 @@ const NPM_DEV = { ruleId: "pr_npm", ruleRevision: "r2", criterion: "Installing d
 const input = (title: string, rules = [READ_ONLY_GIT, NPM_DEV]): PlainRuleJudgeInput => ({
   rules,
   restrictions: { deny: false, ask: false },
-  action: { kind: "execute", title, locations: [], inWorkspace: true, factsFromTool: true },
+  action: { kind: "read", title, locations: ["src/a.ts"], inWorkspace: true, targetsVerified: true },
 });
 
 const CODE: Record<Verdict, string> = {
@@ -97,9 +97,9 @@ describe("#701 plain-rule judge: one batched call per ask", () => {
         { id: "pr_git", revision: "r1", criterion: READ_ONLY_GIT.criterion },
         { id: "pr_npm", revision: "r2", criterion: NPM_DEV.criterion },
       ],
-      action: { kind: "execute", title: "git status", locations: [], inWorkspace: true },
+      action: { kind: "read", title: "git status", locations: ["src/a.ts"], inWorkspace: true },
     });
-    expect(Object.keys(t.frames[0]!.action)).not.toContain("factsFromTool");
+    expect(Object.keys(t.frames[0]!.action)).not.toContain("targetsVerified");
   });
 
   it("picks the earliest covered rule when several cover the call", async () => {
@@ -292,18 +292,21 @@ describe("#701 plain-rule judge: hard boundaries and the safe envelope come befo
   });
 
   it.each([
-    ["facts not from the tool call", action({ factsFromTool: false })],
+    ["targets not verified by ORCA", action({ targetsVerified: false })],
+    ["a command", action({ kind: "execute" })],
+    ["a command with no location", action({ kind: "execute", locations: [] })],
+    ["an edit", action({ kind: "edit", locations: ["src/a.ts"] })],
+    ["a read with no location", action({ locations: [] })],
     ["outside the workspace", action({ inWorkspace: false })],
     ["a delete", action({ kind: "delete", locations: ["a.txt"] })],
     ["a move", action({ kind: "move", locations: ["a.txt"] })],
     ["a fetch", action({ kind: "fetch" })],
     ["an unknown kind", action({ kind: "other" })],
-    ["an edit with no location", action({ kind: "edit", locations: [] })],
     ["an absolute path", action({ kind: "read", locations: ["/etc/passwd"] })],
     ["a home path", action({ kind: "read", locations: ["~/.ssh/id_rsa"] })],
     ["a drive path", action({ kind: "read", locations: ["C:\\Users\\x"] })],
-    ["a parent escape", action({ kind: "edit", locations: ["src/../../x"] })],
-    ["a backslash parent escape", action({ kind: "edit", locations: ["src\\..\\..\\x"] })],
+    ["a parent escape", action({ locations: ["src/../../x"] })],
+    ["a backslash parent escape", action({ kind: "search", locations: ["src\\..\\..\\x"] })],
   ])("is outside-envelope for %s, without calling the judge", async (_name, bad) => {
     const t = always();
     expect(await createPlainRuleJudge({ transport: t.transport })(bad, signal())).toMatchObject({
@@ -313,14 +316,14 @@ describe("#701 plain-rule judge: hard boundaries and the safe envelope come befo
     expect(t.send).not.toHaveBeenCalled();
   });
 
-  it("judges an in-envelope edit and refuses missing restrictions or facts as malformed", async () => {
+  it("judges an in-envelope search and refuses missing restrictions or facts as malformed", async () => {
     const t = always();
     const judge = createPlainRuleJudge({ transport: t.transport });
-    expect(await judge(action({ kind: "edit", locations: ["src/a.ts"] }), signal())).toMatchObject({
+    expect(await judge(action({ kind: "search", locations: ["src"] }), signal())).toMatchObject({
       outcome: "allow",
     });
     const { restrictions: _r, ...noRestrictions } = input("git status");
-    const { factsFromTool: _f, ...noFacts } = input("git status").action;
+    const { targetsVerified: _f, ...noFacts } = input("git status").action;
     for (const bad of [
       noRestrictions,
       { ...input("git status"), restrictions: { deny: "no", ask: false } },
