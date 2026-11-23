@@ -316,7 +316,8 @@ export type PermissionPolicy = {
  * written: the config's `permissions.rules`, the sidecar's list for this agent (counting rules
  * that were skipped as expired or wildcard, so it names the entry a person sees in the file),
  * or `DEFAULT_PERMISSION_POLICY.rules`. `revision` is the sha256 of the sidecar bytes the rule
- * was read from. `capped` is set when the rule's `allow` became `ask` because a sidecar ahead
+ * was read from; it is kept in memory for owner-private audit and is never written to an
+ * ordinary `agent.permission` event (#702 review). `capped` is set when the rule's `allow` became `ask` because a sidecar ahead
  * of it could not be read.
  */
 export type PermissionRuleOrigin = {

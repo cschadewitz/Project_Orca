@@ -175,11 +175,12 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   bytes the rule was parsed from. An allow turned into an ask behind an unreadable sidecar is
   marked `capped`. `agent.permission` carries this as an optional `rule`, for asks and `fs:`
   calls alike. For a restricted command that is asked, it cites the first part an explicit ask
-  rule decided before a part that only fell through to an ask default. The `revision` is a
-  stable fingerprint of the sidecar's whole contents, not an ordinal: equal values mean
-  identical files, and a reader holding a candidate file can confirm it. It is a public field
-  of the run's event log, so every reader of that log receives it (the daemon's event stream
-  and its clients, the CLI, exports); the contents themselves never leave the file. It is a record of the evaluation, not of the person's answer, and it is not a
+  rule decided before a part that only fell through to an ask default. The event carries
+  the layer and index but never the sidecar `revision`: that sha256 is a deterministic
+  fingerprint of the whole permission file, and an ordinary event reaches every reader and
+  export of the run log, where it could correlate one workspace's policy across runs. The
+  loader keeps it in memory for owner-private audit data, and the event schema drops one a
+  writer sends. The record is a record of the evaluation, not of the person's answer, and it is not a
   durable authorization record either: it says which rule ORCA consulted, not what then ran.
 - **A wildcard `allow` in this file is ignored**, with a warning. Everything ORCA writes here
   is derived and scoped, and the Config surface narrows a kind by a path, a prefix, the

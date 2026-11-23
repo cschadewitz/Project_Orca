@@ -114,13 +114,8 @@ describe("explainPermission", () => {
     const deny = call({ toolCallId: "t", kind: "edit", title: "e", locations: [{ path: "/w/a.ts" }] });
     const explained = explainPermission(withOrigins, deny, { workspaceCwd: "/w" });
     expect(explained.origin).toEqual({ layer: "sidecar", index: 3, file: 0, revision: "abc" });
-    expect(permissionRuleRecord(explained)).toEqual({
-      basis: "rule",
-      layer: "sidecar",
-      index: 3,
-      file: 0,
-      revision: "abc",
-    });
+    expect(permissionRuleRecord(explained)).toEqual({ basis: "rule", layer: "sidecar", index: 3, file: 0 });
+    expect(permissionRuleRecord(explained)).not.toHaveProperty("revision");
     const misaligned = { ...withOrigins, origins: withOrigins.origins!.slice(0, 1) };
     expect(explainPermission(misaligned, deny, { workspaceCwd: "/w" }).origin).toBeUndefined();
   });

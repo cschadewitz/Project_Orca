@@ -126,7 +126,13 @@ export function explainPermission(
   return origin ? { ...found, origin } : found;
 }
 
-/** The `rule` an `agent.permission` event records for an explanation (#702). */
+/**
+ * The `rule` an `agent.permission` event records for an explanation (#702). It never includes
+ * the sidecar `revision`: that is a deterministic digest of the whole permission file, and an
+ * ordinary event would carry it into every reader and export of the run log, where it could
+ * correlate one workspace's policy across runs (#702 review). The layer and index say which
+ * rule decided without it; the exact revision stays in memory for owner-private audit data.
+ */
 export function permissionRuleRecord(explained: PermissionExplanation): PermissionRuleRecord {
   const o = explained.origin;
   return {
@@ -136,7 +142,6 @@ export function permissionRuleRecord(explained: PermissionExplanation): Permissi
           layer: o.layer,
           index: o.index,
           ...(o.file !== undefined ? { file: o.file } : {}),
-          ...(o.revision ? { revision: o.revision } : {}),
           ...(o.capped ? { capped: true } : {}),
         }
       : {}),
@@ -148,7 +153,6 @@ export interface PermissionRuleRecord {
   layer?: PermissionRuleOrigin["layer"];
   index?: number;
   file?: number;
-  revision?: string;
   capped?: boolean;
 }
 

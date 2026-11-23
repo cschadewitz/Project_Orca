@@ -7,7 +7,6 @@
  * real ACP agent over stdio makes the calls, and each is decided by the policy just before
  * the I/O: a deny refuses, an ask needs a one-time allow, and that allow is good once.
  */
-import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -337,7 +336,7 @@ describe("a read of a file that is not there", () => {
 });
 
 describe("each decision records the rule that made it (#702)", () => {
-  it("names the config rule, the sidecar rule with its file revision, and the fallthrough", async () => {
+  it("names the config rule, the sidecar rule by its place in the file, and the fallthrough", async () => {
     const dir = await workspace();
     const sidecar = permissionPolicyPath(dir);
     await writeFile(
@@ -355,9 +354,6 @@ describe("each decision records the rule that made it (#702)", () => {
       }),
       "utf8",
     );
-    const revision = createHash("sha256")
-      .update(await readFile(sidecar))
-      .digest("hex");
     const { decisions, rules } = await turn(
       dir,
       [
@@ -372,7 +368,8 @@ describe("each decision records the rule that made it (#702)", () => {
     expect(decisions).toEqual(["fs:allow", "fs:deny", "deny"]);
     expect(rules).toEqual([
       { basis: "rule", layer: "config", index: 0 },
-      { basis: "rule", layer: "sidecar", index: 1, file: 0, revision },
+      // No revision: the file's digest stays out of the public run log (#702 review).
+      { basis: "rule", layer: "sidecar", index: 1, file: 0 },
       { basis: "default" },
     ]);
   });

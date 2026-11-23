@@ -194,3 +194,18 @@ describe("an event log written before v0.4.0", () => {
     expect(state.lastSeq).toBe(8);
   });
 });
+
+describe("agent.permission's rule record (#702)", () => {
+  it("keeps the basis and rule provenance, and drops a sidecar revision a writer sends", () => {
+    const e = parse("agent.permission", {
+      stepRunId: "s",
+      sessionId: "x",
+      title: "Write a.ts",
+      decision: "deny",
+      rule: { basis: "rule", layer: "sidecar", index: 2, file: 0, revision: "ab".repeat(32) },
+    });
+    if (e.type !== "agent.permission") throw new Error("wrong type");
+    expect(e.payload.rule).toEqual({ basis: "rule", layer: "sidecar", index: 2, file: 0 });
+    expect(JSON.stringify(e)).not.toContain("abab");
+  });
+});

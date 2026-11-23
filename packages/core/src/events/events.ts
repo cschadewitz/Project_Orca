@@ -253,16 +253,12 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       title: z.string(),
       decision: z.string(),
       /**
-       * What decided it (#702): the basis, and for a rule its layer, its index in that layer
-       * and, for a sidecar rule, the sha256 of the file bytes it was read from. Absent on
-       * events written before this existed and where the policy was not consulted.
-       *
-       * `revision` is a stable fingerprint of the sidecar's whole contents, not an ordinal: equal
-       * values mean byte-identical files, and anyone holding a candidate file can confirm it.
-       * It is a public field of the run's event log, so it reaches every reader of that log: the
-       * daemon's run event stream and its clients (the app, `orca` CLI views and logs), the
-       * store's public events, and any export or forwarding of them. It never carries the
-       * contents themselves.
+       * What decided it (#702): the basis, and for a rule its layer and its index in that
+       * layer. Absent on events written before this existed and where the policy was not
+       * consulted. It deliberately has no sidecar revision: a digest of the whole permission
+       * file in an ordinary event would reach every reader and export of the run log and could
+       * correlate a workspace's policy across runs (#702 review). Parsing drops one if a
+       * writer sends it, so the public log never keeps it.
        */
       rule: z
         .object({
@@ -270,7 +266,6 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
           layer: z.enum(["config", "sidecar", "default"]).optional(),
           index: z.number().int().nonnegative().optional(),
           file: z.number().int().nonnegative().optional(),
-          revision: z.string().optional(),
           capped: z.boolean().optional(),
         })
         .optional(),
