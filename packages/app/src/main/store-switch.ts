@@ -30,6 +30,8 @@ const RequestSchema = z
   .object({
     version: z.literal(1),
     workspace: z.string().min(1),
+    /** Which way; absent in a request written before the switch back, which was to SQLite. */
+    to: z.enum(["sqlite", "files"]).optional(),
     /** The first-run claim of the daemon stopped for the switch: the next launch must follow it. */
     after: z.string().regex(/^[a-f0-9]{64}$/),
     /** The workspace and store directories that stop settled, by identity, not by name. */
@@ -37,6 +39,8 @@ const RequestSchema = z
   })
   .strict();
 type Directory = z.infer<typeof DirectorySchema>;
+/** Which way a switch goes: to SQLite, or back to files. */
+export type StoreSwitchTo = "sqlite" | "files";
 
 /** The identity of a workspace's directory and its store's (the first-run fence's own form). */
 export type StoreSwitchDirectories = (workspace: string) => { workspace: Directory; store: Directory };
@@ -53,9 +57,10 @@ export function writeStoreSwitchRequest(
   file: string,
   workspace: string,
   after: string,
+  to: StoreSwitchTo = "sqlite",
   directories: StoreSwitchDirectories = fenceDirectories,
 ): void {
-  const request = RequestSchema.parse({ version: 1, workspace, after, directories: directories(workspace) });
+  const request = RequestSchema.parse({ version: 1, workspace, to, after, directories: directories(workspace) });
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${randomUUID()}.tmp`;
   try {
@@ -79,7 +84,7 @@ export function takeStoreSwitchRequest(
   launch: { previous?: string | null | undefined },
   enabled: boolean,
   directories: StoreSwitchDirectories = fenceDirectories,
-): { after: string } | undefined {
+): { to: StoreSwitchTo; after: string } | undefined {
   let text: string;
   try {
     text = readFileSync(file, "utf8");
@@ -97,7 +102,7 @@ export function takeStoreSwitchRequest(
       JSON.stringify(now.store) !== JSON.stringify(request.directories.store)
     )
       return undefined;
-    return { after: request.after };
+    return { to: request.to ?? "sqlite", after: request.after };
   } catch {
     return undefined;
   }
@@ -110,7 +115,7 @@ export interface StoreSwitchRestartOptions {
   /** After the exact stop: settle the stopped daemon's reservation; returns its workspace and claim. */
   settle: (token: string) => Promise<{ path: string; claimHash: string }>;
   /** Record the request for the launch after the stopped claim `after`, of exactly this workspace. */
-  request: (workspace: string, after: string) => void;
+  request: (workspace: string, after: string, to: StoreSwitchTo) => void;
   /** Start ORCA again once this process exits, then quit. */
   relaunch: () => void;
   changed: (state: StoreSwitchState) => void;
@@ -131,14 +136,19 @@ export class StoreSwitchRestart {
     if (this.busy || this.held) return;
     const target = this.options.target();
     const store = target?.store;
-    const offered =
-      this.options.enabled &&
-      (this.options.platform ?? process.platform) !== "win32" &&
-      store?.backend === "file" &&
-      store.sqliteSwitch === "available";
+    const allowed = this.options.enabled && (this.options.platform ?? process.platform) !== "win32";
+    const to: StoreSwitchTo | undefined = !allowed
+      ? undefined
+      : store?.backend === "file" && store.sqliteSwitch === "available"
+        ? "sqlite"
+        : store?.backend === "sqlite" && store.filesSwitch === "available"
+          ? "files"
+          : undefined;
+    const offered = to !== undefined;
     const next: StoreSwitchState = {
       phase: offered ? "ready" : "unavailable",
       ...(store ? { backend: store.backend } : {}),
+      ...(to ? { to } : {}),
       ...(store?.lastSwitch ? { last: store.lastSwitch } : {}),
       ...(this.state.phase === "error" && offered && this.state.message ? { message: this.state.message } : {}),
     };
@@ -156,7 +166,12 @@ export class StoreSwitchRestart {
     if (this.busy || this.held || this.state.phase !== "ready") return this.state;
     const target = this.options.target();
     if (!target) return this.state;
-    const base = { backend: this.state.backend ?? "file" } as const;
+    const to = this.state.to ?? "sqlite";
+    const targetName = to === "sqlite" ? "SQLite" : "files";
+    const base: Pick<StoreSwitchState, "backend" | "to"> = {
+      backend: this.state.backend ?? (to === "sqlite" ? "file" : "sqlite"),
+      to,
+    };
     this.busy = true;
     this.held = true;
     const token = randomUUID();
@@ -183,11 +198,11 @@ export class StoreSwitchRestart {
       if (settled.path !== target.path)
         return this.stranded("The background service that stopped was not this workspace's.");
       try {
-        this.options.request(settled.path, settled.claimHash);
+        this.options.request(settled.path, settled.claimHash, to);
       } catch {
         return this.stranded("The switch could not be recorded for the next start.");
       }
-      this.set({ ...base, phase: "restarting", message: "Restarting ORCA to switch to SQLite" });
+      this.set({ ...base, phase: "restarting", message: `Restarting ORCA to switch to ${targetName}` });
       this.options.relaunch();
       return this.state;
     } catch (error) {
@@ -206,8 +221,7 @@ export class StoreSwitchRestart {
       this.set({
         ...base,
         phase: "error",
-        message:
-          "The switch to SQLite did not start. Save or discard drafts and let running work finish, then try again. Nothing was changed.",
+        message: `The switch to ${targetName} did not start. Save or discard drafts and let running work finish, then try again. Nothing was changed.`,
       });
       return this.state;
     } finally {
@@ -217,10 +231,12 @@ export class StoreSwitchRestart {
 
   /** After the stop: held, with admission closed. Quitting and reopening ORCA starts it again. */
   private stranded(cause: string): StoreSwitchState {
+    const stays = this.state.to === "files" ? "SQLite" : "files";
     this.set({
       phase: "error",
-      backend: this.state.backend ?? "file",
-      message: `${cause} The store was not switched. Quit and reopen ORCA to continue on files.`,
+      backend: this.state.backend ?? (stays === "SQLite" ? "sqlite" : "file"),
+      ...(this.state.to ? { to: this.state.to } : {}),
+      message: `${cause} The store was not switched. Quit and reopen ORCA to continue on ${stays}.`,
     });
     return this.state;
   }

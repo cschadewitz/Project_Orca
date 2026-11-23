@@ -121,12 +121,13 @@ export interface BundledDaemonOptions {
   /** Base environment for the child; `ELECTRON_RUN_AS_NODE=1` is added to it. */
   env?: NodeJS.ProcessEnv;
   /**
-   * Ask this launch's daemon to switch the workspace's store to SQLite in place, under the
-   * workspace's writer fence, before it opens the store (#339, cli/src/desktop-sqlite-switch.ts).
-   * `after` is the first-run claim of the daemon stopped for it: the daemon switches only if its
-   * own claim directly follows that one. Never set on a closed update launch; never inherited.
+   * Ask this launch's daemon to switch the workspace's store to SQLite, or back to files, in
+   * place, under the workspace's writer fence, before it opens the store (#339,
+   * cli/src/desktop-sqlite-switch.ts). `after` is the first-run claim of the daemon stopped for it:
+   * the daemon switches only if its own claim directly follows that one. Never set on a closed
+   * update launch; never inherited.
    */
-  storeSwitch?: { after: string };
+  storeSwitch?: { to: "sqlite" | "files"; after: string };
   /** How long to wait for the first answered `hello` before giving up on an attempt. */
   startTimeoutMs?: number;
   /** How often to ask. */
@@ -312,7 +313,9 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
         ELECTRON_RUN_AS_NODE: "1",
         ORCA_FIRST_RUN_LAUNCH: options.firstRunToken,
         ORCA_STORE_SWITCH:
-          options.closedUpdate || !options.storeSwitch ? undefined : `sqlite:${options.storeSwitch.after}`,
+          options.closedUpdate || !options.storeSwitch
+            ? undefined
+            : `${options.storeSwitch.to}:${options.storeSwitch.after}`,
         ORCA_UPDATE_ATTEMPT: options.closedUpdate?.attempt,
         ORCA_UPDATE_LAUNCH: options.closedUpdate?.token,
         ORCA_MANAGED_UPDATE_CONTROL: options.closedUpdate ? undefined : env.ORCA_MANAGED_UPDATE_CONTROL,

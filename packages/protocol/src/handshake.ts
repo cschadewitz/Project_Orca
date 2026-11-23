@@ -249,9 +249,17 @@ export type ManagedDeployment = z.infer<typeof ManagedDeploymentSchema>;
 export const StoreStatusSchema = z.object({
   backend: z.enum(["file", "sqlite"]),
   sqliteSwitch: z.enum(["available", "unavailable"]),
+  /**
+   * Whether this daemon could switch its store back from SQLite to files in place, on the same
+   * terms (#339). Optional: a daemon from before the switch back sends none, which means
+   * unavailable. Only the app's own bundled daemon is ever asked, so no version gates it.
+   */
+  filesSwitch: z.enum(["available", "unavailable"]).optional(),
   /** How the switch the app asked for on this daemon's launch ended. */
   lastSwitch: z
     .object({
+      /** Which way it was asked for; absent means to SQLite (a daemon from before the switch back). */
+      to: z.enum(["sqlite", "files"]).optional(),
       status: z.enum(["switched", "current", "refused"]),
       reason: z.string().max(64).optional(),
       message: z.string().max(4096).optional(),

@@ -514,8 +514,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       isClosedUpdateBootstrap() ? "read" : "write",
     ));
     // Before this process registers as a writer: the switch refuses while any writer is alive.
-    if (storeSwitch && !isClosedUpdateBootstrap() && backend === "file") {
-      storeSwitchOutcome = await desktopSqliteSwitch(storeDir, writer, storeWriterVersion(), storeSwitch.after);
+    // Only from the backend the store is on: a request for where it already is changes nothing.
+    if (storeSwitch && !isClosedUpdateBootstrap() && backend === (storeSwitch.to === "sqlite" ? "file" : "sqlite")) {
+      storeSwitchOutcome = await desktopSqliteSwitch(storeDir, writer, storeWriterVersion(), storeSwitch);
       backend = recordedStoreBackend(storeDir) ?? "file";
     }
     if (!isClosedUpdateBootstrap()) {
@@ -531,21 +532,28 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     }
   }
   // Only the app's own workspace (its writer fence held) may be switched in place, never on
-  // Windows (#947), and only while it is on files.
+  // Windows (#947): to SQLite while it is on files, back to files while it is on SQLite.
+  const switchable = Boolean(writer) && process.platform !== "win32";
   const storeStatus: StoreStatus | undefined =
     opts.ephemeral || isClosedUpdateBootstrap()
       ? undefined
       : {
           backend,
-          sqliteSwitch: writer && process.platform !== "win32" && backend === "file" ? "available" : "unavailable",
+          sqliteSwitch: switchable && backend === "file" ? "available" : "unavailable",
+          filesSwitch: switchable && backend === "sqlite" ? "available" : "unavailable",
           ...(storeSwitchOutcome ? { lastSwitch: storeSwitchOutcome } : {}),
         };
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   if (storeSwitchOutcome?.status === "refused")
     logger.warn(
-      `store stays on files, not switched to SQLite (${storeSwitchOutcome.reason}): ${storeSwitchOutcome.message}`,
+      storeSwitchOutcome.to === "sqlite"
+        ? `store stays on files, not switched to SQLite (${storeSwitchOutcome.reason}): ${storeSwitchOutcome.message}`
+        : `store stays on SQLite, not switched back to files (${storeSwitchOutcome.reason}): ${storeSwitchOutcome.message}`,
     );
-  else if (storeSwitchOutcome?.status === "switched") logger.info("store switched to SQLite metadata");
+  else if (storeSwitchOutcome?.status === "switched")
+    logger.info(
+      storeSwitchOutcome.to === "sqlite" ? "store switched to SQLite metadata" : "store switched back to files",
+    );
   const agents = AgentRegistry.fromConfig(config, { configDir: resolve(configDir) });
   const assets = await releaseAssets(config);
   const templates = await loadTemplates(assets.templates, configDir);
