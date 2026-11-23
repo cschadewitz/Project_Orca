@@ -262,7 +262,7 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
        */
       rule: z
         .object({
-          basis: z.enum(["protected", "rule", "default", "command-restricted"]),
+          basis: z.enum(["protected", "rule", "default", "command-restricted", "unverified-identity"]),
           layer: z.enum(["config", "sidecar", "default"]).optional(),
           index: z.number().int().nonnegative().optional(),
           file: z.number().int().nonnegative().optional(),
