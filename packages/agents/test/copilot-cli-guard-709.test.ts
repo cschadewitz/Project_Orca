@@ -3,7 +3,8 @@
  * prompts, allow-all/autopilot options and bounded "always" answers. No Copilot runs here; the
  * same checks against the real Copilot CLI are in copilot-cli-acceptance-709.test.ts.
  */
-import { chmod, chown, mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { chmod, chown, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -28,6 +29,9 @@ import {
   type OpenSessionOptions,
   type SessionUpdateEvent,
 } from "@orca/agents";
+
+/** The temporary directory without links (macOS reaches it through /var -> /private/var). */
+const TMP = realpathSync(tmpdir());
 
 const good = (over: Partial<Record<string, unknown>> = {}): AgentSpec =>
   AgentSpecSchema.parse({
@@ -150,7 +154,7 @@ describe("executable identity and Copilot's profile", () => {
   });
 
   async function options(command: string, home?: string): Promise<OpenSessionOptions> {
-    home ??= join(await mkdtemp(join(tmpdir(), "orca-copilot-home-")), "profile");
+    home ??= join(await mkdtemp(join(TMP, "orca-copilot-home-")), "profile");
     return {
       host: new LocalHost({ id: "local", type: "local" }),
       agent: good({ command, env: { ...good().env, COPILOT_HOME: home } }),
@@ -158,7 +162,7 @@ describe("executable identity and Copilot's profile", () => {
     };
   }
   async function executable(): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), "orca-copilot-exe-"));
+    const dir = await mkdtemp(join(TMP, "orca-copilot-exe-"));
     const path = join(dir, "copilot");
     await writeFile(path, "x");
     return path;
@@ -201,7 +205,7 @@ describe("executable identity and Copilot's profile", () => {
   });
 
   async function home(files: Record<string, string>, dirs: Record<string, string[]> = {}): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), "orca-copilot-home-"));
+    const root = await mkdtemp(join(TMP, "orca-copilot-home-"));
     await chmod(root, 0o700);
     for (const [name, text] of Object.entries(files)) await writeFile(join(root, name), text);
     for (const [name, children] of Object.entries(dirs)) {
@@ -219,7 +223,7 @@ describe("executable identity and Copilot's profile", () => {
     )}\n`;
 
   it("accepts a fresh or signed-in profile and the state Copilot writes during ORCA's sessions", async () => {
-    const fresh = await mkdtemp(join(tmpdir(), "orca-copilot-fresh-"));
+    const fresh = await mkdtemp(join(TMP, "orca-copilot-fresh-"));
     await chmod(fresh, 0o700);
     expect(await copilotHomeProblems(join(fresh, "copilot-profile"))).toEqual([]);
     const dir = await home(
@@ -307,7 +311,7 @@ describe("answers", () => {
       seen = o;
       return fakeSession();
     };
-    const dir = await mkdtemp(join(tmpdir(), "orca-copilot-ask-"));
+    const dir = await mkdtemp(join(TMP, "orca-copilot-ask-"));
     await writeFile(join(dir, "copilot"), "x");
     await withProviderGuards(open, [
       copilotCliGuard({
@@ -419,7 +423,7 @@ describe("the environment Copilot actually receives (#709 review)", () => {
   const guard = (environment: Record<string, string> = {}) =>
     copilotCliGuard({ digest: async () => LINUX.sha256, platform: "linux-x64", environment: () => environment });
   async function exe(): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), "orca-copilot-env-"));
+    const dir = await mkdtemp(join(TMP, "orca-copilot-env-"));
     await writeFile(join(dir, "copilot"), "x");
     return join(dir, "copilot");
   }
@@ -427,7 +431,7 @@ describe("the environment Copilot actually receives (#709 review)", () => {
     host: new LocalHost({ id: "local", type: "local" }),
     agent: good({
       command: await exe(),
-      env: { ...good().env, COPILOT_HOME: join(await mkdtemp(join(tmpdir(), "orca-copilot-home-")), "profile") },
+      env: { ...good().env, COPILOT_HOME: join(await mkdtemp(join(TMP, "orca-copilot-home-")), "profile") },
       ...agent,
     }),
     cwd: tmpdir(),
@@ -449,7 +453,7 @@ describe("the environment Copilot actually receives (#709 review)", () => {
   });
 
   it("inspects the COPILOT_HOME a session override points at", async () => {
-    const dirty = await mkdtemp(join(tmpdir(), "orca-copilot-dirty-"));
+    const dirty = await mkdtemp(join(TMP, "orca-copilot-dirty-"));
     await chmod(dirty, 0o700);
     await writeFile(join(dirty, "settings.json"), JSON.stringify({ allowedUrls: ["example.com"] }));
     const open = vi.fn(async () => fakeSession());
@@ -505,7 +509,7 @@ describe("the environment Copilot actually receives (#709 review)", () => {
     await expect(
       start({ secrets: [{ id: "s", source: { provider: "env", name: "X" }, env: ["COPILOT_AUTO_UPDATE"] }] }),
     ).rejects.toMatchObject({ message: expect.stringContaining("COPILOT_AUTO_UPDATE comes from a secret") });
-    const other = join(await mkdtemp(join(tmpdir(), "orca-copilot-home-")), "profile");
+    const other = join(await mkdtemp(join(TMP, "orca-copilot-home-")), "profile");
     await expect(start({ env: { COPILOT_HOME: other } })).rejects.toMatchObject({
       message: expect.stringContaining("COPILOT_HOME changed"),
     });
@@ -529,7 +533,7 @@ describe("the environment Copilot actually receives (#709 review)", () => {
 
 describe("profile entries are checked for type, ownership and permissions (#709 review)", () => {
   async function profile(): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), "orca-copilot-entries-"));
+    const root = await mkdtemp(join(TMP, "orca-copilot-entries-"));
     await chmod(root, 0o700);
     return root;
   }
@@ -553,10 +557,23 @@ describe("profile entries are checked for type, ownership and permissions (#709 
       const open = await profile();
       await chmod(open, 0o777);
       expect((await copilotHomeProblems(join(open, "profile")))[0]).toMatch(/can be written by other users/);
-      // Through a link, the real directory is the one judged.
+      // A link anywhere on the path is refused, even one to a private directory (#709 review 5).
       const link = join(await profile(), "link");
-      await symlink(open, link);
-      expect((await copilotHomeProblems(join(link, "profile")))[0]).toContain(await realpath(open));
+      await symlink(root, link);
+      await mkdir(join(root, "a"), { mode: 0o700 });
+      expect(await copilotHomeProblems(join(link, "a", "profile"))).toEqual([
+        `${link}, on the path to COPILOT_HOME ${join(link, "a", "profile")}, is a symbolic link; give COPILOT_HOME as a path without links`,
+      ]);
+      // A dangling link is not an absence: Copilot would follow it and create the profile elsewhere.
+      const dangling = await profile();
+      await symlink(join(open, "elsewhere"), join(dangling, "profile"));
+      expect(await copilotHomeProblems(join(dangling, "profile"))).toEqual([
+        `COPILOT_HOME ${join(dangling, "profile")} is a symbolic link`,
+      ]);
+      await symlink(join(open, "gone"), join(dangling, "mid"));
+      expect(await copilotHomeProblems(join(dangling, "mid", "profile"))).toEqual([
+        `${join(dangling, "mid")}, where COPILOT_HOME ${join(dangling, "mid", "profile")} would be created, is a symbolic link`,
+      ]);
 
       const above = await profile();
       await chmod(above, 0o777);
@@ -568,7 +585,7 @@ describe("profile entries are checked for type, ownership and permissions (#709 
   );
 
   it.skipIf(process.platform === "win32")(
-    "checks the path to an existing profile too, as written and through its links (#709 review 4)",
+    "checks the path to an existing profile too, and refuses links on it (#709 review 4, 5)",
     async () => {
       const above = await profile();
       await mkdir(join(above, "mine", "profile"), { recursive: true, mode: 0o700 });
@@ -579,20 +596,17 @@ describe("profile entries are checked for type, ownership and permissions (#709 
         `${above}, on the path to COPILOT_HOME ${join(above, "mine", "profile")}, can be changed by other users`,
       ]);
 
-      // A link in a closed directory to a profile behind an open one is judged by where it leads.
+      // An existing profile reached through a link is refused, wherever the link leads (#709 review 5).
+      await chmod(above, 0o700);
       const closed = await profile();
       await symlink(join(above, "mine"), join(closed, "via"));
-      expect((await copilotHomeProblems(join(closed, "via", "profile")))[0]).toBe(
-        `${above}, on the path to COPILOT_HOME ${join(closed, "via", "profile")}, can be changed by other users`,
-      );
-      // And a link in an open directory is refused even when it leads somewhere closed.
-      await chmod(above, 0o700);
-      const open = await profile();
-      await chmod(open, 0o777);
-      await symlink(join(above, "mine"), join(open, "via"));
-      expect((await copilotHomeProblems(join(open, "via", "profile")))[0]).toBe(
-        `${open}, on the path to COPILOT_HOME ${join(open, "via", "profile")}, can be changed by other users`,
-      );
+      expect(await copilotHomeProblems(join(closed, "via", "profile"))).toEqual([
+        `${join(closed, "via")}, on the path to COPILOT_HOME ${join(closed, "via", "profile")}, is a symbolic link; give COPILOT_HOME as a path without links`,
+      ]);
+      await symlink(join(above, "mine", "profile"), join(closed, "direct"));
+      expect(await copilotHomeProblems(join(closed, "direct"))).toEqual([
+        `COPILOT_HOME ${join(closed, "direct")} is a symbolic link`,
+      ]);
     },
   );
 

@@ -18,6 +18,7 @@
  */
 import { once } from "node:events";
 import { execFile } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { createServer, type Server } from "node:http";
@@ -42,6 +43,9 @@ import {
   type OpenSessionOptions,
   type SessionUpdateEvent,
 } from "@orca/agents";
+
+/** The temporary directory without links (macOS reaches it through /var -> /private/var). */
+const TMP = realpathSync(tmpdir());
 
 const COPILOT = process.env["ORCA_COPILOT_CLI"];
 
@@ -170,7 +174,7 @@ async function openCopilot(
   answer: (r: acp.RequestPermissionRequest) => string | undefined,
   opts: { permissions?: unknown; guarded?: boolean; home?: string } = {},
 ): Promise<Opened> {
-  const root = await mkdtemp(join(tmpdir(), "orca-copilot-accept-"));
+  const root = await mkdtemp(join(TMP, "orca-copilot-accept-"));
   roots.push(root);
   const workspace = join(root, "workspace");
   const home = opts.home ?? join(root, "copilot-home");
@@ -219,7 +223,7 @@ describe.skipIf(!COPILOT)("Copilot CLI over ACP, real executable (#709)", { time
 
   describe("Copilot's own profile", () => {
     it("a profile reused across sessions stays clean: no saved approval, and the next session asks again", async () => {
-      const root = await mkdtemp(join(tmpdir(), "orca-copilot-reuse-"));
+      const root = await mkdtemp(join(TMP, "orca-copilot-reuse-"));
       roots.push(root);
       const home = join(root, "copilot-home");
       for (const n of [1, 2]) {
@@ -237,7 +241,7 @@ describe.skipIf(!COPILOT)("Copilot CLI over ACP, real executable (#709)", { time
     });
 
     it("a profile Copilot itself gave a standing URL approval is refused before the agent starts", async () => {
-      const root = await mkdtemp(join(tmpdir(), "orca-copilot-seeded-"));
+      const root = await mkdtemp(join(TMP, "orca-copilot-seeded-"));
       roots.push(root);
       const home = join(root, "copilot-home");
       await promisify(execFile)(COPILOT!, ["--no-auto-update", "config", "allowedUrls", "example.com"], {
