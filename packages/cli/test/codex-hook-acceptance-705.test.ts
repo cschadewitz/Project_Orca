@@ -34,7 +34,7 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFailed } from "vitest";
 import { AgentSpecSchema, silentLogger } from "@orca/core";
 import {
   CODEX_HOOK_KEY,
@@ -74,8 +74,10 @@ type Step = { tool: string; namespace?: string; args?: Record<string, unknown>; 
  * then "done". A step for a freeform (custom) tool sends its `input` as is. `"$SID"` in a
  * step's arguments is the session id the previous output reported.
  */
-function modelStandIn(): Promise<{ server: Server; url: string; tools: Set<string> }> {
+function modelStandIn(): Promise<{ server: Server; url: string; tools: Set<string>; outputs: string[] }> {
   let n = 0;
+  /** Every tool output Codex sent back, as it sent it; printed when a test fails. */
+  const seen: string[] = [];
   /** Every tool Codex offered the model, by name (or type, for hosted tools). */
   const tools = new Set<string>();
   const server = createServer((req, res) => {
@@ -100,6 +102,7 @@ function modelStandIn(): Promise<{ server: Server; url: string; tools: Set<strin
         : [];
       const outputs = input.filter((i) => i.type === "function_call_output" || i.type === "custom_tool_call_output");
       const lastOut = outputs.length ? JSON.stringify(outputs[outputs.length - 1]!.output ?? "") : "";
+      if (outputs.length) seen.push(lastOut.slice(0, 2000));
       const sid = /session ID (\d+)/.exec(lastOut)?.[1] ?? "0";
       const step = script[outputs.length];
       const id = `resp_${++n}`;
@@ -137,7 +140,12 @@ function modelStandIn(): Promise<{ server: Server; url: string; tools: Set<strin
   });
   return new Promise((resolve) =>
     server.listen(0, "127.0.0.1", () =>
-      resolve({ server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`, tools }),
+      resolve({
+        server,
+        url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`,
+        tools,
+        outputs: seen,
+      }),
     ),
   );
 }
@@ -152,7 +160,7 @@ const patch = (...lines: string[]): Step => ({
 /* ---------------------------------- the setup ---------------------------------- */
 
 describe.skipIf(ADAPTER === undefined)("the hook in the real Codex (#705)", () => {
-  let model: { server: Server; url: string; tools: Set<string> };
+  let model: { server: Server; url: string; tools: Set<string>; outputs: string[] };
   let hookScript: string;
   let root: string;
   let configDir: string;
@@ -180,6 +188,9 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Codex (#705)", () =
     await mkdir(configDir);
     await mkdir(workspace);
     await mkdir(codexHome);
+    // What Codex reported back for each call is the only account of why a call did not run.
+    model.outputs.length = 0;
+    onTestFailed(() => console.error(`tool outputs Codex sent the model:\n${model.outputs.join("\n")}`));
     // Codex may still be writing its home as the session closes.
     return () => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
