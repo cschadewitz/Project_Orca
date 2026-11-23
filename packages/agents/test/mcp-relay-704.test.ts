@@ -303,6 +303,17 @@ describe("ORCA serves a hooked session's MCP servers over ACP (#704)", () => {
     expect(await t.serverLog()).toBe("");
   });
 
+  it("ends a request at its deadline while it waits for admission, and starts nothing", async () => {
+    const admission = new Promise<void>(() => undefined);
+    const t = await setup({ admission, requestTimeoutMs: 300 });
+    await t.open();
+    const started = Date.now();
+    const [discover] = await t.listed();
+    expect(discover).toEqual({ acpError: expect.objectContaining({ data: { reason: "deadline" } }) });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(await t.serverLog()).toBe("");
+  });
+
   it("starts the server for the first request after the session is admitted", async () => {
     let admit!: () => void;
     const admission = new Promise<void>((resolve) => (admit = resolve));
@@ -629,6 +640,27 @@ describe("ORCA serves a hooked session's MCP servers over ACP (#704)", () => {
     const [call] = await turn;
     expect(call).toEqual({ acpError: expect.objectContaining({ data: { reason: "deadline" } }) });
     expect(await t.serverLog()).toBe("");
+  });
+
+  it("does not fail the live turn when a retired ask's callback fails late", async () => {
+    const t = await setup({
+      noList: true,
+      permissions: { default: "ask", rules: [] },
+      requestTimeoutMs: 300,
+      // The host's callback learns the ask was withdrawn, and only then fails.
+      askPermission: async (_req, invocation) => {
+        await new Promise<void>((resolve) => invocation?.signal.addEventListener("abort", () => resolve()));
+        throw new Error("the host could not record the withdrawn ask");
+      },
+    });
+    const s = await t.open();
+    await t.seen();
+    // A parallel turn stays open after its answer: the failure lands while it is live.
+    const [call] = await t.turn(s, JSON.stringify(["PARALLEL", ["tools/call", { name: "touch", arguments: {} }]]));
+    expect(call).toEqual({ acpError: expect.objectContaining({ data: { reason: "deadline" } }) });
+    // The session still takes turns.
+    const [next] = await t.turn(s, JSON.stringify([["tools/list", {}]]));
+    expect(next).toEqual({ tools: [{ name: "touch", inputSchema: { type: "object" } }] });
   });
 
   it.skipIf(process.platform === "win32")(

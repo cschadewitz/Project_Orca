@@ -215,7 +215,18 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
   const handlerFor =
     (server: RelayedMcpServer): acpUnstable.McpRequestHandler =>
     async (op) => {
-      if (!(await opts.admitted)) {
+      // The request's deadline runs from its arrival, and with cancellation it bounds every wait
+      // the request makes: admission, deciding it (and retiring any ask), starting its server
+      // and the server's answer.
+      const deadline = AbortSignal.timeout(opts.requestTimeoutMs ?? MCP_RELAY_REQUEST_TIMEOUT_MS);
+      const early = AbortSignal.any([op.signal, stopping.signal, deadline]);
+      let admitted: boolean;
+      try {
+        admitted = await untilAborted(opts.admitted, early);
+      } catch (error) {
+        throw failure(error instanceof RelayFailure ? error : new RelayFailure("failed"));
+      }
+      if (!admitted) {
         opts.logger.warn("MCP request refused: the session was not admitted", {
           server: server.name,
           method: op.method,
@@ -231,12 +242,8 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
         });
         throw new acpUnstable.McpProtocolError(METHOD_NOT_FOUND, `${op.method} is not relayed by ORCA`);
       }
-      // The request's deadline runs from its arrival: deciding it, starting its server and
-      // the server's answer all count against it.
-      const deadline = AbortSignal.timeout(opts.requestTimeoutMs ?? MCP_RELAY_REQUEST_TIMEOUT_MS);
-      // Deciding it is bounded too: cancellation and the deadline end the wait, and retire any
-      // ask it is waiting on.
-      const early = AbortSignal.any([op.signal, stopping.signal, deadline]);
+      // A request that has already ended is not decided at all: no ask is started for it.
+      if (early.aborted) throw failure(new RelayFailure(abortFailure(early)));
       let gate: McpRelayDispatch;
       try {
         gate = await untilAborted(opts.authorize(call, early), early);
@@ -362,9 +369,13 @@ function bounded(text: string, max = MCP_RELAY_ERROR_MESSAGE_LIMIT): string {
   return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }
 
-/** `p`, unless `signal` aborts first; then a failure for why it did. */
+/** `p`, unless `signal` aborts first; then a failure for why it did. `p` is always observed. */
 function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(new RelayFailure(abortFailure(signal)));
+  if (signal.aborted) {
+    // Whatever `p` comes to is no longer anybody's answer, but it is still observed.
+    p.catch(() => undefined);
+    return Promise.reject(new RelayFailure(abortFailure(signal)));
+  }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(new RelayFailure(abortFailure(signal)));
     signal.addEventListener("abort", onAbort, { once: true });

@@ -398,7 +398,8 @@ needs only a live session. A tool call needs the session's live prompt turn and 
 read at that moment, deciding `<server>: <tool>` (kind `other`, the same call the hook decides):
 a deny never reaches the server, and an ask is put to a person as a one-time allow for that
 call. Each call is decided again on the policy as it is when it reaches the head of the line
-to the server, and a request's 10 minutes run from its arrival and bound everything it waits on: a person's
+to the server, and a request's 10 minutes run from its arrival and bound everything it waits on: the session's
+admission, a person's
 answer (the ask is withdrawn when the request ends), its server's start and the policy read
 before it is sent. One that ran out while it was decided starts no server, and one that ends
 while its policy is being read does not hold up the requests behind it. Any other MCP request (resources, prompts) is refused. A request ends with

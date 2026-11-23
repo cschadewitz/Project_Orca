@@ -333,7 +333,9 @@ async function openPlanned(
             try {
               return await opts.askPermission!(request, invocation);
             } catch (error) {
-              if (activeTurn !== turn || turn.abort.signal.aborted) return undefined;
+              // An ask that was retired (its turn ended, or the request it was for) has nothing
+              // left to fail: a callback that rejects late must not take the live turn with it.
+              if (activeTurn !== turn || turn.abort.signal.aborted || invocation.signal.aborted) return undefined;
               const failure =
                 error instanceof Error
                   ? error
