@@ -37,7 +37,7 @@
  * a hook prints on stdout becomes its answer.
  */
 import { closeSync, constants, fstatSync, openSync, writeSync, type BigIntStats } from "node:fs";
-import { lstat, open, readdir, unlink } from "node:fs/promises";
+import { lstat, open, readdir, unlink, type FileHandle } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { HOOK_TELEMETRY_LINE_LIMIT, HookTelemetryLineSchema, OrcaError, type HookTelemetryLine } from "@orca/core";
@@ -85,13 +85,10 @@ export function recordHookTelemetry(target: HookTelemetryTarget, line: HookTelem
   let fd: number | undefined;
   if (!POSIX) return false;
   try {
-    const bytes = Buffer.from(`${JSON.stringify(line)}\n`, "utf8");
-    if (bytes.length > HOOK_TELEMETRY_LINE_LIMIT) return false;
-    fd = openSync(target.file, constants.O_WRONLY | constants.O_APPEND | NOFOLLOW | NONBLOCK);
-    const stat = fstatSync(fd, { bigint: true });
-    if (!stat.isFile() || String(stat.dev) !== target.dev || String(stat.ino) !== target.ino) return false;
-    if (privateEnough(stat) || stat.nlink !== 1n) return false;
-    if (Number(stat.size) + bytes.length > HOOK_TELEMETRY_SPOOL_LIMIT) return false;
+    const bytes = spoolLine(line);
+    if (bytes === undefined) return false;
+    fd = openSync(target.file, SPOOL_APPEND);
+    if (!writableSpool(fstatSync(fd, { bigint: true }), target, bytes.length)) return false;
     // One write: an O_APPEND write this small lands whole, after every earlier one.
     return writeSync(fd, bytes) === bytes.length;
   } catch {
@@ -104,6 +101,78 @@ export function recordHookTelemetry(target: HookTelemetryTarget, line: HookTelem
         // Nothing to report: the hook's answer is already out.
       }
   }
+}
+
+/**
+ * Hook side, as the hook program uses it: {@link recordHookTelemetry}'s checks and single
+ * append, done without blocking the process, so that the hook can stop waiting for it. It
+ * never rejects; it resolves to whether the line was written.
+ */
+export async function recordHookTelemetryAsync(target: HookTelemetryTarget, line: HookTelemetryLine): Promise<boolean> {
+  if (!POSIX) return false;
+  let handle: FileHandle | undefined;
+  try {
+    const bytes = spoolLine(line);
+    if (bytes === undefined) return false;
+    handle = await open(target.file, SPOOL_APPEND);
+    if (!writableSpool(await handle.stat({ bigint: true }), target, bytes.length)) return false;
+    return (await handle.write(bytes)).bytesWritten === bytes.length;
+  } catch {
+    return false;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+/** How the hook opens the spool: append only, never creating, following a link or waiting. */
+const SPOOL_APPEND = constants.O_WRONLY | constants.O_APPEND | NOFOLLOW | NONBLOCK;
+
+/** The line as bytes, or undefined when it is over the line limit. */
+function spoolLine(line: HookTelemetryLine): Buffer | undefined {
+  const bytes = Buffer.from(`${JSON.stringify(line)}\n`, "utf8");
+  return bytes.length > HOOK_TELEMETRY_LINE_LIMIT ? undefined : bytes;
+}
+
+/** Whether the open file is ORCA's spool, private, with room for `size` more bytes. */
+function writableSpool(stat: BigIntStats, target: HookTelemetryTarget, size: number): boolean {
+  if (!stat.isFile() || String(stat.dev) !== target.dev || String(stat.ino) !== target.ino) return false;
+  if (privateEnough(stat) || stat.nlink !== 1n) return false;
+  return Number(stat.size) + size <= HOOK_TELEMETRY_SPOOL_LIMIT;
+}
+
+/** A value in a call's input longer than this, encoded, is left out of a line that would not fit. */
+const INPUT_VALUE_KEEP = 512;
+
+/**
+ * Hook side: the line as it will fit in {@link HOOK_TELEMETRY_LINE_LIMIT}, or `undefined` when
+ * even its bare fields do not. Whatever does not fit is left out whole, never cut: a cut value
+ * could end inside a secret that ORCA would then not recognize to redact. In order, it leaves
+ * out the input's long values, then the title, then the whole input, each replaced by a short
+ * note that says what was left out and how long it was.
+ */
+export function fitHookTelemetryLine(line: HookTelemetryLine): HookTelemetryLine | undefined {
+  const fits = (l: HookTelemetryLine) =>
+    Buffer.byteLength(`${JSON.stringify(l)}\n`, "utf8") <= HOOK_TELEMETRY_LINE_LIMIT;
+  if (fits(line)) return line;
+  const omitted = (value: unknown) => `[left out: ${JSON.stringify(value)?.length ?? 0} characters]`;
+  let next = line;
+  const input = line.input;
+  if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+    const kept: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input))
+      kept[key] = (JSON.stringify(value)?.length ?? 0) > INPUT_VALUE_KEEP ? omitted(value) : value;
+    next = { ...next, input: kept };
+    if (fits(next)) return next;
+  }
+  if (next.title !== undefined) {
+    next = { ...next, title: `[left out: ${next.title.length} characters]` };
+    if (fits(next)) return next;
+  }
+  if (input !== undefined) {
+    next = { ...next, input: omitted(input) };
+    if (fits(next)) return next;
+  }
+  return undefined;
 }
 
 /** What one drain found, besides the lines it handed on. */

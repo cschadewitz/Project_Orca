@@ -12,7 +12,7 @@ import {
 } from "./update-bootstrap.js";
 import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
-import { DIAGNOSTICS_DIR, FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
+import { DIAGNOSTICS_DIR, FileRetryClaimStore, HOOK_SESSION_DIR, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
 import { enterDaemonStoreFormat } from "./desktop-carryover.js";
 import {
   desktopSqliteSwitch,
@@ -39,6 +39,7 @@ import {
   claudePreToolHookScript,
   CLAUDE_ADAPTER_NAMES,
   nativeToolHookSession,
+  sweepHookTelemetrySpools,
   nativeToolHookUnavailable,
   openAcpSession,
   withProviderGuards,
@@ -318,13 +319,23 @@ export function makeSessionFactory(
   const protectedPaths = orcaProtectedPaths(layout);
   // Provider-specific launch checks and session guards (#709, #710, #711): Copilot CLI, OpenCode, Cline.
   const guarded = withProviderGuards(open);
-  const contextDir = join(resolve(layout.configDir, layout.storeDir), "private-execution", "tool-hooks");
+  // Left out of every store copy (backups, carryover, conversion): see HOOK_SESSION_DIR.
+  const contextDir = join(resolve(layout.configDir, layout.storeDir), ...HOOK_SESSION_DIR.split("/"));
+  // Telemetry spools a stopped process left behind (#1000) are discarded, never ingested,
+  // once, before the first hooked session.
+  let swept: Promise<void> | undefined;
+  const sweep = () =>
+    (swept ??= sweepHookTelemetrySpools({ dir: contextDir, protectedPaths }).then(
+      () => undefined,
+      () => undefined,
+    ));
   return async (options: OpenSessionOptions) => {
     const bound = { ...options, permissionFiles, protectedPaths };
     // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
     // says who it is, and the session refused wherever it cannot be put in force.
     if (options.agent.nativeToolHook !== "on") return guarded(bound);
     if (hook.activation !== "acceptance-only") throw nativeToolHookUnavailable(options.agent)!;
+    await sweep();
     // The hook runs where the agent does; ORCA installs it only on its own host.
     if (options.host.spec.type !== "local")
       throw new OrcaError(
@@ -350,6 +361,7 @@ export function makeSessionFactory(
       codexEnvironment: hook.codexEnvironment,
       codexShell: hook.codexShell,
       agentEnv: { ...process.env, ...literalEnv(options.agent.env), ...(options.env ?? {}) },
+      toolCallTelemetry: options.agent.diagnostics?.toolCalls,
       // In the desktop app ORCA's runtime is the Electron binary, which runs a script as Node
       // only with this set; the hooks the agent starts inherit it from the agent.
       runtimeEnv: process.versions["electron"] !== undefined ? { ELECTRON_RUN_AS_NODE: "1" } : undefined,
@@ -408,6 +420,9 @@ export function makeSessionFactory(
         await installed.cleanup();
       }
     };
+    // The engine drains it while the session runs (#1000); `cleanup` reads it a last time.
+    const telemetry = installed.telemetry();
+    if (telemetry !== undefined) Object.defineProperty(session, "hookTelemetry", { value: telemetry });
     return session;
   };
 }

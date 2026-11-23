@@ -2,4 +2,4 @@
 import { answer } from "../../../src/bin/hook-output-guard.js";
 // eslint-disable-next-line no-console -- the stray output under test
 console.log("a dependency talking");
-answer({ exitCode: 0, stdout: "", stderr: "" });
+void answer({ exitCode: 0, stdout: "", stderr: "" });
