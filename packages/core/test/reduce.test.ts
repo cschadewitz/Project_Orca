@@ -144,19 +144,79 @@ describe("reduceRun", () => {
     ];
     expect(reduceRun(events).steps.step_1?.inputArtifactIds).toEqual(["art_1", "art_2", "art_3"]);
   });
-  it("refuses an inherited key as a step id instead of writing to Object.prototype", () => {
-    const created = ev("run.created", {
-      workflowId: "wf",
-      workflowVersion: "1",
-      workspace: { hostId: "local", cwd: "/w" },
-      vars: {},
+  describe("event-indexed dictionaries hold only own keys", () => {
+    const created = (vars: Record<string, unknown> = {}) =>
+      ev("run.created", { workflowId: "wf", workflowVersion: "1", workspace: { hostId: "local", cwd: "/w" }, vars });
+    const artifact = (id: string) => ({
+      id,
+      kind: "intent",
+      name: "intent",
+      mediaType: "text/markdown",
+      contentHash: "h",
+      size: 1,
+      version: 1,
+      producedBy: { runId: "run_1" },
+      parents: [],
+      data: {},
+      createdAt: "t",
     });
-    for (const id of ["__proto__", "constructor", "toString"]) {
-      expect(() => reduceRun([created, ev("step.started", { stepRunId: id, inputArtifactIds: [] })])).toThrow(
-        /unknown step/,
-      );
-    }
-    expect(({} as { status?: unknown }).status).toBeUndefined();
+    const asked = (stepRunId: string, requestId: string) =>
+      ev("human.requested", { stepRunId, requestId, kind: "question", question: "?", options: [] });
+    const inherited = ["__proto__", "constructor", "toString", "hasOwnProperty"];
+    const prototypeIsClean = () => {
+      const probe = {} as Record<string, unknown>;
+      for (const key of ["status", "startedAt", "answer", "answeredAt", "result", "id"])
+        expect(probe[key]).toBeUndefined();
+      expect(Object.getPrototypeOf(probe)).toBe(Object.prototype);
+    };
+
+    it("refuses an inherited key as a step id", () => {
+      for (const id of inherited) {
+        expect(() => reduceRun([created(), ev("step.started", { stepRunId: id, inputArtifactIds: [] })])).toThrow(
+          /unknown step/,
+        );
+      }
+      prototypeIsClean();
+    });
+
+    it("records an inherited key as an ordinary step, artifact and human input", () => {
+      for (const id of inherited) {
+        const s = reduceRun([
+          created(),
+          ev("step.scheduled", { stepRunId: id, nodeId: "n", nodeType: "agent", attempt: 1 }),
+          ev("step.started", { stepRunId: id, inputArtifactIds: [] }),
+          ev("artifact.recorded", { stepRunId: id, artifact: artifact(id) }),
+          asked(id, id),
+          ev("human.answered", { stepRunId: id, requestId: id, answer: "yes" }),
+          ev("step.completed", { stepRunId: id, result: { artifactIds: [], data: {} } }),
+        ]);
+        for (const dict of [s.steps, s.artifacts, s.humanInputs]) {
+          expect(Object.getPrototypeOf(dict)).toBe(Object.prototype);
+          expect(Object.keys(dict)).toEqual([id]);
+        }
+        expect(s.steps[id]?.status).toBe("completed");
+        expect(s.steps[id]?.result?.artifactIds).toEqual([id]);
+        expect(s.humanInputs[id]?.answer).toBe("yes");
+      }
+      prototypeIsClean();
+    });
+
+    it("ignores an answer to an inherited key that was never asked", () => {
+      for (const id of inherited) {
+        const s = reduceRun([created(), ev("human.answered", { stepRunId: id, requestId: id, answer: "yes" })]);
+        expect(Object.keys(s.humanInputs)).toEqual([]);
+      }
+      prototypeIsClean();
+    });
+
+    it("sets an inherited key as an ordinary var", () => {
+      const vars = JSON.parse('{"__proto__": {"polluted": true}, "b": 2}') as Record<string, unknown>;
+      const s = reduceRun([created({ a: 1 }), ev("vars.set", { vars })]);
+      expect(Object.getPrototypeOf(s.run.vars)).toBe(Object.prototype);
+      expect(Object.keys(s.run.vars).sort()).toEqual(["__proto__", "a", "b"]);
+      expect((s.run.vars as { polluted?: unknown }).polluted).toBeUndefined();
+      prototypeIsClean();
+    });
   });
   it("rejects logs that do not start with run.created", () => {
     expect(() => reduceRun([ev("run.started", {})])).toThrow(/run.created/);
