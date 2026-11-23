@@ -1,8 +1,9 @@
 # ADR 0011: SQLite is the durable metadata store; graph and key-value stores deferred
 
 - Status: Proposed (#341). Settles SQLite as the store and defers both alternatives on measured
-  SQLite headroom. It does **not** meet #341's criterion of comparing equivalent graph and
-  key-value prototypes against budgets recorded beforehand (see "What this does not show").
+  SQLite headroom. It does **not** compare equivalent graph and key-value prototypes against
+  budgets recorded beforehand; the project owner accepted that narrower criterion for #341 (see
+  "What this does not show").
 - Date: 2026-11-23
 - Inspected baseline: main `9413feac7fdd9abea8f9b76af1344c6ee115fbcc` (workloads, run
   45084792624) and the final reviewed head of #989 (`b046a57d`, run 45139685534) for checkpoints
@@ -212,7 +213,9 @@ window at a time; the remedy then is a restart checkpoint once the log passes `w
   seen.
 
 So this ADR supports keeping SQLite and **deferring** the alternatives on measured headroom. It
-does not show that equivalent prototypes were compared under budgets recorded beforehand. That
-part of #341 stays open unless it is explicitly narrowed to "defer on measured SQLite headroom";
-completing it means building graph and key-value prototypes that use their own traversal and
-indexing, and comparing them against these budgets, now recorded.
+does not show that equivalent prototypes were compared under budgets recorded beforehand.
+
+**Criterion narrowed (2026-11-23).** The project owner accepted closing #341 on this narrower
+basis: SQLite stays, graph and key-value stores are deferred on measured SQLite headroom, with the
+triggers above. If a trigger fires, the comparison is done then, with graph and key-value
+prototypes that use their own traversal and indexing, measured against these budgets.
