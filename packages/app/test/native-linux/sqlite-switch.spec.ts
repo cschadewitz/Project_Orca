@@ -123,9 +123,12 @@ async function reopen(backend: "Files" | "SQLite"): Promise<Page> {
 
 test.beforeAll(async () => {
   session = await NativeSession.start();
-  session.answerPrompts("unlock");
   profile = await mkdtemp(join(session.root, "profile-sqlite-"));
   chosen = await disposableWorkspace(session.root, session.env);
+  // A login keyring for run-intent storage, as keyring-prompt.spec.ts sets up: without one,
+  // Launch work has nowhere to keep the run's intent and refuses before the sample.
+  await session.lockedKeyring();
+  session.answerPrompts("unlock");
 });
 
 test.afterEach(async () => {
