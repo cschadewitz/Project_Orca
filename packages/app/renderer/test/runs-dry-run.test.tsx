@@ -88,7 +88,12 @@ describe("dry runs in the Runs surface", () => {
 
   it("opens a dry run a link names, marked dry on its chip and in its header", async () => {
     let crumbs: readonly Crumb[] = [];
-    renderRuns({ open: { runId: DRY.id }, onCrumbs: (next) => (crumbs = next) });
+    renderRuns({
+      open: { runId: DRY.id },
+      onCrumbs: (next) => {
+        crumbs = next;
+      },
+    });
     const row = await waitFor(() => {
       const found = rows().find((r) => r.id === `tree-row-${DRY.id}`);
       expect(found).toBeTruthy();
