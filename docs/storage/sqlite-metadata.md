@@ -504,6 +504,14 @@ every marker back, what was restored set aside and dropped, the database untouch
 A kill before the marker is undone the same way by the next write-mode start (until
 then read-only opens refuse, `INTERRUPTED`); one after it is finished. A marker or a
 database naming another switch is refused and left as it is.
+
+Recovery acts on the store the switch left, not on whatever is bound to the same store
+by then. Either way, the journal records which database file the switch started from or
+built (its device and inode). Recovery keeps, fences or drops that file only. A copy or a
+restored backup put in its place is refused and left intact, even when it is bound to the
+same store. While a journal is pending, `orca store sqlite restore` and `import` refuse
+(`SWITCH_PENDING`) under the format lock. Start ORCA on the store first, so that the
+switch is finished or undone.
 `sqlite-switch-back.test.ts` covers the round trip (files, SQLite with new work,
 files, SQLite, files), a lost fence at each check, a failure at each restore step,
 kills before and after the marker, and the refusals.

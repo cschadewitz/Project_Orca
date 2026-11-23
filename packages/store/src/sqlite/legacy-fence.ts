@@ -81,6 +81,13 @@ export interface SqliteSwitchJournal {
    * written out to {@link stagedFilesDir} before this journal. Absent: a switch to SQLite.
    */
   to?: "files";
+  /**
+   * The database file this switch started from or built (`<dev>:<ino>` of `metadata.sqlite` when
+   * the journal was written): recovery keeps, fences or drops only that file, never a replacement
+   * that happens to be bound to the same store. Always written; a switch to SQLite journaled by an
+   * earlier build has none and is judged by its binding alone.
+   */
+  database?: string;
 }
 
 /** Where the switch back to files writes the file metadata before it restores it into place. */
@@ -145,7 +152,8 @@ export async function readSqliteSwitchJournal(storeDir: string): Promise<SqliteS
       value.format === 1 &&
       typeof value.sqliteId === "string" &&
       typeof value.backup === "string" &&
-      (value.to === undefined || value.to === "files")
+      (value.to === undefined || value.to === "files") &&
+      (value.database === undefined ? value.to === undefined : typeof value.database === "string")
     )
       return value as SqliteSwitchJournal;
   } catch {

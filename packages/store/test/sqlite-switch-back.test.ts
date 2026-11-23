@@ -5,20 +5,24 @@
  * Every refusal, and an interruption before the marker, leaves the store on SQLite as it was.
  */
 import { spawn } from "node:child_process";
-import { lstat, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { RequestSchema, sha256 } from "@orca/core";
 import { childBundle } from "@orca/testing/child-bundle";
 import {
+  backupSqliteMetadata,
   enterStoreFormat,
   fileStores,
   FileWorkflowVersionStore,
   holdStoreWriter,
+  importFileMetadata,
   LEGACY_FENCES,
   readStoreFormat,
   recordedStoreBackend,
+  restoreSqliteMetadata,
   SQLITE_KEY_FILE,
   SQLITE_METADATA_FILE,
   SQLITE_STORE_FORMAT_EPOCH,
@@ -364,6 +368,37 @@ describe("switch back to files (#339)", () => {
       await writeFile(join(dir, SQLITE_METADATA_FILE), await readFile(join(other, SQLITE_METADATA_FILE)));
       await keptForReview(dir);
     });
+
+    it("refuses, dropping nothing, when the database left behind is a replacement bound to this store", async () => {
+      const dir = await published();
+      // The same store's database, as a copy put in its place: bound to this store, another file.
+      const file = join(dir, SQLITE_METADATA_FILE);
+      await writeFile(`${file}.copy`, await readFile(file));
+      await rename(`${file}.copy`, file);
+      const replacement = await readFile(file);
+      await keptForReview(dir);
+      expect(await readFile(file)).toEqual(replacement);
+    });
+
+    it("refuses to restore or import into the store until the switch settles, and keeps a replacement intact", async () => {
+      const dir = await published();
+      const file = join(dir, SQLITE_METADATA_FILE);
+      const backups = await mkdtemp(join(tmpdir(), "orca-switch-back-backup-"));
+      const backup = join(backups, "metadata.sqlite");
+      await backupSqliteMetadata(dir, backup);
+      // An earlier cleanup removed the database; the journal is still pending.
+      await rm(file);
+      await expect(restoreSqliteMetadata(backup, dir)).rejects.toMatchObject(refusal("SWITCH_PENDING"));
+      await expect(importFileMetadata(dir)).rejects.toMatchObject(refusal("SWITCH_PENDING"));
+      expect(await readdir(dir)).not.toContain(SQLITE_METADATA_FILE);
+      expect(await readdir(join(dir, SQLITE_SWITCH_DIR))).toContain("journal.json");
+      // Put in by hand anyway: recovery does not take it for the database the switch started from.
+      await writeFile(file, await readFile(backup));
+      const replacement = await readFile(file);
+      await keptForReview(dir);
+      expect(await readFile(file)).toEqual(replacement);
+      expect(await readFile(backup)).toEqual(replacement);
+    });
   });
 
   describe("interrupted by a kill", () => {
@@ -408,6 +443,37 @@ describe("switch back to files (#339)", () => {
         await expectPlainFiles(dir);
         await expectReadsOnFiles(dir);
       });
+  });
+
+  it("does not finish an interrupted switch to SQLite on a replacement database bound to the same store", async () => {
+    const interrupted = async () => {
+      const dir = await populated();
+      await expect(
+        switchStoreToSqlite(dir, {
+          appVersion: "0.8.0",
+          afterMarker: async () => {
+            throw new Error("killed");
+          },
+        }),
+      ).rejects.toThrow("killed");
+      expect(await readdir(join(dir, SQLITE_SWITCH_DIR))).toContain("journal.json");
+      return dir;
+    };
+    // Its own database: the next start finishes the switch.
+    expect(await enterStoreFormat(await interrupted(), { appVersion: "0.8.0", mode: "write" })).toMatchObject({
+      backend: "sqlite",
+    });
+    // A copy put in its place: refused, and the copy is left as it is.
+    const dir = await interrupted();
+    const file = join(dir, SQLITE_METADATA_FILE);
+    await writeFile(`${file}.copy`, await readFile(file));
+    await rename(`${file}.copy`, file);
+    const replacement = await readFile(file);
+    await expect(enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).rejects.toMatchObject(
+      refusal("INTERRUPTED"),
+    );
+    expect(await readFile(file)).toEqual(replacement);
+    expect(await readdir(join(dir, SQLITE_SWITCH_DIR))).toContain("journal.json");
   });
 
   it("refuses to settle an interrupted switch back whose database is not the one its journal names", async () => {
