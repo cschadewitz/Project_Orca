@@ -272,15 +272,7 @@ it("stops writing on the first failed chunk and closes only after every write ha
     code: "AGENT_TRANSPORT",
     message: expect.stringContaining("ssh write failed for"),
   });
-  // writeFile closes the handle after a failed write without waiting for it, so the close can
-  // reach the server after the rejection. Wait for it rather than reading the log too early.
-  const read = async () => (await readFile(log, "utf8")).split("\n").filter(Boolean);
-  const deadline = Date.now() + 10_000;
-  let lines = await read();
-  while (!lines.includes("close") && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 20));
-    lines = await read();
-  }
+  const lines = (await readFile(log, "utf8")).split("\n").filter(Boolean);
   const writes = lines.filter((l) => l.startsWith("write "));
   expect(writes.length).toBeLessThan(chunks / 2); // no new chunks after the failure
   expect(lines).not.toContain("write-after-close");
