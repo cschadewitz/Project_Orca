@@ -26,6 +26,7 @@ import {
   connectedEvidenceProblems,
   loadCatalogue,
   loadMatrix,
+  qualifyingCases,
 } from "../guard-qualification/check-support-matrix.js";
 import { SCENARIOS } from "../guard-qualification/scenarios.js";
 import { createWorld } from "../guard-qualification/world.js";
@@ -58,7 +59,7 @@ describe("the connected path and the matrix agree", () => {
 describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("connected: claude (#706)", () => {
   let model;
   let path;
-  const receipt = { cases: [], agentRefusals: [], checks: {} };
+  const receipt = { cases: [], unobservedCalls: [], checks: {} };
 
   beforeAll(async () => {
     model = await modelStandIn();
@@ -86,13 +87,15 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("connected
     }
   }, 120_000);
 
-  it("refuses a session that runs a Claude Code other than the pinned one, before any work", async () => {
+  // One check, for one case: a session whose Claude Code is not the pinned image is refused. It
+  // says nothing about other routes the agent may have, so it is not uncoveredRoutesRefused.
+  it("unpinned runtime: refuses a session on a Claude Code other than the pinned one, before any work", async () => {
     const world = await realWorld();
     try {
       await expect(
         path.openSession(world, { extraEnv: { CLAUDE_CODE_EXECUTABLE: OTHER_RUNTIME } }),
       ).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
-      receipt.checks.uncoveredRoutesRefused = "pass";
+      receipt.checks.unpinnedRuntimeRefused = "pass";
     } finally {
       await world.dispose();
     }
@@ -113,7 +116,7 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("connected
           entry.result = "pass";
         } finally {
           entry.calls = world.callRecords ?? [];
-          for (const r of world.agentRefusals ?? []) receipt.agentRefusals.push({ case: c.id, ...r });
+          for (const r of world.agentRefusals ?? []) receipt.unobservedCalls.push({ case: c.id, ...r });
           await world.dispose();
         }
       },
@@ -123,7 +126,12 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("connected
 
   it("every call of every case carries evidence the matrix checker accepts", () => {
     expect(receipt.cases.map((c) => c.id)).toEqual([...runs]);
-    expect(connectedEvidenceProblems(receipt)).toEqual([]);
+    expect(connectedEvidenceProblems(receipt, qualifyingCases(listed, catalogue))).toEqual([]);
+    // A case listed as unobserved really had no call where ORCA's decision was observed.
+    for (const id of Object.keys(listed.unobserved ?? {}))
+      expect(connectedEvidenceProblems(receipt, [id]), id).toEqual([
+        `case ${id}: ORCA's decision was not observed for any call`,
+      ]);
     expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
   });
 });
@@ -153,7 +161,8 @@ async function writeReceipt(receipt) {
         checks: receipt.checks,
         cases: receipt.cases,
         excluded: listed.excluded ?? {},
-        agentRefusals: receipt.agentRefusals,
+        unobserved: listed.unobserved ?? {},
+        unobservedCalls: receipt.unobservedCalls,
       },
       null,
       2,

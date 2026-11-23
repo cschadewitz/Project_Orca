@@ -13,6 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { effectFrom } from "./connected/evidence.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "..", "..");
@@ -53,37 +54,66 @@ export function receiptProblems(receipt, agent, route, kind, neededCases) {
   if (missing.length) problems.push(`missing ${missing.join(",")}`);
   if (!(receipt.checks?.connects === "pass" && receipt.checks?.uncoveredRoutesRefused === "pass"))
     problems.push("needs checks.connects and checks.uncoveredRoutesRefused passing");
-  if (kind === "connected") problems.push(...connectedEvidenceProblems(receipt));
+  if (kind === "connected") problems.push(...connectedEvidenceProblems(receipt, neededCases));
   return problems;
 }
 
 /**
- * A connected receipt must show, per call, the refusal text, the approvals for that exact call
- * and an independently observed effect, kept apart, and the outcome must follow from them: a
- * refusal or an absent result alone never shows that nothing ran.
+ * A connected receipt must bind every call to its own evidence, and this re-derives the outcome
+ * from that evidence rather than trusting it: approvals carry the call's own tool_use id, the
+ * effect is recomputed from the call's `effectRef` (`connected/evidence.js`), and the outcome
+ * must follow (allow only with the effect observed; deny, block and ask only with it proven none
+ * and ORCA's text or an approval for that call). A call the agent refused before ORCA could
+ * answer is `orcaDecision: "unobserved"` and does not count; a case needs at least one call
+ * where ORCA's decision was observed.
  */
-export function connectedEvidenceProblems(receipt) {
+export function connectedEvidenceProblems(receipt, neededCases = (receipt.cases ?? []).map((c) => c.id)) {
   const problems = [];
-  for (const c of receipt.cases ?? []) {
+  for (const c of (receipt.cases ?? []).filter((x) => neededCases.includes(x.id))) {
     const calls = c.calls ?? [];
     if (calls.length === 0) {
       problems.push(`case ${c.id}: no per-call evidence`);
       continue;
     }
+    let observed = 0;
     for (const call of calls) {
       if (call.strayApprovals) {
         problems.push(`case ${c.id}: an approval matched no call of its turn`);
         continue;
       }
-      if (!("refusal" in call) || !Array.isArray(call.approvals) || typeof call.evidence !== "string")
-        problems.push(`case ${c.id}: a call without refusal, approvals and evidence kept apart`);
-      else if (call.effect !== "observed" && call.effect !== "none")
-        problems.push(`case ${c.id}: ${call.tool} has effect ${call.effect}, not observed or none`);
-      else if ((call.outcome === "allow") !== (call.effect === "observed"))
-        problems.push(`case ${c.id}: ${call.tool} outcome ${call.outcome} does not follow from effect ${call.effect}`);
-      else if (call.outcome === "ask" && call.approvals.length === 0)
-        problems.push(`case ${c.id}: ${call.tool} counted as asked with no approval for that call`);
+      const at = `case ${c.id}: ${call.tool}`;
+      if (
+        typeof call.toolUseId !== "string" ||
+        !Array.isArray(call.approvals) ||
+        !call.effectRef ||
+        !("refusal" in call)
+      ) {
+        problems.push(`${at}: needs its tool_use id, approvals, refusal and effect evidence`);
+        continue;
+      }
+      if (call.approvals.some((a) => a.toolCallId !== call.toolUseId))
+        problems.push(`${at}: an approval is bound to another call`);
+      const effect = effectFrom(call.effectRef);
+      if (effect !== call.effect) problems.push(`${at}: its evidence shows effect ${effect}, not ${call.effect}`);
+      if (call.orcaDecision === "unobserved") {
+        if (effect !== "none") problems.push(`${at}: an unobserved decision needs no effect proven`);
+        continue;
+      }
+      if (call.orcaDecision !== "observed") {
+        problems.push(`${at}: orcaDecision must be observed or unobserved`);
+        continue;
+      }
+      const follows =
+        call.outcome === "allow"
+          ? effect === "observed"
+          : effect === "none" &&
+            ((call.outcome === "deny" && call.refusal === "orca-deny") ||
+              (call.outcome === "block" && call.refusal === "orca-block") ||
+              (call.outcome === "ask" && call.approvals.length > 0));
+      if (!follows) problems.push(`${at}: outcome ${call.outcome} does not follow from its evidence`);
+      else observed++;
     }
+    if (observed === 0) problems.push(`case ${c.id}: ORCA's decision was not observed for any call`);
   }
   return problems;
 }
@@ -100,6 +130,17 @@ export function loadMatrix() {
 export function casesFor(path, catalogue) {
   return catalogue.cases.filter((c) => c.needs.every((n) => path.capabilities.includes(n))).map((c) => c.id);
 }
+
+/**
+ * The cases a connected receipt from `path` qualifies on: those it runs, less the ones it lists
+ * as `unobserved` (run as diagnostics, but the agent refuses the calls before ORCA answers).
+ */
+export function qualifyingCases(path, catalogue) {
+  return casesFor(path, catalogue).filter((id) => !(id in (path.unobserved ?? {})));
+}
+
+/** Cases a path does not cover as evidence: excluded, or run without ORCA's decision observed. */
+const notCovered = (path) => [...Object.keys(path.excluded ?? {}), ...Object.keys(path.unobserved ?? {})];
 
 /** @returns {string[]} one message per problem; empty when the matrix holds */
 export function checkSupportMatrix(
@@ -132,6 +173,12 @@ export function checkSupportMatrix(
     for (const id of ids)
       if (!runs.has(id) && !(id in (path.excluded ?? {})))
         problems.push(`path ${path.id}: case ${id} is neither run nor excluded with a reason`);
+    for (const [id, reason] of Object.entries(path.unobserved ?? {})) {
+      if (!path.connected) problems.push(`path ${path.id}: only a connected path lists unobserved cases`);
+      if (!runs.has(id)) problems.push(`path ${path.id}: lists ${id} as unobserved, but does not run it`);
+      if (typeof reason !== "string" || reason.trim().length < 20)
+        problems.push(`path ${path.id}: unobserved ${id} needs a reason a reader can check`);
+    }
   }
   // A connected path runs a live agent through one route end to end, and proves that route.
   for (const path of matrix.paths) {
@@ -188,7 +235,7 @@ export function checkSupportMatrix(
       const required = [
         { tier: 1, kind: "installed", route, cases: [] },
         { tier: 2, kind: "installed", route, cases: casesFor(path, catalogue) },
-        ...provers.map((p) => ({ tier: 3, kind: "connected", route: p.id, cases: casesFor(p, catalogue) })),
+        ...provers.map((p) => ({ tier: 3, kind: "connected", route: p.id, cases: qualifyingCases(p, catalogue) })),
       ].filter((r) => r.tier <= tier);
       if (tier === 3 && provers.length === 0)
         problems.push(`${at}: tier C on ${route} needs a connected path that proves it`);
@@ -214,25 +261,27 @@ export function checkSupportMatrix(
         // One connected path that proves the route, with a passing receipt and no lifecycle or
         // bypass case excluded, is enough.
         const covered = provers.filter(
-          (p) =>
-            met.has(p.id) &&
-            !Object.keys(p.excluded ?? {}).some((id) => MUST_COVER_FOR_C.includes(byId.get(id)?.category)),
+          (p) => met.has(p.id) && !notCovered(p).some((id) => MUST_COVER_FOR_C.includes(byId.get(id)?.category)),
         );
         if (covered.length === 0) {
           for (const p of provers) {
             if (!met.has(p.id)) {
               const why = receipts.flatMap(({ file, receipt }) =>
-                receiptProblems(receipt, agent, p.id, "connected", casesFor(p, catalogue)).map((x) => `${file}: ${x}`),
+                receiptProblems(receipt, agent, p.id, "connected", qualifyingCases(p, catalogue)).map(
+                  (x) => `${file}: ${x}`,
+                ),
               );
               problems.push(
                 `${at}: tier C on ${route} needs a passing connected receipt from ${p.id} for ${agent.id} ${pin.agentVersion} on ${pin.host}` +
                   (why.length ? ` (${why.join("; ")})` : ""),
               );
             }
-            for (const id of Object.keys(p.excluded ?? {})) {
+            for (const id of notCovered(p)) {
               const c = byId.get(id);
               if (c && MUST_COVER_FOR_C.includes(c.category))
-                problems.push(`${at}: tier C on ${route} excludes ${c.category} case ${id} on ${p.id}`);
+                problems.push(
+                  `${at}: tier C on ${route} ${id in (p.excluded ?? {}) ? "excludes" : "does not observe ORCA's decision for"} ${c.category} case ${id} on ${p.id}`,
+                );
             }
           }
         }

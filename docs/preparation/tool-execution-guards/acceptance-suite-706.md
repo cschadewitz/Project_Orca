@@ -67,35 +67,39 @@ Every call is recorded with three things kept apart, and its outcome follows fro
   the ACP tool call id (the model's `tool_use` id), and how each was answered. An ask that
   matches no call of its turn is recorded as stray and fails the receipt.
 - **Effect**: `observed`, `none` or `indeterminate`, from evidence neither the agent nor ORCA
-  writes:
+  writes, bound to this call and kept in the receipt as `effectRef`:
 
-| Tool | Evidence |
+| Tool | Evidence for this call |
 | --- | --- |
-| Write, Edit | The file's bytes before and after |
-| MCP | The recorder logs each call before answering `recorded <nonce>`; a result naming a new log line ran, and the rest of the turn ran nowhere only if every new line is accounted for |
-| Shell | `CLAUDE_CODE_SHELL_PREFIX` points at a recorder that logs each Bash command before it runs |
-| Read | A token: the content of the file, or one written into a file that did not exist yet, and whether it appears in any tool result of the turn |
+| Write, Edit | Digests of the file before and after, and of what a write wrote |
+| MCP | Each call carries its own id (`orca706Call`), which the recorder logs before answering; a line with that id is this call running. No line with it, and no line of the turn without a call id of the turn, is this call not running |
+| Shell | `CLAUDE_CODE_SHELL_PREFIX` points at a recorder that logs each Bash command before it runs: a line with this call's own command, or none and no line of the turn left unaccounted for |
+| Read | A token (the file's content, or one written into a file that did not exist yet) in this call's own tool result, or absent from it while the result exists and no other result of the turn holds it |
 | A tool not offered | The tool list of the request the call was made in |
 
 | Outcome | Needs |
 | --- | --- |
 | `allow` | Effect observed |
-| `deny`, `block` | Effect none, and ORCA's denial or block in the result |
-| `ask` | Effect none, and an approval for this call |
+| `deny`, `block` | Effect none, and ORCA's denial or block in this call's result |
+| `ask` | Effect none, and an approval bound to this call |
 | `indeterminate` | Anything without proof; fails the case |
 
-A refusal text or an absent result never shows on its own that nothing ran. The receipt
-carries every call's record, and the checker refuses a connected receipt where a call lacks
-them, has an effect other than observed or none, or has an outcome that does not follow
-(`connectedEvidenceProblems`). The privacy cases search the tool results handed back to the
-model.
+A refusal text or an absent result never shows on its own that nothing ran. The checker does
+not trust the recorded effect or outcome: `connectedEvidenceProblems` re-derives the effect
+from each call's `effectRef` (`connected/evidence.js`), requires every approval's tool call id
+to be the call's own `tool_use` id, and requires the outcome to follow. The privacy cases
+search the tool results handed back to the model.
 
 Claude Code refuses some calls itself before any hook runs: a tool it does not offer, an Edit
 of a file that does not exist, a change to a file it has not read. For a change to an existing
 file the path first reads it, as an agent would, with a person allowing that one read if ORCA
-asks. A case that expects ask or deny accepts the agent's own refusal only with effect none proven and where nothing could
-have run anyway (the tool is not offered; Edit cannot create a file; ORCA denied the read), and
-every such call is listed under `agentRefusals` in the receipt.
+asks. Where Claude refuses anyway and no effect is proven (the tool is not offered; Edit cannot
+create a file; ORCA denied the read), the case goes on, but the call is recorded as
+`orcaDecision: "unobserved"`: it is diagnostic only and never counts as evidence of
+enforcement. A case needs at least one call where ORCA's decision was observed. F05, where
+every call is to a tool Claude does not offer, is listed under the path's `unobserved` cases:
+it runs as a diagnostic and does not count toward a tier, and for tier C an unobserved
+lifecycle or bypass case blocks the claim like an exclusion.
 
 Cases that run on this path include the concurrency case (16 identical calls in one model
 message), the timed grant (a real one-minute grant, waited out) and the unanswered,
@@ -103,7 +107,9 @@ cancelled and wrongly-answered asks. The cases it cannot run (raw hook input, th
 file, the installed settings, ACP options, a call from another working directory) are
 excluded with reasons and run on the synthetic paths. The run also checks that a session
 pointed at a Claude Code other than the pinned one is refused before any work
-(`checks.uncoveredRoutesRefused`).
+(`checks.unpinnedRuntimeRefused`). That check proves that one case only, not that every
+uncovered route is refused, so the connected receipt does not claim
+`checks.uncoveredRoutesRefused`.
 
 `claude-hook-acceptance.yml` runs it after the #704 acceptance tests and keeps the receipt as
 an artifact. It is evidence for review: promotion stays disabled, so no tier changes on it.

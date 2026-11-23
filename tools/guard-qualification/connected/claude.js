@@ -21,6 +21,7 @@
  * `unoffered` / `refused:<text>` (the agent's own). Anything without proof is `indeterminate`.
  * Surfaces are the tool results handed back to the model for the case's own calls.
  */
+import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -28,6 +29,7 @@ import { AgentSpecSchema, silentLogger } from "@orca/core";
 import { LocalHost, openAcpSession } from "@orca/agents";
 import { makeSessionFactory } from "../../../packages/cli/src/bootstrap.ts";
 import { claudeShape } from "../world.js";
+import { effectFrom } from "./evidence.js";
 
 const RECORDER = fileURLToPath(new URL("./mcp-recorder.js", import.meta.url));
 const SHELL_RECORDER = fileURLToPath(new URL("./shell-recorder.sh", import.meta.url));
@@ -167,6 +169,7 @@ export function claudeConnected(env) {
         calls: calls.map((c, i) => {
           const m = made[i];
           return {
+            toolUseId: m?.toolUseId,
             made: m !== undefined && m.name === c.name,
             offered: m?.offered.includes(c.name) ?? false,
             result: m ? results.find((r) => r.toolUseId === m.toolUseId) : undefined,
@@ -188,11 +191,15 @@ export function claudeConnected(env) {
       for (const action of actions) {
         const { toolName, toolInput } = claudeShape(action);
         const input = { ...toolInput };
+        const callRef = `c${++world.seq}`;
         // A write's effect is its content landing in the file, so it needs content to look for.
-        if (action.tool === "write" && !action.content) input.content = `orca-706-${++world.seq}`;
+        if (action.tool === "write" && !action.content) input.content = `orca-706-${callRef}`;
+        // An MCP call carries its own id, which the recorder logs: its effect, or its absence,
+        // is bound to this call and no other.
+        if (action.tool === "mcp") input.orca706Call = callRef;
         const before = action.tool === "write" || action.tool === "edit" ? await bytes(input.file_path) : undefined;
-        const token = action.tool === "read" ? await readToken(world, input.file_path) : undefined;
-        prepared.push({ action, name: toolName, input, before, token, primed: undefined });
+        const token = action.tool === "read" ? await readToken(world, input.file_path, callRef) : undefined;
+        prepared.push({ action, name: toolName, input, callRef, before, token, primed: undefined });
       }
 
       // Claude Code refuses to change a file it has not read, before any hook runs. An agent
@@ -216,8 +223,8 @@ export function claudeConnected(env) {
         }
       }
 
-      const shellBefore = await lines(logs(world).shell);
-      const mcpBefore = await lines(logs(world).mcp);
+      const shellBefore = (await lines(logs(world).shell)).length;
+      const mcpBefore = (await lines(logs(world).mcp)).length;
       if (opts.noAnswerer) state.answer = () => undefined;
       else if (opts.onAsk) state.answer = opts.onAsk;
       let seen;
@@ -230,26 +237,29 @@ export function claudeConnected(env) {
       } finally {
         state.answer = undefined;
       }
-      const shellRan = (await lines(logs(world).shell)).slice(shellBefore.length);
-      const mcpRan = (await lines(logs(world).mcp)).slice(mcpBefore.length).map((l) => JSON.parse(l).nonce);
-
-      const effects = await Promise.all(prepared.map((p, i) => effectOf(p, seen.calls[i], seen.surfaces)));
-      settleCounted(prepared, seen, effects, "mcp", mcpRan.length);
-      settleCounted(prepared, seen, effects, "shell", shellRan.length);
+      const shellRan = (await lines(logs(world).shell)).slice(shellBefore).map((l) => JSON.parse(l));
+      const mcpRan = (await lines(logs(world).mcp)).slice(mcpBefore).map((l) => JSON.parse(l));
 
       const out = [];
       for (const [i, p] of prepared.entries()) {
         const c = seen.calls[i];
-        const effect = effects[i];
+        const effectRef = await effectRefOf(p, c, { shellRan, mcpRan, prepared, surfaces: seen.surfaces });
+        const effect = effectFrom(effectRef);
         const refusal = refusalOf(c);
-        const outcome = outcomeOf(c, refusal, effect);
+        const unobserved = orcaUnobserved(p, c, refusal, effect);
+        const outcome = outcomeOf(c, refusal, effect, unobserved);
         const record = {
+          toolUseId: c.toolUseId ?? null,
           tool: p.name.slice(0, 120),
           outcome,
+          // Whether ORCA's own decision for this call was observed. An agent's own refusal is
+          // not, and does not count toward qualification.
+          orcaDecision: unobserved ? "unobserved" : "observed",
+          ...(unobserved ? { unobservedBecause: unobserved } : {}),
           refusal,
-          approvals: c.approvals.map((a) => a.answer),
-          effect: effect.effect,
-          evidence: effect.evidence,
+          approvals: c.approvals.map((a) => ({ toolCallId: a.toolCallId, answer: a.answer })),
+          effect,
+          effectRef,
           ...(p.primed ? { primingRead: p.primed } : {}),
         };
         (world.callRecords ??= []).push(record);
@@ -257,25 +267,27 @@ export function claudeConnected(env) {
           outcome,
           detail: { ...record, result: c.result?.text.slice(0, 300) },
           surfaces: seen.surfaces,
-          agentRefusal: agentRefusal(p, outcome, effect),
+          agentRefusal: unobserved,
         });
       }
       if (seen.strayApprovals.length)
-        (world.callRecords ??= []).push({ strayApprovals: seen.strayApprovals.map((a) => a.title) });
+        (world.callRecords ??= []).push({
+          strayApprovals: seen.strayApprovals.map((a) => ({ toolCallId: a.toolCallId, title: a.title.slice(0, 120) })),
+        });
       return out;
     },
 
     /**
-     * A call Claude Code refused on its own, before ORCA could answer, still counts for a case
-     * that expects ask or deny only when it is proven to have had no effect and nothing could
-     * have run anyway; each one is recorded:
+     * A call Claude Code refused on its own, before ORCA could answer, lets the case go on when
+     * it is proven to have had no effect and nothing could have run anyway, but it is recorded
+     * as `orcaDecision: "unobserved"` and is not evidence of enforcement:
      * - a tool the agent did not offer on that request (Claude Code: "No such tool available");
      * - an Edit of a file that does not exist (Edit cannot create a file);
      * - a change to a file whose read ORCA denied (Claude Code will not change it unread).
      */
     equivalent(world, got, expected) {
       if (!got.agentRefusal || (expected !== "ask" && expected !== "deny")) return false;
-      (world.agentRefusals ??= []).push({ expected, reason: got.agentRefusal, tool: got.detail.tool });
+      (world.agentRefusals ??= []).push({ expected, unobservedBecause: got.agentRefusal, tool: got.detail.tool });
       return true;
     },
   };
@@ -296,96 +308,86 @@ function refusalOf(c) {
   return c.result.isError ? `agent:${text.slice(0, 120)}` : null;
 }
 
-function outcomeOf(c, refusal, effect) {
-  if (effect.effect === "observed") return "allow";
-  if (effect.effect !== "none") return "indeterminate";
+function outcomeOf(c, refusal, effect, unobserved) {
+  if (effect === "observed") return "allow";
+  if (effect !== "none") return "indeterminate";
+  if (unobserved) return `unobserved:${unobserved}`;
   if (!c.made) return "not-made";
-  if (!c.offered) return "unoffered";
   if (refusal === "orca-deny") return "deny";
   if (refusal === "orca-block") return "block";
   if (c.approvals.length) return "ask";
   return `refused:${(c.result?.text ?? refusal ?? "no result").slice(0, 160)}`;
 }
 
-function agentRefusal(p, outcome, effect) {
-  if (effect.effect !== "none") return undefined;
-  if (outcome === "unoffered") return "tool-not-offered";
-  if (!outcome.startsWith("refused:")) return undefined;
-  if (p.action.tool === "edit" && p.before === undefined && outcome.includes("File does not exist"))
+/** Why ORCA's decision for a call was not observed: the agent refused it first. */
+function orcaUnobserved(p, c, refusal, effect) {
+  if (effect !== "none" || refusal === "orca-deny" || refusal === "orca-block" || c.approvals.length) return undefined;
+  if (c.made && !c.offered) return "tool-not-offered";
+  const text = c.result?.text ?? "";
+  if (p.action.tool === "edit" && p.before === undefined && text.includes("File does not exist"))
     return "edit-of-missing-file";
-  if (p.primed === "deny" && outcome.includes("has not been read yet")) return "unread-after-orca-denied-read";
+  if (p.primed === "deny" && text.includes("has not been read yet")) return "unread-after-orca-denied-read";
   return undefined;
 }
 
 /**
- * The call's effect, from evidence the agent and ORCA do not write. MCP and shell calls are
- * settled after the turn by counting their recorder's lines (`settleCounted`).
+ * The evidence for one call's effect, bound to that call: its file's bytes, the recorder line
+ * carrying its own id, the shell line carrying its own command, or its own tool result holding
+ * the read token. Hashes stand in for contents.
  */
-async function effectOf(p, c, surfaces) {
-  if (c.made && !c.offered) return { effect: "none", evidence: "the tool was not offered on the request" };
+async function effectRefOf(p, c, { shellRan, mcpRan, prepared, surfaces }) {
+  if (c.made && !c.offered) return { kind: "not-offered", toolUseId: c.toolUseId };
   switch (p.action.tool) {
-    case "write": {
-      const after = await bytes(p.input.file_path);
-      if (after === p.input.content) return { effect: "observed", evidence: "the file holds the written content" };
-      if (after === p.before)
-        return {
-          effect: "none",
-          evidence: p.before === undefined ? "the file still does not exist" : "the file is unchanged",
-        };
-      return { effect: "indeterminate", evidence: "the file changed to something else" };
-    }
+    case "write":
     case "edit": {
       const after = await bytes(p.input.file_path);
-      if (after === p.before)
-        return {
-          effect: "none",
-          evidence: p.before === undefined ? "the file still does not exist" : "the file is unchanged",
-        };
-      return { effect: "observed", evidence: "the file changed" };
+      return {
+        kind: "file",
+        path: digest(p.input.file_path),
+        before: p.before === undefined ? null : digest(p.before),
+        after: after === undefined ? null : digest(after),
+        ...(p.action.tool === "write" ? { written: digest(p.input.content) } : {}),
+      };
+    }
+    case "mcp": {
+      const mine = mcpRan.filter((l) => l.input?.orca706Call === p.callRef).map((l) => l.nonce);
+      const others = new Set(prepared.filter((q) => q.action.tool === "mcp").map((q) => q.callRef));
+      const answered = /^recorded ([0-9a-f]{16})$/.exec((c.result?.text ?? "").trim())?.[1] ?? null;
+      return {
+        kind: "mcp",
+        callRef: p.callRef,
+        loggedFor: mine,
+        answeredWith: c.result && !c.result.isError ? answered : null,
+        // Lines that carry no call id of this turn: they would make an absence unprovable.
+        unaccountedLines: mcpRan.filter((l) => !others.has(l.input?.orca706Call)).length,
+      };
+    }
+    case "shell": {
+      const quoted = `eval '${p.input.command.replaceAll("'", "'\\''")}'`;
+      const matching = shellRan.filter((l) => l.includes(quoted)).length;
+      const ours = prepared
+        .filter((q) => q.action.tool === "shell")
+        .map((q) => `eval '${q.input.command.replaceAll("'", "'\\''")}'`);
+      return {
+        kind: "shell",
+        command: digest(p.input.command),
+        matching,
+        unaccountedLines: shellRan.filter((l) => !ours.some((o) => l.includes(o))).length,
+      };
     }
     case "read": {
-      if (!p.token) return { effect: "indeterminate", evidence: "no distinctive content to look for" };
-      return surfaces.some((s) => s.includes(p.token))
-        ? { effect: "observed", evidence: "the file's content reached the model" }
-        : { effect: "none", evidence: "the file's content is in no tool result of the turn" };
-    }
-    case "mcp":
-    case "shell":
-      return { effect: "pending", evidence: "" };
-    default:
-      return { effect: "indeterminate", evidence: "no independent evidence for this tool" };
-  }
-}
-
-/**
- * MCP and shell calls by their recorder's log: an MCP answer names its log line, so a call whose
- * result names a new line ran; the rest of the turn's calls of that kind ran nowhere only if the
- * new lines are exactly the ones accounted for. Otherwise they are indeterminate.
- */
-function settleCounted(prepared, seen, effects, tool, newLines) {
-  const idx = prepared
-    .map((p, i) => (p.action.tool === tool && effects[i].effect === "pending" ? i : -1))
-    .filter((i) => i >= 0);
-  if (idx.length === 0) return;
-  if (tool === "mcp") {
-    for (const i of idx) {
-      const text = seen.calls[i].result?.text ?? "";
-      if (!seen.calls[i].result?.isError && /^recorded [0-9a-f]{16}$/.test(text.trim()))
-        effects[i] = { effect: "observed", evidence: "the MCP recorder logged and answered this call" };
-    }
-  }
-  const observed = idx.filter((i) => effects[i].effect === "observed").length;
-  for (const i of idx) {
-    if (effects[i].effect === "observed") continue;
-    if (tool === "shell" && newLines === idx.length)
-      effects[i] = { effect: "observed", evidence: "the shell recorder logged every command of the turn" };
-    else if (newLines === observed)
-      effects[i] = { effect: "none", evidence: `the ${tool} recorder logged no other call in the turn` };
-    else
-      effects[i] = {
-        effect: "indeterminate",
-        evidence: `${newLines} ${tool} recorder lines for ${observed} matched calls`,
+      const own = c.result?.text;
+      return {
+        kind: "read",
+        token: p.token ? digest(p.token) : null,
+        ownResult: own !== undefined,
+        inOwnResult: p.token !== undefined && own !== undefined && own.includes(p.token),
+        // The token in a result of the turn that is not this call's own would be ambiguous.
+        inOtherResult: p.token !== undefined && surfaces.some((t) => t !== own && t.includes(p.token)),
       };
+    }
+    default:
+      return { kind: "none-available" };
   }
 }
 
@@ -393,7 +395,7 @@ function settleCounted(prepared, seen, effects, tool, newLines) {
  * Something distinctive the read would hand back: a token written into a file that does not
  * exist yet (its directory must), or the content of one that does.
  */
-async function readToken(world, file) {
+async function readToken(world, file, callRef) {
   const existing = await bytes(file);
   if (existing !== undefined) {
     // The longest line: the agent's read output numbers lines, so only a whole line is contiguous.
@@ -402,11 +404,12 @@ async function readToken(world, file) {
   }
   const dir = await stat(dirname(file)).catch(() => undefined);
   if (!dir?.isDirectory()) return undefined;
-  const token = `orca-706-read-${++world.seq}-${Date.now()}`;
+  const token = `orca-706-read-${callRef}-${Date.now()}`;
   await writeFile(file, `${token}\n`);
   return token;
 }
 
+const digest = (text) => createHash("sha256").update(text).digest("hex").slice(0, 16);
 const bytes = (file) => readFile(file, "utf8").catch(() => undefined);
 const lines = async (file) => ((await bytes(file)) ?? "").split("\n").filter(Boolean);
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));

@@ -18,6 +18,7 @@ import {
   checkSupportMatrix,
   loadCatalogue,
   loadMatrix,
+  qualifyingCases,
 } from "../guard-qualification/check-support-matrix.js";
 import { PATHS } from "../guard-qualification/paths.js";
 import { SCENARIOS } from "../guard-qualification/scenarios.js";
@@ -152,13 +153,22 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     matrix.paths.find((p) => p.id === "claude-native-hook"),
     catalogue,
   );
-  const connectedCases = casesFor(
+  const connectedCases = qualifyingCases(
     matrix.paths.find((p) => p.id === "claude-connected"),
     catalogue,
   );
-  const evidence = [
-    { tool: "Write", outcome: "deny", refusal: "orca-deny", approvals: [], effect: "none", evidence: "unchanged" },
-  ];
+  /** A write ORCA denied: the file is as it was, bound to this call's own tool_use id. */
+  const denied = {
+    toolUseId: "toolu_1_0",
+    tool: "Write",
+    outcome: "deny",
+    orcaDecision: "observed",
+    refusal: "orca-deny",
+    approvals: [],
+    effect: "none",
+    effectRef: { kind: "file", path: "p", before: null, after: null, written: "w" },
+  };
+  const evidence = [denied];
   const onHook = (kind) =>
     kind === "connected"
       ? receipt({
@@ -200,22 +210,47 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       return r;
     };
     const first = connectedCases[0];
+    const ran = { ...denied.effectRef, after: "w" };
     for (const [calls, why] of [
       [[], `case ${first}: no per-call evidence`],
+      // The recorded effect is re-derived from the evidence, not trusted.
+      [[{ ...denied, effectRef: ran }], `case ${first}: Write: its evidence shows effect observed, not none`],
+      [[{ ...denied, outcome: "allow" }], `case ${first}: Write: outcome allow does not follow from its evidence`],
       [
-        [{ ...evidence[0], effect: "indeterminate" }],
-        `case ${first}: Write has effect indeterminate, not observed or none`,
-      ],
-      [[{ ...evidence[0], outcome: "allow" }], `case ${first}: Write outcome allow does not follow from effect none`],
-      [
-        [{ ...evidence[0], outcome: "ask", refusal: null }],
-        `case ${first}: Write counted as asked with no approval for that call`,
+        [{ ...denied, outcome: "ask", refusal: null }],
+        `case ${first}: Write: outcome ask does not follow from its evidence`,
       ],
       [
-        [{ tool: "Write", outcome: "deny", effect: "none" }],
-        `case ${first}: a call without refusal, approvals and evidence kept apart`,
+        [{ ...denied, outcome: "ask", refusal: null, approvals: [{ toolCallId: "toolu_9_0", answer: "reject_once" }] }],
+        `case ${first}: Write: an approval is bound to another call`,
       ],
-      [[{ strayApprovals: ["Write a.md"] }], `case ${first}: an approval matched no call of its turn`],
+      [
+        [{ ...denied, toolUseId: undefined }],
+        `case ${first}: Write: needs its tool_use id, approvals, refusal and effect evidence`,
+      ],
+      // An absence counted over the turn, not bound to this call, is not "none".
+      [
+        [
+          {
+            ...denied,
+            tool: "mcp__github__create_issue",
+            effectRef: { kind: "mcp", loggedFor: [], unaccountedLines: 1 },
+          },
+        ],
+        `case ${first}: mcp__github__create_issue: its evidence shows effect indeterminate, not none`,
+      ],
+      [
+        [{ ...denied, orcaDecision: "unobserved", outcome: "unobserved:tool-not-offered" }],
+        `case ${first}: ORCA's decision was not observed for any call`,
+      ],
+      [
+        [{ ...denied, orcaDecision: "unobserved", effect: "observed", effectRef: ran }],
+        `case ${first}: Write: an unobserved decision needs no effect proven`,
+      ],
+      [
+        [{ strayApprovals: [{ toolCallId: "toolu_9_0", title: "Write a.md" }] }],
+        `case ${first}: an approval matched no call of its turn`,
+      ],
     ]) {
       const problems = structural(check(hookAgent(), { "i.json": onHook("installed"), "c.json": withCalls(calls) }));
       expect(problems).toHaveLength(1);
@@ -234,6 +269,26 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     const agent = hookAgent({ residualRisks: ["L08: not followed through the live agent"] });
     expect(structural(check(agent, { "i.json": onHook("installed"), "c.json": onHook("connected") }, paths))).toEqual([
       "agent claude: tier C on claude-native-hook excludes lifecycle case L08 on claude-connected",
+    ]);
+  });
+
+  it("tier C when its connected path cannot observe ORCA's decision for a bypass case", () => {
+    const paths = structuredClone(matrix.paths);
+    paths.find((p) => p.id === "claude-connected").unobserved.B01 = "Pretend the agent refuses these calls first.";
+    expect(
+      structural(check(hookAgent(), { "i.json": onHook("installed"), "c.json": onHook("connected") }, paths)),
+    ).toEqual([
+      "agent claude: tier C on claude-native-hook does not observe ORCA's decision for bypass case B01 on claude-connected",
+    ]);
+  });
+
+  it("only a connected path lists unobserved cases, and only cases it runs", () => {
+    const paths = structuredClone(matrix.paths);
+    paths.find((p) => p.id === "acp-ask").unobserved = { L01: "Not a connected path, so it cannot say this." };
+    paths.find((p) => p.id === "claude-connected").unobserved.F01 = "It does not run this case at all.";
+    expect(checkSupportMatrix({ ...matrix, paths }, catalogue)).toEqual([
+      "path acp-ask: only a connected path lists unobserved cases",
+      "path claude-connected: lists F01 as unobserved, but does not run it",
     ]);
   });
 

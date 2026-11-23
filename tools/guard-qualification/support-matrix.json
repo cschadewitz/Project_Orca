@@ -60,9 +60,12 @@
       "unverified": [
         "Behaviour of a real model, which may make calls in shapes the stand-in does not",
         "Agent versions other than the pinned pair; hosts other than linux-x64",
-        "Calls Claude Code refuses itself before the hook (a tool it does not offer, an Edit of a missing file, a change to a file it has not read after ORCA denied the read); nothing runs, and each is recorded in the receipt as an agent refusal",
+        "Calls Claude Code refuses itself before the hook (a tool it does not offer, an Edit of a missing file, a change to a file it has not read after ORCA denied the read). Nothing runs, but ORCA's decision is unobserved: each is recorded as orcaDecision unobserved and does not count",
         "That events, logs and stored records about the call are redacted"
-      ]
+      ],
+      "unobserved": {
+        "F05": "Claude Code refuses a tool it does not offer (No such tool available) before any hook runs, so ORCA's decision is never observed. Run as a diagnostic: nothing runs, shown by the request's tool list; it does not count toward a tier."
+      }
     }
   ],
   "agents": [
