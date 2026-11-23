@@ -23,7 +23,7 @@ import type { DaemonConnectionBridge } from "./daemon-connection.js";
 import type { ManagedServerView, ServerUpdateBridge } from "./server-update.js";
 import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
 import type { MacUpdateCommand, MacUpdateView } from "./mac-update-contract.js";
-import type { LinuxUpdateAction, LinuxUpdateNotice } from "./linux-update-contract.js";
+import type { LinuxRestartState, LinuxUpdateAction, LinuxUpdateNotice } from "./linux-update-contract.js";
 import type {
   CheckoutEvidence,
   LaunchReview,
@@ -293,6 +293,15 @@ export interface OrcaBridge {
     read(): LinuxUpdateNotice | null;
     act(action: LinuxUpdateAction): Promise<BridgeResult<null>>;
     subscribe(listener: (notice: LinuxUpdateNotice | null) => void): () => void;
+  };
+  /**
+   * The `.deb` was upgraded beneath this app (#905); `null` when the installed package is this
+   * version. `restart` hands the store to the installed version and starts it.
+   */
+  linuxRestart?: {
+    read(): LinuxRestartState | null;
+    restart(): Promise<BridgeResult<LinuxRestartState | null>>;
+    subscribe(listener: (state: LinuxRestartState | null) => void): () => void;
   };
   guidedLaunch?: {
     snapshot(): Promise<BridgeResult<GuidedLaunchSnapshot>>;

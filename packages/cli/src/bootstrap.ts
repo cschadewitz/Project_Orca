@@ -11,7 +11,8 @@ import {
 } from "./update-bootstrap.js";
 import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
-import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR, enterStoreFormat } from "@orca/store";
+import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
+import { enterDaemonStoreFormat } from "./desktop-carryover.js";
 import { readOrcaVersion } from "./version.js";
 import {
   CheckpointAdmissionService,
@@ -73,7 +74,17 @@ import {
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
 import { delegatingSessionFactory, validateRemotes } from "@orca/daemon";
-import { fileStores, memoryStores, type Stores } from "@orca/store";
+import {
+  fileStores,
+  holdStoreWriter,
+  memoryStores,
+  recordedStoreBackend,
+  sqliteStores,
+  workspaceIdentity,
+  type StoreBackend,
+  type StoreWriterHold,
+  type Stores,
+} from "@orca/store";
 import { bindLocalAdmissionExecution } from "./admission-execution-authority.js";
 import { cliHumanInput } from "./human-input-cli.js";
 import { localCapabilityUse, localSecretUse } from "./local-secret-use.js";
@@ -228,6 +239,8 @@ export function makeWorkspaceProvider(
         baseBranch: ws.baseBranch,
         branchPrefix: ws.branchPrefix,
         ...(ws.isolateRoots !== undefined ? { isolateRoots: ws.isolateRoots } : {}),
+        ...(ws.fetchRemote !== undefined ? { fetchRemote: ws.fetchRemote } : {}),
+        ...(ws.allowedRefs !== undefined ? { allowedRefs: ws.allowedRefs } : {}),
         ...(ws.worktreeRoot
           ? { worktreeRoot: isAbsolute(ws.worktreeRoot) ? ws.worktreeRoot : resolve(configDir, ws.worktreeRoot) }
           : {}),
@@ -329,6 +342,31 @@ function storeWriterVersion(): string {
   }
 }
 
+/**
+ * The stores, holding `hold` (this process's writer registration) until they are closed or the
+ * process exits; released at once when they cannot be opened.
+ */
+function registeredUntilClosed(hold: StoreWriterHold | undefined, open: () => Stores): Stores {
+  if (!hold) return open();
+  let stores: Stores;
+  try {
+    stores = open();
+  } catch (error) {
+    hold.release();
+    throw error;
+  }
+  return {
+    ...stores,
+    close: () => {
+      try {
+        stores.close?.();
+      } finally {
+        hold.release();
+      }
+    },
+  };
+}
+
 export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const cwd = opts.cwd ?? process.cwd();
   const { config, configDir, configFile } = opts.config
@@ -343,15 +381,39 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     await enterClosedFirstRunInspection(resolve(configDir), resolve(configDir, config.storeDir), () =>
       closedUpdateOwnsConfiguredRoots(configDir, resolve(configDir, config.storeDir)),
     );
-  else await enterFirstRunWriter(resolve(configDir), resolve(configDir, config.storeDir), firstRunLaunch);
+  const writer = isClosedUpdateBootstrap()
+    ? undefined
+    : await enterFirstRunWriter(resolve(configDir), resolve(configDir, config.storeDir), firstRunLaunch);
   // Before any store reader or writer (#566): refuse a store this build cannot open, including
-  // an older format, which only `orca store carry-forward` converts. Closed update validation
-  // only checks; an ephemeral bootstrap never opens the store at all.
-  if (!opts.ephemeral)
-    await enterStoreFormat(resolve(configDir, config.storeDir), {
-      appVersion: storeWriterVersion(),
-      mode: isClosedUpdateBootstrap() ? "read" : "write",
-    });
+  // an older format, which only `orca store carry-forward` converts, or the desktop app's daemon
+  // on the first start after an update while it holds the store's writer fence (#897). Closed
+  // update validation only checks; an ephemeral bootstrap never opens the store at all.
+  let backend: StoreBackend = "file";
+  // A writer registers for as long as it has the store open (#339, store-writers.ts), so a
+  // switch of the store's metadata backend never runs beside it, idle or not. Registered after
+  // the format check, then the backend is read again: a switch that finished in between is seen
+  // in the marker, one still running in its announcement.
+  let writerHold: StoreWriterHold | undefined;
+  if (!opts.ephemeral) {
+    const storeDir = resolve(configDir, config.storeDir);
+    ({ backend } = await enterDaemonStoreFormat(
+      storeDir,
+      writer,
+      storeWriterVersion(),
+      isClosedUpdateBootstrap() ? "read" : "write",
+    ));
+    if (!isClosedUpdateBootstrap()) {
+      writerHold = holdStoreWriter(storeDir, { appVersion: storeWriterVersion(), purpose: "orca" });
+      if ((recordedStoreBackend(storeDir) ?? "file") !== backend) {
+        writerHold.release();
+        throw new OrcaError(
+          "STORE_FORMAT",
+          `${storeDir} was switched to another metadata backend while ORCA was starting; start again.`,
+          { reason: "OTHER_BACKEND", storeDir },
+        );
+      }
+    }
+  }
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config, { configDir: resolve(configDir) });
   const assets = await releaseAssets(config);
@@ -379,9 +441,19 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   );
   let pluginWorkspaceProvider = false;
   let pluginHumanInput = false;
-  const stores = opts.ephemeral
-    ? memoryStores()
-    : fileStores(resolve(configDir, config.storeDir), undefined, logger.child({ component: "store" }));
+  // The store's own marker says which metadata backend it runs on (#339, store-backend.ts):
+  // files, or SQLite once `orca store sqlite switch` has moved it. Closed update validation
+  // opens a SQLite store read-only, as it opens everything else.
+  const stores = registeredUntilClosed(writerHold, () =>
+    opts.ephemeral
+      ? memoryStores()
+      : backend === "sqlite"
+        ? sqliteStores(resolve(configDir, config.storeDir), {
+            logger: logger.child({ component: "store" }),
+            ...(isClosedUpdateBootstrap() ? { readOnly: true } : {}),
+          })
+        : fileStores(resolve(configDir, config.storeDir), undefined, logger.child({ component: "store" })),
+  );
   const plan = new PlanService({
     stores,
     logger: logger.child({ component: "plan" }),
@@ -503,6 +575,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       remotes: () => currentRemotes(),
       configDir,
       receiptsDir: resolve(configDir, config.storeDir, "delegations"),
+      workspaceId: () => workspaceIdentity(resolve(configDir, config.storeDir)),
     });
   const openSession = delegating(makeSessionFactory({ configDir, storeDir: config.storeDir, configFile }));
   const orchestrator = new Orchestrator({

@@ -18,7 +18,7 @@
  * file must be on a local filesystem: SQLite's locking is not reliable over network filesystems,
  * so remote workers reach metadata through the control-plane daemon, never by opening this file.
  */
-import { mkdirSync } from "node:fs";
+import { lstatSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { OrcaError } from "@orca/core";
@@ -29,6 +29,12 @@ export interface SqliteOptions {
   busyDeadlineMs?: number;
   /** When the write-ahead log is copied back into the database. Defaults: `SQLITE_CHECKPOINT`. */
   checkpoint?: SqliteCheckpointOptions;
+  /**
+   * Open read-only, for checks that must change nothing (closed update validation): the database
+   * must already exist at this build's schema version (no migration runs), no setting is
+   * written, and every write fails.
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -105,6 +111,80 @@ function busy(error: unknown): boolean {
   return code !== undefined && ((code & 0xff) === BUSY || (code & 0xff) === LOCKED);
 }
 
+/** The migration that adds `store_binding`: a database below it is bound to no store. */
+const BINDING_SCHEMA = 2;
+
+/**
+ * Check, changing nothing, that `file` is the database a store on SQLite records (`storeId`,
+ * from its marker) before anything opens it for the workspace (#339). The workspace's metadata
+ * is that database and nothing else: a writable open would create a missing file and migrate an
+ * empty one, so a lost or replaced database would silently become an empty store. Refused
+ * (`STORE_FORMAT`): `METADATA_MISSING` (no file, or not a regular file), `METADATA_UNBOUND` (the
+ * marker names no database), `METADATA_MISMATCH` (not an ORCA database, or bound to no store or
+ * another one), `NEWER`.
+ */
+export function checkBoundSqliteMetadata(file: string, storeDir: string, storeId: string | undefined): void {
+  const refuse = (reason: string, problem: string, extra: Record<string, unknown> = {}): never => {
+    throw new OrcaError(
+      "STORE_FORMAT",
+      `${problem} This store keeps its metadata in SQLite, so it was not opened and nothing was changed. Put its database back with \`orca store sqlite restore <backup>\` (a backup taken by \`orca store sqlite backup\`), or restore the whole store from the backup its format marker names, then start again.`,
+      { reason, storeDir, file, ...extra },
+    );
+  };
+  if (!storeId) refuse("METADATA_UNBOUND", `${storeDir} records SQLite metadata but not which database holds it.`);
+  let regular: boolean;
+  try {
+    regular = lstatSync(file).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    regular = false;
+  }
+  if (!regular) refuse("METADATA_MISSING", `${file} is missing.`);
+  const db = new (sqlite().DatabaseSync)(file, { readOnly: true });
+  try {
+    db.exec("PRAGMA busy_timeout = 1000");
+    const applicationId = Number(
+      (db.prepare("PRAGMA application_id").get() as { application_id: number }).application_id,
+    );
+    const schema = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+    if (applicationId !== ORCA_SQLITE_APPLICATION_ID || schema < 1)
+      refuse("METADATA_MISMATCH", `${file} is not an ORCA metadata database.`, { applicationId, schema });
+    if (schema > SQLITE_MIGRATIONS.length)
+      throw new OrcaError("STORE_FORMAT", `SQLite metadata schema ${schema} is newer than this build`, {
+        reason: "NEWER",
+        file,
+        schema,
+        supported: SQLITE_MIGRATIONS.length,
+      });
+    const bound =
+      schema >= BINDING_SCHEMA
+        ? (db.prepare("SELECT store_id FROM store_binding WHERE slot = 1").get() as { store_id: string } | undefined)
+            ?.store_id
+        : undefined;
+    if (bound !== storeId)
+      refuse(
+        "METADATA_MISMATCH",
+        bound
+          ? `${file} is the metadata of another store (database ${bound}, not ${storeId}).`
+          : `${file} is not the database this store was switched to: it is bound to no store.`,
+        { expected: storeId, ...(bound ? { bound } : {}) },
+      );
+  } finally {
+    db.close();
+  }
+}
+
+/** Record in `database` that it holds the metadata of the store whose marker will name `storeId`. */
+export function bindSqliteMetadata(database: SqliteDatabase, storeId: string, at: Date): Promise<void> {
+  return database.write(() => {
+    database
+      .prepare(
+        "INSERT INTO store_binding (slot, store_id, bound_at) VALUES (1, ?, ?) ON CONFLICT (slot) DO UPDATE SET store_id = excluded.store_id, bound_at = excluded.bound_at",
+      )
+      .run(storeId, at.toISOString());
+  });
+}
+
 export class SqliteDatabase {
   readonly db: DatabaseSync;
   private readonly statements = new Map<string, StatementSync>();
@@ -120,8 +200,25 @@ export class SqliteDatabase {
   ) {
     this.busyDeadlineMs = options.busyDeadlineMs ?? 10_000;
     this.checkpointSettings = { ...SQLITE_CHECKPOINT, ...options.checkpoint };
-    mkdirSync(dirname(file), { recursive: true });
     const { DatabaseSync } = sqlite();
+    if (options.readOnly) {
+      this.db = new DatabaseSync(file, { readOnly: true });
+      try {
+        this.db.exec("PRAGMA busy_timeout = 50");
+        this.refuseNewer();
+        if (this.schemaVersion() !== SQLITE_MIGRATIONS.length)
+          throw new OrcaError(
+            "STORE_FORMAT",
+            `SQLite metadata schema ${this.schemaVersion()} needs migrating to ${SQLITE_MIGRATIONS.length}, which a read-only open does not do`,
+            { reason: "NEEDS_MIGRATION", file, schema: this.schemaVersion(), supported: SQLITE_MIGRATIONS.length },
+          );
+      } catch (error) {
+        this.db.close();
+        throw error;
+      }
+      return;
+    }
+    mkdirSync(dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
     try {
       this.db.exec("PRAGMA busy_timeout = 50");

@@ -2,7 +2,7 @@
 # arm64 machine, with nobody involved (#889).
 #
 # Release (attach signed installer) attaches both signed installers to the staged draft and
-# records each one's digest. When it completes, this picks the oldest final draft whose
+# records each one's digest, then dispatches this with that draft's id. This picks the oldest final draft whose
 # recorded arm64 installer is attached and not yet accepted (tools/deploy/release-attach.sh
 # accept-select) and, on the exact draft bytes:
 #
@@ -26,15 +26,14 @@
 # draft, removes its arm64 installer, and attach, reconcile, accept, publish and the feed all
 # keep to it (docs/RELEASING.md).
 #
-# Runs after every Release (attach signed installer) run, including its 6-hourly reconcile, so
-# a failed or displaced acceptance is retried; a dispatch from main can name a draft. Only the
+# Dispatched, never started by a `workflow_run`: GitHub starts none for a run the workflow token
+# dispatched, which is how the attach usually runs. The attach dispatches it for the draft it
+# attached to, and its 6-hourly reconcile dispatches it without an id, so a failed or displaced
+# acceptance is retried; a dispatch from main can name a draft. Only the
 # select and record jobs can write to releases; the job that runs the installer reads only.
 name: Release (accept Windows arm64)
 
 on:
-  workflow_run:
-    workflows: ["Release (attach signed installer)"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       release_id:
@@ -53,11 +52,7 @@ permissions:
 jobs:
   select:
     name: find a draft waiting for arm64 acceptance
-    if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !inputs.x64_only) ||
-      (github.event_name == 'workflow_run' && vars.ORCA_RELEASE_AUTO_SIGN == 'true' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main')
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !inputs.x64_only
     runs-on: ubuntu-24.04
     # Reading drafts needs write access; this job only reads and downloads.
     permissions:

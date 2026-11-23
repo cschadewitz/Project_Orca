@@ -41,6 +41,7 @@ import type { SqliteCollection } from "./documents.js";
 import { insertEvent } from "./events.js";
 import { expectedSchemaObjects, ORCA_SQLITE_APPLICATION_ID, schemaObjects, SQLITE_MIGRATIONS } from "./schema.js";
 import { SQLITE_METADATA_FILE, sqliteStores } from "./stores.js";
+import { recordedSqliteBinding, recordedStoreBackend } from "../store-backend.js";
 
 export interface SqliteImportReport {
   /** Documents now in each collection. */
@@ -116,7 +117,8 @@ export async function importFileMetadata(dir: string, options: SqliteImportOptio
       dir,
     });
 
-  const target = sqliteStores(dir, dbOptions);
+  // A mirror beside the files: before a switch the store still records file metadata.
+  const target = sqliteStores(dir, { ...dbOptions, unselected: true });
   const collection = (store: unknown) => (store as { collection: SqliteCollection<never> }).collection;
   const db = collection(target.requests).db;
   const sinks = new Map(
@@ -446,6 +448,20 @@ export async function restoreSqliteMetadata(
           file: backup,
         });
       const { schema } = checkDatabaseFile(staged);
+      // A store on SQLite takes back only its own database (#339): the one its marker names.
+      // Checked on the staged copy, so a backup of another store is never published here.
+      if (recordedStoreBackend(dir) === "sqlite") {
+        const expected = recordedSqliteBinding(dir);
+        const bound = boundStoreId(staged);
+        if (!expected || bound !== expected)
+          throw new OrcaError(
+            "STORE_FORMAT",
+            bound
+              ? `${backup} is a backup of another store's metadata (database ${bound}), not this store's (${expected ?? "none recorded"}); nothing was restored`
+              : `${backup} is a backup of metadata bound to no store; this store takes back only its own database (${expected ?? "none recorded"}); nothing was restored`,
+            { reason: "METADATA_MISMATCH", file: backup, expected, ...(bound ? { bound } : {}) },
+          );
+      }
       await options.beforePublish?.();
       await refuseExisting();
       try {
@@ -583,6 +599,19 @@ export async function verifySqliteMetadata(dir: string): Promise<SqliteVerifyRep
       problems,
       unreferencedBlobs,
     };
+  } finally {
+    db.close();
+  }
+}
+
+/** The store id a database file is bound to (`store_binding`), read-only; undefined when none. */
+export function boundStoreId(file: string): string | undefined {
+  const db = new (sqlite().DatabaseSync)(file, { readOnly: true });
+  try {
+    const table = db.prepare("SELECT 1 AS ok FROM sqlite_schema WHERE type = 'table' AND name = 'store_binding'").get();
+    if (!table) return undefined;
+    return (db.prepare("SELECT store_id FROM store_binding WHERE slot = 1").get() as { store_id: string } | undefined)
+      ?.store_id;
   } finally {
     db.close();
   }

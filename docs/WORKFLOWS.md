@@ -413,21 +413,61 @@ agents:
     profile: build-box                    # a remotes[].id
     workflow: build                       # the workflow the remote daemon runs per step
     # promptVar: prompt                   # the remote workflow variable the task arrives in
+    # gitRef: refs/heads/release/0.8      # a full branch or tag the remote allows (below)
     roles: [builder]
 ```
 
-One-time setup on the remote: issue this daemon a credential and save it beside this
-daemon's config, readable only by its user:
+One-time setup: enroll the remote. With no credential saved for it, enrollment has the
+remote's own ORCA CLI issue one over the same verified ssh:
+
+```sh
+# on build-box: its host key's fingerprint
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+# on this machine
+orca remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for a jump host
+```
+
+The remote runs `<serverCommand> auth issue delegate-<this workspace id> --preset client
+--workflow-scope <each workflow this config's agents delegate there>` (with `--config
+<serverConfig>` when set): a credential that may start only those workflows and see only the
+runs it started. Enrollment checks it like any other and saves it in its own file,
+`auth/remotes/<id>.<credential id>.token`, readable only by this user; the enrollment record
+names that file. Enrolling again reuses it while the route and host keys are unchanged.
+`orca remote enroll <id> --issue` replaces it. The ssh login must be able to run that CLI
+(`remotes[].serverCommand`, default `orca`).
+
+Before anything is saved, enrollment checks what the credential may actually do there: the
+remote must take delegated runs, and the credential must be able to start every workflow this
+config delegates to it. An issued one must be scoped to exactly those workflows and to its own
+runs; one that no longer fits (the config now delegates other workflows) is replaced.
+
+The enrollment record is written last, so an enrollment that fails or is cut off at any step
+leaves the previous one in use. Only one enrollment of a remote runs at a time
+(`auth/remotes/<id>.json.lock`; a lock left by a process that is gone is taken over), and none
+runs while delegations to that remote are still in progress, since a new enrollment would
+strand them. The other way round, a delegated step that starts while its remote is being
+enrolled waits for the enrollment to finish before it sends anything; if the enrollment
+replaced the record it was about to use, the step is refused with nothing sent and can be
+retried. Each file enrollment writes is flushed together with its directory, so the order holds
+across a power loss. Windows cannot flush a directory, so there enrollment does not issue
+credentials: save one by hand, as below.
+
+Every credential enrollment issues carries a label unique to that request, and is listed in
+`auth/remotes/<id>.json.pending-revoke` before the request is sent and again before a newer
+enrollment replaces it. A listed credential is revoked only on the daemon that issued it: over
+the same route and host keys, at the same workspace, and only once that daemon's own credential
+list shows the label. Anything that cannot be proven or revoked yet (another daemon issued it,
+a delegation still uses it, or the request never arrived) stays listed with the reason and a
+warning. The next enrollment retries; otherwise run `orca auth revoke <credential id>` on the
+daemon that issued it and remove the entry.
+
+To use a credential issued by hand instead, save it first and enroll as above:
 
 ```sh
 # on build-box, in the remote daemon's workspace
 orca auth issue parent-daemon --preset client --json > build-box.token
 # on this machine
 install -m 600 build-box.token auth/remotes/build-box.token   # or set remotes[].credentialFile
-# on build-box: its host key's fingerprint
-ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
-# on this machine
-orca remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for a jump host
 ```
 
 `orca remote enroll` trusts a host key only when it is already pinned in
@@ -459,6 +499,16 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
   known to have ended without success, or known never to have been admitted.
 - **The work is the remote daemon's.** It appears in that daemon's run list, owned by the
   credential's principal, and its audit log names that principal on the admission.
+- **The remote run records where it came from.** A remote whose `hello` lists `origin` in
+  `admitFields` (protocol 2.6) records
+  this daemon's workspace id, the parent run and the step as the run's `origin` (on
+  `runs.list` and `runs.get`); its audit record of the admission names the principal and that
+  run (the origin itself stays out of the audit log). The origin is what the admitting
+  principal stated; the principal is what the remote authenticated. Only canonical ids are
+  taken, and an origin a remote secret happens to match is left off the remote's public view.
+  A remote that does not list it is delegated to without one; a step whose earlier admission
+  stated one is refused (reason `protocol`) by a remote that no longer takes it, rather than
+  replayed differently.
 - **Progress shows on the step.** Remote step milestones and the remote agents' updates
   appear as the step's agent output.
 - **Remote gates are asked here.** A question the remote run (or a child run the remote's
@@ -486,8 +536,59 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
   not be reached. `DELEGATED_RUN_FAILED` means the remote run ended without success; its
   error is in the step's error details.
 
-Not yet: recording the parent run as the remote run's origin, fetching a named git ref on
-the remote side, issuing the credential automatically over SSH, and binary artifacts.
+### Working from a named git ref
+
+With `gitRef`, each remote run works from that branch or tag, named in full
+(`refs/heads/feature/login`, `refs/tags/v1.2.0`): a short name could match a branch and a tag,
+and a commit id is not accepted because a commit the remote's repository happens to hold says
+nothing about where it came from. The remote daemon checks the ref before it admits the run,
+then fetches it from its workspace's fetch remote (`workspace.fetchRemote`, default `origin`)
+and gives the run its own checkout of the commit it named, recorded as the run's
+`workspace.rootProvisioning` (`ref` and `baseCommit`). A retried or resumed run keeps that
+commit; nothing is fetched twice.
+
+Choosing a ref replaces the remote's default checkout, so it is the remote administrator's
+decision, not the caller's: a `runs.admit` grant alone never lets a caller pick one. The remote
+names the refs it allows in `workspace.allowedRefs`, each a full ref or a prefix ending in
+`/*`, and refuses every other ref (and every ref when the list is absent or empty). It also
+needs a workspace that gives each run its own checkout:
+
+```yaml
+# the remote daemon's config
+workspace:
+  provider: git-worktree
+  repo: /srv/checkouts/app
+  isolateRoots: true          # each root run gets its own worktree (local Linux host)
+  allowedRefs:                # the refs a delegated run may name; none by default
+    - refs/heads/main
+    - refs/heads/release/*
+  # fetchRemote: origin
+```
+
+The remote checks the ref under exactly its name on the fetch remote (never Git's suffix
+matching) and remembers the object it names (for an annotated tag, the tag object). It then
+fetches only that ref, into a run-private ref, and refuses the run if the fetched object is
+not the one it checked (the ref moved: admit the run again). The admission keeps that object
+with its own record, so creating the run, and recovering an interrupted admission, use exactly
+it rather than looking the ref up again. The fetch leaves the rest of the
+repository alone: no remote-tracking refs, pruning, `FETCH_HEAD`, tags, submodules or automatic
+maintenance. Listing and fetching run
+with no prompts (no terminal, askpass or credential-manager prompt, and batch-mode SSH unless
+`core.sshCommand` is set) and a deadline (30 seconds to list, 2 minutes to fetch); a remote
+that does not answer refuses the ref. The checkout is prepared outside any agent sandbox, so
+it runs no repository hook, fsmonitor command or submodule recursion, and every configured
+filter driver is switched off: files are written as stored (a Git LFS file arrives as its
+pointer).
+
+ORCA does not push anything: the ref must already be on that remote (code sync beyond
+fetching a named ref is out of scope). A remote that cannot check the ref out (another
+workspace provider, a ref it does not allow, an unknown ref, a ref that is not a full branch
+or tag name, a fetch remote that fails or times out) fails the step with `DELEGATION_REFUSED`
+and reason `git-ref` before any run is admitted. A remote whose `hello` does not list `gitRef`
+in `admitFields` (older than protocol 2.7) is refused with reason `protocol`, never run
+without the ref.
+
+Not yet: binary artifacts.
 
 ## MCP servers and skills for agent steps
 

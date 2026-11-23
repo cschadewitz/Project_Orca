@@ -86,6 +86,7 @@ describe("store format marker (#566)", () => {
     expect(await enterStoreFormat(dir, { appVersion: "0.7.1", mode: "write" })).toEqual({
       status: "fresh",
       epoch: STORE_FORMAT_EPOCH,
+      backend: "file",
     });
     expect(await readStoreFormat(dir)).toMatchObject({ epoch: STORE_FORMAT_EPOCH, writtenBy: "0.7.1" });
     expect(await backups(dir)).toEqual([]);
@@ -316,17 +317,6 @@ describe("store format marker (#566)", () => {
     await expect(enterStoreFormat(dir, { appVersion: "0.7.1", mode: "write" })).rejects.toMatchObject({
       reason: "DAMAGED",
     });
-  });
-
-  it("refuses to carry forward on Windows, where private copies cannot be verified yet", async () => {
-    const dir = await store();
-    await mkdir(dir, { recursive: true });
-    await legacy(dir);
-    const before = await contents(dir);
-    await expect(carryStoreForward(dir, { appVersion: "0.7.1", platform: "win32" })).rejects.toMatchObject({
-      reason: "BACKUPS_UNSAFE",
-    });
-    expect(await contents(dir)).toEqual(before);
   });
 
   it("refuses to carry forward a store that holds links", async () => {

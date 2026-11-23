@@ -17,6 +17,8 @@ import { serverKey } from "./remote-credentials.js";
 import type { RemoteCommand } from "@orca/protocol/remote-access";
 import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
+import { handOffStoreForUpdate, type StoppedReservation } from "./first-run/update-handoff.js";
+import type { UpdateHandoff } from "@orca/protocol/update-handoff";
 import {
   MAINTENANCE_RUNTIME_METHOD,
   RuntimeMaintenanceResultSchema,
@@ -75,6 +77,8 @@ interface WindowsUpdateAttempt {
   storeDir: string | undefined;
   target: WorkspaceTarget;
   stopAttempted: boolean;
+  /** The store handoff written for the version being installed, once per attempt (#897). */
+  handedOff: UpdateHandoff | undefined;
   recovering: boolean;
   busy: boolean;
 }
@@ -143,6 +147,8 @@ export interface WorkspaceDeps {
   /** Explicit environment workspace only. No home-directory bootstrap. */
   defaultPath: () => string | undefined;
   setupBusy?: () => boolean;
+  /** Injected for tests; default to the first-run journal's update handoff (#897). */
+  handOffStore?: (path: string, stopped: StoppedReservation, from: string, to: string) => UpdateHandoff;
   /** Saved-receipt verification must bind this exact path before requesting its candidate. */
   recoverFirstRun?: (
     path: string,
@@ -1151,6 +1157,31 @@ export class Workspace {
     }
   }
 
+  /**
+   * After the exact stop, before the installer: hand the stopped bundled daemon's store to the
+   * first start of `to` (#897). Only for an app-owned first-run workspace whose daemon this
+   * attempt prepared (admission closed, no active work), stopped, and saw exit.
+   */
+  async handOffForUpdate(token: string, from: string, to: string): Promise<void> {
+    const attempt = this.windowsUpdate;
+    if (!attempt || attempt.token !== token) throw new Error("Update was not prepared for this token");
+    this.checkWindowsUpdate(attempt);
+    if (attempt.busy || !attempt.stopAttempted || attempt.handedOff || attempt.recovering)
+      throw new Error("Update handoff is not available");
+    if (!attempt.daemon || attempt.daemon.exited !== true || !attempt.firstRun || !attempt.ownership)
+      throw new Error("No stopped bundled daemon to hand off");
+    attempt.busy = true;
+    try {
+      if (!attempt.ownership.complete()) throw new FirstRunOwnershipRefusal();
+      // The exact reservation this attempt prepared and stopped, never whatever the journal's
+      // latest attempt is by now: the handoff refuses unless they are the same.
+      const stopped = { reservationId: attempt.ownership.reservationId, claimHash: attempt.ownership.claimHash };
+      attempt.handedOff = (this.deps.handOffStore ?? handOffStoreForUpdate)(attempt.firstRun.path, stopped, from, to);
+    } finally {
+      attempt.busy = false;
+    }
+  }
+
   async prepareUpdate(token: string): Promise<void> {
     const refuseUnclaimed = (message: string): never => {
       // A duplicate exact-token caller cannot declare its existing reservation absent.
@@ -1191,6 +1222,7 @@ export class Workspace {
       storeDir: this.verifiedHello?.storeDir,
       target: { ...this.target },
       stopAttempted: false,
+      handedOff: undefined,
       recovering: false,
       busy: true,
     };
@@ -1228,6 +1260,10 @@ export class Workspace {
         }
       } else if (attempt.daemon) {
         if (attempt.daemon.exited !== true) throw new Error("Exact child termination is uncertain");
+        // Nothing was installed. The handoff stays on disk, inert: the recovered daemon's claim
+        // follows the stopped one, so it spends the record under its own fence, and its version
+        // is not the one the record names, so it never carries under it (#897).
+        attempt.handedOff = undefined;
         attempt.ownership?.check();
         if (attempt.ownership && !attempt.ownership.complete()) throw new FirstRunOwnershipRefusal();
         // The old captured child is now settled. Generic reconnect cannot authorize a new writer.

@@ -40,7 +40,7 @@ import type {
 import type { UpdateSnapshot } from "../update-contract.js";
 import type { ServerUpdateOutcome, ServerUpdateProgress, ServerUpdatePreview } from "../server-update.js";
 import type { MacUpdateView } from "../mac-update-contract.js";
-import type { LinuxUpdateNotice } from "../linux-update-contract.js";
+import type { LinuxRestartState, LinuxUpdateNotice } from "../linux-update-contract.js";
 import type { DiagnosticsResult, DiagnosticsStatus } from "../diagnostics-contract.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
@@ -157,6 +157,17 @@ const bridge: OrcaBridge = {
       ipcRenderer.on("orca:linuxUpdate", forward);
       return () => {
         ipcRenderer.off("orca:linuxUpdate", forward);
+      };
+    },
+  },
+  linuxRestart: {
+    read: () => ipcRenderer.sendSync("orca:linuxRestart.read") as LinuxRestartState | null,
+    restart: () => call("orca:linuxRestart.restart"),
+    subscribe: (listener) => {
+      const forward = (_event: unknown, state: LinuxRestartState | null) => listener(state);
+      ipcRenderer.on("orca:linuxRestart", forward);
+      return () => {
+        ipcRenderer.off("orca:linuxRestart", forward);
       };
     },
   },

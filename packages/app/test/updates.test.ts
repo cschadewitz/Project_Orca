@@ -34,6 +34,24 @@ function rig() {
   return { driver, guards, order, changed, updates: new Updates(driver, "0.6.0", guards, changed) };
 }
 describe("manual updates", () => {
+  it("hands the store off after the exact stop and before the installer, and never blocks on it (#897)", async () => {
+    const r = rig();
+    r.guards.handOff = vi.fn((_token: string, from: string, to: string) => {
+      r.order.push(`handoff ${from}->${to}`);
+      return Promise.resolve();
+    });
+    await r.updates.act("check");
+    await r.updates.act("download");
+    await r.updates.act("restart");
+    expect(r.order).toEqual(["drafts", "admission", "stop", "handoff 0.6.0->0.6.1", "install"]);
+    const failing = rig();
+    failing.guards.handOff = vi.fn(() => Promise.reject(new Error("not a first-run workspace")));
+    await failing.updates.act("check");
+    await failing.updates.act("download");
+    await failing.updates.act("restart");
+    expect(failing.order).toEqual(["drafts", "admission", "stop", "install"]);
+    expect(failing.guards.resume).not.toHaveBeenCalled();
+  });
   it("does not download on check or install on download; stops only after guards", async () => {
     const r = rig();
     await r.updates.act("restart");

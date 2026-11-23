@@ -900,12 +900,23 @@ converts a store:
 | --- | --- |
 | Its own format | Opens it in place. Updates that keep the format, such as 0.7.0 to 0.7.1, need nothing else. |
 | `operator-journals-v4`, before the marker existed, with intact evidence a released 0.7 build wrote it: `.workspace-identified` holding `1`, a valid `workspace-identity/id` and a 32-byte `private-execution/.execution-key`, none of them linked or foreign-owned. The 0.7 desktop app's daemon and `submit` write all three; 0.6 and earlier wrote none | Stamps the marker and opens it in place. No conversion, no backup, no other byte changed. |
-| The previous release's format, or any other unmarked store (incomplete or missing evidence included) | Refuses (`CARRYOVER_REQUIRED`) and changes nothing. Run `orca store carry-forward` once, below. |
+| The previous release's format, or any other unmarked store (incomplete or missing evidence included) | Refuses (`CARRYOVER_REQUIRED`) and changes nothing. Run `orca store carry-forward` once, below. The desktop app's first start after an in-app update carries it forward itself, under the proof in [Automatic carryover after a desktop update](#automatic-carryover-after-a-desktop-update). |
 | An older format than that | Refuses, naming the release line to open it with first. |
 | A format it does not know (a newer ORCA) | Refuses for reads and writes alike and changes nothing. The message names the version that wrote it and, when there is one, the backup that version made. |
 | A damaged marker | Refuses until the marker is restored or repaired with ORCA stopped. |
 
-`orca store format` prints the recorded format and what startup would do.
+`orca store format` prints the recorded format, whether the store's metadata is in files or
+SQLite, and what startup would do.
+
+A store on SQLite (#339) records a format of its own, `operator-journals-v4-sqlite`, which
+ORCA 0.7.1 and later refuse unless they know it. `orca store sqlite convert` converts a
+workspace's file store into a SQLite store of its own beside it (`.orca-sqlite`) and names it in
+the workspace's config, leaving the file store exactly as it was. ORCA 0.7.0 and earlier never
+read the marker; the new store is fenced against them before anything opens it, so they refuse
+it. Stop every older ORCA first: one that is still running keeps the file store, and what it
+writes there is not in the new store (`orca store format` reports it). To go back, point
+`storeDir` at the file store again. `orca store sqlite switch` (in place) is refused. See [the
+SQLite metadata backend](storage/sqlite-metadata.md#choosing-sqlite-for-a-workspace).
 
 **`orca store carry-forward`** is the explicit, offline conversion. Stop every ORCA app,
 daemon and command using the workspace first. Writers from before 0.7.1 take no lock the
@@ -933,22 +944,146 @@ keeping the newest two and always the one the marker names, plus the scratch fol
 interrupted run. Anything else in `format-backups/` is left alone. The folder must be a
 private directory owned by the user running ORCA (`BACKUPS_UNSAFE` otherwise).
 
-`carry-forward` is not available on Windows yet (`BACKUPS_UNSAFE`): the copies hold the
-execution key and private records, and ORCA cannot yet verify that a destination's ACL keeps
-them at least as private as the originals. That, with automatic desktop carryover, is #897.
-Marker adoption of 0.7 stores, which copies nothing, works on Windows as everywhere else.
+On Linux and macOS the copy, its manifest, the published backup and then the marker are each
+flushed to disk (files, then the directory holding each new entry) before the next step, so the
+marker never becomes durable before the backup it names. The tests interrupt the sequence at
+each step; that shows a stopped process leaves the prior format in charge with at most an
+unpublished scratch copy (removed next time) or an extra complete backup, not that every disk
+honours the flushes on power loss. The desktop app's own
+workspaces are refused (`APP_OWNED`): only the daemon the app launches may write them, and this
+command cannot hold that daemon's write fence. The app carries those forward itself, below.
+
+**Windows does not change a store's format yet (#910).** Every Windows carryover is refused
+(`UNDURABLE`) with nothing touched, and the store stays on the format the previous ORCA wrote,
+until an automated power-cut test on NTFS (#947) proves the design below. The design is built and
+tested with the switch (`WINDOWS_STORE_CARRYOVER` in `packages/store/src/store-format.ts`) on;
+turning it on is a one-line change made together with that proof.
+
+Windows documents no way for an unelevated program to make a new or renamed directory entry
+reach the disk before a later one, so the POSIX order above (a published backup folder, then the
+marker) cannot be shown to survive a power loss there. What Windows does document is that
+flushing a file (`FlushFileBuffers`) writes its data to the device before returning, and a file
+that survived a restart has its directory entry on disk already. So on Windows the backup is one
+ZIP archive written into a backup slot that survived a restart:
+
+1. Every write-mode start of a store this ORCA may write creates `format-backups/` (owner-only)
+   and two slot files in it, `store-backup-1.zip` and `store-backup-2.zip`, if missing. Each new
+   slot holds its own identity: its NTFS volume serial and file ID and the Windows `BootId` it
+   was created in. Windows increases `BootId` on every start, and no clock or timestamp can move
+   it. A slot whose identity names another file (copied or replaced) is stamped anew.
+2. Carryover uses only a slot that is a private regular file whose identity is that very file and
+   whose `BootId` is not the current one, so it survived a restart. It never uses the slot the
+   current marker names, nor any archive whose conversion the marker does not yet reflect (an
+   identity-only slot first, then the archive written longest ago). With no such slot, or no
+   readable `BootId`, it refuses (`UNDURABLE`) having copied nothing: restart Windows and start
+   ORCA again. The automatic carryover keeps the update's handoff for that retry.
+3. Steps 1 to 4 above run as on Linux and macOS. Then the verified copy and its
+   `format-backup.json` manifest, which names the conversion (`from`, `to`) and the slot's
+   identity, are written over the slot in place as a stored (uncompressed) ZIP archive, the file
+   is truncated to its new length and flushed, and the archive is read back and compared entry
+   by entry with the copy. Only after that flush has returned is the marker created.
+4. The marker is itself a new directory entry, which a power cut may still lose while later
+   writes survive. The slot archive is therefore the durable record of the conversion: whenever
+   a Windows ORCA carries a store forward, an archive whose `from` matches the marker (or
+   `unmarked`) but whose conversion the marker does not show is found first. If the store is
+   still byte for byte what it archived, the conversion is finished by writing the marker naming
+   that archive, which is not rewritten. Otherwise the store is refused (`INTERRUPTED`) and the
+   archive is kept: open the store with the version that last wrote it. Both slots are examined
+   before deciding: any archive recording a newer format than this ORCA's refuses the store
+   (`NEWER`) on every Windows open, whatever the marker says and even with carryover switched
+   off, and takes precedence over an unfinished record in the other slot. Two unfinished records
+   are ambiguous and refuse the store (`INTERRUPTED`), keeping both.
+
+The two slots are the retention on Windows: the marker's backup and the one before it. **There
+is no supported way to restore a Windows slot archive yet.** Extracting it (Explorer's "Extract
+all", `Expand-Archive`) round-trips the bytes but not the access rules that keep the execution
+key and private records to the user, so ORCA's messages never suggest it. A restore needs a
+verified private destination and owner-only access checked on every restored entry before an
+older build may use it; that comes with turning Windows carryover on (#947).
+
+A Windows CI job runs the design as a standard user on NTFS with the switch on for the probe
+only: refusal with the switch off, refusal with fresh slots recording the real `BootId`,
+carryover with the next `BootId`, the archive finishing the conversion after the marker is
+deleted, and Windows' own `Expand-Archive` reading the archive's bytes back (a format check, not
+a restore path). It stands in for a restart; it does not cut power.
+
+The private-copy path for Windows: the copies hold the execution
+key and private records, and anyone with the default "bypass traverse checking" right can reach
+a file by its path whatever its parent's ACL. So every directory of the backup and of the
+throwaway read copy is created with an owner-only protected DACL by the packaged first-run
+boundary, and every directory and file copied is verified owner-only and owned by the user
+running ORCA before anything is published (`BACKUPS_UNSAFE` otherwise). Files are created new
+in those directories (never with a copy-file call that could carry the source's security), so
+their DACL is assigned from the owner-only parent when they are created; a Windows CI job
+checks this on NTFS as a standard user.
 
 The supported window is this release's format and the one before it, so a store carries
 forward across one format change at a time. Closed update validation (`serve --read-only
 --no-resume` under an update fence) only checks; it never writes the marker. `validate` does
-not open the store and is unaffected. Automatic carryover on the desktop update path, with
-proof that the updater owns the store and holds its write fence, is tracked separately and
-must land before the next store format change.
+not open the store and is unaffected.
+
+#### Automatic carryover after a desktop update
+
+From 0.8.0 the desktop app carries its own workspace's store forward on the first start after
+an in-app update, with no command, and only with positive proof that nothing else can write the
+store while it does (#897):
+
+1. Before the installer runs, the updater closes admission on the bundled daemon, waits until
+   it reports no active work, stops it and observes that exact process exit, as for every
+   update. It then publishes `update-handoff.json.<claim>` into the store: the exact store and
+   workspace directories, the first-run journal claim of the daemon it stopped, and the version
+   being installed. That claim is the one the update's own ownership handle captured for the
+   daemon it drained and stopped; the journal's latest attempt must be exactly that one (same
+   reservation, same claim, settled by that observed exit), or nothing is published. The file is named by that claim and created exclusively, so the updater never
+   replaces a record: a stale updater can only publish for the daemon it stopped itself, never
+   over a newer handoff, which names another claim. Readers look only at the record for the claim
+   they directly follow. The updater never deletes the record, which holds nothing open by itself: if the
+   installer never starts, the recovered daemon of this version directly follows the stopped
+   claim, cannot carry under a record naming another version, and spends it under its own fence.
+   Any later reservation follows another claim, so an unused record grants it nothing.
+2. On the new app's first start, its bundled daemon enters as the store's first-run writer and
+   holds the workspace's kernel-lifetime fence, which no other ORCA app, daemon or command can
+   hold at the same time. It may carry the store forward only if its own journal claim directly
+   follows the one the record names (so nothing else was launched on the workspace in between),
+   the record names this exact store, and this is the version the update installed.
+3. The carryover is the same as `carry-forward` above, and the fence must still hold before the
+   copy, after it, after the read check, before the backup is published and before the marker
+   is written. If it no longer holds, nothing is carried (`FENCE_LOST`) and the prior format
+   stays in charge.
+
+A carryover that finishes or is refused spends the record, but only while the daemon still
+holds the fence and the record is exactly the one it claimed; once that proof is gone it
+changes nothing in the store, the record included. One interrupted by a crash is retried
+by the next start under the same proof (the daemon moves the record onto its own claim before it
+copies), at most three times. Without the record, or with any part of the proof missing, startup
+keeps refusing (`CARRYOVER_REQUIRED`) exactly as before, and `orca store carry-forward` remains
+the way through. This covers app-owned workspaces updated by the Windows in-app updater, with
+the backup in a pre-boot slot (above, #910). The Linux `.deb` has no
+in-app updater and no `orca` command; its route is **Restart to finish update** (#905). While the
+app runs, it reads dpkg's status every 30 seconds, and once `apt` has fully installed an
+`orca-desktop` version other than the running one, the title bar offers that restart. It runs
+exactly the Windows sequence above (drafts prepared, admission closed and drained, the exact
+daemon stopped and its exit observed, `update-handoff.json.<claim>` published naming the installed
+version) and then starts the installed binary, whose bundled daemon carries the store forward
+under the same proof. A failure before the stop resumes the running version's daemon and offers
+the restart again. The target is checked at the click, after the stop and just before the
+launch is scheduled: dpkg must still report the offered version fully installed, and
+`/opt/ORCA/orca-desktop` must match the package's recorded checksum. That does not bind the
+executable that opens, which Electron starts only after the old app exits: if `apt` changes the
+package in that moment, another version may start. The guarantee is about the store, not the
+executable: the record names the offered version, and any other version's daemon cannot carry the
+store under it, so it refuses an older-format store (`CARRYOVER_REQUIRED`) as it would after a
+plain quit and reopen. After the stop the running version is never restarted
+(apt may already have removed its files): a moved target, a refused handoff or an uncertain stop
+starts nothing, keeps admission closed and tells the person to quit and reopen, and, if the
+workspace then refuses (`CARRYOVER_REQUIRED`), to reinstall the previous package
+(docs/INSTALL-LINUX.md). Quitting and reopening without the restart writes no record either.
 
 The backup covers the store directory only: not the config file, the permission sidecar or
 `auth/` beside the config. Agents cannot read `format-backups/`, which holds copies of the
 store's private directories. To go back to the older release after a carryover, stop ORCA,
-move the store aside, copy the backup back in its place, and start the older release. Work
+move the store aside, copy the backup back in its place, and start the older release (not on
+Windows: a slot archive has no supported restore yet, above). Work
 done after the backup is not in it.
 
 During compatible activation, `activation.json` is fsynced before any service/pointer change.

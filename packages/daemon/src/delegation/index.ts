@@ -7,7 +7,8 @@
  *
  * - `auth/remotes/<id>.token`: the bearer credential the remote daemon issued for this daemon
  *   (`orca auth issue <principal> --json` there). Read at every session open, never logged.
- *   `credentialFile` moves it.
+ *   `credentialFile` moves it. A credential enrollment issued itself lives in its own
+ *   generation file instead, `auth/remotes/<id>.<credential id>.token`, named by the record.
  * - `auth/remotes/<id>.known_hosts`: the remote's SSH host keys (and its jump host's), pinned
  *   only by `orca remote enroll <id>`.
  * - `auth/remotes/<id>.json`: the enrollment record (`enrollment.ts`): the sealed keys, the
@@ -19,7 +20,7 @@
  * is recorded under the store's `delegations/` (`receipts.ts`).
  */
 import { readFileSync, statSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { OrcaError, type AgentSpec, type OrcaConfig, type RemoteDaemonSpec } from "@orca/core";
 import type { AgentSession, OpenSessionOptions } from "@orca/agents";
@@ -31,13 +32,23 @@ import {
   type TunnelRefusalCode,
 } from "@orca/protocol/remote-access";
 import { delegationRefusal, openDaemonSession, type DelegationTransport } from "./daemon-session.js";
-import { credentialIdOf, enrollmentFile, readEnrollment, routeOf, sameRoute, type Enrollment } from "./enrollment.js";
+import {
+  credentialIdOf,
+  enrollmentFile,
+  enrollmentInProgress,
+  readEnrollment,
+  routeOf,
+  sameRoute,
+  type Enrollment,
+} from "./enrollment.js";
 import { DelegationReceipts, type DelegationBinding } from "./receipts.js";
 
 export {
   delegationRefusal,
   DELEGATION_METHODS,
   openDaemonSession,
+  recordsOrigin,
+  takesGitRef,
   type DelegationRefusalReason,
   type DelegationTransport,
   type OpenDaemonSessionOptions,
@@ -54,9 +65,14 @@ export {
 export {
   credentialIdOf,
   enrollmentFile,
+  durableEnrollment,
+  enrollmentInProgress,
   enrollRemote,
   EnrollmentSchema,
+  pendingRevokeFile,
   readEnrollment,
+  readPendingRevokes,
+  tokenFileName,
   type Enrollment,
   type EnrollOptions,
 } from "./enrollment.js";
@@ -128,7 +144,7 @@ export function readRemoteCredential(remote: RemoteDaemonSpec, file: string): st
     delegationRefusal(
       remote.id,
       "credential-missing",
-      `No usable credential for remote ${remote.id} (${detail}). On the remote, run \`orca auth issue <name> --preset client --json\` and save its token to ${file}, readable only by this user.`,
+      `No usable credential for remote ${remote.id} (${detail}). Run \`orca remote enroll ${remote.id} --issue\` here to have the remote issue one over ssh, or on the remote run \`orca auth issue <name> --preset client --json\` and save its token to ${file}, readable only by this user.`,
     );
   let text: string;
   try {
@@ -160,7 +176,7 @@ export function readRemoteCredential(remote: RemoteDaemonSpec, file: string): st
 export function delegationBinding(
   enrollment: Enrollment,
   profile: ConnectionProfile,
-  agent: Pick<AgentSpec, "workflow" | "promptVar">,
+  agent: Pick<AgentSpec, "workflow" | "promptVar" | "gitRef">,
   configGeneration: string,
 ): DelegationBinding {
   const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -179,8 +195,15 @@ export function delegationBinding(
       serverCommand: profile.serverCommand ?? null,
       serverConfig: profile.serverConfig ?? null,
       promptVar: agent.promptVar ?? "prompt",
+      // Only when set, so a binding made before refs existed keeps its digest.
+      ...(agent.gitRef !== undefined ? { gitRef: agent.gitRef } : {}),
     }),
   };
+}
+
+/** The credential file an enrollment binds: an issued generation's own file, else the configured one. */
+export function enrolledCredentialFile(files: RemoteFiles, enrollment: Enrollment): string {
+  return enrollment.tokenFile ? resolve(dirname(files.enrollmentFile), enrollment.tokenFile) : files.credentialFile;
 }
 
 /** The remote's enrollment record, or a refusal saying how to enroll it. */
@@ -235,6 +258,10 @@ export interface DelegationOptions {
   tunnel?: (profile: ConnectionProfile, files: RemoteFiles, enrollment: Enrollment) => SshTunnel;
   /** Test seam: how often a running remote run is read. */
   pollMs?: number;
+  /** How long a session open waits for an enrollment of its remote to finish. Default 2 min. */
+  enrollmentWaitMs?: number;
+  /** This daemon's workspace id, stated as each delegated run's origin (#883). */
+  workspaceId?: () => Promise<string>;
 }
 
 /** What the engine says a session is opened for (`SessionOrigin` in `@orca/engine`). */
@@ -259,8 +286,22 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
     if (!remote) throw delegationRefusal(id, "profile-invalid", `no remotes[] entry has id ${id}`);
     const profile = remoteProfile(remote);
     const files = remoteFiles(options.configDir, remote);
-    const token = readRemoteCredential(remote, files.credentialFile);
+    // An enrollment under way may replace the record: wait for it, so this session binds the
+    // generation it leaves active.
+    const waitUntil = Date.now() + (options.enrollmentWaitMs ?? 120_000);
+    while (enrollmentInProgress(files.enrollmentFile)) {
+      if (Date.now() > waitUntil)
+        throw delegationRefusal(
+          id,
+          "enrollment-in-progress",
+          `Remote ${id} is being enrolled (${files.enrollmentFile}.lock) and that has not finished. Nothing was sent.`,
+        );
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    // The record first: it names the credential generation (an issued one's own file), so a
+    // re-enrollment that has not committed yet never changes what this session sends.
     const enrollment = enrolled(remote, files);
+    const token = readRemoteCredential(remote, enrolledCredentialFile(files, enrollment));
     // The bearer goes only where enrollment proved it belongs: this route, these keys, this
     // credential. Each is checked before ssh starts.
     if (!sameRoute(routeOf(profile), enrollment.route))
@@ -297,6 +338,9 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
         tunnel: code,
       });
     }
+    // A workspace id that cannot be read leaves the origin out; the run is still delegated.
+    const originWorkspaceId = await options.workspaceId?.().catch(() => undefined);
+    const binding = delegationBinding(enrollment, profile, open.agent, open.origin?.generationId ?? "unversioned");
     return openDaemonSession({
       agent: open.agent,
       host: open.host,
@@ -305,8 +349,22 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
       remoteName: profile.name,
       transport: tunnelTransport(tunnel),
       token,
-      binding: delegationBinding(enrollment, profile, open.agent, open.origin?.generationId ?? "unversioned"),
+      binding,
       receipts,
+      enrollment: {
+        inProgress: () => enrollmentInProgress(files.enrollmentFile),
+        current: () => {
+          try {
+            const now = readEnrollment(files.enrollmentFile);
+            return (
+              now !== undefined && delegationBinding(now, profile, open.agent, "-").enrollment === binding.enrollment
+            );
+          } catch {
+            return false;
+          }
+        },
+      },
+      ...(originWorkspaceId ? { originWorkspaceId } : {}),
       ...(open.askPermission ? { askPermission: (req, invocation) => open.askPermission!(req, invocation) } : {}),
       ...(open.logger ? { logger: open.logger } : {}),
       ...(open.clock ? { clock: open.clock } : {}),

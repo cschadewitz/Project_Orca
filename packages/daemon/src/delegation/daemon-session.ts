@@ -45,6 +45,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   newId,
   OrcaError,
+  RunOriginSchema,
   silentLogger,
   systemClock,
   type AgentSpec,
@@ -124,7 +125,9 @@ export type DelegationRefusalReason =
   | "protocol"
   | "admission-closed"
   | "workflow"
-  | "scope-changed";
+  | "git-ref"
+  | "scope-changed"
+  | "enrollment-in-progress";
 
 export function delegationRefusal(
   profile: string,
@@ -170,6 +173,22 @@ export interface OpenDaemonSessionOptions {
   pollMs?: number;
   /** Per-call limit for remote calls. Default 30 s. */
   callTimeoutMs?: number;
+  /**
+   * This daemon's workspace id. With it, each admission states its origin (this workspace,
+   * the parent run and the step) to a remote whose `hello.admitFields` lists `origin` (#883).
+   */
+  originWorkspaceId?: string;
+  /**
+   * The remote's enrollment, as this session sees it (#883 part 4). New work is not submitted
+   * while an enrollment is under way, nor once the record no longer is the one `binding` was
+   * made from: either could publish a generation that strands the receipt.
+   */
+  enrollment?: {
+    /** An enrollment of this remote is running now. */
+    inProgress(): boolean;
+    /** The active record is still the one `binding` names. */
+    current(): boolean;
+  };
 }
 
 /** The turn in flight: its remote run, and what its forwarded questions are bound to. */
@@ -218,6 +237,22 @@ const MAX_PAGES_PER_ROUND = 50;
 const MAX_CHILD_DEPTH = 8;
 
 /** The workspace and principal every remote mutation for a receipt is scoped to. */
+/**
+ * Whether a daemon takes `runs.admit` `gitRef`: only when its `hello` lists the field in
+ * `admitFields`, never on the strength of a protocol minor.
+ */
+export function takesGitRef(hello: { admitFields?: readonly string[] | undefined }): boolean {
+  return hello.admitFields?.includes("gitRef") ?? false;
+}
+
+/**
+ * Whether a daemon takes `runs.admit` `origin`: only when its `hello` lists the field in
+ * `admitFields`, never on the strength of a protocol minor (another 2.6 need not have it).
+ */
+export function recordsOrigin(hello: { admitFields?: readonly string[] | undefined }): boolean {
+  return hello.admitFields?.includes("origin") ?? false;
+}
+
 function scopeOf(receipt: DelegationReceipt): { workspaceId: string; principalId: string } {
   return { workspaceId: receipt.binding.workspaceId, principalId: receipt.binding.principalId };
 }
@@ -275,6 +310,13 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
         { missing },
       );
     if (hello.identity && hello.identity.workspaceId !== options.binding.workspaceId) throw changed("workspace");
+    // A named ref is never dropped: a daemon that cannot take one would run the wrong code.
+    if (options.agent.gitRef !== undefined && !takesGitRef(hello))
+      throw refuse(
+        "protocol",
+        `The daemon on ${options.remoteName} speaks protocol ${formatProtocolVersion(hello.protocol)}, and does not take the git ref this agent names (its hello does not list \`gitRef\` in admitFields). Update ORCA there, or remove gitRef.`,
+        { remoteProtocol: formatProtocolVersion(hello.protocol) },
+      );
     const discovery = OperatorDiscoverySchema.parse(
       await client.call("operator.discover", {}).catch((e: unknown) => {
         throw fault(e);
@@ -288,10 +330,14 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
         `The credential for ${options.remoteName} may not start runs there. Issue one with the client preset.`,
         { principal: discovery.principalId },
       );
-    const session = new DaemonSession(options, client, clock, logger, {
-      principalId: discovery.principalId,
-      workspaceId: discovery.target.workspaceId,
-    });
+    const session = new DaemonSession(
+      options,
+      client,
+      clock,
+      logger,
+      { principalId: discovery.principalId, workspaceId: discovery.target.workspaceId },
+      recordsOrigin(hello),
+    );
     await session.sweep();
     return session;
   } catch (error) {
@@ -316,6 +362,16 @@ function classify(profile: string, transport: DelegationTransport, error: unknow
       return delegationRefusal(profile, "protocol", `The remote daemon refused the protocol: ${error.message}`, {
         remoteCode: error.code,
       });
+    if (error.code === "NOT_SUPPORTED" && error.details && typeof error.details.gitRef === "string")
+      return delegationRefusal(
+        profile,
+        "git-ref",
+        `The remote daemon cannot work from that git ref: ${error.message}`,
+        {
+          remoteCode: error.code,
+          gitRef: error.details.gitRef,
+        },
+      );
     if (
       error.code === "WORKFLOW_NOT_FOUND" ||
       error.code === "WORKFLOW_INPUT_INVALID" ||
@@ -360,6 +416,8 @@ class DaemonSession implements AgentSession {
     private readonly clock: Clock,
     private readonly logger: Logger,
     private readonly scope: { principalId: string; workspaceId: string },
+    /** The remote's `hello.admitFields` lists `origin`. */
+    private readonly takesOrigin = false,
   ) {
     this.id = newId("sess", clock.now());
     this.agentId = options.agent.id;
@@ -509,7 +567,10 @@ class DaemonSession implements AgentSession {
    * it was read at; `ReceiptConflict` otherwise. A receipt without a revision must be new.
    */
   private store(
-    receipt: Omit<DelegationReceipt, "version" | "updatedAt" | "revision"> & { revision?: number },
+    receipt: Omit<DelegationReceipt, "version" | "updatedAt" | "revision" | "instance"> & {
+      revision?: number;
+      instance?: string | undefined;
+    },
   ): DelegationReceipt {
     const { version: _v, updatedAt: _u, ...rest } = receipt as DelegationReceipt;
     return this.options.receipts.write(rest);
@@ -538,6 +599,18 @@ class DaemonSession implements AgentSession {
     for (;;) {
       if (signal?.aborted) throw new OrcaError("CANCELLED", "cancelled before the remote run was admitted");
       const receipt = this.options.receipts.read(parentRunId, delegationId);
+      // A reservation made under another binding was never sent under: back it out, then decide.
+      if (
+        receipt?.state === "reserved" &&
+        (receipt.profile !== this.options.profile || !sameBinding(receipt.binding, this.options.binding))
+      ) {
+        try {
+          this.options.receipts.unreserve(receipt);
+        } catch (error) {
+          if (!(error instanceof ReceiptConflict)) throw error;
+        }
+        continue;
+      }
       if (receipt && (receipt.profile !== this.options.profile || !sameBinding(receipt.binding, this.options.binding)))
         throw delegationRefusal(
           this.options.profile,
@@ -555,6 +628,22 @@ class DaemonSession implements AgentSession {
     }
   }
 
+  /**
+   * The origin a new generation states (#883): this daemon's workspace, the parent run and the
+   * step's first attempt, which stays the same across retries of the step. Only for a remote
+   * that takes it; a 2.5 daemon refuses the unknown field.
+   */
+  private originOf(turn: TurnContext): Pick<DelegationReceipt, "origin"> {
+    if (!this.takesOrigin || !this.options.originWorkspaceId) return {};
+    // Canonical ids only, as the remote checks them; an origin that is not one is left out.
+    const origin = RunOriginSchema.safeParse({
+      workspaceId: this.options.originWorkspaceId,
+      runId: turn.runId,
+      stepRunId: turn.delegationId,
+    });
+    return origin.success ? { origin: origin.data } : {};
+  }
+
   /** One decision on a delegation's receipt: the receipt to follow, or undefined to read again. */
   private async step(
     receipt: DelegationReceipt | undefined,
@@ -566,6 +655,7 @@ class DaemonSession implements AgentSession {
   ): Promise<DelegationReceipt | undefined> {
     const { runId: parentRunId, delegationId } = turn;
     if (!receipt) {
+      // Reserved first: not submittable by anyone until it passes the enrollment gate.
       const fresh = this.store({
         profile: this.options.profile,
         binding: this.options.binding,
@@ -573,11 +663,15 @@ class DaemonSession implements AgentSession {
         delegationId,
         generation: 0,
         key: delegationKey(parentRunId, delegationId, 0),
-        state: "submitting",
+        state: "reserved",
+        ...this.originOf(turn),
       });
-      return this.submit(fresh, task, deadline, signal);
+      return this.promote(fresh, task, deadline, signal, wait);
     }
     switch (receipt.state) {
+      case "reserved":
+        // Another session's reservation, or one a crash left: nothing was sent under it.
+        return this.promote(receipt, task, deadline, signal, wait);
       case "admitted": {
         // Reattach only to a run that may still go on; one that ended is settled first.
         const ended = await this.call("runs.get", { runId: receipt.remoteRunId! }, deadline, signal).then(
@@ -601,17 +695,66 @@ class DaemonSession implements AgentSession {
         const generation = receipt.generation + 1;
         const next = this.store({
           revision: receipt.revision,
+          instance: receipt.instance,
           profile: this.options.profile,
           binding: this.options.binding,
           parentRunId,
           delegationId,
           generation,
           key: delegationKey(parentRunId, delegationId, generation),
-          state: "submitting",
+          state: "reserved",
+          previous: {
+            generation: receipt.generation,
+            key: receipt.key,
+            outcome: receipt.outcome!,
+            ...(receipt.remoteRunId ? { remoteRunId: receipt.remoteRunId } : {}),
+            ...(receipt.origin ? { origin: receipt.origin } : {}),
+          },
+          ...this.originOf(turn),
         });
-        return this.submit(next, task, deadline, signal);
+        return this.promote(next, task, deadline, signal, wait);
       }
     }
+  }
+
+  /**
+   * After a new generation's receipt is durable and before anything is sent under it: proceed
+   * only while no enrollment of the remote is running and the record is still the one this
+   * session is bound to. An enrollment checks for unsettled receipts after taking its lock, and
+   * this checks its lock after writing the receipt, so one of the two always sees the other.
+   * Otherwise the receipt is backed out (nothing was sent under it), the enrollment is waited
+   * out, and the turn goes on only if the record did not change.
+   */
+  private async enrollmentGate(stored: DelegationReceipt, wait: (what: string) => Promise<void>): Promise<boolean> {
+    const gate = this.options.enrollment;
+    if (!gate || (!gate.inProgress() && gate.current())) return true;
+    this.options.receipts.unreserve(stored);
+    while (gate.inProgress()) await wait(`the enrollment of remote ${this.options.remoteName}`);
+    if (!gate.current())
+      throw delegationRefusal(
+        this.options.profile,
+        "scope-changed",
+        `Remote ${this.options.remoteName} was enrolled again while this step was starting. Nothing was sent; retry the step to delegate under the new enrollment.`,
+      );
+    return false;
+  }
+
+  /**
+   * A `reserved` receipt becomes `submitting` (and is submitted) only through the enrollment
+   * gate, and only by the one session whose compare-and-swap promotes that exact revision;
+   * every other session reads it again. Backed out instead when the gate is closed.
+   */
+  private async promote(
+    reserved: DelegationReceipt,
+    task: string,
+    deadline: number,
+    signal: AbortSignal | undefined,
+    wait: (what: string) => Promise<void>,
+  ): Promise<DelegationReceipt | undefined> {
+    if (!(await this.enrollmentGate(reserved, wait))) return undefined;
+    const { previous: _p, version: _v, updatedAt: _u, ...rest } = reserved;
+    const submitting = this.store({ ...rest, state: "submitting" });
+    return this.submit(submitting, task, deadline, signal);
   }
 
   /**
@@ -727,7 +870,17 @@ class DaemonSession implements AgentSession {
       vars: { [this.options.agent.promptVar ?? "prompt"]: task },
       idempotencyKey: receipt.key,
       expectedScope: scopeOf(receipt),
+      ...(receipt.origin ? { origin: receipt.origin } : {}),
+      ...(this.options.agent.gitRef !== undefined ? { gitRef: this.options.agent.gitRef } : {}),
     };
+    // The receipt's admission is replayed exactly as it was first sent: an origin it carries is
+    // part of that command. A remote that no longer takes one is refused, never sent less.
+    if (receipt.origin && !this.takesOrigin)
+      throw delegationRefusal(
+        this.options.profile,
+        "protocol",
+        `The daemon on ${this.options.remoteName} no longer takes a run origin, which this step's earlier admission stated. Nothing was sent; update ORCA there to settle the step.`,
+      );
     const admitted = (runId: string) => this.store({ ...receipt, state: "admitted", remoteRunId: runId });
     for (let attempt = 0; ; attempt++) {
       if (signal?.aborted) return this.abandon(receipt, deadline);

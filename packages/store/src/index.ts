@@ -14,6 +14,17 @@ export * from "./protected-event-store.js";
 
 export { workspaceIdentity, renewWorkspaceIdentity } from "./workspace-identity.js";
 export * from "./store-format.js";
+export * from "./store-backend.js";
+export * from "./store-writers.js";
+export * from "./store-convert.js";
+export {
+  LEGACY_FENCES,
+  LEGACY_FENCE_MARKER,
+  LEGACY_FENCE_NOTE,
+  SQLITE_SWITCH_DIR,
+  readSqliteSwitchJournal,
+} from "./sqlite/legacy-fence.js";
+export { SQLITE_KEY_FILE } from "./protected-file.js";
 export * from "./store-contracts.js";
 
 export * from "./admission-retry-store.js";

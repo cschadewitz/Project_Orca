@@ -494,6 +494,16 @@ jobs:
           pnpm --filter @orca/app exec electron-builder --linux deb --x64 --publish never \
             -c.extraMetadata.version="$version"
 
+      # The same build stamped 99.0.0, for package-restart.spec.ts (#905): apt upgrades to it
+      # beneath the running app. Only the version differs; it is never installed outside that
+      # spec, which reinstalls the package above afterwards.
+      - name: Build a higher-version regression .deb for the upgrade check (x64)
+        run: |
+          set -euo pipefail
+          pnpm --filter @orca/app exec electron-builder --linux deb --x64 --publish never \
+            -c.extraMetadata.version=99.0.0 -c.directories.output=dist/release-next
+          test "$(dpkg-deb -f packages/app/dist/release-next/ORCA-99.0.0-linux-amd64.deb Version)" = 99.0.0
+
       # The same refusals as desktop.yml's .deb step, before anything runs with sudo: one
       # package, named orca-desktop, claiming nothing of the screen reader's, a payload that
       # is root-owned with no setuid/setgid/sticky bit and nothing group- or other-writable
@@ -579,7 +589,13 @@ jobs:
         timeout-minutes: 15
         env:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-linux-native
-        run: pnpm run app:linux-native
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          current=(packages/app/dist/release/ORCA-*-linux-amd64.deb)
+          export ORCA_NATIVE_CURRENT_DEB=$(readlink -f "${current[0]}")
+          export ORCA_NATIVE_NEXT_DEB=$(readlink -f packages/app/dist/release-next/ORCA-99.0.0-linux-amd64.deb)
+          pnpm run app:linux-native
 
       # Screenshots of ORCA's own window and per-cycle timings only. The session's keyring,
       # profile and workspace live in a temp dir the specs delete.

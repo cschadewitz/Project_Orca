@@ -167,13 +167,29 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * and `operator.reconcileAdmission` refuse a checkpoint receipt; it stays on `admissions.*`.
  * `admissions.reconcile` takes an optional `kind` (`run.recover`) and refuses any other kind
  * before it reconciles; a 2.4 daemon rejects the unknown field, so it fails closed.
+ *
+ * 2.6 (#883) adds an optional `origin` ({ workspaceId, runId, stepRunId? }, canonical ids
+ * only) to `runs.admit`: the parent workspace, run and step a delegated run was started for.
+ * The daemon records it on the run (`origin` on `RunSummaryView`; left off the public
+ * projection if a secret touched it). The audit log leaves it out. It is the
+ * admitting principal's statement, never authority. `runs.admit` params are strict, so a
+ * daemon that takes the field says so in `hello.admitFields` (also new), and a caller sends
+ * it only to a daemon that lists it there, never on the strength of the minor alone.
  */
 /**
- * 2.6 adds secret reference metadata (#336): `secrets.list` and `secrets.check`, two reads
+ * 2.6 also adds secret reference metadata (#336): `secrets.list` and `secrets.check`, two reads
  * under the new `secrets.read` permission that never return a value. New method names in
  * `hello.methods`: a 2.5 client never calls them.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 6 };
+/**
+ * 2.7 (#883) adds an optional `gitRef` (a fully qualified branch or tag) to `runs.admit`, listed in
+ * `hello.admitFields` as `gitRef`: the daemon's workspace checks it before admitting
+ * (`NOT_SUPPORTED` with `details.gitRef` when it cannot) and fetches it into the run's own
+ * checkout, recorded as `workspace.rootProvisioning.ref`. A delegating daemon whose agent
+ * names a ref sends it only to a daemon that lists the field, and refuses any other rather
+ * than run without it.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 7 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is

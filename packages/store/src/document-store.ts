@@ -17,6 +17,7 @@ import { FileArtifactStore, InMemoryArtifactStore, type ArtifactStore } from "./
 import { FileWorkflowVersionStore, InMemoryWorkflowVersionStore, type WorkflowVersionStore } from "./workflow-store.js";
 import { FileExecutionStore, InMemoryExecutionStore, type ExecutionStore } from "./execution-store.js";
 import { ProtectedEventStore } from "./protected-event-store.js";
+import { refuseOtherBackend } from "./store-backend.js";
 import { filePlanStores, memoryPlanStores, type PlanStores } from "./plan-store.js";
 import {
   documentVersion,
@@ -453,8 +454,12 @@ export interface Stores {
   close?(): void;
 }
 
-/** `logger` receives what the file-backed stores notice and survive: torn log lines, stale locks. */
+/**
+ * `logger` receives what the file-backed stores notice and survive: torn log lines, stale locks.
+ * Refuses a store recorded for SQLite (store-backend.ts): its file metadata is no longer current.
+ */
 export function fileStores(dir: string, clock?: Clock, logger?: Logger): Stores {
+  refuseOtherBackend(dir, "file");
   const execution = new FileExecutionStore(dir);
   const workflows = new FileWorkflowVersionStore(dir);
   return {

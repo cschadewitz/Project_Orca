@@ -40,7 +40,16 @@ export const WorkspaceSchema = z.object({
   /** Provider that created it (git-worktree, kepler, t3code, ...). */
   provider: z.string().optional(),
   /** Built-in owned root identity, inherited unchanged by children. */
-  rootProvisioning: z.object({ runId: z.string(), baseCommit: z.string() }).optional(),
+  rootProvisioning: z
+    .object({
+      runId: z.string(),
+      baseCommit: z.string(),
+      /** The named git ref the run was given (#883); `baseCommit` is the commit it named. */
+      ref: z.string().optional(),
+      /** The object `ref` named when its admission checked it (an annotated tag's tag object, else `baseCommit`). */
+      refObject: z.string().optional(),
+    })
+    .optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 
@@ -106,6 +115,26 @@ export type EffectReviewDecision = z.infer<typeof EffectReviewDecisionSchema>;
 /** The step attempt of another run a reused step stands for (#357). */
 export const StepOriginSchema = z.object({ runId: z.string(), stepRunId: z.string() });
 export type StepOrigin = z.infer<typeof StepOriginSchema>;
+
+/**
+ * Where a delegated run came from (#883): the parent daemon's workspace, run and step. The
+ * admitting principal states it; it is a record of that statement, never authority.
+ */
+const CANONICAL = "(?:[0-9A-HJKMNP-TV-Z]{26}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})";
+/** A run id as ORCA makes them: `run_` and a ULID, or `run_` and a UUID (admission reservations). */
+export const CANONICAL_RUN_ID = new RegExp(`^run_${CANONICAL}$`);
+/** A step run id as ORCA makes them: `step_` and a ULID or a UUID. */
+export const CANONICAL_STEP_RUN_ID = new RegExp(`^step_${CANONICAL}$`);
+/** A workspace id: the lowercase UUID a store's workspace identity holds. */
+export const CANONICAL_WORKSPACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const RunOriginSchema = z
+  .object({
+    workspaceId: z.string().regex(CANONICAL_WORKSPACE_ID),
+    runId: z.string().regex(CANONICAL_RUN_ID),
+    stepRunId: z.string().regex(CANONICAL_STEP_RUN_ID).optional(),
+  })
+  .strict();
+export type RunOrigin = z.infer<typeof RunOriginSchema>;
 
 export const StepRunSchema = z.object({
   id: z.string(),
@@ -229,6 +258,8 @@ export const RunSchema = z.object({
   provenance: RunProvenanceSchema.optional(),
   /** A checkpoint attempt's source run and checkpoint step (#357). */
   checkpoint: StepOriginSchema.optional(),
+  /** A delegated run's parent workspace, run and step (#883). */
+  origin: RunOriginSchema.optional(),
   error: ErrorInfoSchema.optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
@@ -253,6 +284,7 @@ export const RunSummarySchema = RunSchema.pick({
   overrides: true,
   provenance: true,
   checkpoint: true,
+  origin: true,
   createdAt: true,
   startedAt: true,
   completedAt: true,

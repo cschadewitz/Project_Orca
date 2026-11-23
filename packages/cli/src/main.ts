@@ -49,6 +49,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         "mcp-server": { type: "string", multiple: true },
         "host-key": { type: "string", multiple: true },
         "jump-host-key": { type: "string", multiple: true },
+        issue: { type: "boolean" },
         "runs-scope": { type: "string" },
         "expires-at": { type: "string" },
         agent: { type: "string", multiple: true },

@@ -8,6 +8,7 @@ that the other Playwright projects cannot see:
 |---|---|---|
 | `reopen-cycles.spec.ts` | #858 | On X11 (Xvfb) and on Wayland (headless Weston), `ORCA_NATIVE_CYCLES` (default 5) quit/reopen cycles each show the window within 8 s (`BrowserWindow.isVisible()`, and on X11 a mapped window named ORCA), connect to the bundled daemon, render the shell, and leave no ORCA or daemon process after quit. |
 | `release-notice.spec.ts` | #888 | Against a local release-list stub (`ORCA_RELEASES_URL`): an install older than the newest stable release with an amd64 `.deb` shows the title-bar notice, with the `apt` command and **Open release page**; a current install shows nothing; an unreachable list is silent and the window is still visible within the usual budget. |
+| `package-restart.spec.ts` | #905 | With first-run setup done, `sudo apt-get install` upgrades to a second package of the same build stamped higher (`ORCA_NATIVE_NEXT_DEB`) beneath the running app. **Restart to finish update to X** appears; clicking it writes `update-handoff.json.<claim>` (from the running version, to the installed one, drained), the old app exits, the installed one starts by itself and its daemon spends the record. A second launch with no app workspace follows the offer as apt moves up, back and up again, then clicks it: the handoff is refused after the stop, nothing new starts, the app stays, and its message names the recovery. Then `ORCA_NATIVE_CURRENT_DEB` is reinstalled. Defined only when both are set. |
 | `keyring-prompt.spec.ts` | #857 | With a locked GNOME login keyring and the real gcr unlock prompt: Cancel on a fresh install gives the before-send refusal and no run, with no in-app Retry. Quit, reopen and Unlock admits the sample once and it succeeds. Another reopen still lists exactly one run. Locking again with a journal on disk and cancelling gives the recovery-only refusal, Launch disabled, and no new run. |
 
 ## Run it
@@ -18,6 +19,17 @@ sudo apt-get install xvfb dbus dbus-bin gnome-keyring gcr libsecret-tools xdotoo
 pnpm run build && pnpm --filter @orca/app run build:daemon
 pnpm --filter @orca/app exec electron-builder --linux deb --x64 --publish never
 sudo apt-get install ./packages/app/dist/release/ORCA-*-linux-amd64.deb
+pnpm run app:linux-native
+```
+
+For `package-restart.spec.ts`, also build the same tree stamped higher and name both packages
+(it runs `sudo apt-get install`, so sudo must not prompt):
+
+```sh
+pnpm --filter @orca/app exec electron-builder --linux deb --x64 --publish never \
+  -c.extraMetadata.version=99.0.0 -c.directories.output=dist/release-next
+ORCA_NATIVE_CURRENT_DEB=$(readlink -f packages/app/dist/release/ORCA-*-linux-amd64.deb) \
+ORCA_NATIVE_NEXT_DEB=$(readlink -f packages/app/dist/release-next/ORCA-99.0.0-linux-amd64.deb) \
 pnpm run app:linux-native
 ```
 
