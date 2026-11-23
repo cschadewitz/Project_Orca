@@ -33,6 +33,7 @@ import {
   remoteFiles,
   remoteProfile,
   takesGitRef,
+  type DelegationReceipt,
   type DelegationTransport,
   type OpenDaemonSessionOptions,
 } from "@orca/daemon";
@@ -1090,6 +1091,62 @@ describe("delegation through a proxy the test controls (#883)", () => {
     await session.close();
     await proxy.close();
   }, 60_000);
+
+  it("never submits a reservation outside the gate: a crash's is backed out by enrollment or promoted once by recovery", async () => {
+    const receipts = new DelegationReceipts(join(work, "receipts-reserved"));
+    const bound = { ...binding, workflowId: "remote-task" };
+    const reserve = (parentRunId: string, extra: Partial<DelegationReceipt> = {}) =>
+      receipts.write({
+        profile: "direct",
+        binding: bound,
+        parentRunId,
+        delegationId: `${parentRunId}_step1`,
+        generation: 0,
+        key: delegationKey(parentRunId, `${parentRunId}_step1`, 0),
+        state: "reserved",
+        ...extra,
+      });
+    // What an enrollment does under its lock: a first reservation leaves nothing, a next
+    // generation goes back to the settled one it would have replaced.
+    reserve("run_res_a");
+    reserve("run_res_b", {
+      generation: 1,
+      key: delegationKey("run_res_b", "run_res_b_step1", 1),
+      previous: { generation: 0, key: delegationKey("run_res_b", "run_res_b_step1", 0), outcome: "failed" },
+    });
+    expect(receipts.unsettled("direct")).toBe(2);
+    receipts.unreserveAll("direct");
+    expect(receipts.read("run_res_a", "run_res_a_step1")).toBeUndefined();
+    expect(receipts.read("run_res_b", "run_res_b_step1")).toMatchObject({
+      state: "settled",
+      generation: 0,
+      outcome: "failed",
+    });
+    expect(receipts.unsettled("direct")).toBe(0);
+
+    // Recovery after a crash: the reservation is promoted through the gate, by exactly one of
+    // two sessions racing for it, and submitted once.
+    reserve("run_res_c");
+    const proxy = await proxied();
+    const gate = { inProgress: () => false, current: () => true };
+    const one = await open(proxy.transport(), receipts, { enrollment: gate });
+    const two = await open(proxy.transport(), receipts, { enrollment: gate });
+    const before = (await runsOf("remote-task")).length;
+    const results = await Promise.all(
+      [one, two].map((session, i) =>
+        session.prompt("ignored", {
+          timeoutMs: 60_000,
+          turn: turn("run_res_c", join(work, `res-c-${i}`, "report.md")),
+        }),
+      ),
+    );
+    expect(results.map((r) => r.stopReason)).toEqual(["end_turn", "end_turn"]);
+    expect(await runsOf("remote-task")).toHaveLength(before + 1);
+    expect(receipts.read("run_res_c", "run_res_c_step1")).toMatchObject({ state: "settled", generation: 0 });
+    await one.close();
+    await two.close();
+    await proxy.close();
+  }, 90_000);
 
   it("refuses, sending nothing and leaving no receipt, when the remote was enrolled again as the step started", async () => {
     const proxy = await proxied();

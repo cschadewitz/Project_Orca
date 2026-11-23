@@ -596,6 +596,18 @@ class DaemonSession implements AgentSession {
     for (;;) {
       if (signal?.aborted) throw new OrcaError("CANCELLED", "cancelled before the remote run was admitted");
       const receipt = this.options.receipts.read(parentRunId, delegationId);
+      // A reservation made under another binding was never sent under: back it out, then decide.
+      if (
+        receipt?.state === "reserved" &&
+        (receipt.profile !== this.options.profile || !sameBinding(receipt.binding, this.options.binding))
+      ) {
+        try {
+          this.options.receipts.unreserve(receipt);
+        } catch (error) {
+          if (!(error instanceof ReceiptConflict)) throw error;
+        }
+        continue;
+      }
       if (receipt && (receipt.profile !== this.options.profile || !sameBinding(receipt.binding, this.options.binding)))
         throw delegationRefusal(
           this.options.profile,
@@ -640,6 +652,7 @@ class DaemonSession implements AgentSession {
   ): Promise<DelegationReceipt | undefined> {
     const { runId: parentRunId, delegationId } = turn;
     if (!receipt) {
+      // Reserved first: not submittable by anyone until it passes the enrollment gate.
       const fresh = this.store({
         profile: this.options.profile,
         binding: this.options.binding,
@@ -647,13 +660,15 @@ class DaemonSession implements AgentSession {
         delegationId,
         generation: 0,
         key: delegationKey(parentRunId, delegationId, 0),
-        state: "submitting",
+        state: "reserved",
         ...this.originOf(turn),
       });
-      if (!(await this.enrollmentGate(fresh, undefined, wait))) return undefined;
-      return this.submit(fresh, task, deadline, signal);
+      return this.promote(fresh, task, deadline, signal, wait);
     }
     switch (receipt.state) {
+      case "reserved":
+        // Another session's reservation, or one a crash left: nothing was sent under it.
+        return this.promote(receipt, task, deadline, signal, wait);
       case "admitted": {
         // Reattach only to a run that may still go on; one that ended is settled first.
         const ended = await this.call("runs.get", { runId: receipt.remoteRunId! }, deadline, signal).then(
@@ -683,11 +698,17 @@ class DaemonSession implements AgentSession {
           delegationId,
           generation,
           key: delegationKey(parentRunId, delegationId, generation),
-          state: "submitting",
+          state: "reserved",
+          previous: {
+            generation: receipt.generation,
+            key: receipt.key,
+            outcome: receipt.outcome!,
+            ...(receipt.remoteRunId ? { remoteRunId: receipt.remoteRunId } : {}),
+            ...(receipt.origin ? { origin: receipt.origin } : {}),
+          },
           ...this.originOf(turn),
         });
-        if (!(await this.enrollmentGate(next, receipt, wait))) return undefined;
-        return this.submit(next, task, deadline, signal);
+        return this.promote(next, task, deadline, signal, wait);
       }
     }
   }
@@ -700,17 +721,10 @@ class DaemonSession implements AgentSession {
    * Otherwise the receipt is backed out (nothing was sent under it), the enrollment is waited
    * out, and the turn goes on only if the record did not change.
    */
-  private async enrollmentGate(
-    stored: DelegationReceipt,
-    prior: DelegationReceipt | undefined,
-    wait: (what: string) => Promise<void>,
-  ): Promise<boolean> {
+  private async enrollmentGate(stored: DelegationReceipt, wait: (what: string) => Promise<void>): Promise<boolean> {
     const gate = this.options.enrollment;
     if (!gate || (!gate.inProgress() && gate.current())) return true;
-    if (prior) {
-      const { version: _v, updatedAt: _u, ...rest } = prior;
-      this.store({ ...rest, revision: stored.revision });
-    } else this.options.receipts.discard(stored);
+    this.options.receipts.unreserve(stored);
     while (gate.inProgress()) await wait(`the enrollment of remote ${this.options.remoteName}`);
     if (!gate.current())
       throw delegationRefusal(
@@ -719,6 +733,24 @@ class DaemonSession implements AgentSession {
         `Remote ${this.options.remoteName} was enrolled again while this step was starting. Nothing was sent; retry the step to delegate under the new enrollment.`,
       );
     return false;
+  }
+
+  /**
+   * A `reserved` receipt becomes `submitting` (and is submitted) only through the enrollment
+   * gate, and only by the one session whose compare-and-swap promotes that exact revision;
+   * every other session reads it again. Backed out instead when the gate is closed.
+   */
+  private async promote(
+    reserved: DelegationReceipt,
+    task: string,
+    deadline: number,
+    signal: AbortSignal | undefined,
+    wait: (what: string) => Promise<void>,
+  ): Promise<DelegationReceipt | undefined> {
+    if (!(await this.enrollmentGate(reserved, wait))) return undefined;
+    const { previous: _p, version: _v, updatedAt: _u, ...rest } = reserved;
+    const submitting = this.store({ ...rest, state: "submitting" });
+    return this.submit(submitting, task, deadline, signal);
   }
 
   /**

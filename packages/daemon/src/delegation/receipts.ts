@@ -80,7 +80,7 @@ export const DelegationReceiptSchema = z
     delegationId: z.string().min(1),
     generation: z.number().int().nonnegative(),
     key: z.string().min(1),
-    state: z.enum(["submitting", "admitted", "cancel-pending", "settled"]),
+    state: z.enum(["reserved", "submitting", "admitted", "cancel-pending", "settled"]),
     remoteRunId: z.string().min(1).optional(),
     /**
      * The origin this generation's admission states (#883): this daemon's
@@ -90,6 +90,20 @@ export const DelegationReceiptSchema = z
      */
     origin: RunOriginSchema.optional(),
     outcome: z.enum(["succeeded", "failed", "cancelled", "never-admitted"]).optional(),
+    /**
+     * A `reserved` next generation: the settled generation it would replace, restored if the
+     * reservation is backed out.
+     */
+    previous: z
+      .object({
+        generation: z.number().int().nonnegative(),
+        key: z.string().min(1),
+        remoteRunId: z.string().min(1).optional(),
+        outcome: z.enum(["succeeded", "failed", "cancelled", "never-admitted"]),
+        origin: RunOriginSchema.optional(),
+      })
+      .strict()
+      .optional(),
     updatedAt: z.string(),
   })
   .strict();
@@ -205,6 +219,49 @@ export class DelegationReceipts {
       return full;
     } finally {
       lock.release();
+    }
+  }
+
+  /**
+   * Back a `reserved` receipt out, if it is still the revision read: nothing was ever sent
+   * under it. A next generation goes back to the settled generation it would have replaced; a
+   * first one leaves no receipt. Anything else throws `ReceiptConflict` and changes nothing.
+   */
+  unreserve(receipt: DelegationReceipt): void {
+    if (receipt.state !== "reserved") throw new ReceiptConflict();
+    const { previous, version: _v, updatedAt: _u, ...rest } = receipt;
+    if (!previous) return this.discard(receipt);
+    const { remoteRunId: _r, origin: _o, outcome: _x, ...base } = rest;
+    this.write({
+      ...base,
+      generation: previous.generation,
+      key: previous.key,
+      state: "settled",
+      outcome: previous.outcome,
+      ...(previous.remoteRunId ? { remoteRunId: previous.remoteRunId } : {}),
+      ...(previous.origin ? { origin: previous.origin } : {}),
+    });
+  }
+
+  /**
+   * Back out every `reserved` receipt for `profile` (an enrollment does this under its lock):
+   * a reservation is never sent under until a session promotes it after checking that lock,
+   * so one backed out here is either promoted never or re-reserved under the new enrollment.
+   */
+  unreserveAll(profile: string): void {
+    let names: string[];
+    try {
+      names = readdirSync(this.dir).filter((n) => n.endsWith(".json"));
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      try {
+        const receipt = DelegationReceiptSchema.parse(JSON.parse(readFileSync(join(this.dir, name), "utf8")));
+        if (receipt.profile === profile && receipt.state === "reserved") this.unreserve(receipt);
+      } catch {
+        // Unreadable, or moved on meanwhile: `unsettled` counts what is left.
+      }
     }
   }
 

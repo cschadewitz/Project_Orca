@@ -173,6 +173,24 @@ function writeAtomic(file: string, text: string, durable = false): void {
   syncDir(dirname(file), durable);
 }
 
+/**
+ * Create `dir` and any missing ancestors, flushing each new directory's entry in its parent
+ * (top down), so none of them can vanish in a power loss. With `durable`, a flush that fails
+ * throws.
+ */
+function ensureDir(dir: string, durable: boolean): void {
+  const missing: string[] = [];
+  for (let at = resolve(dir); !existsSync(at); at = dirname(at)) {
+    missing.unshift(at);
+    if (dirname(at) === at) break;
+  }
+  mkdirSync(dir, { recursive: true });
+  for (const created of missing) {
+    syncDir(created, durable);
+    syncDir(dirname(created), durable);
+  }
+}
+
 /** Flush a directory's entries (a rename or removal in it). */
 function syncDir(dir: string, durable: boolean): void {
   try {
@@ -367,9 +385,10 @@ export function enrollmentInProgress(file: string): boolean {
  * create: only the claimant removes the dead lock, and every other contender only ever creates
  * one, so no live lock is removed by anyone else.
  */
-function lockEnrollment(file: string, remoteId: string): () => void {
+function lockEnrollment(file: string, remoteId: string, durable: boolean): () => void {
   const lock = `${file}.lock`;
-  mkdirSync(dirname(file), { recursive: true });
+  // Before anything can be issued, the directory chain the journal lives in is itself durable.
+  ensureDir(dirname(file), durable);
   const owner = JSON.stringify({
     pid: process.pid,
     host: hostname(),
@@ -467,7 +486,7 @@ export async function enrollRemote(options: EnrollOptions): Promise<Enrollment> 
     throw refuse(
       `Issuing the credential for remote ${id} during enrollment is not available on this platform yet: it cannot order the files it writes across a power loss. On the remote run \`orca auth issue <name> --preset client --json\`, save the token beside this config, then enroll again.`,
     );
-  const unlock = lockEnrollment(options.file, id);
+  const unlock = lockEnrollment(options.file, id, options.issue !== undefined);
   try {
     return await enrollLocked(options, refuse);
   } finally {
@@ -520,6 +539,9 @@ async function enrollLocked(
   // A re-enrollment is a new binding: delegations still running under the current one would be
   // stranded (and lose their credential on a rotation). They finish first.
   if (previous) {
+    // Reservations were never sent under; backed out here, a session re-reserves them under
+    // whatever this enrollment leaves active (it checks this lock before promoting one).
+    receipts.unreserveAll(id);
     const busy = receipts.unsettled(id);
     if (busy)
       throw new OrcaError(
