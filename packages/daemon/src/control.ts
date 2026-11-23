@@ -603,6 +603,7 @@ export class ControlModel {
     // never decides when a grant ends. Stamped here, before the answer is accepted, so the
     // rule cannot outlive what the person chose by however long acceptance took.
     const durationMs = params.always!.durationMs;
+    const at = this.clock.now();
     return {
       file: this.permissionsFile,
       agentId: await this.agentForStep(request.runId, request.stepRunId),
@@ -612,9 +613,9 @@ export class ControlModel {
       ...(durationMs === undefined
         ? {}
         : {
-            expiresAt: new Date(this.clock.now() + durationMs).toISOString(),
-            // The same clock stamps `addedAt` and judges "not after now", so the two agree.
-            now: () => new Date(this.clock.now()),
+            expiresAt: new Date(at + durationMs).toISOString(),
+            // One instant stamps `addedAt` and the expiry, so the rule lasts exactly what was chosen.
+            now: () => new Date(at),
           }),
     };
   }
