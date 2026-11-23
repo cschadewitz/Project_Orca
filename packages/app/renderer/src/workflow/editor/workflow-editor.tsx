@@ -27,6 +27,7 @@ import type {
 } from "@orca/protocol";
 import { useAnnounce } from "../../a11y/announce-context.js";
 import { useAuthority, useMethodPresent } from "../../chrome/use-connection.js";
+import { useNotifications } from "../../notifications-context.js";
 import { diffText, gutterFor } from "../../artifacts/diff.js";
 import { PaneSplitter } from "../../chrome/pane-splitter.js";
 import { useWritability } from "../../chrome/use-connection.js";
@@ -59,6 +60,15 @@ export function WorkflowEditor({ workflowId, onClose, onPublished, onOpen }: Wor
         kind="empty"
         title="Editing is not available"
         body={state.reason}
+        action={{ label: "Back to the viewer", onClick: onClose }}
+      />
+    );
+  if (state.phase === "missing")
+    return (
+      <StateView
+        kind="empty"
+        title="No draft here"
+        body={`The daemon this window is connected to now has no draft of ${workflowId}. Start one from the viewer.`}
         action={{ label: "Back to the viewer", onClick: onClose }}
       />
     );
@@ -103,8 +113,8 @@ function Editor({
     { value: WorkflowDraftReview; request: number; targetEpoch: number | undefined } | undefined
   >(undefined);
   const reviewRequest = useRef(0);
-  const latest = useRef({ draft, readOnly, busy: controller.busy });
-  latest.current = { draft, readOnly, busy: controller.busy };
+  const latest = useRef({ draft, readOnly, busy: controller.busy, checking: controller.checking });
+  latest.current = { draft, readOnly, busy: controller.busy, checking: controller.checking };
   const invalidateReview = useCallback(() => {
     reviewRequest.current += 1;
     setReview(undefined);
@@ -118,6 +128,8 @@ function Editor({
     draft.owner.principalId,
     readOnly,
     controller.conflict,
+    // A review stands on validated findings; findings being checked again retire it.
+    controller.checking,
     invalidateReview,
   ]);
   useEffect(
@@ -126,6 +138,24 @@ function Editor({
     },
     [],
   );
+  /* The findings were checked against the configuration that was active then: when it
+     changes (a template added, an agent removed), validate the draft again (#182). */
+  const stream = useNotifications();
+  const { revalidate } = controller;
+  useEffect(() => stream.on("config.changed", () => void revalidate()), [stream, revalidate]);
+
+  /* The live region hears about validation only when the draft crosses between clean and not
+     (#182): every edit re-validates, and a count read out after each one is noise. */
+  const errorCount = draft.issues.filter((issue) => issue.severity === "error").length;
+  const heardErrors = useRef(errorCount);
+  useEffect(() => {
+    if (controller.checking) return;
+    const before = heardErrors.current;
+    heardErrors.current = errorCount;
+    if (before === 0 && errorCount > 0) announce(`The draft has ${counted(errorCount, "validation error")}.`);
+    else if (before > 0 && errorCount === 0) announce("The draft has no validation errors.");
+  }, [errorCount, controller.checking, announce]);
+
   const review =
     heldReview?.request === reviewRequest.current &&
     heldReview.value.revision === draft.revision &&
@@ -338,7 +368,7 @@ function Editor({
   };
 
   const startReview = async () => {
-    if (readOnly || controller.busy) return;
+    if (readOnly || controller.busy || controller.checking) return;
     const request = ++reviewRequest.current;
     const revision = draft.revision;
     const targetEpoch = window.orca.daemonConnection?.read().epoch;
@@ -347,6 +377,7 @@ function Editor({
       result &&
       request === reviewRequest.current &&
       !latest.current.readOnly &&
+      !latest.current.checking &&
       latest.current.draft.base.current &&
       latest.current.draft.revision === revision &&
       result.revision === revision &&
@@ -361,6 +392,7 @@ function Editor({
       heldReview?.request !== reviewRequest.current ||
       latest.current.readOnly ||
       latest.current.busy ||
+      latest.current.checking ||
       latest.current.draft.revision !== review.revision ||
       heldReview.targetEpoch !== window.orca.daemonConnection?.read().epoch
     )
@@ -514,8 +546,12 @@ function Editor({
               size="sm"
               tone="primary"
               onClick={() => void startReview()}
-              disabled={draft.publishBlocked !== undefined || controller.busy}
-              {...(draft.publishBlocked !== undefined ? { disabledReason: draft.publishBlocked } : {})}
+              disabled={draft.publishBlocked !== undefined || controller.checking || controller.busy}
+              {...(draft.publishBlocked !== undefined
+                ? { disabledReason: draft.publishBlocked }
+                : controller.checking
+                  ? { disabledReason: "The draft is being checked against the running configuration again." }
+                  : {})}
             >
               Review and publish
             </Button>
@@ -608,7 +644,7 @@ function Editor({
               onRedo={() => void redo()}
               {...(trace ? { trace } : {})}
             />
-            <ValidationPanel issues={draft.issues} path={path} onGo={goTo} />
+            <ValidationPanel issues={draft.issues} path={path} checking={controller.checking} onGo={goTo} />
             {dryOpen && !readOnly && canDryRun && (
               <DryRunPanel
                 graph={editorGraph(draft.document, draft.base.document, []) ?? graph}

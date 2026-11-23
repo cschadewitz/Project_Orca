@@ -129,6 +129,25 @@ draft that validates clean is one activation will accept. Three severities:
   runtime's other warnings.
 - **Note**: a `gate` that approves itself, with its condition.
 
+A finding about the whole workflow (a missing start, no end node, two start nodes) has no
+node to jump to: it is a row without a button, and it stays on screen whatever graph is open.
+A missing start reports once, not once more for every node it leaves unreachable.
+
+**The findings belong to one revision (#182).** They arrive with the draft, so a late answer
+for an older revision never replaces a newer one. When the daemon goes away the rows stay but
+the panel says `Checking`, and it never says the draft is clean until the daemon has
+validated it again: on reconnecting, on a different daemon behind the window, and whenever
+the configuration it was checked against changes. Any answer sent before such a change, an
+edit's reply included, is dropped rather than shown, so the old rows stay marked stale until
+the new check answers. Publishing waits for that. A daemon with no
+active configuration to check against says so as one whole-workflow error, which keeps the
+draft from publishing. The live region speaks only when the draft goes from clean to having
+errors or back, never on every edit.
+
+Each rule has a fixture draft (`packages/daemon/test/workflow-draft-validation-rules.test.ts`)
+that produces exactly its row from the daemon's validator, and the renderer opens each one
+in the editor and presses the row (`workflow-editor-validation.test.tsx`).
+
 **Not built yet:** the rules the runtime validator does not have. These are a `loop` with no
 exit, retries above the host's concurrency, a `set` that shadows an earlier one, and a cycle
 outside a `loop`, which `ai-sdlc`'s own back edges would currently trip.
