@@ -103,9 +103,34 @@ jobs:
       - run: pnpm install --frozen-lockfile
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      # The machines' packages layer is built once per base.Dockerfile and cached, so a slow
+      # Ubuntu archive does not stall every run in the test's own image build. A cold build gets
+      # a bounded time per attempt and is tried again, rather than hanging until the job times out.
+      - name: Restore the machine base image
+        id: base-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/orca-machine-base.tar
+          key: orca-machine-base-${{ runner.os }}-${{ hashFiles('packages/testing/machine/base.Dockerfile') }}
+      - name: Load or build the machine base image
+        env:
+          BASE_TAR: ${{ runner.temp }}/orca-machine-base.tar
+          CACHE_HIT: ${{ steps.base-cache.outputs.cache-hit }}
+        run: |
+          if [ "$CACHE_HIT" = "true" ] && docker load -i "$BASE_TAR"; then exit 0; fi
+          for attempt in 1 2 3; do
+            if timeout 300 docker build -q -t orca-machine-base:ci -f packages/testing/machine/base.Dockerfile packages/testing/machine; then
+              docker save -o "$BASE_TAR" orca-machine-base:ci
+              exit 0
+            fi
+            echo "::warning::machine base build attempt $attempt failed or timed out"
+            sleep $((attempt * 15))
+          done
+          exit 1
       # The fixture bundles the daemon from the compiled packages, as the release does.
       - run: pnpm run build
       - name: A parent and a worker on separate machines, over the worker's sshd
         env:
           ORCA_TWO_MACHINES: "1"
+          ORCA_MACHINE_BASE: orca-machine-base:ci
         run: pnpm exec vitest run packages/cli/test/delegation-machines-885.test.ts
