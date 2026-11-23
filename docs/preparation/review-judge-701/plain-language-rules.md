@@ -316,6 +316,30 @@ replay shows exactly what the rule would cover.
   turned on.
 - A local model and an ORCA-hosted judge are adapter choices on the same contract.
 
+**Providers (Casey chose both, configurable, 2026-11-23).** `plain-rule-providers.ts` turns a
+plain-rule frame into a provider request and the provider's reply back into the verdict text:
+
+| `kind` | Request | Defaults | Key placement |
+| --- | --- | --- | --- |
+| `anthropic` | Messages API, structured output (`output_config.format`), `anthropic-version: 2026-10-21` | model `claude-haiku-5-5`, `maxTokens` 1024, `effort: low` | `x-api-key` |
+| `openai-compatible` | chat completions, strict `json_schema` `response_format`, `n: 1` | `model` required, `maxTokens` 1024 | `Authorization: Bearer` |
+
+The proposed config shape, which wiring will read (the destination is the pinned secret's URL):
+
+```yaml
+review:
+  plainRules:
+    judge:
+      provider: { kind: anthropic }                 # or { kind: openai-compatible, model: <name> }
+      credential: judge-key                         # a #336 secret pinned to the provider URL
+```
+
+The frame goes in as the user turn, as data, under a fixed and versioned system prompt. A reply
+must be one text answer with a normal stop: a refusal, a cut-off, a tool call, a second answer, prose
+around the JSON, duplicate keys or alternate escapes are failures (no match), never normalized. The
+provider, model, limits, prompt, schema and API version all go into the transport version, so any
+change shows in the decision record. Wiring this to the sender and the connection is its own review.
+
 ## 11. Coordination
 
 - **#702 (approval rules thread), agreed:** #702 owns the `judge: { criterion }` rule field, its
