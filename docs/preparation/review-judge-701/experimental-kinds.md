@@ -34,11 +34,27 @@ Common to all three:
   policy, or an MCP identity the agent only claims closes the lane before the judge is called.
   The answer is checked again against the policy as it is just before the call proceeds, and a
   removed or changed rule refuses it.
-- **Bound to facts ORCA checked.** An edit must name exactly one workspace file that ORCA verified
-  (real path, not protected, not read-only, not hard-linked; a new file does not qualify yet). An MCP
-  call is identified by the server ORCA runs and the tool and arguments it is relaying, and only a
-  judged rule whose `titlePattern` is exactly `^<server>: <tool>$` (optionally with kind `other`) can
-  answer it. Agent-side edits and agent-reported MCP identities are never judged.
+- **Bound to facts ORCA checked.** An edit must name exactly one existing workspace file that ORCA
+  verified (real path, not protected, not read-only, not hard-linked), and the file's identity is
+  checked again when the write starts. An MCP call is identified by the server ORCA runs and the tool
+  it is relaying. Agent-side edits and agent-reported MCP identities are never judged.
+- **Edits are judged on their path only.** The judge is told which file, never what the write
+  changes, so only a criterion about which files may be written can be met. One that depends on the
+  content or effect of the write is answered unsure, and the person is asked.
+- **MCP rules name the tool as identifiers.** A judged MCP rule is written in the config with an
+  `mcp` field, never through a title pattern, and its `match` is empty or `{ kind: other }`:
+
+  ```yaml
+  permissions:
+    rules:
+      - mcp: { server: notes, tool: search, arguments: [query] }
+        match: {}
+        judge: { criterion: "Searching my notes for anything but credentials." }
+  ```
+
+  The judge sees only the top-level arguments the rule lists, exactly as they will be sent. If a listed
+  argument holds a session secret, which the judge could only see redacted, the person is asked. A saved
+  (sidecar) rule cannot name an MCP tool, and no other lane reads an MCP rule.
 - **Each kind its own disclosure.** Each kind has its own request format
   (`orca-plain-rule-request/edit/v1`, `…/mcp/v1`, `…/command/v1`), prompt and grant. The owner grants
   them separately: `orca auth issue --judge-disclosure --judge-disclosure-kind edits
@@ -48,5 +64,5 @@ Common to all three:
 - **Recorded.** Each decision record carries the judge's `kind`, and command advice is marked
   `advisory: true`.
 
-MCP arguments are sent to the judge with the session's secret values replaced, and screened like the
-title before sending.
+MCP arguments are screened like the title before sending, and anything over the size limit is refused
+rather than cut short, so the person is asked.

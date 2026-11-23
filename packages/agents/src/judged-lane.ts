@@ -174,7 +174,8 @@ function gate(
   verify = true,
 ): Gate {
   const { kind, commandLike, claimed, matches } = callFacts(request, ctx);
-  const candidates = (policy.judged ?? []).filter((rule) => matches(rule.match, "allow"));
+  // A rule about one relayed MCP tool is the MCP lane's alone (#701): its match is deliberately empty.
+  const candidates = (policy.judged ?? []).filter((rule) => rule.mcp === undefined && matches(rule.match, "allow"));
   if (candidates.length === 0) return { state: "closed" };
   // Any typed deny or ask that holds for the call, wherever it sits, closes the lane. A
   // command rule is a restriction on a command-like call, which is outside the envelope anyway.
@@ -248,7 +249,7 @@ async function adviseCommand(
   const facts = callFacts(request, ctx);
   if (facts.kind !== "execute" || facts.claimed) return undefined;
   const candidates = (policy.judged ?? []).filter(
-    (rule) => rule.match.kind === "execute" && facts.matches(rule.match, "allow"),
+    (rule) => rule.mcp === undefined && rule.match.kind === "execute" && facts.matches(rule.match, "allow"),
   );
   if (candidates.length === 0) return undefined;
   const base = { kind: "command" as const, advisory: true };
@@ -320,7 +321,7 @@ export function judgedEditLane(options: {
   ) => {
     const facts = callFacts(write.request, write.ctx);
     const candidates = (policy.judged ?? []).filter(
-      (rule) => rule.match.kind === "edit" && facts.matches(rule.match, "allow"),
+      (rule) => rule.mcp === undefined && rule.match.kind === "edit" && facts.matches(rule.match, "allow"),
     );
     if (candidates.length === 0) return { state: "none" as const };
     if (facts.kind !== "edit" || facts.claimed || facts.commandLike || restricted(policy, facts))
@@ -400,24 +401,20 @@ export function judgedEditLane(options: {
   };
 }
 
-/** `^<literal>$` for `text`: the one title pattern that names exactly this title. */
-export function exactTitlePattern(text: string): string {
-  return `^${text.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&")}$`;
-}
-
 /**
  * The `mcpCalls` class: a tool call to an MCP server ORCA itself runs and relays, when the typed answer is `ask`.
- * The server, tool and arguments are ORCA's own facts about this one request. Only a judged rule that names this
- * exact tool is asked about: its `titlePattern` must be `exactTitlePattern("<server>: <tool>")` and it may narrow
- * by nothing else, so no rule covers every tool. The arguments go to the judge redacted. After an allow, the policy
- * is read again: the typed answer must still be `ask` and the rule must still be there at the same revision.
+ * The server, tool and arguments are ORCA's own facts about this one request. Only a judged rule whose `mcp` names
+ * this exact server and tool, as identifiers and never through the display title, is asked about (#701 review).
+ * The judge sees only the top-level arguments those rules list, as they will be sent; if a session secret is among
+ * them, the judge would not see what is sent, so the person is asked instead. After an allow, the policy is read
+ * again: the typed answer must still be `ask` and the rule must still be there at the same revision.
  */
 export function judgedMcpLane(options: {
   judge: JudgePermission;
   reload: () => Promise<PermissionPolicy>;
   /** The typed answer for the relayed call under a policy: what the relay decides by. */
   explain: (policy: PermissionPolicy) => PermissionExplanation;
-  /** Replaces the session's secret values in the arguments before the judge sees them. */
+  /** Replaces the session's secret values in a text; a change means the text held one. */
   redact: (text: string) => string;
 }): (
   policy: PermissionPolicy,
@@ -441,19 +438,13 @@ export function judgedMcpLane(options: {
     },
   ) => {
     const facts = callFacts(call.request, call.ctx);
-    const exact = exactTitlePattern(`${call.server}: ${call.tool}`);
-    const candidates = (policy.judged ?? []).filter((rule) => {
-      const m = rule.match;
-      const narrowed = Object.entries(m)
-        .filter(([, v]) => v !== undefined)
-        .map(([k]) => k);
-      return (
-        m.titlePattern === exact &&
-        (m.kind === undefined || m.kind === "other") &&
-        narrowed.every((k) => k === "titlePattern" || k === "kind") &&
-        facts.matches(m, "allow")
-      );
-    });
+    const candidates = (policy.judged ?? []).filter(
+      (rule) =>
+        rule.mcp !== undefined &&
+        rule.mcp.server === call.server &&
+        rule.mcp.tool === call.tool &&
+        Object.entries(rule.match).every(([k, v]) => v === undefined || (k === "kind" && v === "other")),
+    );
     if (candidates.length === 0) return { state: "none" as const };
     if (facts.claimed || restricted(policy, facts)) return { state: "closed" as const, verdict: "hard-boundary" };
     return { state: "open" as const, candidates };
@@ -463,12 +454,8 @@ export function judgedMcpLane(options: {
     const first = look(policy, call);
     if (first.state === "none") return { allowed: false };
     if (first.state === "closed") return { allowed: false, judged: { ...base, verdict: first.verdict } };
-    let args: string;
-    try {
-      args = options.redact(JSON.stringify(call.arguments ?? {}));
-    } catch {
-      return { allowed: false, judged: { ...base, verdict: "outside-envelope" } };
-    }
+    const args = disclosedArguments(call.arguments, first.candidates, options.redact);
+    if (args === undefined) return { allowed: false, judged: { ...base, verdict: "outside-envelope" } };
     let outcome: PlainRuleJudgeOutcome;
     try {
       outcome = await options.judge(
@@ -521,4 +508,31 @@ export function judgedMcpLane(options: {
       stillCovered: (p) => sameCandidate(p, allowed),
     };
   };
+}
+
+/**
+ * The arguments a judge may see for a relayed tool call (#701 review): only the top-level names the
+ * candidate rules list, with their values exactly as they will be sent, as a JSON object string.
+ * `undefined` when the judge could not see what is needed: arguments that are not an object while
+ * a name is listed, or a listed value holding a session secret, which would reach the judge only
+ * redacted. The person decides those instead.
+ */
+function disclosedArguments(
+  args: unknown,
+  rules: readonly { mcp?: { arguments?: readonly string[] | undefined } | undefined }[],
+  redact: (text: string) => string,
+): string | undefined {
+  const names = [...new Set(rules.flatMap((rule) => rule.mcp?.arguments ?? []))].sort();
+  if (names.length === 0) return "{}";
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return undefined;
+  const picked: Record<string, unknown> = {};
+  for (const name of names)
+    if (Object.prototype.hasOwnProperty.call(args, name)) picked[name] = (args as Record<string, unknown>)[name];
+  let text: string;
+  try {
+    text = JSON.stringify(picked);
+  } catch {
+    return undefined;
+  }
+  return redact(text) === text ? text : undefined;
 }

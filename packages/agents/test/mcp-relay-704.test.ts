@@ -883,7 +883,11 @@ async function expectGone(pid: number): Promise<void> {
 }
 
 describe("a relayed tool call, judged (#701 MCP class)", () => {
-  const RULE = { match: { titlePattern: "^tools: touch$" }, judge: { criterion: "Touching the tools server." } };
+  const RULE = {
+    match: {},
+    mcp: { server: "tools", tool: "touch" },
+    judge: { criterion: "Touching the tools server." },
+  };
   const judge = (outcome: "allow" | "no-match" = "allow") =>
     vi.fn<JudgePermission>(async (input) => ({
       outcome,
@@ -939,10 +943,13 @@ describe("a relayed tool call, judged (#701 MCP class)", () => {
     }
   });
 
-  it("is never judged under a rule that is not exactly that tool", async () => {
+  it("is never judged under a rule that names it only by title", async () => {
     const mcp = judge();
     const t = await setup({
-      permissions: { default: "ask", rules: [{ ...RULE, match: { titlePattern: "^tools: .*$" } }] },
+      permissions: {
+        default: "ask",
+        rules: [{ match: { titlePattern: "^tools: touch$" }, judge: { criterion: "Touching the tools server." } }],
+      },
       judgePermission: judge(),
       judgeKinds: { mcp },
       askPermission: async () => "reject",

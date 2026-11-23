@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as acp from "@agentclientprotocol/sdk";
-import { AgentSpecSchema, OrcaConfigSchema, type PermissionPolicy } from "@orca/core";
+import { AgentSpecSchema, OrcaConfigSchema, PermissionPolicyFileSchema, type PermissionPolicy } from "@orca/core";
 import {
   explainPermission,
   judgedLane,
@@ -40,7 +40,7 @@ import {
   resolvePlainRuleProvider,
 } from "../src/review-judge/plain-rule-providers.js";
 import { plainRuleDisclosureQuery } from "../src/review-judge/plain-rule-connection.js";
-import { exactTitlePattern, judgedEditLane, judgedMcpLane } from "../src/judged-lane.js";
+import { judgedEditLane, judgedMcpLane } from "../src/judged-lane.js";
 import { fsToolCall } from "../src/owned-fs-gate.js";
 
 const signal = () => new AbortController().signal;
@@ -122,6 +122,9 @@ describe("#701 judge classes", () => {
     expect(new Set(Object.values(PLAIN_RULE_REQUEST_SCHEMAS)).size).toBe(4);
     expect(plainRuleSystemPrompt("mcp")).toContain(PLAIN_RULE_REQUEST_SCHEMAS.mcp);
     expect(plainRuleSystemPrompt("command")).toContain("advice");
+    // Cal's 23:12Z refinements: an edit's evidence is its path only, an MCP call's only the listed arguments.
+    expect(plainRuleSystemPrompt("edit")).toContain("Only its path is known");
+    expect(plainRuleSystemPrompt("mcp")).toContain("only the arguments the user chose to show");
     const config = {
       provider: { kind: "anthropic" },
       destination: "https://api.anthropic.com/v1/messages",
@@ -297,44 +300,82 @@ describe("the MCP lane: relayed calls by a rule naming the exact tool", () => {
       explain: (p) => explainPermission(p, req, ctx),
       redact: (text) => text.replaceAll("s3cret", "[redacted]"),
     });
-  const rule = (title: string, extra: Record<string, unknown> = {}) => ({
-    match: { titlePattern: exactTitlePattern(title), ...extra },
-    judge: { criterion: "Searching notes." },
+  const rule = (server: string, tool: string, args?: string[], match: Record<string, unknown> = {}) => ({
+    match,
+    mcp: { server, tool, ...(args ? { arguments: args } : {}) },
+    judge: { criterion: "Searching notes for anything but secrets." },
   });
+  const call = (tool: string, args: unknown) => {
+    const req = request("notes", tool, args);
+    return { req, call: { server: "notes", tool, arguments: args, request: req, ctx } };
+  };
 
-  it("allows one call by a rule naming that tool, with the arguments redacted", async () => {
-    const policy = await policyOf([rule("notes: search")]);
-    const req = request("notes", "search", { q: "release", token: "s3cret" });
+  it("allows one call by a rule naming that server and tool, showing only the arguments it lists", async () => {
+    const policy = await policyOf([rule("notes", "search", ["q"])]);
+    const { req, call: c } = call("search", { q: "release", limit: 5, path: "/home" });
     const judge = fakeJudge();
-    const out = await laneFor(judge, async () => policy, req)(
-      policy,
-      { server: "notes", tool: "search", arguments: { q: "release", token: "s3cret" }, request: req, ctx },
-      signal(),
-    );
+    const out = await laneFor(judge, async () => policy, req)(policy, c, signal());
     expect(out).toMatchObject({ allowed: true, judged: { kind: "mcp", ruleId: "config:0" } });
     const sent = judge.mock.calls[0]![0].action;
-    expect(sent.mcp).toEqual({ server: "notes", tool: "search", arguments: '{"q":"release","token":"[redacted]"}' });
+    expect(sent.mcp).toEqual({ server: "notes", tool: "search", arguments: '{"q":"release"}' });
     expect(sent.targetsVerified).toBe(true);
+    // A rule that lists none shows none.
+    const bare = await policyOf([rule("notes", "search")]);
+    const shown = fakeJudge();
+    await laneFor(shown, async () => bare, req)(bare, c, signal());
+    expect(shown.mock.calls[0]![0].action.mcp?.arguments).toBe("{}");
   });
 
-  it("asks nobody for a rule matching more than that tool, another tool, or a typed restriction", async () => {
+  it("asks the person when a listed argument holds a secret the judge would only see redacted", async () => {
+    const policy = await policyOf([rule("notes", "search", ["q", "token"])]);
+    const { req, call: c } = call("search", { q: "release", token: "s3cret" });
     const judge = fakeJudge();
-    const req = request("notes", "delete", {});
-    const call = { server: "notes", tool: "delete", arguments: {}, request: req, ctx };
-    // A pattern that is not exactly this tool, or a rule narrowed by anything else, is not asked about.
+    expect(await laneFor(judge, async () => policy, req)(policy, c, signal())).toMatchObject({
+      allowed: false,
+      judged: { kind: "mcp", verdict: "outside-envelope" },
+    });
+    // Unlisted, the secret is never sent, and the call can be judged.
+    const narrow = await policyOf([rule("notes", "search", ["q"])]);
+    expect(await laneFor(judge, async () => narrow, req)(narrow, c, signal())).toMatchObject({ allowed: true });
+    expect(judge).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches the tool by identifiers, never by title, and leaves other calls to the person", async () => {
+    const judge = fakeJudge();
+    const { req, call: c } = call("delete", {});
     for (const rules of [
-      [{ match: { titlePattern: "^notes: .*$" }, judge: { criterion: "Notes." } }],
-      [rule("notes: search")],
-      [rule("notes: delete", { kind: "read" })],
+      // A title pattern alone names no tool for this lane.
+      [{ match: { titlePattern: "^notes: delete$" }, judge: { criterion: "Notes." } }],
+      [rule("notes", "search")],
+      [rule("other", "delete")],
     ]) {
       const policy = await policyOf(rules);
-      expect(await laneFor(judge, async () => policy, req)(policy, call, signal())).toEqual({ allowed: false });
+      expect(await laneFor(judge, async () => policy, req)(policy, c, signal())).toEqual({ allowed: false });
     }
-    const denied = await policyOf([rule("notes: delete"), { match: { titlePattern: "^notes: " }, decision: "ask" }]);
-    expect(await laneFor(judge, async () => denied, req)(denied, call, signal())).toMatchObject({
+    const restricted = await policyOf([
+      rule("notes", "delete"),
+      { match: { titlePattern: "^notes: " }, decision: "ask" },
+    ]);
+    expect(await laneFor(judge, async () => restricted, req)(restricted, c, signal())).toMatchObject({
       allowed: false,
       judged: { verdict: "hard-boundary" },
     });
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it("refuses an MCP rule narrowed by anything else, and no other lane reads one", async () => {
+    await expect(policyOf([rule("notes", "search", undefined, { kind: "read" })])).rejects.toThrow();
+    await expect(policyOf([rule("notes", "search", undefined, { titlePattern: "^notes" })])).rejects.toThrow();
+    // Its empty match would cover any read; the read lane must not take it.
+    const policy = await policyOf([rule("notes", "search")]);
+    const judge = fakeJudge();
+    const read: acp.RequestPermissionRequest = {
+      sessionId: "s",
+      toolCall: { toolCallId: "t", title: "Read README.md", kind: "read", locations: [], rawInput: {} },
+      options: [],
+    };
+    const out = await judgedLane({ judge, reload: async () => policy, localHost: true })(policy, read, ctx, signal());
+    expect(out.decision).toBe("ask");
     expect(judge).not.toHaveBeenCalled();
   });
 });
@@ -370,6 +411,18 @@ describe("the command class: advice only", () => {
       verdict: "hard-boundary",
     });
     expect(command).not.toHaveBeenCalled();
+  });
+});
+
+describe("where an MCP tool rule may be written", () => {
+  it("is refused in the sidecar: a saved judged rule is for reads and searches", () => {
+    const doc = {
+      version: 4,
+      agents: {
+        a: { rules: [{ match: { kind: "read" }, mcp: { server: "s", tool: "t" }, judge: { criterion: "c" } }] },
+      },
+    };
+    expect(PermissionPolicyFileSchema.safeParse(doc).success).toBe(false);
   });
 });
 

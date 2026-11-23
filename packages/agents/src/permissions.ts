@@ -152,10 +152,19 @@ export function judgedPolicyRule(rule: JudgedPermissionRule, ruleId: string): Ju
       .filter(([, v]) => v !== undefined)
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   ) as PermissionRule["match"];
+  // An MCP tool rule's identity and disclosed arguments are part of what it is (#701); a rule
+  // without one keeps the revision it always had.
+  const mcp = rule.mcp
+    ? {
+        server: rule.mcp.server,
+        tool: rule.mcp.tool,
+        ...(rule.mcp.arguments ? { arguments: [...rule.mcp.arguments] } : {}),
+      }
+    : undefined;
   const ruleRevision = createHash("sha256")
-    .update(JSON.stringify({ match, judge: { criterion: rule.judge.criterion } }))
+    .update(JSON.stringify({ match, judge: { criterion: rule.judge.criterion }, ...(mcp ? { mcp } : {}) }))
     .digest("hex");
-  return { match, criterion: rule.judge.criterion, ruleId, ruleRevision };
+  return { match, criterion: rule.judge.criterion, ruleId, ruleRevision, ...(mcp ? { mcp } : {}) };
 }
 
 /**

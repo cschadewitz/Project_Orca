@@ -187,16 +187,39 @@ const JudgeCriterionSchema = z.strictObject({
     .max(JUDGED_CRITERION_MAX, { message: `a criterion is at most ${JUDGED_CRITERION_MAX} characters` }),
 });
 
+/**
+ * The relayed MCP tool a judged rule is about (#701 experimental `mcpCalls` class): the server and
+ * tool as ORCA's relay names them, matched as exact identifiers rather than through the display
+ * title, and the top-level argument names the judge may see. Arguments not listed are never sent.
+ */
+export const JudgedMcpToolSchema = z.strictObject({
+  server: z.string().min(1).max(128),
+  tool: z.string().min(1).max(128),
+  arguments: z.array(z.string().min(1).max(128)).max(32).optional(),
+});
+export type JudgedMcpTool = z.infer<typeof JudgedMcpToolSchema>;
+
 export const JudgedPermissionRuleSchema = z
   .strictObject({
     match: PermissionRuleSchema.shape.match,
     judge: JudgeCriterionSchema,
+    mcp: JudgedMcpToolSchema.optional(),
   })
   .refine((rule) => rule.match.command === undefined, {
     // Commands need verified effect evidence before a judge may allow one (#703).
     message: "a judged rule cannot match a command yet: write a typed deny or ask rule instead",
     path: ["match", "command"],
-  });
+  })
+  .refine(
+    (rule) =>
+      rule.mcp === undefined ||
+      Object.entries(rule.match).every(([k, v]) => v === undefined || (k === "kind" && v === "other")),
+    {
+      // The tool is named by `mcp`; a path, title or scope would only be the agent's words.
+      message: "a judged MCP rule names its server and tool in `mcp`, and its match is empty or { kind: other }",
+      path: ["match"],
+    },
+  );
 export type JudgedPermissionRule = z.infer<typeof JudgedPermissionRuleSchema>;
 
 /** A configured rule: a typed one, or a judged one. */
@@ -396,6 +419,8 @@ export type JudgedPolicyRule = {
   ruleId: string;
   /** The sha256 of the rule's canonical content: an edit makes it a different rule. */
   ruleRevision: string;
+  /** A rule about one relayed MCP tool (#701): only the MCP lane considers it. */
+  mcp?: JudgedMcpTool | undefined;
 };
 
 /**
@@ -524,6 +549,8 @@ export const SidecarJudgedPermissionRuleSchema = z
     match: PermissionRuleSchema.shape.match,
     judge: JudgeCriterionSchema,
     decision: z.undefined({ error: "a rule has a `decision` or a `judge`, not both" }).optional(),
+    // A saved rule is for reads and searches only; an MCP tool rule is written in the config.
+    mcp: z.undefined({ error: "a saved judged rule cannot name an MCP tool" }).optional(),
     /** ISO-8601 instant the rule was saved. */
     addedAt: z.string().optional(),
     /** As on a typed rule: when it stops deciding. Absent: until removed. */
