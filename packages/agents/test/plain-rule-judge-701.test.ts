@@ -9,6 +9,8 @@ import {
   PLAIN_RULE_REQUEST_SCHEMA,
   PLAIN_RULE_VERDICT_SCHEMA,
   plainRuleJudgeConfigRef,
+  PLAIN_RULE_REASON_TEXT,
+  PLAIN_RULE_REASONS,
   type PlainRuleJudgeInput,
   type PlainRuleTransport,
 } from "../src/review-judge/plain-rule.js";
@@ -26,8 +28,15 @@ const NPM_DEV = { ruleId: "pr_npm", ruleRevision: "r2", criterion: "Installing d
 
 const input = (title: string, rules = [READ_ONLY_GIT, NPM_DEV]): PlainRuleJudgeInput => ({
   rules,
-  action: { kind: "execute", title, locations: [], inWorkspace: true },
+  restrictions: { deny: false, ask: false },
+  action: { kind: "execute", title, locations: [], inWorkspace: true, factsFromTool: true },
 });
+
+const CODE: Record<Verdict, string> = {
+  covered: "matches-criterion",
+  "not-covered": "outside-criterion",
+  unsure: "action-ambiguous",
+};
 
 const reply = (sent: SentFrame, verdicts: Verdict[], reasons: string[] = []) =>
   JSON.stringify({
@@ -37,7 +46,7 @@ const reply = (sent: SentFrame, verdicts: Verdict[], reasons: string[] = []) =>
       ruleId: r.id,
       ruleRevision: r.revision,
       verdict: verdicts[i] ?? "not-covered",
-      reason: reasons[i] ?? "",
+      reasonCode: reasons[i] ?? CODE[verdicts[i] ?? "not-covered"],
     })),
   });
 
@@ -51,7 +60,6 @@ function fixtureTransport(table: Record<string, (command: string) => Verdict>) {
     return reply(
       sent,
       sent.rules.map((r) => table[r.id]?.(sent.action.title) ?? "not-covered"),
-      sent.rules.map((r) => `checked ${r.id}`),
     );
   });
   const transport: PlainRuleTransport = { version: "fixture/v1", send };
@@ -75,10 +83,10 @@ describe("#701 plain-rule judge: one batched call per ask", () => {
       verdict: "covered",
       ruleId: "pr_git",
       ruleRevision: "r1",
-      reason: "checked pr_git",
+      reasonCode: "matches-criterion",
       verdicts: [
-        { ruleId: "pr_git", verdict: "covered" },
-        { ruleId: "pr_npm", verdict: "not-covered" },
+        { ruleId: "pr_git", verdict: "covered", reasonCode: "matches-criterion" },
+        { ruleId: "pr_npm", verdict: "not-covered", reasonCode: "outside-criterion" },
       ],
       judgeConfigRef: plainRuleJudgeConfigRef("fixture/v1", DEFAULT_PLAIN_RULE_LIMITS),
     });
@@ -91,6 +99,7 @@ describe("#701 plain-rule judge: one batched call per ask", () => {
       ],
       action: { kind: "execute", title: "git status", locations: [], inWorkspace: true },
     });
+    expect(Object.keys(t.frames[0]!.action)).not.toContain("factsFromTool");
   });
 
   it("picks the earliest covered rule when several cover the call", async () => {
@@ -102,14 +111,20 @@ describe("#701 plain-rule judge: one batched call per ask", () => {
     expect(out).toMatchObject({ outcome: "allow", ruleId: "pr_npm" });
   });
 
-  it("is no-match with not-covered or unsure when nothing covers the call, keeping the reason", async () => {
+  it("is no-match with not-covered or unsure when nothing covers the call, with a fixed reason code", async () => {
     const judge = createPlainRuleJudge({ transport: fixtureTransport(table).transport });
     expect(await judge(input("git push"), signal())).toMatchObject({
       outcome: "no-match",
       verdict: "not-covered",
-      reason: "checked pr_git",
+      reasonCode: "outside-criterion",
     });
-    expect(await judge(input("npm publish"), signal())).toMatchObject({ outcome: "no-match", verdict: "unsure" });
+    expect(await judge(input("npm publish"), signal())).toMatchObject({
+      outcome: "no-match",
+      verdict: "unsure",
+      reasonCode: "action-ambiguous",
+    });
+    for (const code of Object.values(PLAIN_RULE_REASONS).flat())
+      expect(PLAIN_RULE_REASON_TEXT[code]).toMatch(/^[A-Z].+\.$/);
   });
 
   it("sends at most maxRules rules; later rules cannot allow", async () => {
@@ -150,8 +165,10 @@ describe("#701 plain-rule judge: the reply is closed", () => {
       (s: SentFrame) => JSON.stringify({ requestId: s.requestId, schema: PLAIN_RULE_VERDICT_SCHEMA, verdicts: [] }),
     ],
     ["a duplicate key", (s: SentFrame) => reply(s, ["not-covered"]).replace(/^\{/, `{"schema":"x",`)],
-    ["a long reason", (s: SentFrame) => reply(s, ["covered"], ["x".repeat(201)])],
-    ["an oversized reply", (s: SentFrame) => reply(s, ["covered"], [" ".repeat(200)]) + " ".repeat(20_000)],
+    ["free-text reason", (s: SentFrame) => reply(s, ["covered"], ["git status is read-only"])],
+    ["a reason from another verdict", (s: SentFrame) => reply(s, ["covered"], ["outside-criterion"])],
+    ["the old free-text field", (s: SentFrame) => reply(s, ["covered"]).replaceAll('"reasonCode":', '"reason":')],
+    ["an oversized reply", (s: SentFrame) => reply(s, ["covered"]) + " ".repeat(20_000)],
   ])("is malformed for %s, never an allow", async (_name, make) => {
     expect(await withReply(make)(input("git status"), signal())).toMatchObject({
       outcome: "no-match",
@@ -250,6 +267,144 @@ describe("#701 plain-rule judge: failures are no-match, never a throw", () => {
     expect(await second).toMatchObject({ outcome: "allow" });
     expect(await judge(input("git status"), signal())).toMatchObject({ verdict: "over-budget" });
     expect(send).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("#701 plain-rule judge: hard boundaries and the safe envelope come before any judge", () => {
+  const always = () => fixtureTransport({ pr_git: () => "covered", pr_npm: () => "covered" });
+
+  it.each([
+    ["a deterministic deny anywhere in the policy", { deny: true, ask: false }],
+    ["a mandatory-human ask anywhere in the policy", { deny: false, ask: true }],
+  ])("is hard-boundary for %s, whatever the rule order", async (_name, restrictions) => {
+    const t = always();
+    const out = await createPlainRuleJudge({ transport: t.transport })(
+      { ...input("git push origin main"), restrictions },
+      signal(),
+    );
+    expect(out).toMatchObject({ outcome: "no-match", verdict: "hard-boundary", verdicts: [] });
+    expect(t.send).not.toHaveBeenCalled();
+  });
+
+  const action = (over: Partial<PlainRuleJudgeInput["action"]>) => ({
+    ...input("git status"),
+    action: { ...input("git status").action, ...over },
+  });
+
+  it.each([
+    ["facts not from the tool call", action({ factsFromTool: false })],
+    ["outside the workspace", action({ inWorkspace: false })],
+    ["a delete", action({ kind: "delete", locations: ["a.txt"] })],
+    ["a move", action({ kind: "move", locations: ["a.txt"] })],
+    ["a fetch", action({ kind: "fetch" })],
+    ["an unknown kind", action({ kind: "other" })],
+    ["an edit with no location", action({ kind: "edit", locations: [] })],
+    ["an absolute path", action({ kind: "read", locations: ["/etc/passwd"] })],
+    ["a home path", action({ kind: "read", locations: ["~/.ssh/id_rsa"] })],
+    ["a drive path", action({ kind: "read", locations: ["C:\\Users\\x"] })],
+    ["a parent escape", action({ kind: "edit", locations: ["src/../../x"] })],
+    ["a backslash parent escape", action({ kind: "edit", locations: ["src\\..\\..\\x"] })],
+  ])("is outside-envelope for %s, without calling the judge", async (_name, bad) => {
+    const t = always();
+    expect(await createPlainRuleJudge({ transport: t.transport })(bad, signal())).toMatchObject({
+      outcome: "no-match",
+      verdict: "outside-envelope",
+    });
+    expect(t.send).not.toHaveBeenCalled();
+  });
+
+  it("judges an in-envelope edit and refuses missing restrictions or facts as malformed", async () => {
+    const t = always();
+    const judge = createPlainRuleJudge({ transport: t.transport });
+    expect(await judge(action({ kind: "edit", locations: ["src/a.ts"] }), signal())).toMatchObject({
+      outcome: "allow",
+    });
+    const { restrictions: _r, ...noRestrictions } = input("git status");
+    const { factsFromTool: _f, ...noFacts } = input("git status").action;
+    for (const bad of [
+      noRestrictions,
+      { ...input("git status"), restrictions: { deny: "no", ask: false } },
+      { ...input("git status"), action: noFacts },
+    ])
+      expect(await judge(bad as never, signal())).toMatchObject({ verdict: "malformed" });
+    expect(t.send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("#701 plain-rule judge: a send holds its slot until it settles", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  /** A transport that ignores abort and settles only when the test says so. */
+  function stubborn() {
+    const settle: (() => void)[] = [];
+    const signals: AbortSignal[] = [];
+    const send = vi.fn((frame: string, s: AbortSignal) => {
+      signals.push(s);
+      return new Promise<string>((resolve) =>
+        settle.push(() => resolve(reply(JSON.parse(frame) as SentFrame, ["covered", "covered"]))),
+      );
+    });
+    return { transport: { version: "stubborn/v1", send }, send, settle, signals };
+  }
+
+  it("ends the caller's wait at the deadline but keeps the slot until the send settles", async () => {
+    const t = stubborn();
+    const judge = createPlainRuleJudge({
+      transport: t.transport,
+      limits: { ...DEFAULT_PLAIN_RULE_LIMITS, timeoutMs: 100, maxPending: 1 },
+    });
+    const first = judge(input("git status"), signal());
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await first).toMatchObject({ outcome: "no-match", verdict: "timeout" });
+    expect(t.signals[0]!.aborted).toBe(true);
+    // The send ignored its abort and is still outstanding: no second send may start.
+    expect(await judge(input("git status"), signal())).toMatchObject({ verdict: "over-budget" });
+    expect(t.send).toHaveBeenCalledTimes(1);
+    t.settle[0]!();
+    await vi.advanceTimersByTimeAsync(0);
+    const second = judge(input("git status"), signal());
+    await vi.advanceTimersByTimeAsync(0);
+    t.settle[1]!();
+    expect(await second).toMatchObject({ outcome: "allow" });
+  });
+
+  it("ends the caller's wait at once on cancellation, drops the late reply, and keeps the slot", async () => {
+    const t = stubborn();
+    const judge = createPlainRuleJudge({
+      transport: t.transport,
+      limits: { ...DEFAULT_PLAIN_RULE_LIMITS, maxPending: 1 },
+    });
+    const controller = new AbortController();
+    const first = judge(input("git status"), controller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    expect(await first).toMatchObject({ outcome: "no-match", verdict: "unavailable" });
+    expect(t.signals[0]!.aborted).toBe(true);
+    expect(await judge(input("git status"), signal())).toMatchObject({ verdict: "over-budget" });
+    t.settle[0]!();
+    await vi.advanceTimersByTimeAsync(0);
+    const next = judge(input("git status"), signal());
+    await vi.advanceTimersByTimeAsync(0);
+    t.settle[1]!();
+    expect(await next).toMatchObject({ outcome: "allow" });
+  });
+
+  it("releases the slot when a transport throws synchronously", async () => {
+    let calls = 0;
+    const judge = createPlainRuleJudge({
+      transport: {
+        version: "sync-throw/v1",
+        send: () => {
+          calls++;
+          throw new Error("boom");
+        },
+      },
+      limits: { ...DEFAULT_PLAIN_RULE_LIMITS, maxPending: 1 },
+    });
+    expect(await judge(input("git status"), signal())).toMatchObject({ verdict: "unavailable" });
+    expect(await judge(input("git status"), signal())).toMatchObject({ verdict: "unavailable" });
+    expect(calls).toBe(2);
   });
 });
 

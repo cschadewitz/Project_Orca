@@ -8,14 +8,19 @@
  * one in order would give. The answer is only `allow` or `no-match`: the judge never denies, and anything short of
  * that is `no-match`, so the next typed rule or the default decides. This module:
  *
+ * - asks nothing when a deterministic deny or mandatory-human rule matches the action anywhere in the policy
+ *   (`hard-boundary`), or when the action is outside the safe envelope this lane may allow at all, or its facts did
+ *   not come from the tool call itself (`outside-envelope`). These are code checks, not model judgement: the judge
+ *   can only allow inside them;
  * - builds the request itself from the rule and the action, carrying the agent-controlled command as a JSON string,
  *   never as instructions, capped in size, and refuses obvious injection tripwires without asking the judge;
  * - decodes a closed reply that must echo this request id, rule id and revision;
  * - bounds every call by a deadline, a concurrency cap and a call budget, all reserved before any await;
- * - never throws, and returns no command text or criterion in its result.
+ * - never throws, and returns no command text, criterion or model prose: a reason is a fixed code, worded locally.
  *
  * The transport is owner-injected. Tests use deterministic fakes. A real provider comes with the reviewed HTTPS
- * sender and the BYOK credentials (#964). Nothing here is registered or switched on.
+ * sender and the BYOK credentials (#964). Nothing here is registered or switched on, and it stays inactive until
+ * the real sender and the evaluation slot have had their own independent review.
  */
 import { createHash, randomUUID } from "node:crypto";
 
@@ -31,15 +36,49 @@ export interface PlainRuleCandidate {
 export interface PlainRuleJudgeInput {
   /** The judged rules this ask reaches, in first-match order. Each one's deterministic `match` already holds. */
   readonly rules: readonly PlainRuleCandidate[];
+  /**
+   * Whether any deterministic `deny` or mandatory-human (`ask`) rule in the whole policy matches this action,
+   * wherever it sits in the order. Either one closes the judged lane: no rule order lets a judge allow an action
+   * the person reserved for themselves or explicitly denied. Both must be exactly `false` to proceed.
+   */
+  readonly restrictions: { readonly deny: boolean; readonly ask: boolean };
   readonly action: {
     readonly kind: string;
     /** The tool call title: for `execute`, the command text. Agent-controlled. */
     readonly title: string;
-    /** Workspace-relative where possible. */
+    /** Workspace-relative paths, resolved by ORCA. */
     readonly locations: readonly string[];
     readonly inWorkspace: boolean;
+    /**
+     * True only when `kind`, `locations` and `inWorkspace` were derived by ORCA from the tool call's own fields,
+     * not inferred from the title or reported loosely by the agent. Anything else goes to the person.
+     */
+    readonly factsFromTool: boolean;
   };
 }
+
+/** Tool kinds a judged rule may ever allow. Delete, move, fetch, mode switches and unknown kinds go to the person. */
+export const PLAIN_RULE_JUDGED_KINDS: ReadonlySet<string> = new Set(["read", "search", "edit", "execute"]);
+
+/**
+ * Fixed reasons a judge may give, one family per verdict. Never model prose: the wording a person sees is ORCA's
+ * own (`PLAIN_RULE_REASON_TEXT`), so a reply cannot echo the command or the criterion into a prompt or the audit.
+ */
+export const PLAIN_RULE_REASONS = Object.freeze({
+  covered: ["matches-criterion"],
+  "not-covered": ["outside-criterion", "excluded-by-criterion"],
+  unsure: ["action-ambiguous", "criterion-ambiguous"],
+} as const);
+export type PlainRuleReasonCode = (typeof PLAIN_RULE_REASONS)[keyof typeof PLAIN_RULE_REASONS][number];
+
+/** Local wording for each reason code. */
+export const PLAIN_RULE_REASON_TEXT: Readonly<Record<PlainRuleReasonCode, string>> = Object.freeze({
+  "matches-criterion": "Your rule covers this.",
+  "outside-criterion": "Your rule doesn't cover this.",
+  "excluded-by-criterion": "Your rule excludes this.",
+  "action-ambiguous": "It isn't clear what this would do.",
+  "criterion-ambiguous": "It isn't clear whether your rule covers this.",
+});
 
 export type PlainRuleVerdict =
   | "covered"
@@ -49,23 +88,29 @@ export type PlainRuleVerdict =
   | "malformed"
   | "timeout"
   | "over-budget"
-  | "injection-suspected";
+  | "injection-suspected"
+  | "hard-boundary"
+  | "outside-envelope";
 
 export interface PlainRuleJudgeOutcome {
   readonly outcome: "allow" | "no-match";
   /**
-   * With `allow`: `covered`. Otherwise the call's own failure (`unavailable`, `malformed`, `timeout`, `over-budget`,
-   * `injection-suspected`) or, from a well-formed reply that covers nothing, `not-covered` / `unsure` (unsure when
-   * any rule was unsure).
+   * With `allow`: `covered`. Otherwise a refusal before any call (`hard-boundary`, `outside-envelope`,
+   * `injection-suspected`, `over-budget`), the call's own failure (`unavailable`, `malformed`, `timeout`) or, from
+   * a well-formed reply that covers nothing, `not-covered` / `unsure` (unsure when any rule was unsure).
    */
   readonly verdict: PlainRuleVerdict;
   /** With `allow`: the rule that allowed, which the slot re-reads before answering. */
   readonly ruleId?: string;
   readonly ruleRevision?: string;
-  /** The deciding rule's reason (or the first one given), at most 200 characters, for the person. */
-  readonly reason?: string;
-  /** Every judged rule's verdict, in the order sent, from a well-formed reply. Empty otherwise. */
-  readonly verdicts: readonly { readonly ruleId: string; readonly verdict: "covered" | "not-covered" | "unsure" }[];
+  /** From a well-formed reply: the deciding rule's reason code (the first unsure, or the first rule's). */
+  readonly reasonCode?: PlainRuleReasonCode;
+  /** Every judged rule's verdict and reason code, in the order sent, from a well-formed reply. Empty otherwise. */
+  readonly verdicts: readonly {
+    readonly ruleId: string;
+    readonly verdict: "covered" | "not-covered" | "unsure";
+    readonly reasonCode: PlainRuleReasonCode;
+  }[];
   /** Which transport, schema and limits decided: recorded with every decision. */
   readonly judgeConfigRef: string;
 }
@@ -79,7 +124,10 @@ export interface PlainRuleTransport {
 export interface PlainRuleJudgeLimits {
   /** Per call, including the transport. Over it is `timeout`. */
   readonly timeoutMs: number;
-  /** In flight at once. Over it is `over-budget`, never a queue. */
+  /**
+   * Sends outstanding at once, each held until the send itself settles (not when the caller stops waiting). Over it
+   * is `over-budget`, never a queue.
+   */
   readonly maxPending: number;
   /** Calls this judge may ever make. Reserved per call and never refunded. */
   readonly maxCalls: number;
@@ -102,18 +150,22 @@ export const DEFAULT_PLAIN_RULE_LIMITS: PlainRuleJudgeLimits = Object.freeze({
 
 export type JudgePermission = (input: PlainRuleJudgeInput, signal: AbortSignal) => Promise<PlainRuleJudgeOutcome>;
 
-const MAX_REASON = 200;
 const TIMED_OUT = Symbol("timed-out");
+const CANCELLED = Symbol("cancelled");
 const MAX_CRITERION_BYTES = 2_048;
 const MAX_LOCATIONS = 32;
 const REPLY_KEYS = ["schema", "requestId", "verdicts"] as const;
-const ENTRY_KEYS = ["ruleId", "ruleRevision", "verdict", "reason"] as const;
+const ENTRY_KEYS = ["ruleId", "ruleRevision", "verdict", "reasonCode"] as const;
 const JUDGE_VERDICTS = new Set(["covered", "not-covered", "unsure"]);
+const reasonFits = (verdict: string, code: string) =>
+  Object.hasOwn(PLAIN_RULE_REASONS, verdict) &&
+  (PLAIN_RULE_REASONS[verdict as keyof typeof PLAIN_RULE_REASONS] as readonly string[]).includes(code);
 
 /**
  * Text that addresses a reviewer rather than a shell, or carries control characters that can hide it. A command
  * containing any of these is not sent: it is `injection-suspected`, which is `no-match`. A tripwire, not a defence
- * on its own: the rule's deterministic `match` and the closed reply are what bound a false `covered`.
+ * on its own and not an authorization boundary: the restrictions, the safe envelope and the rule's deterministic
+ * `match` are what bound a false `covered`.
  */
 const TRIPWIRES = [
   // eslint-disable-next-line no-control-regex
@@ -174,15 +226,49 @@ function snapshot(input: PlainRuleJudgeInput, limits: PlainRuleJudgeLimits) {
     seen.add(ruleId);
     rules.push({ ruleId, ruleRevision, criterion });
   }
-  const { kind, title, locations, inWorkspace } = input.action;
+  const restrictions = input.restrictions as unknown;
+  if (restrictions === null || typeof restrictions !== "object") return null;
+  const { deny, ask } = restrictions as Record<string, unknown>;
+  if (typeof deny !== "boolean" || typeof ask !== "boolean") return null;
+  const { kind, title, locations, inWorkspace, factsFromTool } = input.action;
   if (!text(kind) || typeof title !== "string" || typeof inWorkspace !== "boolean") return null;
+  if (typeof factsFromTool !== "boolean") return null;
   if (!Array.isArray(locations) || locations.length > MAX_LOCATIONS) return null;
   const copied = [...(locations as unknown[])];
   if (!copied.every((l): l is string => typeof l === "string" && bytes(l) <= limits.maxCommandBytes)) return null;
-  return { rules, action: { kind, title, locations: copied, inWorkspace } };
+  return {
+    rules,
+    restricted: deny || ask,
+    factsFromTool,
+    action: { kind, title, locations: copied, inWorkspace },
+  };
 }
 
-type Entry = { ruleId: string; ruleRevision: string; verdict: "covered" | "not-covered" | "unsure"; reason: string };
+/** A workspace-relative path with no way out of the workspace: not absolute, no `..`, no home or drive prefix. */
+function workspaceRelative(path: string): boolean {
+  if (path.length === 0 || /^[/\\~]/.test(path) || /^[A-Za-z]:/.test(path)) return false;
+  return !path.split(/[/\\]/).some((part) => part === "..");
+}
+
+/**
+ * The deterministic envelope a judged rule may allow in, from the tool call's own facts: a judged kind, inside the
+ * workspace, every location workspace-relative, and at least one location for anything but a command. Absent or
+ * ambiguous facts are outside it.
+ */
+function insideEnvelope(selected: NonNullable<ReturnType<typeof snapshot>>): boolean {
+  const { action } = selected;
+  if (selected.factsFromTool !== true || action.inWorkspace !== true) return false;
+  if (!PLAIN_RULE_JUDGED_KINDS.has(action.kind)) return false;
+  if (action.kind !== "execute" && action.locations.length === 0) return false;
+  return action.locations.every(workspaceRelative);
+}
+
+type Entry = {
+  ruleId: string;
+  ruleRevision: string;
+  verdict: "covered" | "not-covered" | "unsure";
+  reasonCode: PlainRuleReasonCode;
+};
 const exact = (value: unknown, keys: readonly string[]): value is Record<string, unknown> =>
   value !== null &&
   typeof value === "object" &&
@@ -214,7 +300,8 @@ function decode(
     if (!exact(item, ENTRY_KEYS) || !ENTRY_KEYS.every((k) => typeof item[k] === "string")) return "malformed";
     const rule = expect.rules[i]!;
     if (item.ruleId !== rule.ruleId || item.ruleRevision !== rule.ruleRevision) return "malformed";
-    if (!JUDGE_VERDICTS.has(item.verdict as string) || (item.reason as string).length > MAX_REASON) return "malformed";
+    if (!JUDGE_VERDICTS.has(item.verdict as string) || !reasonFits(item.verdict as string, item.reasonCode as string))
+      return "malformed";
     entries.push(item as Entry);
   }
   // Reject duplicate keys, reordered fields and alternate encodings: the reply must be the canonical form.
@@ -243,7 +330,9 @@ export function createPlainRuleJudge(options: {
     Object.freeze({ outcome: "no-match", verdict, verdicts: Object.freeze([]), judgeConfigRef });
   /** The earliest covered rule allows, as judging the rules one by one in order would. */
   const decided = (entries: Entry[]): PlainRuleJudgeOutcome => {
-    const verdicts = Object.freeze(entries.map((e) => Object.freeze({ ruleId: e.ruleId, verdict: e.verdict })));
+    const verdicts = Object.freeze(
+      entries.map((e) => Object.freeze({ ruleId: e.ruleId, verdict: e.verdict, reasonCode: e.reasonCode })),
+    );
     const winner = entries.find((e) => e.verdict === "covered");
     if (winner)
       return Object.freeze({
@@ -251,15 +340,15 @@ export function createPlainRuleJudge(options: {
         verdict: "covered",
         ruleId: winner.ruleId,
         ruleRevision: winner.ruleRevision,
-        ...(winner.reason ? { reason: winner.reason } : {}),
+        reasonCode: winner.reasonCode,
         verdicts,
         judgeConfigRef,
       });
-    const reason = entries.find((e) => e.reason)?.reason;
+    const unsure = entries.find((e) => e.verdict === "unsure");
     return Object.freeze({
       outcome: "no-match",
-      verdict: entries.some((e) => e.verdict === "unsure") ? "unsure" : "not-covered",
-      ...(reason ? { reason } : {}),
+      verdict: unsure ? "unsure" : "not-covered",
+      reasonCode: (unsure ?? entries[0]!).reasonCode,
       verdicts,
       judgeConfigRef,
     });
@@ -271,6 +360,9 @@ export function createPlainRuleJudge(options: {
       if (signal.aborted) return result("unavailable");
       const selected = snapshot(input, limits);
       if (selected === null) return result("malformed");
+      // Hard boundaries first, in code: a judge is never asked about what it could not allow.
+      if (selected.restricted) return result("hard-boundary");
+      if (!insideEnvelope(selected)) return result("outside-envelope");
       const command = selected.action.title;
       if (bytes(command) > limits.maxCommandBytes || TRIPWIRES.some((t) => t.test(command)))
         return result("injection-suspected");
@@ -285,31 +377,41 @@ export function createPlainRuleJudge(options: {
         action: selected.action,
       });
       const controller = new AbortController();
-      const abort = () => controller.abort();
-      signal.addEventListener("abort", abort, { once: true });
+      // The slot stays taken until the send itself settles, however long a transport ignores its abort.
+      // A synchronous throw becomes a rejection here, so it releases the slot the same way.
+      const sending: Promise<unknown> = (async () => send(frame, controller.signal))();
+      const release = () => {
+        inFlight--;
+      };
+      void sending.then(release, release);
+      // The caller's wait ends at the deadline or on cancellation, whichever is first, without waiting for the send.
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let onAbort: (() => void) | undefined;
       try {
         const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
-          timer = setTimeout(() => {
-            controller.abort();
-            resolve(TIMED_OUT);
-          }, limits.timeoutMs);
+          timer = setTimeout(() => resolve(TIMED_OUT), limits.timeoutMs);
+        });
+        const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+          onAbort = () => resolve(CANCELLED);
+          if (signal.aborted) onAbort();
+          else signal.addEventListener("abort", onAbort, { once: true });
         });
         let reply: unknown;
         try {
-          reply = await Promise.race([send(frame, controller.signal), deadline]);
+          reply = await Promise.race([sending, deadline, cancelled]);
         } catch {
           return result("unavailable");
         }
-        if (reply === TIMED_OUT) return result(signal.aborted ? "unavailable" : "timeout");
-        // A reply that arrives after cancellation is dropped.
-        if (signal.aborted || controller.signal.aborted) return result("unavailable");
+        // A reply that arrives together with cancellation is dropped.
+        if (reply === CANCELLED || signal.aborted) return result("unavailable");
+        if (reply === TIMED_OUT) return result("timeout");
         const decoded = decode(reply, { requestId, rules: selected.rules }, limits.maxReplyBytes);
         return decoded === "malformed" ? result("malformed") : decided(decoded);
       } finally {
         if (timer !== undefined) clearTimeout(timer);
-        signal.removeEventListener("abort", abort);
-        inFlight--;
+        if (onAbort) signal.removeEventListener("abort", onAbort);
+        // Tell the transport to stop when the caller stopped waiting first. A settled send ignores it.
+        controller.abort();
       }
     } catch {
       return result("unavailable");

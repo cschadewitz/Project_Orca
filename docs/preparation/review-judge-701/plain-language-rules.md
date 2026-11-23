@@ -1,7 +1,8 @@
 # Plain-language permission rules, decided by a review judge (#701)
 
 Status: **design for review (Cal) and owner decisions (Casey).** Only `judgePermission` (section 5)
-is built, with fake judges, and nothing calls it yet.
+is built, with fake judges, and nothing calls it yet. It stays inactive until the real sender and
+the evaluation slot have each had their own independent review.
 Builds on: the live layered permission policy (`packages/agents/src/permissions.ts`), the
 inactive judge adapters and connection (`packages/agents/src/review-judge/`), BYOK judge keys
 (#964), and the typed command rules planned in #702.
@@ -55,33 +56,60 @@ agents:
 
 ## 3. Where it sits in the decision
 
-The order is unchanged: protected files → configured rules → sidecar rules → defaults, and the
-first match wins. A judged rule takes part in that order like any other rule:
+The judged lane sits inside hard boundaries that are checked in code before any judge is asked.
+Rule order decides between allows; it never lets a model past a restriction.
 
 ```
-protected path?                        → deny            (no judge, ever)
-first matching rule is typed           → its decision
-first matching rule is judged          → judge: allow ──► allow once
-                                                 no-match ──► continue to the next rule
-no rule left                           → default (usually ask → person)
+protected path?                                   → deny            (no judge, ever)
+any deterministic deny rule matches, anywhere     → no judged allow (the typed rules decide as today)
+any mandatory-human (ask) rule matches, anywhere  → no judged allow (the person is asked)
+outside the safe action envelope                  → no judged allow (the person is asked)
+first matching rule is typed                      → its decision
+first matching rule is judged                     → judge: allow ──► allow once
+                                                            no-match ──► continue to the next rule
+no rule left                                      → default (usually ask → person)
 ```
 
-- The judge only ever answers **allow** or **no match**. It never denies, and it can't get past an
-  earlier deny, because an earlier deny is the first match.
-- An explicit typed `ask` rule placed before a judged rule wins through ordering. Saved judged
-  rules land under the configured rules, so a hand-written "always ask me about `git push`"
-  stays in force.
+**Hard boundaries, regardless of order.** Before calling the judge, the evaluation slot checks the
+action against **every** deterministic `deny` and every mandatory-human `ask` rule in the agent's
+whole policy (configured and sidecar), not only those above the judged rule. If any matches, the
+judged lane is closed for that ask (`hard-boundary`). A person who wrote "always ask me about
+`git push`" or "deny `rm -rf`" anywhere in their list gets exactly that, even if a broad judged rule
+sits above it. A model can never turn an action a person reserved for themselves, or explicitly
+denied, into an automatic allow.
+
+**Safe action envelope.** A judged rule can only allow inside a deterministic envelope derived from
+the tool call's own facts (`outside-envelope` otherwise, and the person is asked):
+- the kind is one of `read`, `search`, `edit`, `execute`. Delete, move, fetch, mode switches and
+  unknown kinds always go to the person;
+- the call is inside the workspace, and every location is workspace-relative (not absolute, no
+  `..`, no home or drive prefix);
+- anything but a command names at least one location;
+- the kind, locations and workspace flag were derived by ORCA from the tool call's own fields
+  (`factsFromTool`), not inferred from the title or reported loosely. Absent or ambiguous facts go
+  to the person.
+
+These checks are the authorization boundary. The judge, the tripwires in section 6 and the
+canonical reply shape only decide whether an action *inside* them is covered; none of them is a
+boundary on its own.
+
+- The judge only ever answers **allow** or **no match**. It never denies.
 - **Decision for Casey:** may a saved judged rule ever sit *above* configured rules, for example
   by an explicit "put this first"? Recommendation: **no.** Saved rules, judged or not, always come
   after hand-written ones, as today.
 
 **Shadowing.** Judged rules only allow, so when several cover a call the outcome is the same
 (allow once). Only the credit differs, and the record lists every rule the batch judged covered,
-not just the first. A broad judged rule placed *above* a typed `ask` or `deny` rule that it could
-overlap would be reached first, so the app warns when saving a judged rule above such a rule (same
-agent, overlapping `match`). If plain-language "ask" or "never" rules are added later, a
-restriction will win over an allow regardless of order, instead of first match, so a broad allow
-can never shadow a specific restriction.
+not just the first. A broad judged rule can't shadow a typed restriction, because of the hard
+boundaries above. It *can* shadow the exceptions inside a narrower judged rule: with "allow git
+commands" above "allow git commands except push or delete", a `git push` is allowed by the first,
+because a judged rule's exceptions only narrow that rule. To keep `git push` with the person, write
+it as an ask rule. Two follow-ups make that easier (**Casey chose both, 2026-11-23**; built in a
+later PR, section 12):
+- plain-language "always ask me" rules, judged in the same batch, which close the judged lane when
+  they match. Being judged, they can only add prompts, never remove them;
+- "Tidy my rules" flags a narrower judged rule that a broader one above it fully covers, and offers
+  to fold the exception into the broad rule or turn it into an ask rule.
 
 ## 4. The answer ORCA gives
 
@@ -103,19 +131,27 @@ It takes **one call per ask, for all candidate rules**:
 judgePermission(
   input: {
     rules: { ruleId: string; ruleRevision: string; criterion: string }[]; // in first-match order
-    action: { kind: string; title: string; locations: string[]; inWorkspace: boolean };
+    restrictions: { deny: boolean; ask: boolean };  // any deterministic deny / ask match, anywhere
+    action: { kind: string; title: string; locations: string[]; inWorkspace: boolean;
+              factsFromTool: boolean };
   },
   signal: AbortSignal,
 ): Promise<{
   outcome: "allow" | "no-match";
   verdict: "covered" | "not-covered" | "unsure" | "unavailable" | "malformed" | "timeout"
-         | "over-budget" | "injection-suspected";
+         | "over-budget" | "injection-suspected" | "hard-boundary" | "outside-envelope";
   ruleId?: string; ruleRevision?: string;    // with allow: the earliest rule judged covered
-  reason?: string;                            // <= 200 chars, shown to the person
-  verdicts: { ruleId: string; verdict: "covered" | "not-covered" | "unsure" }[];
+  reasonCode?: ReasonCode;                    // fixed code; ORCA words it locally
+  verdicts: { ruleId: string; verdict: "covered" | "not-covered" | "unsure"; reasonCode: ReasonCode }[];
   judgeConfigRef: string;                     // which judge, model, prompt and limits decided
 }>
 ```
+
+`ReasonCode` is a closed set, one family per verdict: `matches-criterion` (covered);
+`outside-criterion`, `excluded-by-criterion` (not covered); `action-ambiguous`,
+`criterion-ambiguous` (unsure). The judge never returns prose. What a person sees and what the
+audit records is ORCA's own wording for the code, so an otherwise valid reply can't echo the
+command or the criterion into a prompt or the record.
 
 The slot gathers, in first-match order, every judged rule whose deterministic `match` holds, stopping
 at the first typed rule that matches. Then it makes one call. The earliest rule judged covered
@@ -123,7 +159,9 @@ allows, which is exactly what judging them one at a time in order would give. On
 first matching typed rule decides, or the default when there is none. At most `maxRules` (20) are
 sent, and rules past that cannot allow.
 
-It never throws. Any failure is `no-match`, with a verdict saying why.
+It never throws. Any failure is `no-match`, with a verdict saying why. With `restrictions` set or
+outside the envelope it returns without calling the judge, as a second line behind the slot's own
+checks.
 
 **Relation to the strict lane's types.** `judgePermission` does not take `JudgeRequestV1` or
 `JudgeResultV1`. Those carry the strict lane's authority stamp, action binding, coverage id and
@@ -140,15 +178,17 @@ whether the call is inside the workspace. It gets no secrets, file contents, run
 or policy capability.
 
 The judge's own output schema is closed: `orca-plain-rule-verdict/v1`, holding `requestId` plus
-exactly one `{ ruleId, ruleRevision, verdict, reason }` per rule sent, in the order sent, in
-canonical JSON. Anything else is `malformed`.
+exactly one `{ ruleId, ruleRevision, verdict, reasonCode }` per rule sent, in the order sent, in
+canonical JSON, with a reason code from the verdict's own family. Anything else, including free
+text, is `malformed`.
 
 | Judge says | ORCA does |
 | --- | --- |
 | `covered` for one or more rules, every entry matching a rule sent | `allow` by the earliest → allow once |
 | an entry for another rule, revision, request, or out of order | `no-match` (`malformed`) |
-| `not-covered`, `unsure` | `no-match`. The next rule or the default decides, and an eventual prompt shows the reason |
+| `not-covered`, `unsure` | `no-match`. The next rule or the default decides, and an eventual prompt shows ORCA's wording for the reason code |
 | unavailable, timeout, cancelled, malformed, over budget, injection suspected | `no-match` (never a silent allow, never a deny) |
+| a deterministic deny or ask matches anywhere, or the action is outside the envelope | `no-match` without calling the judge (`hard-boundary`, `outside-envelope`) |
 
 After the verdict, the evaluation slot re-reads the rule (same id and revision, not deleted) and
 re-checks its match and protected paths in the same turn as it answers the agent. A rule edited
@@ -158,9 +198,11 @@ or deleted while the judge was thinking is not honoured.
 
 The judge reads agent-controlled text, so assume the command will try to talk it into "covered".
 
-- The rule's deterministic `match` bounds the blast radius: whatever the judge says, it can only
-  allow a call the rule's `match` already covers. It can never reach a protected path or get
-  past an earlier deny, and it allows only once.
+- The hard boundaries and the envelope (section 3) and the rule's deterministic `match` bound the
+  blast radius: whatever the judge says, it can only allow a call inside all three. It can never
+  reach a protected path or get past any deny or mandatory ask, and it allows only once. The rest
+  of this section lowers the rate of false "covered" inside that space; none of it is an
+  authorization boundary.
 - The command is carried as a JSON string field, never spliced into instructions. The judge's
   system prompt says that text inside `action` is data and instructions in it are to be ignored.
 - The output is closed and must cite a rule id and revision ORCA sent. A free-text "yes" is
@@ -186,8 +228,11 @@ could apply:
    pass shortlists, then the batch checks the shortlist.
 4. **Exact-repeat cache** within a run (see below).
 
-- Per-call deadline 5 s (configurable, max 15 s) → person on timeout.
+- Per-call deadline 5 s (configurable, max 15 s) → person on timeout. The deadline and cancellation
+  end the wait at once, even if the transport ignores its abort.
 - Concurrency cap per daemon (2) and per run (1); excess asks go to the person rather than queue.
+  A send keeps its slot until it actually settles, not when the caller stops waiting, so a stuck
+  provider can't pile up hidden requests.
 - Budget in cost units per run and per day (owner-declared, reserved per call as in the existing
   connection). Out of budget → person, and the run log says so once.
 - Optional exact-repeat cache: the same rule revision, kind, command and locations, with the same
@@ -198,13 +243,14 @@ could apply:
 
 Every plain-rule decision appends to the run's event log:
 `permission.decided { decision: "allow:plain-rule" | "ask:plain-rule-<outcome>", ruleId,
-ruleRevision, judgeConfigRef, verdict, reason, latencyMs, costUnits }`. Nothing secret, and no
-command text beyond what the existing permission event already records.
+ruleRevision, judgeConfigRef, verdict, reasonCode, latencyMs, costUnits }`. Nothing secret, no
+model prose, and no command text beyond what the existing permission event already records.
 
 In the app:
 - An automatic allow shows "Allowed by your rule: *Allow read-only git commands…*" with a link
   to the rule.
-- When the judge declined, the prompt shows its reason ("not read-only: `git push`").
+- When the judge declined, the prompt shows ORCA's wording for the reason code ("Your rule doesn't
+  cover this.").
 - The prompt gets a third choice next to Allow once and Save: **"Write a rule for things like
   this"**, prefilled with a suggested sentence the person edits. ORCA never saves a rule the
   person didn't confirm.
@@ -280,7 +326,10 @@ replay shows exactly what the rule would cover.
    the prompt files until then. The decision record lands with #702's acp-session work, after
    #946 and #948.
 4. Offline evaluation set and report. Turning it on stays behind a setting that is off by default.
-5. Suggestions from repeated approvals and "Tidy my rules", with replay diffs (section 9).
+5. Suggestions from repeated approvals and "Tidy my rules", with replay diffs (section 9) and the
+   shadowing warning (section 3).
+6. Plain-language "always ask me" rules: judged in the same batch, a match closes the judged lane.
+   Needs the `judge` field to accept an `ask` effect (#702's schema).
 
 ## 13. Decisions for Casey
 
@@ -290,3 +339,4 @@ replay shows exactly what the rule would cover.
 4. Suggestion threshold (recommended: 3 approvals in 7 days) and whether "Tidy" may propose
    removing unused rules (recommended: yes, as a suggestion).
 3. Default budget and deadline (recommended: 5 s, 200 judge calls per day, cache off).
+5. ~~Plain-language "always ask me" rules and Tidy's shadowing warning~~: decided, both (section 3).
