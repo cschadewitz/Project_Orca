@@ -29,6 +29,8 @@ import {
 import { counted } from "../../ui/count.js";
 import { nestedSteps, type EditorGraph, type EditorNode } from "./draft-model.js";
 import type { EditorSelection } from "./editor-canvas.js";
+import { CapabilityScopeEditor } from "./capability-scope-editor.js";
+import { readScope, type CapabilityChoices } from "./capability-scope.js";
 
 export interface InspectorHandle {
   /** F2: put the cursor in the selected node's name. */
@@ -48,7 +50,11 @@ export interface EditorInspectorProps {
   issues: { byNode: ReadonlyMap<string, DraftIssue[]>; byEdge: ReadonlyMap<number, DraftIssue[]> };
   readOnly: boolean;
   /** The workflow's own document, for the nothing-selected view. */
-  workflow: { name?: string; description?: string } | undefined;
+  workflow: { name?: string; description?: string; capabilities?: unknown } | undefined;
+  /** Catalog ids from the configuration, for capability scopes (#335); absent when unreadable. */
+  capabilityChoices?: CapabilityChoices | undefined;
+  /** Whether the daemon takes a workflow-level capability scope (protocol 2.10). */
+  workflowScope?: boolean;
   /** Registered workflow ids, for a subworkflow's target. */
   workflows: readonly string[];
   onApply: (ops: DraftOperation[]) => Promise<boolean>;
@@ -67,7 +73,8 @@ const NODE_TYPES = ["agent", "decision", "gate", "set", "loop", "parallel", "sub
 interface FieldSpec {
   key: string;
   label: string;
-  kind: "text" | "textarea" | "number" | "choice" | "expression" | "yaml" | "list" | "agent" | "workflow";
+  kind:
+    "text" | "textarea" | "number" | "choice" | "expression" | "yaml" | "list" | "agent" | "workflow" | "capabilities";
   choices?: readonly string[];
   help?: string;
 }
@@ -92,6 +99,12 @@ const FIELDS: Record<string, readonly FieldSpec[]> = {
     { key: "completion", label: "Completion", kind: "yaml" },
     { key: "vars", label: "Variables", kind: "yaml" },
     { key: "maxAttempts", label: "Attempts", kind: "number" },
+    {
+      key: "capabilities",
+      label: "Capabilities",
+      kind: "capabilities",
+      help: "This step's MCP servers and skills, within what its agent permits.",
+    },
   ],
   decision: [
     {
@@ -209,6 +222,7 @@ function NodeInspector({
   issues,
   readOnly,
   workflows,
+  capabilityChoices,
   onApply,
   onSelect,
   onDelete,
@@ -321,6 +335,8 @@ function NodeInspector({
             value={node.raw[spec.key]}
             readOnly={locked}
             workflows={workflows}
+            capabilityChoices={capabilityChoices}
+            owner={node.id}
             issue={nodeIssues.find(
               (issue) => issue.path.endsWith(`.${spec.key}`) || issue.path.includes(`.${spec.key}.`),
             )}
@@ -529,7 +545,16 @@ function EdgeInspector({
 
 /* ---------- the workflow ---------- */
 
-function WorkflowInspector({ graph, path, workflow, readOnly, onApply }: EditorInspectorProps): JSX.Element {
+function WorkflowInspector({
+  graph,
+  path,
+  workflow,
+  readOnly,
+  onApply,
+  capabilityChoices,
+  workflowScope = true,
+}: EditorInspectorProps): JSX.Element {
+  const scope = readScope(workflow?.capabilities);
   const starts = graph.nodes.filter((n) => n.type === "start" && n.state !== "removed");
   const title = path.length === 0 ? (workflow?.name ?? "") : path.map((step) => step.node).join(" ▸ ");
   return (
@@ -571,6 +596,22 @@ function WorkflowInspector({ graph, path, workflow, readOnly, onApply }: EditorI
                 />
               )}
             </ConfigField>
+            <div className="orca-inspector__group">Capabilities</div>
+            {!workflowScope ? (
+              <Text style="caption">Editing the workflow&apos;s capabilities here needs a newer daemon.</Text>
+            ) : scope === undefined ? (
+              <Text style="caption">
+                The workflow&apos;s capabilities use a form this editor cannot show. Edit them in the YAML.
+              </Text>
+            ) : (
+              <CapabilityScopeEditor
+                scope={scope}
+                label="Workflow"
+                choices={capabilityChoices}
+                readOnly={readOnly}
+                onCommit={(capabilities) => void onApply([{ op: "setWorkflow", capabilities: capabilities ?? null }])}
+              />
+            )}
           </>
         )}
         <div className="orca-inspector__group">This graph</div>
@@ -595,6 +636,8 @@ function FieldEditor({
   value,
   readOnly,
   workflows,
+  capabilityChoices,
+  owner,
   issue,
   onCommit,
 }: {
@@ -603,6 +646,9 @@ function FieldEditor({
   value: unknown;
   readOnly: boolean;
   workflows: readonly string[];
+  capabilityChoices?: CapabilityChoices | undefined;
+  /** The node id, naming this field's controls. */
+  owner?: string;
   issue: DraftIssue | undefined;
   onCommit: (value: unknown) => void;
 }): JSX.Element {
@@ -691,6 +737,21 @@ function FieldEditor({
                 }}
               />
             );
+          case "capabilities": {
+            // A scope the control cannot show faithfully is edited as YAML, never rewritten.
+            const scope = readScope(value);
+            return scope === undefined ? (
+              <YamlInput control={control} value={value} readOnly={readOnly} onError={setError} onCommit={onCommit} />
+            ) : (
+              <CapabilityScopeEditor
+                scope={scope}
+                label={owner ?? spec.label}
+                choices={capabilityChoices}
+                readOnly={readOnly}
+                onCommit={onCommit}
+              />
+            );
+          }
           case "yaml":
             return (
               <YamlInput control={control} value={value} readOnly={readOnly} onError={setError} onCommit={onCommit} />

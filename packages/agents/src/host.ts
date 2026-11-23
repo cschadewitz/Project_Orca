@@ -46,7 +46,30 @@ export interface ExecResult {
   stderr: string;
 }
 
+/**
+ * Errors a host's `readFile` raised because the file is positively not there. Each host
+ * decides that at its own file-system boundary and marks the error it already throws, so
+ * the error keeps its shape and nothing else (a failed spawn, a lost connection, a refused
+ * read) can be mistaken for absence by inspecting codes after the fact.
+ */
+const missingFiles = new WeakSet<object>();
+
+/** Mark `error` as "this file does not exist", and return it for throwing. */
+export function markHostFileMissing<E extends object>(error: E): E {
+  missingFiles.add(error);
+  return error;
+}
+
+/** Whether a host file-system call failed because the file is positively absent. */
+export function isHostFileMissing(error: unknown): boolean {
+  return typeof error === "object" && error !== null && missingFiles.has(error);
+}
+
 export interface HostFileSystem {
+  /**
+   * The file's text. A host that can tell the file does not exist marks the error with
+   * `markHostFileMissing`; any other failure, including one it cannot classify, is unmarked.
+   */
   readFile(path: string): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
   exists(path: string): Promise<boolean>;
