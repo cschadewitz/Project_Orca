@@ -14,7 +14,7 @@
  * stand-in, for web fetches) rather than taken from what OpenCode reports.
  */
 import { createServer, type IncomingMessage, type Server } from "node:http";
-import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile, appendFile, chmod } from "node:fs/promises";
+import { appendFile, chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -164,7 +164,9 @@ describe.skipIf(!BIN)(`OpenCode ${OPENCODE_VERIFIED_VERSION}, installed binary, 
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const address = server.address();
     base = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
-    root = await mkdtemp(join(tmpdir(), "orca-opencode-accept-"));
+    // The real path: on macOS the temp directory is reached through a link (/var -> /private/var),
+    // and OpenCode treats a path given through it as outside the project, which it denies natively.
+    root = await realpath(await mkdtemp(join(tmpdir(), "orca-opencode-accept-")));
     isolated = JSON.parse(await readFile(new URL("opencode.isolated.json", packet), "utf8")) as Record<string, unknown>;
   });
   afterEach(async () => {
