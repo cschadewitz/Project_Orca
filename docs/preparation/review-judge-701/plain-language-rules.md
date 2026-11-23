@@ -110,7 +110,8 @@ each location:
   of every rule), plus no real ancestor that is a no-access path by identity, and no case-folded
   match against one. Protection over-matches on purpose; containment under-matches on purpose.
 
-Only "no such file" counts as absence. A permission, I/O or identity failure anywhere the check
+Only "no such file" while resolving a path counts as absence; a path that resolved and whose
+metadata then fails is incomplete evidence. A permission, I/O or identity failure anywhere the check
 needs evidence (the workspace, a target, any of its ancestors, an existing no-access path) refuses
 the call as `unverifiable`; the check never claims a verification it could not complete.
 

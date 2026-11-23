@@ -18,7 +18,7 @@
  *   rule), and, on top of it, no real ancestor of the file is a no-access path by identity, and no real path matches
  *   one ignoring case. Protection over-matches on purpose; containment under-matches on purpose.
  *
- * Only "no such file" counts as absence. A permission, I/O or identity failure anywhere the check needs evidence (the
+ * Only "no such file" while resolving counts as absence. A permission, I/O or identity failure anywhere the check needs evidence (the
  * workspace, a target, any of its ancestors, an existing no-access path) refuses the call as `unverifiable`.
  *
  * The check runs at decision time, and that is its limit. The allow it can lead to is one-time and the slot re-checks
@@ -89,16 +89,24 @@ function isAbsence(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-/** The real path of an existing file or directory; undefined only when it confirmably does not exist. */
+/**
+ * The real path of an existing file or directory; undefined only when resolution itself confirmed it does not exist.
+ * A path that resolved and whose metadata then could not be read is incomplete evidence, never absence.
+ */
 function real(io: PlainRuleTargetIo, path: string): string | undefined {
+  let resolved: string;
   try {
-    const resolved = io.realpath(path);
-    io.stat(resolved);
-    return resolved;
+    resolved = io.realpath(path);
   } catch (error) {
     if (isAbsence(error)) return undefined;
     throw new Unverifiable();
   }
+  try {
+    io.stat(resolved);
+  } catch {
+    throw new Unverifiable();
+  }
+  return resolved;
 }
 
 /** The identity of an existing file. Any failure, absence included, is unverifiable: the caller knows it exists. */

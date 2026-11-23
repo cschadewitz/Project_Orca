@@ -270,7 +270,25 @@ describe("#701 plain-rule target check", () => {
     expect(at(failing("EIO", (op, p) => op === "realpath" && p === "/case/ws/secrets"))).toMatchObject({
       reason: "unverifiable",
     });
-    // A guard that confirmably does not exist is fine, and still guards by text.
+    // A guard that resolved and then vanished or would not answer before its identity was read: incomplete evidence.
+    expect(at(failing("ENOENT", (op, p) => op === "stat" && p === "/case/ws/secrets"))).toMatchObject({
+      reason: "unverifiable",
+    });
+    expect(at(failing("ENOTDIR", (op, p) => op === "stat" && p === "/case/ws/secrets"))).toMatchObject({
+      reason: "unverifiable",
+    });
+    // The same transition for the target and the workspace.
+    expect(at(failing("ENOENT", (op, p) => op === "stat" && p === "/case/ws/src/a.ts"))).toMatchObject({
+      reason: "unverifiable",
+    });
+    expect(at(failing("ENOENT", (op, p) => op === "stat" && p === "/case/ws"))).toMatchObject({
+      reason: "unverifiable",
+    });
+    // A guard that confirmably does not exist at resolution is fine, and still guards by text.
+    expect(at(failing("ENOENT", (op, p) => op === "realpath" && p === "/case/ws/secrets"))).toEqual({
+      targetsVerified: true,
+      locations: ["src/a.ts"],
+    });
     expect(at(base, ["/case/ws/gone"])).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
     expect(at(base, ["/case/ws/src/a.ts/x"])).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
     // An ancestor, the target, or the workspace whose identity cannot be read.
