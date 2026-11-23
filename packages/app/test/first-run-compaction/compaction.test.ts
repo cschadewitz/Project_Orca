@@ -1,11 +1,15 @@
 /** Real journal compaction: settled history folds into a checkpoint that still verifies, and nothing else is folded. */
 import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { firstRunRequiresExplicitContinuationRecovery } from "../../../cli/src/first-run-recovery-fence.js";
 import { inspectFirstRunOwnership, reserveFirstRunOwnership } from "../../src/main/first-run/ownership.js";
 import { FirstRunRecovery } from "../../src/main/first-run/recovery.js";
 import { journal, launch, listing, refused, selected } from "./fixture.js";
+// Hundreds of real launches put thousands of fsyncs on the checkout volume (the fence refuses tmpfs), and on a
+// busy CI runner each one can take tens of milliseconds, so the wall time tracked disk latency, not the journal.
+// Durability is not what these tests observe, so flushes are no-ops here; every other file operation is real.
+vi.mock("node:fs", async (original) => ({ ...(await original<typeof import("node:fs")>()), fsyncSync: vi.fn() }));
 
 it("detects tampering with the checkpoint or the history it binds, and carries reconciliation forward", async () => {
   const path = await selected();
