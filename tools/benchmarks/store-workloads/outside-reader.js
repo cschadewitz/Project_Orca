@@ -8,7 +8,9 @@
  * workerData: { file, runIds, pageSize, holdMs, gapMs, stop (SharedArrayBuffer, Int32Array[0] = 1
  * stops) }. `holdMs` keeps each snapshot open that long before ending it, as a slow consumer of a
  * large read does; `gapMs` waits that long between reads, as something polling does; 0 and 0
- * read back to back. Posts { reads, rows, errors, ordered, firstError? } when done.
+ * read back to back. Posts { ready: true } once its connection is open, then, when stopped,
+ * { reads, rows, errors, ordered, snapshotShare, firstError? }: `snapshotShare` is the part of
+ * its time it had a snapshot open.
  */
 import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
@@ -20,6 +22,10 @@ db.exec("PRAGMA busy_timeout = 5000");
 const tail = db.prepare("SELECT seq FROM events WHERE run_id = ? ORDER BY seq DESC LIMIT ?");
 const before = db.prepare("SELECT seq FROM events WHERE run_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?");
 const pause = new Int32Array(new SharedArrayBuffer(4));
+// Ready: the connection is open; the writer starts its load once every reader says so.
+parentPort.postMessage({ ready: true });
+const started = performance.now();
+let inSnapshotMs = 0;
 let reads = 0;
 let rows = 0;
 let errors = 0;
@@ -29,6 +35,7 @@ let i = 0;
 while (Atomics.load(flag, 0) === 0) {
   const runId = runIds[i++ % runIds.length];
   try {
+    const opened = performance.now();
     db.exec("BEGIN DEFERRED");
     try {
       const page = tail.all(runId, pageSize);
@@ -40,6 +47,7 @@ while (Atomics.load(flag, 0) === 0) {
       if (holdMs > 0) Atomics.wait(pause, 0, 0, holdMs);
     } finally {
       db.exec("COMMIT");
+      inSnapshotMs += performance.now() - opened;
     }
     reads++;
     if (gapMs > 0) Atomics.wait(pause, 0, 0, gapMs);
@@ -48,5 +56,14 @@ while (Atomics.load(flag, 0) === 0) {
     firstError ??= String(error);
   }
 }
+const wallMs = performance.now() - started;
 db.close();
-parentPort.postMessage({ reads, rows, errors, ordered, ...(firstError ? { firstError } : {}) });
+parentPort.postMessage({
+  reads,
+  rows,
+  errors,
+  ordered,
+  // How much of its time this reader had a snapshot open: the overlap the writer saw.
+  snapshotShare: Math.round((inSnapshotMs / wallMs) * 1000) / 1000,
+  ...(firstError ? { firstError } : {}),
+});

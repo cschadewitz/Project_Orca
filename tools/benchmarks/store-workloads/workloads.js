@@ -474,6 +474,60 @@ const thin = (samples) =>
         (_, i) => samples[Math.round((i * (samples.length - 1)) / (KEEP_SAMPLES - 1))],
       );
 
+/** How long an outside reader may take to start, or to finish once told to stop, before it is terminated. */
+export const READER_DEADLINE_MS = 10_000;
+
+/** `promise`, or `undefined` once `ms` have passed. */
+const within = (promise, ms) =>
+  Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(undefined), ms).unref())]);
+
+/**
+ * Start `readers` as worker threads (outside-reader.js) on `data`'s store. `ready()` waits until
+ * every one has opened its connection, so the load starts with them all reading; `stop()` must
+ * be called whatever happened (it is idempotent): it tells them to stop and collects each one's
+ * result, recording a worker that failed or exited without one, and terminates any that does not
+ * finish within `deadlineMs` (READER_DEADLINE_MS), so no worker outlives its phase.
+ */
+export function startReaders(readers, data, deadlineMs = READER_DEADLINE_MS) {
+  const stopFlag = new SharedArrayBuffer(4);
+  const started = readers.map((reader) => {
+    const worker = new Worker(new URL("./outside-reader.js", import.meta.url), {
+      workerData: { ...data, holdMs: reader.holdMs, gapMs: reader.gapMs, stop: stopFlag },
+    });
+    let markReady;
+    const ready = new Promise((resolve) => (markReady = resolve));
+    const result = new Promise((resolve) => {
+      worker.on("message", (message) => (message.ready ? markReady(true) : resolve(message)));
+      worker.once("error", (error) => resolve({ failed: String(error) }));
+      worker.once("exit", (code) => resolve({ failed: `exited (code ${code}) without a result` }));
+    });
+    // A worker that ends before it is ready is not waited for.
+    void result.then(() => markReady(false));
+    return { reader, worker, ready, result };
+  });
+  let stopped;
+  return {
+    async ready() {
+      const all = await within(Promise.all(started.map((s) => s.ready)), deadlineMs);
+      if (!all || all.includes(false)) throw new Error("an outside reader did not start");
+    },
+    stop() {
+      stopped ??= (async () => {
+        Atomics.store(new Int32Array(stopFlag), 0, 1);
+        return Promise.all(
+          started.map(async ({ reader, worker, result }) => {
+            const value = await within(result, deadlineMs);
+            if (value) return { ...reader, ...value };
+            await worker.terminate();
+            return { ...reader, failed: `did not stop within ${deadlineMs} ms; terminated` };
+          }),
+        );
+      })();
+      return stopped;
+    },
+  };
+}
+
 /**
  * Checkpoints under sustained load (#339): what the write-ahead log and the writer do when
  * appends never stop for `scale.sustainedMs`, so the store's idle checkpoint never gets its quiet
@@ -509,66 +563,56 @@ export async function walUnderLoad({ handle, scale }) {
       });
     // Every phase starts from an empty log, so what it shows is this phase's.
     const emptied = wal.connect().checkpoint("truncate");
-    const stop = new SharedArrayBuffer(4);
-    const workers = outside.map((reader) => {
-      const worker = new Worker(new URL("./outside-reader.js", import.meta.url), {
-        workerData: {
-          file: wal.file,
-          runIds,
-          pageSize: scale.pageSize,
-          holdMs: reader.holdMs,
-          gapMs: reader.gapMs,
-          stop,
-        },
-      });
-      const done = new Promise((resolve, reject) => {
-        worker.once("message", resolve);
-        worker.once("error", reject);
-      });
-      return { reader, done };
-    });
+    const outsideReaders = startReaders(outside, { file: wal.file, runIds, pageSize: scale.pageSize });
     const reader = handle.stores().events;
     const readLatency = [];
     let readsOrdered = true;
     const latency = [];
-    const samples = [{ ms: 0, walBytes: wal.bytes(), appends: 0 }];
-    const started = performance.now();
-    let lastSample = started;
+    const samples = [];
+    let loadMs = 0;
     let i = 0;
-    while (performance.now() - started < scale.sustainedMs) {
-      const runId = runIds[i % runIds.length];
-      const { ms } = await timed(() =>
-        events.append({
-          type: "agent.update",
-          runId,
-          payload: { stepRunId: "step_load", sessionId: "s", update: { kind: "agent_message_chunk", text } },
-        }),
-      );
-      latency.push(ms);
-      i++;
-      if (i % 25 === 0) {
-        const page = await timed(() =>
-          reader.readRange(runId, { before: Number.MAX_SAFE_INTEGER, limit: scale.pageSize }),
+    let readers;
+    try {
+      // The load starts once every outside reader has its connection open and is reading.
+      await outsideReaders.ready();
+      samples.push({ ms: 0, walBytes: wal.bytes(), appends: 0 });
+      const started = performance.now();
+      let lastSample = started;
+      while (performance.now() - started < scale.sustainedMs) {
+        const runId = runIds[i % runIds.length];
+        const { ms } = await timed(() =>
+          events.append({
+            type: "agent.update",
+            runId,
+            payload: { stepRunId: "step_load", sessionId: "s", update: { kind: "agent_message_chunk", text } },
+          }),
         );
-        readLatency.push(page.ms);
-        for (let k = 1; k < page.value.length; k++)
-          if (page.value[k].seq !== page.value[k - 1].seq + 1) readsOrdered = false;
-      }
-      if (i % 50 === 0) {
-        const now = performance.now();
-        if (now - lastSample >= 250) {
-          samples.push({ ms: round(now - started), walBytes: wal.bytes(), appends: i });
-          lastSample = now;
+        latency.push(ms);
+        i++;
+        if (i % 25 === 0) {
+          const page = await timed(() =>
+            reader.readRange(runId, { before: Number.MAX_SAFE_INTEGER, limit: scale.pageSize }),
+          );
+          readLatency.push(page.ms);
+          for (let k = 1; k < page.value.length; k++)
+            if (page.value[k].seq !== page.value[k - 1].seq + 1) readsOrdered = false;
         }
-        // Let timers and other work in, as a daemon's event loop would.
-        await new Promise((resolve) => setImmediate(resolve));
+        if (i % 50 === 0) {
+          const now = performance.now();
+          if (now - lastSample >= 250) {
+            samples.push({ ms: round(now - started), walBytes: wal.bytes(), appends: i });
+            lastSample = now;
+          }
+          // Let timers and other work in, as a daemon's event loop would.
+          await new Promise((resolve) => setImmediate(resolve));
+        }
       }
+      loadMs = performance.now() - started;
+      samples.push({ ms: round(loadMs), walBytes: wal.bytes(), appends: i });
+    } finally {
+      // Whatever happened, every reader is stopped (or terminated) before the phase ends.
+      readers = await outsideReaders.stop();
     }
-    const loadMs = performance.now() - started;
-    samples.push({ ms: round(loadMs), walBytes: wal.bytes(), appends: i });
-    Atomics.store(new Int32Array(stop), 0, 1);
-    const readers = [];
-    for (const w of workers) readers.push({ ...w.reader, ...(await w.done) });
     // Quiet for longer than the idle window: what the store's own checkpoint did after the load.
     const seen = wal.checkpoints.length;
     await new Promise((resolve) => setTimeout(resolve, wal.settings.idleMs + 250));
@@ -610,21 +654,28 @@ export async function walUnderLoad({ handle, scale }) {
       latency: summarize(latency),
       stallsOver5ms: latency.filter((ms) => ms > 5).length,
       stallsOver50ms: latency.filter((ms) => ms > 50).length,
+      // The log file's size during the load, sampled. A file never shrinks by itself, so this is a
+      // high-water mark: flat means the log kept starting over, rising means it did not. It says
+      // nothing about how far checkpoints got; `afterLoad` does.
       walBytes: {
         peakFirstHalf: peak(half),
         peak: peak(samples),
         endOfLoad: samples.at(-1).walBytes,
-        afterIdle,
-        afterNextWrite,
         samples: thin(samples),
       },
       inProcessReads: summarize(readLatency),
       readers,
-      idleCheckpoints: idle,
+      afterLoad: {
+        idleCheckpoints: idle,
+        // The store's own idle checkpoint copied the whole log back, as it reported.
+        fullyCheckpointed: idle.some((e) => !e.error && !e.busy && e.checkpointedPages === e.logPages),
+        walBytesAfterIdle: afterIdle,
+        walBytesAfterNextWrite: afterNextWrite,
+      },
       checks: {
         everyAppendCommitted: committed,
         logCutBackAfterLoad: afterNextWrite <= wal.settings.walLimitBytes,
-        readsNeverFailed: readers.every((r) => r.errors === 0 && r.reads > 0),
+        readsNeverFailed: readers.every((r) => !r.failed && r.errors === 0 && r.reads > 0),
         readsSawOrderedPages: readsOrdered && readers.every((r) => r.ordered),
       },
     };

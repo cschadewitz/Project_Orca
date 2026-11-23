@@ -12,7 +12,7 @@ import * as store from "@orca/store";
 import { backends } from "../benchmarks/store-workloads/backends.js";
 import { allChecks, REPORT_SCHEMA_VERSION, runBenchmark } from "../benchmarks/store-workloads/harness.js";
 import { SCALES } from "../benchmarks/store-workloads/scales.js";
-import { LOAD_PHASES } from "../benchmarks/store-workloads/workloads.js";
+import { LOAD_PHASES, startReaders } from "../benchmarks/store-workloads/workloads.js";
 import { summarize as summarizeReport } from "../benchmarks/store-workloads/summarize.js";
 import { prng, summarize } from "../benchmarks/store-workloads/stats.js";
 
@@ -65,7 +65,11 @@ describe("store workload benchmark", () => {
       expect(phase.appends).toBeGreaterThan(0);
       expect(phase.inProcessReads.n).toBeGreaterThan(0);
       expect(phase.readers).toHaveLength(readers.length);
-      for (const reader of phase.readers) expect(reader.reads).toBeGreaterThan(0);
+      for (const reader of phase.readers) {
+        expect(reader.reads).toBeGreaterThan(0);
+        expect(reader.snapshotShare).toBeGreaterThan(0);
+      }
+      expect(phase.afterLoad.fullyCheckpointed).toBe(true);
       expect(phase.walBytes.samples.length).toBeLessThanOrEqual(40);
       expect(Object.values(phase.checks).every(Boolean)).toBe(true);
     }
@@ -208,5 +212,66 @@ describe("store workload benchmark", () => {
     const a = prng(7);
     const b = prng(7);
     expect(Array.from({ length: 5 }, a)).toEqual(Array.from({ length: 5 }, b));
+  });
+
+  describe("outside readers", () => {
+    const seeded = async () => {
+      const dir = await mkdtemp(join(scratch, "readers-"));
+      const stores = store.sqliteStores(dir);
+      await stores.events.append({
+        type: "run.created",
+        runId: "r",
+        payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} },
+      });
+      return { file: join(dir, store.SQLITE_METADATA_FILE), close: () => stores.close() };
+    };
+
+    it("start reading before the load and report how much of their time they held a snapshot", async () => {
+      const { file, close } = await seeded();
+      const readers = startReaders([{ holdMs: 20, gapMs: 0 }], { file, runIds: ["r"], pageSize: 10 });
+      try {
+        await readers.ready();
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      } finally {
+        const [result] = await readers.stop();
+        expect(result).toMatchObject({ holdMs: 20, errors: 0, ordered: true });
+        expect(result.failed).toBeUndefined();
+        expect(result.reads).toBeGreaterThan(0);
+        expect(result.snapshotShare).toBeGreaterThan(0.5);
+        close();
+      }
+    });
+
+    it("record a reader that fails to start, and still stop the others", async () => {
+      const { file, close } = await seeded();
+      const readers = startReaders(
+        [
+          { holdMs: 0, gapMs: 10 },
+          { holdMs: 0, gapMs: 10 },
+        ],
+        { file: join(scratch, "absent", "dir", "x.sqlite"), runIds: ["r"], pageSize: 10 },
+      );
+      await expect(readers.ready()).rejects.toThrow("an outside reader did not start");
+      const results = await readers.stop();
+      expect(results).toHaveLength(2);
+      for (const r of results) expect(r.failed).toBeTruthy();
+      // stop() is idempotent: the same results, no second stop.
+      expect(await readers.stop()).toBe(results);
+      close();
+      void file;
+    });
+
+    it("terminate a reader that does not stop within the deadline", async () => {
+      const { file, close } = await seeded();
+      // Holds each snapshot a minute: it cannot see the stop signal in time.
+      const readers = startReaders([{ holdMs: 60_000, gapMs: 0 }], { file, runIds: ["r"], pageSize: 10 }, 300);
+      await readers.ready();
+      await new Promise((resolve) => setTimeout(resolve, 100)); // Inside its first snapshot.
+      const started = performance.now();
+      const [result] = await readers.stop();
+      expect(result.failed).toBe("did not stop within 300 ms; terminated");
+      expect(performance.now() - started).toBeLessThan(5_000);
+      close();
+    });
   });
 });
