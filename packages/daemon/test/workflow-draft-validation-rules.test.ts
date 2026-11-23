@@ -9,21 +9,68 @@
  *
  *     UPDATE_VALIDATION_RULES=1 pnpm vitest run packages/daemon/test/workflow-draft-validation-rules.test.ts
  */
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { stringify } from "yaml";
 import type { DraftGraphPath, DraftIssue } from "@orca/protocol";
-import type { ValidationContext } from "@orca/core";
+import { parseOrcaConfig, type ValidationContext } from "@orca/core";
+import { AgentRegistry } from "@orca/agents";
+import { capabilityChecker } from "../../engine/src/capabilities.js";
 import { validateDraft } from "../src/workflow-drafts.js";
 
 const GOLDEN = resolve("packages/app/renderer/test/fixtures/validation-rules.json");
+
+/**
+ * The agents, hosts, secrets and capability catalog of the active generation: a real registry,
+ * so the capability and secret rows (#337) come from the same checker activation uses.
+ */
+const skills = mkdtempSync(join(tmpdir(), "orca-validation-rules-"));
+writeFileSync(join(skills, "review.md"), "Review carefully.\n");
+const registry = AgentRegistry.fromConfig(
+  parseOrcaConfig({
+    hosts: [
+      { id: "local", type: "local" },
+      { id: "build-box", type: "ssh", host: "build.example" },
+    ],
+    secrets: {
+      "github-token": { host: "local", provider: "env", name: "GITHUB_TOKEN" },
+      "deploy-key": { host: "build-box", provider: "env", name: "DEPLOY_KEY" },
+    },
+    capabilities: {
+      mcpServers: {
+        github: { command: "gh-mcp", env: { GITHUB_TOKEN: { secret: "github-token" } } },
+        deploy: { command: "deploy-mcp", env: { DEPLOY_KEY: { secret: "deploy-key" } } },
+        forbidden: { command: "forbidden-mcp" },
+      },
+      skills: {
+        review: { path: "review.md" },
+        pinned: { path: "review.md", digest: `sha256:${"0".repeat(64)}` },
+      },
+    },
+    agents: [
+      {
+        id: "worker",
+        command: "worker",
+        roles: ["reviewer"],
+        capabilities: {
+          mcpServers: { available: ["github", "deploy"] },
+          skills: { available: ["review", "pinned"] },
+        },
+      },
+    ],
+  }),
+  { configDir: skills },
+);
 
 /** The active generation, as far as these drafts need one. */
 const context: ValidationContext = {
   hasTemplate: (id) => id === "sdlc/review",
   hasWorkflow: (id) => id === "fix-it",
-  hasAgent: (selector) => typeof selector === "object" && "role" in selector && selector.role === "reviewer",
+  hasAgent: (selector) => registry.canResolve(selector),
+  checkCapabilities: capabilityChecker(registry),
   validateCustomNode: (node) => {
     if (node.type !== "custom:score") return undefined;
     const rubric = (node as { rubric?: unknown }).rubric;
@@ -274,6 +321,65 @@ const RULES: Rule[] = [
     message: /^node 'orphan' is unreachable from start$/,
   },
 
+  /* ---------- capabilities and secret references (#335, #336, #337) ---------- */
+  {
+    rule: "a step selecting an MCP server the catalog does not have",
+    severity: "error",
+    breaks: (d) => (d.nodes.plan!.capabilities = { mcpServers: { enable: ["ghost"] } }),
+    at: { node: "plan" },
+    message: /no MCP server 'ghost'/,
+  },
+  {
+    rule: "a step selecting a skill the catalog does not have",
+    severity: "error",
+    breaks: (d) => (d.nodes.plan!.capabilities = { skills: { enable: ["ghost"] } }),
+    at: { node: "plan" },
+    message: /no skill 'ghost'/,
+  },
+  {
+    rule: "a step turning on an MCP server its agent may not use",
+    severity: "error",
+    breaks: (d) => (d.nodes.plan!.capabilities = { mcpServers: { enable: ["forbidden"] } }),
+    at: { node: "plan" },
+    message: /cannot turn on MCP server 'forbidden': agent 'worker' is not permitted to use it/,
+  },
+  {
+    rule: "a step listing an MCP server twice",
+    severity: "error",
+    breaks: (d) => (d.nodes.plan!.capabilities = { mcpServers: { enable: ["github", "github"] } }),
+    at: { node: "plan" },
+    message: /lists MCP server 'github' twice/,
+  },
+  {
+    rule: "a step giving its agent an MCP server whose secret lives on another host",
+    severity: "error",
+    breaks: (d) => (d.nodes.plan!.capabilities = { mcpServers: { enable: ["deploy"] } }),
+    at: { node: "plan" },
+    message:
+      /^MCP server 'deploy' reads secret 'deploy-key' \(DEPLOY_KEY\), which is bound to host 'build-box', but this step's agent runs on 'local'/,
+  },
+  {
+    rule: "a skill whose content no longer matches its pin",
+    severity: "error",
+    breaks: (d) => (d.nodes.plan!.capabilities = { skills: { enable: ["pinned"] } }),
+    at: {},
+    message: /^skill 'pinned' content is sha256:[0-9a-f]{64}, but its pinned digest is sha256:0{64}/,
+  },
+  {
+    rule: "a workflow-wide selection the catalog does not have",
+    severity: "error",
+    breaks: (d) => ((d as Doc & { capabilities?: unknown }).capabilities = { mcpServers: { enable: ["ghost"] } }),
+    at: {},
+    message: /no MCP server 'ghost'/,
+  },
+  {
+    rule: "a step disabling an MCP server that is not on",
+    severity: "warning",
+    breaks: (d) => (d.nodes.plan!.capabilities = { mcpServers: { disable: ["github"] } }),
+    at: { node: "plan" },
+    message: /^MCP server 'github' is not enabled at this point, so disabling it changes nothing$/,
+  },
+
   /* ---------- the same rules inside each kind of nested graph ---------- */
   {
     rule: "a node with no outgoing edge, in a loop body",
@@ -367,6 +473,10 @@ describe("the validation panel's rules, one fixture draft each (#182)", () => {
   it("starts from a clean draft that uses every node family and every kind of nested graph", () => {
     const doc = clean();
     expect(validateDraft(stringify(doc), "ai-sdlc", context)).toEqual([]);
+    // A step that uses a catalog server and a skill its agent may use is clean too.
+    const using = clean();
+    using.nodes.plan!.capabilities = { mcpServers: { enable: ["github"] }, skills: { enable: ["review"] } };
+    expect(validateDraft(stringify(using), "ai-sdlc", context)).toEqual([]);
     const types = new Set(Object.values(doc.nodes).map((node) => String(node.type)));
     expect([...types].sort()).toEqual(
       ["agent", "custom:score", "decision", "end", "gate", "loop", "parallel", "set", "start", "subworkflow"].sort(),
@@ -392,8 +502,9 @@ describe("the validation panel's rules, one fixture draft each (#182)", () => {
       const [issue] = validateDraft(stringify(document), "ai-sdlc", context);
       return { rule: rule.rule, document, issue };
     });
-    const text = `${JSON.stringify(rows, null, 2)}\n`;
-    if (process.env.UPDATE_VALIDATION_RULES) await writeFile(GOLDEN, text);
-    expect(await readFile(GOLDEN, "utf8").catch(() => "")).toBe(text);
+    if (process.env.UPDATE_VALIDATION_RULES) await writeFile(GOLDEN, `${JSON.stringify(rows, null, 2)}\n`);
+    // Compared as data: the file is formatted by the repository's formatter, not by this test.
+    const held: unknown = JSON.parse(await readFile(GOLDEN, "utf8").catch(() => "null"));
+    expect(held).toEqual(JSON.parse(JSON.stringify(rows)));
   });
 });
