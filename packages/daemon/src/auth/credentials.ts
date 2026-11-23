@@ -112,6 +112,17 @@ function sha256(secret: string): Buffer {
   return createHash("sha256").update(secret, "utf8").digest();
 }
 
+/**
+ * Twelve base64url characters, never starting with `-`: an id is typed as a command-line
+ * argument (`orca auth revoke <id>`), where a leading dash reads as an option.
+ */
+export function newCredentialId(): string {
+  for (;;) {
+    const id = randomBytes(9).toString("base64url");
+    if (!id.startsWith("-")) return id;
+  }
+}
+
 /** Split a token into its parts without judging it; `undefined` when it is not a token at all. */
 export function parseToken(token: string): { id: string; secret: string } | undefined {
   const m = TOKEN_RE.exec(token);
@@ -172,7 +183,7 @@ export class CredentialStore {
     }
     const expiresAt =
       opts.expiresAt ?? (opts.ttlMs === undefined ? undefined : new Date(this.now().getTime() + opts.ttlMs));
-    const id = randomBytes(9).toString("base64url");
+    const id = newCredentialId();
     const secret = randomBytes(32).toString("base64url");
     const record: CredentialRecord = {
       id,

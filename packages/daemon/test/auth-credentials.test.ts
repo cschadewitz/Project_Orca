@@ -13,6 +13,7 @@ import {
   CredentialStore,
   FileAuditSink,
   bootstrapLocalOwner,
+  newCredentialId,
   openAuthDirectory,
   parseToken,
   readLocalToken,
@@ -170,6 +171,11 @@ describe("CredentialStore", () => {
     await writeFile(file, "{ not json");
     expect(store.authenticate(token)).toMatchObject({ ok: false, reason: "unavailable" });
     expect(() => new CredentialStore({ file })).toThrow(CredentialError);
+  });
+
+  it("issues ids that never start with a dash, so they work as command-line arguments", () => {
+    // One draw in 64 starts with `-`; 4,000 draws all but guarantee the old generator would show one.
+    for (let i = 0; i < 4_000; i++) expect(newCredentialId()).toMatch(/^[A-Za-z0-9_][A-Za-z0-9_-]{11}$/);
   });
 
   it("refuses a principal name it could not log safely", async () => {
