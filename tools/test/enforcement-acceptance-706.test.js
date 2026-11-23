@@ -18,6 +18,7 @@ import {
   checkSupportMatrix,
   loadCatalogue,
   loadMatrix,
+  loadAssertions,
   qualifyingCases,
 } from "../guard-qualification/check-support-matrix.js";
 import { PATHS } from "../guard-qualification/paths.js";
@@ -85,12 +86,28 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     cases: acpCases.map((id) => ({ id, result: "pass" })),
     ...extra,
   });
-  const check = (agent, files = {}, paths = matrix.paths) =>
+  /**
+   * A stand-in for the committed assertion inventory: every case the connected path runs makes
+   * one Write that ORCA must deny, which is what the fixture receipts below record.
+   */
+  const inventoryFor = (paths) => {
+    const connected = paths.find((p) => p.id === "claude-connected");
+    return {
+      format: "orca-706-assertions/1",
+      paths: {
+        "claude-connected": Object.fromEntries(
+          casesFor(connected, catalogue).map((id) => [id, [{ tool: "Write", expected: ["deny"] }]]),
+        ),
+      },
+    };
+  };
+  const check = (agent, files = {}, paths = matrix.paths, assertions = inventoryFor(paths)) =>
     checkSupportMatrix(
       { ...matrix, agents: [{ ...agent, receipts: Object.keys(files) }], paths },
       catalogue,
       (p) => p in files,
       (p) => files[p],
+      assertions,
     );
   /** Every promotion is refused today, so each result leads with that; the rest is structure. */
   const structural = (problems) => {
@@ -161,7 +178,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     idealPaths.find((p) => p.id === "claude-connected"),
     catalogue,
   );
-  const checkC = (agent, files, paths = idealPaths) => check(agent, files, paths);
+  const checkC = (agent, files, paths = idealPaths, assertions) => check(agent, files, paths, assertions);
   /** A write ORCA denied: the file is as it was, bound to this call's own tool_use id. */
   const denied = {
     toolUseId: "toolu_1_0",
@@ -180,12 +197,13 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       ? receipt({
           kind,
           route: "claude-connected",
-          checks: { connects: "pass", uncoveredRoutesRefused: "pass", unpinnedRuntimeRefused: "pass" },
+          // A connected receipt makes no route-coverage claim; that is the installed receipts'.
+          checks: { connects: "pass", unpinnedRuntimeRefused: "pass" },
           // Every call has its own tool_use id across the receipt.
           cases: connectedCases.map((id, i) => ({
             id,
             result: "pass",
-            calls: evidence.map((call) => ({ ...call, toolUseId: `toolu_${i}_0` })),
+            calls: evidence.map((call) => ({ ...call, toolUseId: `toolu_case${i}` })),
           })),
         })
       : receipt({ kind, route: "claude-native-hook", cases: hookCases.map((id) => ({ id, result: "pass" })) });
@@ -193,8 +211,8 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
 
   it("tier C needs the installed receipts below it as well as the connected one", () => {
     expect(structural(checkC(hookAgent(), { "c.json": onHook("connected") }))).toEqual([
-      `${needs("A", "installed", "claude-native-hook")} (c.json: kind connected, needs installed; c.json: route claude-connected)`,
-      `${needs("B", "installed", "claude-native-hook")} (c.json: kind connected, needs installed; c.json: route claude-connected; c.json: missing ${hookCases.filter((id) => !connectedCases.includes(id)).join(",")})`,
+      `${needs("A", "installed", "claude-native-hook")} (c.json: kind connected, needs installed; c.json: route claude-connected; c.json: needs checks.uncoveredRoutesRefused passing)`,
+      `${needs("B", "installed", "claude-native-hook")} (c.json: kind connected, needs installed; c.json: route claude-connected; c.json: missing ${hookCases.filter((id) => !connectedCases.includes(id)).join(",")}; c.json: needs checks.uncoveredRoutesRefused passing)`,
     ]);
     expect(structural(checkC(hookAgent(), { "i.json": onHook("installed"), "c.json": onHook("connected") }))).toEqual(
       [],
@@ -221,13 +239,19 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       r.cases[0] = { ...r.cases[0], calls };
       return r;
     };
+    // The narrow runtime check is the connected receipt's own; route coverage is not, and the
+    // installed receipts still need it.
     const noRuntimeCheck = { ...onHook("connected"), checks: { connects: "pass", uncoveredRoutesRefused: "pass" } };
     expect(structural(checkC(hookAgent(), { "i.json": onHook("installed"), "c.json": noRuntimeCheck }))[0]).toContain(
       "c.json: needs checks.unpinnedRuntimeRefused passing",
     );
+    const noRouteCoverage = { ...onHook("installed"), checks: { connects: "pass" } };
+    expect(
+      structural(checkC(hookAgent(), { "i.json": noRouteCoverage, "c.json": onHook("connected") })).join("\n"),
+    ).toContain("i.json: needs checks.uncoveredRoutesRefused passing");
     const first = connectedCases[0];
     const ran = { ...denied.effectRef, after: "w" };
-    for (const [calls, why] of [
+    for (const [calls, why, required = 1] of [
       [[], `case ${first}: no per-call evidence`],
       // The recorded effect is re-derived from the evidence, not trusted.
       [[{ ...denied, effectRef: ran }], `case ${first}: Write: its evidence shows effect observed, not none`],
@@ -272,22 +296,68 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
           },
         ],
         `case ${first}: Write: ORCA's decision was not observed (edit-of-missing-file)`,
+        2,
       ],
-      [[{ ...denied, expected: undefined }], `case ${first}: Write: bound to no assertion`],
-      [[{ ...denied, expected: ["ask"] }], `case ${first}: Write: outcome deny is not one its assertion accepts (ask)`],
+      // The assertion and its accepted outcomes come from the committed inventory, not the receipt.
+      [
+        [{ ...denied, expected: undefined }],
+        `case ${first}: Write: bound to nothing, the inventory's assertion accepts deny`,
+      ],
+      [
+        [{ ...denied, expected: ["ask"] }],
+        `case ${first}: Write: bound to ask, the inventory's assertion accepts deny`,
+      ],
+      [
+        [
+          {
+            ...denied,
+            expected: ["ask"],
+            outcome: "ask",
+            refusal: null,
+            approvals: [{ toolCallId: "toolu_1_0", answer: "reject_once" }],
+          },
+        ],
+        `case ${first}: Write: outcome ask is not one its assertion accepts (deny)`,
+      ],
+      [[{ ...denied, tool: "Edit" }], `case ${first}: Edit: the inventory's call 1 is Write`],
+      [[denied, { ...denied, toolUseId: "toolu_x_1" }], `case ${first}: 2 calls, the inventory requires 1`],
       [[denied, denied], `tool_use id used by more than one call: toolu_1_0`],
       [
         [{ strayApprovals: [{ toolCallId: "toolu_9_0", title: "Write a.md" }] }],
         `case ${first}: an approval matched no call of its turn`,
       ],
     ]) {
-      const problems = structural(checkC(hookAgent(), { "i.json": onHook("installed"), "c.json": withCalls(calls) }));
+      const assertions = inventoryFor(idealPaths);
+      assertions.paths["claude-connected"][first] = [{ tool: "Write", expected: ["deny"], calls: required }];
+      const problems = structural(
+        checkC(hookAgent(), { "i.json": onHook("installed"), "c.json": withCalls(calls) }, idealPaths, assertions),
+      );
       expect(problems).toHaveLength(1);
       expect(problems[0]).toContain(
         "tier C on claude-native-hook needs a passing connected receipt from claude-connected",
       );
       expect(problems[0]).toContain(`c.json: ${why}`);
     }
+  });
+
+  it("tier C when the committed assertion inventory does not list the case or the route", () => {
+    const first = connectedCases[0];
+    const files = { "i.json": onHook("installed"), "c.json": onHook("connected") };
+    const noCase = inventoryFor(idealPaths);
+    delete noCase.paths["claude-connected"][first];
+    const problems = checkC(hookAgent(), files, idealPaths, noCase);
+    expect(problems[0]).toBe(`path claude-connected: case ${first} has no committed assertion inventory`);
+    expect(problems.join("\n")).toContain(`c.json: case ${first}: not in the assertion inventory`);
+    const noRoute = { format: "orca-706-assertions/1", paths: {} };
+    expect(checkC(hookAgent(), files, idealPaths, noRoute).join("\n")).toContain(
+      "c.json: no committed assertion inventory for route claude-connected",
+    );
+  });
+
+  it("the committed assertion inventory lists exactly the cases the connected path runs", () => {
+    const assertions = loadAssertions();
+    const connected = matrix.paths.find((p) => p.id === "claude-connected");
+    expect(Object.keys(assertions.paths["claude-connected"]).sort()).toEqual(casesFor(connected, catalogue).sort());
   });
 
   it("tier C when its connected path excludes a lifecycle case, named residual or not", () => {

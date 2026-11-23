@@ -59,7 +59,7 @@ describe("the connected path and the matrix agree", () => {
 describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("connected: claude (#706)", () => {
   let model;
   let path;
-  const receipt = { cases: [], unobservedCalls: [], checks: {} };
+  const receipt = { route: "claude-connected", cases: [], unobservedCalls: [], checks: {} };
 
   beforeAll(async () => {
     model = await modelStandIn();

@@ -13,7 +13,7 @@ judges each call by what it did, not by what ORCA said.
 | [support-matrix.json](../../../tools/guard-qualification/support-matrix.json) | Per path: what it verifies, what it leaves unverified, capabilities and reasoned exclusions. Per agent: pinned tuple, tier, routes, receipts, unverified statements, uncovered routes, residual risks |
 | [check-support-matrix.js](../../../tools/guard-qualification/check-support-matrix.js) | Refuses a tier not backed by passing installed or connected receipts for the exact pinned tuple, and a case neither run nor excluded |
 | [enforcement-acceptance-706.test.js](../../../tools/test/enforcement-acceptance-706.test.js) | Runs every case on every path that can run it, in ordinary CI |
-| [connected/](../../../tools/guard-qualification/connected/) | The connected path for Claude (`claude.js`), the model stand-in and the MCP recorder it runs against |
+| [connected/](../../../tools/guard-qualification/connected/) | The connected path for Claude (`claude.js`), the model stand-in and the MCP recorder it runs against, and the committed inventory of each case's assertions (`assertions.json`) |
 | [enforcement-connected-706.test.js](../../../tools/test/enforcement-connected-706.test.js) | Runs every case the connected path can run, in `claude-hook-acceptance.yml`, and writes the connected receipt |
 
 ```sh
@@ -85,13 +85,19 @@ Every call is recorded with three things kept apart, and its outcome follows fro
 | `indeterminate` | Anything without proof; fails the case |
 
 A refusal text or an absent result never shows on its own that nothing ran. Each call is also
-bound to the assertion it serves: `expected` lists the outcomes that assertion accepts, so a
-call that no assertion asked for, or whose outcome its assertion does not accept, fails the
-case. The checker does not trust the recorded effect or outcome: `connectedEvidenceProblems`
-re-derives the effect from each call's `effectRef` (`connected/evidence.js`), requires every
-`tool_use` id to belong to one call only across the receipt, every approval's tool call id to
-be the call's own, the outcome to follow from the evidence, and the outcome to be one its
-assertion accepts. Missing or ambiguous evidence leaves the case nonqualifying. The privacy
+bound to the assertion it serves. What a case must assert is not taken from the receipt: the
+committed inventory [`connected/assertions.json`](../../../tools/guard-qualification/connected/assertions.json)
+lists, per connected path and case, every call in order with its tool and the outcomes its
+assertion accepts. The receipt's own `expected` must match it. A case the inventory does not
+list, or whose calls are missing, extra, out of order, for another tool or bound to other
+outcomes, does not qualify, and the matrix check fails if a case the path runs has no
+inventory entry. The checker does not trust the recorded effect or outcome either:
+`connectedEvidenceProblems` re-derives the effect from each call's `effectRef`
+(`connected/evidence.js`), requires every `tool_use` id to belong to one call only across the
+receipt, every approval's tool call id to be the call's own, the outcome to follow from the
+evidence, and the outcome to be one the inventory's assertion accepts. Missing or
+inconsistent evidence leaves the case nonqualifying. A change to a scenario's assertions
+changes the inventory in the same review. The privacy
 cases search the tool results handed back to the model.
 
 Claude Code refuses some calls itself before any hook runs: a tool it does not offer, an Edit
@@ -115,10 +121,10 @@ cancelled and wrongly-answered asks. The cases it cannot run (raw hook input, th
 file, the installed settings, ACP options, a call from another working directory) are
 excluded with reasons and run on the synthetic paths. The run also checks that a session
 pointed at a Claude Code other than the pinned one is refused before any work
-(`checks.unpinnedRuntimeRefused`), and a connected receipt must carry it passing, on its own,
-before its cases are looked at. That check proves that one case only, not that every
-uncovered route is refused, so the connected receipt does not claim
-`checks.uncoveredRoutesRefused`; route coverage stays with the installed receipts.
+(`checks.unpinnedRuntimeRefused`), and a connected receipt must carry it passing. That check
+proves that one case only, not that every uncovered route is refused, so a connected receipt
+neither claims nor is asked for `checks.uncoveredRoutesRefused`. Route coverage is the
+installed receipts' requirement, and tier C still needs it through the tiers below it.
 
 `claude-hook-acceptance.yml` runs it after the #704 acceptance tests and keeps the receipt as
 an artifact. It is evidence for review: promotion stays disabled, so no tier changes on it.
@@ -136,7 +142,9 @@ refuses every tier above `none`, whatever receipts a row lists (`PROMOTION_ENABL
 What a receipt must show once promotion is enabled: the row pins agent version, adapter
 version, host and the exact 40-hex ORCA build. For **each route**, a committed
 `orca-enforcement-receipt/1` must match that pin and route, list no case twice, pass every case
-it lists, and carry `checks.connects` and `checks.uncoveredRoutesRefused` passing. Tiers are
+it lists, and carry `checks.connects` passing. An installed receipt also needs
+`checks.uncoveredRoutesRefused`; a connected one needs `checks.unpinnedRuntimeRefused` and
+per-call evidence matching the assertion inventory instead. Tiers are
 cumulative: each needs the receipts of every tier below it. A file path, a workflow's existence
 or a named residual risk is not proof.
 
