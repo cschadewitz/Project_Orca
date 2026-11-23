@@ -47,6 +47,12 @@ const binding = {
   /** The one host this secret is read on. A session on any other host cannot use it. */
   host: z.string().min(1),
   description: z.string().optional(),
+  /**
+   * Pins the value to one network destination that ORCA itself sends it to (#701: a review
+   * judge's bring-your-own-key). A pinned secret is never delivered to an agent or MCP server
+   * process, and an unpinned one is never sent to a judge: neither use falls back to the other.
+   */
+  destination: z.string().min(1).optional(),
 };
 
 /** Where a secret's value is read, on its host. Only metadata: never the value. */
@@ -110,6 +116,11 @@ export function validateSecretReferences(config: {
     for (const { name, ref } of secretRefs(env)) {
       const def = secrets[ref.secret];
       if (!def) issues.push({ path: `${path}.${name}`, message: `no secret '${ref.secret}' is defined in secrets` });
+      else if (def.destination !== undefined)
+        issues.push({
+          path: `${path}.${name}`,
+          message: `secret '${ref.secret}' is pinned to destination '${def.destination}', which only ORCA's own connection to it may use. An agent or MCP server cannot refer to it`,
+        });
       else if (hostId !== undefined && def.host !== hostId)
         issues.push({
           path: `${path}.${name}`,

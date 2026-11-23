@@ -189,6 +189,13 @@ export function planSessionSecrets(
         `it is bound to host '${def.host}', and this session runs on '${host.id}'`,
         host.id,
       );
+    if (def.destination !== undefined)
+      throw secretUnavailable(
+        id,
+        "unsupported",
+        `it is pinned to destination '${def.destination}', and only ORCA's own connection to it may use it`,
+        host.id,
+      );
     if (!host.deliversSecrets)
       throw secretUnavailable(id, "unsupported", `host '${host.id}' cannot read secrets`, host.id);
     const delivery: SecretDelivery = { id, source: secretSource(def), env: [] };
