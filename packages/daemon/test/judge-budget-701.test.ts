@@ -21,7 +21,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { JUDGE_BUDGET_ANCHOR_FILENAME, JUDGE_BUDGET_FILENAME, judgeBudgetKey, type JudgeBudgetIo } from "@orca/agents";
+import {
+  JUDGE_BUDGET_ANCHOR_FILENAME,
+  JUDGE_BUDGET_FILENAME,
+  judgeBudgetKey,
+  type JudgeBudgetIo,
+} from "@orca/agents/judge-budget";
 import {
   describeJudgeBudgetUnavailable,
   judgeBudgetAnchorDir,

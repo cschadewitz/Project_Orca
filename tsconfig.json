@@ -19,6 +19,7 @@
       "@orca/cli": ["./packages/cli/src/index.ts"],
       "@orca/protocol/update-window": ["./packages/protocol/src/update-window.ts"],
       "@orca/protocol/first-run-fence": ["./packages/protocol/src/first-run-fence.ts"],
+      "@orca/agents/judge-budget": ["./packages/agents/src/review-judge/judge-budget.ts"],
       "@orca/protocol/update-handoff": ["./packages/protocol/src/update-handoff.ts"],
       "@orca/protocol/remote-access": ["./packages/protocol/src/remote-access.ts"],
       "@orca/protocol/server-setup": ["./packages/protocol/src/server-setup.ts"],

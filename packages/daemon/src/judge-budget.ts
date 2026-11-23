@@ -2,7 +2,7 @@
  * The daemon's qualified judge budget (#701, item 2 of the activation plan): the one place that may present the
  * plain-rule judge's daily budget as durable.
  *
- * `daemonJudgeBudget` (`@orca/agents`, #1029) keeps the count at `<store>/review-judge/budget.json` and a high-water
+ * `daemonJudgeBudget` (`@orca/agents/judge-budget`, #1029) keeps the count at `<store>/review-judge/budget.json` and a high-water
  * mark at `<anchor>/review-judge/budget-anchor.json`, so restoring the store from a backup cannot hand back budget
  * that was already spent. On its own it reports `durable: false`, because it only checks that the two paths are spelled
  * apart. This module enforces what that primitive cannot, at construction, and again before every reservation:
@@ -49,7 +49,7 @@ import {
   type JudgeBudget,
   type JudgeBudgetIo,
   type JudgeBudgetState,
-} from "@orca/agents";
+} from "@orca/agents/judge-budget";
 import { CONVERTED_STORE_SUFFIX } from "@orca/store";
 
 /** The platforms whose replacement protocol (write, sync, rename, sync the directory) is verified. */

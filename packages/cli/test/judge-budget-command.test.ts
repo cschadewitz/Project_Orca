@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { JUDGE_BUDGET_FILENAME, judgeBudgetKey } from "@orca/agents";
+import { JUDGE_BUDGET_FILENAME, judgeBudgetKey } from "@orca/agents/judge-budget";
 import { qualifiedJudgeBudget } from "@orca/daemon";
 import { workspaceIdentity } from "@orca/store";
 import { judgeCommand } from "../src/commands/judge.js";

@@ -16,7 +16,7 @@
 import { lstat, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { OrcaError } from "@orca/core";
-import { JUDGE_BUDGET_FILENAME } from "@orca/agents";
+import { JUDGE_BUDGET_FILENAME } from "@orca/agents/judge-budget";
 import { describeJudgeBudgetUnavailable, inspectJudgeBudget, qualifiedJudgeBudget } from "@orca/daemon";
 import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
 import { workspaceIdentity } from "@orca/store";
