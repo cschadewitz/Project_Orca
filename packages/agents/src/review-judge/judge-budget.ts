@@ -6,8 +6,7 @@
  * Durability. A reservation is acknowledged only after it is committed: the new count is written to a temporary
  * file, that file is synced, renamed over the budget file, and the directory is synced; then the same is done for
  * the anchor (below). Only then does `reserve` answer `true`. Any failure on that path answers `false`, and the call
- * is not made. Node cannot sync a directory on Windows, so the replacement is not verified durable there: on Windows
- * the budget reports `durable: false`, which activation refuses, until that protocol is verified on it. Reads and
+ * is not made. (Node cannot sync a directory on Windows, so there the replacement protocol is not verified.) Reads and
  * writes are serialized across processes with the policy files' strict-ownership lock; a lock left by a crashed
  * process is never taken over, so calls are refused (the person is asked) until it is removed.
  *
@@ -24,6 +23,12 @@
  * the budget, so a crash between the two leaves the anchor behind, never ahead; every acknowledged reservation is in
  * both. The two directories must not contain one another. What this cannot detect is a coordinated rollback of
  * both directories to the same earlier pair; that is out of scope, as for the engine's revision runtime.
+ *
+ * Unqualified. This primitive takes the two directories as given: it only checks that their paths do not contain
+ * one another, which does not show that they are physically separate, that the anchor is excluded from the
+ * daemon's supported restore, or that the platform's replacement protocol is verified (Windows is not). So it
+ * reports `durable: false`, and activation, which requires `true`, refuses it. Only a reviewed daemon integration
+ * that enforces those prerequisites at its construction boundary may present a budget as durable.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
@@ -41,7 +46,10 @@ const MAX_LIMIT = 100_000;
 export interface JudgeBudget {
   /** Whether the call was reserved and durably committed. Every refusal is `false`; never throws. */
   readonly reserve: (key: string, limit: number) => Promise<boolean>;
-  /** Whether the count is the daemon's durable one. Activation requires `true`. */
+  /**
+   * Whether the count is the daemon's qualified durable one. Activation requires `true`. Neither budget here
+   * reports it: only a reviewed daemon integration that enforces the storage prerequisites may.
+   */
   readonly durable: boolean;
 }
 
@@ -204,14 +212,7 @@ async function commitBoth(
   await commit(io, anchor, mark, owned);
 }
 
-function makeFileBudget(
-  file: string,
-  anchor: string,
-  now: () => number,
-  io: JudgeBudgetIo,
-  lockTimeoutMs: number,
-  durable: boolean,
-) {
+function makeFileBudget(file: string, anchor: string, now: () => number, io: JudgeBudgetIo, lockTimeoutMs: number) {
   const locked = <T>(fn: (owned: () => Promise<void>) => Promise<T>) =>
     withPolicyLock(file, { strictOwnership: true, timeoutMs: lockTimeoutMs }, fn);
 
@@ -297,7 +298,8 @@ function makeFileBudget(
     }
   };
 
-  return Object.freeze({ durable, reserve, initialize });
+  // Unqualified: see the module comment. Never signals activation readiness on its own.
+  return Object.freeze({ durable: false as const, reserve, initialize });
 }
 
 /** Where the daemon keeps the budget and its anchor. The two must not contain one another. */
@@ -320,7 +322,7 @@ const within = (parent: string, child: string) =>
  */
 export function daemonJudgeBudget(
   dirs: DaemonJudgeBudgetDirs,
-  options: { now?: () => number; io?: JudgeBudgetIo; lockTimeoutMs?: number; platform?: NodeJS.Platform } = {},
+  options: { now?: () => number; io?: JudgeBudgetIo; lockTimeoutMs?: number } = {},
 ): JudgeBudget & { readonly initialize: () => Promise<JudgeBudgetInitResult> } {
   const stateDir = resolve(dirs.stateDir);
   const anchorDir = resolve(dirs.anchorDir);
@@ -328,15 +330,13 @@ export function daemonJudgeBudget(
     throw new Error("the judge budget's anchor directory must be outside its state directory, and the other way round");
   const file = resolve(stateDir, JUDGE_BUDGET_FILENAME);
   const anchor = resolve(anchorDir, JUDGE_BUDGET_ANCHOR_FILENAME);
-  // The directory sync is part of the durability claim; where Node cannot do it, the budget is not durable.
-  const durable = (options.platform ?? process.platform) !== "win32";
   const timeout = options.lockTimeoutMs ?? 5_000;
-  if (options.now || options.io || options.platform)
-    return makeFileBudget(file, anchor, options.now ?? Date.now, options.io ?? NODE_IO, timeout, durable);
+  if (options.now || options.io)
+    return makeFileBudget(file, anchor, options.now ?? Date.now, options.io ?? NODE_IO, timeout);
   const id = JSON.stringify([file, anchor]);
   let budget = budgets.get(id);
   if (!budget) {
-    budget = makeFileBudget(file, anchor, Date.now, NODE_IO, timeout, durable);
+    budget = makeFileBudget(file, anchor, Date.now, NODE_IO, timeout);
     budgets.set(id, budget);
   }
   return budget;

@@ -15,7 +15,8 @@
  * - the daily budget is reserved first and never refunded (over it the call fails, which the judge reports as
  *   `unavailable`, so the person is asked). It comes from the injected `JudgeBudget`: `daemonJudgeBudget` is shared
  *   by every judge using the same key and destination and survives restarts; `memoryJudgeBudget` (tests) does
- *   not, and the result says which (`durableBudget`);
+ *   not. `durableBudget` is true only for a budget qualified by a reviewed daemon integration (none yet), and
+ *   activation requires it;
  * - the key is leased for that one request only, for purpose `review-judge` and the pinned destination;
  * - the disclosure grant is rechecked as the lease's last awaited step, and again synchronously at the dispatch
  *   itself (`currentNow`), with the call's cancellation, in the turn that calls the sender. The send happens only
@@ -64,7 +65,7 @@ export interface PlainRuleJudgeConfig {
     /** Default 5000. */
     readonly timeoutMs?: number;
     /**
-     * Default 200. Counted per UTC day, reserved per call and never refunded, in the injected budget: durable and
+     * Default 200. Counted per UTC day, reserved per call and never refunded, in the injected budget: committed and
      * shared per key and destination with `daemonJudgeBudget`.
      */
     readonly maxCallsPerDay?: number;
@@ -190,7 +191,10 @@ export async function preparePlainRuleJudge(
   services: {
     readonly credentials: JudgeCredentialService;
     readonly disclosure: PlainRuleDisclosureService;
-    /** The daily call budget. Activation requires a durable one (`daemonJudgeBudget`). */
+    /**
+     * The daily call budget. Activation requires a qualified durable one, which only a reviewed daemon integration
+     * provides; `daemonJudgeBudget` alone is shared and committed but reports `durable: false`.
+     */
     readonly budget: JudgeBudget;
     /** Tests inject the HTTPS request function and the clock. */
     readonly request?: HttpsRequestFn;

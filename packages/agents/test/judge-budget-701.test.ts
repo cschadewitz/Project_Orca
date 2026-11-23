@@ -1,5 +1,6 @@
 /**
- * #701 the plain-rule judge's daily budget: one per daemon, durable, shared, and never silently recovered. Real
+ * #701 the plain-rule judge's daily budget: one per daemon, committed before acknowledged, shared, never silently
+ * recovered, and unqualified for activation until a reviewed daemon integration enforces its storage prerequisites. Real
  * temporary files; an injected file-system layer checks the commit order and its failures. No network.
  */
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -72,7 +73,6 @@ describe("#701 judge budget: no silent recovery", () => {
     await initializedYesterday();
     const a = budget();
     const b = budget();
-    expect(a.durable).toBe(true);
     expect(await a.reserve(KEY, 3)).toBe(true);
     expect(await b.reserve(KEY, 3)).toBe(true);
     expect(await budget().reserve(KEY, 3)).toBe(true);
@@ -235,10 +235,13 @@ describe("#701 judge budget: rollback across restarts", () => {
     expect(() => daemonJudgeBudget({ stateDir: join(anchorDir, "state"), anchorDir })).toThrow(/outside/);
   });
 
-  it("reports Windows as not durable: its directory sync is not verified", () => {
-    expect(daemonJudgeBudget(dirs(), { platform: "win32" }).durable).toBe(false);
-    expect(daemonJudgeBudget(dirs(), { platform: "linux" }).durable).toBe(true);
-    expect(daemonJudgeBudget(dirs(), { platform: "darwin" }).durable).toBe(true);
+  it("is unqualified: it never signals activation readiness on its own", async () => {
+    // Path checks cannot show physical separation, restore exclusion or a verified platform (Windows).
+    expect(daemonJudgeBudget(dirs()).durable).toBe(false);
+    await initializedYesterday();
+    const b = budget();
+    expect(await b.reserve(KEY, 3)).toBe(true);
+    expect(b.durable).toBe(false);
   });
 });
 

@@ -378,9 +378,8 @@ On each call:
   or a re-preparation does not start at zero.
   - Durable before acknowledged: a reservation answers yes only after the new count is written to a
     temporary file, that file is synced, renamed over the budget file and the directory is synced,
-    and then the same is done for the anchor. Any failure on that path refuses the call. Node cannot
-    sync a directory on Windows, so there the budget reports `durable: false`, which activation
-    refuses, until the replacement protocol is verified on Windows. Reads and writes go through the
+    and then the same is done for the anchor. Any failure on that path refuses the call. (Node
+    cannot sync a directory on Windows, so the protocol is not verified there.) Reads and writes go through the
     policy files' strict-ownership lock; a lock left by a crashed process is never taken over, so
     calls are refused (the person is asked) until it is removed.
   - No silent recovery: only `initialize`, an explicit owner step, creates the budget file, never
@@ -396,8 +395,13 @@ On each call:
     ahead. A coordinated rollback of both directories to the same earlier pair is not detected;
     like the engine's revision runtime, this claims no protection against rolling back every copy
     of the evidence.
-  - `memoryJudgeBudget` is for tests and reports `durableBudget: false`, which activation refuses.
-    Nothing in this step wires the judge into activation;
+  - Unqualified: the primitive only checks that the two paths do not contain one another, which does
+    not show that the directories are physically separate, that the anchor is excluded from the
+    daemon's supported restore, or that the platform's protocol is verified (Windows is not). So
+    `daemonJudgeBudget` reports `durable: false` (and `durableBudget: false`), which activation
+    refuses. Only a reviewed daemon integration that enforces those prerequisites at its
+    construction boundary may present a budget as durable. `memoryJudgeBudget` is for tests and is
+    not durable either. Nothing in this step wires the judge into activation;
 - the key is leased for that one request (purpose `review-judge`, the pinned destination);
 - the grant is rechecked as the lease's last awaited step. Then, synchronously at the dispatch, in
   the turn that calls the sender, the call's cancellation and the grant's current revision and
