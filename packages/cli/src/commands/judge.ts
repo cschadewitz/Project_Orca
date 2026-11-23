@@ -1,0 +1,131 @@
+/**
+ * `orca judge budget ...` - the owner's steps for the plain-language rule judge's daily budget (#701).
+ *
+ *   judge budget status   read-only: whether this machine can keep the budget durably, where, and whether the budget
+ *                         is not created yet, ready, or refused
+ *   judge budget init     create the budget; the day it is created counts as fully spent
+ *   judge budget reset    replace a budget that was refused (for example after the store was restored from a backup),
+ *                         under the budget's lock; the old one stays as it was on any failure before the replacement,
+ *                         and the new one also starts with that day fully spent
+ *
+ * The budget lives in the store (`<store>/review-judge/budget.json`) and its anchor in a per-user directory outside
+ * it (`qualifiedJudgeBudget` in `@orca/daemon`), so restoring the store cannot hand back budget already spent. A
+ * budget is never created or replaced by the daemon on its own: only these explicit steps do it. Windows is not
+ * supported: the judge stays unavailable there.
+ */
+import { lstat, readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { OrcaError } from "@orca/core";
+import { JUDGE_BUDGET_FILENAME } from "@orca/agents/judge-budget";
+import { describeJudgeBudgetUnavailable, inspectJudgeBudget, qualifiedJudgeBudget } from "@orca/daemon";
+import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
+import { workspaceIdentity } from "@orca/store";
+import { loadConfig } from "../bootstrap.js";
+import type { CommandContext } from "./index.js";
+
+export async function judgeCommand(ctx: CommandContext): Promise<number> {
+  const [area, sub = "status"] = ctx.positionals;
+  if (area !== "budget") throw new OrcaError("CONFIG_INVALID", "usage: orca judge budget [status | init | reset]");
+  if (sub !== "status" && sub !== "init" && sub !== "reset")
+    throw new OrcaError("CONFIG_INVALID", `unknown judge budget step '${sub}': use status, init or reset`);
+  const { config, configDir } = await loadConfig(ctx.cwd, ctx.configPath);
+  const storeDir = resolve(configDir, config.storeDir);
+  try {
+    if (!(await lstat(storeDir)).isDirectory()) throw new Error("not a directory");
+  } catch {
+    ctx.err(`There is no store at ${storeDir} yet. Start ORCA once in this workspace, then run this again.`);
+    return 1;
+  }
+  if (sub !== "status")
+    try {
+      assertNoUnownedFirstRunMutation(storeDir);
+    } catch {
+      ctx.err(
+        "This store belongs to the desktop app's workspace, so the command line does not change it. Nothing was changed.",
+      );
+      return 1;
+    }
+  if (sub === "status") return status(ctx, storeDir);
+  const qualified = await qualifiedJudgeBudget({ storeDir, workspaceId: await workspaceIdentity(storeDir) });
+  if (qualified.status !== "durable") {
+    ctx.err(describeJudgeBudgetUnavailable(qualified.reason));
+    return 1;
+  }
+  ctx.out(`budget  ${join(qualified.storeDir, JUDGE_BUDGET_FILENAME)}`);
+  ctx.out(`anchor  ${qualified.anchorDir}`);
+  const result = sub === "reset" ? await qualified.budget.replace() : await qualified.budget.initialize();
+  switch (result.status) {
+    case "initialized":
+      ctx.out(
+        `${sub === "reset" ? "replaced" : "created"} for ${result.day} (UTC). That day counts as fully spent, so the judge's first calls are allowed from the next UTC day.`,
+      );
+      return 0;
+    case "uncertain":
+      ctx.err(
+        "Writing the new budget began but did not finish, so either the old budget or the new one may now be in place. Run `orca judge budget status` to see which; if it reports the budget refused, run `orca judge budget reset` again.",
+      );
+      return 1;
+    case "refused":
+      ctx.err(
+        result.reason === "exists"
+          ? "A budget already exists, so nothing was changed. Use `orca judge budget reset` only if `orca judge budget status` reports it as refused."
+          : result.reason === "clock"
+            ? "The system clock could not be read, or is before a day the budget already recorded, so nothing was changed."
+            : result.reason === "anchor"
+              ? `The budget's anchor in ${qualified.anchorDir} cannot be read, so the day it protects cannot be trusted and nothing was changed. Remove that anchor file yourself only if you accept that the budget may restart from the budget file's own day.`
+              : result.reason === "storage"
+                ? "The budget's folders changed or are no longer separate from the store, so nothing was changed."
+                : "The budget could not be written, so nothing was changed.",
+      );
+      return 1;
+  }
+}
+
+/** Read-only: changes nothing in the store or the anchor directory. */
+async function status(ctx: CommandContext, storeDir: string): Promise<number> {
+  const workspaceId = await readWorkspaceId(storeDir);
+  if (!workspaceId) {
+    ctx.err("This store has no workspace identity yet. Start ORCA once in this workspace, then run this again.");
+    return 1;
+  }
+  const inspected = await inspectJudgeBudget({ storeDir, workspaceId });
+  if (inspected.status !== "eligible") {
+    ctx.err(describeJudgeBudgetUnavailable(inspected.reason));
+    return 1;
+  }
+  ctx.out(`budget  ${join(inspected.storeDir, JUDGE_BUDGET_FILENAME)}`);
+  ctx.out(`anchor  ${inspected.anchorDir}${inspected.anchorCreated ? "" : " (not created yet)"}`);
+  ctx.out("storage eligible: the anchor is outside the store and every restore ORCA supports");
+  switch (inspected.budget.state) {
+    case "uninitialized":
+      ctx.out("budget  not created: run `orca judge budget init`");
+      return 0;
+    case "ready":
+      ctx.out(
+        `budget  ready: agrees with its anchor and the clock; started ${inspected.budget.initializedDay} (UTC), last counted ${inspected.budget.day}${
+          inspected.budget.firstDaySpent
+            ? "; today is its first day, which counts as spent, so calls start tomorrow (UTC)"
+            : ""
+        }. Each call still needs the budget's lock and room in today's limit.`,
+      );
+      return 0;
+    case "refused":
+      ctx.out(
+        inspected.budget.reason === "clock"
+          ? "budget  refused: the system clock is before a day the budget already recorded. Fix the clock, or wait for that day; a reset cannot start before it."
+          : "budget  refused: it is unreadable or disagrees with its anchor (for example after the store was restored). Run `orca judge budget reset`; the new budget starts with today spent.",
+      );
+      return 1;
+  }
+}
+
+/** The store's workspace identity, read without the identity lock and without creating one. */
+async function readWorkspaceId(storeDir: string): Promise<string | undefined> {
+  try {
+    await lstat(join(storeDir, ".workspace-identified"));
+    const id = (await readFile(join(storeDir, "workspace-identity", "id"), "utf8")).trim();
+    return /^[0-9a-f-]{36}$/i.test(id) ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
