@@ -160,15 +160,14 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
     const sentUnder = freshness.current;
     let mine = true;
     void bridge.call("workflowDrafts.open", { workflowId }).then((result) => {
-      if (!live.current || !mine) return;
+      // An open from a context that has moved on is dropped whole, its refusal too: the
+      // re-read that move started answers for the new one, and draws the draft from there.
+      if (!live.current || !mine || sentUnder !== freshness.current) return;
       if (!result.ok) {
         setState({ phase: "error", error: describe(result.error) });
         return;
       }
-      // The first view is all there is to draw. If the context moved while it was out, it
-      // stays marked `checking` until the re-read that move started answers.
-      if (sentUnder === freshness.current) take(result.result, sentUnder);
-      else accept(result.result);
+      take(result.result, sentUnder);
     });
     return () => {
       mine = false;
@@ -204,25 +203,36 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
   }, [revalidate]);
 
   /** Run `call` after everything already queued, with the busy flag and the refusal handling. */
-  const enqueue = useCallback(<T>(call: (draft: WorkflowDraftView) => Promise<T>): Promise<T | undefined> => {
-    const next = queue.current.then(async () => {
-      await settling.current;
-      const draft = latest.current;
-      if (!draft || !live.current) return undefined;
-      setBusy(true);
-      try {
-        return await call(draft);
-      } finally {
-        if (live.current) setBusy(false);
-      }
-    });
-    queue.current = next.catch(() => undefined);
-    return next;
-  }, []);
+  /**
+   * Run `call` after everything already queued, under the freshness it was asked in: a call
+   * asked for the previous context is never sent to the next one, against a revision it
+   * never saw. `call` gets that freshness to check its own answer against.
+   */
+  const enqueue = useCallback(
+    <T>(call: (draft: WorkflowDraftView, sentUnder: number) => Promise<T>): Promise<T | undefined> => {
+      const queuedUnder = freshness.current;
+      const next = queue.current.then(async () => {
+        await settling.current;
+        const draft = latest.current;
+        if (!draft || !live.current || queuedUnder !== freshness.current) return undefined;
+        setBusy(true);
+        try {
+          return await call(draft, queuedUnder);
+        } finally {
+          if (live.current) setBusy(false);
+        }
+      });
+      queue.current = next.catch(() => undefined);
+      return next;
+    },
+    [],
+  );
 
   /** A refusal: re-read on a conflict, otherwise say it. */
   const refused = useCallback(
-    async (error: ProtocolError) => {
+    async (error: ProtocolError, sentUnder: number) => {
+      // A refusal from a context that has since moved on says nothing about this one.
+      if (sentUnder !== freshness.current) return;
       if (error.code === "CONFIG_STALE") {
         setConflict(describe(error));
         await reload();
@@ -233,8 +243,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
 
   const mutate = useCallback(
     (method: "workflowDrafts.undo" | "workflowDrafts.redo") =>
-      enqueue(async (draft) => {
-        const sentUnder = freshness.current;
+      enqueue(async (draft, sentUnder) => {
         const result = await window.orca.workflowDrafts!.call(method, {
           workflowId,
           expectedRevision: draft.revision,
@@ -243,15 +252,14 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
           setConflict(undefined);
           setMessage(undefined);
           take(result.result, sentUnder);
-        } else await refused(result.error);
+        } else await refused(result.error, sentUnder);
       }),
     [enqueue, workflowId, take, refused],
   );
 
   const apply = useCallback(
     async (ops: DraftOperation[]): Promise<boolean> =>
-      (await enqueue(async (draft) => {
-        const sentUnder = freshness.current;
+      (await enqueue(async (draft, sentUnder) => {
         const result = await window.orca.workflowDrafts!.call("workflowDrafts.apply", {
           workflowId,
           expectedRevision: draft.revision,
@@ -264,7 +272,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
           take(result.result, sentUnder);
           return true;
         }
-        await refused(result.error);
+        await refused(result.error, sentUnder);
         return false;
       })) ?? false,
     [enqueue, workflowId, take, refused],
@@ -272,13 +280,14 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
 
   const review = useCallback(
     () =>
-      enqueue(async (draft) => {
+      enqueue(async (draft, sentUnder) => {
         const result = await window.orca.workflowDrafts!.call("workflowDrafts.review", {
           workflowId,
           expectedRevision: draft.revision,
         });
-        if (result.ok) return result.result;
-        await refused(result.error);
+        // A preview from a context that has moved on is evidence for nothing on screen.
+        if (result.ok) return sentUnder === freshness.current ? result.result : undefined;
+        await refused(result.error, sentUnder);
         return undefined;
       }),
     [enqueue, workflowId, refused],
@@ -286,7 +295,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
 
   const publish = useCallback(
     (reviewToken: string) =>
-      enqueue(async (draft) => {
+      enqueue(async (draft, sentUnder) => {
         const result = await window.orca.workflowDrafts!.call("workflowDrafts.publish", {
           workflowId,
           expectedRevision: draft.revision,
@@ -296,7 +305,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
           latest.current = undefined;
           return result.result;
         }
-        await refused(result.error);
+        await refused(result.error, sentUnder);
         return undefined;
       }),
     [enqueue, workflowId, refused],
@@ -304,7 +313,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
 
   const discard = useCallback(
     async (): Promise<boolean> =>
-      (await enqueue(async (draft) => {
+      (await enqueue(async (draft, sentUnder) => {
         const result = await window.orca.workflowDrafts!.call("workflowDrafts.discard", {
           workflowId,
           expectedRevision: draft.revision,
@@ -313,7 +322,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
           latest.current = undefined;
           return true;
         }
-        await refused(result.error);
+        await refused(result.error, sentUnder);
         return false;
       })) ?? false,
     [enqueue, workflowId, refused],

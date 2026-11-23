@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { WorkflowDraftView } from "@orca/protocol";
 import type { WorkflowDraftBridge } from "../../src/workflow-draft-bridge.js";
+import type { DaemonTargetSnapshot } from "../../src/daemon-connection.js";
 import { useWorkflowDraft } from "../src/workflow/editor/use-workflow-draft.js";
 import { installBridge } from "./harness.js";
 
@@ -283,5 +284,90 @@ describe("useWorkflowDraft", () => {
     expect(revisionOf(hook)).toBe(1);
     await act(() => hook.result.current.reload());
     expect(revisionOf(hook)).toBe(0);
+  });
+  describe("across a change of daemon target (#182)", () => {
+    function target(fake: ReturnType<typeof drafts>["fake"]) {
+      let epoch = 1;
+      const listeners = new Set<(snapshot: DaemonTargetSnapshot) => void>();
+      const read = (): DaemonTargetSnapshot => ({
+        epoch,
+        url: "http://localhost:6722",
+        source: "saved",
+        environmentOverride: false,
+      });
+      fake.bridge.daemonConnection = {
+        read,
+        subscribe: (listener) => {
+          listeners.add(listener);
+          return () => void listeners.delete(listener);
+        },
+        onShow: () => () => {},
+        show: () => {},
+        cancel: () => {},
+        activate: () => {},
+        connect: async () => ({ ok: true }),
+      };
+      return () => {
+        epoch += 1;
+        listeners.forEach((listener) => listener(read()));
+      };
+    }
+
+    it("drops an open from the former target that answers after the new target's read", async () => {
+      let answerOpen!: (value: Answer) => void;
+      const bridge = drafts({
+        "workflowDrafts.open": () => new Promise<Answer>((resolve) => (answerOpen = resolve)),
+        "workflowDrafts.get": () => ({
+          ok: true,
+          result: { draft: view(5), layout: { graphs: {} }, editable: true },
+        }),
+      });
+      const change = target(bridge.fake);
+      const hook = renderHook(() => useWorkflowDraft("ai-sdlc"));
+      await act(async () => change());
+      await waitFor(() => expect(revisionOf(hook)).toBe(5));
+      expect(hook.result.current.checking).toBe(false);
+      // The former target's open: another creation, so `accept` alone would take it.
+      await act(async () => answerOpen({ ok: true, result: { ...view(0), createdAt: "2026-10-09T12:00:00.000Z" } }));
+      expect(revisionOf(hook)).toBe(5);
+      expect(hook.result.current.checking).toBe(false);
+      expect(hook.result.current.state.phase).toBe("ready");
+    });
+
+    it("never sends an edit queued for the former target to the new one", async () => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const { fake, call } = drafts({
+        "workflowDrafts.apply": async (params) => {
+          await held;
+          return { ok: true, result: view((params.expectedRevision as number) + 1) };
+        },
+        "workflowDrafts.get": () => ({
+          ok: true,
+          result: { draft: view(9), layout: { graphs: {} }, editable: true },
+        }),
+      });
+      const change = target(fake);
+      const hook = renderHook(() => useWorkflowDraft("ai-sdlc"));
+      await waitFor(() => expect(hook.result.current.state.phase).toBe("ready"));
+      let first!: Promise<boolean>;
+      let second!: Promise<boolean>;
+      act(() => {
+        first = hook.result.current.apply([{ op: "tidy" }]);
+        second = hook.result.current.apply([{ op: "tidy" }]);
+      });
+      await waitFor(() => expect(call.mock.calls.some(([method]) => method === "workflowDrafts.apply")).toBe(true));
+      await act(async () => change());
+      release();
+      await act(async () => {
+        expect(await first).toBe(true); // sent before the change, and applied there
+        expect(await second).toBe(false); // asked for the old target: never sent
+      });
+      const applies = call.mock.calls.filter(([method]) => method === "workflowDrafts.apply");
+      expect(applies).toHaveLength(1);
+      // The first's reply belongs to the old target; the new target's read stands.
+      expect(revisionOf(hook)).toBe(9);
+      expect(hook.result.current.checking).toBe(false);
+    });
   });
 });
