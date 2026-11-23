@@ -24,6 +24,7 @@ import type { ManagedServerView, ServerUpdateBridge } from "./server-update.js";
 import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
 import type { MacUpdateCommand, MacUpdateView } from "./mac-update-contract.js";
 import type { LinuxRestartState, LinuxUpdateAction, LinuxUpdateNotice } from "./linux-update-contract.js";
+import type { StoreSwitchState } from "./store-switch-contract.js";
 import type {
   CheckoutEvidence,
   LaunchReview,
@@ -302,6 +303,12 @@ export interface OrcaBridge {
     read(): LinuxRestartState | null;
     restart(): Promise<BridgeResult<LinuxRestartState | null>>;
     subscribe(listener: (state: LinuxRestartState | null) => void): () => void;
+  };
+  /** "Switch to SQLite" for the app's own workspace (#339): main decides and runs it. */
+  storeSwitch?: {
+    read(): StoreSwitchState;
+    restart(): Promise<BridgeResult<StoreSwitchState>>;
+    subscribe(listener: (state: StoreSwitchState) => void): () => void;
   };
   guidedLaunch?: {
     snapshot(): Promise<BridgeResult<GuidedLaunchSnapshot>>;

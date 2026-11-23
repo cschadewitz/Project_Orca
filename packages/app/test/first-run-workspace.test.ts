@@ -627,3 +627,33 @@ it.each(["parked", "setup"] as const)(
     await f.workspace.close();
   },
 );
+
+it("asks for the store's switch to SQLite once per owned launch, and passes it to that launch only (#339)", async () => {
+  for (const asked of [true, false]) {
+    const takeStoreSwitch = vi.fn(() => asked);
+    const f = rig({ takeStoreSwitch });
+    (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
+    expect(takeStoreSwitch).toHaveBeenCalledExactlyOnceWith(selectedPath);
+    if (asked) expect(f.start.mock.calls[0]![0]).toMatchObject({ storeSwitch: "sqlite" });
+    else expect(f.start.mock.calls[0]![0]).not.toHaveProperty("storeSwitch");
+    await f.workspace.close();
+  }
+});
+
+it("reports the app's own store, and settles the stopped daemon for a store switch only after the exact stop (#339)", async () => {
+  const f = rig();
+  expect(f.workspace.storeSwitchTarget).toBeUndefined();
+  const store = { backend: "file", sqliteSwitch: "available" } as const;
+  (await f.workspace.prepareFirstRunConnection(selectedPath)).activate({ ...hello(), store });
+  expect(f.workspace.storeSwitchTarget).toEqual({ path: selectedPath, store });
+  vi.spyOn(f.workspace.client, "maintenance").mockResolvedValue({ ready: true, active: [] });
+  await expect(f.workspace.settleForStoreSwitch("owner")).rejects.toThrow("not prepared");
+  await f.workspace.prepareUpdate("owner");
+  // Held for the restart: nothing is offered meanwhile.
+  expect(f.workspace.storeSwitchTarget).toBeUndefined();
+  await expect(f.workspace.settleForStoreSwitch("owner")).rejects.toThrow("not available");
+  await f.workspace.stopForUpdate("owner");
+  await expect(f.workspace.settleForStoreSwitch("other")).rejects.toThrow("not prepared");
+  expect(await f.workspace.settleForStoreSwitch("owner")).toBe(selectedPath);
+  await f.workspace.close();
+});

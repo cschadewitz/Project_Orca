@@ -354,9 +354,25 @@ marker was written and flushed).
 - A daemon outside an app workspace (no fence) refuses (`SWITCH_REFUSED`) and points
   to `convert`. Windows is refused (#947).
 
-Before the app offers the switch to users, released-binary and native store
-acceptance of a switched app workspace is a separate gate. How the app offers it is a
-follow-up.
+**How the app asks** (`packages/app/src/main/store-switch.ts`). The daemon reports its
+store in `hello.store` (protocol 2.7): the backend, whether the switch is available
+(an app workspace on files, its fence held, not Windows) and how a switch asked for on
+its launch ended. Config shows a "Workspace storage" section with the backend and that
+outcome, and "Switch to SQLite" when main offers it. Main alone decides: only for the
+connected bundled first-run daemon reporting the switch available. After a
+confirmation, the restart goes through the update guards: drafts prepared, the
+daemon's admission closed and drained (refused while a run is active), the exact
+daemon stopped and its exit observed, its first-run reservation settled. Then a
+request naming the workspace is written (`<userData>/store-switch/request.json`) and
+ORCA restarts. The next owned launch of that workspace asks for the request, which is
+spent by asking whether or not it names the workspace, and starts its daemon with the
+switch; an update recovery's launch never does. A refusal before the stop reopens
+admission on the running daemon; after it, nothing restarts the old daemon, and
+reopening ORCA starts the workspace on files.
+
+**Not offered yet.** Released-binary and native signed/installed acceptance of the
+switch and of its rollback is a separate gate. Until it passes, the app offers the
+switch only when started with `ORCA_SQLITE_SWITCH=1`, which only that acceptance sets.
 
 ### The switch in place
 

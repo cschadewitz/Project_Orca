@@ -1226,6 +1226,7 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
     orcaVersion: ORCA_VERSION,
     storeDir,
     deployment: managedDeployment(process.env),
+    store: app.storeStatus,
     // With control on - the default - this process is one of the store's writers. It
     // takes each run's single-writer lease before it appends, exactly as a CLI does, and
     // refuses a run another live process holds (ADR 0008, #101). `--read-only` gives

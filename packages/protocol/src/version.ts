@@ -189,6 +189,11 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * names a ref sends it only to a daemon that lists the field, and refuses any other rather
  * than run without it.
  */
+/**
+ * 2.7 also adds an optional `store` on `hello` (#339): the metadata backend of the store the
+ * daemon serves, whether the desktop app may ask its daemon to switch it to SQLite in place,
+ * and how such a switch on this launch ended. An optional field: a 2.6 client strips it.
+ */
 export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 7 };
 
 /**

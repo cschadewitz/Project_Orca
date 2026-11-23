@@ -279,6 +279,12 @@ describe("orca store", () => {
       const app = await bootstrap({ cwd: dir, logger: silentLogger });
       expect(process.env.ORCA_STORE_SWITCH).toBeUndefined();
       expect(app.storeSwitch).toMatchObject({ status: "refused", reason: "SWITCH_REFUSED" });
+      // Reported in hello: on files, and no switch offered outside the app's own workspace.
+      expect(app.storeStatus).toMatchObject({
+        backend: "file",
+        sqliteSwitch: "unavailable",
+        lastSwitch: { status: "refused", reason: "SWITCH_REFUSED" },
+      });
       expect(app.orchestrator.stores.capabilities?.backend).toBe("file");
       app.orchestrator.stores.close?.();
     } finally {

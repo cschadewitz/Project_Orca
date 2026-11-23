@@ -93,5 +93,20 @@ describe("dispatch", () => {
     );
     expect(r).toMatchObject({ ok: true, result: { capabilities: ["runs.read"] } });
     expect((r as { result: object }).result).not.toHaveProperty("storeDir");
+    expect((r as { result: object }).result).not.toHaveProperty("store");
+  });
+
+  it("reports the store's backend and the desktop app's SQLite switch when the daemon has them (#339)", async () => {
+    const store = {
+      backend: "file" as const,
+      sqliteSwitch: "available" as const,
+      lastSwitch: { status: "refused" as const, reason: "BUSY", message: "A run is active." },
+    };
+    const r = await dispatch(
+      JSON.stringify({ kind: "request", id: 1, method: "hello", params: { client: "c", protocol: PROTOCOL_VERSION } }),
+      methods,
+      { ...ctx, store },
+    );
+    expect(HelloResultSchema.parse((r as { result: unknown }).result).store).toEqual(store);
   });
 });

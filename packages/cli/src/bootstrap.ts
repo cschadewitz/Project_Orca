@@ -2,6 +2,7 @@
  * Bootstrap: turn `orca.config.yaml` into a wired Orchestrator + ProgramService.
  * The CLI, the ACP facade and embedders all go through here.
  */
+import type { StoreStatus } from "@orca/protocol";
 import { enterFirstRunWriter } from "@orca/protocol/first-run-fence";
 import { assertNoUnownedTypedWorkspace } from "./typed-workspace-gate.js";
 import {
@@ -173,6 +174,8 @@ export interface OrcaApp {
   closedWorkState(): Promise<"empty" | "parked" | "unsupported-generation">;
   /** How the switch to SQLite the desktop app asked for on this launch ended (#339). */
   storeSwitch?: DesktopSqliteSwitchOutcome | undefined;
+  /** The store's backend and whether the app may switch it to SQLite (#339), for `hello`. */
+  storeStatus?: StoreStatus | undefined;
 }
 
 export async function findConfig(cwd: string): Promise<string | undefined> {
@@ -426,6 +429,16 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       }
     }
   }
+  // Only the app's own workspace (its writer fence held) may be switched in place, never on
+  // Windows (#947), and only while it is on files.
+  const storeStatus: StoreStatus | undefined =
+    opts.ephemeral || isClosedUpdateBootstrap()
+      ? undefined
+      : {
+          backend,
+          sqliteSwitch: writer && process.platform !== "win32" && backend === "file" ? "available" : "unavailable",
+          ...(storeSwitchOutcome ? { lastSwitch: storeSwitchOutcome } : {}),
+        };
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   if (storeSwitchOutcome?.status === "refused")
     logger.warn(
@@ -769,6 +782,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     configDir,
     ...(configFile ? { configFile } : {}),
     ...(storeSwitchOutcome ? { storeSwitch: storeSwitchOutcome } : {}),
+    ...(storeStatus ? { storeStatus } : {}),
     orchestrator,
     program,
     plan,
