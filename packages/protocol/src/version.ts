@@ -228,7 +228,13 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * replaced). A 2.10 daemon refuses the strict admit fields, so a caller sends them only to one
  * whose hello lists them; a 2.10 client strips `redacted`.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 11 };
+/**
+ * 2.12 (#701) adds `permissions.saveJudgedRule`, the app's save method for a plain-language
+ * rule: it appends a judged rule to the permission sidecar, which becomes version 4. A new
+ * method name in `hello.methods`: a 2.11 client never calls it, and the app offers the save
+ * only to a daemon that lists it.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 12 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is

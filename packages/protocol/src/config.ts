@@ -28,7 +28,14 @@
  */
 import { z } from "zod";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
-import { PermissionDecisionSchema, PermissionRuleSchema, ToolKindSchema } from "@orca/core/schemas";
+import {
+  JUDGED_CRITERION_MAX,
+  MAX_PERMISSION_RULE_LIFETIME_MS,
+  PermissionDecisionSchema,
+  PermissionRuleSchema,
+  SAVED_JUDGED_KINDS,
+  ToolKindSchema,
+} from "@orca/core/schemas";
 
 export const CONFIG_GET_METHOD = "config.get";
 export const CONFIG_SET_METHOD = "config.set";
@@ -446,3 +453,70 @@ export const ConfigSetResultSchema = z.object({
   asOf: z.string(),
 });
 export type ConfigSetResult = z.infer<typeof ConfigSetResultSchema>;
+
+/**
+ * `permissions.saveJudgedRule` (protocol 2.12, #701): the app's save method for a
+ * plain-language rule a person wrote or accepted.
+ *
+ * The daemon appends the rule to the ADR 0009 sidecar for `agentId`, after every hand-written
+ * rule, and the file becomes version 4, which earlier releases refuse rather than read the rule
+ * as a plain allow. A judged rule allows nothing by itself: a judge is asked about it only in a
+ * session given one, only after the typed rules answered `ask`, only inside the judged lane's
+ * hard boundaries, and its `covered` is an allow for one call, never a standing grant
+ * (`plain-language-rules.md` in `docs/preparation/review-judge-701`).
+ *
+ * The match must name a kind, `read` or `search` for now: the kinds the judged lane can open
+ * for, so a saved rule can never be a match-everything rule nor one that could never apply.
+ * A `command` match is refused, and `path` and `pathPrefix` are relative to the workspace.
+ * A saved rule always comes after the configuration's rules (decided 2026-11-23).
+ *
+ * It needs `permissions.grant` and `config.write`, because it writes standing permission policy
+ * to the workspace's configuration, and `config.read`, because its answer describes the file:
+ * whether an equal rule was already there, its place and its end. That holds on every path,
+ * the duplicate that writes nothing included.
+ */
+export const PERMISSIONS_SAVE_JUDGED_RULE_METHOD = "permissions.saveJudgedRule";
+
+/** The kinds a saved judged rule may name; `SAVED_JUDGED_KINDS` in `@orca/core`. */
+export const SAVED_JUDGED_RULE_KINDS = SAVED_JUDGED_KINDS;
+
+export const PermissionsSaveJudgedRuleParamsSchema = z
+  .object({
+    /** The agent whose policy the rule joins; it must be one the active configuration declares. */
+    agentId: z.string().min(1),
+    /** The deterministic gate: which calls the judge is asked about at all. */
+    match: z
+      .object({
+        kind: z.enum(SAVED_JUDGED_KINDS),
+        titlePattern: z.string().optional(),
+        path: z.string().optional(),
+        pathPrefix: z.string().optional(),
+        scope: z.enum(["workspace", "outside-workspace"]).optional(),
+      })
+      .strict(),
+    /** The sentence the judge applies, as the person wrote or accepted it. */
+    criterion: z.string().trim().min(1).max(JUDGED_CRITERION_MAX),
+    /**
+     * How long the rule lasts, in milliseconds from when the daemon writes it, as on
+     * `inputs.answer`'s `always`. Absent: until somebody removes it.
+     */
+    durationMs: z.number().int().positive().max(MAX_PERMISSION_RULE_LIFETIME_MS).optional(),
+  })
+  .strict();
+export type PermissionsSaveJudgedRuleParams = z.infer<typeof PermissionsSaveJudgedRuleParamsSchema>;
+
+export const PermissionsSaveJudgedRuleResultSchema = z.object({
+  agentId: z.string(),
+  /** The rule's id as the judged lane and the decision record name it, `sidecar:N`. */
+  ruleId: z.string(),
+  /**
+   * `added`: appended. `extended`: the same rule (same match and criterion) was on file and
+   * ended sooner, so its end moved out in place. `already-present`: on file for at least as
+   * long, and nothing was written.
+   */
+  outcome: z.enum(["added", "extended", "already-present"]),
+  /** When the rule stops deciding, stamped on the daemon's clock. Absent: until removed. */
+  expiresAt: z.string().optional(),
+  asOf: z.string(),
+});
+export type PermissionsSaveJudgedRuleResult = z.infer<typeof PermissionsSaveJudgedRuleResultSchema>;

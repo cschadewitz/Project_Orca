@@ -623,6 +623,10 @@ handle("orca:runs.reviewEffect", (params: Parameters<DaemonClient["runsReviewEff
 // The fourth (#174, #266). It writes a file rather than a run, so no lease is involved, but
 // it is still absent from a `--read-only` daemon and `useWritability()` still governs it.
 handle("orca:config.set", (params: Parameters<DaemonClient["configSet"]>[0]) => client().configSet(params));
+// Protocol 2.12 (#701): a plain-language rule, saved to the permission sidecar.
+handle("orca:permissions.saveJudgedRule", (params: Parameters<DaemonClient["permissionsSaveJudgedRule"]>[0]) =>
+  client().permissionsSaveJudgedRule(params),
+);
 
 // The plan writes and `claims.release` (#169, #88). `--read-only` omits them exactly as it
 // omits the three above, so the same `useWritability()` answer covers all of them.

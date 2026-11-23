@@ -16,7 +16,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { PermissionPolicyFileSchema, type ConfigSetParams } from "@orca/protocol";
+import { PermissionPolicyFileSchema, type ConfigSetParams, type RecordedPermissionRule } from "@orca/protocol";
 import { ConfigProvider } from "../src/config/config-context.js";
 import { PolicyPanel } from "../src/config/policy-editor.js";
 import {
@@ -488,7 +488,7 @@ function sidecarOnDisk(): {
 
 /** The grants the file holds for one agent, as the daemon's own schema reads them. */
 const onDiskFor = (text: string, agentId: string) =>
-  PermissionPolicyFileSchema.parse(JSON.parse(text)).agents[agentId]?.rules ?? [];
+  (PermissionPolicyFileSchema.parse(JSON.parse(text)).agents[agentId]?.rules ?? []) as RecordedPermissionRule[];
 
 describe("the policy editor", () => {
   beforeEach(() => {
@@ -638,7 +638,7 @@ describe("the policy editor", () => {
     const parsed = PermissionPolicyFileSchema.safeParse(JSON.parse(write.text));
     expect(parsed.success).toBe(true);
 
-    const rules = parsed.data!.agents["claude"]!.rules;
+    const rules = parsed.data!.agents["claude"]!.rules as RecordedPermissionRule[];
     expect(rules).toHaveLength(1);
     // The one that was removed is gone, and the one that stayed is untouched — the audit
     // trail ADR 0009 keeps is not rewritten by an edit somewhere else in the file.
@@ -699,7 +699,8 @@ describe("the policy editor", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Save" }));
     await waitFor(() => expect(lastWrite().document).toBe("permissions"));
 
-    const rules = PermissionPolicyFileSchema.parse(JSON.parse(lastWrite().text)).agents["claude"]!.rules;
+    const rules = PermissionPolicyFileSchema.parse(JSON.parse(lastWrite().text)).agents["claude"]!
+      .rules as RecordedPermissionRule[];
     expect(rules).toHaveLength(3);
     expect(rules[2]!.addedAt).toBe("2026-09-21T12:00:00.000Z");
     expect(rules[2]!.grantedFor).toBe(HAND_GRANT);
@@ -713,7 +714,8 @@ describe("the policy editor", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Save" }));
     await waitFor(() => expect(lastWrite().document).toBe("permissions"));
 
-    const rules = PermissionPolicyFileSchema.parse(JSON.parse(lastWrite().text)).agents["claude"]!.rules;
+    const rules = PermissionPolicyFileSchema.parse(JSON.parse(lastWrite().text)).agents["claude"]!
+      .rules as RecordedPermissionRule[];
     expect(rules[0]!.match.pathPrefix).toBe("packages");
     expect(rules[0]!.grantedFor).toBe("Edit src/index.ts");
   });

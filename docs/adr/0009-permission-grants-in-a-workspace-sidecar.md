@@ -224,7 +224,38 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   file system, so the lane is open only for a session on the local host. Every other outcome leaves the typed
   answer, and a turn that ended meanwhile is answered as expired. The event records the
   verdict, the rule's id and the judge's config ref, not the rule's revision. Nothing wires a
-  judge yet; saved judged rules (a version-4 sidecar) come with the app's save method.
+  judge yet.
+- **A judged rule can be saved here (#701).** `permissions.saveJudgedRule` (protocol 2.12,
+  `permissions.grant`, `config.write` and `config.read`, since its answer describes the file) is
+  the app's save method: it appends
+  `{ match, judge: { criterion }, addedAt, expiresAt? }` to the agent's list in this file,
+  under the same `link()` lock, so it lands after every configured rule (a saved judged rule
+  never sits above a hand-written one). A saved rule must name its kind, `read` or `search`,
+  the kinds the judged lane can open for, so the app can never write a match-everything judged
+  rule or one that could never apply; it cannot match a command, its `path` and `pathPrefix`
+  are workspace-relative with no `..`, and its `titlePattern` compiles and is at most 256
+  characters. These are the version-4 schema's checks, so the save method, a whole-file
+  `config.set` and the loader refuse the same rows; and a title pattern that does not compile
+  and reaches matching anyway fails closed (never matches for an allow, always for a deny or an
+  ask). A row with both a `decision` and a `judge` is refused. **Every writer of this file
+  takes one lock, with no automatic takeover:** `<file>.lock` is now a directory holding one
+  owner token, created with `mkdir` and never broken by age, replacing the `link()` file lock
+  that was broken after 30 seconds (age cannot prove a paused writer died, and a writer that
+  resumed after a takeover could overwrite its successor's edit, grant or removal). Just
+  before its rename a writer also checks that it still owns the lock and that the file is still
+  the bytes it read. A lock left by a writer that crashed stays, and writes refuse
+  (`STORE_LOCK_TIMEOUT`) until a person removes it after making sure no writer runs; reading
+  never takes the lock. An older release's `link()` writer cannot take the directory over, and
+  a lock file one of them left is waited on, not removed. The same rule (match and criterion) is never appended twice; one that ends
+  sooner is extended in place. The loader carries saved judged rules in `policy.judged` after
+  the configured ones, named `sidecar:N` by their place in the agent's list as written, and
+  skips an expired one; the typed rules, and everything that decides synchronously, see none
+  of them. An unreadable sidecar drops every judged rule, as before. **A file holding any
+  judged rule is version 4** (`PERMISSION_JUDGED_VERSION`), which every earlier reader refuses
+  rather than read the rule as a plain allow: 0.7.x refuses any version but 1, and a version 3
+  reader refuses the row. A version 1 or 3 file carrying a judged row is refused too, and
+  removing the last one makes the file version 3 or 1 again. `config.get`'s effective policy
+  still lists typed rules only.
 - **Each decision names what decided it (#702).** `explainPermission` is the one evaluation
   and `decidePermission` its decision: it reports whether ORCA's own files, a rule, the
   fallthrough or the command restriction decided, and for a rule its index. The loader records

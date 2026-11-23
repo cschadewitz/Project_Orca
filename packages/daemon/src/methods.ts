@@ -110,6 +110,8 @@ import {
   CLAIMS_RELEASE_METHOD,
   CONFIG_GET_METHOD,
   CONFIG_SET_METHOD,
+  PERMISSIONS_SAVE_JUDGED_RULE_METHOD,
+  PermissionsSaveJudgedRuleParamsSchema,
   ClaimsListParamsSchema,
   ClaimsReleaseParamsSchema,
   ConfigGetParamsSchema,
@@ -187,6 +189,8 @@ import {
   type ConfigGetParams,
   type ConfigGetResult,
   type ConfigSetParams,
+  type PermissionsSaveJudgedRuleParams,
+  type PermissionsSaveJudgedRuleResult,
   type ConfigSetResult,
   type DaemonCapability,
   type DecisionsDecideParams,
@@ -262,7 +266,7 @@ export interface MethodContext {
    */
   protocolWindow?: ProtocolWindow;
   /** Guard-owned current workspace authority, rechecked after reads and under the config writer lock. */
-  configurationAuthority?: (write: boolean, read?: boolean) => Promise<void>;
+  configurationAuthority?: (write: boolean, read?: boolean, grant?: boolean) => Promise<void>;
   /** Internal authenticated mount; never a collector constructed by the method table. */
   hostResourceRead?: (params: unknown, invocation: MethodContext) => Promise<unknown>;
   /**
@@ -798,6 +802,21 @@ export const configSet: Method<ConfigSetParams, ConfigSetResult> = {
     config(ctx).set(params, ctx.configurationAuthority && (() => ctx.configurationAuthority!(true))),
 };
 
+/**
+ * `permissions.saveJudgedRule` (protocol 2.12, #701): save a plain-language rule to the
+ * permission sidecar. A write of standing policy, so it needs `permissions.grant` and
+ * `config.write`, and `config.read` because its answer describes the sidecar (whether an equal
+ * rule is on file, its place and its end); all three are rechecked under the sidecar's lock.
+ */
+export const permissionsSaveJudgedRule: Method<PermissionsSaveJudgedRuleParams, PermissionsSaveJudgedRuleResult> = {
+  params: PermissionsSaveJudgedRuleParamsSchema,
+  handle: (params, ctx) =>
+    config(ctx).saveJudgedRule(
+      params,
+      ctx.configurationAuthority && (() => ctx.configurationAuthority!(true, true, true)),
+    ),
+};
+
 // ------------------------------------------------------------ the plan writes
 
 /** `dependencies.waive`: a person saying this edge no longer has to hold. */
@@ -899,7 +918,10 @@ export const methods: MethodTable = {
  * absent from a `--read-only` daemon exactly like the other writes.
  */
 export const configMethods: MethodTable = { [CONFIG_GET_METHOD]: configGet };
-export const configControlMethods: MethodTable = { [CONFIG_SET_METHOD]: configSet };
+export const configControlMethods: MethodTable = {
+  [CONFIG_SET_METHOD]: configSet,
+  [PERMISSIONS_SAVE_JUDGED_RULE_METHOD]: permissionsSaveJudgedRule,
+};
 
 /**
  * The nine plan reads, kept apart so a daemon projecting runs alone leaves them out whole.

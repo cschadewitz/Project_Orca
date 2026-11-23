@@ -10,7 +10,12 @@ import { ProtocolVersionSchema } from "./version.js";
 import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD, SessionSlotsSummarySchema } from "./agents.js";
 import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
 import { CLAIMS_LIST_METHOD, CLAIMS_RELEASE_METHOD } from "./claims.js";
-import { CONFIG_GET_METHOD, CONFIG_SET_METHOD, CONFIG_APPLY_METHOD } from "./config.js";
+import {
+  CONFIG_GET_METHOD,
+  CONFIG_SET_METHOD,
+  CONFIG_APPLY_METHOD,
+  PERMISSIONS_SAVE_JUDGED_RULE_METHOD,
+} from "./config.js";
 import { INPUTS_ANSWER_METHOD, RUNS_CANCEL_METHOD, RUNS_RESUME_METHOD, RUNS_START_METHOD } from "./control.js";
 import { RUNS_RECOVERY_METHOD, RUNS_REVIEW_EFFECT_METHOD } from "./recovery.js";
 import { RUNS_DRY_RUN_REPORT_METHOD } from "./dry-run.js";
@@ -131,6 +136,8 @@ export const CONTROL_METHODS = [
   // Protocol 2.5 (#357): appends a review to a run's log under its lease.
   RUNS_REVIEW_EFFECT_METHOD,
   CONFIG_SET_METHOD,
+  // Protocol 2.12 (#701): saves a plain-language rule to the permission sidecar.
+  PERMISSIONS_SAVE_JUDGED_RULE_METHOD,
   DEPENDENCIES_WAIVE_METHOD,
   DECISIONS_DECIDE_METHOD,
   DECISIONS_REOPEN_METHOD,
