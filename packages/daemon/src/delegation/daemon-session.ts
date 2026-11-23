@@ -93,6 +93,11 @@ import {
 
 /** ACP shapes, through `@orca/agents`' own types: this package does not import the SDK. */
 type PromptInput = Parameters<AgentSession["prompt"]>[0];
+/** The task a delegated turn sends, and whether it holds a value the parent run protects (#363). */
+interface DelegatedTask {
+  text: string;
+  sensitive: boolean;
+}
 type ContentBlocks = Exclude<PromptInput, string>;
 type PermissionRequest = Parameters<NonNullable<OpenSessionOptions["askPermission"]>>[0];
 type RawUpdate = SessionUpdateEvent["raw"];
@@ -260,6 +265,15 @@ export function takesGitRef(hello: { admitFields?: readonly string[] | undefined
  * Whether a daemon takes `runs.admit` `origin`: only when its `hello` lists the field in
  * `admitFields`, never on the strength of a protocol minor (another 2.6 need not have it).
  */
+/**
+ * Whether a daemon takes `runs.admit` `sensitiveVars` (#363): only when its `hello` lists the
+ * field in `admitFields`. A task holding a value the parent run protects goes only to one that
+ * does, so the worker keeps it encrypted and redacted too; it is never sent as an ordinary var.
+ */
+export function takesSensitiveVars(hello: { admitFields?: readonly string[] | undefined }): boolean {
+  return hello.admitFields?.includes("sensitiveVars") ?? false;
+}
+
 export function recordsOrigin(hello: { admitFields?: readonly string[] | undefined }): boolean {
   return hello.admitFields?.includes("origin") ?? false;
 }
@@ -269,13 +283,21 @@ function scopeOf(receipt: DelegationReceipt): { workspaceId: string; principalId
 }
 
 /** Why a remote artifact's copy does not match its record, or undefined when it does. */
-function artifactMismatch(listed: ArtifactView, got: ArtifactView, text: string): string | undefined {
+function artifactMismatch(
+  listed: ArtifactView,
+  got: ArtifactView,
+  text: string,
+  redacted?: { size: number; contentHash: string },
+): string | undefined {
   if (got.id !== listed.id || got.name !== listed.name || got.kind !== listed.kind) return "identity";
   if (got.producedByStepRunId !== listed.producedByStepRunId) return "producing step";
   if (!got.contentHash || got.contentHash !== listed.contentHash) return "no matching digest";
+  // A body the worker sent with its run's protected values replaced (#363) is checked against
+  // what it says it sent; the record's own digest names the unredacted original.
+  const expected = redacted ?? { size: got.size, contentHash: got.contentHash };
   const bytes = Buffer.from(text, "utf8");
-  if (bytes.length !== got.size) return "size";
-  if (createHash("sha256").update(bytes).digest("hex") !== got.contentHash) return "digest";
+  if (bytes.length !== expected.size) return "size";
+  if (createHash("sha256").update(bytes).digest("hex") !== expected.contentHash) return "digest";
   return undefined;
 }
 
@@ -350,6 +372,7 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
       logger,
       { principalId: discovery.principalId, workspaceId: discovery.target.workspaceId },
       recordsOrigin(hello),
+      takesSensitiveVars(hello),
     );
     await session.sweep();
     return session;
@@ -431,6 +454,8 @@ class DaemonSession implements AgentSession {
     private readonly scope: { principalId: string; workspaceId: string },
     /** The remote's `hello.admitFields` lists `origin`. */
     private readonly takesOrigin = false,
+    /** The remote's `hello.admitFields` lists `sensitiveVars` (#363). */
+    private readonly takesSensitive = false,
   ) {
     this.id = newId("sess", clock.now());
     this.agentId = options.agent.id;
@@ -495,7 +520,17 @@ class DaemonSession implements AgentSession {
       this.note(`The remote run for this step already finished; ${this.options.remoteName} is not asked again.`);
       return { stopReason: "end_turn", durationMs: 0 };
     }
-    const task = turn.task || (typeof input === "string" ? input : textOf(input));
+    const task: DelegatedTask = {
+      text: turn.task || (typeof input === "string" ? input : textOf(input)),
+      sensitive: turn.sensitive === true,
+    };
+    // Refused before any receipt is written: nothing is reserved, so nothing can be sent later.
+    if (task.sensitive && !this.takesSensitive)
+      throw delegationRefusal(
+        this.options.profile,
+        "protocol",
+        `This step's task holds a value the run keeps protected, and the daemon on ${this.options.remoteName} cannot take it as a protected input (its hello does not list \`sensitiveVars\` in admitFields). Nothing was sent; update ORCA there.`,
+      );
     const signal = options.signal;
     let receipt = await this.resolve(turn, task, deadline, signal);
     const runId = receipt.remoteRunId!;
@@ -597,7 +632,7 @@ class DaemonSession implements AgentSession {
    */
   private async resolve(
     turn: TurnContext,
-    task: string,
+    task: DelegatedTask,
     deadline: number,
     signal: AbortSignal | undefined,
   ): Promise<DelegationReceipt> {
@@ -661,7 +696,7 @@ class DaemonSession implements AgentSession {
   private async step(
     receipt: DelegationReceipt | undefined,
     turn: TurnContext,
-    task: string,
+    task: DelegatedTask,
     deadline: number,
     signal: AbortSignal | undefined,
     wait: (what: string) => Promise<void>,
@@ -759,7 +794,7 @@ class DaemonSession implements AgentSession {
    */
   private async promote(
     reserved: DelegationReceipt,
-    task: string,
+    task: DelegatedTask,
     deadline: number,
     signal: AbortSignal | undefined,
     wait: (what: string) => Promise<void>,
@@ -876,13 +911,22 @@ class DaemonSession implements AgentSession {
   /** Send the receipt's admission (same key every time) until it is accepted; `admitted` after. */
   private async submit(
     receipt: DelegationReceipt,
-    task: string,
+    task: DelegatedTask,
     deadline: number,
     signal?: AbortSignal,
   ): Promise<DelegationReceipt> {
+    const promptVar = this.options.agent.promptVar ?? "prompt";
+    if (task.sensitive && !this.takesSensitive)
+      throw delegationRefusal(
+        this.options.profile,
+        "protocol",
+        `The daemon on ${this.options.remoteName} cannot take this step's task as a protected input. Nothing was sent; update ORCA there.`,
+      );
     const params = {
       workflowId: receipt.binding.workflowId,
-      vars: { [this.options.agent.promptVar ?? "prompt"]: task },
+      vars: { [promptVar]: task.text },
+      // The worker protects the prompt variable as it would a declared sensitive input (#363).
+      ...(task.sensitive ? { sensitiveVars: [promptVar] } : {}),
       idempotencyKey: receipt.key,
       expectedScope: scopeOf(receipt),
       ...(receipt.origin ? { origin: receipt.origin } : {}),
@@ -1270,7 +1314,7 @@ class DaemonSession implements AgentSession {
         );
         continue;
       }
-      const mismatch = artifactMismatch(match, got.artifact, got.text);
+      const mismatch = artifactMismatch(match, got.artifact, got.text, got.redacted);
       if (mismatch)
         throw new OrcaError(
           "AGENT_PROTOCOL",

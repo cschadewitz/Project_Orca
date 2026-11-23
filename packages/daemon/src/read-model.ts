@@ -23,7 +23,10 @@
  * first read. Run logs were never affected - the event store re-reads them - so statuses
  * and trees stay current the same way.
  */
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+
+const sha256Hex = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex");
 import {
   OrcaError,
   RUN_SUMMARY_EVENT_TYPES,
@@ -960,7 +963,14 @@ export class ReadModel {
         },
         asOf,
       };
-    return { artifact: view, text: await this.protectedArtifactText(artifact), asOf };
+    const text = await this.protectedArtifactText(artifact);
+    const bytes = Buffer.from(text, "utf8");
+    // A body that held a protected value is sent redacted; say so, with what was sent.
+    const redacted =
+      artifact.contentHash !== undefined && sha256Hex(bytes) !== artifact.contentHash
+        ? { redacted: { size: bytes.length, contentHash: sha256Hex(bytes) } }
+        : {};
+    return { artifact: view, text, ...redacted, asOf };
   }
 
   /**

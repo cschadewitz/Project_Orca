@@ -146,6 +146,12 @@ export class RunContext {
     return this.runtimeSecrets.size ? redactExecutionValue(value, [...this.runtimeSecrets]) : value;
   }
 
+  /** Whether `text` holds any value this run keeps protected: what redaction would replace (#363). */
+  holdsProtectedValue(text: string): boolean {
+    const secrets = this.redactionInputs()?.secrets;
+    return !!secrets?.length && redactExecutionValue(text, secrets) !== text;
+  }
+
   private redactionInputs(): ExecutionInputs | undefined {
     if (!this.runtimeSecrets.size) return this.executionInputs;
     const secrets = [...(this.executionInputs?.secrets ?? []), ...this.runtimeSecrets];

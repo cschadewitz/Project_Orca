@@ -46,6 +46,12 @@ export interface TurnContext {
   followUp: number;
   /** The step's task as its prompt template rendered it, without ORCA's deliverable instructions. */
   task: string;
+  /**
+   * The task or prompt holds a value the run keeps protected: a sensitive launch input or a
+   * secret value read for the run (#363). A session that hands the task to another daemon
+   * must have it protected there too, or not send it.
+   */
+  sensitive?: boolean;
   /** Where the step collects its outputs once the turn ends: absolute paths on the agent's host. */
   deliverables: readonly TurnDeliverable[];
 }

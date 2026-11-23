@@ -105,6 +105,13 @@ export const ArtifactsGetResultSchema = z.object({
   artifact: ArtifactViewSchema,
   /** The body, verbatim. Present exactly when `omitted` is absent. */
   text: z.string().optional(),
+  /**
+   * Protocol 2.11 (#363): present when `text` is the body with the run's protected values
+   * replaced by `[REDACTED]`, so not the bytes `artifact.size` and `artifact.contentHash`
+   * describe. `size` and `contentHash` here are those of `text` as sent: what a copy is checked
+   * against.
+   */
+  redacted: z.object({ size: z.number().int().nonnegative(), contentHash: z.string() }).optional(),
   /** Present exactly when `text` is absent: the body exists and is not being shown. */
   omitted: ArtifactOmittedSchema.optional(),
   asOf: z.string(),

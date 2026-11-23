@@ -302,6 +302,11 @@ export interface StartRunOptions {
    */
   gitRefObject?: string;
   /**
+   * Launch vars to protect as if the workflow declared them `sensitive` (#363): a delegating
+   * daemon names its prompt variable when the task holds a value its own run protects.
+   */
+  sensitiveVars?: readonly string[];
+  /**
    * Per-run selection (#186): role -> agent, model, item workflow, template pack. Validated
    * before `run.created` is appended and recorded in it, so a replay resolves the same agents.
    */
@@ -779,7 +784,13 @@ export class Orchestrator {
     const workflowStored = this.dryRun ? false : await this.recordDefinition(def);
     if (this.dryRun) await this.stores.execution.putGeneration(dryRunDefinitionKey(runId), def);
     // A checkpoint attempt keeps everything its source treated as sensitive, overlays included.
-    let protectedInputs = protectExecutionInputs(runId, def, vars, opts.checkpoint?.inputs ?? parentInputs);
+    let protectedInputs = protectExecutionInputs(
+      runId,
+      def,
+      vars,
+      opts.checkpoint?.inputs ?? parentInputs,
+      opts.sensitiveVars,
+    );
     const configuredSecrets = generation ? configuredGenerationSecrets(generation) : [];
     if (configuredSecrets.length)
       protectedInputs = {

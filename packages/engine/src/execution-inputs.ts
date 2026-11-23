@@ -16,8 +16,10 @@ export function protectExecutionInputs(
   definition: WorkflowDefinition,
   vars: Record<string, unknown>,
   parent?: ExecutionInputs,
+  /** Names the launch asked to protect though the definition does not declare them (#363). */
+  alsoSensitive: readonly string[] = [],
 ): ExecutionInputs | undefined {
-  const sensitiveNames = new Set(parent?.sensitiveNames ?? []);
+  const sensitiveNames = new Set([...(parent?.sensitiveNames ?? []), ...alsoSensitive]);
   for (const [name, declaration] of Object.entries(definition.inputSchema?.fields ?? {}))
     if (containsSensitive(declaration)) sensitiveNames.add(name);
   if (!sensitiveNames.size && !parent?.secrets.length) return undefined;

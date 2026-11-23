@@ -1777,6 +1777,56 @@ describe("delegation through a proxy the test controls (#883)", () => {
     await proxy.close();
   }, 60_000);
 
+  const SECRET = "launch-secret-363-value";
+
+  it("sends a task holding a protected value only as a protected input, so the worker redacts it too (#363)", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-sensitive"));
+    const session = await open(proxy.transport(), receipts);
+    const parent = "run_01JD0000000000000000000363";
+    const task = {
+      ...turn(parent, join(work, "sensitive", "report.md")),
+      task: `deploy with ${SECRET}`,
+      sensitive: true,
+    };
+    await expect(session.prompt("ignored", { timeoutMs: 60_000, turn: task })).resolves.toMatchObject({
+      stopReason: "end_turn",
+    });
+    const runId = receipts.read(parent, task.delegationId)!.remoteRunId!;
+    // The worker's workflow does not declare its prompt sensitive; the admission asked for it.
+    const view = await call(remote, "runs.get", { runId });
+    expect(JSON.stringify(view)).not.toContain(SECRET);
+    expect((view.vars as Record<string, unknown>).prompt).toBe("[REDACTED]");
+    const { events } = (await call(remote, "runs.events", { runId, limit: 200 })) as { events: unknown[] };
+    expect(JSON.stringify(events)).not.toContain(SECRET);
+    // The report is brought back as the worker sent it: redacted, and checked against what was sent.
+    expect(readFileSync(join(work, "sensitive", "report.md"), "utf8")).not.toContain(SECRET);
+    await session.close();
+    await proxy.close();
+  }, 120_000);
+
+  it("refuses, sending nothing, a protected task to a worker that cannot protect it (#363)", async () => {
+    const proxy = await proxied();
+    proxy.state.rules.tamper = { method: "hello", from: '"sensitiveVars"', to: '"sensitiveVarz"' };
+    const receipts = new DelegationReceipts(join(work, "receipts-sensitive-old"));
+    const session = await open(proxy.transport(), receipts);
+    const parent = "run_01JD0000000000000000000364";
+    const before = (await runsOf("remote-task")).length;
+    const task = {
+      ...turn(parent, join(work, "sensitive-old", "report.md")),
+      task: `deploy with ${SECRET}`,
+      sensitive: true,
+    };
+    const error = await session.prompt("ignored", { timeoutMs: 30_000, turn: task }).catch((e: unknown) => e);
+    expect(isOrcaError(error, "DELEGATION_REFUSED")).toBe(true);
+    expect((error as { details: { reason: string } }).details.reason).toBe("protocol");
+    expect(String((error as Error).message)).not.toContain(SECRET);
+    expect(await runsOf("remote-task")).toHaveLength(before);
+    expect(receipts.read(parent, task.delegationId)).toBeUndefined();
+    await session.close();
+    await proxy.close();
+  }, 60_000);
+
   it("fails the step with a typed refusal when the remote cannot check out the named git ref", async () => {
     const proxy = await proxied();
     const receipts = new DelegationReceipts(join(work, "receipts-ref"));

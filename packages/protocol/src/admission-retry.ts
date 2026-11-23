@@ -17,6 +17,7 @@ export const AdmissionExpectedScopeSchema = z.strictObject({
 });
 /** Protocol 2.6 (#883): the parent workspace, run and step a delegated run is started for. */
 export const RunOriginParamsSchema = RunOriginSchema;
+const SensitiveVarNameSchema = z.string().min(1).max(128);
 export const RunsAdmitParamsSchema = RunsStartParamsSchema.extend({
   expectedScope: AdmissionExpectedScopeSchema.optional(),
   idempotencyKey: RetryKeySchema.optional(),
@@ -27,6 +28,13 @@ export const RunsAdmitParamsSchema = RunsStartParamsSchema.extend({
    * daemon's workspace checks it before admitting and fetches it into the run's own checkout.
    */
   gitRef: z.string().min(1).max(200).optional(),
+  /**
+   * Protocol 2.11 (#363): launch vars to protect as if the workflow declared them `sensitive`:
+   * kept in the encrypted execution store and redacted from run views, notifications and logs.
+   * Listed in `hello.admitFields` as `sensitiveVars`. A delegating daemon names its prompt
+   * variable here when the task holds a value its own run protects.
+   */
+  sensitiveVars: z.array(SensitiveVarNameSchema).min(1).max(64).optional(),
 }).strict();
 export const AdmissionsGetParamsSchema = z.strictObject({
   operationId: z.string().regex(/^retry_[a-f0-9-]{36}$/),

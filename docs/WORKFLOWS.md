@@ -508,6 +508,17 @@ change on purpose (remove the old `known_hosts` file first for new host keys).
   (and brings back the artifacts of one that already succeeded: a succeeded run stays the
   step's result across its retries), and starts new remote work only once the earlier run is
   known to have ended without success, or known never to have been admitted.
+- **A protected value stays protected on the remote (#363).** When the task holds a value
+  this run protects (a `sensitive` launch input, or a secret value read for the run), the
+  admission names the prompt variable in `sensitiveVars`, and the remote keeps it as it would
+  a declared `sensitive` input: in its encrypted execution store, redacted from its run views,
+  events, notifications and logs. Only a remote whose `hello` lists `sensitiveVars` in
+  `admitFields` (protocol 2.11) is sent such a task; any other refuses the step (reason
+  `protocol`) before a receipt is written or anything is sent. An artifact whose body held a
+  protected value comes back redacted, checked against the size and digest the remote reports
+  for what it sent. Detection matches the values as they appear in the task, so a value
+  transformed by the template (encoded, split) is not recognised; keep sensitive inputs out
+  of delegated prompts where you can.
 - **The work is the remote daemon's.** It appears in that daemon's run list, owned by the
   credential's principal, and its audit log names that principal on the admission.
 - **The remote run records where it came from.** A remote whose `hello` lists `origin` in
