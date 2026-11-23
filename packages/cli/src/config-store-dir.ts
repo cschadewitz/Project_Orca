@@ -15,7 +15,7 @@ import { open, readFile, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { parse as parseYaml, parseDocument } from "yaml";
 import { OrcaError, parseOrcaConfig } from "@orca/core";
-import { withFileLock } from "@orca/store";
+import { CONFIG_FILE_LOCK, withFileLock } from "@orca/store";
 import { CONFIG_FILENAMES } from "./bootstrap.js";
 
 /** What a config held when it was read: its bytes' hash. */
@@ -35,25 +35,29 @@ export async function writeConfigStoreDir(
   value: string,
   expected: { revision: ConfigRevision; source: string },
 ): Promise<string> {
-  return withFileLock(`${file}.lock`, async () => {
-    const stale = (why: string) =>
-      new OrcaError(
-        "CONFIG_STALE",
-        `${file} ${why} since the conversion began, so it was not changed. The converted store was left in place; run the conversion again to put it in use.`,
-        { file },
-      );
-    const saved = await readFile(file, "utf8").catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") throw stale("was removed");
-      throw error;
-    });
-    if (configRevision(saved) !== expected.revision) throw stale("changed");
-    const others = await otherConfigs(file);
-    if (others.length) throw stale(`has ${others[0]} beside it`);
-    const current = file.endsWith(".json") ? JSON.parse(saved) : parseYaml(saved);
-    if (resolve(configDir, parseOrcaConfig(current).storeDir) !== expected.source)
-      throw stale(`names another store than ${expected.source}`);
-    return writeLocked(file, saved, value);
-  });
+  return withFileLock(
+    `${file}.lock`,
+    async () => {
+      const stale = (why: string) =>
+        new OrcaError(
+          "CONFIG_STALE",
+          `${file} ${why} since the conversion began, so it was not changed. The converted store was left in place; run the conversion again to put it in use.`,
+          { file },
+        );
+      const saved = await readFile(file, "utf8").catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") throw stale("was removed");
+        throw error;
+      });
+      if (configRevision(saved) !== expected.revision) throw stale("changed");
+      const others = await otherConfigs(file);
+      if (others.length) throw stale(`has ${others[0]} beside it`);
+      const current = file.endsWith(".json") ? JSON.parse(saved) : parseYaml(saved);
+      if (resolve(configDir, parseOrcaConfig(current).storeDir) !== expected.source)
+        throw stale(`names another store than ${expected.source}`);
+      return writeLocked(file, saved, value);
+    },
+    CONFIG_FILE_LOCK,
+  );
 }
 
 /**

@@ -77,7 +77,7 @@ import {
   type PermissionsSaveJudgedRuleParams,
   type PermissionsSaveJudgedRuleResult,
 } from "@orca/protocol";
-import { withFileLock } from "@orca/store";
+import { CONFIG_FILE_LOCK, withFileLock } from "@orca/store";
 import { describeConfigSchema, validationErrors } from "./config-schema.js";
 import { describeConfigFormSchema } from "./config-form-schema.js";
 import { effectiveCapabilities } from "./config-capabilities.js";
@@ -161,7 +161,7 @@ export class ConfigModel {
       readConfig: () => this.get(),
       exclusive: async (command) => {
         await mkdir(dirname(this.configFile), { recursive: true });
-        return withFileLock(`${this.configFile}.lock`, command);
+        return withFileLock(`${this.configFile}.lock`, command, CONFIG_FILE_LOCK);
       },
       applyLocked: (params, recheck) => this.applyLocked(params, recheck),
       changed: () => this.announce("config"),
@@ -171,7 +171,7 @@ export class ConfigModel {
       readConfig: () => this.get(),
       exclusive: async (command) => {
         await mkdir(dirname(this.configFile), { recursive: true });
-        return withFileLock(`${this.configFile}.lock`, command);
+        return withFileLock(`${this.configFile}.lock`, command, CONFIG_FILE_LOCK);
       },
       applyLocked: (params, recheck) => this.applyLocked(params, recheck),
       validationContext: () => {
@@ -380,7 +380,7 @@ export class ConfigModel {
   async apply(params: ConfigApplyParams, authorize?: () => Promise<void>): Promise<ConfigApplyResult> {
     await authorize?.();
     await mkdir(dirname(this.configFile), { recursive: true });
-    return withFileLock(`${this.configFile}.lock`, () => this.applyLocked(params, authorize));
+    return withFileLock(`${this.configFile}.lock`, () => this.applyLocked(params, authorize), CONFIG_FILE_LOCK);
   }
 
   /** Template publication holds the same lock across catalog verification and generation activation. */
@@ -425,34 +425,38 @@ export class ConfigModel {
   ): Promise<ConfigDocumentView> {
     const path = this.pathOf("config");
     await mkdir(dirname(path), { recursive: true });
-    return withFileLock(`${path}.lock`, async (stillHeld) => {
-      await authorize?.();
-      const current = await this.read("config");
-      await authorize?.();
-      refuseIfStale(params, current);
-      const text = this.nextConfigText(current, params);
-      const errors = this.validate("config", text);
-      if (errors.length)
-        throw new OrcaError("CONFIG_INVALID", `${path}: ${errors[0]?.message ?? "invalid"}`, { errors });
-      // The commit fence (#701 review), run now and again just before the rename: this writer
-      // still holds the lock, the file is still the bytes this edit was made against, and the
-      // authority is decided by what those bytes and the new ones say about judged rules. A
-      // writer that lost its lock, or a file that moved, fails closed rather than overwriting.
-      const commit = async (): Promise<void> => {
-        await stillHeld();
-        const onDisk = await this.read("config");
-        if (onDisk.revision !== current.revision)
-          throw new ProtocolFault(
-            "CONFIG_STALE",
-            `${path} has changed since you read it: write again against the current revision`,
-            { document: "config", expectedRevision: current.revision, actualRevision: onDisk.revision },
-          );
-        await (changesJudgedRules("config", onDisk, text) ? (authorizeJudged ?? authorize) : authorize)?.();
-      };
-      await commit();
-      await writeAtomically(path, text, commit);
-      return this.read("config");
-    });
+    return withFileLock(
+      `${path}.lock`,
+      async (stillHeld) => {
+        await authorize?.();
+        const current = await this.read("config");
+        await authorize?.();
+        refuseIfStale(params, current);
+        const text = this.nextConfigText(current, params);
+        const errors = this.validate("config", text);
+        if (errors.length)
+          throw new OrcaError("CONFIG_INVALID", `${path}: ${errors[0]?.message ?? "invalid"}`, { errors });
+        // The commit fence (#701 review), run now and again just before the rename: this writer
+        // still holds the lock, the file is still the bytes this edit was made against, and the
+        // authority is decided by what those bytes and the new ones say about judged rules. A
+        // writer that lost its lock, or a file that moved, fails closed rather than overwriting.
+        const commit = async (): Promise<void> => {
+          await stillHeld();
+          const onDisk = await this.read("config");
+          if (onDisk.revision !== current.revision)
+            throw new ProtocolFault(
+              "CONFIG_STALE",
+              `${path} has changed since you read it: write again against the current revision`,
+              { document: "config", expectedRevision: current.revision, actualRevision: onDisk.revision },
+            );
+          await (changesJudgedRules("config", onDisk, text) ? (authorizeJudged ?? authorize) : authorize)?.();
+        };
+        await commit();
+        await writeAtomically(path, text, commit);
+        return this.read("config");
+      },
+      CONFIG_FILE_LOCK,
+    );
   }
 
   /**
