@@ -120,6 +120,12 @@ export interface BundledDaemonOptions {
   execPath?: string;
   /** Base environment for the child; `ELECTRON_RUN_AS_NODE=1` is added to it. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Ask this launch's daemon to switch the workspace's store to SQLite in place, under the
+   * workspace's writer fence, before it opens the store (#339, cli/src/desktop-sqlite-switch.ts).
+   * Never set on a closed update launch; never inherited from `env`.
+   */
+  storeSwitch?: "sqlite";
   /** How long to wait for the first answered `hello` before giving up on an attempt. */
   startTimeoutMs?: number;
   /** How often to ask. */
@@ -304,6 +310,7 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
         ...env,
         ELECTRON_RUN_AS_NODE: "1",
         ORCA_FIRST_RUN_LAUNCH: options.firstRunToken,
+        ORCA_STORE_SWITCH: options.closedUpdate ? undefined : options.storeSwitch,
         ORCA_UPDATE_ATTEMPT: options.closedUpdate?.attempt,
         ORCA_UPDATE_LAUNCH: options.closedUpdate?.token,
         ORCA_MANAGED_UPDATE_CONTROL: options.closedUpdate ? undefined : env.ORCA_MANAGED_UPDATE_CONTROL,

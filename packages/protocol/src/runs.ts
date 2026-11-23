@@ -149,17 +149,65 @@ export const RunsListParamsSchema = z.object({
    * to show - rather than a search; ids that match nothing are simply absent.
    */
   runIds: z.array(z.string().min(1)).max(500).optional(),
+  /**
+   * Protocol 2.8: continue after this row (#340). The `nextCursor` of the page before, or
+   * `runsListCursor(row)` of the last row a client holds. Unlike `offset` it names a place in
+   * the order rather than a count, so runs created while a person pages back through history
+   * do not shift the next page onto rows already shown. `offset` still applies after it.
+   */
+  cursor: z
+    .string()
+    .min(1)
+    .max(400)
+    .refine((c) => parseRunsListCursor(c) !== undefined, "not a runs.list cursor")
+    .optional(),
   /** Newest first, from `offset`. */
   limit: z.number().int().positive().max(500).default(100),
   offset: z.number().int().nonnegative().default(0),
 });
 export type RunsListParams = z.infer<typeof RunsListParamsSchema>;
 
+/**
+ * Where a row sits in `runs.list`'s order: creation time, then id, both descending. The
+ * cursor is that pair as text; a client treats it as opaque and only hands it back.
+ */
+export function runsListCursor(row: { createdAt: string; id: string }): string {
+  return `${row.createdAt}|${row.id}`;
+}
+
+/** The pair a cursor names, or `undefined` for text no daemon handed out. */
+export function parseRunsListCursor(cursor: string): { createdAt: string; id: string } | undefined {
+  const bar = cursor.indexOf("|");
+  if (bar <= 0 || bar === cursor.length - 1) return undefined;
+  const createdAt = cursor.slice(0, bar);
+  if (Number.isNaN(Date.parse(createdAt))) return undefined;
+  return { createdAt, id: cursor.slice(bar + 1) };
+}
+
+/** `runs.list`'s order as a comparator: negative when `a` comes first (is newer). */
+export function compareRunsListOrder(
+  a: { createdAt: string; id: string },
+  b: { createdAt: string; id: string },
+): number {
+  return b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id);
+}
+
+/** Whether `row` comes strictly after the place `cursor` names, in `runs.list`'s order. */
+export function isAfterRunsListCursor(row: { createdAt: string; id: string }, cursor: string): boolean {
+  const at = parseRunsListCursor(cursor);
+  return at !== undefined && compareRunsListOrder(at, row) < 0;
+}
+
 export const RunsListResultSchema = z.object({
   /** Newest first (by creation), the `limit` runs after `offset`. */
   runs: z.array(RunSummaryViewSchema),
   /** How many runs match the filter, so a client can page without asking again. */
   total: z.number().int().nonnegative(),
+  /**
+   * Protocol 2.8: the `cursor` for the next page, present when more rows follow this one. A
+   * cursor counts nothing, so `total` stays the whole filter's count, before and after it.
+   */
+  nextCursor: z.string().optional(),
   /** The daemon's clock when it answered; the base for every elapsed time in the result. */
   asOf: z.string(),
 });

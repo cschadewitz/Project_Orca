@@ -33,13 +33,14 @@ const changed = (over: Partial<RunChangedParams> = {}): RunChangedParams => ({
 });
 
 describe("ordering", () => {
-  it("is newest first by creation, and stable on a tie", () => {
+  it("is newest first by creation, and stable on a tie, broken as the daemon breaks it", () => {
     const a = run({ id: "run-a", createdAt: "2026-03-01T09:00:00.000Z" });
     const b = run({ id: "run-b", createdAt: "2026-03-01T09:00:00.000Z" });
     const c = run({ id: "run-c", createdAt: "2026-03-01T09:00:05.000Z" });
 
-    expect(orderRuns([a, b, c]).map((r) => r.id)).toEqual(["run-c", "run-a", "run-b"]);
-    expect(orderRuns([b, c, a]).map((r) => r.id)).toEqual(["run-c", "run-a", "run-b"]);
+    // Id descending on a tie, as `runs.list` pages: a later page must not swap across the boundary.
+    expect(orderRuns([a, b, c]).map((r) => r.id)).toEqual(["run-c", "run-b", "run-a"]);
+    expect(orderRuns([b, c, a]).map((r) => r.id)).toEqual(["run-c", "run-b", "run-a"]);
   });
 
   it("replaces a row it already holds rather than duplicating it", () => {

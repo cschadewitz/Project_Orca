@@ -385,6 +385,15 @@ agents:
   `limits.agentSlotWaitMs`, when you set it, fails any wait longer than that with
   `STEP_TIMEOUT`. With no deadline set, a long queue is never cut off. A session already
   being torn down never counts as stuck.
+- A delegating agent (`type: orca-daemon`) is also held to its **remote daemon's** cap
+  (#884): that daemon's own `limits.maxAgentSessions`, as its `hello` reports it at each
+  delegated session. This daemon never holds more delegated sessions open to one remote than
+  that cap; the rest wait here with a detail such as
+  `waiting for an agent slot: 2 of 2 in use on remote build-box (its limits.maxAgentSessions)`.
+  A remote with no cap is unlimited. Until a remote has answered once since this daemon
+  started, its cap is taken to be 1, so a fan-out never runs ahead of a limit nobody has read
+  yet. The remote enforces its cap itself too, which is what bounds several parents that
+  share it: their steps beyond it wait there.
 - A slot whose agent process exit cannot be confirmed stays held - the process may still be
   running - and `agents.list` reports it as `teardownUnconfirmed`, with a warning in the log.
 - A cancel always wins: a step cancelled while waiting, or after its slot was granted but
@@ -399,6 +408,8 @@ another ORCA daemon, which runs a named workflow there as one of its own runs (#
 remote is reached over SSH with the same tunnel the desktop app's SSH profiles use (#874):
 typed fields only, no ssh config file read. A remote takes delegated steps only once it is
 enrolled, and only over the host keys and with the credential enrollment recorded.
+[Running across machines](MULTI-MACHINE.md) compares this with SSH-hosted agents and the
+app watching several daemons, with a worked worker and parent config.
 
 ```yaml
 remotes:
@@ -652,11 +663,55 @@ nodes:
   (`source`), plus a skill's version and content digest - never a command, argument or
   environment value. A nested graph runs under its workflow's scope; a `subworkflow` that
   names another workflow runs under that workflow's own.
-- **What reaches an agent session today is the agent's own inline `mcpServers`, narrowed by
-  any scope.** Catalog servers and skills resolve and appear in validation and the preview,
-  but a step that selects one is refused at launch (and warned about at validation) rather
-  than started with or without it. Passing them to sessions waits for delivery that checks
-  the caller, the host and the agent can take each one (#337).
+- **What reaches an agent session.** The agent's own inline `mcpServers`, narrowed by any
+  scope, as configured. A catalog server selected for a step reaches that step's session
+  only when, at that session open (#337):
+  1. the run's owner holds **one** current credential with `capabilities.use` whose grant
+     covers the step's whole selected set: each server as it is defined now, on the
+     agent's host and that host's endpoint (`orca auth issue <principal> --mcp-server
+     github@local`, or `--mcp-server '*'`; the `owner` preset grants every server). Grants
+     on two credentials do not combine. A grant does not follow a server redefined to
+     another command or a host id pointed at another machine, and a revoked or expired
+     credential stops the next step, even one that would reuse a `per-run` session. The
+     decision is asked again after any wait for a session slot, immediately before
+     `session/new` hands the agent its servers, and before every prompt, so authority
+     revoked while a step waits is not used; a `per-run` session refused there is closed
+     and never handed to another step;
+  2. the server's command resolves on the **agent's host** to an executable regular file,
+     and the agent is handed that absolute path, so it starts what was checked and does
+     not search again. Over SSH that is one quiet `command -v` on that host. ORCA never
+     installs one, and never tries another host.
+
+  Otherwise the step is refused before anything starts, naming the step and the server. A
+  run with no recorded owner, or a daemon with no use decision, refuses catalog servers at
+  launch.
+
+  What a grant covers when a server is launched:
+  - **The executable.** A grant for named servers covers only a server whose `command` is
+    a **trusted executable** on the agent's host, checked there at every delivery: an
+    absolute path that is the file itself (no extension appended, no `PATH`), canonical
+    (no symbolic link, `.` or `..` anywhere on it), an executable regular file, and owned,
+    with every directory above it up to `/`, by root or the account the agent runs as,
+    writable by neither group nor others and carrying no ACL. So only an administrator of
+    that host, or the agent's own account, can put another program at the granted path.
+    Anything else (a file under `/tmp`, a symlinked `/bin/...`, a group-writable
+    `/usr/local`, any Windows machine, whose permissions this check cannot read) runs only
+    under `'*'`. A bare name
+    (searched on the server's literal `env.PATH`, else the agent's, else the host's) or a
+    relative path (resolved against the session's working directory, which is the run's
+    workspace) is covered only by `'*'`, and `orca auth issue` refuses to write a named
+    grant for one.
+  - **Arguments** are passed exactly as configured, and the grant pins them. ORCA does not
+    resolve them; a relative path in an argument is the server's to interpret, in the
+    session's working directory.
+  - **Environment.** The server's configured `env` is pinned by the grant, with secret
+    references read on the agent's host under `secrets.use`. Anything else the server
+    inherits comes from the agent process that starts it: the agent's configured `env` and
+    what the agent passes on. That is the agent's behaviour, not something ORCA enforces.
+
+  The executable being there is not proof the server works: the agent starts it, over
+  ACP's stdio transport, which every ACP agent supports. Skills are delivered under the
+  same decision; see [Skills](#skills).
 - **Who decides.** The workspace and agent scopes live in `orca.config.yaml`, which only
   config authority can change. A workflow or node can only narrow that, or turn on what the
   agent permits. A caller's role override picks a different configured agent, and then that
@@ -682,7 +737,43 @@ the digest it found so you can review the change and update the pin. A run is pi
 configuration, so only a skill's files could change under it: a step whose skill no longer
 hashes to what its launch recorded is refused rather than given the edited skill.
 
-As with catalog servers, this version resolves skills but does not deliver them yet (#337).
+**How a skill reaches a session (#337).** A step's selected skills travel in its prompts,
+not through any host's filesystem: every prompt the step sends starts with each skill file
+as an ACP `resource` block, its text inline, named
+`orca-skill://<id>/<file>?digest=<sha256:...>`. So no host path is involved, and a skill
+on the daemon's machine reaches an agent on an SSH host the same way.
+
+- The run's owner must hold one current credential with `capabilities.use` whose grant
+  covers the step's whole set, servers and skills together. A named skill grant pins the
+  content digest (`orca auth issue <principal> --skill review`), so an edited skill needs a
+  new grant; `--skill '*'` (and the `owner` preset) covers every skill. A wildcard is per
+  kind: `--mcp-server '*'` grants no skill, and `--skill '*'` no server.
+- The skill is read once at session open, hashed over exactly the bytes that are sent, and
+  refused if that is not what the launch recorded. The configured path is resolved to its
+  real place once, and every directory above it must be one only root or the daemon's
+  account can change (owned by one of them, writable by no one else unless sticky, like
+  `/tmp`). The walk goes through each directory's open descriptor, so a rename meanwhile
+  cannot lead it outside the skill; every file and directory is opened without following a
+  symbolic link and checked by its descriptor to be what the walk found. That walk needs a
+  Linux daemon: elsewhere only a single-file skill can be delivered, and on Windows none.
+  A step's skills share one budget, spent as they are read and never checked after: at most
+  256 KiB together, counting each file's content and the block that names it (so empty
+  files are paid for), and at most 64 files and directories together. A directory is
+  listed one entry at a time and never past what is left.
+  Every file must be UTF-8 text; a leading byte-order mark is kept in the text, so what is
+  sent is exactly the bytes the digest names.
+- The use decision is asked again before every prompt that carries the skills, so a grant
+  revoked while the step waits sends nothing.
+- The agent must say at `initialize` that it accepts embedded context
+  (`promptCapabilities.embeddedContext`). One that does not is refused right after
+  `initialize`, before `session/new` or `session/load` configures any MCP server, and the
+  step fails; a `per-run` session that could not take the skills is closed rather than kept
+  in the pool. ORCA does not fall back to leaving the skill out or pasting it in as plain
+  text.
+- **A skill is instructions, not authority.** It grants nothing: tool calls still go through
+  the agent's permission policy and ORCA's asks. ORCA delivers the skills it lists in the
+  preview and nothing else, but it cannot stop an agent from also loading skills of its own
+  (for example from the user's home directory); those are not shown as selected.
 
 ## Secret references
 
@@ -729,8 +820,8 @@ agents:
   does not load otherwise, naming the field: `agents[0].env.GITHUB_TOKEN: secret
   'db-password' is bound to host 'build-box', but this agent runs on 'local'`. There is no
   fallback: ORCA never uses a value of the same name from the daemon's environment, another
-  host, or an earlier session. A reference in a catalog MCP server is checked against the
-  host of the agent it is given to once catalog servers reach sessions (#337).
+  host, or an earlier session. A reference in a catalog MCP server is read on the host
+  of the agent it is given to, like any other in that session (#337).
 - **Read at every session open.** The value is read on the host immediately before the agent
   process starts, and not cached, so a rotated value is used by the next session and a
   revoked one stops working then. A missing or unreadable value refuses the step before

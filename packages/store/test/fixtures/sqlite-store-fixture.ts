@@ -24,9 +24,9 @@ export const refusal = (reason: string) => ({ code: "STORE_FORMAT", details: exp
 export const workflow = parseWorkflow(`id: pinned\nname: Pinned\nstart: e\nnodes: { e: { type: end } }\nedges: []`);
 export const oldWorkflow = parseWorkflow(`id: old\nname: Old\nstart: e\nnodes: { e: { type: end } }\nedges: []`);
 
-/** A store on files with something at every path the fence covers. */
-export async function populated(): Promise<string> {
-  const dir = await store();
+/** A store on files with something at every path the fence covers (at `at`, or a new one). */
+export async function populated(at?: string): Promise<string> {
+  const dir = at ?? (await store());
   await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" });
   const files = fileStores(dir);
   await files.events.append({

@@ -55,6 +55,9 @@ import {
 import { redactExecutionValue, type WorkItemClaim } from "@orca/store";
 import {
   INLINE_WORKFLOW_SEPARATOR,
+  compareRunsListOrder,
+  isAfterRunsListCursor,
+  runsListCursor,
   LiveDecisionIdentitySchema,
   displayStatusForRun,
   displayStatusForStep,
@@ -605,8 +608,11 @@ export class ReadModel {
     }
     // `listRuns` is oldest first and ids are time-ordered, but createdAt is what a client sorts by.
     // The id breaks ties, so a page boundary is the same on every call over the same store.
-    rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
-    const page = rows.slice(params.offset, params.offset + params.limit);
+    rows.sort(compareRunsListOrder);
+    // A cursor (2.8) is a place in that order, so the page after it is the same rows however
+    // many runs were created since the cursor was handed out; `total` still counts them all.
+    const after = params.cursor === undefined ? rows : rows.filter((r) => isAfterRunsListCursor(r, params.cursor!));
+    const page = after.slice(params.offset, params.offset + params.limit);
     const runs: RunSummaryView[] = [];
     for (const view of page) {
       const detailed = params.operations ? await pass.operationsRow(view.id) : undefined;
@@ -615,7 +621,13 @@ export class ReadModel {
       // operations, rather than a newer projection the filter would not have returned.
       runs.push(detailed && stillMatches(detailed, params) ? detailed : view);
     }
-    return { runs, total: rows.length, asOf: pass.asOf };
+    const more = params.offset + page.length < after.length && page.length > 0;
+    return {
+      runs,
+      total: rows.length,
+      ...(more ? { nextCursor: runsListCursor(page[page.length - 1]!) } : {}),
+      asOf: pass.asOf,
+    };
   }
 
   /** One run, whole: the tree of steps and attempts, its children, its artifacts. */

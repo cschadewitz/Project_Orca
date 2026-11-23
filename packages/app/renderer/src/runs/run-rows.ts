@@ -12,7 +12,7 @@
  * so the daemon does it — the same code path a paged list will need — and only the text
  * filter is local, because the protocol has no text parameter to send it in.
  */
-import type { DisplayStatus, RunChangedParams, RunSummaryView } from "@orca/protocol";
+import { compareRunsListOrder, type DisplayStatus, type RunChangedParams, type RunSummaryView } from "@orca/protocol";
 
 /** Statuses a run does not leave. A row in one of these has a total duration, not an elapsed one. */
 const TERMINAL: readonly DisplayStatus[] = ["succeeded", "failed", "cancelled"];
@@ -22,10 +22,12 @@ export const isTerminal = (status: DisplayStatus): boolean => TERMINAL.includes(
 /**
  * Newest first by creation, which is the order `runs.list` documents. Ties break on id so
  * that two runs created in the same millisecond do not swap places between renders —
- * `orca demo` writes a whole store in well under a second, so this is not hypothetical.
+ * `orca demo` writes a whole store in well under a second, so this is not hypothetical. The
+ * daemon's own comparator, descending on both, so a page read later lands where the daemon
+ * would have put it rather than swapping with its neighbour across the page boundary.
  */
 export function orderRuns(runs: readonly RunSummaryView[]): RunSummaryView[] {
-  return [...runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+  return [...runs].sort(compareRunsListOrder);
 }
 
 /**

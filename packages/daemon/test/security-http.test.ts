@@ -230,6 +230,36 @@ describe("resource isolation", () => {
     }
   });
 
+  it("pages a scoped caller's history by cursor over the runs it can see, and no others (#340)", async () => {
+    const start = async (token: string) => {
+      h.clock.advance(1_000);
+      const r = await h.rpc(token, "runs.start", { workflowId: "gated" });
+      return (r.body.result as { runId: string }).runId;
+    };
+    const mine = [h.runs.alice];
+    for (let i = 0; i < 4; i++) {
+      mine.push(await start(h.tokens.alice));
+      await start(h.tokens.bob);
+    }
+    const shown: string[] = [];
+    let cursor: string | undefined;
+    for (let pages = 0; pages < 10; pages++) {
+      const r = await h.rpc(h.tokens.alice, "runs.list", { limit: 2, ...(cursor ? { cursor } : {}) });
+      const page = r.body.result as { runs: { id: string }[]; total: number; nextCursor?: string };
+      // The whole filter as this caller sees it, on every page; never bob's runs.
+      expect(page.total).toBe(mine.length);
+      shown.push(...page.runs.map((run) => run.id));
+      cursor = page.nextCursor;
+      if (!cursor) break;
+    }
+    expect(shown).toEqual([...mine].reverse());
+    // A cursor made from a run the caller cannot see places it, and still shows only its own.
+    const theirs = await h.rpc(h.tokens.alice, "runs.list", {
+      cursor: `${new Date(h.clock.now()).toISOString()}|${h.runs.bob}`,
+    });
+    expect(ids(theirs)).toEqual([...mine].sort());
+  });
+
   it("answers another principal's run exactly as it answers a run that does not exist", async () => {
     for (const method of ["runs.get", "runs.events", "runs.resume", "runs.cancel"]) {
       const theirs = await h.rpc(h.tokens.alice, method, { runId: h.runs.bob });

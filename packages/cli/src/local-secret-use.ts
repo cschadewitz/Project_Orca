@@ -1,5 +1,6 @@
 /**
- * The secret use decision for an orchestrator this process runs locally (#336): `orca run`,
+ * The secret use decision for an orchestrator this process runs locally (#336), and the
+ * catalog MCP server use decision (#337) made the same way: `orca run`,
  * `submit`, `resume`, `answer` and the rest, in a fresh process or after a restart. It is
  * the daemon's decision, made from the same files: the root run's durable owner (the
  * ownership file every admission writes) and that owner's credentials as they are now.
@@ -26,12 +27,16 @@ import {
   FileAuditSink,
   LOCAL_TOKEN_FILE,
   OWNERSHIP_FILE,
+  EVERY_CAPABILITY,
   OwnershipStore,
   RunAccess,
   UNRESTRICTED,
   orchestratorResolver,
+  capabilityUseAuthority,
   secretUseAuthority,
   type AuditSink,
+  type CapabilityUseCheck,
+  type SecretUseAuthorityOptions,
   type Principal,
   type ResolverSource,
   type SecretUseCheck,
@@ -45,11 +50,22 @@ export function osUserPrincipalId(user: { uid: number; username: string } = user
     .slice(0, 32)}`;
 }
 
-export function localSecretUse(app: {
+interface LocalApp {
   configDir: string;
   storeDir: string;
   orchestrator: ResolverSource;
-}): SecretUseCheck {
+}
+
+export function localSecretUse(app: LocalApp): SecretUseCheck {
+  return secretUseAuthority(localUseOptions(app));
+}
+
+/** The same decision for catalog MCP servers (#337), from the same files. */
+export function localCapabilityUse(app: LocalApp): CapabilityUseCheck {
+  return capabilityUseAuthority(localUseOptions(app));
+}
+
+function localUseOptions(app: LocalApp): SecretUseAuthorityOptions {
   const authDir = join(app.configDir, "auth");
   const credentialsFile = join(authDir, CREDENTIALS_FILE);
   const tokenFile = join(authDir, LOCAL_TOKEN_FILE);
@@ -81,13 +97,22 @@ export function localSecretUse(app: {
     if (process.platform !== "win32")
       for (const dir of [app.configDir, resolve(app.storeDir)])
         if (statSync(dir, { throwIfNoEntry: false })?.uid !== localUser.uid) return [];
-    return [{ id, kind: "local", permissions: new Set(["secrets.use"]), scope: UNRESTRICTED, secrets: "*" }];
+    return [
+      {
+        id,
+        kind: "local",
+        permissions: new Set(["secrets.use", "capabilities.use"]),
+        scope: UNRESTRICTED,
+        secrets: "*",
+        capabilities: EVERY_CAPABILITY,
+      },
+    ];
   };
-  return secretUseAuthority({
+  return {
     root: (runId) => runs.root(runId),
     owner: (root) => ownership.owner(root),
     verifyOwner: (root, principalId) => ownership.verify(root, principalId),
     principals: (id) => (configured() ? credentials.currentForPrincipal(id) : standalone(id)),
     audit,
-  });
+  };
 }
