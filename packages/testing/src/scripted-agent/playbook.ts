@@ -12,7 +12,7 @@ export const PlaybookEntrySchema = z.object({
   data: z.record(z.string(), z.unknown()).optional(),
   /**
    * Markdown body. Supports {kind}, {path}, {n} (1-based occurrence), {prompt} and {extract}
-   * placeholders.
+   * placeholders, and {env:NAME}: the agent process's environment variable (empty when unset).
    */
   body: z.string().optional(),
   /** Full raw content (overrides data/body). */

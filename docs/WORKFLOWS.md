@@ -912,12 +912,19 @@ nodes:
   and reads it like any other reference: on the agent's host, at session open, under the run
   owner's grant, redacted from everything the run writes. The value never enters the prompt,
   the model's context or the store; `{{ vars.deployToken }}` renders the id.
+- **The secret the launch chose.** The id is read from the launch record in the private
+  execution store, never from the run's working vars, so nothing a step sets later can point
+  a step at another secret.
+- **A process per step.** A step with `secretEnv` always gets an agent process of its own,
+  opened for that step and closed with it, even for a `per-run` agent: it neither takes the
+  pooled session nor leaves its own for the next step. Each step's open asks for the grant
+  again and reads the value again, so a revoked grant stops the next step before its process
+  starts, and a rotated value is what the next step gets.
 - **Checked when the workflow is validated.** Every `secretEnv` entry must name a top-level
   input of type `secret`. A `secret` input nested inside an object or array is refused.
 - **Not across daemons.** A step whose agent delegates to another daemon cannot take a
   `secretEnv` mapping, and the launch is refused with `reason: unsupported`. A daemon with
   no use check refuses it with `reason: unauthorized`, as for any reference.
-- A `per-run` session pool keeps steps that map different secrets in different sessions.
 
 ## Templates
 

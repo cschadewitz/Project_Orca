@@ -154,6 +154,16 @@ export class RunContext {
   }
 
   /**
+   * A launch var as the launch recorded it in the private execution store (#363): the exact
+   * value admission checked, never the run's working vars, which steps may change later.
+   * Undefined when the launch recorded no such var, or no record at all.
+   */
+  launchVar(name: string): unknown {
+    const vars = this.executionInputs?.vars;
+    return vars && Object.hasOwn(vars, name) ? vars[name] : undefined;
+  }
+
+  /**
    * The protected values that occur in `text`, as redaction matches them (#363): what a worker
    * that is handed `text` must redact on its own surfaces. Longest first; never logged or stored.
    */

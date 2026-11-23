@@ -126,6 +126,7 @@ import { protectExecutionInputs } from "./execution-inputs.js";
 import { checkpointSeed, resumeBlocked } from "./checkpoint-attempt.js";
 import { gitRefMoved, gitRefRefusal, LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 import {
+  agentInstructions,
   capabilityRefusal,
   deliveryIssues,
   nodeCapabilityScope,
@@ -813,7 +814,10 @@ export class Orchestrator {
         secrets: [...(protectedInputs?.secrets ?? []), ...configuredSecrets],
       };
     // Authenticate actor and lineage even for public application inputs.
-    if (!protectedInputs && (opts.actor || opts.parentRunId || generation || opts.checkpoint))
+    // A step's `secretEnv` reads its secret's id from the launch record (#363), so a run that has
+    // one keeps that record even when nothing else needs it.
+    const launchSelectsSecrets = agentInstructions(def).some((step) => step.secretEnv !== undefined);
+    if (!protectedInputs && (opts.actor || opts.parentRunId || generation || opts.checkpoint || launchSelectsSecrets))
       protectedInputs = {
         runId,
         workflowId: def.id,
@@ -2593,7 +2597,9 @@ export class Orchestrator {
     const env: Record<string, SecretRef> = {};
     for (const name of Object.keys(mapping).sort()) {
       const input = mapping[name]!;
-      const id = rc.state.run.vars[input];
+      // The selection recorded with the launch, in the private execution store: never the run's
+      // working vars, which steps may change after the launch was checked.
+      const id = rc.launchVar(input);
       if (typeof id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id))
         throw new OrcaError(
           "CONFIG_INVALID",
@@ -2891,12 +2897,16 @@ export class Orchestrator {
     const capabilities = this.stepCapabilities(rc, step, agent);
     // `secret` launch inputs the step hands its agent as environment variables (#363).
     const secretEnv = this.stepSecretEnv(rc, step, agent);
-    // A pooled session carries the servers and the secret references it was opened with.
-    const sessionShape = secretEnv ? `${capabilities.key}\0${JSON.stringify(secretEnv)}` : capabilities.key;
+    // A pooled session carries the servers it was opened with.
+    const sessionShape = capabilities.key;
+    // A step that hands its agent a secret gets a process of its own, opened for that step
+    // under the grant and the value as they are now, and closed with it (#363): it neither
+    // takes a pooled session nor leaves its own in the pool for the next step.
+    const pooling = agent.sessionMode === "per-run" && !secretEnv;
     // Asked at every open, pooled or not: a revoked grant stops the next step (#337).
     const delivered = await this.deliverCatalog(rc, step, agent, host, capabilities);
     const { mcpServers, authorize } = delivered;
-    let pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
+    let pooled = pooling ? this.sessions.get(key) : undefined;
     if (pooled && pooled.capabilities !== sessionShape) {
       // A per-run session carries the MCP servers it was opened with. A step whose scope
       // differs gets its own session rather than a broader or narrower one (#335).
@@ -3183,7 +3193,7 @@ export class Orchestrator {
           .emit({ type: "agent.session.closed", payload: { stepRunId: current.step.id, sessionId: session.id } })
           .catch(() => undefined);
       };
-      if (agent.sessionMode === "per-run") {
+      if (pooling) {
         const pooled = { session, current, close: closeOnce, returnSlot, capabilities: sessionShape };
         this.sessions.set(key, pooled);
         // A pooled session whose connection went away (wedged agent killed after a cancel, or a

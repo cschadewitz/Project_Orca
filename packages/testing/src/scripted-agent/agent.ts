@@ -298,9 +298,11 @@ type EntryVars = { kind: string; path: string; n: number; prompt: string };
 
 function substitute(s: string, vars: EntryVars, entry: PlaybookEntry): string {
   const extract = entry.extract === undefined ? "" : (new RegExp(entry.extract).exec(vars.prompt)?.[1] ?? "");
-  return s.replace(/\{(kind|path|n|prompt|extract)\}/g, (_, k: keyof EntryVars | "extract") =>
-    k === "extract" ? extract : String(vars[k]),
-  );
+  return s
+    .replace(/\{(kind|path|n|prompt|extract)\}/g, (_, k: keyof EntryVars | "extract") =>
+      k === "extract" ? extract : String(vars[k]),
+    )
+    .replace(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => process.env[name] ?? "");
 }
 
 function renderEntry(entry: PlaybookEntry, vars: EntryVars): string {
