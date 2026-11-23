@@ -7,5 +7,6 @@
   On the local machine the read or write is also tied to the file ORCA checked: if it is
   replaced, turned into a link, or is not an ordinary file (a folder, a pipe, a device), the
   operation is refused. On Linux a new file, and any folders it needs, are created only inside
-  the folder ORCA checked; on macOS and Windows each folder is checked again just before ORCA
-  creates anything there. Remote (SSH) hosts keep their earlier behavior.
+  the folder ORCA checked. On macOS and Windows ORCA does not create new files for agents
+  through this path for now, since it cannot yet tie the creation to the checked folder there;
+  existing files can still be read and written. Remote (SSH) hosts keep their earlier behavior.

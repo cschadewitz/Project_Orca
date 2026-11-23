@@ -7,7 +7,6 @@ import { existsSync, realpathSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   bindOwnedFs,
-  createVerified,
   isHostFileMissing,
   OwnedFsNotDispatched,
   readBound,
@@ -167,31 +166,18 @@ describe("bound I/O", () => {
   });
 });
 
-describe("new files where creation can only be verified, not bound", () => {
-  it("creates a new file, directories and all", async () => {
+describe("new files where creation cannot be bound to the directory", () => {
+  it("refuses to create one, and makes nothing", async () => {
     const d = await dir();
-    const file = join(d, "x", "y", "new");
-    await createVerified(bindOwnedFs(file)!, "new");
-    expect(await readFile(file, "utf8")).toBe("new");
-  });
-
-  it("makes no directory when the directory it goes under was replaced", async () => {
-    const d = await dir();
-    const under = join(d, "under");
-    await mkdir(under);
-    const binding = bindOwnedFs(join(under, "x", "new"))!;
-    await rename(under, join(d, "moved"));
-    await mkdir(under);
-    await expect(createVerified(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
-    expect(existsSync(join(under, "x"))).toBe(false);
-  });
-
-  it("refuses a file that appeared meanwhile, and leaves it alone", async () => {
-    const d = await dir();
-    const file = join(d, "new");
+    const file = join(d, "x", "new");
     const binding = bindOwnedFs(file)!;
-    await writeFile(file, "someone else's");
-    await expect(createVerified(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
-    expect(await readFile(file, "utf8")).toBe("someone else's");
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      await expect(writeBound(binding, "new")).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+    expect(existsSync(join(d, "x"))).toBe(false);
   });
 });

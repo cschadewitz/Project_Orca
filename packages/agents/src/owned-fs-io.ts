@@ -16,12 +16,9 @@
  *   and each directory and then the file are made through `/proc/self/fd/N/name`, which the
  *   kernel resolves through that open directory, as `openat`/`mkdirat` would. Nothing is made
  *   anywhere but under the checked directory.
- * - A new file on macOS and Windows is verified, not bound, and is outside the identity-bound
- *   guarantee (#1034). Node offers neither `openat` nor `/proc/self/fd` there, so before each
- *   effect the directory it happens in is checked by identity and physical path. A change
- *   found before the first effect refuses the operation; one in the instant between a check
- *   and its effect is caught only afterwards: the new file is taken away and the outcome is
- *   unknown, never `not-dispatched`.
+ * - A new file on macOS and Windows is refused (`not-dispatched`, nothing made): Node offers
+ *   neither `openat` nor `/proc/self/fd` there, and a creation by names alone could land
+ *   outside the checked directory. A directory-bound way there is tracked in #1034.
  * - A write that fails once it may have changed something (a truncate, a write, a directory
  *   made) is not "failed": its effect is unknown, and it is not safe to retry as if nothing
  *   happened. Only `OwnedFsFailedWithoutEffect` and `OwnedFsNotDispatched` say nothing changed.
@@ -30,8 +27,8 @@
  *   paths are compared as written, as `owned-fs-gate.ts` says; verifying them is tracked
  *   separately (#1032).
  */
-import { constants, lstatSync, statSync } from "node:fs";
-import { lstat, mkdir, open, unlink, type FileHandle } from "node:fs/promises";
+import { constants, statSync } from "node:fs";
+import { lstat, mkdir, open, type FileHandle } from "node:fs/promises";
 import { dirname, relative, sep } from "node:path";
 import { markHostFileMissing } from "./host.js";
 import { physicalPathOf } from "./permissions.js";
@@ -175,8 +172,12 @@ export async function writeBound(binding: OwnedFsBinding, content: string): Prom
     }
     return;
   }
-  if (procFdUsable()) return createBound(binding, content);
-  return createVerified(binding, content);
+  // No directory-bound creation here: refused, never done through names alone (#1034).
+  if (!procFdUsable())
+    throw new OwnedFsNotDispatched(
+      "creating a new file is not supported on this platform: ORCA cannot bind the creation to the checked directory",
+    );
+  return createBound(binding, content);
 }
 
 /**
@@ -243,91 +244,9 @@ async function createBound(binding: OwnedFsBinding, content: string): Promise<vo
   }
 }
 
-let procFd: boolean | undefined;
 /** Whether this process can create through `/proc/self/fd/N/name` (Linux with /proc mounted). */
 function procFdUsable(): boolean {
-  if (procFd === undefined) procFd = process.platform === "linux" && identityNow("/proc/self/fd") !== undefined;
-  return procFd;
-}
-
-/**
- * Elsewhere (macOS, Windows): Node has no `openat`/`mkdirat`, so a new file is verified, not
- * bound. Each directory an effect happens in is checked just before the effect.
- */
-export async function createVerified(binding: OwnedFsBinding, content: string): Promise<void> {
-  const parent = dirname(binding.io);
-  // Every directory between the anchor and the new file, nearest the anchor first.
-  const missing: string[] = [];
-  for (let dir = parent; dir !== binding.anchor; dir = dirname(dir)) {
-    if (dirname(dir) === dir)
-      throw new OwnedFsNotDispatched("the file is not under the directory it was authorized for");
-    missing.unshift(dir);
-  }
-  // Nothing is changed until the directory it goes in is shown to be the authorized one, and
-  // each directory made is checked the same way before anything is made in it. Once one is
-  // made, no later failure is "no effect".
-  let made = false;
-  const refuse = (reason: string): never => {
-    if (made) throw new Error(`${reason}, after a directory was made for it`);
-    throw new OwnedFsNotDispatched(reason);
-  };
-  let expected = binding.identity;
-  for (const dir of missing) {
-    if (!directoryIs(dirname(dir), expected)) refuse("the directory changed before the file was created");
-    try {
-      await mkdir(dir);
-    } catch (error) {
-      if (errorCode(error) === "EEXIST") refuse("a directory appeared before the file was created");
-      if (made) throw error;
-      throw new OwnedFsFailedWithoutEffect(error);
-    }
-    made = true;
-    const id = directoryIdentity(dir);
-    if (id === undefined) throw new Error("a directory made for the file cannot be identified");
-    expected = id;
-  }
-  if (!directoryIs(parent, expected)) refuse("the directory changed before the file was created");
-  let handle;
-  try {
-    handle = await open(binding.io, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o666);
-  } catch (error) {
-    // An exclusive create that failed made nothing.
-    if (errorCode(error) === "EEXIST" || errorCode(error) === "ELOOP") refuse("a file appeared before it was created");
-    if (made) throw error;
-    throw new OwnedFsFailedWithoutEffect(error);
-  }
-  try {
-    const created = idOf(await handle.stat({ bigint: true }));
-    // The file was created where it was checked: the directory it is in is still that one.
-    // Otherwise the new, empty file is taken away again; that is cleanup, not "not dispatched":
-    // the outcome is unknown.
-    const placed = created !== undefined && directoryIs(parent, expected) && identityNow(binding.io) === created;
-    if (!placed) {
-      await handle.close();
-      handle = undefined;
-      const now = await lstat(binding.io, { bigint: true }).catch(() => undefined);
-      if (now && created !== undefined && idOf(now) === created) await unlink(binding.io).catch(() => undefined);
-      throw new Error("the directory changed while the file was created; the new file was taken away");
-    }
-    await writeAll(handle, content);
-  } finally {
-    await handle?.close();
-  }
-}
-
-/** The identity of the directory `dir` itself (a link is not one), or undefined. */
-function directoryIdentity(dir: string): string | undefined {
-  try {
-    const stats = lstatSync(dir, { bigint: true });
-    return stats.isDirectory() ? idOf(stats) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Whether `dir` is, right now, the directory `identity` names, reached by its own physical path. */
-function directoryIs(dir: string, identity: string): boolean {
-  return directoryIdentity(dir) === identity && physicalPathOf(dir) === dir;
+  return process.platform === "linux" && identityNow("/proc/self/fd") !== undefined;
 }
 
 /** Write all of `content` from the start of the file: a short write is continued, never taken as done. */

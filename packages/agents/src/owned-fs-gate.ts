@@ -30,8 +30,8 @@
  * answer stands), and the I/O goes to the resolved file (`owned-fs-io.ts`). Only an ordinary
  * file is read or written. An existing file is bound to the identity the decision saw (checked
  * before a safe open and again on the descriptor). A new file is bound on Linux (made through
- * the checked, open directory) and only verified elsewhere, outside the identity-bound
- * guarantee (#1034). A path whose identity cannot be established is refused. This is still
+ * the checked, open directory) and refused elsewhere, where no directory-bound creation is
+ * available (#1034). A path whose identity cannot be established is refused. This is still
  * not an operating-system boundary. Remote (SSH) hosts are explicitly outside it: their paths
  * are compared as written with no identity binding (#1032).
  *

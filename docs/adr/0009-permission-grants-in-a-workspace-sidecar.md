@@ -172,11 +172,9 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   byte is read or written. A new file on Linux is bound too: its nearest existing ancestor is
   opened as a directory and checked by identity, and each directory and then the file are
   made through `/proc/self/fd/N/name`, which resolves through that open directory as
-  `openat`/`mkdirat` would. On macOS and Windows, where Node has neither, a new file is
-  verified, not bound, and is outside the identity-bound guarantee (#1034): before each effect
-  the directory it happens in is checked by identity and physical path; a change found before
-  the first effect refuses the operation, and one found only after takes the new file away and
-  leaves the outcome unknown. A write is complete only when all of its content was written. A
+  `openat`/`mkdirat` would. On macOS and Windows, where Node has neither, creating a new file
+  this way is refused, with nothing made: a creation by names alone could land outside the
+  checked directory, so it is not done at all until a directory-bound way exists (#1034). A write is complete only when all of its content was written. A
   path whose identity cannot be established, or that is not an ordinary file, is
   refused. This is still not an operating-system boundary. Remote (SSH) hosts are explicitly
   outside this: their paths are compared as written and their I/O is not identity-bound, as
