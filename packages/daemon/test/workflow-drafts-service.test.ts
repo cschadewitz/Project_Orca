@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ConfigModel } from "../src/config-model.js";
 import { nextWorkflowVersion, WorkflowDraftService, type DraftCaller } from "../src/workflow-drafts.js";
 import { parse } from "yaml";
-import { DraftOperationSchema, type ConfigApplyResult } from "@orca/protocol";
+import { DraftOperationSchema, type ConfigApplyResult, type DraftOperation } from "@orca/protocol";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -388,7 +388,7 @@ capabilities:
     for (const op of [
       { op: "updateNode", id: "work", set: { capabilities: { skills: { disable: ["review", "deploy"] } } } },
       { op: "updateNode", id: "work", unset: ["capabilities"] },
-    ] as const)
+    ] satisfies DraftOperation[])
       await expect(f.service.apply({ workflowId: "tiny", expectedRevision: 0, ops: [op] }, casey)).rejects.toThrow(
         /anchor or alias shared with another part.*Edit the workflow's YAML/,
       );
