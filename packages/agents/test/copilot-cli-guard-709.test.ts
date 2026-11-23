@@ -209,17 +209,22 @@ describe("executable identity and Copilot's profile", () => {
     }
     return root;
   }
-  const FRESH_CONFIG =
-    '// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  "firstLaunchAt": "2026-11-23T09:28:01.155Z"\n}\n';
+  /** config.json as Copilot writes it: two comment lines, then JSON. */
+  const config = (extra: Record<string, unknown> = {}) =>
+    `// User settings belong in settings.json.\n// This file is managed automatically.\n${JSON.stringify(
+      { firstLaunchAt: "2026-11-23T09:28:01.155Z", ...extra },
+      null,
+      2,
+    )}\n`;
 
   it("accepts a fresh or signed-in profile and the state Copilot writes during ORCA's sessions", async () => {
     expect(await copilotHomeProblems("/nonexistent/copilot-profile")).toEqual([]);
     const dir = await home(
       {
-        "config.json": FRESH_CONFIG.replace(
-          "}",
-          ', "loggedInUsers": [{"host": "https://github.com", "login": "x"}], "lastLoggedInUser": {"login": "x"}}',
-        ),
+        "config.json": config({
+          loggedInUsers: [{ host: "https://github.com", login: "x" }],
+          lastLoggedInUser: { login: "x" },
+        }),
         "settings.json.lock": "",
         "session-store.db": "",
         "settings.json": '{ "banner": "never", "model": "gpt-5" }',
@@ -233,7 +238,7 @@ describe("executable identity and Copilot's profile", () => {
   it("refuses saved approvals, trust, hooks, MCP servers, plugins, unknown files and shared directories", async () => {
     const dir = await home(
       {
-        "config.json": FRESH_CONFIG.replace("}", ', "trustedFolders": ["/w"]}'),
+        "config.json": config({ trustedFolders: ["/w"] }),
         "settings.json": '{ "allowedUrls": ["example.com"], "defaultPermissionMode": "allow-all", "banner": "never" }',
         "permissions-config.json": '{ "locations": { "/w": { "tool_approvals": ["shell(touch)"] } } }',
         "mcp-config.json": "{}",
