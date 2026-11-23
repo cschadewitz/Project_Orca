@@ -12,6 +12,7 @@ import * as store from "@orca/store";
 import { backends } from "../benchmarks/store-workloads/backends.js";
 import { allChecks, REPORT_SCHEMA_VERSION, runBenchmark } from "../benchmarks/store-workloads/harness.js";
 import { SCALES } from "../benchmarks/store-workloads/scales.js";
+import { LOAD_PHASES } from "../benchmarks/store-workloads/workloads.js";
 import { summarize as summarizeReport } from "../benchmarks/store-workloads/summarize.js";
 import { prng, summarize } from "../benchmarks/store-workloads/stats.js";
 
@@ -44,6 +45,7 @@ describe("store workload benchmark", () => {
           "paginatedHistory",
           "projectionRebuild",
           "walCheckpoint",
+          "walUnderLoad",
         ].sort(),
       );
       expect(result.seeding.history.events).toBe(SCALES.smoke.runs * SCALES.smoke.eventsPerRun);
@@ -55,6 +57,18 @@ describe("store workload benchmark", () => {
     expect(wal.appends).toBe(SCALES.smoke.checkpointBurst - 1);
     expect(Object.keys(wal.checks).sort()).toEqual(["everyAppendCommitted", "truncateEmptiedLog"].sort());
     expect(wal.walBytes.afterTruncate).toBe(0);
+    // Under load: every phase ran from an empty log, with its readers, and lost nothing.
+    const load = report.results.find((r) => r.backend === "sqlite").workloads.walUnderLoad;
+    for (const { name, readers } of LOAD_PHASES) {
+      const phase = load[name];
+      expect(phase.startedFromEmptyLog).toBe(true);
+      expect(phase.appends).toBeGreaterThan(0);
+      expect(phase.inProcessReads.n).toBeGreaterThan(0);
+      expect(phase.readers).toHaveLength(readers.length);
+      for (const reader of phase.readers) expect(reader.reads).toBeGreaterThan(0);
+      expect(phase.walBytes.samples.length).toBeLessThanOrEqual(40);
+      expect(Object.values(phase.checks).every(Boolean)).toBe(true);
+    }
     // The store's own idle checkpoint ran after the burst, and reported what it copied.
     expect(wal.idleCheckpoints.length).toBeGreaterThan(0);
     expect(wal.idleCheckpoints.every((c) => c.busy === false && c.checkpointedPages === c.logPages)).toBe(true);
@@ -68,9 +82,13 @@ describe("store workload benchmark", () => {
     // Memory has no cold reads: its cold cell says so rather than borrowing the warm figure.
     expect(md).toMatch(/\| History tail page p95 \(cold\) \| no cold state \| [\d.]+ ms \| [\d.]+ ms \|/);
     for (const plain of ["memory", "file"])
-      expect(report.results.find((r) => r.backend === plain).workloads.walCheckpoint).toMatchObject({
-        skipped: "no write-ahead log on this backend",
-      });
+      for (const w of ["walCheckpoint", "walUnderLoad"])
+        expect(report.results.find((r) => r.backend === plain).workloads[w]).toMatchObject({
+          skipped: "no write-ahead log on this backend",
+        });
+    expect(md).toMatch(
+      /\| Under load, pinnedSnapshot \(appends\/s, max, log peak\) \| no log \| no log \| [\d,]+, [\d.]+ ms, [\d.]+ MB \|/,
+    );
     for (const durable of ["file", "sqlite"]) {
       const result = report.results.find((r) => r.backend === durable);
       expect(result.storeBytes).toBeGreaterThan(0);

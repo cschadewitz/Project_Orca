@@ -17,6 +17,7 @@
  */
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { prng, round, summarize, timed } from "./stats.js";
 
 const AT = "2026-01-01T00:00:00.000Z";
@@ -441,10 +442,202 @@ export async function walCheckpoint({ handle, scale }) {
   };
 }
 
+// ------------------------------------------------- 6. checkpoints under load
+
+/**
+ * The phases of `walUnderLoad`, each with the readers it runs on other connections beside the
+ * writer. `holdMs` is how long a reader keeps each snapshot open, `gapMs` how long it waits
+ * before the next one:
+ *
+ * - daemon: none, the writer's process alone.
+ * - pollingReader: a short read every 100 ms, as something watching a run does.
+ * - backToBack: short reads with no pause at all.
+ * - slowConsumer: reads that each keep their snapshot 100 ms, 10 ms apart, as a large export does.
+ * - pinnedSnapshot: the same reads with no pause, so some snapshot is almost always open.
+ */
+export const LOAD_PHASES = [
+  { name: "daemon", readers: [] },
+  { name: "pollingReader", readers: [{ holdMs: 0, gapMs: 100 }] },
+  { name: "backToBack", readers: [{ holdMs: 0, gapMs: 0 }] },
+  { name: "slowConsumer", readers: [{ holdMs: 100, gapMs: 10 }] },
+  { name: "pinnedSnapshot", readers: [{ holdMs: 100, gapMs: 0 }] },
+];
+
+/** At most this many WAL size samples are kept per phase (evenly thinned). */
+const KEEP_SAMPLES = 40;
+
+const thin = (samples) =>
+  samples.length <= KEEP_SAMPLES
+    ? samples
+    : Array.from(
+        { length: KEEP_SAMPLES },
+        (_, i) => samples[Math.round((i * (samples.length - 1)) / (KEEP_SAMPLES - 1))],
+      );
+
+/**
+ * Checkpoints under sustained load (#339): what the write-ahead log and the writer do when
+ * appends never stop for `scale.sustainedMs`, so the store's idle checkpoint never gets its quiet
+ * second and only SQLite's automatic checkpoint (`autoPages`) runs, while the store is also read.
+ * Each phase (LOAD_PHASES) starts from an emptied log and writes streamed agent output
+ * round-robin to four runs as fast as one writer can, while the writer's own process pages
+ * history every 25 appends, as the daemon serving a timeline does (`node:sqlite` is synchronous,
+ * so those reads never overlap a commit). Phases after `daemon` add worker threads reading on
+ * their own connections at the same time as the writer, as another process reading the store
+ * would. A reader's snapshot is what a checkpoint cannot copy past and what keeps the log from
+ * starting over, so that is where the log can grow.
+ *
+ * Reported per phase: append rate and latency (stalls over 5 and 50 ms), the log's size over
+ * time (sampled; the file never shrinks by itself, so a flat size means the log keeps starting
+ * over at about `autoPages`, and a rising one means it does not), what the readers did, and what
+ * the idle checkpoint did once the load stopped, and the log's size after the next write, which
+ * is when SQLite starts it over and cuts the file back to `walLimitBytes`. Backends without a log
+ * say they have none.
+ */
+export async function walUnderLoad({ handle, scale }) {
+  if (!handle.wal) return { skipped: "no write-ahead log on this backend" };
+  const { wal } = handle;
+  const text = "streamed agent output ".repeat(8);
+  const out = { settings: { ...wal.settings }, sustainedMs: scale.sustainedMs };
+  for (const { name: phase, readers: outside } of LOAD_PHASES) {
+    const events = handle.stores().events;
+    const runIds = Array.from({ length: 4 }, (_, i) => `run_bench_load_${phase}_${i}`);
+    for (const runId of runIds)
+      await events.append({
+        type: "run.created",
+        runId,
+        payload: { workflowId: "bench", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} },
+      });
+    // Every phase starts from an empty log, so what it shows is this phase's.
+    const emptied = wal.connect().checkpoint("truncate");
+    const stop = new SharedArrayBuffer(4);
+    const workers = outside.map((reader) => {
+      const worker = new Worker(new URL("./outside-reader.js", import.meta.url), {
+        workerData: {
+          file: wal.file,
+          runIds,
+          pageSize: scale.pageSize,
+          holdMs: reader.holdMs,
+          gapMs: reader.gapMs,
+          stop,
+        },
+      });
+      const done = new Promise((resolve, reject) => {
+        worker.once("message", resolve);
+        worker.once("error", reject);
+      });
+      return { reader, done };
+    });
+    const reader = handle.stores().events;
+    const readLatency = [];
+    let readsOrdered = true;
+    const latency = [];
+    const samples = [{ ms: 0, walBytes: wal.bytes(), appends: 0 }];
+    const started = performance.now();
+    let lastSample = started;
+    let i = 0;
+    while (performance.now() - started < scale.sustainedMs) {
+      const runId = runIds[i % runIds.length];
+      const { ms } = await timed(() =>
+        events.append({
+          type: "agent.update",
+          runId,
+          payload: { stepRunId: "step_load", sessionId: "s", update: { kind: "agent_message_chunk", text } },
+        }),
+      );
+      latency.push(ms);
+      i++;
+      if (i % 25 === 0) {
+        const page = await timed(() =>
+          reader.readRange(runId, { before: Number.MAX_SAFE_INTEGER, limit: scale.pageSize }),
+        );
+        readLatency.push(page.ms);
+        for (let k = 1; k < page.value.length; k++)
+          if (page.value[k].seq !== page.value[k - 1].seq + 1) readsOrdered = false;
+      }
+      if (i % 50 === 0) {
+        const now = performance.now();
+        if (now - lastSample >= 250) {
+          samples.push({ ms: round(now - started), walBytes: wal.bytes(), appends: i });
+          lastSample = now;
+        }
+        // Let timers and other work in, as a daemon's event loop would.
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    }
+    const loadMs = performance.now() - started;
+    samples.push({ ms: round(loadMs), walBytes: wal.bytes(), appends: i });
+    Atomics.store(new Int32Array(stop), 0, 1);
+    const readers = [];
+    for (const w of workers) readers.push({ ...w.reader, ...(await w.done) });
+    // Quiet for longer than the idle window: what the store's own checkpoint did after the load.
+    const seen = wal.checkpoints.length;
+    await new Promise((resolve) => setTimeout(resolve, wal.settings.idleMs + 250));
+    const idle = wal.checkpoints.slice(seen).map((event) =>
+      "error" in event
+        ? { ms: round(event.ms), error: String(event.error) }
+        : {
+            ms: round(event.ms),
+            busy: event.busy,
+            logPages: event.logPages,
+            checkpointedPages: event.checkpointedPages,
+          },
+    );
+    const afterIdle = wal.bytes();
+    let total = 0;
+    for (const runId of runIds) total += await events.lastSeq(runId);
+    const committed = total === i; // seq 0 is run.created in every run.
+    // The next write starts the log over (everything was copied back) and cuts the file down.
+    await events.append({
+      type: "agent.update",
+      runId: runIds[0],
+      payload: { stepRunId: "step_load", sessionId: "s", update: { kind: "agent_message_chunk", text } },
+    });
+    const afterNextWrite = wal.bytes();
+    const half = samples.filter((s) => s.ms <= loadMs / 2);
+    const peak = (list) => list.reduce((max, s) => Math.max(max, s.walBytes), 0);
+    const windowRate = (from, to) => {
+      const a = samples.findLast((s) => s.ms <= from) ?? samples[0];
+      const b = samples.findLast((s) => s.ms <= to) ?? samples.at(-1);
+      return b.ms > a.ms ? round((b.appends - a.appends) / ((b.ms - a.ms) / 1000)) : null;
+    };
+    out[phase] = {
+      startedFromEmptyLog: !emptied.busy,
+      loadMs: round(loadMs),
+      appends: i,
+      appendsPerSecond: round(i / (loadMs / 1000)),
+      appendsPerSecondFirstFifth: windowRate(0, loadMs / 5),
+      appendsPerSecondLastFifth: windowRate((loadMs * 4) / 5, loadMs),
+      latency: summarize(latency),
+      stallsOver5ms: latency.filter((ms) => ms > 5).length,
+      stallsOver50ms: latency.filter((ms) => ms > 50).length,
+      walBytes: {
+        peakFirstHalf: peak(half),
+        peak: peak(samples),
+        endOfLoad: samples.at(-1).walBytes,
+        afterIdle,
+        afterNextWrite,
+        samples: thin(samples),
+      },
+      inProcessReads: summarize(readLatency),
+      readers,
+      idleCheckpoints: idle,
+      checks: {
+        everyAppendCommitted: committed,
+        logCutBackAfterLoad: afterNextWrite <= wal.settings.walLimitBytes,
+        readsNeverFailed: readers.every((r) => r.errors === 0 && r.reads > 0),
+        readsSawOrderedPages: readsOrdered && readers.every((r) => r.ordered),
+      },
+    };
+    await wal.connect().checkpoint("truncate");
+  }
+  return out;
+}
+
 export const WORKLOADS = {
   dependencyTraversal,
   paginatedHistory,
   concurrentMetadataWrites,
   projectionRebuild,
   walCheckpoint,
+  walUnderLoad,
 };

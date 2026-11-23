@@ -68,6 +68,14 @@ export function summarize(report) {
       return !c || c.skipped ? "no log" : mb(c.walBytes?.sampledMax);
     }),
   );
+  for (const phase of ["daemon", "pollingReader", "slowConsumer", "pinnedSnapshot"])
+    lines.push(
+      row(`Under load, ${phase} (appends/s, max, log peak)`, (w) => {
+        const p = w.walUnderLoad?.[phase];
+        if (w.walUnderLoad?.skipped || (w.walUnderLoad && !p)) return "no log";
+        return p ? `${num(p.appendsPerSecond)}, ${ms(p.latency.max)}, ${mb(p.walBytes.peak)}` : "—";
+      }),
+    );
   lines.push(row("Bytes on disk", (_, r) => (r.storeBytes === undefined ? "in memory" : mb(r.storeBytes))));
   if (skipped.length) {
     lines.push("");

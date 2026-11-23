@@ -22,6 +22,7 @@ export const SCALES = {
     opsPerWriter: 8,
     concurrency: [1, 2],
     checkpointBurst: 200,
+    sustainedMs: 800,
   },
   small: {
     workItems: 250,
@@ -35,6 +36,7 @@ export const SCALES = {
     opsPerWriter: 40,
     concurrency: [1, 4, 16],
     checkpointBurst: 5_000,
+    sustainedMs: 8_000,
   },
   medium: {
     workItems: 2_500,
@@ -48,6 +50,7 @@ export const SCALES = {
     opsPerWriter: 40,
     concurrency: [1, 4, 16],
     checkpointBurst: 20_000,
+    sustainedMs: 12_000,
   },
   large: {
     workItems: 25_000,
@@ -61,6 +64,7 @@ export const SCALES = {
     opsPerWriter: 20,
     concurrency: [1, 4, 16],
     checkpointBurst: 50_000,
+    sustainedMs: 20_000,
   },
 };
 

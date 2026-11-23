@@ -57,6 +57,28 @@ files.
 
   `SqliteDatabase.checkpoint("truncate")` copies everything and empties the log, for
   maintenance; it waits for other connections and is never run on the write path.
+
+  **Under sustained load** (`walUnderLoad` in the store workload benchmark, #341). One
+  writer appending without pause, so the idle checkpoint never runs and only `autoPages`
+  does, while the writer's own process pages history:
+  - **The daemon alone, or with other connections that let go between reads** (polling
+    every 100 ms, short reads back to back, or 100 ms snapshots 10 ms apart), the log keeps
+    starting over: its file stays at about `autoPages` (4 to 8 MB) for the whole run, at
+    every scale, with no lost write and no failed read.
+  - **With a reader on another connection that keeps a snapshot open almost all the time**
+    (100 ms snapshots with no pause between them), the log never starts over and grows
+    for as long as that lasts: about 15 to 20 MB a second at the container's append rate,
+    past `walLimitBytes`, to 150 to 250 MB in 8 to 12 s. Appends slow down by about a
+    third, and nothing fails. Once that reader stops, the idle checkpoint copies the whole
+    log back, and the next write starts the log over and cuts the file back to
+    `walLimitBytes`.
+
+  Nothing in ORCA reads that way today: the daemon's own reads never overlap a commit, and
+  `orca store sqlite backup` holds one snapshot only while `VACUUM INTO` runs. A long backup
+  or another tool reading continuously beside a busy daemon would grow the log for that
+  long. The size is measured on the reference machine in every benchmark run; whether to
+  bound it (a restart checkpoint once the log passes `walLimitBytes`, at the cost of waiting
+  for readers) is for the #341 budgets.
 - **Writes:** every write is one `BEGIN IMMEDIATE ... COMMIT`. `node:sqlite` is
   synchronous, so no other operation in the process can interleave with a write.
   Contention with another connection is `SQLITE_BUSY`: the connection waits 50 ms,
