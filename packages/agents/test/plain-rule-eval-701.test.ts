@@ -4,8 +4,10 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_PLAIN_RULE_LIMITS } from "../src/review-judge/plain-rule.js";
 import {
   checkPlainRuleEvalSet,
+  PLAIN_RULE_EVAL_FAILURE_CODES,
   createPlainRuleStandIn,
   plainRuleEvalDigest,
   plainRuleEvalGateProblems,
@@ -150,7 +152,11 @@ describe.each(PROVIDERS)("against a stand-in $kind model", ({ kind, config }) =>
     expect(plainRuleEvalGateProblems(report, { maxErrorRate: 1, minCorrectAllowRate: 0.01 }).join()).toMatch(
       /0 of \d+ expected allows allowed/,
     );
-    expect(plainRuleEvalGateProblems(report, GATE).join()).toMatch(/failed call/);
+    expect(plainRuleEvalGateProblems(report, GATE).join()).toMatch(/34 of 34 call\(s\) failed/);
+    // A reply that is not an answer is not resistance: the model-judged injection cases are undemonstrated.
+    expect(m.injection.resistedByModel).toBe(0);
+    expect(m.injection.resisted).toBe(m.injection.refusedBeforeCall);
+    expect(m.injection.undemonstrated).toBe(m.injection.cases - m.injection.refusedBeforeCall);
   });
 
   it("counts a provider that throws as failed calls", async () => {
@@ -195,5 +201,102 @@ describe("comparing providers", () => {
       expect(summary).not.toContain(c.action.title);
       for (const r of c.rules) expect(summary).not.toContain(r.criterion);
     }
+  });
+});
+
+describe("integrity and output hygiene", () => {
+  const anthropic = { kind: "anthropic" };
+  const resign = (cases: unknown[]) => ({ ...raw, cases, digest: plainRuleEvalDigest(cases) }) as PlainRuleEvalSet;
+
+  it("counts a delivery the judge stopped waiting for as attempted, unsettled and not resistance", async () => {
+    const report = await runPlainRuleEval({
+      set: raw,
+      provider: anthropic,
+      limits: { ...DEFAULT_PLAIN_RULE_LIMITS, timeoutMs: 20 },
+      post: () => () => new Promise<string>(() => {}),
+    });
+    const m = report.metrics;
+    const modelCases = raw.cases.filter((c) => c.expect.verdict === undefined).length;
+    expect(m.calls).toBe(modelCases);
+    for (const r of report.results.filter((x) => x.calledModel)) {
+      expect(r.verdict).toBe("timeout");
+      expect(r.failure).toBe("unsettled");
+      expect(r.latencyMs).toBeUndefined();
+    }
+    expect(m.errors).toBe(modelCases);
+    expect(m.injection.resistedByModel).toBe(0);
+    expect(m.boundaryViolations).toBe(0);
+    expect(m.latencyMs).toBeNull();
+  });
+
+  it("makes any delivery on a pre-call case a boundary violation", async () => {
+    // B05 expects outside-envelope; with its targets marked verified the judge would ask the model.
+    const cases = structuredClone(raw.cases) as unknown as { id: string; action: { targetsVerified: boolean } }[];
+    cases.find((c) => c.id === "B05")!.action.targetsVerified = true;
+    const report = await runPlainRuleEval({
+      set: resign(cases),
+      provider: anthropic,
+      post: createPlainRuleStandIn("anthropic", "reference"),
+    });
+    const b05 = report.results.find((r) => r.id === "B05")!;
+    expect(b05.calledModel).toBe(true);
+    expect(b05.error).toBe("boundary");
+    expect(report.metrics.boundaryViolations).toBe(1);
+  });
+
+  it("keeps missing usage unknown rather than zero, and marks cost as a lower bound", async () => {
+    const report = await runPlainRuleEval({
+      set: raw,
+      provider: anthropic,
+      price: { inputPerMTok: 0.1, outputPerMTok: 0.5 },
+      post: (c) => async (body, signal) => {
+        const full = JSON.parse(await createPlainRuleStandIn("anthropic", "reference")(c)(body, signal)) as Record<
+          string,
+          unknown
+        >;
+        delete full.usage;
+        return JSON.stringify(full);
+      },
+    });
+    const m = report.metrics;
+    expect(report.results.every((r) => r.inputTokens === undefined && r.outputTokens === undefined)).toBe(true);
+    expect(m.tokens).toEqual({ input: 0, output: 0, unknownCalls: m.calls });
+    expect(m.costUsd!.unknownCalls).toBe(m.calls);
+    expect(plainRuleEvalSummary([report])).toMatch(/at least; 34 call\(s\) without usage/);
+  });
+
+  it("keeps only failure codes on the fixed list", async () => {
+    const coded = (code: string) =>
+      runPlainRuleEval({
+        set: raw,
+        provider: anthropic,
+        post: () => async () => {
+          throw Object.assign(new Error("secret text"), { code });
+        },
+      });
+    const known = await coded("http-status");
+    expect(known.results.filter((r) => r.calledModel).every((r) => r.failure === "http-status")).toBe(true);
+    const odd = await coded("leaked-value-sk-123");
+    expect(odd.results.filter((r) => r.calledModel).every((r) => r.failure === "other")).toBe(true);
+    expect(JSON.stringify(odd)).not.toMatch(/leaked-value|secret text/);
+    expect(PLAIN_RULE_EVAL_FAILURE_CODES).toContain("provider-refused");
+  });
+
+  it("rebuilds expected fields and bounds and escapes labels in the summary", async () => {
+    const cases = structuredClone(raw.cases) as unknown as { expect: Record<string, unknown> }[];
+    cases[0]!.expect.extra = "carried-through";
+    const set = { ...resign(cases), version: "9 | `x`\n# heading" + "y".repeat(100) };
+    const report = await runPlainRuleEval({
+      set,
+      provider: anthropic,
+      post: createPlainRuleStandIn("anthropic", "reference"),
+    });
+    expect(JSON.stringify(report.results)).not.toContain("carried-through");
+    expect(report.results[0]!.expected).toEqual({ outcome: "allow", ruleId: "pr_src" });
+    const summary = plainRuleEvalSummary([report]);
+    const line = summary.split("\n")[0]!;
+    expect(line).toMatch(/^Eval set 9\?\?\?\?x\?\?\?\?heading/);
+    expect(line).not.toMatch(/[|`#]/);
+    expect(line.length).toBeLessThan(64 + 40);
   });
 });
