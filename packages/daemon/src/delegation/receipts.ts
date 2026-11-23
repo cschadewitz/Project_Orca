@@ -74,6 +74,12 @@ export const DelegationReceiptSchema = z
     version: z.literal(1),
     /** Bumped by every transition; what a writer must have read to replace the receipt. */
     revision: z.number().int().nonnegative(),
+    /**
+     * Random, fixed when the receipt file is created and never reused: a receipt removed and
+     * made again at the same path is another instance, so a writer holding the old one can
+     * never compare equal to the new one at the same revision.
+     */
+    instance: z.string().min(1),
     profile: z.string().min(1),
     binding: DelegationBindingSchema,
     parentRunId: z.string().min(1),
@@ -199,18 +205,22 @@ export class DelegationReceipts {
    * Anything else throws `ReceiptConflict` and writes nothing.
    */
   write(
-    receipt: Omit<DelegationReceipt, "version" | "updatedAt" | "revision"> & { revision?: number | undefined },
+    receipt: Omit<DelegationReceipt, "version" | "updatedAt" | "revision" | "instance"> & {
+      revision?: number | undefined;
+      instance?: string | undefined;
+    },
   ): DelegationReceipt {
     mkdirSync(this.dir, { recursive: true });
     const target = this.file(receipt.parentRunId, receipt.delegationId);
     const lock = this.lock(target);
     try {
       const current = this.read(receipt.parentRunId, receipt.delegationId);
-      if (current?.revision !== receipt.revision) throw new ReceiptConflict();
+      if (current?.revision !== receipt.revision || current?.instance !== receipt.instance) throw new ReceiptConflict();
       const full = DelegationReceiptSchema.parse({
         ...receipt,
         version: 1,
         revision: (receipt.revision ?? -1) + 1,
+        instance: receipt.instance ?? randomUUID(),
         updatedAt: new Date().toISOString(),
       });
       // The lock must still be ours at the commit: never write over a successor's decision.
@@ -270,12 +280,13 @@ export class DelegationReceipts {
    * a delegation that backed out before submitting leaves no receipt to strand. Anything else
    * throws `ReceiptConflict` and removes nothing.
    */
-  discard(receipt: Pick<DelegationReceipt, "parentRunId" | "delegationId" | "revision">): void {
+  discard(receipt: Pick<DelegationReceipt, "parentRunId" | "delegationId" | "revision" | "instance">): void {
     const target = this.file(receipt.parentRunId, receipt.delegationId);
     const lock = this.lock(target);
     try {
       const current = this.read(receipt.parentRunId, receipt.delegationId);
-      if (current?.revision !== receipt.revision || !lock.held()) throw new ReceiptConflict();
+      if (current?.revision !== receipt.revision || current?.instance !== receipt.instance || !lock.held())
+        throw new ReceiptConflict();
       rmSync(target);
       try {
         const dir = openSync(this.dir, "r");

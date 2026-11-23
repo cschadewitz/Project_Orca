@@ -1124,6 +1124,22 @@ describe("delegation through a proxy the test controls (#883)", () => {
     });
     expect(receipts.unsettled("direct")).toBe(0);
 
+    // A reservation removed and made again at the same path is another receipt: whoever still
+    // holds the first can neither promote nor remove the second, even at the same revision.
+    const first = reserve("run_res_d");
+    receipts.unreserve(first);
+    const second = reserve("run_res_d");
+    expect(second.revision).toBe(first.revision);
+    const { version: _v, updatedAt: _u, ...stale } = first;
+    expect(() => receipts.write({ ...stale, state: "submitting" })).toThrow(ReceiptConflict);
+    expect(() => receipts.discard(first)).toThrow(ReceiptConflict);
+    expect(() => receipts.unreserve(first)).toThrow(ReceiptConflict);
+    expect(receipts.read("run_res_d", "run_res_d_step1")).toMatchObject({
+      state: "reserved",
+      instance: second.instance,
+    });
+    receipts.unreserve(second);
+
     // Recovery after a crash: the reservation is promoted through the gate, by exactly one of
     // two sessions racing for it, and submitted once.
     reserve("run_res_c");

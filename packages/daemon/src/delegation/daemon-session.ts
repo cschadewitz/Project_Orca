@@ -567,7 +567,10 @@ class DaemonSession implements AgentSession {
    * it was read at; `ReceiptConflict` otherwise. A receipt without a revision must be new.
    */
   private store(
-    receipt: Omit<DelegationReceipt, "version" | "updatedAt" | "revision"> & { revision?: number },
+    receipt: Omit<DelegationReceipt, "version" | "updatedAt" | "revision" | "instance"> & {
+      revision?: number;
+      instance?: string;
+    },
   ): DelegationReceipt {
     const { version: _v, updatedAt: _u, ...rest } = receipt as DelegationReceipt;
     return this.options.receipts.write(rest);
@@ -692,6 +695,7 @@ class DaemonSession implements AgentSession {
         const generation = receipt.generation + 1;
         const next = this.store({
           revision: receipt.revision,
+          instance: receipt.instance,
           profile: this.options.profile,
           binding: this.options.binding,
           parentRunId,
