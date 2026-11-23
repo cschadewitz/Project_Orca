@@ -7,9 +7,15 @@
  * - with an `internal` token, whose ring holds N+1, it is offered N+1, downloads it through
  *   the Worker and restarts into the installer, after which Windows reports N+1 installed.
  *
- * With `ORCA_UPDATE_MODE=automatic` (#566) the internal run presses nothing: automatic updates
- * are on, the app checks and downloads by itself, and closing its window installs N+1 without
- * starting the app again. Otherwise automatic updates are turned off and every step is pressed.
+ * With automatic updates on (#566) the internal run presses nothing; the app checks and
+ * downloads by itself, then one of two paths installs, one per job:
+ *
+ * - `ORCA_UPDATE_MODE=automatic-idle`: the idle threshold is one second, so the idle install
+ *   runs, and the updated app starts again by itself;
+ * - `ORCA_UPDATE_MODE=automatic-close`: idle never comes, and closing the window installs N+1
+ *   without starting the app again.
+ *
+ * Otherwise (`manual`) automatic updates are turned off and every step is pressed.
  *
  * That covers the Worker's ring choice and authorization, the app's update driver and
  * electron-updater on an unsigned per-user install, with nothing published. It does not
@@ -22,7 +28,7 @@ import { test, expect, chromium, type Browser, type Page } from "@playwright/tes
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 
 const execute = promisify(execFile);
@@ -37,7 +43,8 @@ const EXECUTABLE = required("ORCA_UPDATE_EXECUTABLE");
 const FEED_URL = required("ORCA_UPDATE_URL");
 const FROM = required("ORCA_UPDATE_FROM");
 const TO = required("ORCA_UPDATE_TO");
-const MODE = process.env.ORCA_UPDATE_MODE === "automatic" ? "automatic" : "manual";
+const MODES = ["manual", "automatic-idle", "automatic-close"] as const;
+const MODE = MODES.find((mode) => mode === process.env.ORCA_UPDATE_MODE) ?? "manual";
 const TOKEN_FILES = {
   internal: required("ORCA_UPDATE_TOKEN_INTERNAL"),
   preview: required("ORCA_UPDATE_TOKEN_PREVIEW"),
@@ -77,7 +84,7 @@ async function launch(ring: keyof typeof TOKEN_FILES): Promise<Launched> {
   await mkdir(join(root, "profile"), { recursive: true });
   await writeFile(
     join(root, "profile", "preferences.json"),
-    `${JSON.stringify({ updates: { automatic: MODE === "automatic" } })}\n`,
+    `${JSON.stringify({ updates: { automatic: MODE !== "manual" } })}\n`,
   );
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
@@ -88,6 +95,10 @@ async function launch(ring: keyof typeof TOKEN_FILES): Promise<Launched> {
     ORCA_WORKSPACE: workspace,
   });
   delete env.ORCA_UPDATE_PRERELEASE;
+  // One install path per job: idle at once, or idle never (#566).
+  if (MODE === "automatic-idle") env.ORCA_UPDATE_IDLE_SECONDS = "1";
+  else if (MODE === "automatic-close") env.ORCA_UPDATE_IDLE_SECONDS = "1000000000";
+  else delete env.ORCA_UPDATE_IDLE_SECONDS;
   delete env.ELECTRON_RUN_AS_NODE;
   const port = PORTS[ring];
   const child = spawn(EXECUTABLE, [`--user-data-dir=${join(root, "profile")}`, `--remote-debugging-port=${port}`], {
@@ -192,7 +203,7 @@ test("a preview token, whose ring holds the installed version, is not offered th
   }
 });
 
-// The automatic run (#566) covers the internal ring with nothing pressed; one install per job.
+// The automatic runs (#566) cover the internal ring with nothing pressed; one install per job.
 if (MODE === "manual")
   test("an internal token is offered the next version, downloads it and installs it", async () => {
     // Each step has its own bound, so a hang names the step; the feed's request log is in the
@@ -248,37 +259,75 @@ if (MODE === "manual")
     });
   });
 
-if (MODE === "automatic")
-  test("automatic: with nothing pressed, it downloads by itself and closing the window installs (#566)", async () => {
-    test.setTimeout(1_200_000);
+/** Running copies of the installed app (not its installer or uninstaller), by image name. */
+async function appProcesses(): Promise<number> {
+  const { stdout } = await execute("tasklist", ["/FI", `IMAGENAME eq ${basename(EXECUTABLE)}`, "/FO", "CSV", "/NH"]);
+  return stdout.split(/\r?\n/).filter((line) => line.startsWith(`"${basename(EXECUTABLE)}"`)).length;
+}
+
+/** Waits until the app, pressing nothing, reports the downloaded update (or has already left). */
+async function downloadedByItself(page: Page, quit: () => boolean): Promise<void> {
+  const escaped = TO.replaceAll(".", "\\.");
+  await expect
+    .poll(
+      async () => {
+        if (quit()) return "quit";
+        return page
+          .evaluate(() => (window as unknown as UpdatesWindow).orca.updates.read())
+          .then((state) => `${state.phase} ${state.version ?? ""}`.trim())
+          .catch(() => (quit() ? "quit" : "unreadable"));
+      },
+      { timeout: 600_000, intervals: [5_000], message: "the app checks and downloads by itself" },
+    )
+    .toMatch(new RegExp(`^(ready ${escaped}|restarting ${escaped}|quit)$`));
+}
+
+if (MODE === "automatic-idle")
+  test("automatic, idle: nothing pressed, it installs N+1 and starts the updated app (#566)", async () => {
+    test.setTimeout(1_500_000);
     const launched = await launch("internal");
     const { child, page } = launched;
     let quit = false;
     void launched.exited.then(() => (quit = true));
     try {
-      await test.step(
-        "checks and downloads on its own",
-        async () => {
-          // The first automatic check is two minutes after start; nothing here calls act().
-          await expect
-            .poll(
-              async () => {
-                if (quit) return "quit";
-                return page
-                  .evaluate(() => (window as unknown as UpdatesWindow).orca.updates.read())
-                  .then((state) => `${state.phase} ${state.version ?? ""}`.trim())
-                  .catch(() => (quit ? "quit" : "unreadable"));
-              },
-              { timeout: 600_000, intervals: [5_000] },
-            )
-            .toMatch(new RegExp(`^(ready ${TO.replaceAll(".", "\\.")}|restarting ${TO.replaceAll(".", "\\.")}|quit)$`));
-        },
-        { timeout: 620_000 },
-      );
+      await test.step("checks and downloads on its own", () => downloadedByItself(page, () => quit), {
+        timeout: 620_000,
+      });
+      await test.step("installs once idle, with nothing pressed", async () => {
+        // The scheduler ticks every minute and retries every five; nothing here acts.
+        await expect.poll(() => quit, { timeout: 480_000, intervals: [5_000] }).toBe(true);
+        expect(child.exitCode, "the app's exit code").toBe(0);
+      });
+    } finally {
+      await stop(launched);
+    }
+    await test.step("installed version", async () => {
+      await expect
+        .poll(installedVersion, { timeout: 480_000, intervals: [5_000], message: `Windows reports ${TO} installed` })
+        .toBe(TO);
+    });
+    await test.step("the updated app starts again by itself", async () => {
+      // The old process is gone (above), so a running copy is the one the installer started.
+      await expect
+        .poll(appProcesses, { timeout: 180_000, intervals: [5_000], message: "the updated app is running" })
+        .toBeGreaterThan(0);
+    });
+  });
+
+if (MODE === "automatic-close")
+  test("automatic, close: closing the window installs N+1 and does not start the app again (#566)", async () => {
+    test.setTimeout(1_500_000);
+    const launched = await launch("internal");
+    const { child, page } = launched;
+    let quit = false;
+    void launched.exited.then(() => (quit = true));
+    try {
+      await test.step("checks and downloads on its own", () => downloadedByItself(page, () => quit), {
+        timeout: 620_000,
+      });
+      expect(quit, "nothing installs before the window closes (idle never comes in this job)").toBe(false);
       await test.step("closing the window installs instead of just closing", async () => {
-        // An idle install may already be under way on a runner nobody touches; either way the
-        // app leaves into the installer with a clean exit.
-        if (!quit) void page.evaluate(() => window.close()).catch(() => undefined);
+        void page.evaluate(() => window.close()).catch(() => undefined);
         await expect.poll(() => quit, { timeout: 180_000 }).toBe(true);
         expect(child.exitCode, "the app's exit code").toBe(0);
       });
@@ -289,5 +338,12 @@ if (MODE === "automatic")
       await expect
         .poll(installedVersion, { timeout: 480_000, intervals: [5_000], message: `Windows reports ${TO} installed` })
         .toBe(TO);
+    });
+    await test.step("the app does not start again", async () => {
+      // Long enough for a relaunch the installer would have made at its end.
+      for (let i = 0; i < 6; i++) {
+        expect(await appProcesses(), "no running copy of the app after a close install").toBe(0);
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+      }
     });
   });

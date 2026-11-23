@@ -1,6 +1,6 @@
 /** Automatic desktop updates (#566): when the scheduler checks, downloads and installs. */
 import { describe, expect, it, vi } from "vitest";
-import { AUTO_UPDATE_TIMING, AutoUpdates } from "../src/main/auto-updates.js";
+import { AUTO_UPDATE_TIMING, AutoUpdates, idleThreshold } from "../src/main/auto-updates.js";
 import { Updates, UpdatePreflightRefusal, type UpdateDriver, type UpdateGuards } from "../src/main/updates.js";
 
 const MINUTE = 60_000;
@@ -173,4 +173,71 @@ describe("automatic updates", () => {
     expect(r.driver.install).toHaveBeenCalledOnce();
     expect(r.auto.installsOnClose).toBe(false);
   });
+});
+
+describe("an automatic install asks again right before the stop", () => {
+  /** A rig whose daemon preparation waits until released, so the reason can change meanwhile. */
+  function deferred() {
+    const r = rig();
+    let release!: () => void;
+    r.guards.prepareDaemon = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    return { ...r, release: () => release() };
+  }
+
+  it.each([
+    ["the person comes back", (r: ReturnType<typeof deferred>) => r.setIdle(3)],
+    ["automatic updates are turned off", (r: ReturnType<typeof deferred>) => r.setEnabled(false)],
+    ["the app starts to quit", (r: ReturnType<typeof deferred>) => r.auto.stop()],
+  ])("%s while preparing: releases the exact reservation and drafts, stops nothing", async (_name, change) => {
+    const r = deferred();
+    await ready(r);
+    r.setIdle(AUTO_UPDATE_TIMING.idleSeconds);
+    const pass = r.auto.tick();
+    await vi.waitFor(() => expect(r.guards.prepareDaemon).toHaveBeenCalledOnce());
+    change(r);
+    r.release();
+    await pass;
+    const token = vi.mocked(r.guards.prepareDaemon).mock.calls[0]![0];
+    expect(r.guards.resume).toHaveBeenCalledExactlyOnceWith(token);
+    expect(r.guards.releaseDrafts).toHaveBeenCalledOnce();
+    expect(r.guards.stopDaemon).not.toHaveBeenCalled();
+    expect(r.driver.install).not.toHaveBeenCalled();
+    expect(r.updates.state.phase).toBe("ready");
+    expect(r.updates.held).toBe(false);
+  });
+
+  it("closing installs unless automatic updates were turned off meanwhile", async () => {
+    const r = deferred();
+    await ready(r);
+    const closing = r.auto.installOnClose();
+    await vi.waitFor(() => expect(r.guards.prepareDaemon).toHaveBeenCalledOnce());
+    r.setEnabled(false);
+    r.release();
+    expect(await closing).toBe(false);
+    expect(r.guards.stopDaemon).not.toHaveBeenCalled();
+    expect(r.guards.resume).toHaveBeenCalledOnce();
+
+    const kept = deferred();
+    await ready(kept);
+    const install = kept.auto.installOnClose();
+    await vi.waitFor(() => expect(kept.guards.prepareDaemon).toHaveBeenCalledOnce());
+    // Idle does not matter for a close: the person closing the window is the reason.
+    kept.setIdle(0);
+    kept.release();
+    expect(await install).toBe(true);
+    expect(kept.driver.install).toHaveBeenCalledExactlyOnceWith({ relaunch: false });
+  });
+});
+
+it("ORCA_UPDATE_IDLE_SECONDS takes only whole seconds from 1 to 1e9", () => {
+  expect(idleThreshold(undefined)).toEqual({});
+  expect(idleThreshold("1")).toEqual({ idleSeconds: 1 });
+  expect(idleThreshold("1000000000")).toEqual({ idleSeconds: 1e9 });
+  for (const bad of ["", "0", "-5", "1.5", "1e3", " 60", "1000000001", "99999999999"])
+    expect(idleThreshold(bad)).toEqual({});
 });

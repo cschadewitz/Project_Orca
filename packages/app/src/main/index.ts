@@ -40,7 +40,7 @@ import { RemoteProfiles } from "./remote-profiles.js";
 import { ServerUpdater } from "./server-update.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates, type UpdateGuards } from "./updates.js";
-import { AutoUpdates } from "./auto-updates.js";
+import { AutoUpdates, idleThreshold } from "./auto-updates.js";
 import { MacUpdateWindows } from "./mac-update-windows.js";
 import { MacUpdateGuards } from "./mac-update-guards.js";
 import { installMacUpdateIPC } from "./mac-update-application.js";
@@ -1565,6 +1565,7 @@ const autoUpdates = new AutoUpdates({
   enabled: () => preferences.read().updates.automatic,
   idleSeconds: () => powerMonitor.getSystemIdleTime(),
   now: () => Date.now(),
+  timing: idleThreshold(process.env.ORCA_UPDATE_IDLE_SECONDS),
 });
 const storeSwitch = new StoreSwitchRestart({
   guards: updateGuards,

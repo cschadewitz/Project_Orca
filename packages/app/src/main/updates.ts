@@ -46,6 +46,17 @@ export interface UpdateActOptions {
   automatic?: boolean;
   /** False for an install on quit: the person closed the app, so it does not start again. */
   relaunch?: boolean;
+  /**
+   * Asked again after drafts and admission are prepared and right before the exact stop: an
+   * automatic install whose reason has gone (the person came back, turned automatic updates
+   * off, or the app began to quit) releases its exact reservation and drafts instead.
+   */
+  stillWanted?: () => boolean;
+}
+export class AutomaticInstallWithdrawn extends Error {
+  constructor() {
+    super("Automatic install no longer wanted");
+  }
 }
 export class Updates {
   state: UpdateSnapshot;
@@ -113,6 +124,7 @@ export class Updates {
         daemonAttempted = true;
         await this.guards.prepareDaemon(token, options.automatic ? { idleProof: true } : undefined);
         daemonPrepared = true;
+        if (options.automatic && !wanted(options)) throw new AutomaticInstallWithdrawn();
         await this.guards.stopDaemon(token);
         if (this.state.version)
           await this.guards.handOff?.(token, this.state.current, this.state.version).catch(() => undefined);
@@ -164,5 +176,13 @@ export class Updates {
       this.busy = false;
     }
     return this.state;
+  }
+}
+
+function wanted(options: UpdateActOptions): boolean {
+  try {
+    return options.stillWanted?.() ?? true;
+  } catch {
+    return false;
   }
 }

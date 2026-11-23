@@ -55,8 +55,9 @@ it("updates every architecture the feed serves, arm64 on a native arm64 runner (
   expect(include).toEqual([
     { arch: "x64", runner: "windows-latest", mode: "manual" },
     { arch: "arm64", runner: "windows-11-arm", mode: "manual" },
-    // Automatic updates (#566) once, on x64: nothing pressed, closing the window installs.
-    { arch: "x64", runner: "windows-latest", mode: "automatic" },
+    // Automatic updates (#566) on x64, one install path per job.
+    { arch: "x64", runner: "windows-latest", mode: "automatic-idle" },
+    { arch: "x64", runner: "windows-latest", mode: "automatic-close" },
   ]);
   const manual = include.filter((entry) => entry.mode === "manual");
   expect(manual.map((entry) => entry.arch)).toEqual(SERVED_ARCHES);

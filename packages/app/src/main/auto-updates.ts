@@ -58,6 +58,8 @@ export class AutoUpdates {
   private running: Promise<void> | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private closeTried = false;
+  /** The app is quitting: an idle install in preparation must not reach the stop. */
+  private stopped = false;
 
   constructor(private readonly deps: AutoUpdateDeps) {
     this.timing = { ...AUTO_UPDATE_TIMING, ...deps.timing };
@@ -80,6 +82,7 @@ export class AutoUpdates {
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
   }
@@ -96,7 +99,7 @@ export class AutoUpdates {
     const updates = this.deps.updates;
     const on = this.on;
     updates.setAutomatic(on);
-    if (!on || updates.held) return;
+    if (!on || updates.held || this.stopped) return;
     const now = this.deps.now();
     const phase = updates.state.phase;
     if (phase !== "ready") {
@@ -134,7 +137,17 @@ export class AutoUpdates {
     }
     if (!(idle >= this.timing.idleSeconds)) return;
     this.lastAttempt = now;
-    await updates.act("restart", { automatic: true });
+    await updates.act("restart", { automatic: true, stillWanted: () => this.idleStillWanted() });
+  }
+
+  /** Still off, still idle and not quitting, read fresh at the stop boundary. */
+  private idleStillWanted(): boolean {
+    if (this.stopped || !this.on) return false;
+    try {
+      return this.deps.idleSeconds() >= this.timing.idleSeconds;
+    } catch {
+      return false;
+    }
   }
 
   /** The preference changed: the header learns at once, the next tick acts on it. */
@@ -159,7 +172,24 @@ export class AutoUpdates {
     this.closeTried = true;
     await this.running;
     if (updates.held || updates.state.phase !== "ready") return false;
-    const result = await updates.act("restart", { automatic: true, relaunch: false });
+    const result = await updates.act("restart", {
+      automatic: true,
+      relaunch: false,
+      // Closing is the reason; turning automatic updates off, or another quit, withdraws it.
+      stillWanted: () => !this.stopped && this.on,
+    });
     return result.phase === "restarting";
   }
+}
+
+/**
+ * `ORCA_UPDATE_IDLE_SECONDS`: how long without input before an idle install, in whole seconds
+ * (1 to 1e9). Anything else keeps the default 15 minutes. The Windows update test uses it to
+ * take one path at a time; a machine that is never idle long enough can raise it, not lower
+ * the guards: the runtime idle proof and draft checks still decide.
+ */
+export function idleThreshold(value: string | undefined): { idleSeconds?: number } {
+  if (!value || !/^[1-9][0-9]{0,9}$/.test(value)) return {};
+  const seconds = Number(value);
+  return seconds <= 1e9 ? { idleSeconds: seconds } : {};
 }

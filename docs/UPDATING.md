@@ -46,14 +46,18 @@ on work, and a busy app simply tries again later.
 - **Check and download.** Two minutes after start, then every four hours, the app checks its
   feed and downloads whatever it is offered, in the background.
 - **Install when idle.** Once a download is ready, the app installs it after 15 minutes without
-  keyboard or mouse input, trying at most every five minutes. It goes through exactly the
+  keyboard or mouse input (`ORCA_UPDATE_IDLE_SECONDS` changes the 15 minutes), trying at most
+  every five minutes. It goes through exactly the
   restart above, with one more condition: the bundled daemon's runtime idle proof
   (`maintenance.runtime`) must close admission, which it refuses while any request, run
   execution, callback, renewal, dispatch, continuation or recovery is in progress. A refusal
-  holds nothing and stops nothing; unsaved drafts refuse the same way. The updated app starts
-  again by itself.
+  holds nothing and stops nothing; unsaved drafts refuse the same way. Just before the stop the
+  app asks again: if input came back, automatic updates were turned off or the app began to
+  quit, it releases admission and the drafts and stops nothing. The updated app starts again by
+  itself.
 - **Install on close.** Closing the last window with a ready download tries the same install,
-  without starting the app again. Refused, the window closes as it always did. It is tried
+  without starting the app again (turning automatic updates off meanwhile withdraws it).
+  Refused, the window closes as it always did. It is tried
   once per run of the app.
 - **Overdue.** A download that has waited three days for an idle moment turns the header's
   **Restart to update** button into a highlighted "waiting 3 days" button. It still kills

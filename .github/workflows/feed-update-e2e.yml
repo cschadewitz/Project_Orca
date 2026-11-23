@@ -57,10 +57,14 @@ jobs:
           - arch: arm64
             runner: windows-11-arm
             mode: manual
-          # Automatic updates (#566): nothing pressed, closing the window installs.
+          # Automatic updates (#566), nothing pressed: the idle install relaunches the new app;
+          # closing the window installs without relaunching. One path per job.
           - arch: x64
             runner: windows-latest
-            mode: automatic
+            mode: automatic-idle
+          - arch: x64
+            runner: windows-latest
+            mode: automatic-close
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
