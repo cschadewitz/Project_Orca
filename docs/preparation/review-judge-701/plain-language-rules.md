@@ -95,6 +95,15 @@ envelope, and the person is asked otherwise (`outside-envelope`):
 - as a second, lexical line behind that check, every location is workspace-relative (not absolute,
   no `..`, no home or drive prefix).
 
+The check is `verifyPlainRuleTargets` (`review-judge/plain-rule-targets.ts`): read or search
+only, every location existing, its real path at or below the workspace's real path segment by
+segment, and not under a protected path for reading (`protectedPathFor`, the same check that denies
+ahead of every rule). Its verified locations are the real, workspace-relative paths, and those are
+what the judge sees. It runs at decision time. A link swapped after the slot's same-turn re-check and
+before the agent's own open is outside what any check on the request can see. That window closes
+only with ORCA-owned execution (#703), which is one more reason writes and commands stay with the
+person.
+
 `restrictions` and `targetsVerified` passed to `judgePermission` are the **output** of the slot's
 trusted checks, never a substitute for them. The helper refuses without them, but it cannot verify
 them itself.
