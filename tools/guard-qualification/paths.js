@@ -142,4 +142,93 @@ function hookOutcome(result) {
   return decision === "ask" || decision === "deny" ? decision : `invalid:${String(decision)}`;
 }
 
-export const PATHS = [acpAsk, claudeNativeHook];
+/* --------------------------- Codex 0.171.0 through codex-acp (#705) --------------------------- */
+
+/** A patch in Codex's `apply_patch` format that adds or updates one file. */
+function codexPatch(op, path, content = "") {
+  const body = op === "add" ? content.split("\n").map((l) => `+${l}`) : ["@@", "-a", "+b"];
+  const header = `*** ${op === "add" ? "Add" : "Update"} File: ${path}`;
+  return ["*** Begin Patch", header, ...body, "*** End Patch"].join("\n");
+}
+
+/** The tool name and input Codex 0.171.0 hands a `PreToolUse` hook for an action. */
+function codexShape(action) {
+  switch (action.tool) {
+    case "shell":
+      return { toolName: "Bash", toolInput: { command: action.command } };
+    case "write":
+      return { toolName: "apply_patch", toolInput: { command: codexPatch("add", action.path, action.content) } };
+    case "edit":
+      return { toolName: "apply_patch", toolInput: { command: codexPatch("update", action.path) } };
+    case "read":
+      // Codex reads files through its shell; the one read tool it hooks by name is `view_image`.
+      return { toolName: "view_image", toolInput: { path: action.path } };
+    case "mcp":
+      return { toolName: `mcp__${action.server}__${action.name}`, toolInput: action.input ?? {} };
+    case "unknown":
+      return { toolName: action.name, toolInput: action.input ?? {} };
+    default:
+      throw new Error(`unknown action ${JSON.stringify(action)}`);
+  }
+}
+
+/**
+ * ORCA's Codex `PreToolUse` hook (#705), run as its process runs it (`runClaudePreToolHook`
+ * after `--codex`). Codex 0.171.0 blocks a call only on exit 2, so the hook answers every
+ * decision but allow with exit 2 and a fixed reason whose first words say which decision it
+ * was; an ask is blocked, since Codex cannot pause a call for a person. Verifies the hook
+ * program's answer to a frame; not that Codex runs it, trusts it or blocks on it (Codex lets a
+ * call through when its hook runner fails), and the session's startup probe is not run here.
+ */
+export const codexNativeHook = {
+  id: "codex-native-hook",
+  capabilities: ["raw-input", "context-file", "cwd"],
+
+  contextFile(world) {
+    return claudeNativeHook.contextFile(world);
+  },
+
+  /** The same context file ORCA writes for either agent's hook. */
+  async open(world) {
+    return claudeNativeHook.open(world);
+  },
+
+  frame(world, action) {
+    const { toolName, toolInput } = codexShape(action);
+    return JSON.stringify({
+      session_id: "acceptance-session",
+      transcript_path: null,
+      cwd: action.cwd ?? world.workspace,
+      hook_event_name: "PreToolUse",
+      model: "acceptance-model",
+      permission_mode: "bypassPermissions",
+      tool_name: toolName,
+      tool_input: toolInput,
+      tool_use_id: `call_${++world.seq}`,
+    });
+  },
+
+  async decide(world, action) {
+    await codexNativeHook.open(world);
+    return codexNativeHook.decideRaw(world, codexNativeHook.frame(world, action));
+  },
+
+  /** Send the hook exactly these stdin bytes; `args` are the ones after `--codex`. */
+  async decideRaw(world, input, args) {
+    await codexNativeHook.open(world);
+    const result = await runClaudePreToolHook(["--codex", ...(args ?? [codexNativeHook.contextFile(world)])], input);
+    return { outcome: codexHookOutcome(result), detail: result, surfaces: [result.stdout, result.stderr] };
+  },
+};
+
+function codexHookOutcome(result) {
+  if (result.exitCode === 0)
+    return result.stdout === "" && result.stderr === "" ? "allow" : "invalid:exit-0-with-output";
+  if (result.stdout !== "") return "invalid:stdout";
+  if (result.stderr.startsWith("Denied by ORCA: ")) return "deny";
+  if (result.stderr.startsWith("Blocked by ORCA: its policy asks a person first")) return "ask";
+  if (result.stderr.startsWith("Blocked by ORCA: ")) return "block";
+  return "invalid:unrecognised-stderr";
+}
+
+export const PATHS = [acpAsk, claudeNativeHook, codexNativeHook];
