@@ -133,7 +133,7 @@ describe("#701 judge floor: every rule x floor x judge row through the real port
 describe("#701 judge floor: strengthen-only composition and limits", () => {
   it("a rule's stricter answers survive the floor", async () => {
     const strict = ruleWith("required", {
-      delegation: delegationOf("required", { onNotFit: "deny", onIndeterminate: "indeterminate" }),
+      delegation: delegationOf("required", { onNotFit: "deny", onIndeterminate: "indeterminate" })!,
     });
     expect((await run(stateWith([strict], floorOf("ask")), "not-fit")).verdict.outcome).toBe("deny");
     expect((await run(stateWith([strict], floorOf("ask")), "indeterminate")).verdict.outcome).toBe("indeterminate");
