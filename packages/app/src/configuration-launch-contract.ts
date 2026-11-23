@@ -72,6 +72,24 @@ export interface ConfigReview {
     kind: "added" | "removed" | "changed" | "moved";
     valueDisplay: "withheld" | "non-secret";
   }[];
+  /**
+   * Each agent's capability set (#335) as the candidate would make it, against the running
+   * configuration's: ids and deciding scopes only. Absent when either side has no set to
+   * report (an older daemon, or a candidate the schema refuses).
+   */
+  readonly capabilities?: readonly AgentCapabilityPreview[];
+}
+export interface AgentCapabilityPreview {
+  readonly agent: string;
+  readonly entries: readonly {
+    readonly kind: "mcpServer" | "skill";
+    readonly id: string;
+    /** The scope that decides it in the candidate; for a removed entry, the one that did. */
+    readonly source: string;
+    readonly change: "added" | "removed" | "unchanged" | "source-changed";
+  }[];
+  /** Selections that change nothing (dotted paths), from the candidate. */
+  readonly warnings: readonly string[];
 }
 /** Candidate bytes remain privately held by the authorized editor adapter. */
 export interface ConfigurationPorts {

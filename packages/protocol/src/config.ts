@@ -264,6 +264,29 @@ export const ConfigEffectivePolicySchema = z.object({
 });
 export type ConfigEffectivePolicy = z.infer<typeof ConfigEffectivePolicySchema>;
 
+/**
+ * One agent's capability set at its own scope (#335): the workspace scope, then its inline MCP
+ * servers, then `agents[].capabilities`, which is what a step gets when its workflow and node
+ * select nothing. Identities and the scope that decided each entry, never a definition: no
+ * command, argument, environment value or skill path. `catalog` is false for an agent's own
+ * inline server. Skills carry a digest only when the catalog pins one; content is not read.
+ */
+const CapabilityIssueSchema = z.object({ path: z.string(), message: z.string() });
+export const ConfigAgentCapabilitiesSchema = z.object({
+  mcpServers: z.array(z.object({ id: z.string(), source: z.string(), catalog: z.boolean() })),
+  skills: z.array(
+    z.object({ id: z.string(), source: z.string(), version: z.string().optional(), digest: z.string().optional() }),
+  ),
+  errors: z.array(CapabilityIssueSchema),
+  warnings: z.array(CapabilityIssueSchema),
+});
+export type ConfigAgentCapabilities = z.infer<typeof ConfigAgentCapabilitiesSchema>;
+export const ConfigEffectiveCapabilitiesSchema = z.object({
+  /** Keyed by agent id, for every agent the config declares. */
+  agents: z.record(z.string(), ConfigAgentCapabilitiesSchema),
+});
+export type ConfigEffectiveCapabilities = z.infer<typeof ConfigEffectiveCapabilitiesSchema>;
+
 export const ConfigGetParamsSchema = z.object({});
 export type ConfigGetParams = z.infer<typeof ConfigGetParamsSchema>;
 
@@ -297,6 +320,8 @@ export const ConfigGetResultSchema = z.object({
   schema: ConfigSchemaDescriptionSchema,
   formSchema: ConfigFormSchemaSchema.optional(),
   effective: ConfigEffectivePolicySchema,
+  /** The active configuration's capability sets (#335). Absent from an older daemon. */
+  capabilities: ConfigEffectiveCapabilitiesSchema.optional(),
   generation: ConfigGenerationStatusSchema.optional(),
   asOf: z.string(),
 });
@@ -407,6 +432,12 @@ export const ConfigSetResultSchema = z.object({
    * person types.
    */
   validation: z.object({ errors: z.array(ConfigValidationErrorSchema) }).optional(),
+  /**
+   * Under `validateOnly` for the config document (#335): the capability sets the candidate
+   * would give each agent, so a form can preview them before saving and applying. Absent when
+   * the candidate does not parse against the schema, and from an older daemon.
+   */
+  capabilities: ConfigEffectiveCapabilitiesSchema.optional(),
   asOf: z.string(),
 });
 export type ConfigSetResult = z.infer<typeof ConfigSetResultSchema>;

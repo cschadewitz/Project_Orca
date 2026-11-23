@@ -72,6 +72,7 @@ import {
 import { withFileLock } from "@orca/store";
 import { describeConfigSchema, validationErrors } from "./config-schema.js";
 import { describeConfigFormSchema } from "./config-form-schema.js";
+import { effectiveCapabilities } from "./config-capabilities.js";
 import { lowerConfigEdits } from "./config-collection-edits.js";
 import { configReferenceErrors } from "./config-references.js";
 import { TemplateAuthoringService } from "./template-authoring.js";
@@ -239,6 +240,9 @@ export class ConfigModel {
     const config = await this.read("config");
     const permissions = await this.read("permissions");
     await authorize?.();
+    const capabilities = effectiveCapabilities(
+      this.generations ? this.generations.effectiveConfig() : configurationValue(config),
+    );
     return {
       config,
       permissions,
@@ -248,6 +252,7 @@ export class ConfigModel {
         this.generations ? { ...config, parsed: this.generations.effectiveConfig() } : config,
         permissions,
       ),
+      ...(capabilities === undefined ? {} : { capabilities }),
       ...(this.generations ? { generation: this.generations.status(configurationValue(config), config.revision) } : {}),
       asOf: this.clock.isoNow(),
     };
@@ -280,10 +285,13 @@ export class ConfigModel {
       refuseIfStale(params, current);
       const text = this.nextText(current, params);
       const parsed = safeParse(params.document, text);
+      const capabilities =
+        params.document === "config" && parsed !== undefined ? effectiveCapabilities(parsed ?? {}) : undefined;
       return {
         document: { ...current, exists: true, revision: hash(text), text, ...(parsed === undefined ? {} : { parsed }) },
         written: false,
         validation: { errors: this.validate(params.document, text) },
+        ...(capabilities === undefined ? {} : { capabilities }),
         asOf: this.clock.isoNow(),
       };
     }
