@@ -9,7 +9,7 @@ import { HELLO_METHOD, PROTOCOL_VERSION } from "@orca/protocol";
 import { commands, type CommandContext } from "../src/commands/index.js";
 import { daemonCall, localTokenFile } from "../src/daemon-client.js";
 import * as bootstrapModule from "../src/bootstrap.js";
-import { main } from "../src/main.js";
+import { credentialIdLast, main } from "../src/main.js";
 
 const dirs: string[] = [];
 beforeEach(() => {
@@ -106,6 +106,60 @@ describe("CLI auth lifecycle", () => {
     await commands.auth!.run(revoke);
     expect(revoke.lines.join("\n")).not.toContain(rotated.token);
     expect(auth.credentials.authenticate(rotated.token).ok).toBe(false);
+  });
+
+  it("rotates and revokes a credential whose id starts with a dash", async () => {
+    // Ids issued before newCredentialId could start with `-`, which the parser read as an option.
+    const dir = await fixture();
+    const file = join(dir, "auth", "credentials.json");
+    const dashedCredential = async () => {
+      const issue = ctx(dir, ["issue", "build-bot"], { json: true });
+      await commands.auth!.run(issue);
+      const { id } = (JSON.parse(issue.lines[0]!) as { credential: { id: string } }).credential;
+      const dashed = `-${id.slice(1)}`;
+      await writeFile(file, (await readFile(file, "utf8")).replaceAll(id, dashed));
+      return dashed;
+    };
+    const rotated = await dashedCredential();
+    const revoked = await dashedCredential();
+    const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    expect(await main(["auth", "rotate", rotated, "--cwd", dir, "--json"])).toBe(0);
+    expect(await main(["auth", "revoke", revoked, "--cwd", dir])).toBe(0);
+    expect(err).not.toHaveBeenCalled();
+    expect(out).toHaveBeenCalledWith(`revoked ${revoked}\n`);
+    const credentials = openAuthDirectory(join(dir, "auth")).credentials.list();
+    expect(credentials.find((c) => c.id === rotated)?.revokedAt).toBeDefined();
+    expect(credentials.find((c) => c.id === revoked)?.revokedAt).toBeDefined();
+  });
+
+  it("moves only the credential id of auth rotate/revoke behind --", () => {
+    const id = "-AbCdEfGhIjK";
+    expect(credentialIdLast(["auth", "revoke", id, "--json"])).toEqual(["auth", "revoke", "--json", "--", id]);
+    expect(credentialIdLast(["auth", "revoke", "--AbCdEfGhIj"])).toEqual(["auth", "revoke", "--", "--AbCdEfGhIj"]);
+    // Global options and their values may sit anywhere, as the parser allows.
+    expect(
+      credentialIdLast(["--cwd", "/w", "auth", "--json", "rotate", "--expires-at", "2030-01-01T00:00:00Z", id]),
+    ).toEqual(["--cwd", "/w", "auth", "--json", "rotate", "--expires-at", "2030-01-01T00:00:00Z", "--", id]);
+    for (const argv of [
+      // A declared option of the same length, and an explicit --.
+      ["auth", "rotate", "--expires-at", "2030-01-01T00:00:00Z", "AbCdEfGhIjKl"],
+      ["auth", "revoke", "--", id],
+      // Other commands and subcommands, even with "auth revoke" among their arguments.
+      ["auth", "issue", id],
+      ["runs", "revoke", id],
+      ["runs", "show", "auth", "revoke", id],
+      ["workflows", "auth", "revoke", id],
+      // "auth" or "revoke" as an option's value is not the command.
+      ["--cwd", "auth", "revoke", id],
+      ["--label", "auth", "auth", "issue", "--label", "revoke", id],
+      ["--note=auth", "revoke", id],
+      // An id-shaped value of an option, and other shapes.
+      ["auth", "revoke", "--label", id, "AbCdEfGhIjKl"],
+      ["auth", "revoke", "-short"],
+      ["auth", "revoke", "AbCdEfGhIjKl", id],
+    ])
+      expect(credentialIdLast(argv)).toBe(argv);
   });
 
   it("leaves bootstrap rotation to atomic daemon startup", async () => {

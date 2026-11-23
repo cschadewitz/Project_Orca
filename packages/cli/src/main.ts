@@ -24,69 +24,106 @@ global options:
   --version          print the ORCA version and exit
 `;
 
+const OPTIONS = {
+  config: { type: "string" },
+  endpoint: { type: "string" },
+  "token-env": { type: "string" },
+  cwd: { type: "string" },
+  var: { type: "string", multiple: true },
+  "var-json": { type: "string", multiple: true },
+  "workflow-version": { type: "string" },
+  "expected-workflow-revision": { type: "string" },
+  "trusted-proxy": { type: "string", multiple: true },
+  "allow-origin": { type: "string", multiple: true },
+  "unauthenticated-loopback": { type: "boolean" },
+  preset: { type: "string" },
+  label: { type: "string" },
+  "workflow-scope": { type: "string", multiple: true },
+  secret: { type: "string", multiple: true },
+  "mcp-server": { type: "string", multiple: true },
+  skill: { type: "string", multiple: true },
+  "judge-disclosure": { type: "boolean" },
+  "host-key": { type: "string", multiple: true },
+  "jump-host-key": { type: "string", multiple: true },
+  issue: { type: "boolean" },
+  "runs-scope": { type: "string" },
+  "expires-at": { type: "string" },
+  agent: { type: "string", multiple: true },
+  model: { type: "string", multiple: true },
+  "item-workflow": { type: "string" },
+  "template-pack": { type: "string" },
+  body: { type: "string" },
+  "body-file": { type: "string" },
+  "idempotency-key": { type: "string" },
+  dir: { type: "string" },
+  "log-level": { type: "string" },
+  note: { type: "string" },
+  checkpoint: { type: "string" },
+  plan: { type: "string" },
+  status: { type: "string" },
+  rationale: { type: "string" },
+  workflow: { type: "string" },
+  run: { type: "string" },
+  host: { type: "string" },
+  port: { type: "string" },
+  "ssh-port": { type: "string" },
+  identity: { type: "string" },
+  confirm: { type: "string" },
+  json: { type: "boolean" },
+  force: { type: "boolean" },
+  quiet: { type: "boolean" },
+  mermaid: { type: "boolean" },
+  keep: { type: "boolean" },
+  "run-again": { type: "boolean" },
+  abandon: { type: "boolean" },
+  "no-resume": { type: "boolean" },
+  "read-only": { type: "boolean" },
+  help: { type: "boolean" },
+  version: { type: "boolean" },
+} as const;
+
+/**
+ * `orca auth rotate|revoke <id>` with an id that starts with `-` (ids issued before
+ * 0.8.0 could): the parser would read it as an unknown option, so move it behind a `--`.
+ * The walk follows the parser: declared options are skipped with their values, and only
+ * when the first two positionals are `auth` and `rotate`/`revoke` is the next token that
+ * is not a declared option, and has the exact credential-id shape, moved. Anything else,
+ * and argv that already has a `--`, is left alone. An old id that is itself a declared
+ * option name (such as `--expires-at`) still needs the explicit `orca auth revoke -- <id>`.
+ */
+export function credentialIdLast(argv: string[]): string[] {
+  if (argv.includes("--")) return argv;
+  const positionals: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg.startsWith("--")) {
+      const [name, inline] = [arg.slice(2).split("=")[0]!, arg.includes("=")];
+      const declared = (OPTIONS as Record<string, { type: string }>)[name];
+      if (declared) {
+        if (declared.type === "string" && !inline) i++; // its value, whatever it looks like
+        continue;
+      }
+    }
+    if (!arg.startsWith("-")) {
+      positionals.push(arg);
+      if (positionals.length > 2) return argv;
+      continue;
+    }
+    // Not a declared option: the id we are looking for, or something the parser will refuse.
+    const command = positionals[0] === "auth" && (positionals[1] === "rotate" || positionals[1] === "revoke");
+    if (!command || positionals.length !== 2 || !/^-[A-Za-z0-9_-]{11}$/.test(arg)) return argv;
+    return [...argv.slice(0, i), ...argv.slice(i + 1), "--", arg];
+  }
+  return argv;
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   try {
     const { values, positionals } = parseArgs({
-      args: argv,
+      args: credentialIdLast(argv),
       allowPositionals: true,
       strict: true,
-      options: {
-        config: { type: "string" },
-        endpoint: { type: "string" },
-        "token-env": { type: "string" },
-        cwd: { type: "string" },
-        var: { type: "string", multiple: true },
-        "var-json": { type: "string", multiple: true },
-        "workflow-version": { type: "string" },
-        "expected-workflow-revision": { type: "string" },
-        "trusted-proxy": { type: "string", multiple: true },
-        "allow-origin": { type: "string", multiple: true },
-        "unauthenticated-loopback": { type: "boolean" },
-        preset: { type: "string" },
-        label: { type: "string" },
-        "workflow-scope": { type: "string", multiple: true },
-        secret: { type: "string", multiple: true },
-        "mcp-server": { type: "string", multiple: true },
-        skill: { type: "string", multiple: true },
-        "judge-disclosure": { type: "boolean" },
-        "host-key": { type: "string", multiple: true },
-        "jump-host-key": { type: "string", multiple: true },
-        issue: { type: "boolean" },
-        "runs-scope": { type: "string" },
-        "expires-at": { type: "string" },
-        agent: { type: "string", multiple: true },
-        model: { type: "string", multiple: true },
-        "item-workflow": { type: "string" },
-        "template-pack": { type: "string" },
-        body: { type: "string" },
-        "body-file": { type: "string" },
-        "idempotency-key": { type: "string" },
-        dir: { type: "string" },
-        "log-level": { type: "string" },
-        note: { type: "string" },
-        checkpoint: { type: "string" },
-        plan: { type: "string" },
-        status: { type: "string" },
-        rationale: { type: "string" },
-        workflow: { type: "string" },
-        run: { type: "string" },
-        host: { type: "string" },
-        port: { type: "string" },
-        "ssh-port": { type: "string" },
-        identity: { type: "string" },
-        confirm: { type: "string" },
-        json: { type: "boolean" },
-        force: { type: "boolean" },
-        quiet: { type: "boolean" },
-        mermaid: { type: "boolean" },
-        keep: { type: "boolean" },
-        "run-again": { type: "boolean" },
-        abandon: { type: "boolean" },
-        "no-resume": { type: "boolean" },
-        "read-only": { type: "boolean" },
-        help: { type: "boolean" },
-        version: { type: "boolean" },
-      },
+      options: OPTIONS,
     });
     const [name, ...rest] = positionals;
     // Before the command lookup and before `--help`: `orca --version` is a question about the

@@ -61,6 +61,11 @@ Only `issue` and `rotate` print a token, once; nothing else ever shows one.
 | Rotate    | `orca auth rotate <id> [--expires-at <ISO>]`: keeps the current expiry unless given. The bootstrap credential rotates only by restarting `orca serve`. |
 | Revoke    | `orca auth revoke <id>`                                                                                                                  |
 
+Credential ids are twelve characters and never start with `-`. An id issued before 0.8.0 may
+start with one; `rotate` and `revoke` accept it as typed, except an id that is exactly an
+`orca` option name (such as `--expires-at`), which needs a `--` before it:
+`orca auth revoke -- <id>`.
+
 `--json` prints the same records as JSON. The CLI issues a preset's permissions and has no
 flag for an arbitrary list; `CredentialStore.issue({ permissions })` is the only way to issue
 one, and the restricted-scope rule below still applies to it.
