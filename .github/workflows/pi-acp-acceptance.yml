@@ -1,0 +1,87 @@
+# ORCA driving the real pi through the pi-acp adapter (#705, tiers A and B), pinned below. A
+# scripted local stand-in answers for the model (an OpenAI-compatible endpoint configured as a
+# custom provider in pi's own agent directory), so the run needs no account, key or secret and
+# costs nothing. It observes on the installed agent: an ORCA session opens, streams and is
+# cancelled during a running command; pi runs shell commands and file writes without asking
+# ORCA even under a deny-everything policy; and an extension's own dialog reaches ORCA as a
+# kind-other request.
+#
+# PI_ACP_VERSION and PI_VERSION must be a pair in PI_ACP_SUPPORT
+# (packages/agents/src/agent-profiles/pi.ts); the suite fails if they are not. Moving either
+# is a reviewed change to both. A weekly run sees a change in behaviour behind the pins.
+name: pi ACP acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/agents/src/agent-profiles/**
+      - packages/agents/src/acp-session.ts
+      - packages/agents/src/permissions.ts
+      - packages/cli/test/pi-acp-acceptance-705.test.ts
+      - .github/workflows/pi-acp-acceptance.yml
+  schedule:
+    - cron: "57 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-acp-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PI_ACP_VERSION: 0.0.35
+  PI_VERSION: 1.6.0
+
+jobs:
+  linux:
+    name: pi acp acceptance (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Install the pinned pi-acp and pi outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/pi"
+          mkdir -p "$d"
+          cd "$d"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --ignore-scripts \
+            "pi-acp@${PI_ACP_VERSION}" "@earendil-works/pi-coding-agent@${PI_VERSION}"
+          test "$(node -p 'require("pi-acp/package.json").version')" = "$PI_ACP_VERSION"
+          test "$(node -p 'require("@earendil-works/pi-coding-agent/package.json").version')" = "$PI_VERSION"
+          test -f "$d/node_modules/pi-acp/dist/index.js"
+          test -x "$d/node_modules/.bin/pi"
+          {
+            echo "ORCA_PI_ACP=$d/node_modules/pi-acp/dist/index.js"
+            echo "ORCA_PI=$d/node_modules/.bin/pi"
+            echo "ORCA_PI_VERSION=$PI_VERSION"
+          } >> "$GITHUB_ENV"
+
+      - name: Run the acceptance tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run packages/cli/test/pi-acp-acceptance-705.test.ts \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/acceptance.json"
+          # The suite is skipped without the agent; here every test has to have run.
+          node -e '
+            const r = require(process.argv[1]);
+            if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
+              throw new Error(`expected every acceptance test to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
+          ' "$RUNNER_TEMP/acceptance.json"

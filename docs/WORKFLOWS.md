@@ -373,7 +373,7 @@ version, which calls reach ORCA and which the agent runs on its own. `orca agent
 advisory, not a guard: the known settings it can see in an agent's command line and
 environment that let calls run without asking ORCA (for Gemini CLI today: YOLO or auto-edit
 in a trusted workspace, allowed-tools and policy flags, a trusted workspace, and the user's
-own Gemini home). It reads no settings file, so an empty advisory is not proof.
+own Gemini home; for pi, always, because pi never asks). It reads no settings file, so an empty advisory is not proof.
 
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive

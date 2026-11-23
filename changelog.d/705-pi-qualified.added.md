@@ -1,0 +1,1 @@
+- **agents:** pi (through `pi-acp` 0.0.35, pi 1.6.0) is qualified as an ACP agent without a hook (#705): a CI suite runs ORCA against the real agent, and `orca agents` and `docs/agent-hook-coverage.md` say plainly that pi runs every tool call without asking ORCA, so ORCA's rules and protected files do not apply to it.

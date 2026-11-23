@@ -8,7 +8,8 @@ agent ORCA installs no hook in, it lists which calls reach ORCA as permission re
 which the agent runs on its own. Every entry says how it is known:
 
 - **installed**: observed on the real agent by ORCA's acceptance tests, which run unattended in
-  CI against a scripted stand-in for the model (`gemini-acp-acceptance.yml`);
+  CI against a scripted stand-in for the model (`gemini-acp-acceptance.yml`,
+  `pi-acp-acceptance.yml`);
 - **source**: read in the agent's source at the pinned version, not exercised;
 - **unknown**: not established, and treated as not covered.
 
@@ -25,6 +26,7 @@ acceptance suite passes; none yet).
 | Agent (pinned) | Tier | In short |
 | --- | --- | --- |
 | Gemini CLI 0.70.0 (`gemini --acp`), Linux | **No hook; approval tested** | `nativeToolHook: on` is refused. Shell calls and edits ask ORCA, answered with Gemini's one-time option. The read-only tools the suite ran (`list_directory`, `glob`, `read_file`), Gemini's own session and saved grants, and YOLO in a trusted workspace ran without asking ORCA; other routes are listed as unverified. |
+| pi 1.6.0 through `pi-acp` 0.0.35, Linux | **No hook; no approvals** | `nativeToolHook: on` is refused. pi runs every tool call without asking ORCA, so ORCA's rules and protected files do not apply. Only a pi extension's own dialogs reach ORCA. Run it in a sandbox. |
 
 ## Gemini CLI (`@google/gemini-cli` 0.70.0)
 
@@ -67,3 +69,31 @@ extension or a trusted-folders list allows. An empty advisory does not mean noth
 | What is already in the Gemini home the profile names, system settings (`/etc/gemini-cli`), installed extensions, the trusted-folders list | Not inspected by ORCA or by the advisory; the suite starts each run from an empty home. Treated as able to allow calls ORCA never sees | unknown |
 | MCP tools | Ask ORCA with Gemini's server and tool in `_meta`; their session options cover the server or the tool | source |
 | `nativeToolHook: on` | Refused before the session starts. Gemini's `BeforeTool` hook (exit 2 blocks, exit 1 lets the call run, 60 s timeout) is the candidate for tier C, after #706 | source |
+
+## pi (`pi-acp` 0.0.35 with `@earendil-works/pi-coding-agent` 1.6.0)
+
+pi does not ask before tool calls (its own `docs/security.md`), and `pi-acp` serves no file
+operation through ORCA. ORCA runs pi anyway and says so: the `orca agents` advisory reports "pi runs every
+tool call without asking" for every pi agent. The boundary for pi is an operating-system
+sandbox, not ORCA's policy. The recommended launch profile gives pi an agent directory of its
+own and pins the pi that `pi-acp` starts:
+
+```yaml
+  - id: pi
+    command: pi-acp
+    env:
+      PI_CODING_AGENT_DIR: /path/to/an/orca-only/pi-agent
+      PI_ACP_PI_COMMAND: /path/to/pi
+```
+
+| What | Behaviour | Known by |
+| --- | --- | --- |
+| Session | Opens and streams; a cancel during a running command ends the turn `cancelled` and stops the command | installed |
+| Shell (`bash`), file writes (`write`) | **Run without asking ORCA**, even under `default: deny`; no `fs/*` call reaches ORCA | installed |
+| pi's other tools (`read`, `edit`, …), MCP tools | Not run by the suite. pi's docs say no tool asks before it runs | source |
+| ORCA's own files | **Not protected**: pi wrote `.orca/permissions.json` in the workspace | installed |
+| An extension's `ctx.ui.confirm` (the one the suite installs) | Reaches ORCA as a permission request on a synthetic `pi-ui-*` call of kind `other`, options `yes`/`no` ; the extension gets the answer and decides. `select` maps to `choice-<n>` options (source). An ORCA rule allowing kind `other` answers "yes" unattended | installed |
+| Settings outside ORCA | Without `PI_CODING_AGENT_DIR`, the user's `~/.pi/agent` applies: settings, extensions, saved project trust, credentials. A trusted project loads its own `.pi` extensions | source |
+| What is already in the agent directory the profile names, installed extensions and packages, saved project trust | Not inspected by ORCA or by the advisory; the suite starts each run from an agent directory holding only the stand-in's model settings | unknown |
+| Which pi runs | `pi-acp` reports only its own version; it starts `PI_ACP_PI_COMMAND`, else `pi` on `PATH` | source |
+| `nativeToolHook: on` | Refused before the session starts. pi's extension `tool_call` hook can block or rewrite a call, but later command-prefix and spawn hooks can still change what runs (#747); the candidate for tier C, after #706 | source |
