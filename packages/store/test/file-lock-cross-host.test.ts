@@ -76,22 +76,25 @@ describe("cross-host shared-volume locks fail closed", () => {
       entered();
       await released;
     });
-    await holding;
-    const [name] = await readdir(lock);
-    expect(JSON.parse(await readFile(join(lock, name!), "utf8"))).toMatchObject({ host: "host-b" });
-
-    // Host A sees a token from another host and refuses to judge it.
-    vi.mocked(hostname).mockReturnValue("host-a");
     const wrote = vi.fn();
-    await expect(withFileLock(lock, async () => wrote(), { staleMs: 1, timeoutMs: 50 })).rejects.toMatchObject({
-      code: "STORE_LOCK_TIMEOUT",
-    });
-    expect(wrote).not.toHaveBeenCalled();
-    expect(await readdir(lock)).toEqual([name]);
+    try {
+      await holding;
+      const [name] = await readdir(lock);
+      expect(JSON.parse(await readFile(join(lock, name!), "utf8"))).toMatchObject({ host: "host-b" });
 
-    vi.mocked(hostname).mockReturnValue("host-b");
-    release();
-    await holder;
+      // Host A sees a token from another host and refuses to judge it.
+      vi.mocked(hostname).mockReturnValue("host-a");
+      await expect(withFileLock(lock, async () => wrote(), { staleMs: 1, timeoutMs: 50 })).rejects.toMatchObject({
+        code: "STORE_LOCK_TIMEOUT",
+      });
+      expect(wrote).not.toHaveBeenCalled();
+      expect(await readdir(lock)).toEqual([name]);
+    } finally {
+      // Always let host B finish, so a failed assertion cannot strand the holder.
+      vi.mocked(hostname).mockReturnValue("host-b");
+      release();
+      await holder;
+    }
     vi.mocked(hostname).mockReturnValue("host-a");
     await withFileLock(lock, async () => wrote());
     expect(wrote).toHaveBeenCalledOnce();

@@ -43,26 +43,37 @@ with backoff and, at its deadline (60 s unless the caller sets `timeoutMs`), fai
 `STORE_LOCK_TIMEOUT`. The holder's token is left exactly as it was. The age of a lock
 never breaks it: `staleMs` is still accepted but has no effect.
 
-So the unsupported cross-host topology does not corrupt a store through the lock: it
-stalls. While the remote holder is alive and releases normally, writers on the other
-host simply wait their turn. If the remote holder dies holding the lock, every writer
-elsewhere times out until someone intervenes.
+This is only a statement about what this lock code does with a token it cannot judge:
+it does not reclaim it. It is **not** a claim that an unsupported shared store is safe.
+Shared-filesystem semantics (caching, rename and create atomicity, delayed visibility)
+and duplicate hostnames are outside what the lock can detect, and either can still let
+two writers in or damage data. Do not run a store this way.
 
 `packages/store/test/file-lock-cross-host.test.ts` holds this behaviour in place: a
 remote token with a pid that is dead here, one with a pid that happens to be alive
 here, a token with no host, a lock held through the real protocol by a second
 (simulated) host, and recovery only after manual removal.
 
-## Recovering an abandoned lock by hand
+## Recovering a lock by hand
 
-When a lock is held by a holder that no longer exists on another host (or one that
-cannot be judged for any reason above):
+A `STORE_LOCK_TIMEOUT` is **not** proof that a lock was abandoned: a live holder on
+another host, in another container, or simply slow looks exactly the same. Remove a lock
+by hand only when you can do all of the following; if any holder cannot be accounted for,
+stop and leave the lock in place.
 
-1. Stop every ORCA process that writes the store, on every machine that can reach it.
-2. Remove only the abandoned lock directory named in the `STORE_LOCK_TIMEOUT` error
-   (`details.path`). Do not remove other files in the store.
-3. Start ORCA again. Move the store to one host's local disk before you do, so the
-   situation cannot recur.
+1. **Account for every writer.** Positively identify every ORCA process (daemon, CLI,
+   app, scripts, test harnesses) on every machine and container that can reach the store,
+   confirm each one has stopped, and prevent each from restarting (disable services,
+   timers and autostart) until you finish.
+2. **Check it is the right lock.** Confirm the directory named in the error
+   (`details.path`) is inside the store you intend to recover, and that its owner token
+   names a holder you have accounted for in step 1.
+3. **Take a consistent backup** of the whole store while every writer is stopped, and
+   keep it until the store has run cleanly again.
+4. **Move to one local owner.** Put the store on one host's local disk with a single
+   owning ORCA installation, so the shared topology cannot recur.
+5. Only then remove that one lock directory (nothing else in the store) and start ORCA
+   on the owning host.
 
 ## Not done yet
 
