@@ -15,15 +15,37 @@ digest="$(sed -n 's/^ARG BASE=ubuntu@\(sha256:[0-9a-f]\{64\}\)$/\1/p' "$here/bas
 [ -n "$digest" ] || { echo "::error::no pinned base digest in base.Dockerfile"; exit 1; }
 # Per-attempt time for the package install; the main warm job, which nothing waits on, allows more.
 build_timeout="${ORCA_BASE_BUILD_TIMEOUT:-300}"
-# The archive mirror this host's own apt uses (a hosted runner's is usually close by and fast);
-# the last attempt goes to the Ubuntu archive itself in case that mirror is the one stalling.
-host_mirror="$(sed -n 's/^URIs:[[:space:]]*\(https\?:\/\/[^[:space:]]*\).*/\1/p' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null | head -n1 || true)"
-case "$host_mirror" in *//archive.ubuntu.com/* | *//security.ubuntu.com/*) host_mirror="" ;; esac
 if [ -s "$tar_path" ] && docker load -i "$tar_path"; then exit 0; fi
+# Which Ubuntu mirror to take packages from. Hosted runners do not always come with a nearby
+# one configured, so each candidate (this host's own apt source first) is timed fetching the
+# release file, and attempts go to the fastest first. Packages are verified against the image's
+# archive keys whichever mirror serves them.
+candidates=()
+for list in /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list; do
+  [ -r "$list" ] || continue
+  while read -r uri; do candidates+=("${uri%/}"); done < <(
+    grep -oE 'https?://[A-Za-z0-9.-]+/ubuntu/?' "$list" | grep -v '//security\.ubuntu\.com/' | sort -u
+  )
+done
+candidates+=(http://azure.archive.ubuntu.com/ubuntu http://us-east-1.ec2.archive.ubuntu.com/ubuntu
+  https://mirrors.edge.kernel.org/ubuntu http://archive.ubuntu.com/ubuntu)
+ranked=()
+while read -r speed uri; do
+  echo "mirror $uri: ${speed} B/s"
+  [ "${speed%.*}" -gt 0 ] && ranked+=("$uri")
+done < <(
+  for uri in $(printf '%s\n' "${candidates[@]}" | awk '!seen[$0]++'); do
+    speed="$(curl -fsS -o /dev/null --max-time 20 -w '%{speed_download}' "$uri/dists/noble/InRelease" 2>/dev/null)" || speed=0
+    echo "${speed:-0} $uri"
+  done | sort -rn -k1,1
+)
+[ "${#ranked[@]}" -gt 0 ] || ranked=(http://archive.ubuntu.com/ubuntu)
 for attempt in 1 2 3; do
-  mirror="$host_mirror"
-  [ "$attempt" = 3 ] && mirror=""
-  echo "package mirror for attempt $attempt: ${mirror:-the Ubuntu archive}"
+  # The fastest mirror twice, then the next one, in case the fastest is the one that stalls.
+  pick=0
+  [ "$attempt" = 3 ] && [ "${#ranked[@]}" -gt 1 ] && pick=1
+  mirror="${ranked[$pick]}"
+  echo "package mirror for attempt $attempt: $mirror"
   base=""
   for repo in docker.io/library/ubuntu mirror.gcr.io/library/ubuntu; do
     echo "pulling $repo@$digest (attempt $attempt)"
