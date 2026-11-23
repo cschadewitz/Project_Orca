@@ -89,3 +89,10 @@
   gap: var(--space-2);
   flex-wrap: wrap;
 }
+
+/* A plain-language rule's sentence (#701): prose a person wrote, so the body face, and a box
+   that grows by hand rather than by row. Its height is the `rows` the element states. */
+.orca-policy__criterion {
+  height: auto;
+  resize: vertical;
+}

@@ -34,6 +34,7 @@ import type {
   ConfigSchemaDescription,
   ConfigValidationError,
   EffectiveAgentPolicy,
+  EffectiveJudgedRule,
   EffectivePermissionRule,
 } from "@orca/protocol";
 import { counted } from "../ui/count.js";
@@ -463,6 +464,29 @@ export interface AgentPolicyView {
   /** The fallthrough, which is configuration's alone — the sidecar carries none (ADR 0009). */
   default: EffectiveAgentPolicy["default"];
   rows: readonly PermissionRow[];
+  /**
+   * The plain-language rules (#701), apart from `rows`: they decide nothing in the first-match
+   * order, so numbering them among the typed rules would draw a precedence they do not have.
+   * Empty from a daemon that does not report them.
+   */
+  judged: readonly JudgedRow[];
+}
+
+/** One plain-language rule, as a surface lists it (#701). */
+export interface JudgedRow {
+  /** The name the judged lane and a decision record give it, `config:N` or `sidecar:N`. */
+  ruleId: string;
+  source: Exclude<PolicySource, "default">;
+  /** Which calls a judge is asked about at all, as a phrase: "read under docs". */
+  gate: string;
+  criterion: string;
+  addedAt?: string;
+  expiresAt?: string;
+}
+
+/** A judged rule's gate in words: the same phrase `describeRule` draws, without a decision. */
+export function describeGate(match: EffectiveJudgedRule["match"]): string {
+  return describeRule({ match, decision: "ask", source: "config" }).replace(/^ask /, "");
 }
 
 /**
@@ -518,6 +542,14 @@ export function agentPolicies(effective: {
       ...(rule.grantedFor === undefined ? {} : { grantedFor: rule.grantedFor }),
       ...(rule.expiresAt === undefined ? {} : { expiresAt: rule.expiresAt }),
     })),
+    judged: (policy.judged ?? []).map((rule) => ({
+      ruleId: rule.ruleId,
+      source: rule.source === "permissions" ? "sidecar" : "config",
+      gate: describeGate(rule.match),
+      criterion: rule.criterion,
+      ...(rule.addedAt === undefined ? {} : { addedAt: rule.addedAt }),
+      ...(rule.expiresAt === undefined ? {} : { expiresAt: rule.expiresAt }),
+    })),
   }));
 }
 
@@ -539,3 +571,15 @@ export function lineOfPath(text: string, path: string): number | undefined {
   const index = lines.findIndex((line) => pattern.test(line));
   return index === -1 ? undefined : index + 1;
 }
+
+/**
+ * Whether plain-language rules change permission decisions in this build (#701). They do not
+ * yet: the daemon's judge is wired but switched off until a separately reviewed activation, so
+ * a saved rule is kept and shown but every call it would cover still goes to a person. The
+ * activation changes this with the daemon's own switch, and both panels say which it is.
+ */
+export const PLAIN_RULES_ACTIVE = false;
+
+/** Said wherever plain-language rules are listed while they are inactive. */
+export const PLAIN_RULES_INACTIVE_NOTE =
+  "Not active in this version of ORCA. Rules saved here are kept, but they do not change any permission decision yet: every call they would cover still goes to a person.";

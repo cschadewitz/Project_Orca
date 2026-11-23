@@ -52,6 +52,7 @@ import {
   OrcaError,
   OrcaConfigSchema,
   PERMISSION_POLICY_FILENAME,
+  PermissionPolicyFileSchema,
   systemClock,
   WritablePermissionPolicyFileSchema,
   type Clock,
@@ -71,11 +72,12 @@ import {
   type ConfigSetParams,
   type ConfigSetResult,
   type ConfigValidationError,
+  type EffectiveJudgedRule,
   type EffectivePermissionRule,
   type PermissionsSaveJudgedRuleParams,
   type PermissionsSaveJudgedRuleResult,
 } from "@orca/protocol";
-import { withFileLock } from "@orca/store";
+import { CONFIG_FILE_LOCK, withFileLock } from "@orca/store";
 import { describeConfigSchema, validationErrors } from "./config-schema.js";
 import { describeConfigFormSchema } from "./config-form-schema.js";
 import { effectiveCapabilities } from "./config-capabilities.js";
@@ -159,7 +161,7 @@ export class ConfigModel {
       readConfig: () => this.get(),
       exclusive: async (command) => {
         await mkdir(dirname(this.configFile), { recursive: true });
-        return withFileLock(`${this.configFile}.lock`, command);
+        return withFileLock(`${this.configFile}.lock`, command, CONFIG_FILE_LOCK);
       },
       applyLocked: (params, recheck) => this.applyLocked(params, recheck),
       changed: () => this.announce("config"),
@@ -169,7 +171,7 @@ export class ConfigModel {
       readConfig: () => this.get(),
       exclusive: async (command) => {
         await mkdir(dirname(this.configFile), { recursive: true });
-        return withFileLock(`${this.configFile}.lock`, command);
+        return withFileLock(`${this.configFile}.lock`, command, CONFIG_FILE_LOCK);
       },
       applyLocked: (params, recheck) => this.applyLocked(params, recheck),
       validationContext: () => {
@@ -281,7 +283,16 @@ export class ConfigModel {
    * before the lock stays, because it refuses the ordinary case sooner; it is no longer the
    * one that decides.
    */
-  async set(params: ConfigSetParams, authorize?: () => Promise<void>): Promise<ConfigSetResult> {
+  async set(
+    params: ConfigSetParams,
+    authorize?: () => Promise<void>,
+    /**
+     * The authority a change to judged (plain-language) rules needs as well (#701 review): the
+     * same `permissions.grant` that `permissions.saveJudgedRule` asks for. Checked whenever the
+     * write would change the judged rules on disk, at the start and again under the lock.
+     */
+    authorizeJudged?: () => Promise<void>,
+  ): Promise<ConfigSetResult> {
     await authorize?.();
     if (params.validateOnly) {
       // Nothing is written, so there is nothing to serialise against: this reports what the
@@ -304,8 +315,8 @@ export class ConfigModel {
 
     const written =
       params.document === "config"
-        ? await this.writeConfigFile(params, authorize)
-        : await this.writeSidecarFile(params, authorize);
+        ? await this.writeConfigFile(params, authorize, authorizeJudged)
+        : await this.writeSidecarFile(params, authorize, authorizeJudged);
     this.publish(written);
     const config = params.document === "config" ? written : await this.read("config");
     await authorize?.();
@@ -369,7 +380,7 @@ export class ConfigModel {
   async apply(params: ConfigApplyParams, authorize?: () => Promise<void>): Promise<ConfigApplyResult> {
     await authorize?.();
     await mkdir(dirname(this.configFile), { recursive: true });
-    return withFileLock(`${this.configFile}.lock`, () => this.applyLocked(params, authorize));
+    return withFileLock(`${this.configFile}.lock`, () => this.applyLocked(params, authorize), CONFIG_FILE_LOCK);
   }
 
   /** Template publication holds the same lock across catalog verification and generation activation. */
@@ -407,21 +418,45 @@ export class ConfigModel {
    * happens in here: patching a YAML document is read-modify-write, and a compare made
    * outside the lock is a compare of bytes that may not be the ones being replaced.
    */
-  private async writeConfigFile(params: ConfigSetParams, authorize?: () => Promise<void>): Promise<ConfigDocumentView> {
+  private async writeConfigFile(
+    params: ConfigSetParams,
+    authorize?: () => Promise<void>,
+    authorizeJudged?: () => Promise<void>,
+  ): Promise<ConfigDocumentView> {
     const path = this.pathOf("config");
     await mkdir(dirname(path), { recursive: true });
-    return withFileLock(`${path}.lock`, async () => {
-      await authorize?.();
-      const current = await this.read("config");
-      await authorize?.();
-      refuseIfStale(params, current);
-      const text = this.nextConfigText(current, params);
-      const errors = this.validate("config", text);
-      if (errors.length)
-        throw new OrcaError("CONFIG_INVALID", `${path}: ${errors[0]?.message ?? "invalid"}`, { errors });
-      await writeAtomically(path, text, authorize);
-      return this.read("config");
-    });
+    return withFileLock(
+      `${path}.lock`,
+      async (stillHeld) => {
+        await authorize?.();
+        const current = await this.read("config");
+        await authorize?.();
+        refuseIfStale(params, current);
+        const text = this.nextConfigText(current, params);
+        const errors = this.validate("config", text);
+        if (errors.length)
+          throw new OrcaError("CONFIG_INVALID", `${path}: ${errors[0]?.message ?? "invalid"}`, { errors });
+        // The commit fence (#701 review), run now and again just before the rename: this writer
+        // still holds the lock, the file is still the bytes this edit was made against, and the
+        // authority is decided by what those bytes and the new ones say about judged rules. A
+        // writer that lost its lock, or a file that moved, fails closed rather than overwriting.
+        const commit = async (): Promise<void> => {
+          await stillHeld();
+          const onDisk = await this.read("config");
+          if (onDisk.revision !== current.revision)
+            throw new ProtocolFault(
+              "CONFIG_STALE",
+              `${path} has changed since you read it: write again against the current revision`,
+              { document: "config", expectedRevision: current.revision, actualRevision: onDisk.revision },
+            );
+          await (changesJudgedRules("config", onDisk, text) ? (authorizeJudged ?? authorize) : authorize)?.();
+        };
+        await commit();
+        await writeAtomically(path, text, commit);
+        return this.read("config");
+      },
+      CONFIG_FILE_LOCK,
+    );
   }
 
   /**
@@ -433,6 +468,7 @@ export class ConfigModel {
   private async writeSidecarFile(
     params: ConfigSetParams,
     authorize?: () => Promise<void>,
+    authorizeJudged?: () => Promise<void>,
   ): Promise<ConfigDocumentView> {
     const current = await this.read("permissions");
     await authorize?.();
@@ -441,10 +477,21 @@ export class ConfigModel {
     const errors = this.validate("permissions", text);
     if (errors.length)
       throw new OrcaError("CONFIG_INVALID", `${current.path}: ${errors[0]?.message ?? "invalid"}`, { errors });
+    const judged = authorizeJudged ?? authorize;
+    // Refused early when the edit as read changes judged rules; decided again under the lock.
+    if (changesJudgedRules("permissions", current, text)) await judged?.();
+    // Under the sidecar's lock, the writer calls this before the compare and again before the
+    // rename: the file read here is the one being replaced, whatever revision the edit quoted.
+    const commit =
+      authorize &&
+      (async () => {
+        const onDisk = await this.read("permissions");
+        await (changesJudgedRules("permissions", onDisk, text) ? judged : authorize)?.();
+      });
     try {
       await replacePermissionPolicyFile(current.path, JSON.parse(text), {
         expectedRevision: params.expectedRevision,
-        authorize,
+        authorize: commit,
       });
     } catch (e) {
       // The writer's stable code, in the wire's words. `details` already carries both hashes.
@@ -572,7 +619,7 @@ export class ConfigModel {
       : { version: 1, agents: {} };
     const agents: ConfigEffectivePolicy["agents"] = {};
     // One instant for both lists, so an expiring rule cannot be in one and not the other (#702).
-    const now = Date.now();
+    const now = this.clock.now();
     for (const agent of parsed.data.agents) {
       // Saved judged rules are not typed rules either (#701): the overlay leaves them out.
       const recorded = (doc.agents[agent.id]?.rules ?? []).filter(
@@ -595,13 +642,42 @@ export class ConfigModel {
           ...(provenance?.expiresAt ? { expiresAt: provenance.expiresAt } : {}),
         };
       });
-      agents[agent.id] = { default: layered.default, rules };
+      // The plain-language rules (#701), apart from the typed ones and named as the judged
+      // lane names them: `config:N` and `sidecar:N` by their index as written, typed rules
+      // counted. A saved one whose lifetime has run out is left out, as the lane leaves it out.
+      const judged: EffectiveJudgedRule[] = [];
+      agent.permissions.rules.forEach((rule, index) => {
+        if (isJudgedPermissionRule(rule))
+          judged.push({
+            ruleId: `config:${index}`,
+            source: "config",
+            match: definedOnly(rule.match),
+            criterion: rule.judge.criterion,
+          });
+      });
+      (doc.agents[agent.id]?.rules ?? []).forEach((rule, index) => {
+        if (!isSidecarJudgedRule(rule) || permissionRuleExpired(rule, now)) return;
+        judged.push({
+          ruleId: `sidecar:${index}`,
+          source: "permissions",
+          match: definedOnly(rule.match),
+          criterion: rule.judge.criterion,
+          ...(rule.addedAt ? { addedAt: rule.addedAt } : {}),
+          ...(rule.expiresAt ? { expiresAt: rule.expiresAt } : {}),
+        });
+      });
+      agents[agent.id] = { default: layered.default, rules, ...(judged.length > 0 ? { judged } : {}) };
     }
     return { agents };
   }
 }
 
 /* ------------------------------ plain helpers ------------------------------ */
+
+/** A match without the keys it leaves unset, so the wire carries no `undefined`. */
+function definedOnly<T extends object>(match: T): T {
+  return Object.fromEntries(Object.entries(match).filter(([, value]) => value !== undefined)) as T;
+}
 
 /**
  * Refuse an edit made against a revision the file no longer has.
@@ -627,6 +703,38 @@ function hash(text: string): string {
 }
 
 /** `parsed` is best-effort: a file that does not parse still has `text`, which is what an editor shows. */
+/**
+ * The judged (plain-language) rules a document gives ORCA, as one comparable string (#701 review):
+ * the rules the authoritative reader accepts, each agent's in order, as that reader parses them -
+ * `PermissionPolicyFileSchema` for the sidecar, `OrcaConfigSchema` for the config. A document the
+ * reader refuses gives no judged rules at all, whatever rows its text holds, so repairing one
+ * into a readable document that has judged rules is a change to them.
+ */
+function judgedRulesKey(document: ConfigDocument, text: string | undefined): string {
+  if (text === undefined || text.trim() === "") return "[]";
+  const raw = safeParse(document, text);
+  if (raw === undefined) return "[]";
+  let entries: [string, readonly unknown[]][];
+  if (document === "permissions") {
+    const parsed = PermissionPolicyFileSchema.safeParse(raw ?? {});
+    if (!parsed.success) return "[]";
+    entries = Object.entries(parsed.data.agents).map(([id, agent]) => [id, agent.rules.filter(isSidecarJudgedRule)]);
+  } else {
+    const parsed = OrcaConfigSchema.safeParse(raw ?? {});
+    if (!parsed.success) return "[]";
+    entries = parsed.data.agents.map((agent) => [
+      agent.id,
+      (agent.permissions?.rules ?? []).filter(isJudgedPermissionRule),
+    ]);
+  }
+  return JSON.stringify(entries.filter(([, rules]) => rules.length > 0).map(([id, rules]) => ({ id, rules })));
+}
+
+/** Whether writing `next` over `current` changes the judged rules ORCA reads: an add, edit, removal or move. */
+function changesJudgedRules(document: ConfigDocument, current: ConfigDocumentView, next: string): boolean {
+  return judgedRulesKey(document, current.exists ? current.text : undefined) !== judgedRulesKey(document, next);
+}
+
 function safeParse(document: ConfigDocument, text: string): unknown {
   try {
     return document === "config" ? parseYaml(text) : JSON.parse(text === "" ? "{}" : text);

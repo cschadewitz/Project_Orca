@@ -230,6 +230,8 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "config.get": { permission: "config.read", resource: "none" },
   "config.apply": { permission: "config.write", resource: "none", audit: "mutation" },
   // Every Save/validation receipt includes unredacted document bytes, even for an empty patch.
+  // A write that changes judged (plain-language) rules also needs `permissions.grant`, as
+  // `permissions.saveJudgedRule` does; `ConfigModel.set` checks it by content, under the lock (#701).
   "config.set": {
     permission: "config.write",
     additionalPermissions: ["config.read"],

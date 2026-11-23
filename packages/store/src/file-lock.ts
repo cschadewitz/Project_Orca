@@ -1,4 +1,5 @@
 /** Cross-process mutex directories. Only the remover of an exact owner token may rmdir. */
+import { readFileSync, readlinkSync } from "node:fs";
 import { link, mkdir, open, readdir, readFile, rename, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
@@ -11,6 +12,40 @@ export interface FileLockOptions {
   /** Give up, with STORE_LOCK_TIMEOUT, after this long. Default 60 s. */
   timeoutMs?: number | undefined;
   onBroken?: (holder: LockHolder) => void;
+  /**
+   * When a lock left by a holder that is gone may be cleared automatically.
+   *
+   * - `"host"` (the default): the holder named this host name and its pid is not running here.
+   * - `"provable"`: only when the holder recorded the same liveness domain as this process (on
+   *   Linux, this kernel boot and this pid namespace) and its pid is not running. A host name does
+   *   not prove that pids are comparable (two containers, two machines on one share), so anything
+   *   less is left for a person to clear, and writers time out with `STORE_LOCK_TIMEOUT` meanwhile.
+   *   Every writer sharing a lock must use the same mode (#701 review: the config file's lock).
+   */
+  recovery?: "host" | "provable";
+}
+
+/** The lock options every writer of `orca.config.yaml` passes: provable owner recovery only. */
+export const CONFIG_FILE_LOCK: FileLockOptions = Object.freeze({ recovery: "provable" });
+
+let domainCache: string | null | undefined;
+/**
+ * The domain a pid is meaningful in, positively established, or null: on Linux, this kernel
+ * boot (`/proc/sys/kernel/random/boot_id`) and this process's pid namespace (`/proc/self/ns/pid`).
+ * The same rule the permission sidecar's lock uses (#1040). Elsewhere there is none.
+ */
+export function livenessDomain(): string | null {
+  if (domainCache !== undefined) return domainCache;
+  if (process.platform !== "linux") return (domainCache = null);
+  try {
+    const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    const ns = readlinkSync("/proc/self/ns/pid");
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(boot) || !/^pid:\[[0-9]+\]$/.test(ns))
+      return (domainCache = null);
+    return (domainCache = `linux:${boot}:${ns}`);
+  } catch {
+    return (domainCache = null);
+  }
 }
 export interface LockHolder {
   pid: number;
@@ -24,7 +59,17 @@ const codeOf = (error: unknown) => (error as NodeJS.ErrnoException).code;
 const sharing = (error: unknown) => process.platform === "win32" && ["EPERM", "EACCES"].includes(codeOf(error) ?? "");
 
 /** Legacy files, empty directories and unknown owners fail closed until explicitly recovered. */
-export async function withFileLock<T>(path: string, fn: () => Promise<T>, options: FileLockOptions = {}): Promise<T> {
+/**
+ * Run `fn` holding the lock. `fn` is given `stillHeld`, which throws `STORE_LOCK_LOST` unless this
+ * holder's own token is still in the lock directory: a writer calls it immediately before it
+ * commits, so a holder whose lock was recovered by another process fails closed rather than
+ * overwriting what that process wrote.
+ */
+export async function withFileLock<T>(
+  path: string,
+  fn: (stillHeld: () => Promise<void>) => Promise<T>,
+  options: FileLockOptions = {},
+): Promise<T> {
   const token = `owner.${tag()}.json`;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
@@ -40,7 +85,9 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T>, option
     if (created) {
       // No callback runs before publication. A crash here leaves an empty directory,
       // which is deliberately not automatically removed by another contender.
-      await writeFile(join(path, token), JSON.stringify({ pid: process.pid, at: Date.now(), host: hostname() }), {
+      const domain = livenessDomain();
+      const holder = { pid: process.pid, at: Date.now(), host: hostname(), ...(domain ? { domain } : {}) };
+      await writeFile(join(path, token), JSON.stringify(holder), {
         flag: "wx",
       });
       break;
@@ -51,8 +98,16 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T>, option
     await sleep(backoff + Math.random() * backoff);
     backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
   }
+  const stillHeld = async (): Promise<void> => {
+    try {
+      await stat(join(path, token));
+    } catch (error) {
+      if (codeOf(error) !== "ENOENT" && codeOf(error) !== "ENOTDIR") throw error;
+      throw new OrcaError("STORE_LOCK_LOST", `lock ${path} is no longer held by this writer`, { path });
+    }
+  };
   try {
-    return await fn();
+    return await fn(stillHeld);
   } finally {
     await removeToken(path, token);
   }
@@ -76,7 +131,14 @@ async function removeDeadOwner(path: string, options: FileLockOptions): Promise<
     const names = await readdir(path);
     if (names.length !== 1 || !/^owner\.\d+\.[a-f0-9-]+\.json$/.test(names[0]!)) return false;
     const token = names[0]!;
-    const raw = JSON.parse(await readFile(join(path, token), "utf8")) as Partial<LockHolder> & { host?: string };
+    const raw = JSON.parse(await readFile(join(path, token), "utf8")) as Partial<LockHolder> & {
+      host?: string;
+      domain?: unknown;
+    };
+    if (options.recovery === "provable") {
+      const domain = livenessDomain();
+      if (domain === null || raw.domain !== domain) return false;
+    }
     if (
       raw.host !== hostname() ||
       !Number.isInteger(raw.pid) ||

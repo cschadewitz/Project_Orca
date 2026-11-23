@@ -41,7 +41,12 @@
  *   written onto the file as it is when it is sent (`composeGrants`). Only a change on disk
  *   to an agent the person also edited is a conflict.
  */
-import { PERMISSION_DECISIONS, type EffectivePermissionRule } from "@orca/protocol";
+import {
+  JUDGED_RULE_CRITERION_MAX,
+  PERMISSION_DECISIONS,
+  SAVED_JUDGED_RULE_KINDS,
+  type EffectivePermissionRule,
+} from "@orca/protocol";
 
 /** What a rule matches. The wire's own shape, minus the `source` the daemon tags it with. */
 export type RuleMatch = EffectivePermissionRule["match"];
@@ -55,7 +60,7 @@ export type RuleDecision = EffectivePermissionRule["decision"];
  * typed for them: the parsed row *is* the object the JSON produced, editing one spreads it,
  * and `canonicalRule` writes what it does not recognise back out.
  */
-export interface SidecarRule {
+export interface TypedSidecarRule {
   match: RuleMatch;
   decision: RuleDecision;
   addedAt?: string;
@@ -65,12 +70,97 @@ export interface SidecarRule {
 }
 
 /**
+ * A plain-language rule as the sidecar holds it (#701): a match and the criterion a judge
+ * applies, in place of a decision. It decides nothing in the first-match order; a judge is
+ * asked about it only after the typed rules answered `ask`, and its yes allows one call once.
+ */
+export interface JudgedSidecarRule {
+  match: RuleMatch;
+  judge: { criterion: string };
+  addedAt?: string;
+  expiresAt?: string;
+}
+
+/** One row of the sidecar: a typed rule, or a plain-language one (#701). */
+export type SidecarRule = TypedSidecarRule | JudgedSidecarRule;
+
+/** Whether a row is a plain-language rule: it carries `judge` and no `decision`. */
+export function isJudgedRule(rule: SidecarRule): rule is JudgedSidecarRule {
+  return "judge" in rule && (rule as { judge?: unknown }).judge !== undefined;
+}
+
+/**
+ * The kinds a plain-language rule may name, and the longest criterion: `SAVED_JUDGED_RULE_KINDS`
+ * and `JUDGED_RULE_CRITERION_MAX` in `@orca/protocol`, which the daemon's own schema enforces.
+ */
+export { JUDGED_RULE_CRITERION_MAX, SAVED_JUDGED_RULE_KINDS } from "@orca/protocol";
+
+/**
+ * What a plain-language rule's row is missing before the daemon would take it, or `undefined`.
+ * Said on the row as it is typed, so Save is not the first place a person learns it.
+ */
+export function judgedRuleProblem(rule: JudgedSidecarRule): string | undefined {
+  if (rule.judge.criterion.trim() === "") return "Write the rule in a sentence before saving.";
+  if (rule.judge.criterion.trim().length > JUDGED_RULE_CRITERION_MAX)
+    return `A rule is at most ${JUDGED_RULE_CRITERION_MAX} characters.`;
+  if (!(SAVED_JUDGED_RULE_KINDS as readonly string[]).includes(rule.match.kind ?? ""))
+    return `A plain-language rule names its kind, ${SAVED_JUDGED_RULE_KINDS.join(" or ")}. Other calls go to a person.`;
+  if ((rule.match as { command?: unknown }).command !== undefined)
+    return "A plain-language rule cannot match a command. Write a typed deny or ask rule instead.";
+  for (const key of ["path", "pathPrefix"] as const) {
+    const value = rule.match[key];
+    if (value !== undefined && !workspaceRelative(value))
+      return "Write paths relative to the workspace, with no '..', home or drive prefix.";
+  }
+  const pattern = rule.match.titlePattern;
+  if (pattern !== undefined && !titlePatternIsValid(pattern))
+    return `A title pattern is a regular expression of at most ${SAVED_TITLE_PATTERN_MAX} characters.`;
+  return undefined;
+}
+
+/** `SAVED_TITLE_PATTERN_MAX` in core, mirrored because the renderer cannot import core (ADR 0008). */
+const SAVED_TITLE_PATTERN_MAX = 256;
+
+/** Mirrors `savedTitlePatternIsValid` in core. */
+function titlePatternIsValid(pattern: string): boolean {
+  if (pattern.length === 0 || pattern.length > SAVED_TITLE_PATTERN_MAX) return false;
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The first plain-language rule in a document that the daemon would refuse, with its agent, or
+ * `undefined`. Save is held while there is one (#701 review): a row that says it blocks Save
+ * must actually block it.
+ */
+export function firstJudgedProblem(doc: SidecarDocument): { agentId: string; problem: string } | undefined {
+  for (const [agentId, entry] of Object.entries(doc.agents))
+    for (const rule of entry.rules) {
+      if (!isJudgedRule(rule)) continue;
+      const problem = judgedRuleProblem(rule);
+      if (problem !== undefined) return { agentId, problem };
+    }
+  return undefined;
+}
+
+/** Mirrors `savedRulePathIsWorkspaceRelative` in core, which the renderer cannot import. */
+function workspaceRelative(path: string): boolean {
+  if (path === "" || path.startsWith("/") || path.startsWith("\\") || path.startsWith("~")) return false;
+  if (/^[A-Za-z]:/.test(path)) return false;
+  return !path.split(/[\\/]+/).includes("..");
+}
+
+/**
  * Presentation only: mirrors `isWildcardPermissionRule` in core/src/model/agent.ts.
  * The renderer cannot import core (ADR 0008). Keep this projection aligned with that
  * predicate; the loader remains the authority. Do not reject or rewrite saved rows:
  * ignored allows may already exist, and deny/ask rules must never be labelled ignored.
  */
-export function sidecarRuleWarning(rule: SidecarRule): string | undefined {
+export function sidecarRuleWarning(rule: TypedSidecarRule): string | undefined {
   if (rule.decision !== "allow") return undefined;
   const match = rule.match;
   if (match.command !== undefined || match.kind === "execute")
@@ -146,7 +236,13 @@ export function parseSidecar(text: string): SidecarDocument | undefined {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
   const record = parsed as Record<string, unknown>;
   const version = record["version"];
-  if (version !== undefined && version !== 1 && version !== SIDECAR_LIFETIME_VERSION) return undefined;
+  if (
+    version !== undefined &&
+    version !== 1 &&
+    version !== SIDECAR_LIFETIME_VERSION &&
+    version !== SIDECAR_JUDGED_VERSION
+  )
+    return undefined;
   const agents = record["agents"];
   if (agents !== undefined && (typeof agents !== "object" || agents === null || Array.isArray(agents))) {
     return undefined;
@@ -163,9 +259,25 @@ export function parseSidecar(text: string): SidecarDocument | undefined {
     }
     out[id] = { rules: checked };
   }
-  const v3 = Object.values(out).some((agent) => agent.rules.some(needsVersion3));
-  if (v3 && version !== SIDECAR_LIFETIME_VERSION) return undefined;
-  return { version: v3 ? SIDECAR_LIFETIME_VERSION : 1, agents: out };
+  // The file must be at least the version its content needs, as the daemon's reader insists.
+  const needed = versionFor(out);
+  if (needed > ((version as number | undefined) ?? 1)) return undefined;
+  return { version: needed, agents: out };
+}
+
+/**
+ * The version a sidecar holding any plain-language rule carries (#701):
+ * `PERMISSION_JUDGED_VERSION` in `@orca/core`, mirrored for the same reason as the one above.
+ * Every earlier reader refuses it rather than reading a judged rule as a plain allow.
+ */
+export const SIDECAR_JUDGED_VERSION = 4;
+
+/** The version the content needs: 4 with any judged rule, 3 with any lifetime or command, else 1. */
+function versionFor(agents: Readonly<Record<string, { rules: readonly SidecarRule[] }>>): number {
+  const all = Object.values(agents).flatMap((agent) => agent.rules);
+  if (all.some(isJudgedRule)) return SIDECAR_JUDGED_VERSION;
+  if (all.some(needsVersion3)) return SIDECAR_LIFETIME_VERSION;
+  return 1;
 }
 
 /**
@@ -200,6 +312,20 @@ function asRule(value: unknown): SidecarRule | undefined {
     if (fields[key] !== undefined && typeof fields[key] !== "string") return undefined;
   }
   const decision = row["decision"];
+  const judge = row["judge"];
+  if (judge !== undefined) {
+    // A plain-language rule (#701): a criterion in place of a decision, never both. Held to the
+    // daemon's strict v4 rule (#701 review): its `judge` is exactly `{ criterion }`, and a row the
+    // daemon would refuse refuses the document here too. Editing one would otherwise rebuild it
+    // as `{ criterion }` and could turn a refused row into a valid rule during an unrelated edit.
+    if (decision !== undefined) return undefined;
+    if (typeof judge !== "object" || judge === null || Array.isArray(judge)) return undefined;
+    const keys = Object.keys(judge);
+    if (keys.length !== 1 || keys[0] !== "criterion") return undefined;
+    if (typeof (judge as Record<string, unknown>)["criterion"] !== "string") return undefined;
+    if (judgedRuleProblem(row as unknown as JudgedSidecarRule) !== undefined) return undefined;
+    return row as unknown as SidecarRule;
+  }
   if (typeof decision !== "string" || !(PERMISSION_DECISIONS as readonly string[]).includes(decision)) {
     return undefined;
   }
@@ -254,7 +380,7 @@ export function withRules(doc: SidecarDocument, agentId: string, rules: readonly
 const MATCH_KEYS: readonly string[] = ["kind", "titlePattern", "path", "pathPrefix", "scope", "command"];
 
 /** The keys of a rule, in that same writer's order. */
-const RULE_KEYS: readonly string[] = ["match", "decision", "addedAt", "grantedFor", "expiresAt"];
+const RULE_KEYS: readonly string[] = ["match", "decision", "judge", "addedAt", "grantedFor", "expiresAt"];
 
 /**
  * One rule as it is written: the keys this app knows in the daemon's order, then any it
@@ -279,9 +405,13 @@ function canonicalRule(rule: SidecarRule): Record<string, unknown> {
   for (const key of Object.keys(rawMatch)) {
     if (!MATCH_KEYS.includes(key) && rawMatch[key] !== undefined) match[key] = rawMatch[key];
   }
-  const out: Record<string, unknown> = { match, decision: rule.decision };
+  // A plain-language rule is written `match`, `judge`, `addedAt`, `expiresAt`, as the daemon's
+  // writer writes one (#701); its criterion is carried as typed, and trimmed by the daemon.
+  const out: Record<string, unknown> = isJudgedRule(rule)
+    ? { match, judge: { criterion: rule.judge.criterion } }
+    : { match, decision: rule.decision };
   if (rule.addedAt !== undefined) out["addedAt"] = rule.addedAt;
-  if (rule.grantedFor !== undefined) out["grantedFor"] = rule.grantedFor;
+  if (!isJudgedRule(rule) && rule.grantedFor !== undefined) out["grantedFor"] = rule.grantedFor;
   if (rule.expiresAt !== undefined) out["expiresAt"] = rule.expiresAt;
   for (const key of Object.keys(raw)) {
     if (!RULE_KEYS.includes(key) && raw[key] !== undefined) out[key] = raw[key];
@@ -305,14 +435,21 @@ export function serializeSidecar(doc: SidecarDocument): string {
     agents[id] = { rules: rulesOf(doc, id).map(canonicalRule) };
   }
   // `version` and `agents`, and never a third key: the sidecar carries no `default`. The
-  // version follows the content, as the daemon's writer stamps it (#702).
-  const v3 = Object.keys(doc.agents).some((id) => rulesOf(doc, id).some(needsVersion3));
-  return `${JSON.stringify({ version: v3 ? SIDECAR_LIFETIME_VERSION : 1, agents }, null, 2)}\n`;
+  // version follows the content, as the daemon's writer stamps it (#702, #701).
+  return `${JSON.stringify({ version: versionFor(doc.agents), agents }, null, 2)}\n`;
 }
 
 /** A rule a person adds here: narrow, and saying so in its own provenance. */
-export function handRule(now: string): SidecarRule {
+export function handRule(now: string): TypedSidecarRule {
   return { match: { kind: "read", scope: "workspace" }, decision: "allow", addedAt: now, grantedFor: HAND_GRANT };
+}
+
+/**
+ * A plain-language rule a person starts here (#701): reads inside the workspace, and an empty
+ * criterion to write, which Save refuses until it is written (`judgedRuleProblem`).
+ */
+export function handJudgedRule(now: string): JudgedSidecarRule {
+  return { match: { kind: "read", scope: "workspace" }, judge: { criterion: "" }, addedAt: now };
 }
 
 /**

@@ -83,7 +83,19 @@ describe("permissions.saveJudgedRule", () => {
     const heard = vi.fn();
     model.onChange(heard);
     await model.saveJudgedRule(RULE);
-    expect((await model.get()).effective).toEqual(before);
+    // The typed rules are as they were; the saved rule is listed apart from them (#701).
+    const after = (await model.get()).effective.agents["claude"]!;
+    expect(after.rules).toEqual(before.agents["claude"]!.rules);
+    expect(after.default).toBe(before.agents["claude"]!.default);
+    expect(after.judged).toEqual([
+      {
+        ruleId: "sidecar:0",
+        source: "permissions",
+        match: RULE.match,
+        criterion: RULE.criterion,
+        addedAt: "2026-11-23T12:00:00.000Z",
+      },
+    ]);
     expect(heard).toHaveBeenCalledWith(expect.objectContaining({ document: "permissions" }));
     heard.mockClear();
     expect((await model.saveJudgedRule(RULE)).outcome).toBe("already-present");
@@ -164,5 +176,152 @@ describe("permissions.saveJudgedRule", () => {
     expect(readOnly.error?.code).toBe("PROTOCOL_METHOD");
     const saved = await call(context(false), PERMISSIONS_SAVE_JUDGED_RULE_METHOD, RULE);
     expect(saved).toMatchObject({ ok: true, result: { ruleId: "sidecar:0", outcome: "added" } });
+  });
+});
+
+describe("config.set and judged rules (#701 review: same authority on both routes)", () => {
+  const typed = { match: { kind: "read", path: "README.md" }, decision: "allow" };
+  const judged = { match: { kind: "read", scope: "workspace" }, judge: { criterion: "Reading the docs." } };
+  const sidecarText = (rules: unknown[], version = 4) => JSON.stringify({ version, agents: { claude: { rules } } });
+  /** config.write and config.read, and a separate judged authority that refuses unless granted. */
+  const authority = (grant: boolean) => {
+    const calls = { plain: 0, judged: 0 };
+    return {
+      calls,
+      plain: async () => void calls.plain++,
+      judged: async () => {
+        calls.judged++;
+        if (!grant) throw new Error("missing-permission:permissions.grant");
+      },
+    };
+  };
+
+  it("needs the grant to add, change or remove a judged rule through the whole document", async () => {
+    const { model, sidecar } = await workspace();
+    const without = authority(false);
+    await expect(
+      model.set(
+        { document: "permissions", expectedRevision: "", text: sidecarText([judged]) },
+        without.plain,
+        without.judged,
+      ),
+    ).rejects.toThrow("permissions.grant");
+    await expect(readFile(sidecar, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    const owner = authority(true);
+    const added = await model.set(
+      { document: "permissions", expectedRevision: "", text: sidecarText([judged]) },
+      owner.plain,
+      owner.judged,
+    );
+    // Before the lock, then under it before the compare and again before the rename.
+    expect(owner.calls.judged).toBeGreaterThanOrEqual(3);
+
+    const edited = sidecarText([{ ...judged, judge: { criterion: "Reading anything." } }]);
+    await expect(
+      model.set(
+        { document: "permissions", expectedRevision: added.document.revision, text: edited },
+        without.plain,
+        without.judged,
+      ),
+    ).rejects.toThrow("permissions.grant");
+    await expect(
+      model.set(
+        { document: "permissions", expectedRevision: added.document.revision, text: sidecarText([], 1) },
+        without.plain,
+        without.judged,
+      ),
+    ).rejects.toThrow("permissions.grant");
+    expect(JSON.parse(await readFile(sidecar, "utf8")).agents.claude.rules).toEqual([judged]);
+  });
+
+  it("keeps ordinary grants and unrelated edits on config.write alone, judged rows untouched", async () => {
+    const { model, sidecar } = await workspace();
+    const owner = authority(true);
+    const first = await model.set(
+      { document: "permissions", expectedRevision: "", text: sidecarText([judged]) },
+      owner.plain,
+      owner.judged,
+    );
+    const without = authority(false);
+    await model.set(
+      { document: "permissions", expectedRevision: first.document.revision, text: sidecarText([typed, judged]) },
+      without.plain,
+      without.judged,
+    );
+    expect(without.calls.judged).toBe(0);
+    expect(JSON.parse(await readFile(sidecar, "utf8")).agents.claude.rules).toEqual([typed, judged]);
+
+    // A typed-only sidecar never needs it either.
+    const fresh = await workspace();
+    await fresh.model.set(
+      { document: "permissions", expectedRevision: "", text: sidecarText([typed], 1) },
+      without.plain,
+      without.judged,
+    );
+    expect(without.calls.judged).toBe(0);
+  });
+
+  it("needs the grant for a judged rule written into the config file too", async () => {
+    const { model } = await workspace();
+    const without = authority(false);
+    const current = await model.read("config");
+    await expect(
+      model.set(
+        {
+          document: "config",
+          expectedRevision: current.revision,
+          text: `${CONFIG}      rules:\n        - match: { kind: read, scope: workspace }\n          judge: { criterion: "Reading the docs." }\n`,
+        },
+        without.plain,
+        without.judged,
+      ),
+    ).rejects.toThrow("permissions.grant");
+  });
+
+  it("needs the grant to repair an unreadable sidecar into one with judged rules, not into one without", async () => {
+    const { model, sidecar } = await workspace();
+    // A judged row in a version-3 file: the reader refuses the file, so no judged rule is in force.
+    const unreadable = sidecarText([typed, judged], 3);
+    await writeFile(sidecar, unreadable, "utf8");
+    const before = await model.read("permissions");
+    const without = authority(false);
+    // Same row text, now readable: that brings a judged rule into force.
+    await expect(
+      model.set(
+        { document: "permissions", expectedRevision: before.revision, text: sidecarText([typed, judged]) },
+        without.plain,
+        without.judged,
+      ),
+    ).rejects.toThrow("permissions.grant");
+    expect(await readFile(sidecar, "utf8")).toBe(unreadable);
+    // Repaired to typed rules only: nothing judged comes into force, so config.write is enough.
+    await model.set(
+      { document: "permissions", expectedRevision: before.revision, text: sidecarText([typed], 1) },
+      without.plain,
+      without.judged,
+    );
+    expect(without.calls.judged).toBe(1);
+    expect(JSON.parse(await readFile(sidecar, "utf8")).agents.claude.rules).toEqual([typed]);
+  });
+
+  it("fences a config write against the file it replaces, so a stale ordinary edit cannot drop a judged change", async () => {
+    const { model, dir } = await workspace();
+    const configFile = join(dir, "orca.config.yaml");
+    const withJudged = `${CONFIG}      rules:\n        - match: { kind: read, scope: workspace }\n          judge: { criterion: "Reading the docs." }\n`;
+    const current = await model.read("config");
+    let calls = 0;
+    // A judged change lands after this write was decided under the lock and before its rename.
+    const plain = async () => {
+      if (++calls === 4) await writeFile(configFile, withJudged, "utf8");
+    };
+    await expect(
+      model.set(
+        { document: "config", expectedRevision: current.revision, text: `${CONFIG}# an ordinary edit\n` },
+        plain,
+        async () => {},
+      ),
+    ).rejects.toMatchObject({ code: "CONFIG_STALE" });
+    expect(await readFile(configFile, "utf8")).toBe(withJudged);
   });
 });

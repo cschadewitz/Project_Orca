@@ -799,7 +799,12 @@ export const configApply: Method<ConfigApplyParams, ConfigApplyResult> = {
 export const configSet: Method<ConfigSetParams, ConfigSetResult> = {
   params: ConfigSetParamsSchema,
   handle: (params, ctx) =>
-    config(ctx).set(params, ctx.configurationAuthority && (() => ctx.configurationAuthority!(true))),
+    config(ctx).set(
+      params,
+      ctx.configurationAuthority && (() => ctx.configurationAuthority!(true)),
+      // A change to judged rules is standing policy, as through `permissions.saveJudgedRule` (#701).
+      ctx.configurationAuthority && (() => ctx.configurationAuthority!(true, true, true)),
+    ),
 };
 
 /**

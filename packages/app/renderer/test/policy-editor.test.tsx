@@ -37,6 +37,7 @@ import {
   withRules,
   type SidecarDocument,
   type SidecarRule,
+  type TypedSidecarRule,
 } from "../src/config/policy-model.js";
 import { CONFIG_GET, PERMISSIONS_REVISION, PERMISSIONS_TEXT } from "./fixtures-config.js";
 import { AS_OF, HELLO_READ_ONLY } from "./fixtures.js";
@@ -106,7 +107,7 @@ describe("the sidecar as a document", () => {
     const rules = rulesOf(doc(), "claude");
     expect(rules).toHaveLength(2);
     expect(rules[0]!.match.pathPrefix).toBe("src");
-    expect(rules[1]!.grantedFor).toBe("Run git status");
+    expect((rules[1] as TypedSidecarRule).grantedFor).toBe("Run git status");
   });
 
   it("reads no file as the empty document, and a broken one as nothing at all", () => {

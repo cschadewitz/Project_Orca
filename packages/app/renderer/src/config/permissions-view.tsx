@@ -21,12 +21,25 @@
  *   (answering one prompt must not change the answer to every other one), and a list of
  *   rules without the fallthrough is half a policy.
  *
+ * - **plain-language rules are listed apart** (#701). A judged rule decides nothing in the
+ *   first-match order: a judge is asked about it only after the typed rules answered `ask`,
+ *   and its yes allows one call once. Numbering it among the typed rules would draw a
+ *   precedence it does not have, so it is its own group after them, named by the id a
+ *   decision record gives it.
+ *
  * Nothing here writes. Editing and removing grants is #176; this issue leaves the document
  * readable, which is why the sidecar's own raw JSON is below the list rather than a form.
  */
 import type { JSX } from "react";
 import { Chip, Text, Time, formatAbsolute, textClass } from "../ui/index.js";
-import { POLICY_LAYERS, rowsFrom, type AgentPolicyView } from "./config-model.js";
+import {
+  PLAIN_RULES_ACTIVE,
+  PLAIN_RULES_INACTIVE_NOTE,
+  POLICY_LAYERS,
+  rowsFrom,
+  type AgentPolicyView,
+  type JudgedRow,
+} from "./config-model.js";
 
 export interface PermissionsViewProps {
   policies: readonly AgentPolicyView[];
@@ -124,9 +137,58 @@ export function PermissionsView({ policies, live, path, exists }: PermissionsVie
                 );
               })
             )}
+            {policy.judged.length > 0 && <JudgedRules rows={policy.judged} live={live} />}
           </div>
         ))
       )}
     </section>
+  );
+}
+
+/**
+ * An agent's plain-language rules (#701), after its typed ones and unnumbered. Each is a
+ * declared two-line row: the gate and where it came from on the first, the sentence a person
+ * wrote on the second, cut at its end with the whole of it in its title.
+ */
+function JudgedRules({ rows, live }: { rows: readonly JudgedRow[]; live: boolean }): JSX.Element {
+  return (
+    <div className="orca-config__layer" aria-label="Plain-language rules">
+      <div className="orca-config__layer-head">
+        <Text style="label-strong">Plain-language rules</Text>
+        {!PLAIN_RULES_ACTIVE && <Chip>inactive</Chip>}
+      </div>
+      {!PLAIN_RULES_ACTIVE && (
+        <Text style="caption" className="orca-config__none" data-plain-rules-inactive="">
+          {PLAIN_RULES_INACTIVE_NOTE}
+        </Text>
+      )}
+      <Text style="caption" className="orca-config__none">
+        {PLAIN_RULES_ACTIVE ? "" : "Once active: "}A judge is asked about these only when the rules above answer ask,
+        only for reads and searches, and only in a session given a judge. A yes allows that one call once; anything else
+        goes to a person.
+      </Text>
+      <ol className="orca-config__rules">
+        {rows.map((row) => (
+          <li key={row.ruleId} className="orca-config__judged">
+            <span className="orca-config__judged-line">
+              <span className={`orca-config__order ${textClass("mono-id")}`}>{row.ruleId}</span>
+              <span className={`orca-config__rule-text ${textClass("mono-body")}`} title={row.gate}>
+                {row.gate}
+              </span>
+              <Chip>{row.source}</Chip>
+              {row.addedAt !== undefined && <Time at={new Date(row.addedAt)} show={live ? "both" : "absolute"} />}
+              {row.expiresAt !== undefined && (
+                <Text style="caption" className="orca-config__granted">
+                  {`expires ${formatAbsolute(new Date(row.expiresAt))}`}
+                </Text>
+              )}
+            </span>
+            <Text style="body" className="orca-config__judged-criterion" title={row.criterion}>
+              {row.criterion}
+            </Text>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
