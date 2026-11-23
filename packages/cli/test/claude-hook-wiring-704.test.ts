@@ -6,22 +6,29 @@
  * cannot guard is refused, never opened without the hook. The real adapter and Claude Code are in
  * `claude-hook-acceptance-704.test.ts`; this is the wiring around them, with no agent.
  */
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentSpecSchema, SshHostSchema } from "@orca/core";
 import {
   CLAUDE_HOOK_VERIFIED_ADAPTERS,
   CLAUDE_HOOK_VERIFIED_PAIRS,
+  CODEX_HOOK_KEY,
+  CODEX_HOOK_VERIFIED_ADAPTERS,
+  CODEX_HOOK_VERIFIED_PAIRS,
   LocalHost,
   runClaudeRuntimeAttestation,
+  codexHookTrustHash,
+  codexPreToolHookCommand,
   SshHost,
   permissionPolicyPath,
   type AgentHost,
   type AgentSession,
   type OpenSessionOptions,
 } from "@orca/agents";
+import { childBundle } from "@orca/testing/child-bundle";
 import { makeSessionFactory, orcaProtectedPaths } from "../src/bootstrap.js";
 
 const dirs: string[] = [];
@@ -32,6 +39,8 @@ afterEach(async () => {
 const AGENT_PID = 4242;
 const RUNTIME_PID = 4343;
 const PINNED = CLAUDE_HOOK_VERIFIED_PAIRS[0]!.images["linux-x64"]!;
+const CODEX_PID = 4444;
+const CODEX_PINNED = CODEX_HOOK_VERIFIED_PAIRS[0]!.images["linux-x64"]!;
 const CLAUDE = { name: "@agentclientprotocol/claude-agent-acp", version: CLAUDE_HOOK_VERIFIED_ADAPTERS[0]! };
 
 /** A factory over a fake `open` that calls `sessionMeta` the way `openAcpSession` does. */
@@ -44,7 +53,7 @@ async function setup(
   /**
    * The runtime process the session-start attestation names, and the digest of the image
    * ORCA finds that process running (`error`: ORCA cannot attest it); `null`, nothing (the
-   * attestation never ran).
+   * attestation never ran, as on the Codex path, which has no session-start hook).
    */
   runtime: { pid: number; image: { sha256: string } | { error: string } } | null = {
     pid: RUNTIME_PID,
@@ -52,7 +61,21 @@ async function setup(
   },
   /** `off`: a shipped build, where activation is unavailable. */
   activation: "acceptance-only" | "off" = "acceptance-only",
+  codexOpts: {
+    /** The adapter's ACP extension method, which the Codex path asks for its hook listing. */
+    ext?: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+    /** The Codex process ORCA finds under the agent, and the digest of the image it runs. */
+    codex?: { pid: number; image: { sha256: string } | { error: string } } | { error: string } | undefined;
+    /** The program the hook command runs; the real `node` where the test runs the hook. */
+    runtimeBin?: string;
+  } = {},
 ) {
+  const ext =
+    codexOpts.ext ??
+    (async (method: string) => {
+      throw new Error(`no ${method}`);
+    });
+  const codex = codexOpts.codex ?? { pid: CODEX_PID, image: { sha256: CODEX_PINNED } };
   const dir = await mkdtemp(join(tmpdir(), "orca-704-wiring-"));
   dirs.push(dir);
   let opened = 0;
@@ -65,7 +88,7 @@ async function setup(
     async (options) => {
       opened++;
       seen.options = options;
-      seen.meta = await options.sessionMeta?.(agentInfo, AGENT_PID);
+      seen.meta = await options.sessionMeta?.(agentInfo, ext, AGENT_PID);
       // Claude Code runs the session-start attestation before `session/new` returns.
       const attest = (
         seen.meta as {
@@ -88,14 +111,19 @@ async function setup(
       } as unknown as AgentSession;
     },
     {
-      runtime: "/usr/bin/node",
+      runtime: codexOpts.runtimeBin ?? "/usr/bin/node",
       script: script ?? undefined,
       platform,
       arch: "x64",
       activation: activation === "off" ? undefined : activation,
       // ORCA's own evidence, faked: only the attested process under the agent ORCA started.
-      imageDigest: async (pid, agentPid) =>
-        runtime && pid === runtime.pid && agentPid === AGENT_PID ? runtime.image : { error: "not under the agent" },
+      imageDigest: async (pid, agentPid) => {
+        if (agentPid !== AGENT_PID) return { error: "not under the agent" };
+        if (runtime && pid === runtime.pid) return runtime.image;
+        if ("pid" in codex && pid === codex.pid) return codex.image;
+        return { error: "not under the agent" };
+      },
+      codexProcess: async (pid) => (pid === AGENT_PID ? codex : { error: "not the agent" }),
     },
   );
   const open = (host: AgentHost = new LocalHost({ id: "local", type: "local" })) =>
@@ -111,7 +139,19 @@ async function setup(
       cwd: join(dir, "work"),
     });
   const hookDir = join(dir, ".orca", "private-execution", "tool-hooks");
-  return { dir, open, seen, hookDir, resolveClosed, opened: () => opened, closedByFactory: () => closedByFactory };
+  /** The context files left behind; none, once a session is refused or closed. */
+  const left = () =>
+    readdir(hookDir).catch((e: NodeJS.ErrnoException) => (e.code === "ENOENT" ? [] : Promise.reject(e)));
+  return {
+    dir,
+    open,
+    seen,
+    hookDir,
+    left,
+    resolveClosed,
+    opened: () => opened,
+    closedByFactory: () => closedByFactory,
+  };
 }
 
 describe("installing the hook", () => {
@@ -137,6 +177,8 @@ describe("installing the hook", () => {
           "/opt/orca/claude-pre-tool-hook.mjs",
         ],
       },
+      // A fresh key per session, for the Codex startup probe's receipt.
+      probeKey: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     // The context lives under a directory no agent may read (C4-01).
     expect(orcaProtectedPaths({ configDir: t.dir, storeDir: ".orca" }).noAccess).toContain(
@@ -210,7 +252,7 @@ describe("installing the hook", () => {
       code: "NOT_SUPPORTED",
       message: expect.stringMatching(new RegExp(`${why}[\\s\\S]*nativeToolHook: on`)),
     });
-    await expect(readdir(t.hookDir)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await t.left()).toEqual([]);
   });
 
   it.each([
@@ -244,12 +286,13 @@ describe("installing the hook", () => {
       code: "NOT_SUPPORTED",
       message: expect.stringContaining("not win32"),
     });
-    await expect(readdir(t.hookDir)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await t.left()).toEqual([]);
   });
 
-  it("refuses a Claude session when the build has no hook program", async () => {
+  it("refuses a session when the build has no hook program, before anything starts", async () => {
     const t = await setup(CLAUDE, {}, null);
     await expect(t.open()).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+    expect(t.opened()).toBe(0);
   });
 
   it("refuses an opted-in agent on another host before anything starts", async () => {
@@ -271,5 +314,147 @@ describe("installing the hook", () => {
       await remote.open(new SshHost(SshHostSchema.parse({ id: "box", type: "ssh", host: "box.example" })));
       expect(remote.seen.options?.sessionMeta).toBeUndefined();
     }
+  });
+});
+
+describe("installing the hook in Codex (#705)", () => {
+  const CODEX = { name: "@agentclientprotocol/codex-acp", version: CODEX_HOOK_VERIFIED_ADAPTERS[0]! };
+  const entry = fileURLToPath(new URL("../../agents/src/bin/claude-pre-tool-hook.ts", import.meta.url));
+  const script = childBundle("codex-hook-wiring-705", { entries: { hook: entry } })?.["hook"];
+
+  /** What the Codex adapter would list for the `CODEX_CONFIG` the factory handed it. */
+  const listing =
+    (seen: { options?: OpenSessionOptions }, change: Record<string, unknown> = {}) =>
+    async (method: string) => {
+      expect(method).toBe("_codex/hooks/list");
+      const config = JSON.parse(seen.options!.env!["CODEX_CONFIG"]!) as {
+        hooks: { PreToolUse: { hooks: { command: string }[] }[] };
+      };
+      const command = config.hooks.PreToolUse[0]!.hooks[0]!.command;
+      return {
+        hooks: [
+          {
+            key: CODEX_HOOK_KEY,
+            eventName: "preToolUse",
+            command,
+            matcher: "*",
+            enabled: true,
+            trustStatus: "trusted",
+            ...change,
+          },
+        ],
+      };
+    };
+
+  const codexSetup = async (
+    change: Record<string, unknown> = {},
+    opts: {
+      info?: { name: string; version: string };
+      script?: string;
+      codex?: { pid: number; image: { sha256: string } | { error: string } } | { error: string };
+    } = {},
+  ) => {
+    const seen: { options?: OpenSessionOptions } = {};
+    const t = await setup(
+      opts.info ?? CODEX,
+      { id: "codex", command: "codex-acp", env: { CODEX_CONFIG: JSON.stringify({ model: "m" }) } },
+      opts.script ?? script!,
+      "linux",
+      // Codex has no session-start hook: nothing reports a runtime process in.
+      null,
+      "acceptance-only",
+      {
+        ext: (method, params) => {
+          if (t.seen.options) seen.options = t.seen.options;
+          return listing(
+            seen,
+            change,
+          )(method).then((r) => {
+            expect(params).toEqual({ cwd: join(t.dir, "work") });
+            return r;
+          });
+        },
+        codex: opts.codex,
+        runtimeBin: process.execPath,
+      },
+    );
+    await mkdir(join(t.dir, "work"), { recursive: true });
+    return t;
+  };
+
+  it.skipIf(script === undefined || process.platform === "win32")(
+    "hands Codex the trusted hook at spawn, and opens once Codex lists it and it blocks when run",
+    async () => {
+      const t = await codexSetup();
+      const session = await t.open();
+      expect(t.seen.meta).toBeUndefined();
+      const config = JSON.parse(t.seen.options!.env!["CODEX_CONFIG"]!) as Record<string, unknown>;
+      expect(config["model"]).toBe("m");
+      const [file] = await t.left();
+      const command = codexPreToolHookCommand(process.execPath, script!, join(t.hookDir, file!));
+      expect(config["hooks"]).toEqual({
+        PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: 30 }] }],
+        state: { [CODEX_HOOK_KEY]: { trusted_hash: codexHookTrustHash(command, 30) } },
+      });
+      await session.close();
+      expect(await t.left()).toEqual([]);
+    },
+  );
+
+  it.skipIf(script === undefined || process.platform === "win32")(
+    "refuses unless Codex lists the hook in force",
+    async () => {
+      for (const change of [
+        { trustStatus: "untrusted" },
+        { enabled: false },
+        { command: "something else" },
+        { key: "other" },
+      ]) {
+        const t = await codexSetup(change);
+        await expect(t.open()).rejects.toMatchObject({
+          code: "NOT_SUPPORTED",
+          message: expect.stringContaining("nativeToolHook: on"),
+        });
+        expect(await t.left()).toEqual([]);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("refuses when the hook does not block as Codex would run it", async () => {
+    const t = await codexSetup({}, { script: join(tmpdir(), "orca-705-no-such-hook.mjs") });
+    await expect(t.open()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringContaining("did not block"),
+    });
+    expect(await t.left()).toEqual([]);
+  });
+
+  it.each([
+    [
+      "runs another image",
+      { pid: CODEX_PID, image: { sha256: "0".repeat(64) } },
+      "is not the one ORCA verified with adapter",
+    ],
+    [
+      "cannot be attested",
+      { pid: CODEX_PID, image: { error: "process 4444 is not running under the agent ORCA started" } },
+      "could not attest",
+    ],
+    ["cannot be found", { error: "no Codex app-server runs under the adapter" }, "could not tell which Codex"],
+  ] as const)("refuses when the Codex the adapter runs %s", async (_what, codex, why) => {
+    const t = await codexSetup({}, { codex });
+    await expect(t.open()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringMatching(new RegExp(`${why}[\\s\\S]*nativeToolHook: on`)),
+    });
+    expect(await t.left()).toEqual([]);
+  });
+
+  it("refuses a Codex adapter version the acceptance test does not run", async () => {
+    const t = await codexSetup({}, { info: { name: CODEX.name, version: "2.8.0" } });
+    await expect(t.open()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringContaining("verified the hook only with"),
+    });
   });
 });
