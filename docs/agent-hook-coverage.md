@@ -55,7 +55,7 @@ extension or a trusted-folders list allows. An empty advisory does not mean noth
 | ORCA allow | Answered `proceed_once`: runs once, and the same call asks again | installed |
 | ORCA deny, a person's refusal | Answered `cancel`: does not run | installed |
 | Edit of an existing file (`write_file`) | Gemini reads the file through ORCA's `fs/read_text_file`, asks ORCA (`kind: "edit"`), then writes through `fs/write_text_file`; ORCA decides each file operation too (#703) | installed |
-| Creating a new file (`write_file`) | **Fails today**: Gemini takes only a "Resource not found" answer as a missing file, and ORCA answers with a generic error, so the write fails before Gemini asks. Being fixed in ORCA | installed |
+| Creating a new file (`write_file`) | **Fails**: Gemini checks whether the file exists by reading it through ORCA. ORCA answers ACP's not-found error (#1006), but Gemini 0.70.0 recognises a missing file only from a JavaScript `Error`, and its ACP connection hands it the plain JSON-RPC error, so the write fails before Gemini asks. A Gemini-side gap; editing an existing file works | installed (error shape: source) |
 | `list_directory`, `glob`, `read_file` | **Never ask**: ran without a permission request; the `read_file` run made no `fs/*` call to ORCA either | installed |
 | Other read-only tools (`grep_search`, `read_many_files`, web fetch, …) and other native reads | Not run; whether they ask, and whether they read through ORCA, is not established | unknown |
 | "Allow for this session" (`proceed_always`) | Gemini stops asking for the **whole command prefix** for the rest of the session (`echo a` grants `echo b`). ORCA never answers with it, and ORCA's engine offers a person only the one-time pair | installed |

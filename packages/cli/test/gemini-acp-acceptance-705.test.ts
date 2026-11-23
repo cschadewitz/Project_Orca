@@ -14,7 +14,7 @@
  * - **Approvals (tier B)**: a shell call asks ORCA; an ORCA allow runs it once, answered with
  *   Gemini's one-time option, so the next call asks again; a deny, a person's refusal and a
  *   cancelled ask do not run it. An edit to an existing file goes through ORCA's own file
- *   boundary (`fs/*`); creating a new file there fails today (a known gap, pinned).
+ *   boundary (`fs/*`); creating a new file there fails on Gemini's side (pinned).
  * - **Outside ORCA (pinned, so a change is noticed)**: `list_directory`, `glob` and
  *   `read_file` never ask, and that `read_file` makes no `fs/*` call (other read-only tools
  *   are not run here and stay unverified); "Allow for
@@ -282,11 +282,13 @@ describe.skipIf(GEMINI === undefined)("ORCA and the real Gemini CLI (#705)", () 
     }
   }, 120_000);
 
-  it("cannot create a new file through ORCA's file boundary yet (known gap)", async () => {
-    // Gemini reads a file through ORCA to see whether it exists, and takes only a
-    // "Resource not found" answer as missing. ORCA answers a missing file with a generic
-    // internal error today, so the write fails before Gemini asks. When ORCA answers with
-    // ACP's not-found error this test fails, and the coverage page's gap row goes.
+  it("cannot create a new file through ORCA's file boundary (Gemini 0.70.0 gap, pinned)", async () => {
+    // Gemini reads the file through ORCA first to see whether it exists. ORCA answers a
+    // missing file with ACP's not-found error (#1006), but Gemini 0.70.0 recognises a missing
+    // file only when the error is a JavaScript Error carrying that text
+    // (`AcpFileSystemService.normalizeFileSystemError`), and its ACP connection rejects with
+    // the plain JSON-RPC error object. So the write fails before Gemini asks. When a Gemini
+    // version takes the not-found answer, this test fails and the coverage page's row goes.
     const failures: string[] = [];
     const session = await open({ rules: [{ match: { kind: "edit", scope: "workspace" }, decision: "allow" }] });
     session.onUpdate((e) => {
@@ -300,7 +302,7 @@ describe.skipIf(GEMINI === undefined)("ORCA and the real Gemini CLI (#705)", () 
       expect(await exists("new.txt")).toBeUndefined();
       // The existence checks reached ORCA and were allowed; nothing was asked or written.
       expect(decisions).toEqual(["fs:allow", "fs:allow"]);
-      expect(failures).toEqual([expect.stringContaining("Error checking existing file: Internal error")]);
+      expect(failures).toEqual([expect.stringContaining("Error checking existing file: Resource not found: ")]);
     } finally {
       await session.close();
     }
