@@ -91,9 +91,28 @@ async function recordRefusals(): Promise<void> {
   });
 }
 
+/**
+ * A launch stays retained in the app's protected intent journal after it succeeds, and a new
+ * launch of the same workflow is refused until that one is explicitly abandoned ("The retained
+ * command changed"). So a later sample goes the way a person starts new work: restore the
+ * retained launch, then "Start explicit new work", which asks to abandon it. That question is a
+ * native message box; it is answered "Abandon intent" here, since it is not what this tests.
+ */
+async function abandonRetainedLaunch(page: Page): Promise<void> {
+  await open!.app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
+  });
+  const guided = page.getByRole("region", { name: "Guided launch" });
+  await guided.getByRole("button", { name: "Restore protected launch" }).click();
+  await expect(guided.getByText("A protected launch intent was restored.").first()).toBeVisible({ timeout: 30_000 });
+  await guided.getByRole("button", { name: "Start explicit new work" }).click();
+  await expect(guided.getByText("New work selected.").first()).toBeVisible({ timeout: 30_000 });
+}
+
 async function runSample(page: Page, count: number): Promise<string[]> {
   await openLaunchWork(page);
   await recordRefusals();
+  if (count > 1) await abandonRetainedLaunch(page);
   await launchSample(page);
   try {
     return await succeededRuns(page, count);
