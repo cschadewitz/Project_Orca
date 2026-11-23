@@ -1,6 +1,6 @@
 /** Shared sidecar file mechanics. All policy writers use this lock and exact byte revision. */
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, readlinkSync } from "node:fs";
+import { readFileSync, readlinkSync, type Stats } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -124,6 +124,8 @@ function sidecarOwner(name: string, text: string): SidecarOwner | undefined {
   // The filename and the token must agree on who wrote them.
   if (String(o["pid"]) !== m[1]) return undefined;
   if (typeof o["nonce"] !== "string" || !UUID.test(o["nonce"])) return undefined;
+  // One nonce names the token and is written in it, so the two identify the same writer.
+  if (o["nonce"] !== m[2]) return undefined;
   if (o["domain"] !== null && typeof o["domain"] !== "string") return undefined;
   return o as unknown as SidecarOwner;
 }
@@ -134,8 +136,9 @@ function sidecarOwner(name: string, text: string): SidecarOwner | undefined {
  * however long, is a running process and keeps its lock. The lock is removed only when all of
  * these hold, and is otherwise left for a person (the wait goes on, then `STORE_LOCK_TIMEOUT`):
  *
- * - it holds exactly one entry, a regular file named `owner.<pid>.<uuid>.json`, whose content
- *   is exactly a plain sidecar writer's token (`sidecarOwner`), with the same pid as its name;
+ * - the lock is a plain directory (`lstat`: not a link or anything else), holding exactly one
+ *   entry, a regular file with no other link, named `owner.<pid>.<nonce>.json`, whose content is
+ *   exactly a plain sidecar writer's token (`sidecarOwner`), with the pid and nonce of its name;
  *   a typed or budget owner, an empty directory (a crash between `mkdir` and the token), a
  *   legacy lock file and anything malformed or of another version are never touched;
  * - this process has a liveness domain (`livenessDomain`) and the token names the same one, so
@@ -144,33 +147,49 @@ function sidecarOwner(name: string, text: string): SidecarOwner | undefined {
  * - no process with that pid is running. A pid reused since is running, so the lock stays: that
  *   errs toward refusing.
  *
- * Only that exact token is unlinked, and the directory is removed only if it is then empty, so a
+ * Just before unlinking, the directory and the token are checked to be the very entries inspected
+ * (same device and inode), and the directory again before it is removed. Only that exact token
+ * is unlinked, and the directory is removed only if it is then empty, so a
  * writer that took the lock meanwhile keeps it, and one that made the directory but had not yet
  * written its token fails its own token write and ownership check rather than proceed. Nothing
  * here throws: any failure leaves the lock as it is.
  */
 async function removeDeadSidecarLock(lock: string): Promise<boolean> {
+  let dir: Stats;
   try {
     const domain = livenessDomain();
     if (domain === null) return false;
+    // The lock itself must be a plain directory, not a link or anything else, and every later
+    // step is bound to this exact directory (device and inode) and this exact token file.
+    dir = await lstat(lock);
+    if (!dir.isDirectory()) return false;
     const names = await readdir(lock);
     if (names.length !== 1) return false;
     const token = `${lock}/${names[0]!}`;
     const info = await lstat(token);
-    if (!info.isFile() || info.size > 4096) return false;
+    if (!info.isFile() || info.nlink !== 1 || info.size > 4096) return false;
     const owner = sidecarOwner(names[0]!, await readFile(token, "utf8"));
     if (owner === undefined || owner.domain !== domain) return false;
     if (owner.pid === process.pid || processAlive(owner.pid)) return false;
+    if (!(await same(lock, dir, "dir")) || !(await same(token, info, "file"))) return false;
     await unlink(token);
   } catch {
     return false;
   }
   try {
-    await rmdir(lock);
+    // Not ours to remove unless it is still the directory inspected above.
+    if (await same(lock, dir, "dir")) await rmdir(lock);
   } catch {
-    // Not empty: somebody else's lock now. Leave it.
+    // Not empty, or gone: somebody else's lock now, or nothing. Leave it.
   }
   return true;
+}
+
+/** Whether `path` is still the very entry inspected earlier (same kind, device and inode). */
+async function same(path: string, seen: { dev: number; ino: number }, kind: "dir" | "file"): Promise<boolean> {
+  const now = await lstat(path);
+  if (kind === "dir" ? !now.isDirectory() : !now.isFile()) return false;
+  return now.dev === seen.dev && now.ino === seen.ino;
 }
 
 /** Same .lock namespace, using the store's exact-owner-token idiom without automatic
@@ -184,7 +203,8 @@ async function withStrictPolicyLock<T>(
   recoverDeadOwner = false,
 ): Promise<T> {
   const lock = `${file}.lock`;
-  const token = `${lock}/owner.${process.pid}.${randomUUID()}.json`;
+  const nonce = randomUUID();
+  const token = `${lock}/owner.${process.pid}.${nonce}.json`;
   const contents = JSON.stringify(
     recoverDeadOwner
       ? ({
@@ -192,9 +212,9 @@ async function withStrictPolicyLock<T>(
           kind: "sidecar",
           pid: process.pid,
           domain: livenessDomain(),
-          nonce: randomUUID(),
+          nonce,
         } satisfies SidecarOwner)
-      : { version: 1, pid: process.pid, nonce: randomUUID() },
+      : { version: 1, pid: process.pid, nonce },
   );
   await mkdir(dirname(file), { recursive: true });
   const deadline = Date.now() + timeoutMs;

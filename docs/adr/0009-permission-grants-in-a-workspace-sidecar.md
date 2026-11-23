@@ -246,14 +246,16 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   the bytes it read. A lock left by a writer that crashed is recovered without a person only
   when its owner is provably gone: the plain sidecar writers mark their token (`kind:
   "sidecar"`, pid, and the liveness domain the pid belongs to), and a later writer removes such
-  a lock when the token is exactly that shape, agrees with its file name, names the same
+  a lock when the lock is a plain directory (not a link), its one token is a regular file with
+  no other link, exactly that shape, and agrees with its file name in pid and nonce, names the same
   liveness domain as the writer, and no process with that pid is running (a paused writer is
   running and keeps its lock; a reused pid errs toward refusing). The liveness domain is
   positively established only on Linux, as the kernel boot id plus the pid namespace
   (`/proc/self/ns/pid`); a machine id or host name is not used, because two containers or
   machines can share one while seeing different pids. Elsewhere (macOS, Windows) there is no
-  domain and recovery stays manual. It unlinks that exact token and removes the directory only
-  if it is then empty. Any other leftover (an empty directory, a legacy lock file, a
+  domain and recovery stays manual. Just before it unlinks that exact token it checks that the
+  directory and the token are still the entries it inspected (device and inode), and removes the
+  directory only if it is still that one and then empty. Any other leftover (an empty directory, a legacy lock file, a
   typed-sidecar or judge-budget owner, a malformed or unsupported token, another domain's lock)
   still refuses writes
   (`STORE_LOCK_TIMEOUT`) until a person removes it after making sure no writer runs; reading

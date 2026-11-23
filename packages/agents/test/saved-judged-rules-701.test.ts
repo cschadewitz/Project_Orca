@@ -6,7 +6,21 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { readFileSync, readlinkSync } from "node:fs";
-import { mkdtemp, mkdir, readdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import {
+  link,
+  lstat,
+  mkdtemp,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -259,6 +273,7 @@ describe("a lock left by a sidecar writer that is gone", () => {
       [name, JSON.stringify({ ...valid(), domain: null })], // no liveness domain was known
       [`owner.${dead + 1}.${nonce}.json`, JSON.stringify(valid())], // the name and the token disagree
       [`owner.${dead}.not-a-uuid.json`, JSON.stringify(valid())],
+      [`owner.${dead}.1f0f0f0f-0000-4000-8000-000000000000.json`, JSON.stringify(valid())], // another nonce
       [name, JSON.stringify({ ...valid(), nonce: "n" })],
       [name, JSON.stringify({ ...valid(), version: 2 })],
       [name, JSON.stringify({ ...valid(), extra: true })],
@@ -283,6 +298,24 @@ describe("a lock left by a sidecar writer that is gone", () => {
     );
     await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
     expect(await readdir(`${file}.lock`)).toHaveLength(2);
+  });
+
+  it.skipIf(DOMAIN === null)("is never removed through a link, for the lock or its token", async () => {
+    const name = `owner.${dead}.${nonce}.json`;
+    // The lock is a symbolic link to a directory holding a dead, well-formed token.
+    const elsewhere = join(ws, "elsewhere");
+    await mkdir(elsewhere);
+    await writeFile(join(elsewhere, name), JSON.stringify(valid()));
+    await symlink(elsewhere, `${file}.lock`);
+    await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+    expect(await readdir(elsewhere)).toEqual([name]);
+    expect((await lstat(`${file}.lock`)).isSymbolicLink()).toBe(true);
+    await rm(`${file}.lock`);
+    // The token is a second link to a file that lives elsewhere too.
+    await mkdir(`${file}.lock`);
+    await link(join(elsewhere, name), join(`${file}.lock`, name));
+    await expect(save({ lock: { timeoutMs: 60 } })).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+    expect(await readdir(`${file}.lock`)).toEqual([name]);
   });
 });
 
