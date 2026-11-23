@@ -4,7 +4,7 @@
 # packages/agents/test/cline-acp-711.acceptance.test.ts against it. Cline's openai-compatible
 # provider points at a scripted local stand-in model inside the test, so no account, key or
 # paid request is involved and the job runs unattended. Moving the pin is a reviewed change to
-# CLINE_VERSION and CLINE_LINUX_X64_SHA256 here and CLINE_CLI_VERIFIED_VERSIONS in
+# PINNED_CLINE_VERSION and PINNED_CLINE_LINUX_X64_SHA256 here and CLINE_CLI_VERIFIED_VERSIONS in
 # packages/agents/src/providers/cline.ts together.
 name: Cline ACP acceptance
 
@@ -35,10 +35,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CLINE_VERSION: "3.0.75"
+  PINNED_CLINE_VERSION: "3.0.75"
   # sha256 of bin/cline in @cline/cli-linux-x64@3.0.75 (npm integrity
   # sha512-I9uEOAmfphHjr6Bwvq+hzCx9bHAtjH8r7M0KyF4iS6SdzDAIcZxlaLWduAOu8vZ6ws3xkd4vqDU0StpznNmrHw==).
-  CLINE_LINUX_X64_SHA256: f63e3073dcd3b5d045cca6a78a65250b9baecf7d599a1206276255a5fc4f58fe
+  PINNED_CLINE_LINUX_X64_SHA256: f63e3073dcd3b5d045cca6a78a65250b9baecf7d599a1206276255a5fc4f58fe
 
 jobs:
   acceptance:
@@ -63,9 +63,9 @@ jobs:
         run: |
           prefix="$RUNNER_TEMP/cline"
           npm install --prefix "$prefix" --no-save --ignore-scripts --no-audit --no-fund \
-            "@cline/cli-linux-x64@${CLINE_VERSION}"
+            "@cline/cli-linux-x64@${PINNED_CLINE_VERSION}"
           bin="$prefix/node_modules/@cline/cli-linux-x64/bin/cline"
-          echo "${CLINE_LINUX_X64_SHA256}  $bin" | sha256sum -c -
+          echo "${PINNED_CLINE_LINUX_X64_SHA256}  $bin" | sha256sum -c -
           echo "ORCA_CLINE_BIN=$bin" >> "$GITHUB_ENV"
       - name: Cline acceptance (tiers A and B)
         shell: bash

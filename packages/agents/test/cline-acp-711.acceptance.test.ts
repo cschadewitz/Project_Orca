@@ -179,7 +179,13 @@ describe.skipIf(!BIN)("Cline CLI over ACP, installed (#711)", () => {
       async () => {
         const unsigned = agent();
         delete (unsigned.env as Record<string, unknown>).CLINE_API_KEY;
-        await expect(connect({ agent: unsigned })).rejects.toBeTruthy();
+        // Refused by Cline itself (authentication required), not by ORCA's launch checks.
+        const error = await connect({ agent: unsigned }).then(
+          () => undefined,
+          (e: unknown) => e as { code?: string; message?: string },
+        );
+        expect(error).toBeDefined();
+        expect(error!.code).not.toBe("CONFIG_INVALID");
       },
       TURN_MS,
     );
@@ -362,7 +368,7 @@ describe.skipIf(!BIN)("Cline CLI over ACP, installed (#711)", () => {
         await mkdir(at(".clinerules/hooks"), { recursive: true });
         await writeFile(at(".clinerules/hooks/PreToolUse"), "#!/bin/sh\n");
         try {
-          await expect(connect()).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+          await expect(connect()).rejects.toThrow(/\.clinerules\/hooks holds Cline hooks/);
         } finally {
           await rm(at(".clinerules"), { recursive: true, force: true });
         }
