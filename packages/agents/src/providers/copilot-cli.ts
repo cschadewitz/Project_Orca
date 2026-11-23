@@ -181,6 +181,9 @@ export function copilotCliProfileProblems(
   const home = configured.COPILOT_HOME;
   if (!hidden("COPILOT_HOME") && (!home || !(isAbsolute(home) || win32.isAbsolute(home))))
     problems.push("env: set COPILOT_HOME to an absolute directory that only this agent's Copilot uses");
+  else if (home && home !== resolvePath(home))
+    // The spelling Copilot gets must be the path ORCA inspects: no `.`, `..`, doubled or trailing separators.
+    problems.push(`env: write COPILOT_HOME as ${resolvePath(home)}, the path ORCA checks and Copilot opens`);
   for (const variable of [...COPILOT_TOKEN_VARIABLES, "COPILOT_PROVIDER_API_KEY_COMMAND"]) {
     const fromConfig = agent.env[variable];
     if (sessionEnv[variable] !== undefined || (fromConfig !== undefined && !isSecretRef(fromConfig)))
@@ -317,6 +320,10 @@ function holdsGrant(value: unknown): boolean {
  * because it cannot tell whether it grants anything.
  */
 export async function copilotHomeProblems(home: string): Promise<string[]> {
+  // Every read below uses `home` as given, the same spelling Copilot receives, so it must
+  // already be canonical: resolving it here would inspect one path and launch another.
+  if (home !== resolvePath(home))
+    return [`COPILOT_HOME ${home} is not a canonical path; write it as ${resolvePath(home)}`];
   let info;
   try {
     info = await lstat(home);
@@ -327,7 +334,7 @@ export async function copilotHomeProblems(home: string): Promise<string[]> {
     return [`COPILOT_HOME ${home} cannot be inspected (${(error as NodeJS.ErrnoException).code ?? "error"})`];
   }
   const problems = ownership(`COPILOT_HOME ${home}`, info, "directory");
-  if (!problems.length) problems.push(...(await pathCustodyProblems(dirname(resolvePath(home)), home)));
+  if (!problems.length) problems.push(...(await pathCustodyProblems(dirname(home), home)));
   if (problems.length) return problems;
   let names: string[];
   try {
@@ -395,7 +402,7 @@ async function pathCustodyProblems(dir: string, home: string): Promise<string[]>
   if (process.platform === "win32") return [];
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const on = `on the path to COPILOT_HOME ${home}`;
-  for (let path = resolvePath(dir); ; path = dirname(path)) {
+  for (let path = dir; ; path = dirname(path)) {
     let info;
     try {
       info = await lstat(path);
@@ -419,7 +426,7 @@ async function pathCustodyProblems(dir: string, home: string): Promise<string[]>
  * profile, or swap the path, between this check and Copilot's first launch.
  */
 async function enclosingCustodyProblems(home: string): Promise<string[]> {
-  let parent = dirname(resolvePath(home));
+  let parent = dirname(home);
   let info;
   for (;;) {
     try {

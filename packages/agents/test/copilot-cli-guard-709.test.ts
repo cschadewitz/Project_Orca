@@ -3,7 +3,7 @@
  * prompts, allow-all/autopilot options and bounded "always" answers. No Copilot runs here; the
  * same checks against the real Copilot CLI are in copilot-cli-acceptance-709.test.ts.
  */
-import { chmod, chown, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { chmod, chown, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -519,6 +519,49 @@ describe("the environment Copilot actually receives (#709 review)", () => {
     await expect(start({})).rejects.toThrow("spawned");
     expect(spawned).toHaveBeenCalledOnce();
   });
+
+  it("refuses a COPILOT_HOME spelled other than canonically, existing or not (#709 review 6)", async () => {
+    const root = await mkdtemp(join(TMP, "orca-copilot-home-"));
+    await chmod(root, 0o700);
+    await mkdir(join(root, "made"), { mode: 0o700 });
+    for (const leaf of ["made", "missing"])
+      for (const spelling of [`${root}/${leaf}/`, `${root}//${leaf}`, `${root}/./${leaf}`, `${root}/x/../${leaf}`]) {
+        expect(
+          copilotCliProfileProblems(good({ env: { ...good().env, COPILOT_HOME: spelling } }), {}, "local"),
+        ).toEqual([`env: write COPILOT_HOME as ${join(root, leaf)}, the path ORCA checks and Copilot opens`]);
+        expect(await copilotHomeProblems(spelling)).toEqual([
+          `COPILOT_HOME ${spelling} is not a canonical path; write it as ${join(root, leaf)}`,
+        ]);
+        const open = vi.fn(async () => fakeSession());
+        await expect(
+          withProviderGuards(open, [guard()])(await opts({ env: { COPILOT_HOME: spelling } })),
+        ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+        expect(open).not.toHaveBeenCalled();
+      }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "launches Copilot with exactly the COPILOT_HOME it checked (#709 review 6)",
+    async () => {
+      const dir = await mkdtemp(join(TMP, "orca-copilot-launch-"));
+      await chmod(dir, 0o700);
+      const out = join(dir, "seen");
+      const command = join(dir, "copilot");
+      // Stands in for Copilot: records the COPILOT_HOME it was started with, byte for byte.
+      await writeFile(command, `#!/bin/sh\nprintf '%s' "$COPILOT_HOME" > '${out}'\n`, { mode: 0o700 });
+      for (const leaf of ["missing", "made"]) {
+        const home = join(dir, leaf);
+        if (leaf === "made") await mkdir(home, { mode: 0o700 });
+        const base = await opts({}, { command, env: { ...good().env, COPILOT_HOME: home } });
+        expect(await copilotHomeProblems(home)).toEqual([]);
+        const prepared = await guard().prepare({ ...base, env: { COPILOT_HOME: home } });
+        const handle = await prepared.host.spawnAgent(base.agent, { cwd: dir, env: { COPILOT_HOME: home } });
+        await vi.waitFor(async () => expect(await readFile(out, "utf8")).toBe(home), { timeout: 5000 });
+        handle.kill();
+        await rm(out);
+      }
+    },
+  );
 
   it("treats a daemon variable the host withholds as absent, exactly as the spawn does", async () => {
     const open = vi.fn(async () => fakeSession());
