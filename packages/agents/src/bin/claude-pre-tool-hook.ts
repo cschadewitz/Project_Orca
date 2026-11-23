@@ -13,8 +13,9 @@
  * the answer off stdout, and makes every way out other than the answer exit 2.
  *
  * When the agent keeps tool-call telemetry (#1000), the line that records the answer is
- * written after the answer and its exit code are final, without blocking, and for at most
- * `TELEMETRY_DEADLINE_MS`; whether it was written changes nothing about the answer.
+ * written only once the answer has been handed to the OS and its exit code set, without
+ * blocking, and for at most `TELEMETRY_DEADLINE_MS` after that; whether it was written
+ * changes nothing about the answer.
  */
 import { answer } from "./hook-output-guard.js";
 import {
@@ -59,11 +60,12 @@ const result = await readInput().then(
       ? { exitCode: 2 as const, stdout: "", stderr: `Blocked by ORCA: ${error.message}.\n` }
       : claudePreToolHookFailure(error),
 );
-answer(result);
-// The answer and the exit code are final. The telemetry line goes after, without blocking, and
-// the process leaves when it is written or after TELEMETRY_DEADLINE_MS, whichever is first:
-// however the spool's file system behaves, it can hold the hook at most that long, and
-// nothing it does reaches the answer.
+// The answer first, whole: its exit code is set at once, and nothing below starts until both
+// of its streams have been handed to the OS.
+await answer(result);
+// Only then the telemetry line, without blocking. The process leaves when it is written or
+// TELEMETRY_DEADLINE_MS later, whichever is first: the deadline starts after the answer is out,
+// so it can end only the recording, never the answer, and the exit code is the answer's.
 const telemetry = "telemetry" in result ? result.telemetry : undefined;
 if (telemetry !== undefined) {
   const deadline = setTimeout(() => process.exit(), TELEMETRY_DEADLINE_MS);

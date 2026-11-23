@@ -42,16 +42,31 @@ process.on("exit", () => {
   }
 });
 
-/** Answer the agent and leave: the one road out that can exit 0. Called once. */
-export function answer(result: { exitCode: 0 | 2; stdout: string; stderr: string }): void {
-  if (answered) return;
+/**
+ * Answer the agent and leave: the one road out that can exit 0. Called once. The exit code is
+ * set at once; the promise settles when both answers have been handed to the OS (each write's
+ * callback has run), so whatever runs after it, and however the process then ends, cannot cut
+ * the answer short. It never rejects: a write that fails cannot be retried, and the exit code
+ * already says what the answer was.
+ */
+export function answer(result: { exitCode: 0 | 2; stdout: string; stderr: string }): Promise<void> {
+  if (answered) return Promise.resolve();
   answered = true;
+  const flushed = (write: typeof writeStdout, text: string) =>
+    new Promise<void>((resolve) => {
+      try {
+        write(text, () => resolve());
+      } catch {
+        resolve();
+      }
+    });
   if (stray) {
-    writeStderr("Blocked by ORCA: the hook printed something besides its answer, so its answer is not trusted.\n");
     process.exitCode = 2;
-    return;
+    return flushed(
+      writeStderr,
+      "Blocked by ORCA: the hook printed something besides its answer, so its answer is not trusted.\n",
+    );
   }
-  writeStdout(result.stdout);
-  writeStderr(result.stderr);
   process.exitCode = result.exitCode;
+  return Promise.all([flushed(writeStdout, result.stdout), flushed(writeStderr, result.stderr)]).then(() => undefined);
 }

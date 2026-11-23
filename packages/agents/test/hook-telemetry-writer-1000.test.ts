@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HOOK_TELEMETRY_LINE_LIMIT, HookTelemetryLineSchema, type HookTelemetryLine } from "@orca/core";
 import { childBundle } from "@orca/testing/child-bundle";
@@ -264,11 +264,13 @@ describe.runIf(process.platform !== "win32")("fitting a line", () => {
 describe.runIf(process.platform !== "win32")("the hook process", () => {
   const entry = fileURLToPath(new URL("../src/bin/claude-pre-tool-hook.ts", import.meta.url));
   const bundled = childBundle("claude-pre-tool-hook-1000", { entries: { hook: entry } })?.["hook"];
-  const run = (args: string[], input: string) =>
+  const run = (args: string[], input: string, preload: string[] = [], env: NodeJS.ProcessEnv = {}) =>
     new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-      const child = spawn(process.execPath, bundled ? [bundled, ...args] : ["--import", "tsx", entry, ...args], {
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      const child = spawn(
+        process.execPath,
+        bundled ? [...preload, bundled, ...args] : [...preload, "--import", "tsx", entry, ...args],
+        { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...env } },
+      );
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
@@ -305,6 +307,45 @@ describe.runIf(process.platform !== "win32")("the hook process", () => {
       await rm(spool.file);
     },
   );
+
+  it.each([
+    ["Claude ask, on stdout", [] as string[], { code: 0, stdout: '"permissionDecision":"ask"', stderr: "" }],
+    ["Codex block, on stderr", ["--codex"], { code: 2, stdout: "", stderr: "Blocked by ORCA" }],
+  ])("%s: the whole answer arrives even when recording never completes", async (_what, prefix, expected) => {
+    // Every open of the spool hangs for good (and holds the process), as a stuck file
+    // system would; the marker shows the recorder really started.
+    const marker = join(root, "recorder-started");
+    const preload = join(root, "hang-open.mjs");
+    await writeFile(
+      preload,
+      [
+        'import { createRequire, syncBuiltinESMExports } from "node:module";',
+        'import { writeFileSync } from "node:fs";',
+        'const fsp = createRequire(import.meta.url)("node:fs/promises");',
+        'fsp.open = () => { writeFileSync(process.env.ORCA_TEST_MARKER, "1"); setInterval(() => {}, 1000); return new Promise(() => {}); };',
+        "syncBuiltinESMExports();",
+      ].join("\n"),
+    );
+    // Without telemetry: the answer as it is.
+    await writeContext(context({ telemetry: undefined }));
+    const plain = await run([...prefix, contextFile], frame("Bash", { command: "rm -rf x" }, "toolu_w"));
+    await writeContext(context());
+    const startedAt = Date.now();
+    const hung = await run(
+      [...prefix, contextFile],
+      frame("Bash", { command: "rm -rf x" }, "toolu_w"),
+      ["--import", pathToFileURL(preload).href],
+      { ORCA_TEST_MARKER: marker },
+    );
+    expect(await readFile(marker, "utf8")).toBe("1");
+    expect(hung).toEqual(plain);
+    expect(hung.code).toBe(expected.code);
+    expect(hung.stdout).toContain(expected.stdout);
+    expect(hung.stderr).toContain(expected.stderr);
+    if (expected.stdout)
+      expect(JSON.parse(hung.stdout)).toMatchObject({ hookSpecificOutput: { permissionDecision: "ask" } });
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
 
   it("answers the same when the spool is gone", async () => {
     await rm(spool.file);
