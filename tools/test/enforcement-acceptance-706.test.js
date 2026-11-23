@@ -33,7 +33,13 @@ describe("the catalogue, the scenarios and the matrix agree", () => {
   });
 
   it("every path in the suite is in the matrix with the same capabilities", () => {
-    expect(PATHS.map((p) => p.id).sort()).toEqual(matrix.paths.map((p) => p.id).sort());
+    // Connected paths run a live agent and are checked by enforcement-connected-706.test.js.
+    expect(PATHS.map((p) => p.id).sort()).toEqual(
+      matrix.paths
+        .filter((p) => !p.connected)
+        .map((p) => p.id)
+        .sort(),
+    );
     for (const path of PATHS) {
       const listed = matrix.paths.find((p) => p.id === path.id);
       expect([...path.capabilities].sort(), path.id).toEqual([...listed.capabilities].sort());
@@ -142,30 +148,63 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     ]);
   });
 
+  const hookCases = casesFor(
+    matrix.paths.find((p) => p.id === "claude-native-hook"),
+    catalogue,
+  );
+  const connectedCases = casesFor(
+    matrix.paths.find((p) => p.id === "claude-connected"),
+    catalogue,
+  );
+  const onHook = (kind) =>
+    kind === "connected"
+      ? receipt({ kind, route: "claude-connected", cases: connectedCases.map((id) => ({ id, result: "pass" })) })
+      : receipt({ kind, route: "claude-native-hook", cases: hookCases.map((id) => ({ id, result: "pass" })) });
+  const hookAgent = (extra = {}) => claude({ tier: "C", routes: ["claude-native-hook"], ...extra });
+
   it("tier C needs the installed receipts below it as well as the connected one", () => {
-    expect(structural(check(claude({ tier: "C" }), { "c.json": receipt({ kind: "connected" }) }))).toEqual([
-      `${needs("A")} (c.json: kind connected, needs installed)`,
-      `${needs("B")} (c.json: kind connected, needs installed)`,
+    expect(structural(check(hookAgent(), { "c.json": onHook("connected") }))).toEqual([
+      `${needs("A", "installed", "claude-native-hook")} (c.json: kind connected, needs installed; c.json: route claude-connected)`,
+      `${needs("B", "installed", "claude-native-hook")} (c.json: kind connected, needs installed; c.json: route claude-connected; c.json: missing ${hookCases.filter((id) => !connectedCases.includes(id)).join(",")})`,
     ]);
-    expect(
-      structural(check(claude({ tier: "C" }), { "i.json": receipt(), "c.json": receipt({ kind: "connected" }) })),
-    ).toEqual([]);
+    expect(structural(check(hookAgent(), { "i.json": onHook("installed"), "c.json": onHook("connected") }))).toEqual(
+      [],
+    );
   });
 
-  it("tier C over a route that excludes a lifecycle case, named residual or not", () => {
-    const hookCases = casesFor(
-      matrix.paths.find((p) => p.id === "claude-native-hook"),
-      catalogue,
-    );
-    const agent = claude({
-      tier: "C",
-      routes: ["claude-native-hook"],
-      residualRisks: ["L08: the hook's ask is not followed"],
-    });
-    const on = (kind) =>
-      receipt({ kind, route: "claude-native-hook", cases: hookCases.map((id) => ({ id, result: "pass" })) });
-    expect(structural(check(agent, { "i.json": on("installed"), "c.json": on("connected") }))).toEqual([
-      "agent claude: tier C on claude-native-hook excludes lifecycle case L08",
+  it("tier C needs its connected receipt from a connected path that proves the route", () => {
+    // An installed-style receipt relabelled connected, on the route itself, is not that.
+    const relabelled = { ...onHook("installed"), kind: "connected" };
+    expect(structural(check(hookAgent(), { "i.json": onHook("installed"), "c.json": relabelled }))).toEqual([
+      expect.stringMatching(
+        /^agent claude: tier C on claude-native-hook needs a passing connected receipt from claude-connected .*c\.json: route claude-native-hook/,
+      ),
+    ]);
+    // acp-ask has no connected path proving it.
+    expect(structural(check(claude({ tier: "C" }), { "i.json": receipt() }))).toEqual([
+      "agent claude: tier C on acp-ask needs a connected path that proves it",
+    ]);
+  });
+
+  it("tier C when its connected path excludes a lifecycle case, named residual or not", () => {
+    const paths = structuredClone(matrix.paths);
+    const connected = paths.find((p) => p.id === "claude-connected");
+    connected.capabilities = connected.capabilities.filter((c) => c !== "answerer");
+    connected.excluded.L08 = "Pretend this path could not reach ORCA's answerer at all.";
+    const agent = hookAgent({ residualRisks: ["L08: not followed through the live agent"] });
+    expect(structural(check(agent, { "i.json": onHook("installed"), "c.json": onHook("connected") }, paths))).toEqual([
+      "agent claude: tier C on claude-native-hook excludes lifecycle case L08 on claude-connected",
+    ]);
+  });
+
+  it("a connected path is not a route, and proves only a route", () => {
+    const paths = structuredClone(matrix.paths);
+    paths.find((p) => p.id === "claude-connected").proves = "claude-connected";
+    paths.find((p) => p.id === "acp-ask").proves = "claude-native-hook";
+    expect(check(claude({ routes: ["claude-connected"] }), {}, paths)).toEqual([
+      "path acp-ask: only a connected path proves a route",
+      "path claude-connected: proves claude-connected, which is not a route path",
+      "agent claude: route claude-connected is a connected path, not a route",
     ]);
   });
 

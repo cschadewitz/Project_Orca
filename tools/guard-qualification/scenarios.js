@@ -16,8 +16,16 @@ const issue = { tool: "mcp", server: "github", name: "create_issue" };
 /** Decide and check one outcome, saying which call and path went wrong. */
 async function expectOutcome(world, path, action, expected, opts) {
   const got = await path.decide(world, action, opts);
+  // A connected path may count an agent's own refusal, when nothing could have run (it says when).
+  if (got.outcome !== expected && path.equivalent?.(world, got, expected)) return got;
   assert.equal(got.outcome, expected, `${path.id}: ${JSON.stringify(action)} -> ${JSON.stringify(got.detail)}`);
   return got;
+}
+
+/** `n` identical calls at once: in one agent message where the path has a live agent. */
+function concurrently(world, path, action, n) {
+  const actions = Array(n).fill(action);
+  return path.decideAll ? path.decideAll(world, actions) : Promise.all(actions.map((a) => path.decide(world, a)));
 }
 
 const secretOf = () => `orca706secret${randomBytes(8).toString("hex")}`;
@@ -41,11 +49,13 @@ export const SCENARIOS = {
   },
 
   async L02(world, path) {
-    await world.answerAlways(issue, "allow", { expiresAt: new Date(world.now() + 60_000).toISOString() });
+    // Times are from the grant, so a live agent's slower calls do not move the edges.
+    const granted = world.now();
+    await world.answerAlways(issue, "allow", { expiresAt: new Date(granted + 60_000).toISOString() });
     await expectOutcome(world, path, issue, "allow");
-    world.advance(59_000);
+    await world.advanceTo(granted + 58_000);
     await expectOutcome(world, path, issue, "allow");
-    world.advance(2_000);
+    await world.advanceTo(granted + 61_000);
     await expectOutcome(world, path, issue, "ask");
   },
 
@@ -68,13 +78,13 @@ export const SCENARIOS = {
 
   async L05(world, path) {
     await world.answerAlways(issue);
-    const before = await Promise.all(Array.from({ length: 16 }, () => path.decide(world, issue)));
+    const before = await concurrently(world, path, issue, 16);
     assert.deepEqual(
       before.map((r) => r.outcome),
       Array(16).fill("allow"),
     );
     await world.revokeAll();
-    const after = await Promise.all(Array.from({ length: 16 }, () => path.decide(world, issue)));
+    const after = await concurrently(world, path, issue, 16);
     assert.deepEqual(
       after.map((r) => r.outcome),
       Array(16).fill("ask"),
@@ -100,6 +110,20 @@ export const SCENARIOS = {
   },
 
   async L08(world, path) {
+    if (path.capabilities.includes("agent-turn")) {
+      // Through a live agent the answer is not visible, only that the call did not run.
+      await expectOutcome(world, path, issue, "ask", { noAnswerer: true });
+      const turn = new AbortController();
+      await expectOutcome(world, path, issue, "ask", {
+        signal: turn.signal,
+        onAsk: () => {
+          turn.abort();
+          return new Promise(() => {});
+        },
+      });
+      await expectOutcome(world, path, issue, "ask", { onAsk: async () => "allow-everything" });
+      return;
+    }
     const none = await expectOutcome(world, path, issue, "ask", { noAnswerer: true });
     assert.deepEqual(none.response, { outcome: { outcome: "cancelled" } });
 

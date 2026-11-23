@@ -26,7 +26,7 @@ export const PROMOTION_ENABLED = false;
 export const PROMOTION_DISABLED =
   "tier promotion is disabled: receipt checks are structural only until a receipt is bound to an independently trusted run (#706)";
 
-/** Categories a tier C claim may not exclude on any of its routes. A named residual is not proof. */
+/** Categories a tier C claim's connected path may not exclude. A named residual is not proof. */
 const MUST_COVER_FOR_C = ["lifecycle", "bypass"];
 
 /**
@@ -101,6 +101,15 @@ export function checkSupportMatrix(
       if (!runs.has(id) && !(id in (path.excluded ?? {})))
         problems.push(`path ${path.id}: case ${id} is neither run nor excluded with a reason`);
   }
+  // A connected path runs a live agent through one route end to end, and proves that route.
+  for (const path of matrix.paths) {
+    if (!path.connected) {
+      if (path.proves !== undefined) problems.push(`path ${path.id}: only a connected path proves a route`);
+      continue;
+    }
+    const proved = paths.get(path.proves);
+    if (!proved || proved.connected) problems.push(`path ${path.id}: proves ${path.proves}, which is not a route path`);
+  }
 
   const agents = new Set();
   for (const agent of matrix.agents) {
@@ -112,7 +121,10 @@ export function checkSupportMatrix(
       problems.push(`${at}: unknown tier ${agent.tier}`);
       continue;
     }
-    for (const r of agent.routes) if (!paths.has(r)) problems.push(`${at}: route ${r} has no path in the suite`);
+    for (const r of agent.routes) {
+      if (!paths.has(r)) problems.push(`${at}: route ${r} has no path in the suite`);
+      else if (paths.get(r).connected) problems.push(`${at}: route ${r} is a connected path, not a route`);
+    }
     const receipts = [];
     for (const file of agent.receipts ?? []) {
       if (!exists(file)) {
@@ -138,31 +150,61 @@ export function checkSupportMatrix(
     for (const route of agent.routes) {
       const path = paths.get(route);
       if (!path) continue;
-      // Tiers are cumulative: each one needs the receipt of every tier below it too.
+      // Tiers are cumulative: each one needs the receipt of every tier below it too. Tier C's
+      // receipt comes from a connected path that proves this route, and covers that path's cases.
+      const provers = matrix.paths.filter((p) => p.connected && p.proves === route);
       const required = [
-        { tier: 1, kind: "installed", cases: [] },
-        { tier: 2, kind: "installed", cases: casesFor(path, catalogue) },
-        { tier: 3, kind: "connected", cases: casesFor(path, catalogue) },
+        { tier: 1, kind: "installed", route, cases: [] },
+        { tier: 2, kind: "installed", route, cases: casesFor(path, catalogue) },
+        ...provers.map((p) => ({ tier: 3, kind: "connected", route: p.id, cases: casesFor(p, catalogue) })),
       ].filter((r) => r.tier <= tier);
+      if (tier === 3 && provers.length === 0)
+        problems.push(`${at}: tier C on ${route} needs a connected path that proves it`);
+      const met = new Set();
       for (const need of required) {
         const good = receipts.filter(
-          ({ receipt }) => receiptProblems(receipt, agent, route, need.kind, need.cases).length === 0,
+          ({ receipt }) => receiptProblems(receipt, agent, need.route, need.kind, need.cases).length === 0,
         );
-        if (good.length > 0) continue;
+        if (good.length > 0) {
+          met.add(need.route);
+          continue;
+        }
+        if (need.tier === 3) continue;
         const why = receipts.flatMap(({ file, receipt }) =>
-          receiptProblems(receipt, agent, route, need.kind, need.cases).map((p) => `${file}: ${p}`),
+          receiptProblems(receipt, agent, need.route, need.kind, need.cases).map((p) => `${file}: ${p}`),
         );
         problems.push(
           `${at}: tier ${TIERS[need.tier]} on ${route} needs a passing ${need.kind} receipt for ${agent.id} ${pin.agentVersion} on ${pin.host}` +
             (why.length ? ` (${why.join("; ")})` : ""),
         );
       }
-      if (tier === 3)
-        for (const id of Object.keys(path.excluded ?? {})) {
-          const c = byId.get(id);
-          if (c && MUST_COVER_FOR_C.includes(c.category))
-            problems.push(`${at}: tier C on ${route} excludes ${c.category} case ${id}`);
+      if (tier === 3 && provers.length > 0) {
+        // One connected path that proves the route, with a passing receipt and no lifecycle or
+        // bypass case excluded, is enough.
+        const covered = provers.filter(
+          (p) =>
+            met.has(p.id) &&
+            !Object.keys(p.excluded ?? {}).some((id) => MUST_COVER_FOR_C.includes(byId.get(id)?.category)),
+        );
+        if (covered.length === 0) {
+          for (const p of provers) {
+            if (!met.has(p.id)) {
+              const why = receipts.flatMap(({ file, receipt }) =>
+                receiptProblems(receipt, agent, p.id, "connected", casesFor(p, catalogue)).map((x) => `${file}: ${x}`),
+              );
+              problems.push(
+                `${at}: tier C on ${route} needs a passing connected receipt from ${p.id} for ${agent.id} ${pin.agentVersion} on ${pin.host}` +
+                  (why.length ? ` (${why.join("; ")})` : ""),
+              );
+            }
+            for (const id of Object.keys(p.excluded ?? {})) {
+              const c = byId.get(id);
+              if (c && MUST_COVER_FOR_C.includes(c.category))
+                problems.push(`${at}: tier C on ${route} excludes ${c.category} case ${id} on ${p.id}`);
+            }
+          }
         }
+      }
     }
   }
   return problems;
