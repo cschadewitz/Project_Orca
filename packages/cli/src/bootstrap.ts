@@ -315,7 +315,7 @@ export function makeSessionFactory(
   const protectedPaths = orcaProtectedPaths(layout);
   const contextDir = join(resolve(layout.configDir, layout.storeDir), "private-execution", "tool-hooks");
   // Telemetry spools a stopped process left behind (#1000) are discarded, never ingested,
-  // once, before the first hooked session; whether or not this build installs the hook.
+  // once, before the first hooked session.
   let swept: Promise<void> | undefined;
   const sweep = () =>
     (swept ??= sweepHookTelemetrySpools({ dir: contextDir, protectedPaths }).then(
@@ -327,8 +327,8 @@ export function makeSessionFactory(
     // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
     // says who it is, and the session refused wherever it cannot be put in force.
     if (options.agent.nativeToolHook !== "on") return open(bound);
-    await sweep();
     if (hook.activation !== "acceptance-only") throw nativeToolHookUnavailable(options.agent)!;
+    await sweep();
     // The hook runs where the agent does; ORCA installs it only on its own host.
     if (options.host.spec.type !== "local")
       throw new OrcaError(
