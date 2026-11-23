@@ -1,10 +1,19 @@
 /** Scoped capabilities (#335): skill digests, validation, launch preflight, provenance and session open. */
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AgentRegistry, type AgentSession, type OpenSessionOptions } from "@orca/agents";
 import {
+  AgentRegistry,
+  mcpServerDefinitionDigest,
+  secretHostBinding,
+  type AgentSession,
+  type CapabilityUse,
+  type CapabilityUseCheck,
+  type OpenSessionOptions,
+} from "@orca/agents";
+import {
+  OrcaError,
   parseOrcaConfig,
   parseWorkflow,
   silentLogger,
@@ -63,8 +72,8 @@ describe("skillDigest", () => {
   });
 });
 
-// The agent's own inline servers are what reaches a session today; catalog servers resolve and
-// show in the preview, but are refused at launch until delivery checks them (#337).
+// The agent's own inline servers reach a session as configured; catalog servers reach one only
+// through the run owner's use decision, once their command is found on the agent's host (#337).
 const flow = `
 id: flow
 name: Flow
@@ -102,6 +111,7 @@ function setup(
     workflow?: string | string[];
     stores?: ReturnType<typeof memoryStores>;
     pause?: boolean;
+    capabilityUse?: CapabilityUseCheck;
   } = {},
 ) {
   const config: OrcaConfig = parseOrcaConfig({
@@ -121,12 +131,13 @@ function setup(
   const registry = AgentRegistry.fromConfig(config);
   const workflows = new WorkflowRegistry();
   for (const w of [opts.workflow ?? flow].flat()) workflows.register(parseWorkflow(w));
-  const opened: { mcp: string[]; envKeys: string[][] }[] = [];
+  const opened: { mcp: string[]; envKeys: string[][]; commands: string[] }[] = [];
   let n = 0;
   const orchestrator = new Orchestrator({
     stores: opts.stores ?? memoryStores(),
     ...(opts.pause ? { humanInput: new PausingHumanInput() } : {}),
     logger: silentLogger,
+    ...(opts.capabilityUse ? { capabilityUse: opts.capabilityUse } : {}),
     agents: registry,
     workflows,
     templates: new TemplateRegistry(),
@@ -136,6 +147,7 @@ function setup(
       opened.push({
         mcp: o.agent.mcpServers.map((m) => m.name),
         envKeys: o.agent.mcpServers.map((m) => Object.keys(m.env)),
+        commands: o.agent.mcpServers.map((m) => m.command),
       });
       let close!: () => void;
       const closed = new Promise<void>((r) => (close = r));
@@ -346,12 +358,12 @@ describe("scoped capabilities before agent work", () => {
     expect(made.opened).toEqual([]);
   });
 
-  it("refuses a permitted catalog server until delivery can check it, and names it", async () => {
+  it("refuses a permitted catalog server where there is no use decision, and names it", async () => {
     const made = setup({}, { workflow: flow.replace("enable: [files]", "enable: [github]") });
     await expect(made.orchestrator.startRun({ workflowId: "flow" })).rejects.toMatchObject({
       code: "CONFIG_INVALID",
       message: expect.stringMatching(
-        /workflow\.nodes\.build\.capabilities\.mcpServers: selects catalog MCP server 'github'.*does not pass catalog servers/,
+        /workflow\.nodes\.build\.capabilities\.mcpServers: selects catalog MCP server 'github'.*no server-verified use check/,
       ),
     });
     expect(await made.orchestrator.listRuns()).toEqual([]);
@@ -394,9 +406,9 @@ describe("scoped capabilities before agent work", () => {
       },
       { workflow },
     );
-    // claude permits github (refused only because catalog servers are not delivered yet)...
+    // claude permits github (refused only because this orchestrator has no use decision)...
     await expect(orchestrator.validateStartRun({ workflowId: "flow" })).rejects.toMatchObject({
-      message: expect.stringMatching(/does not pass catalog servers/),
+      message: expect.stringMatching(/no server-verified use check/),
     });
     // ...while a caller who overrides the role to codex gets codex's ceiling, which does not.
     await expect(
@@ -432,6 +444,187 @@ edges: [{ from: s, to: a }, { from: a, to: e }]
     expect(result.warnings).toEqual([
       { path: "workflow(w).nodes.a.capabilities.skills", message: expect.stringMatching(/cannot deliver skills/) },
     ]);
+  });
+});
+
+describe("delivering catalog MCP servers (#337)", () => {
+  /** A catalog whose servers' commands are real executables in a temp dir (or not, for `missing`). */
+  async function deliverable(opts: { missing?: boolean; bare?: boolean; sessionMode?: "per-run" | "per-step" } = {}) {
+    const dir = await tempDir();
+    const bin = join(dir, "gh-mcp");
+    if (!opts.missing) {
+      await writeFile(bin, "#!/bin/sh\nexit 0\n");
+      await chmod(bin, 0o755);
+    }
+    const github = opts.bare
+      ? { command: "gh-mcp", env: { GITHUB_TOKEN: "ghp_secretsecretsecretsecret", PATH: dir } }
+      : { command: bin, env: { GITHUB_TOKEN: "ghp_secretsecretsecretsecret" } };
+    const asked: CapabilityUse[][] = [];
+    let allow = true;
+    /** Called at each decision before it is made, so a test can revoke at that moment. */
+    let onAsk: (n: number) => void = () => {};
+    const capabilityUse: CapabilityUseCheck = async ({ uses }) => {
+      asked.push(uses);
+      onAsk(asked.length);
+      if (!allow) throw new OrcaError("CONFIG_INVALID", "not granted", { reason: "unauthorized" });
+    };
+    const made = setup(
+      { capabilities: { ...catalog, mcpServers: { ...catalog.mcpServers, github } } },
+      {
+        capabilityUse,
+        ...(opts.sessionMode ? { sessionMode: opts.sessionMode } : {}),
+        // Both steps select github, so a per-run session is shared by them.
+        workflow: flow
+          .replace(
+            "capabilities: { mcpServers: { disable: [files] } }",
+            "capabilities: { mcpServers: { enable: [github] } }",
+          )
+          .replace("enable: [files]", "enable: [github]"),
+      },
+    );
+    return {
+      ...made,
+      asked,
+      github,
+      bin,
+      revoke: () => {
+        allow = false;
+      },
+      /** Revoke just before decision `n` (counting from 1). */
+      revokeAt: (n: number) => {
+        onAsk = (at) => {
+          if (at === n) allow = false;
+        };
+      },
+    };
+  }
+
+  it("gives a granted, present server to the session, asking about exactly it on the agent's host", async () => {
+    const made = await deliverable();
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("completed");
+    expect(made.opened.map((o) => o.mcp)).toEqual([
+      ["notes", "files", "shell", "github"],
+      ["notes", "files", "shell", "github"],
+    ]);
+    // Secret-bearing env stays in the session's hands; nothing of the value reaches the decision.
+    const asked = (trustedExecutable: boolean) => [
+      {
+        kind: "mcpServer",
+        id: "github",
+        hostId: "local",
+        hostBinding: secretHostBinding({ id: "local", type: "local" }),
+        definition: mcpServerDefinitionDigest({ args: [], ...made.github }),
+        trustedExecutable,
+      },
+    ];
+    // Per step: before probing (an absolute command taken at its word), then with what the
+    // probe found (a temp file is not a trusted executable), after the slot wait, at
+    // `session/new` (this factory has none), and before the prompt.
+    const step = [asked(true), asked(false), asked(false), asked(false)];
+    expect(made.asked).toEqual([...step, ...step]);
+    expect(JSON.stringify(made.asked)).not.toContain("ghp_");
+  });
+
+  it("hands the agent the executable it resolved, not a name for it to search for again", async () => {
+    const made = await deliverable({ bare: true });
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("completed");
+    expect(made.opened[0]!.commands).toEqual(["notes-mcp", "files-mcp", "shell-mcp", made.bin]);
+    // A name found on PATH is not an absolute command: only a "*" grant covers it.
+    expect(made.asked[0]![0]).toMatchObject({ id: "github", trustedExecutable: false });
+  });
+
+  it("refuses a step whose server is not granted, before anything starts", async () => {
+    const made = await deliverable();
+    made.revoke();
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(made.opened).toEqual([]);
+  });
+
+  it("refuses a step whose server's command is not on the agent's host, naming the step and server", async () => {
+    const made = await deliverable({ missing: true });
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(made.opened).toEqual([]);
+    const events = await made.orchestrator.events(run.id);
+    expect(JSON.stringify(events)).toMatch(/step 'plan'.*MCP server 'github' cannot start on host 'local'/);
+  });
+
+  it("asks again at every step, so a pooled session does not outlive a revoked grant", async () => {
+    const made = await deliverable({ sessionMode: "per-run" });
+    let steps = 0;
+    const factory = made.orchestrator.sessionFactory;
+    made.orchestrator.sessionFactory = async (o) => {
+      const session = await factory(o);
+      const prompt = session.prompt.bind(session);
+      session.prompt = async (...args) => {
+        // The grant is revoked while the first step runs.
+        if (++steps === 1) made.revoke();
+        return prompt(...args);
+      };
+      return session;
+    };
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(made.opened).toHaveLength(1);
+    // Four decisions for the first step; the second step's first one refuses it.
+    expect(made.asked).toHaveLength(5);
+    expect(steps).toBe(1);
+  });
+
+  it("asks again after the slot wait: authority revoked while waiting starts nothing", async () => {
+    const made = await deliverable();
+    // Decisions 1 and 2 come before the slot; 3 is right after it.
+    made.revokeAt(3);
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(made.opened).toEqual([]);
+    expect(made.asked).toHaveLength(3);
+  });
+
+  it("asks again immediately before session/new, and a denial there is not the agent's health", async () => {
+    const made = await deliverable();
+    const factory = made.orchestrator.sessionFactory;
+    let delivered = 0;
+    made.orchestrator.sessionFactory = async (o) => {
+      // The process is up and initialized: revoked now, the servers are not handed over.
+      made.revoke();
+      await o.authorizeCapabilityDelivery!();
+      delivered++;
+      return factory(o);
+    };
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(delivered).toBe(0);
+    expect(made.opened).toEqual([]);
+    expect(made.orchestrator.agents.health.get("claude").state).not.toBe("down");
+  });
+
+  it("asks again before a pooled session's next prompt, and retires it when refused", async () => {
+    const made = await deliverable({ sessionMode: "per-run" });
+    const closed: string[] = [];
+    const factory = made.orchestrator.sessionFactory;
+    made.orchestrator.sessionFactory = async (o) => {
+      const session = await factory(o);
+      const close = session.close.bind(session);
+      session.close = async () => {
+        closed.push(session.id);
+        return close();
+      };
+      return session;
+    };
+    // The second step takes the pooled session (decisions 5 and 6), then is revoked before its
+    // prompt (decision 7): it waited after taking the session, and must not use it.
+    made.revokeAt(7);
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(made.opened).toHaveLength(1);
+    expect(made.asked).toHaveLength(7);
+    expect(closed).toHaveLength(1);
+    const events = await made.orchestrator.events(run.id);
+    expect(events.filter((e) => e.type === "agent.session.closed")).toHaveLength(1);
   });
 });
 

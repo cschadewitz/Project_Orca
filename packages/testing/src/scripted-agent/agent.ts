@@ -28,6 +28,11 @@ export interface ScriptedAgentOptions {
   stateFile?: string;
   /** JSONL file where every prompt is appended (for test assertions). */
   promptLog?: string;
+  /**
+   * JSONL file where every `session/new` is appended as `{cwd, mcpServers}`: each server's
+   * name, command, args and the names (never the values) of its environment variables.
+   */
+  sessionLog?: string;
   name?: string;
 }
 
@@ -72,7 +77,17 @@ export class ScriptedAgent {
         agentInfo: { name: this.opts.name ?? "orca-scripted-agent", version: "0.1.0" },
       }))
       .onRequest(acp.methods.agent.authenticate, () => ({}))
-      .onRequest(acp.methods.agent.session.new, (ctx) => {
+      .onRequest(acp.methods.agent.session.new, async (ctx) => {
+        if (this.opts.sessionLog) {
+          await mkdir(dirname(this.opts.sessionLog), { recursive: true });
+          await appendJsonl(this.opts.sessionLog, {
+            cwd: ctx.params.cwd,
+            mcpServers: ctx.params.mcpServers.map((m) => ({
+              name: m.name,
+              ...("command" in m ? { command: m.command, args: m.args, env: (m.env ?? []).map((e) => e.name) } : {}),
+            })),
+          });
+        }
         const sessionId = randomUUID();
         const advertised = this.opts.playbook.configOptions;
         const configOptions = advertised ? structuredClone(advertised) : [];
