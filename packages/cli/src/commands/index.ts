@@ -1039,6 +1039,9 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
         // So an "always" answer's sidecar write pushes `config.changed` like any other.
         config,
       });
+  // A dry run left unfinished by a previous daemon can never finish (#183): end it, in the
+  // background, so it never counts as unfinished work.
+  void control?.settleInterruptedDryRuns().catch(() => undefined);
   // The plan's writes ride the same switch: `--read-only` omits them with the run
   // controls, and they are present together or not at all.
   const planControl =
@@ -1226,6 +1229,7 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
     orcaVersion: ORCA_VERSION,
     storeDir,
     deployment: managedDeployment(process.env),
+    store: app.storeStatus,
     // With control on - the default - this process is one of the store's writers. It
     // takes each run's single-writer lease before it appends, exactly as a CLI does, and
     // refuses a run another live process holds (ADR 0008, #101). `--read-only` gives

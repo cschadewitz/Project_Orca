@@ -56,6 +56,10 @@ import {
   type ArtifactSpec,
   type DecisionNode,
   type DryRun,
+  DryRunFixturesSchema,
+  type DryRunAgentFixture,
+  type DryRunFixtures,
+  type DryRunReport,
   type GateNode,
   type MutationActor,
   type NodeDef,
@@ -68,7 +72,6 @@ import {
   type Workspace,
 } from "@orca/core";
 import { memoryStores } from "@orca/store";
-import { z } from "zod";
 import { agentInstructions, resolveNodeCapabilities } from "./capabilities.js";
 import { validateArtifact } from "./executors/agent-step.js";
 import { decisionExecutor, endExecutor, setExecutor, startExecutor } from "./executors/basic.js";
@@ -95,35 +98,7 @@ export const DRY_RUN_MAX_STEPS = 5_000;
 /** The version suffix a simulated definition is kept under, so it never collides with a real one. */
 export const DRY_RUN_VERSION_MARK = "+dryrun.";
 
-const MAX_FIXTURE_TEXT = 256 * 1024;
-const MAX_VISITS = 64;
-
-const AgentFixtureSchema = z
-  .object({
-    /** Deliverable content by the produces entry's `name`, else its `kind`. */
-    artifacts: z.record(z.string().max(128), z.string().max(MAX_FIXTURE_TEXT)).optional(),
-    /** Fail this visit instead, as an agent that did not deliver would. */
-    fail: z.string().min(1).max(2_000).optional(),
-  })
-  .strict();
-
-/**
- * The fixtures and simulated choices of a dry run, keyed by node id - or by the qualified id
- * of a node in a nested graph (`loop::build`), which wins over the plain id. A list gives one
- * entry per visit, in order; the last one repeats.
- */
-export const DryRunFixturesSchema = z
-  .object({
-    agents: z
-      .record(z.string().max(512), z.union([AgentFixtureSchema, z.array(AgentFixtureSchema).min(1).max(MAX_VISITS)]))
-      .optional(),
-    choices: z
-      .record(z.string().max(512), z.union([z.string().max(128), z.array(z.string().max(128)).min(1).max(MAX_VISITS)]))
-      .optional(),
-  })
-  .strict();
-export type DryRunAgentFixture = z.infer<typeof AgentFixtureSchema>;
-export type DryRunFixtures = z.infer<typeof DryRunFixturesSchema>;
+export { DryRunFixturesSchema, type DryRunAgentFixture, type DryRunFixtures, type DryRunReport } from "@orca/core";
 
 export interface DryRunRequest {
   /** The exact definition to simulate: a draft's, or a published one. */
@@ -137,6 +112,12 @@ export interface DryRunRequest {
   actor?: MutationActor;
   /** Most steps across the whole tree; `DRY_RUN_DEFAULT_MAX_STEPS` when absent. */
   maxSteps?: number;
+  /**
+   * Called with the root's id once its `run.created` is written and before anything drives it:
+   * where a daemon persists who owns the run. If it throws, the run is cancelled undriven and
+   * the error is rethrown.
+   */
+  beforeDrive?: (runId: string) => Promise<void>;
 }
 
 export interface DryRunHandle {
@@ -564,6 +545,17 @@ export async function startDryRun(base: Orchestrator, request: DryRunRequest): P
     orchestrator.detach();
     throw error;
   }
+  if (request.beforeDrive)
+    try {
+      await request.beforeDrive(runId);
+    } catch (error) {
+      try {
+        await orchestrator.cancel(runId, "dry run refused before it started", request.actor);
+      } finally {
+        orchestrator.detach();
+      }
+      throw error;
+    }
   const done = orchestrator.run(runId).finally(() => orchestrator.detach());
   return {
     runId,
@@ -589,29 +581,6 @@ export async function dryRunDefinition(
 }
 
 // --------------------------------------------------------------------------- report
-
-export interface DryRunReport {
-  runId: string;
-  status: RunState["run"]["status"];
-  outcome?: RunState["run"]["outcome"];
-  dryRun: DryRun;
-  /** Every run of the tree, the root first. */
-  runs: { runId: string; workflowId: string; status: RunState["run"]["status"] }[];
-  /** Each choice made, by whom: live evaluation, a fixture, or a documented default. */
-  choices: { runId: string; nodeId: string; choice: string; source: string }[];
-  /** Options of a gate or decision that no visit in that run chose. */
-  untakenOptions: { runId: string; nodeId: string; options: string[] }[];
-  /** Edges out of a node the run reached that it never followed. */
-  untakenEdges: { runId: string; from: string; to: string; label?: string }[];
-  /** Nodes of a run's graph that no step of that run reached. */
-  unreachedNodes: { runId: string; nodeIds: string[] }[];
-  /** What was assumed in place of an agent, a person or the plan. */
-  assumptions: { runId: string; nodeId: string; assumption: string; detail: string }[];
-  /** Steps that failed, unsupported nodes and invalid fixtures among them. */
-  failures: { runId: string; nodeId: string; code: string; message: string }[];
-  /** Read this before trusting a simulated success. */
-  limits: string;
-}
 
 export const DRY_RUN_LIMITS =
   "Simulated with fixtures: no agent, tool, integration or person took part. This shows how the workflow routes with " +

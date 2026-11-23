@@ -45,6 +45,8 @@ import {
   type WorkItem,
 } from "@orca/core";
 import {
+  dryRunDefinition,
+  dryRunReport,
   INLINE_SEP,
   previewRecovery,
   workflowRevision,
@@ -95,6 +97,8 @@ import {
   type WorkItemView,
   type SearchParams,
   type SearchResult,
+  type RunsDryRunReportParams,
+  type RunsDryRunReportResult,
 } from "@orca/protocol";
 import { PlanModel } from "./plan-model.js";
 import { standingRulePreview } from "./standing-preview.js";
@@ -539,6 +543,14 @@ class Pass {
       ...(summary.parentRunId ? { parentRunId: summary.parentRunId } : {}),
       ...(summary.checkpoint ? { checkpoint: { ...summary.checkpoint } } : {}),
       ...(summary.origin ? { origin: { ...summary.origin } } : {}),
+      ...(summary.dryRun
+        ? {
+            dryRun: {
+              definitionRevision: summary.dryRun.definitionRevision,
+              ...(summary.dryRun.draftRevision !== undefined ? { draftRevision: summary.dryRun.draftRevision } : {}),
+            },
+          }
+        : {}),
       ...(summary.requestId ? { requestId: summary.requestId } : {}),
       ...(workItem ? { workItem } : {}),
       ...(facts.agentId ? { agentId: facts.agentId } : {}),
@@ -590,10 +602,13 @@ export class ReadModel {
     const from = params.createdFrom === undefined ? undefined : Date.parse(params.createdFrom);
     const to = params.createdTo === undefined ? undefined : Date.parse(params.createdTo);
     const rows: RunSummaryView[] = [];
+    // A dry run is never work (#183): listed only when asked, or when the call names its runs.
+    const dryRuns = params.dryRuns ?? (only || params.parentRunId ? "include" : "exclude");
     for (const id of ids) {
       const facts = await pass.runFacts(id);
       if (!facts) continue;
       const s = facts.summary;
+      if (dryRuns === "exclude" ? s.dryRun : dryRuns === "only" && !s.dryRun) continue;
       if (params.requestId && s.requestId !== params.requestId) continue;
       if (params.workItemId && s.workItemId !== params.workItemId) continue;
       if (params.parentRunId && s.parentRunId !== params.parentRunId) continue;
@@ -658,7 +673,10 @@ export class ReadModel {
       // The graph the run is walking: its pinned definition when the file has moved on (#179).
       traversal: traversalView(
         state,
-        await this.definitionOrUndefined(state.run.workflowId, state.run.workflowVersion),
+        // A dry run walked the exact simulated definition it kept (#183), never the catalog's.
+        state.run.dryRun
+          ? await dryRunDefinition(this.orc, state)
+          : await this.definitionOrUndefined(state.run.workflowId, state.run.workflowVersion),
       ),
       artifacts: Object.values(state.artifacts)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
@@ -666,6 +684,11 @@ export class ReadModel {
       lastSeq: state.lastSeq,
       asOf: pass.asOf,
     };
+  }
+
+  /** `runs.dryRunReport` (#183): what a dry run did, traced from its tree's logs. Read-only. */
+  async runsDryRunReport(params: RunsDryRunReportParams): Promise<RunsDryRunReportResult> {
+    return { report: await dryRunReport(this.orc, params.runId), asOf: this.clock.isoNow() };
   }
 
   /**
@@ -1052,7 +1075,8 @@ export class ReadModel {
     const pass = this.pass();
     for (const id of await this.orc.listRuns()) {
       const facts = await pass.runFacts(id);
-      if (facts?.summary.workflowId === def.id) versions.add(facts.summary.workflowVersion);
+      // A dry run's version names a simulated draft (#183), never one a launch can select.
+      if (facts?.summary.workflowId === def.id && !facts.summary.dryRun) versions.add(facts.summary.workflowVersion);
     }
     return [...versions].sort((a, b) => a.localeCompare(b));
   }

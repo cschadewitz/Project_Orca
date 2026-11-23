@@ -13,6 +13,7 @@ import { CLAIMS_LIST_METHOD, CLAIMS_RELEASE_METHOD } from "./claims.js";
 import { CONFIG_GET_METHOD, CONFIG_SET_METHOD, CONFIG_APPLY_METHOD } from "./config.js";
 import { INPUTS_ANSWER_METHOD, RUNS_CANCEL_METHOD, RUNS_RESUME_METHOD, RUNS_START_METHOD } from "./control.js";
 import { RUNS_RECOVERY_METHOD, RUNS_REVIEW_EFFECT_METHOD } from "./recovery.js";
+import { RUNS_DRY_RUN_REPORT_METHOD } from "./dry-run.js";
 import { INPUTS_LIST_METHOD } from "./inputs.js";
 import {
   DECISIONS_DECIDE_METHOD,
@@ -74,6 +75,8 @@ export const READ_METHODS = [
    * the store. It writes nothing, so a `--read-only` daemon answers it like the reads above.
    */
   RUNS_RECOVERY_METHOD,
+  /** `runs.dryRunReport` (protocol 2.8, #183): what a dry run did, read from its tree's logs. */
+  RUNS_DRY_RUN_REPORT_METHOD,
 ] as const;
 
 /**
@@ -238,6 +241,25 @@ export const ManagedDeploymentSchema = z.object({
 });
 export type ManagedDeployment = z.infer<typeof ManagedDeploymentSchema>;
 
+/**
+ * The store a daemon serves (#339, protocol 2.7): its metadata backend, and whether this daemon
+ * could switch it to SQLite in place on a launch the desktop app asks for. That is only ever the
+ * case for the app's own workspace, under its writer fence, and never on Windows (#947).
+ */
+export const StoreStatusSchema = z.object({
+  backend: z.enum(["file", "sqlite"]),
+  sqliteSwitch: z.enum(["available", "unavailable"]),
+  /** How the switch the app asked for on this daemon's launch ended. */
+  lastSwitch: z
+    .object({
+      status: z.enum(["switched", "current", "refused"]),
+      reason: z.string().max(64).optional(),
+      message: z.string().max(4096).optional(),
+    })
+    .optional(),
+});
+export type StoreStatus = z.infer<typeof StoreStatusSchema>;
+
 export const HelloResultSchema = z.object({
   identity: z.object({ workspaceId: z.uuid(), instanceId: z.uuid() }).optional(),
   protocol: ProtocolVersionSchema,
@@ -266,5 +288,7 @@ export const HelloResultSchema = z.object({
    * lists it here, never on the strength of a protocol minor alone. Protocol 2.6: `origin`.
    */
   admitFields: z.array(z.string()).optional(),
+  /** The store this daemon serves and whether the app may switch it to SQLite (#339). Protocol 2.7. */
+  store: StoreStatusSchema.optional(),
 });
 export type HelloResult = z.infer<typeof HelloResultSchema>;

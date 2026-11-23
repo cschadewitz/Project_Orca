@@ -41,6 +41,7 @@ import type { UpdateSnapshot } from "../update-contract.js";
 import type { ServerUpdateOutcome, ServerUpdateProgress, ServerUpdatePreview } from "../server-update.js";
 import type { MacUpdateView } from "../mac-update-contract.js";
 import type { LinuxRestartState, LinuxUpdateNotice } from "../linux-update-contract.js";
+import type { StoreSwitchState } from "../store-switch-contract.js";
 import type { DiagnosticsResult, DiagnosticsStatus } from "../diagnostics-contract.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
@@ -168,6 +169,17 @@ const bridge: OrcaBridge = {
       ipcRenderer.on("orca:linuxRestart", forward);
       return () => {
         ipcRenderer.off("orca:linuxRestart", forward);
+      };
+    },
+  },
+  storeSwitch: {
+    read: () => ipcRenderer.sendSync("orca:storeSwitch.read") as StoreSwitchState,
+    restart: () => call("orca:storeSwitch.restart"),
+    subscribe: (listener) => {
+      const forward = (_event: unknown, state: StoreSwitchState) => listener(state);
+      ipcRenderer.on("orca:storeSwitch", forward);
+      return () => {
+        ipcRenderer.off("orca:storeSwitch", forward);
       };
     },
   },

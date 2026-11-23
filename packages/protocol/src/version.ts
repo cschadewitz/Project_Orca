@@ -190,6 +190,11 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * than run without it.
  */
 /**
+ * 2.7 also adds an optional `store` on `hello` (#339): the metadata backend of the store the
+ * daemon serves, whether the desktop app may ask its daemon to switch it to SQLite in place,
+ * and how such a switch on this launch ended. An optional field: a 2.6 client strips it.
+ */
+/**
  * 2.8 (#340) adds history paging to `runs.list`: an optional `cursor` param and an optional
  * `nextCursor` on the result, a place in the list's order (creation time, then id) rather
  * than a count, so a page back through history is not shifted by runs created meanwhile.
@@ -203,7 +208,14 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * than a save whose rule it cannot show; a 2.7 daemon would also drop `durationMs` and write
  * a rule with no end, which is the other reason the app does not offer it.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 8 };
+/**
+ * 2.9 (#183) adds dry runs: `workflowDrafts.dryRun` (simulate the caller's draft with fixtures;
+ * `config.write` and `runs.start`) and `runs.dryRunReport` (a read), an optional `dryRun` on
+ * `RunSummaryView`, and an optional `dryRuns` on `runs.list`. `runs.list` now leaves dry runs
+ * out unless asked, so a 2.8 client never lists one as work; new method names, and a 2.8 client
+ * strips the field.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 9 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is

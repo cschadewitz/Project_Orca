@@ -217,6 +217,27 @@ protocol 2.5 events (`protocol` on `runs.events` and `subscribe`); an older clie
 streams skip it and keep their cursors. A checkpoint receipt is not carried by
 `operator.admission` or `operator.reconcileAdmission`, which refuse it before doing anything.
 
+## When recovery is refused
+
+Every refusal comes before anything is written, claimed or run, so the same idempotency key
+can be used again once the cause is gone. A `RECOVERY_BLOCKED` refusal carries its reasons in
+`details.blockers`, and its message includes each reason's operator sentence
+(`RECOVERY_BLOCKER_TEXT`). `daemon/test/recovery-safe-failures-357.test.ts` covers each case:
+
+| Case | Checkpoint attempt (`runs.recover`) | Resume (`runs.resume`) |
+| --- | --- | --- |
+| Another principal's run | `RECOVERY_BLOCKED` (`cross-principal`) | `RUN_NOT_FOUND` to a caller scoped to their own runs: a run they may not see is not confirmed to exist |
+| Stale or unknown checkpoint | `CONFIG_INVALID`, naming the step it has no completed run of | not applicable |
+| Missing artifact | `RECOVERY_BLOCKED` (`missing-artifact`). Left to choose, the latest checkpoint that is not blocked is picked | not applicable (Resume reuses nothing) |
+| Workflow version or configuration gone or changed | `RECOVERY_BLOCKED` (`workflow-missing`, `workflow-revision-mismatch`, `generation-missing`, `execution-inputs-missing`) | `WORKFLOW_VERSION_NOT_FOUND` for a definition that is gone, otherwise `RUN_STATE`, with the same blockers and sentences |
+| Permission revoked | `AUTH_FORBIDDEN` when the caller may no longer start the workflow; `AUTH_INVALID` for a revoked credential | `AUTH_FORBIDDEN` without `runs.control`; `AUTH_INVALID` for a revoked credential |
+
+Resume checks the recorded workflow version, configuration generation and launch inputs of every
+run it would re-drive before it takes a lease (`resumeBlocked`), without opening artifacts.
+Leases and unreviewed effects keep their own refusals (`RUN_LEASED_ELSEWHERE`,
+`EFFECT_REVIEW_REQUIRED`). `engine/test/crash-resume-357.test.ts` resumes runs left by a real
+process that exited or was killed, and checks that no completed step runs again.
+
 ## Drift
 
 When the workflow a new run would use is at a different version, or the configuration
@@ -226,7 +247,7 @@ resolve differently and is shown for review, not refused.
 
 ## Not yet
 
-The app's recovery panel (phase 2, next), reconciling an
+Recovery previews on the operations board (#340), reconciling an
 uncertain effect automatically, the operations console (#340), host-specific orphan handling
 (#344), and agent-context recovery for approvals (the Approved, then Continue contract recorded
 on #357).

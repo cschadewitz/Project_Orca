@@ -47,6 +47,7 @@ export * from "./host-resource-fixtures.js";
 export * from "./operator-host-resources.js";
 export * from "./templates.js";
 export * from "./workflow-drafts.js";
+export * from "./dry-run.js";
 export * from "./first-run-config.js";
 
 export * from "./scoped-permissions.js";

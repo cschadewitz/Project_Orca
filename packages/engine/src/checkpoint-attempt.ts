@@ -10,6 +10,8 @@ import {
   type Artifact,
   type OrcaEvent,
   type RecoveryAssessment,
+  type RecoveryBlocker,
+  type RecoveryOption,
   type RunCheckpoint,
   type RunState,
 } from "@orca/core";
@@ -35,6 +37,61 @@ export interface CheckpointSeed {
 }
 
 /**
+ * `RECOVERY_BLOCKED` for a checkpoint attempt of `runId` that cannot start: the blockers, and
+ * each one's operator sentence in the message, so whoever reads only the message knows why and
+ * what to do instead.
+ */
+export function checkpointBlocked(
+  runId: string,
+  option: Pick<RecoveryOption, "blockers" | "checkpointStepRunId"> | undefined,
+): OrcaError {
+  const blockers = option?.blockers ?? [];
+  return new OrcaError(
+    "RECOVERY_BLOCKED",
+    `run ${runId} cannot be recovered from a checkpoint: ${blockers.map((b) => RECOVERY_BLOCKER_TEXT[b]).join(" ")}`.trim(),
+    {
+      runId,
+      blockers,
+      ...(option?.checkpointStepRunId ? { checkpointStepRunId: option.checkpointStepRunId } : {}),
+    },
+  );
+}
+
+/**
+ * What makes a run's recorded history impossible to continue: Resume refuses these up front
+ * with the preview's operator sentences (#357), rather than with the lower-level refusal the
+ * interpreter would reach once it tried to load them.
+ */
+const VERSION_BLOCKERS: ReadonlySet<RecoveryBlocker> = new Set([
+  "workflow-missing",
+  "workflow-revision-mismatch",
+  "generation-missing",
+  "execution-inputs-missing",
+]);
+
+/**
+ * Throws when Resume of `runId` (and every run it would re-drive) cannot continue on the
+ * workflow version, configuration generation or launch inputs it recorded: with the codes the
+ * interpreter has always refused these with (`WORKFLOW_VERSION_NOT_FOUND` for a definition that
+ * is gone, else `RUN_STATE`), now with the operator sentences and the blockers in the details.
+ * Read-only, without opening artifacts. Everything else (a lease, an unreviewed effect, a
+ * finished run) is left to the interpreter's own refusals, which are already specific.
+ */
+export async function resumeBlocked(stores: Stores, runId: string): Promise<void> {
+  const assessment = await previewRecovery(stores, runId, { artifacts: false });
+  const option = assessment.options.find((o) => o.kind === "resume");
+  const blockers = unique((option?.blockers ?? []).filter((b) => VERSION_BLOCKERS.has(b)));
+  if (!blockers.length) return;
+  throw new OrcaError(
+    blockers.includes("workflow-missing") ? "WORKFLOW_VERSION_NOT_FOUND" : "RUN_STATE",
+    `run ${runId} cannot be resumed: ${blockers.map((b) => RECOVERY_BLOCKER_TEXT[b]).join(" ")}`,
+    { runId, blockers },
+  );
+}
+
+const unique = <T>(items: readonly T[]): T[] => [...new Set(items)];
+
+/**
  * The checkpoint-attempt seed for `sourceRunId`, or `RECOVERY_BLOCKED` with the preview's
  * reasons. Unverified is not refused here: the interpreter checks what the preview could not
  * (the recorded generation restores) when it creates and drives the attempt.
@@ -51,17 +108,7 @@ export async function checkpointSeed(
   });
   const option = assessment.options.find((o) => o.kind === "checkpoint-attempt");
   if (!option || option.readiness === "blocked" || !option.checkpointStepRunId)
-    throw new OrcaError(
-      "RECOVERY_BLOCKED",
-      `run ${sourceRunId} cannot be recovered from a checkpoint: ${(option?.blockers ?? [])
-        .map((b) => RECOVERY_BLOCKER_TEXT[b])
-        .join(" ")}`.trim(),
-      {
-        runId: sourceRunId,
-        blockers: option?.blockers ?? [],
-        ...(option?.checkpointStepRunId ? { checkpointStepRunId: option.checkpointStepRunId } : {}),
-      },
-    );
+    throw checkpointBlocked(sourceRunId, option);
   const checkpointStepRunId = option.checkpointStepRunId;
   const checkpoint = assessment.checkpoints.find((c) => c.stepRunId === checkpointStepRunId);
   if (!checkpoint) throw new OrcaError("RUN_STATE", `run ${sourceRunId} has no checkpoint ${checkpointStepRunId}`);

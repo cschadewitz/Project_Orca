@@ -204,6 +204,8 @@ export interface FirstRunOwnership {
   /** This reservation, and the hash of the claim it wrote: what an updater stop hands off. */
   readonly reservationId: string;
   readonly claimHash: string;
+  /** The claim this reservation's directly follows in the journal (`claim.previous`), if any. */
+  readonly previous?: string | null;
   check(): void;
   /** Launch capability stays in main and the exact child environment, never in the journal. */
   launchToken?(): string;
@@ -630,6 +632,7 @@ export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
     return {
       reservationId,
       claimHash: hash(texts.get("claim.json")!),
+      previous,
       check,
       launchToken: () => {
         check();

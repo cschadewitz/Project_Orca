@@ -8,6 +8,7 @@ import {
   ContinuationsGetParamsSchema,
   ContinuationsReconcileParamsSchema,
   type ManagedDeployment,
+  type StoreStatus,
 } from "@orca/protocol";
 import type { SearchScope } from "./search-model.js";
 import {
@@ -72,6 +73,10 @@ import {
   eventTypeReadable,
   RUNS_RECOVER_METHOD,
   RUNS_RECOVERY_METHOD,
+  RUNS_DRY_RUN_REPORT_METHOD,
+  RunsDryRunReportParamsSchema,
+  type RunsDryRunReportParams,
+  type RunsDryRunReportResult,
   RUNS_REVIEW_EFFECT_METHOD,
   RunsRecoverParamsSchema,
   RunsRecoveryParamsSchema,
@@ -315,6 +320,12 @@ export interface MethodContext {
   workflowInputs?: WorkflowInputsModel | undefined;
   /** Server-bound per-call ownership handoff; never parsed from RPC params. */
   attributeStartedRun?: ((runId: string) => void | Promise<void>) | undefined;
+  /**
+   * Set only by the authenticating guard (#183): recheck, against the caller's current
+   * credential, the authority a dry run of `workflowId` needs - the draft permissions, launch
+   * and the workflow scope - immediately before the simulation is created.
+   */
+  dryRunAuthority?: ((workflowId: string) => Promise<void>) | undefined;
   /** ORCA's own version, reported in `hello`. */
   orcaVersion: string;
   maintenance?: Maintenance | undefined;
@@ -322,6 +333,8 @@ export interface MethodContext {
   storeDir?: string | undefined;
   /** The managed server updater that launched this daemon (#879), reported in `hello`. */
   deployment?: ManagedDeployment | undefined;
+  /** The store's backend and the desktop app's SQLite switch (#339), reported in `hello`. */
+  store?: StoreStatus | undefined;
   capabilities: readonly DaemonCapability[];
   /** The projection the read methods answer from. Without it they refuse; `hello` does not need it. */
   reads?: ReadModel | undefined;
@@ -447,6 +460,7 @@ export const hello: Method<HelloParams, HelloResult> = {
       ...(ctx.identity ? { identity: ctx.identity } : {}),
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
       ...(ctx.deployment ? { deployment: ctx.deployment } : {}),
+      ...(ctx.store ? { store: ctx.store } : {}),
       ...(ctx.agents ? { sessionSlots: ctx.agents.sessionSlotsSummary() } : {}),
       capabilities: [
         ...(Object.keys(createOperatorMutationMethods(ctx)) as DaemonCapability[]),
@@ -723,6 +737,12 @@ export const runsCancel: Method<RunsCancelParams, RunsCancelResult> = {
 };
 
 /** `runs.recovery` (#357): how this run could be recovered. Read-only. */
+/** `runs.dryRunReport` (#183): what a dry run did. A read. */
+export const runsDryRunReport: Method<RunsDryRunReportParams, RunsDryRunReportResult> = {
+  params: RunsDryRunReportParamsSchema,
+  handle: (params, ctx) => reads(ctx).runsDryRunReport(params),
+};
+
 export const runsRecovery: Method<RunsRecoveryParams, RunsRecoveryResult> = {
   params: RunsRecoveryParamsSchema,
   handle: (params, ctx) =>
@@ -869,6 +889,7 @@ export const methods: MethodTable = {
   [WORKFLOWS_GET_METHOD]: workflowsGet,
   [SEARCH_METHOD]: search,
   [RUNS_RECOVERY_METHOD]: runsRecovery,
+  [RUNS_DRY_RUN_REPORT_METHOD]: runsDryRunReport,
 };
 
 /**

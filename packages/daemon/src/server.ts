@@ -273,6 +273,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     orcaVersion: opts.orcaVersion,
     storeDir: opts.storeDir,
     deployment: opts.deployment,
+    store: opts.store,
     capabilities: opts.capabilities,
     reads: opts.reads,
     workflowInputs: opts.workflowInputs,

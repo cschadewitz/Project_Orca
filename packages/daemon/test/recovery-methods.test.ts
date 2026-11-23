@@ -3,28 +3,8 @@
  * records a review, and `runs.recover` starts a checkpoint attempt through retry-safe admission
  * and drives it, once per key, under the same first-attachment policy as an admitted run.
  */
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { AgentRegistry } from "@orca/agents";
-import {
-  OrcaError,
-  parseOrcaConfig,
-  parseWorkflow,
-  silentLogger,
-  TemplateRegistry,
-  WorkflowRegistry,
-} from "@orca/core";
-import {
-  builtinExecutors,
-  CheckpointAdmissionService,
-  checkpointAttempts,
-  completed,
-  failed,
-  LocalWorkspaceProvider,
-  Orchestrator,
-} from "@orca/engine";
+import { expect, it, vi } from "vitest";
+import { checkpointAttempts } from "@orca/engine";
 import {
   HelloResultSchema,
   PROTOCOL_VERSION,
@@ -33,138 +13,10 @@ import {
   RunsRecoveryResultSchema,
   RunsReviewEffectResultSchema,
 } from "@orca/protocol";
-import { FileExecutionStore, memoryStores } from "@orca/store";
-import { ControlModel, ReadModel, dispatch, methodsFor, type MethodContext } from "@orca/daemon";
-import { FileRetryClaimStore } from "../../store/src/admission-retry-store.js";
-import { RegisteredRetryClaims } from "../../engine/src/admission-retry.js";
-import { ConfigurationGenerations } from "../../engine/src/configuration-generation.js";
-import { AdmissionRetryModel, type AdmissionAuthorities } from "../src/admission-retry.js";
+import type { MethodContext } from "@orca/daemon";
 import { Maintenance } from "../src/maintenance.js";
+import { call, fixture } from "./recovery-methods-fixture.js";
 import { harness as securityHarness, putArtifact } from "./security-harness.js";
-
-const dirs: string[] = [];
-afterEach(async () => {
-  for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
-});
-
-const definition = parseWorkflow(`
-id: flow
-name: Flow
-version: "1"
-start: s
-nodes:
-  s: { type: start }
-  a: { type: set, vars: { reached: a } }
-  b: { type: "custom:once" }
-  e: { type: end, outcome: success }
-edges: [{ from: s, to: a }, { from: a, to: b }, { from: b, to: e }]
-`);
-
-async function fixture() {
-  const dir = await mkdtemp(join(tmpdir(), "orca-recovery-methods-"));
-  dirs.push(dir);
-  const stores = memoryStores();
-  let failures = 1;
-  const orchestrator = new Orchestrator({
-    stores,
-    agents: new AgentRegistry(),
-    workflows: new WorkflowRegistry().register(definition),
-    templates: new TemplateRegistry(),
-    // Fails once without saying it did nothing outside ORCA: its effect is uncertain.
-    executors: builtinExecutors().register({
-      type: "custom:once",
-      execute: async () => (failures-- > 0 ? failed("ONCE", "not yet") : completed()),
-    }),
-    workspaceProvider: new LocalWorkspaceProvider(dir),
-    logger: silentLogger,
-  });
-  const generations = new ConfigurationGenerations({
-    store: stores.execution,
-    workflows: stores.workflows,
-    loadAssets: async () => ({ workflows: orchestrator.workflows.list(), templates: [] }),
-    admission: {
-      validateStartRun: (opts, material) => orchestrator.validateStartRun(opts, material),
-      startRun: (opts, material) => orchestrator.startRun(opts, material),
-    },
-  });
-  await generations.initialize(
-    parseOrcaConfig({ agents: [], program: { workflow: "flow", itemWorkflow: "flow" } }),
-    "t",
-  );
-  orchestrator.generations = generations;
-  const actor = { principalId: "owner", credentialId: "credential-test" };
-  const owned = new Set<string>();
-  orchestrator.admissionExecution = {
-    authorize: async (policy) => {
-      if (!owned.has(policy.binding.runId)) throw new OrcaError("RUN_STATE", "ownership unavailable");
-    },
-  };
-  const faults = {
-    conflict: () => new OrcaError("RETRY_CONFLICT", "conflict"),
-    limit: () => new OrcaError("RETRY_LIMIT", "limit"),
-  };
-  const claims = new RegisteredRetryClaims(
-    new FileRetryClaimStore({ storeDir: dir, execution: new FileExecutionStore(dir), faults }),
-    faults,
-  );
-  const checkpoints = new CheckpointAdmissionService({ orchestrator, retries: claims });
-  const execute = vi.fn(async (runId: string) => {
-    await orchestrator.run(runId);
-  });
-  const admissionRetries = new AdmissionRetryModel({
-    claims,
-    direct: {} as never,
-    requests: {} as never,
-    checkpoints,
-    orchestrator,
-    execute,
-    executionFailed: () => {},
-  });
-  const workflowsAuthorized: string[] = [];
-  const authorities: AdmissionAuthorities = {
-    principalId: actor.principalId,
-    workspaceId: "workspace-test",
-    check: async () => {},
-    request: async () => {
-      throw new OrcaError("NOT_SUPPORTED", "no requests here");
-    },
-    direct: async () => ({
-      workspaceId: "workspace-test",
-      actor,
-      authorize: async (command) => {
-        workflowsAuthorized.push(command.workflowId);
-      },
-      onRunAdmitted: async (runId) => {
-        owned.add(runId);
-      },
-      verifyRunAdmitted: async (runId) => {
-        if (!owned.has(runId)) throw new OrcaError("RUN_STATE", "ownership unavailable");
-      },
-    }),
-  };
-  const reads = new ReadModel({ orchestrator });
-  const ctx: MethodContext = {
-    orcaVersion: "test",
-    capabilities: ["runs.read", "runs.control"],
-    reads,
-    control: new ControlModel({ orchestrator, reads }),
-    admissionRetries,
-    admissionAuthorities: async () => authorities,
-    mutationActor: actor,
-  };
-  const source = await orchestrator.startAndRun({ workflowId: "flow", vars: {}, actor });
-  expect(source.run.status).toBe("failed");
-  const b = source.stepOrder.map((id) => source.steps[id]!).find((s) => s.nodeId === "b")!;
-  return { orchestrator, stores, ctx, source, b, execute, workflowsAuthorized, claims, checkpoints };
-}
-
-async function call(ctx: MethodContext, method: string, params?: unknown) {
-  return (await dispatch(JSON.stringify({ kind: "request", id: 1, method, params }), methodsFor(ctx), ctx)) as {
-    ok: boolean;
-    result?: unknown;
-    error?: { code: string; message: string; details?: Record<string, unknown> };
-  };
-}
 
 it("reads the assessment, records a review, then starts one attempt per key and drives it", async () => {
   const f = await fixture();

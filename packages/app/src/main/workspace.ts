@@ -95,6 +95,8 @@ export interface WorkspaceDeps {
     readOnly: boolean;
     configPath?: string;
     firstRunToken?: string;
+    /** Ask this launch's daemon to switch its store to SQLite in place (#339). First-run launches only. */
+    storeSwitch?: { after: string };
     onExit: (exit: DaemonExit) => void;
   }) => Promise<BundledDaemon>;
   /** Build the read client for a daemon URL. */
@@ -157,6 +159,13 @@ export interface WorkspaceDeps {
   ) => Promise<void>;
   /** Test seam; production uses the store-local durable reservation. */
   reserveFirstRunOwnership?: (path: string) => FirstRunOwnership;
+  /**
+   * Whether the person asked for this workspace's store to be switched to SQLite on this daemon
+   * launch (#339, store-switch.ts), and after which stopped claim. Asked once per owned
+   * first-run launch, with its new reservation, just before it starts; the request is spent by
+   * asking, so a launch that fails does not repeat it.
+   */
+  takeStoreSwitch?: (path: string, ownership: FirstRunOwnership) => { after: string } | undefined;
 }
 
 /**
@@ -768,12 +777,15 @@ export class Workspace {
         ownership = (this.deps.reserveFirstRunOwnership ?? reserveFirstRunOwnership)(path);
         ownership.check();
         startupAttempted = true;
+        // Never on an update recovery's launch: only an ordinary start switches the store.
+        const storeSwitch = recovery ? undefined : this.deps.takeStoreSwitch?.(path, ownership);
         daemon = await this.deps.start({
           entry,
           cwd: path,
           readOnly: false,
           configPath: join(path, "orca.config.yaml"),
           ...(ownership.launchToken ? { firstRunToken: ownership.launchToken() } : {}),
+          ...(storeSwitch ? { storeSwitch } : {}),
           onExit: () => {
             exited = true;
             if (daemon) this.recordFirstRunExit(daemon);
@@ -1177,6 +1189,42 @@ export class Workspace {
       // latest attempt is by now: the handoff refuses unless they are the same.
       const stopped = { reservationId: attempt.ownership.reservationId, claimHash: attempt.ownership.claimHash };
       attempt.handedOff = (this.deps.handOffStore ?? handOffStoreForUpdate)(attempt.firstRun.path, stopped, from, to);
+    } finally {
+      attempt.busy = false;
+    }
+  }
+
+  /**
+   * The app's own workspace and its store as its current daemon reported them (#339): the
+   * connected bundled first-run daemon only, while it runs. Anything else has no SQLite switch.
+   */
+  get storeSwitchTarget(): { path: string; store: NonNullable<HelloResult["store"]> } | undefined {
+    const daemon = this.daemon;
+    if (!daemon || daemon.exited === true || this.source !== "bundled" || this.updating) return undefined;
+    const owner = this.firstRunOwners.get(daemon);
+    const store = this.verifiedHello?.store;
+    if (!owner || !store || this.target.path !== owner.path) return undefined;
+    return { path: owner.path, store };
+  }
+
+  /**
+   * After the exact stop, for a restart that switches the store (#339): settle the stopped
+   * daemon's reservation, as the update handoff does, so the next start's claim follows it.
+   * Only for the app-owned first-run workspace this attempt prepared, stopped and saw exit.
+   * Returns that workspace and the stopped reservation's claim, which the next launch must follow.
+   */
+  async settleForStoreSwitch(token: string): Promise<{ path: string; claimHash: string }> {
+    const attempt = this.windowsUpdate;
+    if (!attempt || attempt.token !== token) throw new Error("Restart was not prepared for this token");
+    this.checkWindowsUpdate(attempt);
+    if (attempt.busy || !attempt.stopAttempted || attempt.handedOff || attempt.recovering)
+      throw new Error("Restart settlement is not available");
+    if (!attempt.daemon || attempt.daemon.exited !== true || !attempt.firstRun || !attempt.ownership)
+      throw new Error("No stopped bundled daemon to settle");
+    attempt.busy = true;
+    try {
+      if (!attempt.ownership.complete()) throw new FirstRunOwnershipRefusal();
+      return { path: attempt.firstRun.path, claimHash: attempt.ownership.claimHash };
     } finally {
       attempt.busy = false;
     }
