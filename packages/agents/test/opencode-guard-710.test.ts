@@ -200,6 +200,46 @@ describe("OpenCode's own configuration", () => {
     expect(check(noFetch)).toMatch(/permission.webfetch must be "deny"/);
   });
 
+  it("checks the effective ordered ruleset, so a later rule cannot reopen a mandatory denial", async () => {
+    const cfg = await isolatedConfig();
+    const p = cfg.permission as Record<string, unknown>;
+    const env = (permission: unknown) => JSON.stringify(permission);
+    const check = (patch: Record<string, unknown>, permission: unknown = p) =>
+      openCodeConfigProblems({ ...cfg, ...patch, permission }, env(permission)).join("\n");
+    // A wildcard key written after the denial matches it and wins (last match).
+    expect(check({}, { ...p, "t*": "ask" })).toMatch(/permission.task must be "deny", and no later rule/);
+    expect(check({}, { ...p, "web?etch": "ask" })).toMatch(/permission.webfetch/);
+    // A pattern map whose `*` is deny but a later pattern asks opens that pattern.
+    expect(check({}, { ...p, external_directory: { "*": "deny", "/tmp/*": "ask" } })).toMatch(
+      /permission.external_directory/,
+    );
+    // A pattern map that denies every pattern keeps the denial.
+    expect(check({}, { ...p, task: { "*": "deny", general: "deny" } })).toBe("");
+    // The build agent's own block is applied after the top-level one.
+    const agent = cfg.agent as Record<string, unknown>;
+    expect(check({ agent: { ...agent, build: { permission: { "*": "ask" } } } })).toMatch(/permission.task/);
+    expect(check({ agent: { ...agent, build: { permission: { websearch: "ask" } } } })).toMatch(/permission.websearch/);
+    // Another agent's block does not change build's ruleset, but may not allow anything either.
+    expect(check({ agent: { ...agent, plan: { disable: true, permission: { "*": "ask" } } } })).toBe("");
+    expect(check({ agent: { ...agent, plan: { permission: { edit: "allow" } } } })).toMatch(/agent.plan.permission/);
+    // Unreviewed actions and shapes are refused.
+    expect(check({}, { ...p, bash: "maybe" })).toMatch(/unreviewed action 'maybe'/);
+    expect(check({}, { ...p, bash: ["ask"] })).toMatch(/permission.bash must be/);
+  });
+
+  it("refuses settings it has not reviewed, such as the legacy tools map", async () => {
+    const cfg = await isolatedConfig();
+    const permission = JSON.stringify(cfg.permission);
+    const problems = (patch: Record<string, unknown>) =>
+      openCodeConfigProblems({ ...cfg, ...patch }, permission).join("\n");
+    expect(problems({ tools: { bash: true } })).toMatch(/tools is not a reviewed setting/);
+    expect(problems({ mode: { build: {} } })).toMatch(/mode is not a reviewed setting/);
+    const agent = cfg.agent as Record<string, unknown>;
+    expect(problems({ agent: { ...agent, build: { tools: { bash: true } } } })).toMatch(
+      /agent.build.tools is not a reviewed setting/,
+    );
+  });
+
   it("refuses a permission layer that differs from the file, and code that runs without an ask", async () => {
     const cfg = await isolatedConfig();
     const permission = JSON.stringify(cfg.permission);
@@ -377,5 +417,21 @@ describe("session", () => {
     expect(openCodeBoundedAnswer(req(["allow_always", "reject_once"]), "allow_always")).toBeUndefined();
     expect(openCodeBoundedAnswer(req(["allow_once", "reject_once"]), "reject_once")).toBe("reject_once");
     expect(openCodeBoundedAnswer(req(["allow_once"]), undefined)).toBeUndefined();
+  });
+
+  it("sends only one-time answers, and cancels when no one-time option is offered", () => {
+    const req = (kinds: acp.PermissionOptionKind[]): acp.RequestPermissionRequest => ({
+      sessionId: "s",
+      toolCall: { toolCallId: "t" },
+      options: kinds.map((kind) => ({ optionId: kind, kind, name: kind })),
+    });
+    const all: acp.PermissionOptionKind[] = ["allow_once", "allow_always", "reject_once", "reject_always"];
+    expect(openCodeBoundedAnswer(req(all), "allow_always")).toBe("allow_once");
+    expect(openCodeBoundedAnswer(req(all), "reject_always")).toBe("reject_once");
+    expect(openCodeBoundedAnswer(req(all), "allow_once")).toBe("allow_once");
+    // No one-time reject on offer: cancel, never fall back to the persistent rejection.
+    expect(openCodeBoundedAnswer(req(["allow_once", "reject_always"]), "reject_always")).toBeUndefined();
+    // An answer that is not one of the request's options is not passed through.
+    expect(openCodeBoundedAnswer(req(all), "made-up")).toBeUndefined();
   });
 });

@@ -84,6 +84,8 @@ export const OPENCODE_MANAGED_DIRS: Readonly<Record<string, readonly string[]>> 
 };
 
 const TRUE = new Set(["1", "true"]);
+/** The reviewed native agent; another one brings its own permission set. */
+const REVIEWED_MODE = "build";
 
 /** OpenCode's executable is `opencode`, started with the `acp` subcommand first. */
 export function isOpenCodeAgent(agent: Pick<AgentSpec, "command" | "args" | "type">): boolean {
@@ -122,12 +124,93 @@ function flagProblems(args: readonly string[]): string[] {
   return problems;
 }
 
-/** Every string value in a permission block, however nested (pattern maps included). */
-function permissionValues(value: unknown): string[] {
-  if (typeof value === "string") return [value];
-  if (value && typeof value === "object") return Object.values(value).flatMap(permissionValues);
-  return [];
+/** One native rule as OpenCode 1.19.4 builds it from a `permission` block, in written order. */
+export interface OpenCodeRule {
+  permission: string;
+  pattern: string;
+  action: string;
 }
+
+/**
+ * OpenCode's ruleset for one `permission` block: a string value is the rule for pattern `*`,
+ * and a pattern map gives one rule per entry, both in written key order. Anything else is
+ * reported, since OpenCode's schema would read it differently or refuse it.
+ */
+export function openCodeRules(block: unknown, where: string, problems: string[]): OpenCodeRule[] {
+  if (!block || typeof block !== "object" || Array.isArray(block)) {
+    problems.push(`OPENCODE_CONFIG: ${where} must be an object`);
+    return [];
+  }
+  const rules: OpenCodeRule[] = [];
+  for (const [permission, value] of Object.entries(block as Record<string, unknown>)) {
+    if (typeof value === "string") rules.push({ permission, pattern: "*", action: value });
+    else if (value && typeof value === "object" && !Array.isArray(value))
+      for (const [pattern, action] of Object.entries(value as Record<string, unknown>)) {
+        if (typeof action === "string") rules.push({ permission, pattern, action });
+        else problems.push(`OPENCODE_CONFIG: ${where}.${permission}.${pattern} must be "ask" or "deny"`);
+      }
+    else problems.push(`OPENCODE_CONFIG: ${where}.${permission} must be "ask", "deny" or a pattern map of them`);
+  }
+  for (const r of rules)
+    if (r.action === "allow")
+      problems.push(
+        `OPENCODE_CONFIG: ${where}.${r.permission} allows something natively; use ask or deny and let ORCA decide`,
+      );
+    else if (r.action !== "ask" && r.action !== "deny")
+      problems.push(`OPENCODE_CONFIG: ${where}.${r.permission} has the unreviewed action '${r.action}'`);
+  return rules;
+}
+
+/** OpenCode's wildcard match: `*` is any run, `?` one character, the rest literal. */
+function wildcard(text: string, glob: string): boolean {
+  const source = glob
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".");
+  return new RegExp(`^${source}$`, "s").test(text);
+}
+
+/**
+ * Which mandatory denials the effective ruleset does not keep. OpenCode decides an ask by the
+ * last rule whose permission and pattern both match (`findLast`), over the built-in defaults,
+ * then the top-level `permission`, then the agent's own. So a denial holds for every pattern
+ * only if the last matching rule for pattern `*` is `deny` and no later matching rule, for any
+ * pattern, says anything else. A later `"t*": "ask"` or an agent-level `"*": "ask"` breaks it.
+ * The defaults come first and are outranked by the leading `"*"`, which is checked separately.
+ */
+export function openCodeDenialGaps(rules: readonly OpenCodeRule[]): string[] {
+  const gaps: string[] = [];
+  for (const required of OPENCODE_REQUIRED_DENIES) {
+    const matching = rules.filter((r) => wildcard(required, r.permission));
+    const last = matching.map((r) => r.pattern === "*").lastIndexOf(true);
+    if (last < 0 || matching[last]!.action !== "deny" || matching.slice(last + 1).some((r) => r.action !== "deny"))
+      gaps.push(required);
+  }
+  return gaps;
+}
+
+/** Top-level keys whose effect on OpenCode 1.19.4 has been reviewed. Anything else is refused. */
+const REVIEWED_CONFIG_KEYS = new Set([
+  "$schema",
+  "autoupdate",
+  "share",
+  "enabled_providers",
+  "disabled_providers",
+  "provider",
+  "model",
+  "small_model",
+  "plugin",
+  "mcp",
+  "lsp",
+  "formatter",
+  "instructions",
+  "default_agent",
+  "agent",
+  "permission",
+  "command",
+]);
+/** What an `agent.<name>` entry may set: on or off, and its own (checked) permission block. */
+const REVIEWED_AGENT_KEYS = new Set(["disable", "permission"]);
 
 function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -135,26 +218,48 @@ function sameJson(a: unknown, b: unknown): boolean {
 
 /**
  * What is wrong with OpenCode's own configuration: the reviewed file `OPENCODE_CONFIG` names
- * and the `OPENCODE_PERMISSION` layer, which must say the same thing.
+ * and the `OPENCODE_PERMISSION` layer, which must say the same thing. The file must use only
+ * reviewed keys, and the `build` agent's effective ordered ruleset (top-level `permission`,
+ * then `agent.build.permission`) must keep every mandatory denial, not just spell it.
  */
 export function openCodeConfigProblems(config: unknown, permissionEnv: string | undefined): string[] {
   const problems: string[] = [];
   if (!config || typeof config !== "object" || Array.isArray(config))
     return ["OPENCODE_CONFIG: the file is not a JSON object"];
   const c = config as Record<string, unknown>;
+  for (const key of Object.keys(c))
+    if (!REVIEWED_CONFIG_KEYS.has(key)) problems.push(`OPENCODE_CONFIG: ${key} is not a reviewed setting`);
   const permission = c.permission;
+  const rules: OpenCodeRule[] = [];
   if (!permission || typeof permission !== "object" || Array.isArray(permission))
     problems.push("OPENCODE_CONFIG: set a `permission` object");
   else {
     const p = permission as Record<string, unknown>;
-    const keys = Object.keys(p);
-    if (keys[0] !== "*" || (p["*"] !== "ask" && p["*"] !== "deny"))
+    if (Object.keys(p)[0] !== "*" || (p["*"] !== "ask" && p["*"] !== "deny"))
       problems.push('OPENCODE_CONFIG: permission must start with "*": "ask" (OpenCode applies the last matching key)');
-    if (permissionValues(p).includes("allow"))
-      problems.push("OPENCODE_CONFIG: permission allows something natively; use ask or deny and let ORCA decide");
-    for (const key of OPENCODE_REQUIRED_DENIES)
-      if (p[key] !== "deny") problems.push(`OPENCODE_CONFIG: permission.${key} must be "deny"`);
+    rules.push(...openCodeRules(p, "permission", problems));
   }
+  const agents = c.agent;
+  if (agents !== undefined && (!agents || typeof agents !== "object" || Array.isArray(agents)))
+    problems.push("OPENCODE_CONFIG: agent must be an object");
+  else if (agents)
+    for (const [name, a] of Object.entries(agents as Record<string, unknown>)) {
+      if (!a || typeof a !== "object" || Array.isArray(a)) {
+        problems.push(`OPENCODE_CONFIG: agent.${name} must be an object`);
+        continue;
+      }
+      const entry = a as Record<string, unknown>;
+      for (const key of Object.keys(entry))
+        if (!REVIEWED_AGENT_KEYS.has(key))
+          problems.push(`OPENCODE_CONFIG: agent.${name}.${key} is not a reviewed setting`);
+      if (entry.permission === undefined) continue;
+      const own = openCodeRules(entry.permission, `agent.${name}.permission`, problems);
+      if (name === REVIEWED_MODE) rules.push(...own);
+    }
+  for (const gap of openCodeDenialGaps(rules))
+    problems.push(
+      `OPENCODE_CONFIG: permission.${gap} must be "deny", and no later rule (a wildcard key, a pattern or agent.build.permission) may reopen it`,
+    );
   let fromEnv: unknown;
   try {
     fromEnv = permissionEnv === undefined ? undefined : JSON.parse(permissionEnv);
@@ -170,15 +275,8 @@ export function openCodeConfigProblems(config: unknown, permissionEnv: string | 
   if (c.lsp !== false) problems.push("OPENCODE_CONFIG: lsp must be false (language servers are downloaded and run)");
   if (c.share !== "disabled") problems.push('OPENCODE_CONFIG: share must be "disabled"');
   if (c.autoupdate !== false) problems.push("OPENCODE_CONFIG: autoupdate must be false");
-  if (c.default_agent !== undefined && c.default_agent !== "build")
+  if (c.default_agent !== undefined && c.default_agent !== REVIEWED_MODE)
     problems.push('OPENCODE_CONFIG: default_agent must be "build"');
-  const agents = c.agent;
-  if (agents && typeof agents === "object")
-    for (const [name, a] of Object.entries(agents as Record<string, unknown>)) {
-      const own = a && typeof a === "object" ? (a as Record<string, unknown>).permission : undefined;
-      if (own !== undefined && permissionValues(own).includes("allow"))
-        problems.push(`OPENCODE_CONFIG: agent.${name}.permission allows something natively`);
-    }
   if (c.command !== undefined && !sameJson(c.command, {}))
     problems.push("OPENCODE_CONFIG: command must be {} (custom commands can run shell text without an ask)");
   return problems;
@@ -407,21 +505,23 @@ export function openCodeSlashCommand(input: string | readonly acp.ContentBlock[]
   return text.startsWith("/");
 }
 
-/** "Always allow" becomes "Allow once"; with no once option offered, nothing is chosen. */
+/**
+ * Only one-time answers reach OpenCode. "Always allow" becomes "Allow once" and "Always
+ * reject" becomes "Reject once"; when the one-time option is not offered, or the answer is
+ * not one of the request's options, nothing is chosen and the ask is cancelled rather than
+ * answered with a persistent response.
+ */
 export function openCodeBoundedAnswer(
   request: acp.RequestPermissionRequest,
   chosen: string | undefined,
 ): string | undefined {
   if (chosen === undefined) return undefined;
   const option = request.options.find((o) => o.optionId === chosen);
-  if (!option) return chosen;
+  if (!option) return undefined;
   if (option.kind === "allow_always") return request.options.find((o) => o.kind === "allow_once")?.optionId;
-  if (option.kind === "reject_always") return request.options.find((o) => o.kind === "reject_once")?.optionId ?? chosen;
-  return chosen;
+  if (option.kind === "reject_always") return request.options.find((o) => o.kind === "reject_once")?.optionId;
+  return option.kind === "allow_once" || option.kind === "reject_once" ? chosen : undefined;
 }
-
-/** The reviewed native agent; another one brings its own permission set. */
-const REVIEWED_MODE = "build";
 
 function modeOf(options: readonly SessionConfigOption[]): unknown {
   return (options.find((o) => o.id === "mode") as { currentValue?: unknown } | undefined)?.currentValue;

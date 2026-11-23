@@ -95,10 +95,14 @@ isolated profile, and says exactly what is missing (`CONFIG_INVALID`, `problems`
   `~/.opencode`) except the schema-only file OpenCode seeds and the plugin dependency it
   installs there itself. Agents, modes, commands and tools in those directories load with no
   ask, and `--pure` keeps out only plugins, so anything else refuses the launch.
-- The reviewed `OPENCODE_CONFIG` file: nothing natively `allow`, `task`, `webfetch`,
-  `websearch` and `external_directory` denied, `"*"` written first (OpenCode's last matching
-  key wins), no plugins, no MCP, no formatters, no language servers, no custom commands, the
-  `build` agent, sharing and auto-update off.
+- The reviewed `OPENCODE_CONFIG` file: only reviewed settings (an unknown key, such as the
+  legacy `tools` map, refuses the launch), nothing natively `allow`, `"*"` written first, no
+  plugins, no MCP, no formatters, no language servers, no custom commands, the `build` agent,
+  sharing and auto-update off. `task`, `webfetch`, `websearch` and `external_directory` must
+  stay denied in the effective ruleset, not just be written as `deny`: OpenCode decides by
+  the last rule whose permission and pattern match, over the top-level `permission` and then
+  `agent.build.permission`, so ORCA rebuilds that ordered list and refuses a later rule that
+  reopens a denial (a wildcard key such as `"t*"`, a pattern entry, or an agent-level `"*"`).
 - `OPENCODE_PERMISSION` equal to that file's `permission`. It is the last layer OpenCode
   applies, after a machine-wide or MDM configuration, which is why ORCA also refuses to start
   when `/etc/opencode` or the macOS managed equivalent exists: a per-agent rule delivered there
@@ -130,6 +134,7 @@ wrapper's postinstall.
 | A command with a `workdir` outside the workspace | Nothing lands outside: OpenCode's `external_directory` is denied natively. ORCA could not have decided it — an `execute` ask carries the command text only, with no location and no cwd, so an ORCA title rule matches the same command in any directory | installed |
 | A file path given through a link to the workspace (macOS `/var` → `/private/var`) | Treated by OpenCode as outside the project and denied natively, with no ask. Configure the workspace by its real path | installed (macOS) |
 | A prompt starting with `/` | Refused before it is sent: OpenCode would run it as one of its own commands | installed |
+| A person's "Always reject", or an answer with no one-time equivalent on offer | Sent as `reject_once`; when OpenCode offers no one-time option for the answer, the ask is cancelled instead of answered with a persistent response | unit-tested |
 | Switching the session's agent ("mode") | Refused, and a session that opens in another mode is closed: another agent brings its own native permissions | unit-tested |
 | Another build of the executable | Refused before anything starts | installed |
 | Stale, duplicate and wrong-session asks; a failed human-input callback | Answered `cancelled`, which OpenCode maps to a rejection; a failed callback fails the turn | unit-tested (`opencode-acp-fixture-710.test.ts`) |
