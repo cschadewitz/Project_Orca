@@ -293,7 +293,6 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
         throw fault(e);
       }),
     );
-    options.onCapacity?.(hello.sessionSlots?.maxAgentSessions);
     if (!daemonRelation(hello.protocol))
       throw refuse(
         "protocol",
@@ -327,6 +326,8 @@ export async function openDaemonSession(options: OpenDaemonSessionOptions): Prom
     );
     if (discovery.target.workspaceId !== options.binding.workspaceId) throw changed("workspace");
     if (discovery.principalId !== options.binding.principalId) throw changed("principal");
+    // Only the enrolled daemon, proven above, may set the cap its sessions are counted against.
+    options.onCapacity?.(hello.sessionSlots?.maxAgentSessions);
     if (!discovery.operations.includes("runs.admit"))
       throw refuse(
         "auth",

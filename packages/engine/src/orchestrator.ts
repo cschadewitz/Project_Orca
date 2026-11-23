@@ -2787,7 +2787,7 @@ export class Orchestrator {
       agentId: agent.id,
       hostId: host.id,
       ...(remoteId !== undefined ? { remoteId } : {}),
-      caps: () => this.sessionSlotCaps(agent, host),
+      caps: () => this.sessionSlotCaps(agent, host, remoteId),
       signal: rc.abort.signal,
       runs: this.runAncestry(rc),
       deadlineMs: this.sessionSlotWaitMs(),
@@ -2827,11 +2827,16 @@ export class Orchestrator {
    * pinned to an older generation; the run's own specs answer only for an agent or host the
    * current configuration no longer has.
    */
-  private sessionSlotCaps(agent: { id: string; maxSessions?: number | undefined }, host: AgentHost): SessionSlotCaps {
+  private sessionSlotCaps(
+    agent: { id: string; maxSessions?: number | undefined },
+    host: AgentHost,
+    remoteId: string | undefined,
+  ): SessionSlotCaps {
     const registry = this.generations?.current.agents ?? this.agents;
     const currentAgent = registry.listAgents().find((a) => a.id === agent.id);
     const currentHost = registry.hasHost(host.id) ? registry.host(host.id) : undefined;
-    const remoteId = this.delegatedRemote(currentAgent ?? agent);
+    // The remote is the one this open will actually go to: the run's own agent spec names it,
+    // and the slot is counted under it. Only its cap is re-read, never which remote it is.
     return {
       daemon: this.daemonSessionCap(),
       agent: (currentAgent ?? agent).maxSessions,

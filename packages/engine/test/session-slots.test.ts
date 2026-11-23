@@ -30,6 +30,13 @@ const request = (agentId: string, hostId: string, caps: SessionSlotCaps, extra: 
   ...extra,
 });
 const settled = () => new Promise((r) => setTimeout(r, 0));
+async function until(check: () => boolean, ms = 5_000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) throw new Error("condition not met in time");
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
 
 describe("SessionSlots", () => {
   it("is unlimited when no cap is set, and still counts what is open", () => {
@@ -370,6 +377,35 @@ describe("Orchestrator session slots", () => {
     const open = await fanOut("one-to-b");
     expect(open.map((r) => r.run.status)).toEqual(Array(5).fill("completed"));
     expect(peak.byAgent["to-b"]).toBe(5);
+  });
+
+  it("keeps a queued delegated step on the remote its run is bound to when the agent is repointed (#884)", async () => {
+    const delegating = { type: "orca-daemon", command: "", workflow: "remote-task" };
+    const caps: Record<string, number | undefined> = { "box-a": 1, "box-b": undefined };
+    let releaseFirst!: () => void;
+    const first = new Promise<void>((r) => (releaseFirst = r));
+    let turns = 0;
+    const { orchestrator, peak } = fake({
+      agents: [{ id: "to-a", profile: "box-a", ...delegating }],
+      remoteSessionCap: (id) => caps[id],
+      turn: () => (++turns === 1 ? first : Promise.resolve()),
+    });
+    const holding = orchestrator.startAndRun({ workflowId: "one-to-a" });
+    await until(() => orchestrator.sessionSlots.view().inUse.total === 1);
+    const queued = orchestrator.startAndRun({ workflowId: "one-to-a" });
+    await until(() => orchestrator.sessionSlots.view().queued === 1);
+    // A config apply repoints the agent at uncapped box-b: the queued step's run still goes to
+    // box-a, so it is still counted against, and waits for, box-a's cap.
+    orchestrator.agents.addAgent(
+      AgentSpecSchema.parse({ id: "to-a", profile: "box-b", ...delegating, command: "unused" }),
+    );
+    orchestrator.sessionSlots.pump();
+    await settled();
+    expect(orchestrator.sessionSlots.view()).toMatchObject({ queued: 1, inUse: { total: 1 } });
+    releaseFirst();
+    expect((await holding).run.status).toBe("completed");
+    expect((await queued).run.status).toBe("completed");
+    expect(peak.byAgent["to-a"]).toBe(1);
   });
 
   it("holds mixed daemon, agent and host caps at once", async () => {
