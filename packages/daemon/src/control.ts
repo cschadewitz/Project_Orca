@@ -251,8 +251,12 @@ export class ControlModel {
     return this.orc;
   }
   private readonly orc: Orchestrator;
-  /** Dry runs this process is driving now; the interrupted-run sweep leaves them alone. */
-  private readonly ownDryRuns = new Set<string>();
+  /**
+   * The unfinished dry-run roots this process found when it started (#183): the only runs the
+   * interrupted-run sweep, and its retry, may cancel. Taken before this process creates any dry
+   * run of its own - `dryRun` waits for it - so a root this process creates is never in it.
+   */
+  private interruptedDryRuns: Promise<string[]> | undefined;
   private readonly reads: ReadModel;
   private readonly permissionsFile: string | undefined;
   private readonly config: ConfigAnnouncer | undefined;
@@ -536,6 +540,10 @@ export class ControlModel {
   ): Promise<WorkflowDraftDryRunResult> {
     const release = this.orc.runtimeActivity?.enter("dispatch", true);
     try {
+      // Roots this process creates must never be mistaken for ones a stopped daemon left behind:
+      // wait for the startup list, or - when no sweep has started - settle it as empty, the safe side.
+      this.interruptedDryRuns ??= Promise.resolve([]);
+      await this.interruptedDryRuns.catch(() => undefined);
       await bound.authorize?.();
       const attribute = bound.attributeStartedRun;
       const handle = await startDryRun(this.orc, {
@@ -547,12 +555,7 @@ export class ControlModel {
         ...(params.maxSteps !== undefined ? { maxSteps: params.maxSteps } : {}),
         ...(actor ? { actor } : {}),
       });
-      this.ownDryRuns.add(handle.runId);
-      try {
-        await handle.done;
-      } finally {
-        this.ownDryRuns.delete(handle.runId);
-      }
+      await handle.done;
       return {
         runId: handle.runId,
         run: await this.runView(handle.runId),
@@ -569,14 +572,18 @@ export class ControlModel {
    * process that started it, so one that outlived its process can never finish: left alone it
    * would count as unfinished work forever. Each root is cancelled, children with it; one still
    * leased by the dead process is tried again once its lease has lapsed. Best effort.
+   *
+   * Only the roots found unfinished on the first call are ever candidates, for this call, a later
+   * one and the retry alike. The list is taken synchronously-first, before any dry run this
+   * process starts (which waits for it), so a new simulation - created but not yet attributed or
+   * leased - is never cancelled as if another daemon had left it.
    */
-  async settleInterruptedDryRuns(retryAfterMs = 65_000): Promise<string[]> {
+  async settleInterruptedDryRuns(retryAfterMs = 65_000, candidates?: readonly string[]): Promise<string[]> {
+    this.interruptedDryRuns ??= this.unfinishedDryRunRoots();
+    const roots = candidates ?? (await this.interruptedDryRuns);
     const settled: string[] = [];
     const leased: string[] = [];
-    for (const runId of await this.orc.listRuns()) {
-      const first = (await this.orc.stores.events.readRange(runId, { limit: 1 }))[0];
-      if (first?.type !== "run.created" || !first.payload.dryRun || first.payload.parentRunId) continue;
-      if (this.ownDryRuns.has(runId)) continue;
+    for (const runId of roots) {
       const summary = await this.orc.getSummary(runId);
       if (summary.status === "completed" || summary.status === "failed" || summary.status === "cancelled") continue;
       try {
@@ -587,8 +594,20 @@ export class ControlModel {
       }
     }
     if (leased.length && retryAfterMs > 0)
-      setTimeout(() => void this.settleInterruptedDryRuns(0).catch(() => undefined), retryAfterMs).unref();
+      setTimeout(() => void this.settleInterruptedDryRuns(0, leased).catch(() => undefined), retryAfterMs).unref();
     return settled;
+  }
+
+  private async unfinishedDryRunRoots(): Promise<string[]> {
+    const roots: string[] = [];
+    for (const runId of await this.orc.listRuns()) {
+      const first = (await this.orc.stores.events.readRange(runId, { limit: 1 }))[0];
+      if (first?.type !== "run.created" || !first.payload.dryRun || first.payload.parentRunId) continue;
+      const summary = await this.orc.getSummary(runId);
+      if (summary.status !== "completed" && summary.status !== "failed" && summary.status !== "cancelled")
+        roots.push(runId);
+    }
+    return roots;
   }
 
   /**

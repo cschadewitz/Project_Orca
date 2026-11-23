@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
 import { FakeClock, OrcaError, TemplateRegistry, WorkflowRegistry, parseWorkflow, silentLogger } from "@orca/core";
-import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput, startDryRun } from "@orca/engine";
+import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput, runLeaseResource, startDryRun } from "@orca/engine";
 import {
   RunsDryRunReportResultSchema,
   RunsGetResultSchema,
@@ -256,5 +256,46 @@ describe("settleInterruptedDryRuns", () => {
     expect((await h.orchestrator.getState(live.run.id)).run.status).toBe("paused");
     // Once settled there is nothing left to do.
     expect(await h.control.settleInterruptedDryRuns(0)).toEqual([]);
+  });
+
+  it("never cancels a new dry run whose ownership write overlaps the sweep's retry", async () => {
+    const h = await harness();
+    // An orphan the stopped daemon still holds the lease on, so the sweep must try again later.
+    const orphan = orchestratorOver(h.stores);
+    const left = await startDryRun(orphan.orchestrator, { definition: parseWorkflow(GATED) });
+    await left.done;
+    const leftover = (await h.stores.events.read(left.runId)).slice(0, 2);
+    const orphanId = "run_orphan_dry";
+    for (const e of leftover)
+      await h.stores.events.append({ type: e.type, runId: orphanId, payload: e.payload } as never);
+    const lease = await h.stores.leases.acquire({
+      resource: runLeaseResource(orphanId),
+      holder: "gone",
+      ttlMs: 60_000,
+    });
+    expect(await h.control.settleInterruptedDryRuns(5)).toEqual([]);
+
+    // A new dry run of this process, parked in its ownership write while the retry fires.
+    let attributed!: () => void;
+    const held = new Promise<void>((resolve) => (attributed = resolve));
+    let created!: (runId: string) => void;
+    const root = new Promise<string>((resolve) => (created = resolve));
+    const fresh = h.control.dryRun(parseWorkflow(GATED), 0, {}, undefined, {
+      attributeStartedRun: async (runId) => {
+        created(runId);
+        await held;
+      },
+    });
+    const freshId = await root;
+    await h.stores.leases.release(lease);
+    await vi.waitFor(async () => expect((await h.orchestrator.getState(orphanId)).run.status).toBe("cancelled"));
+    // A later sweep does not pick it up either.
+    expect(await h.control.settleInterruptedDryRuns(0)).toEqual([]);
+    expect((await h.orchestrator.getState(freshId)).run.status).toBe("created");
+
+    attributed();
+    const result = await fresh;
+    expect(result.runId).toBe(freshId);
+    expect(result.report.status).toBe("completed");
   });
 });
