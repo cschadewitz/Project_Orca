@@ -1,0 +1,103 @@
+# ORCA's Claude pre-tool hook (#704) against the real Claude ACP adapter and the Claude Code
+# it bundles, pinned below. A scripted local stand-in answers for the model, so the run needs
+# no account, key or secret and costs nothing. It observes on the installed Claude Code what
+# the unit tests cannot: a natively remembered call still reaches ORCA's policy, a revoked
+# grant becomes a permission ask, and a failing hook blocks the call.
+#
+# CLAUDE_ADAPTER_VERSION and the Claude Code it bundles (fixed by the adapter's exact SDK
+# dependency) are the one pair ORCA has verified; ORCA installs the hook with that pair only,
+# and only on Linux x64 (CLAUDE_HOOK_VERIFIED_PAIRS, with the pinned SHA-256 of that Claude
+# Code's image, and CLAUDE_HOOK_VERIFIED_PLATFORMS in packages/agents/src/claude-hook-session.ts;
+# the suite fails if they disagree). ORCA hashes the image the session's runtime process
+# actually runs before giving it work, so the run also points the adapter at another Claude
+# Code (OTHER_CLAUDE_SDK_VERSION, Claude Code 2.1.329) and checks that session is refused.
+# Moving to another pair is a reviewed change to both. Weekly runs catch a change in
+# behaviour behind the same pin. Shipped builds refuse nativeToolHook: on until activation is
+# complete; this suite turns it on for itself only.
+name: Claude hook acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/agents/src/claude-pre-tool-hook.ts
+      - packages/agents/src/claude-hook-session.ts
+      - packages/agents/src/bin/claude-pre-tool-hook.ts
+      - packages/agents/src/bin/hook-output-guard.ts
+      - packages/agents/test/fixtures/hook-output-guard/**
+      - packages/agents/src/acp-session.ts
+      - packages/agents/src/permissions.ts
+      - packages/cli/src/bootstrap.ts
+      - packages/cli/test/claude-hook-acceptance-704.test.ts
+      - .github/workflows/claude-hook-acceptance.yml
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-hook-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CLAUDE_ADAPTER_VERSION: 0.109.1
+  OTHER_CLAUDE_SDK_VERSION: 0.3.329
+
+jobs:
+  linux:
+    name: claude hook acceptance (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Install the pinned Claude ACP adapter outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/claude-adapter"
+          mkdir -p "$d"
+          cd "$d"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --ignore-scripts "@agentclientprotocol/claude-agent-acp@${CLAUDE_ADAPTER_VERSION}"
+          entry="$d/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
+          test -f "$entry"
+          echo "ORCA_CLAUDE_ADAPTER=$entry" >> "$GITHUB_ENV"
+
+      - name: Install a Claude Code the adapter is not paired with
+        shell: bash
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/claude-other"
+          mkdir -p "$d"
+          cd "$d"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --ignore-scripts "@anthropic-ai/claude-agent-sdk-linux-x64@${OTHER_CLAUDE_SDK_VERSION}"
+          bin="$d/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude"
+          "$bin" --version
+          echo "ORCA_CLAUDE_OTHER_RUNTIME=$bin" >> "$GITHUB_ENV"
+
+      - name: Run the acceptance tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run packages/cli/test/claude-hook-acceptance-704.test.ts \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/acceptance.json"
+          # The suite is skipped without the adapter; here every test has to have run.
+          node -e '
+            const r = require(process.argv[1]);
+            if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
+              throw new Error(`expected every acceptance test to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
+          ' "$RUNNER_TEMP/acceptance.json"

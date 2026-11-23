@@ -35,6 +35,7 @@ import {
 import { decideFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
 import { processCleanup } from "./process-cleanup.js";
 import { SftpStatusError, SSH_FX_NO_SUCH_FILE } from "./hosts/sftp.js";
+import { nativeToolHookUnavailable } from "./claude-hook-session.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
 import {
@@ -76,6 +77,19 @@ export interface OpenSessionOptions {
    * with the error this returns, before `session/new` or `session/load` configures anything.
    */
   requireEmbeddedContext?: (() => Error) | undefined;
+  /**
+   * The `_meta` for `session/new` and `session/load`, decided once the agent has said at
+   * `initialize` who it is (#704). The CLI's session factory uses it to install ORCA's
+   * pre-tool hook in an agent that takes one (`claudeHookSessionMeta`). Undefined sends none.
+   * A throw fails the open, and startup cleanup stops the process.
+   */
+  sessionMeta?:
+    | ((
+        agentInfo: { name: string; version: string } | undefined,
+        /** The agent process's id, so the hook can tell its runtime's processes from others. */
+        agentPid: number | undefined,
+      ) => Promise<Record<string, unknown> | undefined>)
+    | undefined;
   /** Handed every resolved secret value, before anything else happens, so the caller can redact it. */
   onSecretValues?: (values: readonly string[]) => void;
   host: AgentHost;
@@ -165,6 +179,12 @@ function withinRoots(path: string, roots: string[]): boolean {
 }
 
 export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSession> {
+  // An agent that asked for ORCA's tool hook is opened only by the session factory that
+  // installs it (`sessionMeta`); any other caller (a probe, a tool) would run it unguarded.
+  if (opts.sessionMeta === undefined) {
+    const refused = nativeToolHookUnavailable(opts.agent);
+    if (refused) throw refused;
+  }
   if (opts.requireContextRecovery && !opts.resumeSessionId?.trim()) throw contextRecoveryFailure("missing-session-id");
   // Secret references (#336) are checked before anything starts; the host reads them as part
   // of starting the agent. From then on every error this session throws, the handshake's
@@ -548,6 +568,11 @@ async function openPlanned(
       })),
     };
     if (opts.additionalDirectories) newSession.additionalDirectories = opts.additionalDirectories;
+    const meta = await opts.sessionMeta?.(
+      init.agentInfo ? { name: init.agentInfo.name, version: init.agentInfo.version } : undefined,
+      proc.pid,
+    );
+    if (meta) newSession._meta = meta;
     let loaded = false;
     let continuity: SessionContinuity = { mode: "fresh", reason: "new" };
     if (opts.resumeSessionId) {
