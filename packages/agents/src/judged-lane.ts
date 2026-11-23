@@ -223,7 +223,6 @@ function restricted(policy: PermissionPolicy, facts: ReturnType<typeof callFacts
   );
 }
 
-
 /** The command text an `execute` ask carries, as the agent wrote it; the title when it sent none. */
 function commandText(request: acp.RequestPermissionRequest): string {
   const raw = request.toolCall.rawInput;
