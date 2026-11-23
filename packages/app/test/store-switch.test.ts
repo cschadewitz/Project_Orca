@@ -9,6 +9,7 @@ import { UpdatePreflightRefusal, type UpdateGuards } from "../src/main/updates.j
 import type { StoreSwitchState } from "../src/store-switch-contract.js";
 
 const AVAILABLE: StoreStatus = { backend: "file", sqliteSwitch: "available" };
+const CLAIM = "a".repeat(64);
 
 function rig(
   options: {
@@ -16,8 +17,8 @@ function rig(
     enabled?: boolean;
     platform?: NodeJS.Platform;
     guards?: Partial<UpdateGuards>;
-    settle?: (token: string) => Promise<string>;
-    request?: (workspace: string) => void;
+    settle?: (token: string) => Promise<{ path: string; claimHash: string }>;
+    request?: (workspace: string, after: string) => void;
   } = {},
 ) {
   const calls: string[] = [];
@@ -39,12 +40,12 @@ function rig(
       options.settle ??
       (async () => {
         calls.push("settle");
-        return "/w";
+        return { path: "/w", claimHash: CLAIM };
       }),
     request:
       options.request ??
-      ((workspace) => {
-        calls.push(`request:${workspace}`);
+      ((workspace, after) => {
+        calls.push(`request:${workspace}:${after === CLAIM}`);
       }),
     relaunch,
     changed: (state) => states.push(state),
@@ -71,7 +72,7 @@ describe("StoreSwitchRestart", () => {
   it("drains and stops the daemon exactly, settles it, records the request, then restarts ORCA", async () => {
     const r = rig();
     const state = await r.restart.restart();
-    expect(r.calls).toEqual(["prepareDrafts", "prepareDaemon", "stopDaemon", "settle", "request:/w", "relaunch"]);
+    expect(r.calls).toEqual(["prepareDrafts", "prepareDaemon", "stopDaemon", "settle", "request:/w:true", "relaunch"]);
     expect(state.phase).toBe("restarting");
     // Held until ORCA restarts: a second ask does nothing.
     await r.restart.restart();
@@ -125,7 +126,7 @@ describe("StoreSwitchRestart", () => {
           throw new Error("First-run ownership");
         },
       },
-      { settle: async () => "/elsewhere" },
+      { settle: async () => ({ path: "/elsewhere", claimHash: CLAIM }) },
       {
         request: () => {
           throw new Error("EACCES");
@@ -154,27 +155,61 @@ describe("StoreSwitchRestart", () => {
 
 describe("store switch request", () => {
   const file = () => join(mkdtempSync(join(tmpdir(), "orca-store-switch-")), "store-switch", "request.json");
+  const dir = (path: string, ino: string) => ({ path, dev: "1", ino, uid: "1000" });
+  /** The workspace's and store's directory identity, as the fence reads it; a replacement changes the inode. */
+  let inode = "10";
+  const directories = (workspace: string) => ({
+    workspace: dir(workspace, inode),
+    store: dir(join(workspace, ".orca"), `${inode}1`),
+  });
+  const write = (path: string, workspace = "/w", after = CLAIM) => {
+    inode = "10";
+    writeStoreSwitchRequest(path, workspace, after, directories);
+  };
+  const take = (path: string, previous: string | null = CLAIM, enabled = true, workspace = "/w") =>
+    takeStoreSwitchRequest(path, workspace, { previous }, enabled, directories);
 
-  it("is spent by asking, and acted on only for the workspace it names", () => {
+  it("is acted on once, by the launch that follows the stopped claim of the same workspace and store", () => {
     const path = file();
-    expect(takeStoreSwitchRequest(path, "/w")).toBe(false);
-    writeStoreSwitchRequest(path, "/w");
-    expect(takeStoreSwitchRequest(path, "/w")).toBe(true);
-    expect(takeStoreSwitchRequest(path, "/w")).toBe(false);
-    writeStoreSwitchRequest(path, "/w");
-    expect(takeStoreSwitchRequest(path, "/other")).toBe(false);
-    // Spent even so: never acted on later.
-    expect(takeStoreSwitchRequest(path, "/w")).toBe(false);
+    expect(take(path)).toBeUndefined();
+    write(path);
+    expect(take(path)).toEqual({ after: CLAIM });
+    expect(take(path)).toBeUndefined();
+    expect(readdirSync(join(path, ".."))).toEqual([]);
+  });
+
+  it("is spent, never acted on, while the switch is disabled: enabling it later finds nothing", () => {
+    const path = file();
+    write(path);
+    expect(take(path, CLAIM, false)).toBeUndefined();
+    expect(take(path, CLAIM, true)).toBeUndefined();
+    expect(readdirSync(join(path, ".."))).toEqual([]);
+  });
+
+  it("is refused, and spent, for another workspace, another launch, or a workspace replaced at the same path", () => {
+    const path = file();
+    write(path);
+    expect(take(path, CLAIM, true, "/other")).toBeUndefined();
+    expect(take(path)).toBeUndefined();
+    // A launch that does not directly follow the stopped daemon (another came between).
+    write(path);
+    expect(take(path, "c".repeat(64))).toBeUndefined();
+    write(path);
+    expect(take(path, null)).toBeUndefined();
+    // The workspace was replaced before the next launch: same path, other directories.
+    write(path);
+    inode = "20";
+    expect(take(path)).toBeUndefined();
     expect(readdirSync(join(path, ".."))).toEqual([]);
   });
 
   it("ignores, and removes, a damaged request", () => {
     const path = file();
-    writeStoreSwitchRequest(path, "/w");
+    write(path);
     writeFileSync(path, "{ not json");
-    expect(takeStoreSwitchRequest(path, "/w")).toBe(false);
-    writeFileSync(path, JSON.stringify({ version: 2, workspace: "/w" }));
-    expect(takeStoreSwitchRequest(path, "/w")).toBe(false);
+    expect(take(path)).toBeUndefined();
+    writeFileSync(path, JSON.stringify({ version: 1, workspace: "/w" }));
+    expect(take(path)).toBeUndefined();
     expect(readdirSync(join(path, ".."))).toEqual([]);
   });
 });

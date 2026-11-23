@@ -864,6 +864,9 @@ let alertsEpoch = 0;
 /** "Switch to SQLite" for the app's own workspace (#339); created with the update guards below. */
 const storeSwitchRef: { current?: StoreSwitchRestart } = {};
 const storeSwitchRequestFile = join(app.getPath("userData"), "store-switch", "request.json");
+// Offered to people only after the native signed/installed switch and rollback acceptance
+// (#339); until then only that acceptance turns it on.
+const sqliteSwitchEnabled = process.env.ORCA_SQLITE_SWITCH === "1";
 const workspace = new Workspace({
   updateBootstrap: {
     get ordinaryAllowed() {
@@ -1019,7 +1022,9 @@ const workspace = new Workspace({
   defaultUrl: DEFAULT_DAEMON_URL,
   defaultPath: () => process.env.ORCA_WORKSPACE || undefined,
   setupBusy: () => firstRun.isBusy,
-  takeStoreSwitch: (path) => takeStoreSwitchRequest(storeSwitchRequestFile, path),
+  // The gate is checked here too: a request written while enabled is never acted on once not.
+  takeStoreSwitch: (path, ownership) =>
+    takeStoreSwitchRequest(storeSwitchRequestFile, path, ownership, sqliteSwitchEnabled),
   recoverFirstRun: async (path, check, prepareConnection) => {
     const attempt = ++firstRunConnectionAttempt;
     await appWriters.run(() =>
@@ -1557,15 +1562,13 @@ const storeSwitch = new StoreSwitchRestart({
   guards: updateGuards,
   target: () => workspace.storeSwitchTarget,
   settle: (token) => workspace.settleForStoreSwitch(token),
-  request: (path) => writeStoreSwitchRequest(storeSwitchRequestFile, path),
+  request: (path, after) => writeStoreSwitchRequest(storeSwitchRequestFile, path, after),
   relaunch: () => {
     app.relaunch();
     app.quit();
   },
   changed: (state) => send("orca:storeSwitch", state),
-  // Offered to people only after the native signed/installed switch and rollback acceptance
-  // (#339); until then only that acceptance turns it on.
-  enabled: process.env.ORCA_SQLITE_SWITCH === "1",
+  enabled: sqliteSwitchEnabled,
 });
 storeSwitchRef.current = storeSwitch;
 storeSwitch.refresh();

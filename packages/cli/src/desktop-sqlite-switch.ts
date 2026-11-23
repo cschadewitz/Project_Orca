@@ -18,8 +18,17 @@ import { StoreFormatError, switchStoreToSqlite, type SwitchToSqliteOptions } fro
 import type { FirstRunWriterHold } from "@orca/protocol/first-run-fence";
 import { storePrivacy } from "./store-privacy.js";
 
-/** Set by the app on one daemon launch to ask for the switch (daemon-process.ts). */
+/**
+ * Set by the app on one daemon launch to ask for the switch (daemon-process.ts):
+ * `sqlite:<claim hash>`, naming the first-run claim of the daemon the app stopped exactly for it.
+ */
 export const STORE_SWITCH_ENV = "ORCA_STORE_SWITCH";
+
+/** The stopped claim a `STORE_SWITCH_ENV` value names, or `undefined` when it is not a request. */
+export function parseStoreSwitchRequest(value: string | undefined): { after: string } | undefined {
+  const match = value === undefined ? null : /^sqlite:([a-f0-9]{64})$/.exec(value);
+  return match ? { after: match[1]! } : undefined;
+}
 
 export type DesktopSqliteSwitchOutcome =
   | { status: "switched" | "current" }
@@ -37,6 +46,8 @@ export async function desktopSqliteSwitch(
   storeDir: string,
   writer: FirstRunWriterHold | undefined,
   appVersion: string,
+  /** The claim of the daemon the app stopped for this switch: this writer's must directly follow it. */
+  after: string,
   /** Tests. */
   hooks: Pick<SwitchToSqliteOptions, "afterFenceStep" | "beforeMarker" | "platform"> = {},
 ): Promise<DesktopSqliteSwitchOutcome> {
@@ -45,6 +56,14 @@ export async function desktopSqliteSwitch(
       status: "refused",
       reason: "SWITCH_REFUSED",
       message: `${storeDir} is not one of the desktop app's own workspaces, so it is not switched in place. Use \`orca store sqlite convert\`, which converts into a new store and leaves this one as it is.`,
+    };
+  // Only the launch directly after the exact stop the app made for the switch: a request that
+  // outlived that stop (another launch came between, the workspace was replaced) is refused.
+  if (writer.previous !== after || !writer.check())
+    return {
+      status: "refused",
+      reason: "SWITCH_REFUSED",
+      message: `The switch to SQLite was asked for another start of ${storeDir} than this one, so the store stays on files. Ask for it again.`,
     };
   const privacy = storePrivacy();
   try {

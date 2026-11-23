@@ -14,7 +14,12 @@ import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
 import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
 import { enterDaemonStoreFormat } from "./desktop-carryover.js";
-import { desktopSqliteSwitch, STORE_SWITCH_ENV, type DesktopSqliteSwitchOutcome } from "./desktop-sqlite-switch.js";
+import {
+  desktopSqliteSwitch,
+  parseStoreSwitchRequest,
+  STORE_SWITCH_ENV,
+  type DesktopSqliteSwitchOutcome,
+} from "./desktop-sqlite-switch.js";
 import { readOrcaVersion } from "./version.js";
 import {
   CheckpointAdmissionService,
@@ -381,7 +386,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const firstRunLaunch = process.env.ORCA_FIRST_RUN_LAUNCH;
   delete process.env.ORCA_FIRST_RUN_LAUNCH;
   // The desktop app asks for its store's switch to SQLite on one launch (#339); never inherited.
-  const storeSwitch = process.env[STORE_SWITCH_ENV];
+  const storeSwitch = parseStoreSwitchRequest(process.env[STORE_SWITCH_ENV]);
   delete process.env[STORE_SWITCH_ENV];
   await enterConfiguredUpdateBootstrap(resolve(configDir), resolve(configDir, config.storeDir));
   if (isClosedUpdateBootstrap() && config.plugins.length)
@@ -413,8 +418,8 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       isClosedUpdateBootstrap() ? "read" : "write",
     ));
     // Before this process registers as a writer: the switch refuses while any writer is alive.
-    if (storeSwitch === "sqlite" && !isClosedUpdateBootstrap() && backend === "file") {
-      storeSwitchOutcome = await desktopSqliteSwitch(storeDir, writer, storeWriterVersion());
+    if (storeSwitch && !isClosedUpdateBootstrap() && backend === "file") {
+      storeSwitchOutcome = await desktopSqliteSwitch(storeDir, writer, storeWriterVersion(), storeSwitch.after);
       backend = recordedStoreBackend(storeDir) ?? "file";
     }
     if (!isClosedUpdateBootstrap()) {

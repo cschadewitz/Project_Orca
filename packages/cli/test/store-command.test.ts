@@ -274,7 +274,7 @@ describe("orca store", () => {
 
   it("a daemon asked to switch in place outside the app's own workspace starts on files", async () => {
     const dir = await fileWorkspace({ name: "orca.config.yaml", text: "version: 1\nworkflows: []\ntemplates: []\n" });
-    process.env.ORCA_STORE_SWITCH = "sqlite";
+    process.env.ORCA_STORE_SWITCH = `sqlite:${"a".repeat(64)}`;
     try {
       const app = await bootstrap({ cwd: dir, logger: silentLogger });
       expect(process.env.ORCA_STORE_SWITCH).toBeUndefined();

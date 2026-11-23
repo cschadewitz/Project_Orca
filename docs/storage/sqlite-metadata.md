@@ -363,10 +363,16 @@ connected bundled first-run daemon reporting the switch available. After a
 confirmation, the restart goes through the update guards: drafts prepared, the
 daemon's admission closed and drained (refused while a run is active), the exact
 daemon stopped and its exit observed, its first-run reservation settled. Then a
-request naming the workspace is written (`<userData>/store-switch/request.json`) and
-ORCA restarts. The next owned launch of that workspace asks for the request, which is
-spent by asking whether or not it names the workspace, and starts its daemon with the
-switch; an update recovery's launch never does. A refusal before the stop reopens
+request is written (`<userData>/store-switch/request.json`) naming the workspace, the
+identity (device, inode, owner) of its directory and of its store directory, and the
+first-run claim of the daemon just stopped, and ORCA restarts. The next owned launch
+spends the request by asking for it, whatever it names, and acts on it only when the
+switch is enabled in this build, the workspace and both directories are the same ones
+by identity (a workspace replaced at the same path is refused), and the launch's own
+reservation directly follows the stopped claim. Its daemon is then started with
+`ORCA_STORE_SWITCH=sqlite:<claim>`, and switches only if its fence, once entered,
+also follows that claim; otherwise it refuses (`SWITCH_REFUSED`) and starts on files.
+An update recovery's launch never asks. A refusal before the stop reopens
 admission on the running daemon; after it, nothing restarts the old daemon, and
 reopening ORCA starts the workspace on files.
 

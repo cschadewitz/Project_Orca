@@ -27,6 +27,9 @@ const nextAttempt = (path: string) => {
   return String(Number(last) + 1).padStart(6, "0");
 };
 
+/** The claim the daemon the app stopped for the switch wrote: the one this launch follows. */
+const after = (hold: { previous: string | null }) => hold.previous!;
+
 /** The app's workspace with a populated store on files, and its daemon entered as the writer. */
 async function appWorkspace() {
   const path = await selected();
@@ -42,12 +45,12 @@ it.runIf(process.platform !== "win32")(
   "switches the app's own store in place while its daemon holds the fence",
   async () => {
     const { store, hold } = await appWorkspace();
-    expect(await desktopSqliteSwitch(store, hold, "0.8.0")).toEqual({ status: "switched" });
+    expect(await desktopSqliteSwitch(store, hold, "0.8.0", after(hold))).toEqual({ status: "switched" });
     expect(recordedStoreBackend(store)).toBe("sqlite");
     await expectFenced(store);
     await expectReadsOnSqlite(store);
     // Asked again: nothing to do.
-    expect(await desktopSqliteSwitch(store, hold, "0.8.0")).toEqual({ status: "current" });
+    expect(await desktopSqliteSwitch(store, hold, "0.8.0", after(hold))).toEqual({ status: "current" });
   },
   30000,
 );
@@ -62,7 +65,7 @@ it.runIf(process.platform !== "win32")(
     // Another launch reserves the workspace while the legacy fence is in: this writer is no
     // longer the journal's latest, so it must neither publish the switch nor open the store.
     await expect(
-      desktopSqliteSwitch(store, hold, "0.8.0", { beforeMarker: async () => reserveAgain(path) }),
+      desktopSqliteSwitch(store, hold, "0.8.0", after(hold), { beforeMarker: async () => reserveAgain(path) }),
     ).rejects.toMatchObject({ code: "STORE_FORMAT", details: expect.objectContaining({ reason: "FENCE_LOST" }) });
     expect(hold.check()).toBe(false);
     expect(await contents(store)).toEqual(before);
@@ -81,14 +84,14 @@ it.runIf(process.platform !== "win32")(
     // Still the writer: the refusal is an outcome, and the daemon goes on on files.
     const kept = await appWorkspace();
     expect(
-      await desktopSqliteSwitch(kept.store, kept.hold, "0.8.0", { beforeMarker: async () => busy() }),
+      await desktopSqliteSwitch(kept.store, kept.hold, "0.8.0", after(kept.hold), { beforeMarker: async () => busy() }),
     ).toMatchObject({ status: "refused", reason: "BUSY" });
     expect(recordedStoreBackend(kept.store)).toBe("file");
     // No longer the writer when refused: rolled back, and the launch is aborted.
     const lost = await appWorkspace();
     const before = await contents(lost.store);
     await expect(
-      desktopSqliteSwitch(lost.store, lost.hold, "0.8.0", {
+      desktopSqliteSwitch(lost.store, lost.hold, "0.8.0", after(lost.hold), {
         afterFenceStep: async () => {
           reserveAgain(lost.path);
           busy();
@@ -101,10 +104,26 @@ it.runIf(process.platform !== "win32")(
   30000,
 );
 
+it.runIf(process.platform !== "win32")(
+  "refuses a request that does not name the claim this launch follows, changing nothing",
+  async () => {
+    const { store, hold } = await appWorkspace();
+    expect(hold.previous).toMatch(/^[a-f0-9]{64}$/);
+    const before = await contents(store);
+    expect(await desktopSqliteSwitch(store, hold, "0.8.0", "c".repeat(64))).toMatchObject({
+      status: "refused",
+      reason: "SWITCH_REFUSED",
+    });
+    expect(await contents(store)).toEqual(before);
+    expect(recordedStoreBackend(store)).toBe("file");
+  },
+  30000,
+);
+
 it("refuses, changing nothing, without the app's fence or on Windows", async () => {
   const plain = await populated();
   const before = await contents(plain);
-  expect(await desktopSqliteSwitch(plain, undefined, "0.8.0")).toMatchObject({
+  expect(await desktopSqliteSwitch(plain, undefined, "0.8.0", "a".repeat(64))).toMatchObject({
     status: "refused",
     reason: "SWITCH_REFUSED",
     message: expect.stringContaining("orca store sqlite convert"),
@@ -113,7 +132,13 @@ it("refuses, changing nothing, without the app's fence or on Windows", async () 
 
   const windows = await populated();
   expect(
-    await desktopSqliteSwitch(windows, { check: () => true } as never, "0.8.0", { platform: "win32" }),
+    await desktopSqliteSwitch(
+      windows,
+      { check: () => true, previous: "a".repeat(64) } as never,
+      "0.8.0",
+      "a".repeat(64),
+      { platform: "win32" },
+    ),
   ).toMatchObject({ status: "refused", reason: "UNDURABLE" });
   expect(recordedStoreBackend(windows)).toBe("file");
 });
