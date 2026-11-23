@@ -22,6 +22,7 @@
  */
 import { z } from "zod";
 import { ConfigApplyResultSchema } from "./config.js";
+import { WorkflowDraftDryRunParamsSchema, WorkflowDraftDryRunResultSchema } from "./dry-run.js";
 
 const WORKFLOW_ID = /^[a-z0-9][a-z0-9-]*$/;
 const NODE_ID = /^[A-Za-z0-9_-]+$/;
@@ -234,6 +235,8 @@ export const WORKFLOW_DRAFT_METHOD_CONTRACTS = {
     params: mutation,
     result: z.object({ discarded: z.literal(true) }),
   },
+  /** Protocol 2.8 (#183): simulate this revision of the caller's draft; see dry-run.ts. */
+  "workflowDrafts.dryRun": { params: WorkflowDraftDryRunParamsSchema, result: WorkflowDraftDryRunResultSchema },
 } as const;
 export type WorkflowDraftMethod = keyof typeof WORKFLOW_DRAFT_METHOD_CONTRACTS;
 /** The draft reads; every other method in the table writes. */

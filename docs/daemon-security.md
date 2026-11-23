@@ -229,6 +229,7 @@ that the two match. A method that is missing from the table is refused with
 | `runs.get` | `runs.read` | the run | — |
 | `runs.events` | `runs.read` | the run | — |
 | `runs.recovery` | `runs.read` | the run; read-only, a run started by another principal is shown as not theirs to recover; without `artifacts.read` no artifact is read or named | — |
+| `runs.dryRunReport` | `runs.read` | the run; read-only; refused for a run that is not a dry run (#183) | — |
 | `search` | `runs.read` | a run-restricted caller must name one run, which is authorized before the scan (no `runId` is `AUTH_FORBIDDEN`), and a named run it cannot see answers empty; artifact hits and artifact events need `artifacts.read` | — |
 | `inputs.revise` | `inputs.answer` | also requires `runs.control`; exact durable run, input and declared destination | decision |
 | `inputs.replaceRevision` | `inputs.answer` | also requires `runs.control`; exact undelivered destination/attempt and CAS | mutation |
@@ -275,6 +276,7 @@ that the two match. A method that is missing from the table is refused with
 | `workflowDrafts.review` | `config.write` | additionally config.read; owner-only; the exact bytes publish would write; no writes | — |
 | `workflowDrafts.publish` | `config.write` | additionally config.read; owner-only, reviewed bytes under the config lock, base re-checked, generation Apply, file restored on refusal | mutation |
 | `workflowDrafts.discard` | `config.write` | additionally config.read; owner-only, revision-checked; deletes the draft file only | mutation |
+| `workflowDrafts.dryRun` | `config.write` | additionally config.read and runs.start; owner-only, revision-checked, refused while validation finds an error; simulates the draft with fixtures (no agent, workspace, secret, Request, work item or plugin node) and leaves a dry-run tree; writes no workflow file (#183) | mutation |
 | `config.get` | `config.read` | workspace-wide | — |
 | `config.set` | `config.write` | additionally config.read; workspace-wide unredacted Save/validation receipt | mutation |
 | `config.apply` | `config.write` | workspace-wide | mutation |

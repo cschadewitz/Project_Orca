@@ -30,9 +30,10 @@ import {
   type RunState,
   type Clock,
   type MutationActor,
+  type WorkflowDefinition,
 } from "@orca/core";
 import { recordAlwaysDecision, type RecordAlwaysResult } from "@orca/agents";
-import type { Orchestrator } from "@orca/engine";
+import { dryRunReport, startDryRun, type Orchestrator } from "@orca/engine";
 import {
   ProtocolFault,
   type ClaimsReleaseParams,
@@ -50,6 +51,8 @@ import {
   type RunsStartParams,
   type RunsStartResult,
   type RunSummaryView,
+  type WorkflowDraftDryRunParams,
+  type WorkflowDraftDryRunResult,
 } from "@orca/protocol";
 import { agentSessionsByStep, type ReadModel } from "./read-model.js";
 
@@ -248,6 +251,8 @@ export class ControlModel {
     return this.orc;
   }
   private readonly orc: Orchestrator;
+  /** Dry runs this process is driving now; the interrupted-run sweep leaves them alone. */
+  private readonly ownDryRuns = new Set<string>();
   private readonly reads: ReadModel;
   private readonly permissionsFile: string | undefined;
   private readonly config: ConfigAnnouncer | undefined;
@@ -510,6 +515,71 @@ export class ControlModel {
     } finally {
       release?.();
     }
+  }
+
+  /**
+   * `workflowDrafts.dryRun` (#183): simulate one exact draft definition with fixtures and answer
+   * once the tree has stopped. Bounded by the dry run's step budget, so it waits like
+   * `runs.start` does. Nothing outside ORCA is touched; see the engine's dry-run.ts.
+   */
+  async dryRun(
+    definition: WorkflowDefinition,
+    draftRevision: number,
+    params: Pick<WorkflowDraftDryRunParams, "vars" | "fixtures" | "maxSteps">,
+    actor?: MutationActor,
+  ): Promise<WorkflowDraftDryRunResult> {
+    const release = this.orc.runtimeActivity?.enter("dispatch", true);
+    try {
+      const handle = await startDryRun(this.orc, {
+        definition,
+        draftRevision,
+        ...(params.vars ? { vars: params.vars } : {}),
+        ...(params.fixtures ? { fixtures: params.fixtures } : {}),
+        ...(params.maxSteps !== undefined ? { maxSteps: params.maxSteps } : {}),
+        ...(actor ? { actor } : {}),
+      });
+      this.ownDryRuns.add(handle.runId);
+      try {
+        await handle.done;
+      } finally {
+        this.ownDryRuns.delete(handle.runId);
+      }
+      return {
+        runId: handle.runId,
+        run: await this.runView(handle.runId),
+        report: await dryRunReport(this.orc, handle.runId),
+        asOf: this.clock.isoNow(),
+      };
+    } finally {
+      release?.();
+    }
+  }
+
+  /**
+   * End the dry runs a previous daemon left unfinished (#183). A dry run is driven only by the
+   * process that started it, so one that outlived its process can never finish: left alone it
+   * would count as unfinished work forever. Each root is cancelled, children with it; one still
+   * leased by the dead process is tried again once its lease has lapsed. Best effort.
+   */
+  async settleInterruptedDryRuns(retryAfterMs = 65_000): Promise<string[]> {
+    const settled: string[] = [];
+    const leased: string[] = [];
+    for (const runId of await this.orc.listRuns()) {
+      const first = (await this.orc.stores.events.readRange(runId, { limit: 1 }))[0];
+      if (first?.type !== "run.created" || !first.payload.dryRun || first.payload.parentRunId) continue;
+      if (this.ownDryRuns.has(runId)) continue;
+      const summary = await this.orc.getSummary(runId);
+      if (summary.status === "completed" || summary.status === "failed" || summary.status === "cancelled") continue;
+      try {
+        await this.orc.cancel(runId, "interrupted: the daemon stopped while this dry run was running");
+        settled.push(runId);
+      } catch (error) {
+        if (error instanceof OrcaError && error.code === "RUN_LEASED") leased.push(runId);
+      }
+    }
+    if (leased.length && retryAfterMs > 0)
+      setTimeout(() => void this.settleInterruptedDryRuns(0).catch(() => undefined), retryAfterMs).unref();
+    return settled;
   }
 
   /**

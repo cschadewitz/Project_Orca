@@ -72,6 +72,10 @@ import {
   eventTypeReadable,
   RUNS_RECOVER_METHOD,
   RUNS_RECOVERY_METHOD,
+  RUNS_DRY_RUN_REPORT_METHOD,
+  RunsDryRunReportParamsSchema,
+  type RunsDryRunReportParams,
+  type RunsDryRunReportResult,
   RUNS_REVIEW_EFFECT_METHOD,
   RunsRecoverParamsSchema,
   RunsRecoveryParamsSchema,
@@ -723,6 +727,12 @@ export const runsCancel: Method<RunsCancelParams, RunsCancelResult> = {
 };
 
 /** `runs.recovery` (#357): how this run could be recovered. Read-only. */
+/** `runs.dryRunReport` (#183): what a dry run did. A read. */
+export const runsDryRunReport: Method<RunsDryRunReportParams, RunsDryRunReportResult> = {
+  params: RunsDryRunReportParamsSchema,
+  handle: (params, ctx) => reads(ctx).runsDryRunReport(params),
+};
+
 export const runsRecovery: Method<RunsRecoveryParams, RunsRecoveryResult> = {
   params: RunsRecoveryParamsSchema,
   handle: (params, ctx) =>
@@ -869,6 +879,7 @@ export const methods: MethodTable = {
   [WORKFLOWS_GET_METHOD]: workflowsGet,
   [SEARCH_METHOD]: search,
   [RUNS_RECOVERY_METHOD]: runsRecovery,
+  [RUNS_DRY_RUN_REPORT_METHOD]: runsDryRunReport,
 };
 
 /**

@@ -107,6 +107,7 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "runs.get": { permission: "runs.read", resource: "run" },
   "runs.events": { permission: "runs.read", resource: "run" },
   "runs.recovery": { permission: "runs.read", resource: "run" },
+  "runs.dryRunReport": { permission: "runs.read", resource: "run" },
   search: { permission: "runs.read", resource: "search" },
   // Exact target checks live in the authenticated revision service, including after the input closes.
   "inputs.revise": { permission: "inputs.answer", resource: "none", audit: "decision" },
@@ -208,6 +209,14 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "workflowDrafts.publish": {
     permission: "config.write",
     additionalPermissions: ["config.read"],
+    resource: "none",
+    audit: "mutation",
+  },
+  // A dry run (#183) simulates the caller's draft and leaves a run tree behind: a draft write
+  // that also needs the grant to start runs.
+  "workflowDrafts.dryRun": {
+    permission: "config.write",
+    additionalPermissions: ["config.read", "runs.start"],
     resource: "none",
     audit: "mutation",
   },
