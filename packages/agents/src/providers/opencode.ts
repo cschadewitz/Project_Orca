@@ -259,7 +259,7 @@ export function openCodePolicyProblems(agent: AgentSpec): string[] {
 
 export type ImageDigest = (path: string) => Promise<string>;
 
-export const sha256File: ImageDigest = (path) =>
+export const openCodeImageDigest: ImageDigest = (path) =>
   new Promise((resolve, reject) => {
     const hash = createHash("sha256");
     createReadStream(path)
@@ -489,7 +489,7 @@ export interface OpenCodeGuardOptions {
 }
 
 export function openCodeGuard(opts: OpenCodeGuardOptions = {}): ProviderGuard {
-  const digest = opts.digest ?? sha256File;
+  const digest = opts.digest ?? openCodeImageDigest;
   const platform = opts.platform ?? process.platform;
   const arch = opts.arch ?? process.arch;
   const managed = opts.managedConfig ?? managedConfigPresent;

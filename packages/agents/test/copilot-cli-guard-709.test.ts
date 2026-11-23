@@ -3,14 +3,17 @@
  * prompts, allow-all/autopilot options and bounded "always" answers. No Copilot runs here; the
  * same checks against the real Copilot CLI are in copilot-cli-acceptance-709.test.ts.
  */
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type * as acp from "@agentclientprotocol/sdk";
 import { AgentSpecSchema, type AgentSpec, type SessionConfigOption } from "@orca/core";
 import {
+  COPILOT_CLI_VERIFIED_BUILDS,
   COPILOT_CLI_VERIFIED_VERSIONS,
+  copilotHomeProblems,
+  sha256File,
   LocalHost,
   boundedOptionId,
   copilotCliGuard,
@@ -26,7 +29,6 @@ import {
   type SessionUpdateEvent,
 } from "@orca/agents";
 
-const VERSION = COPILOT_CLI_VERIFIED_VERSIONS[0]!;
 const good = (over: Partial<Record<string, unknown>> = {}): AgentSpec =>
   AgentSpecSchema.parse({
     id: "copilot",
@@ -134,68 +136,140 @@ describe("launch profile", () => {
   });
 });
 
-describe("version", () => {
+describe("executable identity and Copilot's profile", () => {
+  const LINUX = COPILOT_CLI_VERIFIED_BUILDS.find((b) => b.platform === "linux-x64")!;
+  const guard = (over: Partial<Parameters<typeof copilotCliGuard>[0]> = {}) =>
+    copilotCliGuard({ digest: async () => LINUX.sha256, platform: "linux-x64", environment: () => ({}), ...over });
+
   it("parses copilot --version", () => {
     expect(parseCopilotCliVersion("GitHub Copilot CLI 1.0.114.\nRun 'copilot update' to check for updates.\n")).toBe(
       "1.0.114",
     );
     expect(parseCopilotCliVersion("something else")).toBeUndefined();
+    expect(COPILOT_CLI_VERIFIED_VERSIONS).toEqual(["1.0.114"]);
   });
 
-  async function options(command: string): Promise<OpenSessionOptions> {
+  async function options(command: string, home = "/nonexistent/copilot-profile"): Promise<OpenSessionOptions> {
     return {
       host: new LocalHost({ id: "local", type: "local" }),
-      agent: good({ command }),
+      agent: good({ command, env: { ...good().env, COPILOT_HOME: home } }),
       cwd: tmpdir(),
     };
   }
   async function executable(): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), "orca-copilot-version-"));
+    const dir = await mkdtemp(join(tmpdir(), "orca-copilot-exe-"));
     const path = join(dir, "copilot");
     await writeFile(path, "x");
     return path;
   }
 
-  it("opens a verified version and refuses any other before the agent starts", async () => {
+  it("opens a verified build and refuses any other executable or platform before the agent starts", async () => {
     const open = vi.fn(async () => fakeSession());
-    const ok = withProviderGuards(open, [
-      copilotCliGuard({ probe: async () => `GitHub Copilot CLI ${VERSION}.`, environment: () => ({}) }),
-    ]);
-    await ok(await options(await executable()));
+    await withProviderGuards(open, [guard()])(await options(await executable()));
     expect(open).toHaveBeenCalledOnce();
 
-    const other = withProviderGuards(open, [
-      copilotCliGuard({ probe: async () => "GitHub Copilot CLI 1.0.115.", environment: () => ({}) }),
-    ]);
-    await expect(other(await options(await executable()))).rejects.toMatchObject({
+    await expect(
+      withProviderGuards(open, [guard({ digest: async () => "0".repeat(64) })])(await options(await executable())),
+    ).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      message: expect.stringContaining("1.0.115"),
+      message: expect.stringContaining("not a verified Copilot CLI build"),
     });
-    const silent = withProviderGuards(open, [copilotCliGuard({ probe: async () => "", environment: () => ({}) })]);
-    await expect(silent(await options(await executable()))).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
-    const broken = withProviderGuards(open, [
-      copilotCliGuard({
-        probe: async () => {
-          throw new Error("ENOENT");
-        },
-        environment: () => ({}),
-      }),
-    ]);
-    await expect(broken(await options(await executable()))).rejects.toMatchObject({ code: "AGENT_TRANSPORT" });
+    await expect(
+      withProviderGuards(open, [guard({ platform: "win32-x64" })])(await options(await executable())),
+    ).rejects.toMatchObject({ code: "NOT_SUPPORTED", message: expect.stringContaining("not on win32-x64") });
+    await expect(withProviderGuards(open, [guard()])(await options("/nonexistent/copilot"))).rejects.toMatchObject({
+      code: "AGENT_TRANSPORT",
+    });
     expect(open).toHaveBeenCalledOnce();
   });
 
-  it("refuses a bad profile without asking the executable anything", async () => {
-    const probe = vi.fn(async () => `GitHub Copilot CLI ${VERSION}.`);
+  it("hashes the file", async () => {
+    const path = await executable();
+    expect(await sha256File(path)).toBe("2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881");
+  });
+
+  it("refuses a bad profile without hashing anything", async () => {
+    const digest = vi.fn(async () => LINUX.sha256);
     const open = vi.fn(async () => fakeSession());
     const opts = await options(await executable());
     await expect(
-      withProviderGuards(open, [copilotCliGuard({ probe, environment: () => ({}) })])({
-        ...opts,
-        agent: good({ args: ["--acp", "--yolo"] }),
-      }),
+      withProviderGuards(open, [guard({ digest })])({ ...opts, agent: good({ args: ["--acp", "--yolo"] }) }),
     ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
-    expect(probe).not.toHaveBeenCalled();
+    expect(digest).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  async function home(files: Record<string, string>, dirs: Record<string, string[]> = {}): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "orca-copilot-home-"));
+    await chmod(root, 0o700);
+    for (const [name, text] of Object.entries(files)) await writeFile(join(root, name), text);
+    for (const [name, children] of Object.entries(dirs)) {
+      await mkdir(join(root, name));
+      for (const child of children) await writeFile(join(root, name, child), "{}");
+    }
+    return root;
+  }
+  const FRESH_CONFIG =
+    '// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  "firstLaunchAt": "2026-11-23T09:28:01.155Z"\n}\n';
+
+  it("accepts a fresh or signed-in profile and the state Copilot writes during ORCA's sessions", async () => {
+    expect(await copilotHomeProblems("/nonexistent/copilot-profile")).toEqual([]);
+    const dir = await home(
+      {
+        "config.json": FRESH_CONFIG.replace(
+          "}",
+          ', "loggedInUsers": [{"host": "https://github.com", "login": "x"}], "lastLoggedInUser": {"login": "x"}}',
+        ),
+        "settings.json.lock": "",
+        "session-store.db": "",
+        "settings.json": '{ "banner": "never", "model": "gpt-5" }',
+        "permissions-config.json": '{ "locations": { "/w": { "tool_approvals": [], "allowed_directories": [] } } }',
+      },
+      { logs: ["process.log"], "session-state": ["a"], "installed-plugins": [] },
+    );
+    expect(await copilotHomeProblems(dir)).toEqual([]);
+  });
+
+  it("refuses saved approvals, trust, hooks, MCP servers, plugins, unknown files and shared directories", async () => {
+    const dir = await home(
+      {
+        "config.json": FRESH_CONFIG.replace("}", ', "trustedFolders": ["/w"]}'),
+        "settings.json": '{ "allowedUrls": ["example.com"], "defaultPermissionMode": "allow-all", "banner": "never" }',
+        "permissions-config.json": '{ "locations": { "/w": { "tool_approvals": ["shell(touch)"] } } }',
+        "mcp-config.json": "{}",
+      },
+      { hooks: ["a.json"], "installed-plugins": ["p"] },
+    );
+    expect((await copilotHomeProblems(dir)).sort()).toEqual(
+      [
+        "COPILOT_HOME config.json sets trustedFolders",
+        "COPILOT_HOME settings.json sets allowedUrls",
+        "COPILOT_HOME settings.json sets defaultPermissionMode",
+        "COPILOT_HOME permissions-config.json holds saved approvals",
+        "COPILOT_HOME holds mcp-config.json, which ORCA cannot tell is harmless",
+        "COPILOT_HOME holds hooks, which ORCA cannot tell is harmless",
+        "COPILOT_HOME has installed plugins",
+      ].sort(),
+    );
+    const broken = await home({ "settings.json": "{ not json" });
+    expect(await copilotHomeProblems(broken)).toEqual(["COPILOT_HOME settings.json cannot be read"]);
+    if (process.platform !== "win32") {
+      const shared = await home({});
+      await chmod(shared, 0o777);
+      expect(await copilotHomeProblems(shared)).toEqual([`COPILOT_HOME ${shared} can be written by other users`]);
+      const link = `${shared}-link`;
+      await symlink(shared, link);
+      expect((await copilotHomeProblems(link))[0]).toMatch(/symbolic link/);
+    }
+  });
+
+  it("refuses to start from a profile with problems", async () => {
+    const open = vi.fn(async () => fakeSession());
+    const dir = await home({ "settings.json": '{ "allowedUrls": ["example.com"] }' });
+    await expect(withProviderGuards(open, [guard()])(await options(await executable(), dir))).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("settings.json sets allowedUrls"),
+    });
     expect(open).not.toHaveBeenCalled();
   });
 });
@@ -228,7 +302,11 @@ describe("answers", () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-copilot-ask-"));
     await writeFile(join(dir, "copilot"), "x");
     await withProviderGuards(open, [
-      copilotCliGuard({ probe: async () => `GitHub Copilot CLI ${VERSION}.`, environment: () => ({}) }),
+      copilotCliGuard({
+        digest: async () => COPILOT_CLI_VERIFIED_BUILDS[0]!.sha256,
+        platform: COPILOT_CLI_VERIFIED_BUILDS[0]!.platform,
+        environment: () => ({}),
+      }),
     ])({
       host: new LocalHost({ id: "local", type: "local" }),
       agent: good({ command: join(dir, "copilot") }),
