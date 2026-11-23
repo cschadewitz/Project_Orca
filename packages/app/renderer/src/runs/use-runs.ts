@@ -16,9 +16,20 @@
  *
  * The status filter is a `runs.list` parameter and so re-reads; the text filter is applied to
  * what is already held (see `run-rows.ts` for why the two are split).
+ *
+ * **History is paged, never read whole (#340).** The first read is one page of `PAGE` runs;
+ * `loadOlder` asks for the next, by `cursor` on a 2.8 daemon (a place in the order, so runs
+ * started meanwhile do not shift it) and by `offset` on an older one. One page is in flight at
+ * a time, and a page that answers after the filter changed, the transport reattached or the
+ * surface went is dropped: those reads belong to a list nobody is looking at any more.
+ *
+ * **A link can name a run no page holds yet.** `include` resolves it with one `runs.get` and
+ * pins it in the list whatever the filter says, so `orca://run/<id>` opens last month's run
+ * as surely as this morning's.
  */
-import { useCallback, useEffect, useState } from "react";
-import type { DisplayStatus, ProtocolError, RunSummaryView, RunChangedParams } from "@orca/protocol";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { compareRunsListOrder } from "@orca/protocol";
+import type { DisplayStatus, ProtocolError, RunSummaryView, RunChangedParams, RunsListParams } from "@orca/protocol";
 import { useSubscriptionGeneration } from "../chrome/use-connection.js";
 import { useNotifications } from "../notifications-context.js";
 import { applyRunChanged, mergeRun, orderRuns } from "./run-rows.js";
@@ -49,6 +60,20 @@ export function runFiltersSupported(daemon: string | undefined): boolean {
   return major > 2 || (major === 2 && minor >= 3);
 }
 
+/**
+ * Whether `runs.list` takes a `cursor`: protocol 2.8 on. A 2.7 daemon would strip it and answer
+ * the first page again, so an older one is paged by `offset` instead.
+ */
+export function runCursorSupported(daemon: string | undefined): boolean {
+  if (daemon === undefined) return true;
+  const [major, minor] = daemon.split(".").map(Number);
+  if (major === undefined || minor === undefined || Number.isNaN(major) || Number.isNaN(minor)) return false;
+  return major > 2 || (major === 2 && minor >= 8);
+}
+
+/** Runs per `runs.list` read: the daemon's own default, so every read is a bounded page. */
+export const RUNS_PAGE = 100;
+
 function inQuery(run: RunSummaryView, query: RunsQuery): boolean {
   if (query.workflowId !== undefined && run.workflowId !== query.workflowId) return false;
   if (query.createdFrom !== undefined && Date.parse(run.createdAt) < Date.parse(query.createdFrom)) return false;
@@ -63,30 +88,84 @@ export type RunsState =
       runs: readonly RunSummaryView[];
       /** How many runs match the filter in the store — more than `runs.length` when paged. */
       total: number;
+      /** Older runs match the filter than the pages read so far hold. */
+      more: boolean;
+      /** A `loadOlder` page is in flight. */
+      loadingOlder: boolean;
+      /** The last `loadOlder` failed; the rows held are unchanged and it may be asked again. */
+      olderError?: ProtocolError | undefined;
     };
 
 export interface RunsFeed {
   state: RunsState;
   /** Re-read the page: the error state's retry, and what a person reaches for after a blip. */
   reload: () => void;
+  /** Read the next page back through history. Does nothing while one is in flight or none is left. */
+  loadOlder: () => void;
+  /** Hold this run in the list whatever the filter or the pages say: a link named it. */
+  include: (runId: string) => void;
+  /** The run ids `include` could not resolve: a link to a run the daemon does not know. */
+  unresolved: ReadonlySet<string>;
 }
 
-export function useRuns(status: StatusFilter, query: RunsQuery = {}): RunsFeed {
+export interface RunsPaging {
+  /** Page by `cursor` (protocol 2.8) rather than `offset`. */
+  cursor?: boolean | undefined;
+  /** Runs per read; `RUNS_PAGE` unless a test needs a small one. */
+  pageSize?: number | undefined;
+}
+
+const NOTHING: ReadonlySet<string> = new Set();
+
+export function useRuns(status: StatusFilter, query: RunsQuery = {}, paging: RunsPaging = {}): RunsFeed {
   const { workflowId, createdFrom } = query;
+  const byCursor = paging.cursor ?? true;
+  const pageSize = paging.pageSize ?? RUNS_PAGE;
   const stream = useNotifications();
   const generation = useSubscriptionGeneration();
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<RunsState>({ phase: "loading" });
+  const [pins, setPins] = useState<readonly string[]>([]);
+  const [unresolved, setUnresolved] = useState<ReadonlySet<string>>(NOTHING);
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
+  /* The effect owns the pages; these are its handles, replaced on every read generation so a
+     call into an old one is a no-op rather than a write into a list nobody shows. */
+  const older = useRef<() => void>(() => {});
+  const pin = useRef<(runId: string) => void>(() => {});
+  const loadOlder = useCallback(() => older.current(), []);
+  const include = useCallback((runId: string) => {
+    setPins((held) => (held.includes(runId) ? held : [...held, runId]));
+    pin.current(runId);
+  }, []);
+  const pinsRef = useRef(pins);
+  pinsRef.current = pins;
 
   useEffect(() => {
     let live = true;
-    let snapshot: Extract<RunsState, { phase: "ready" }> | undefined;
+    let snapshot: { runs: readonly RunSummaryView[]; total: number } | undefined;
+    /* Pages after the first, in the order they were read. Kept apart from the first page so a
+       reload is one assignment, and merged by id so a run on two pages is one row. */
+    let pages: RunSummaryView[] = [];
+    /* How far the reads have gone: the next cursor, or how many list rows were read for the
+       offset fallback. `undefined` cursor after a read means the store has nothing older. */
+    let nextCursor: string | undefined;
+    let readRows = 0;
+    let loadingOlder = false;
+    let olderError: ProtocolError | undefined;
+    const pinned = new Set(pinsRef.current);
     const changes = new Map<string, RunChangedParams>();
     const resolved = new Map<string, RunSummaryView>();
     const cursors = new Map<string, number>();
     const fetching = new Set<string>();
     setState({ phase: "loading" });
+
+    const filter = {
+      ...(status === "all" ? {} : { status: [status] }),
+      ...(workflowId === undefined ? {} : { workflowId }),
+      ...(createdFrom === undefined ? {} : { createdFrom }),
+    };
+    const more = (): boolean =>
+      snapshot !== undefined && (byCursor ? nextCursor !== undefined : readRows < snapshot.total);
 
     // Overlay pushes on every read, including resolving reads that started before a newer
     // transition. Keep the overlay until this read generation ends; a list has no cursor.
@@ -94,8 +173,12 @@ export function useRuns(status: StatusFilter, query: RunsQuery = {}): RunsFeed {
       if (!live || !snapshot) return;
       let runs = snapshot.runs;
       let total = snapshot.total;
+      for (const run of pages) runs = mergeRun(runs, run);
+      const head = snapshot.runs[0];
       for (const run of resolved.values()) {
-        if (!runs.some((r) => r.id === run.id)) total += 1;
+        // A run newer than the first page is one `total` never counted; an older one a link
+        // or a notification brought in from history already is.
+        if (!runs.some((r) => r.id === run.id) && (!head || compareRunsListOrder(run, head) < 0)) total += 1;
         runs = mergeRun(runs, run);
       }
       for (const params of changes.values()) {
@@ -103,22 +186,71 @@ export function useRuns(status: StatusFilter, query: RunsQuery = {}): RunsFeed {
         if (row && params.seq > (cursors.get(row.id) ?? -1)) runs = mergeRun(runs, applyRunChanged(row, params));
       }
       if (status !== "all" || workflowId !== undefined || createdFrom !== undefined) {
+        // A pinned run stays: a link asked for it, and the filter is not the link's business.
         const included = runs.filter(
-          (r) => (status === "all" || r.status === status) && inQuery(r, { workflowId, createdFrom }),
+          (r) =>
+            pinned.has(r.id) || ((status === "all" || r.status === status) && inQuery(r, { workflowId, createdFrom })),
         );
         total -= runs.length - included.length;
         runs = included;
       }
-      setState({ phase: "ready", runs: orderRuns(runs), total: Math.max(0, total) });
+      setState({
+        phase: "ready",
+        runs: orderRuns(runs),
+        total: Math.max(0, total, runs.length),
+        more: more(),
+        loadingOlder,
+        ...(olderError ? { olderError } : {}),
+      });
     };
     const resolve = (runId: string) => {
       if (fetching.has(runId) || resolved.has(runId)) return;
       fetching.add(runId);
       void window.orca.runs.get({ runId }).then((result) => {
         fetching.delete(runId);
-        if (!live || !result.ok) return;
+        if (!live) return;
+        if (!result.ok) {
+          // Only a link's run is reported: a notification for a run that went is not news.
+          if (pinned.has(runId)) setUnresolved((gone) => new Set(gone).add(runId));
+          return;
+        }
         resolved.set(runId, result.result.run);
         cursors.set(runId, result.result.lastSeq);
+        publish();
+      });
+    };
+    pin.current = (runId: string) => {
+      pinned.add(runId);
+      const held =
+        snapshot?.runs.some((r) => r.id === runId) || pages.some((r) => r.id === runId) || resolved.has(runId);
+      if (held) publish();
+      else if (snapshot) resolve(runId);
+    };
+    older.current = () => {
+      if (!live || !snapshot || loadingOlder || !more()) return;
+      loadingOlder = true;
+      olderError = undefined;
+      publish();
+      const page: Partial<RunsListParams> = {
+        ...filter,
+        limit: pageSize,
+        ...(byCursor ? { cursor: nextCursor } : { offset: readRows }),
+      };
+      void window.orca.runs.list(page).then((result) => {
+        // Superseded: the filter, the transport or the surface changed while it was out.
+        if (!live) return;
+        loadingOlder = false;
+        if (!result.ok) {
+          olderError = result.error;
+          publish();
+          return;
+        }
+        pages = [...pages, ...result.result.runs];
+        readRows += result.result.runs.length;
+        nextCursor = result.result.nextCursor;
+        // An offset page that came back empty has nothing behind it, whatever `total` said.
+        if (!byCursor && result.result.runs.length === 0) readRows = snapshot!.total;
+        snapshot = { ...snapshot!, total: result.result.total };
         publish();
       });
     };
@@ -132,24 +264,25 @@ export function useRuns(status: StatusFilter, query: RunsQuery = {}): RunsFeed {
       }
       publish();
     });
-    const params = {
-      ...(status === "all" ? {} : { status: [status] }),
-      ...(workflowId === undefined ? {} : { workflowId }),
-      ...(createdFrom === undefined ? {} : { createdFrom }),
-    };
-    void window.orca.runs.list(params).then((result) => {
+    // The daemon's default page is `RUNS_PAGE`, so the first read only says a size it chose.
+    void window.orca.runs.list(pageSize === RUNS_PAGE ? filter : { ...filter, limit: pageSize }).then((result) => {
       if (!live) return;
       if (!result.ok) {
         setState({ phase: "error", error: result.error });
         return;
       }
-      snapshot = { phase: "ready", runs: result.result.runs, total: result.result.total };
+      snapshot = { runs: result.result.runs, total: result.result.total };
+      readRows = result.result.runs.length;
+      nextCursor = result.result.nextCursor;
+      for (const runId of pinned) if (!snapshot.runs.some((r) => r.id === runId)) resolve(runId);
       publish();
     });
     return () => {
       live = false;
+      older.current = () => {};
+      pin.current = () => {};
       off();
     };
-  }, [stream, status, workflowId, createdFrom, attempt, generation]);
-  return { state, reload };
+  }, [stream, status, workflowId, createdFrom, attempt, generation, byCursor, pageSize]);
+  return { state, reload, loadOlder, include, unresolved };
 }
