@@ -5,3 +5,6 @@
   decides such a call. It is asked each time unless a rule denies it, so a grant can no
   longer reach the same tool name on another server. An "always deny" for it is saved as
   `server: tool`. Grants recorded earlier from Gemini's MCP titles stop allowing.
+  Matching by the claimed `server: tool` only ever adds a restriction: such a call is decided
+  by its own title and by the claim, and the stricter answer stands, so an ask matched by the
+  claim never shadows a deny the title meets.

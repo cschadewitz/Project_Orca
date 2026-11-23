@@ -170,3 +170,86 @@ describe("standing rules for a call that claims an MCP tool (#1021)", () => {
     expect(decidePermission(loaded, gemini("gitlab"))).toBe("ask");
   });
 });
+
+describe("matching by the claim never weakens a restriction (#1021 review)", () => {
+  const askByServer = {
+    match: { kind: "other" as const, titlePattern: "^github: create_issue$" },
+    decision: "ask" as const,
+  };
+  const denyByTitle = {
+    match: { kind: "other" as const, titlePattern: "^create_issue\\(" },
+    decision: "deny" as const,
+  };
+
+  it("keeps a deny the agent's title meets when an earlier ask meets only the claim", () => {
+    expect(explainPermission(policy(askByServer, denyByTitle), gemini("github"))).toEqual({
+      decision: "deny",
+      basis: "rule",
+      ruleIndex: 1,
+    });
+    // The claim still adds the ask where nothing denies.
+    expect(explainPermission({ default: "allow", rules: [askByServer] }, gemini("github"))).toMatchObject({
+      decision: "ask",
+      basis: "rule",
+    });
+  });
+
+  it("keeps a deny the claim meets when an earlier ask meets only the agent's title", () => {
+    const askByTitle = { ...denyByTitle, decision: "ask" as const };
+    const denyByServer = { ...askByServer, decision: "deny" as const };
+    expect(decidePermission(policy(askByTitle, denyByServer), gemini("github"))).toBe("deny");
+  });
+
+  it("decides a call with no claim exactly by its title, in the same compositions", () => {
+    const sameTitle = claude("create_issue(title: x)");
+    expect(explainPermission(policy(askByServer, denyByTitle), sameTitle)).toEqual({
+      decision: "deny",
+      basis: "rule",
+      ruleIndex: 1,
+    });
+    expect(
+      decidePermission(policy({ ...denyByTitle, decision: "allow" }, askByServer), claude("create_issue(title: x)")),
+    ).toBe("allow");
+    expect(decidePermission(policy(askByServer, denyByTitle), claude("github: create_issue"))).toBe("ask");
+  });
+
+  const dirs: string[] = [];
+  afterEach(async () => {
+    for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
+  });
+
+  it("keeps a saved deny a deny when a configured ask meets the claim first", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-mcp-compose-"));
+    dirs.push(dir);
+    const file = join(dir, "orca.permissions.json");
+    // A deny saved from a call with no claim, so it names the agent's title.
+    await recordAlwaysDecision({
+      file,
+      agentId: "g",
+      request: claude("create_issue(title: x)"),
+      decision: "deny",
+      workspaceCwd: dir,
+    });
+    const loaded = await loadEffectivePermissionPolicy(
+      { id: "g", permissions: { default: "allow", rules: [askByServer] } },
+      [file],
+    );
+    expect(decidePermission(loaded, gemini("github"))).toBe("deny");
+    expect(decidePermission(loaded, gemini("gitlab"))).toBe("deny");
+    expect(decidePermission(loaded, claude("create_issue(title: x)"))).toBe("deny");
+    expect(decidePermission(loaded, gemini("github", "create_issue (github MCP Server)"))).toBe("ask");
+  });
+
+  it("keeps a saved deny for the claimed tool a deny under a configured ask by title", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-mcp-compose-"));
+    dirs.push(dir);
+    const file = join(dir, "orca.permissions.json");
+    await recordAlwaysDecision({ file, agentId: "g", request: gemini("github"), decision: "deny", workspaceCwd: dir });
+    const loaded = await loadEffectivePermissionPolicy(
+      { id: "g", permissions: { default: "allow", rules: [{ ...denyByTitle, decision: "ask" }] } },
+      [file],
+    );
+    expect(decidePermission(loaded, gemini("github"))).toBe("deny");
+    expect(decidePermission(loaded, gemini("gitlab"))).toBe("ask");
+  });
+});
