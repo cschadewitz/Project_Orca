@@ -27,7 +27,11 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 const dirs: string[] = [];
+const realNow = Date.now.bind(Date);
+// Reads only seed reuse once a file has been unchanged for two seconds of wall clock.
+const settle = () => vi.spyOn(Date, "now").mockImplementation(() => realNow() + 3_000);
 afterEach(async () => {
+  vi.restoreAllMocks();
   calls.frozenTimes.clear();
   for (const directory of dirs.splice(0)) await rm(directory, { recursive: true, force: true });
 });
@@ -46,6 +50,7 @@ async function fixture() {
   });
   await store.putPayload("payload", { type: "vars.set", runId: "run", payload: { vars: { secret: "secret-value" } } });
   const read = () => store.getPayload("run", "payload", "vars.set");
+  settle();
   await read();
   return { directory, store, read, path: (name: string) => join(directory, "private-execution", name) };
 }
@@ -139,4 +144,31 @@ it("rejects an in-place key rewrite when the filesystem reports identical nanose
   await expect(f.read()).rejects.toMatchObject({ code: "RUN_STATE" });
   await expect(f.store.putGeneration("after-rewrite", {})).rejects.toMatchObject({ code: "RUN_STATE" });
   expect(await readFile(path)).toEqual(key);
+});
+
+it("does not seed reuse from a fresh record rewritten in place within one timestamp tick", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orca-private-cache-"));
+  dirs.push(directory);
+  const store = new FileExecutionStore(directory);
+  await store.putInputs({
+    runId: "run",
+    workflowId: "workflow",
+    workflowVersion: "1",
+    vars: {},
+    sensitiveNames: [],
+    secrets: [],
+  });
+  for (const ref of ["one", "two"])
+    await store.putPayload(ref, { type: "vars.set", runId: "run", payload: { vars: { secret: "same-size" } } });
+  const one = join(directory, "private-execution", "one.payload.json");
+  const two = join(directory, "private-execution", "two.payload.json");
+  const before = await stat(one, { bigint: true });
+  // A coarse filesystem clock: the same-size rewrite below reports the original times.
+  calls.frozenTimes.set(one, { mtimeNs: before.mtimeNs, ctimeNs: before.ctimeNs });
+  await expect(store.getPayload("run", "one", "vars.set")).resolves.toEqual({ vars: { secret: "same-size" } });
+  const replacement = await readFile(two);
+  expect(BigInt(replacement.length)).toBe(before.size);
+  await writeFile(one, replacement);
+  expect((await stat(one, { bigint: true })).ino).toBe(before.ino);
+  await expect(store.getPayload("run", "one", "vars.set")).rejects.toMatchObject({ code: "RUN_STATE" });
 });

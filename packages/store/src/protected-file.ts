@@ -32,9 +32,15 @@ const syncedDirectories = new Set<string>();
 // Immutable ciphertext bytes only; callers still authenticate and parse every record.
 // Keys are always reread: same-size in-place rewrites can share a kernel timestamp tick.
 // Every hit revalidates the current path, owner-only mode and nanosecond change metadata.
+// Metadata cannot see a same-size in-place rewrite inside one filesystem timestamp tick,
+// so a file is only cached once it has been unchanged for SETTLED_NS of wall-clock time:
+// any later rewrite then necessarily carries a newer mtime/ctime than the cached stamp.
 const byteCache = new Map<string, { directory: string; file: string; bytes: Buffer }>();
 const MAX_CACHED_BYTES = 8 * 1024 * 1024;
 let cachedBytes = 0;
+const SETTLED_NS = 2_000_000_000n;
+const settled = (info: BigIntStats) =>
+  BigInt(Date.now()) * 1_000_000n - (info.mtimeNs > info.ctimeNs ? info.mtimeNs : info.ctimeNs) >= SETTLED_NS;
 const directoryIdentity = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.mode}:${info.uid}:${info.gid}`;
 const fileIdentity = (info: BigIntStats) =>
   `${directoryIdentity(info)}:${info.nlink}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
@@ -443,7 +449,7 @@ async function privateBytes(dir: string, name: string): Promise<Buffer | undefin
       const bytes = await handle.readFile();
       const after = await handle.stat({ bigint: true });
       if (!after.isFile() || (process.platform !== "win32" && (after.mode & 0o077n) !== 0n)) throw unreadable();
-      if (cacheable && fileIdentity(opened) === fileStamp && fileIdentity(after) === fileStamp)
+      if (cacheable && fileIdentity(opened) === fileStamp && fileIdentity(after) === fileStamp && settled(after))
         rememberBytes(path, directoryStamp, fileStamp, bytes);
       return bytes;
     } finally {
