@@ -17,6 +17,10 @@
     "./two-daemons": {
       "types": "./dist/two-daemons.d.ts",
       "import": "./dist/two-daemons.js"
+    },
+    "./two-machines": {
+      "types": "./dist/two-machines.d.ts",
+      "import": "./dist/two-machines.js"
     }
   },
   "files": [

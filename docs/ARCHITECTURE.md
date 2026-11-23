@@ -482,6 +482,22 @@ prompt as `vars.upstream`. Full description: `docs/PLANNING.md`.
 - Alternative transports implement `AgentSession` and are injected as
   `Orchestrator.sessionFactory` (HTTP ACP; T3 Code threads once its transport lands).
 
+`packages/daemon/src/delegation` adds a second way to reach another machine, from one daemon
+to another rather than from a daemon to an agent (#883/#884):
+
+- An agent of `type: orca-daemon` opens no process. Its step is admitted as a run on a
+  remote daemon, which it reaches through the same typed SSH tunnel as the app's profiles
+  (`ssh -W` to the remote's loopback port; only the enrolled host keys and the enrolled
+  credential). The remote runs the work with its own agents, store and caps, and the parent
+  forwards gates, cancels, reattaches after a dropped connection from a durable receipt,
+  and copies the artifacts back after checking them.
+- The parent's slot queue (`SessionSlots`) holds delegated sessions to each remote's
+  `limits.maxAgentSessions` as its `hello` reports it. The remote's own enforcement bounds
+  several parents together.
+- Which of these to use, and the other setups (SSH hosts, `orca acp` over an SSH host, the
+  app watching several daemons), are compared in [running across machines](MULTI-MACHINE.md).
+  Two daemons in separate containers over a real sshd are tested end to end in CI.
+
 ## Where ORCA sits relative to Kepler and T3 Code
 
 See `docs/INTEGRATIONS.md`. Short version: ORCA is transport‑ and host‑agnostic;
