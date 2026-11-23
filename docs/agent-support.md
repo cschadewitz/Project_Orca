@@ -69,8 +69,9 @@ below is about that ask being made, being decided on the right facts, and holdin
 | What | Behaviour | Known by |
 | --- | --- | --- |
 | Version | `initialize` must report `cline` 3.0.75; anything else fails the handshake | installed (3.0.75 accepted); offline (others refused) |
+| Executable | ORCA hashes the command before every start and opens only the published 3.0.75 build for this platform (SHA-256 per platform) | installed (Linux x64); offline (others refused) |
 | Launch flags | Only `--acp`, `--config <absolute dir>`, `--thinking`, `--reasoning-effort`. `--yolo` and `--auto-approve` (which approve every tool) are refused by name | source; offline |
-| Cline's state | Must be in its own `--config` directory. ORCA refuses agent reads and writes there (Cline keeps sign-ins in plain files) | source; installed (edit refusal shown for hooks) |
+| Cline's state | Must be in its own `--config` directory. ORCA refuses agent reads and writes there (Cline keeps sign-ins in plain files). Deny by default: only `data`, and in `data/settings` only Cline's three settings files; `toolAutoApprove` on is refused | source; installed (edit refusal shown for hooks) |
 | Background hub | Cline runs sessions in a detached hub process by default, which outlives the agent ORCA stops. `CLINE_SESSION_BACKEND_MODE=local` is required; no Cline process remains after ORCA closes its sessions | source; installed |
 | Auto-update | `CLINE_NO_AUTO_UPDATE=1` is required | source |
 | Other `CLINE_*` variables | Refused from the profile and from ORCA's environment (they move state, settings or MCP servers) | source; offline |

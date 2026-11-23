@@ -13,7 +13,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as acp from "@agentclientprotocol/sdk";
 import { AgentSpecSchema, type AgentSpec } from "@orca/core";
 import {
+  CLINE_CLI_VERIFIED_IMAGES,
   CLINE_CLI_VERIFIED_VERSIONS,
+  clineImageProblems,
+  clinePlatform,
   clineFileProblems,
   clineGuard,
   clineProfileProblems,
@@ -33,10 +36,17 @@ import {
   scriptedClineHost,
 } from "./fixtures/cline-acp.js";
 
+/** The executable in these tests is a placeholder file: its digest is the verified one. */
+const pinnedImage = {
+  platform: "linux-x64",
+  digest: async () => CLINE_CLI_VERIFIED_IMAGES[CLINE_VERSION]!["linux-x64"]!,
+};
+
 let root: string;
 let workspace: string;
 let home: string;
 let configDir: string;
+let bin: string;
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "orca-cline-711-"));
@@ -45,12 +55,15 @@ beforeEach(async () => {
   configDir = join(root, "cline-config");
   await Promise.all([workspace, home, configDir].map((d) => mkdir(d, { recursive: true })));
   await mkdir(join(workspace, ".git"));
+  bin = join(root, "bin", "cline");
+  await mkdir(join(root, "bin"));
+  await writeFile(bin, "placeholder");
 });
 
 function spec(over: Partial<Record<keyof AgentSpec, unknown>> = {}): AgentSpec {
   return AgentSpecSchema.parse({
     id: "cline",
-    command: "/opt/cline/3.0.75/bin/cline",
+    command: bin,
     args: ["--acp", "--config", configDir],
     env: { CLINE_SESSION_BACKEND_MODE: "local", CLINE_NO_AUTO_UPDATE: "1", HOME: home },
     ...over,
@@ -68,7 +81,7 @@ async function connect(
   agent: AgentSpec = spec(),
 ) {
   const fake = scriptedClineHost(peer);
-  const opened = withProviderGuards(openAcpSession, [clineGuard(() => home)]);
+  const opened = withProviderGuards(openAcpSession, [clineGuard(() => home, pinnedImage)]);
   const session = await opened({ host: fake.host, agent, cwd: workspace, exitGraceMs: 50, ...extra });
   open.push(session);
   return { session, ...fake };
@@ -211,7 +224,8 @@ describe("code Cline would run without asking", () => {
       await mkdir(dir, { recursive: true });
       await writeFile(join(dir, "x.js"), "");
     }
-    expect(clineFileProblems(configDir, workspace, home)).toHaveLength(3);
+    // The config directory's `plugins` is refused twice: as plugins, and as an entry beside `data`.
+    expect(clineFileProblems(configDir, workspace, home)).toHaveLength(4);
   });
 
   it("refuses Cline's own MCP servers, and an unreadable settings file", async () => {
@@ -223,6 +237,79 @@ describe("code Cline would run without asking", () => {
     expect(clineFileProblems(configDir, workspace, home)[0]).toContain("configures MCP servers for Cline");
     await writeFile(join(settings, "cline_mcp_settings.json"), "{not json");
     expect(clineFileProblems(configDir, workspace, home)).toHaveLength(1);
+  });
+});
+
+describe("Cline's config directory, deny by default", () => {
+  it("accepts its state under data and the settings ORCA checks", async () => {
+    const settings = join(configDir, "data", "settings");
+    await mkdir(join(configDir, "data", "sessions"), { recursive: true });
+    await mkdir(settings, { recursive: true });
+    await writeFile(join(settings, "providers.json"), "{}");
+    await writeFile(join(settings, "global-settings.json"), JSON.stringify({ telemetryOptOut: true }));
+    expect(clineFileProblems(configDir, workspace, home)).toEqual([]);
+  });
+
+  it.each(["rules", "skills", "workflows", "agents", "cron", "tasks", "notes.txt"])(
+    "refuses %s beside data",
+    async (entry) => {
+      await mkdir(join(configDir, entry), { recursive: true });
+      expect(clineFileProblems(configDir, workspace, home)).toEqual([
+        `files: ${join(configDir, entry)} is not something ORCA lets Cline load; remove it`,
+      ]);
+    },
+  );
+
+  it("refuses a settings file it does not check, and a global toolAutoApprove", async () => {
+    const settings = join(configDir, "data", "settings");
+    await mkdir(settings, { recursive: true });
+    await writeFile(join(settings, "connectors.json"), "{}");
+    await writeFile(join(settings, "global-settings.json"), JSON.stringify({ toolAutoApprove: true }));
+    expect(clineFileProblems(configDir, workspace, home)).toEqual([
+      `files: ${join(settings, "connectors.json")} is a Cline setting ORCA does not check; remove it`,
+      `files: ${join(settings, "global-settings.json")} turns toolAutoApprove on; turn it off`,
+    ]);
+  });
+
+  it("refuses a config directory that is not there", () => {
+    expect(clineFileProblems(join(root, "missing"), workspace, home)[0]).toContain("cannot be read");
+  });
+});
+
+describe("the executable", () => {
+  it("opens only a verified build for this platform", async () => {
+    const fake = join(root, "cline");
+    await writeFile(fake, "not cline");
+    expect(await clineImageProblems(fake, "linux-x64")).toEqual([
+      expect.stringContaining("is not a Cline CLI build ORCA has verified"),
+    ]);
+    const pinned = CLINE_CLI_VERIFIED_IMAGES[CLINE_VERSION]!["linux-x64"]!;
+    const bin2 = join(root, "cline2");
+    await writeFile(bin2, "pretend");
+    expect(await clineImageProblems(bin2, "linux-x64", async () => pinned)).toEqual([]);
+    expect(await clineImageProblems(bin2, "plan9-mips", async () => pinned)).toEqual([
+      "platform: ORCA has verified no Cline CLI build for plan9-mips",
+    ]);
+    expect((await clineImageProblems(join(root, "absent"), "linux-x64"))[0]).toContain("cannot be read");
+    expect(clinePlatform("win32", "x64")).toBe("windows-x64");
+    expect(Object.keys(CLINE_CLI_VERIFIED_IMAGES)).toEqual([...CLINE_CLI_VERIFIED_VERSIONS]);
+  });
+
+  it("refuses a swapped binary before starting anything", async () => {
+    const peer = new ScriptedClinePeer();
+    const fake = scriptedClineHost(peer);
+    const opened = withProviderGuards(openAcpSession, [
+      clineGuard(() => home, { platform: "linux-x64", digest: async () => "0".repeat(64) }),
+    ]);
+    await writeFile(join(root, "placeholder"), "");
+    await expect(
+      opened({
+        host: fake.host,
+        agent: spec({ command: join(root, "placeholder").replace("placeholder", "cline") }),
+        cwd: workspace,
+      }),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    expect(fake.spawn).not.toHaveBeenCalled();
   });
 });
 
@@ -400,7 +487,7 @@ describe("the session, through ORCA's policy", () => {
     ]) {
       const peer = new ScriptedClinePeer({ initialize: { ...CLINE_INITIALIZE_RESULT, agentInfo } });
       const fake = scriptedClineHost(peer);
-      const opened = withProviderGuards(openAcpSession, [clineGuard(() => home)]);
+      const opened = withProviderGuards(openAcpSession, [clineGuard(() => home, pinnedImage)]);
       await expect(opened({ host: fake.host, agent: spec(), cwd: workspace, exitGraceMs: 50 })).rejects.toThrow(
         /ORCA opens only Cline CLI 3\.0\.75/,
       );
@@ -434,7 +521,7 @@ describe("the session, through ORCA's policy", () => {
     await writeFile(join(workspace, ".cline", "plugins", "p.js"), "");
     const peer = new ScriptedClinePeer();
     const fake = scriptedClineHost(peer);
-    const opened = withProviderGuards(openAcpSession, [clineGuard(() => home)]);
+    const opened = withProviderGuards(openAcpSession, [clineGuard(() => home, pinnedImage)]);
     await expect(opened({ host: fake.host, agent: spec(), cwd: workspace })).rejects.toMatchObject({
       code: "CONFIG_INVALID",
     });

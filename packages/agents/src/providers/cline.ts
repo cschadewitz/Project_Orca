@@ -28,8 +28,9 @@
  *   plant one for the next session without the policy refusing it.
  * - **MCP servers from ORCA.** Cline accepts `mcpServers` in `session/new` and never uses
  *   them. A session that would hand it any is refused rather than reported as delivered.
- * - **Version.** The `initialize` reply must name Cline at a version in
- *   `CLINE_CLI_VERIFIED_VERSIONS`; any other reply fails the handshake.
+ * - **Version.** The executable's SHA-256 must be a verified build for this platform
+ *   (`CLINE_CLI_VERIFIED_IMAGES`), checked before every start, and the `initialize` reply must
+ *   name Cline at a version in `CLINE_CLI_VERIFIED_VERSIONS`.
  * - **What an ask says.** Cline's permission request carries no `locations` and its command
  *   in `rawInput.commands`, so ORCA's path rules, protected paths and command rules could not
  *   see what a call touches. Each request is rewritten, before ORCA's policy reads it, with the
@@ -45,7 +46,8 @@
  * What stays outside: a shell command Cline was allowed to run can do anything the account
  * can, and its effects are not ORCA's to see. See the matrix.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve as resolvePath, win32 } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -62,6 +64,67 @@ import type { ProviderGuard } from "./guard.js";
  * another. Moving the pin is a reviewed change here and in `cline-acp-acceptance.yml` together.
  */
 export const CLINE_CLI_VERIFIED_VERSIONS: readonly string[] = ["3.0.75"];
+
+/**
+ * SHA-256 of each verified version's executable, per platform (`<os>-<arch>`, as npm's
+ * `@cline/cli-<os>-<arch>` packages name them). ORCA hashes the configured executable before
+ * every start and opens only one of these, so a binary swapped in place under a verified
+ * version's path is refused. Linux x64 runs in CI; the others are the published artifacts.
+ */
+export const CLINE_CLI_VERIFIED_IMAGES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "3.0.75": {
+    "linux-x64": "f63e3073dcd3b5d045cca6a78a65250b9baecf7d599a1206276255a5fc4f58fe",
+    "linux-arm64": "7ac941243bc464ce6f0ff5ad220124f512bca0115ae83c983eb411c9d20243f6",
+    "darwin-arm64": "4180d55d6062ee3c1713979350f1b6503db5762f7d302584ecc1be41d92ca67c",
+    "darwin-x64": "d73b23bd0fbd5edea8c8464e837a4fe6c242eb1b5b5855d4db9136f4f58b968a",
+    "windows-x64": "ddaf924aed244a67f9d286ed8ef2e7603f0160780bdbbe0c6d0737cdd93205c7",
+    "windows-arm64": "1ba98adabb1b6ca4f87466a4b1101241ec39765f4080078bb1e229ac46b06bf1",
+  },
+};
+
+/** This computer, as the pins above name platforms. */
+export function clinePlatform(platform: string = process.platform, arch: string = process.arch): string {
+  return `${platform === "win32" ? "windows" : platform}-${arch}`;
+}
+
+export type ImageDigest = (path: string) => Promise<string>;
+
+/** SHA-256 of a file, read whole. */
+export const sha256File: ImageDigest = (path) =>
+  new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    createReadStream(path)
+      .on("data", (chunk) => hash.update(chunk))
+      .on("error", reject)
+      .on("end", () => resolve(hash.digest("hex")));
+  });
+
+/** SHA-256 digests already taken, by path, size and modification time. */
+const digestCache = new Map<string, string>();
+
+/** What is wrong with the executable itself: empty when it is a verified Cline for this platform. */
+export async function clineImageProblems(
+  command: string,
+  platform: string = clinePlatform(),
+  digest: ImageDigest = sha256File,
+): Promise<string[]> {
+  const verified = Object.entries(CLINE_CLI_VERIFIED_IMAGES).filter(([, images]) => images[platform] !== undefined);
+  if (verified.length === 0) return [`platform: ORCA has verified no Cline CLI build for ${platform}`];
+  let sha: string;
+  try {
+    const info = statSync(command);
+    const key = `${command}\0${info.size}\0${info.mtimeMs}`;
+    const cached = digest === sha256File ? digestCache.get(key) : undefined;
+    sha = cached ?? (await digest(command));
+    if (digest === sha256File) digestCache.set(key, sha);
+  } catch (error) {
+    return [`command: ${command} cannot be read (${error instanceof Error ? error.message : String(error)})`];
+  }
+  if (verified.some(([, images]) => images[platform] === sha)) return [];
+  return [
+    `command: ${command} is not a Cline CLI build ORCA has verified (SHA-256 ${sha}); install ${verified.map(([v]) => v).join(", ")} from @cline/cli-${platform}`,
+  ];
+}
 
 /** The `agentInfo.name` Cline's ACP server reports. */
 export const CLINE_AGENT_NAME = "cline";
@@ -235,7 +298,7 @@ function nonEmptyDir(path: string): boolean {
 /** Hooks, plugins and Cline-configured MCP servers present for this launch. */
 export function clineFileProblems(configDir: string, cwd: string, home: string): string[] {
   const paths = clineLoadPaths(configDir, cwd, home);
-  const problems: string[] = [];
+  const problems: string[] = [...clineConfigDirProblems(configDir)];
   for (const dir of paths.hookDirs)
     if (nonEmptyDir(dir)) problems.push(`files: ${dir} holds Cline hooks, which run without asking ORCA`);
   for (const dir of paths.pluginDirs)
@@ -252,6 +315,54 @@ export function clineFileProblems(configDir: string, cwd: string, home: string):
       problems.push(
         `files: ${paths.mcpSettings} configures MCP servers for Cline, which ORCA does not see; remove them`,
       );
+  }
+  return problems;
+}
+
+/** What Cline's config directory may hold: its state under `data`, and nothing else. */
+const CONFIG_DIR_ENTRIES = new Set(["data"]);
+/** The settings files ORCA reads before a start. Any other file there is refused. */
+const SETTINGS_FILES = new Set(["providers.json", "global-settings.json", "cline_mcp_settings.json"]);
+
+/**
+ * Cline's config directory, deny by default. Cline reads rules, skills, workflows, agent
+ * definitions, hooks, plugins, cron and task specs from beside `data`; ORCA accepts only `data`
+ * there, only the settings files it knows inside `data/settings`, and refuses a global
+ * `toolAutoApprove`.
+ */
+export function clineConfigDirProblems(configDir: string): string[] {
+  const problems: string[] = [];
+  let entries: string[];
+  try {
+    entries = readdirSync(configDir);
+  } catch {
+    return [
+      `files: Cline's config directory ${configDir} cannot be read; create it and sign in with cline auth --config`,
+    ];
+  }
+  for (const entry of entries.sort())
+    if (!CONFIG_DIR_ENTRIES.has(entry))
+      problems.push(`files: ${join(configDir, entry)} is not something ORCA lets Cline load; remove it`);
+  const settings = join(configDir, "data", "settings");
+  let files: string[] = [];
+  try {
+    files = readdirSync(settings);
+  } catch {
+    /* No settings yet. */
+  }
+  for (const file of files.sort())
+    if (!SETTINGS_FILES.has(file))
+      problems.push(`files: ${join(settings, file)} is a Cline setting ORCA does not check; remove it`);
+  if (files.includes("global-settings.json")) {
+    let autoApprove = true;
+    try {
+      const parsed = JSON.parse(readFileSync(join(settings, "global-settings.json"), "utf8")) as Json;
+      autoApprove = parsed.toolAutoApprove === true;
+    } catch {
+      /* Unreadable is treated as on. */
+    }
+    if (autoApprove)
+      problems.push(`files: ${join(settings, "global-settings.json")} turns toolAutoApprove on; turn it off`);
   }
   return problems;
 }
@@ -526,6 +637,7 @@ export function guardClineSession(session: AgentSession): AgentSession {
   const guarded: AgentSession = Object.create(session) as AgentSession;
   Object.defineProperties(guarded, {
     prompt: {
+      writable: true,
       value: async (input: Parameters<AgentSession["prompt"]>[0], options?: Parameters<AgentSession["prompt"]>[1]) => {
         if (tripped.length) throw fail("turned on");
         const result = await session.prompt(input, options);
@@ -534,6 +646,7 @@ export function guardClineSession(session: AgentSession): AgentSession {
       },
     },
     setConfigOption: {
+      writable: true,
       value: async (configId: string, value: string | boolean) => {
         if (clineGrantingOption(configId, value))
           throw new OrcaError(
@@ -545,6 +658,7 @@ export function guardClineSession(session: AgentSession): AgentSession {
       },
     },
     close: {
+      writable: true,
       value: async () => {
         stop();
         return session.close();
@@ -566,7 +680,10 @@ function mergeProtected(base: ProtectedPaths | undefined, readOnly: string[], no
   };
 }
 
-export function clineGuard(home: () => string = homedir): ProviderGuard {
+export function clineGuard(
+  home: () => string = homedir,
+  image: { platform?: string; digest?: ImageDigest } = {},
+): ProviderGuard {
   return {
     id: "cline",
     matches: (agent) => isClineAgent(agent),
@@ -582,7 +699,10 @@ export function clineGuard(home: () => string = homedir): ProviderGuard {
       const configDir = clineConfigDir(agent);
       const effectiveHome = literalEnv(agent.env).HOME ?? ambient.HOME ?? home();
       if (problems.length === 0 && configDir)
-        problems.push(...clineFileProblems(configDir, options.cwd, effectiveHome));
+        problems.push(
+          ...clineFileProblems(configDir, options.cwd, effectiveHome),
+          ...(await clineImageProblems(agent.command, image.platform, image.digest)),
+        );
       if (problems.length)
         throw new OrcaError("CONFIG_INVALID", `Cline agent '${agent.id}' cannot start: ${problems.join("; ")}.`, {
           agentId: agent.id,

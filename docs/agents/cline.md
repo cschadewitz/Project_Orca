@@ -18,14 +18,18 @@ npm install --prefix "$prefix" --ignore-scripts @cline/cli-linux-x64@3.0.75   # 
 
 `--ignore-scripts` is enough: ORCA starts the platform binary itself, not the `cline` npm
 wrapper. On Linux x64 the binary's SHA-256 is
-`f63e3073dcd3b5d045cca6a78a65250b9baecf7d599a1206276255a5fc4f58fe`. Do not use
+`f63e3073dcd3b5d045cca6a78a65250b9baecf7d599a1206276255a5fc4f58fe`. ORCA hashes the
+executable before every start and opens only the published 3.0.75 build for your platform
+(`CLINE_CLI_VERIFIED_IMAGES` in `packages/agents/src/providers/cline.ts`). Do not use
 `npx cline` or a global install as the agent's command: ORCA refuses both.
 
 ## 2. Give Cline a directory of its own
 
 Pick an absolute directory, for example `/opt/orca-providers/cline/profile`, and pass it as
 `--config` both when you sign in and in the agent profile. Cline keeps its sign-in there, in
-plain files, so ORCA refuses any agent access to it.
+plain files, so ORCA refuses any agent access to it. Keep nothing else in it: ORCA accepts
+only Cline's `data` directory there, and in `data/settings` only `providers.json`,
+`global-settings.json` and `cline_mcp_settings.json`.
 
 ## 3. Sign in
 
@@ -48,6 +52,9 @@ sign-in from inside a run.
 ORCA refuses to start Cline, with the reason, when:
 
 - the command is not an absolute path to a `cline` executable, or the agent is on an SSH host;
+- the executable's SHA-256 is not the published 3.0.75 build for this platform;
+- the config directory is missing, holds anything but Cline's `data` directory, or its
+  `global-settings.json` turns `toolAutoApprove` on;
 - the arguments are anything but `--acp`, `--config <absolute dir>`, `--thinking` and
   `--reasoning-effort <level>` (`--yolo` and `--auto-approve` are named in the refusal);
 - `CLINE_SESSION_BACKEND_MODE` is not `local` or `CLINE_NO_AUTO_UPDATE` is not `1`;
