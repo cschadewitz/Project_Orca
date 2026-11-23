@@ -1,10 +1,12 @@
 # The legacy fence of `orca store sqlite switch` (#339), against the released builds themselves.
 # v0.7.0 and v0.6.0 never read a store's format marker; a switched store keeps them out with
 # markers (packages/store/src/sqlite/legacy-fence.ts). This builds both releases from their
-# tags, makes workspaces with v0.7.0's demo, switches one with this commit's CLI (opted in: the
-# switch is not offered to users yet), and runs every released store command against a baseline
-# and then the switched store: each must reach the store in the baseline, be refused by the store
-# when switched, and change nothing (tools/legacy-fence/run.js). Linux only. Runs on its own whenever the store, the CLI or the check changes.
+# tags, makes workspaces with v0.7.0's demo, switches one with this commit's store build through
+# tools/legacy-fence/switch.js (the shipped CLI refuses the switch, which this also checks), and
+# runs every released store command against a baseline and then the switched store: each must
+# reach the store in the baseline, be refused by the store when switched, and change nothing
+# (tools/legacy-fence/run.js). Linux only. Runs on its own whenever the store, the CLI or the
+# check changes.
 name: Legacy fence
 
 on:

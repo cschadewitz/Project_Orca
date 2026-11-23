@@ -22,7 +22,8 @@
  *     [--scratch dir] [--output report.json]
  *
  * The workspace is made by the first released build's own `demo` (scripted agents, no model),
- * opened once by the current build, and switched with the current CLI; each baseline is another
+ * opened once by the current build, and switched through switch.js (the shipped CLI refuses the
+ * in-place switch); each baseline is another
  * such workspace. CI: legacy-fence.yml.
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -92,13 +93,8 @@ function diff(before, after) {
   return changes.sort();
 }
 
-function cli(main, cwd, args, timeoutMs = 120_000, env = {}) {
-  const result = spawnSync(process.execPath, [main, ...args], {
-    cwd,
-    encoding: "utf8",
-    timeout: timeoutMs,
-    env: { ...process.env, ...env },
-  });
+function cli(main, cwd, args, timeoutMs = 120_000) {
+  const result = spawnSync(process.execPath, [main, ...args], { cwd, encoding: "utf8", timeout: timeoutMs });
   return {
     code: result.status,
     signal: result.signal ?? null,
@@ -231,10 +227,9 @@ const store = join(workspace, ".orca");
 const baselines = new Map(legacy.map(({ tag }) => [tag, workspaceAt(join(scratch, `baseline-${tag}`))]));
 
 // 2. The switch, with the current CLI.
-// The in-place switch is not offered to users yet; this check opts into it (Linux only).
-const switched = cli(current, workspace, ["store", "sqlite", "switch"], 120_000, {
-  ORCA_IN_PLACE_SQLITE_SWITCH: "unenforced",
-});
+// The shipped CLI refuses the in-place switch; this check switches through its own entry point
+// (switch.js), from this checkout's store build.
+const switched = cli(join(import.meta.dirname, "switch.js"), workspace, [workspace]);
 report.switch = switched.output.trim();
 if (switched.code !== 0) throw new Error(`switch failed:\n${switched.output}`);
 
@@ -329,7 +324,19 @@ function firstLine(output) {
   return (output.split("\n").find((l) => l.trim()) ?? "").trim().slice(0, 160);
 }
 
-// 5. The current build still has everything, on SQLite.
+// 5. The shipped command still refuses, even with the opt-in an earlier draft had, and changes nothing.
+const fresh = workspaceAt(join(scratch, "refused"));
+const freshBefore = snapshot(join(fresh.dir, ".orca"));
+const refused = spawnSync(process.execPath, [current, "store", "sqlite", "switch"], {
+  cwd: fresh.dir,
+  encoding: "utf8",
+  env: { ...process.env, ORCA_IN_PLACE_SQLITE_SWITCH: "unenforced" },
+});
+if (refused.status === 0 || !/SWITCH_REFUSED|not available yet/.test(`${refused.stdout}${refused.stderr}`))
+  fail(`the shipped \`orca store sqlite switch\` did not refuse: ${refused.stdout}${refused.stderr}`);
+if (diff(freshBefore, snapshot(join(fresh.dir, ".orca"))).length) fail("the refused shipped switch changed the store");
+
+// 6. The current build still has everything, on SQLite.
 const after = cli(current, workspace, ["runs"]);
 if (after.code !== 0) fail(`the current build cannot open the switched store:\n${after.output}`);
 else if (JSON.stringify(runLines(after.output)) !== JSON.stringify(target.runs))

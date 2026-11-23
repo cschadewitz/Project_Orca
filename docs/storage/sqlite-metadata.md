@@ -226,8 +226,8 @@ missing. The directories and the index are renamed aside and then replaced, so f
 instant nothing stands at their path.
 
 `tools/legacy-fence/run.js` (CI: `legacy-fence.yml`, Linux) builds v0.7.0 and v0.6.0
-from their tags, makes workspaces with v0.7.0's own demo, switches one with the
-current CLI, and runs every released command that opens the store (`runs`, `status`,
+from their tags, makes workspaces with v0.7.0's own demo, switches one with
+`tools/legacy-fence/switch.js`, and runs every released command that opens the store (`runs`, `status`,
 `events`, `plan ...`, `claims ...`, `leases ...`, `admissions`, `answer`, `resume`,
 `submit`, `run`, `serve`), first against an unswitched workspace (the baseline) and
 then against the switched one. A command passes only if, in the baseline, it exists
@@ -249,10 +249,11 @@ and may write it back, over a marker. Released versions leave nothing in the sto
 while idle that the switch could check for. That is why the switch is not offered.
 
 **`orca store sqlite switch`** is the one way from files to SQLite, and it is **not
-offered yet**: it refuses (`SWITCH_REFUSED`) and changes nothing, because it cannot
-make sure no released ORCA is still running against the store (above). The release
-check and tests opt in, on Linux only, with `ORCA_IN_PLACE_SQLITE_SWITCH=unenforced`;
-that is not for a workspace anyone uses. Under the store's format lock it:
+offered yet**: it always refuses (`SWITCH_REFUSED`) and changes nothing, because it
+cannot make sure no released ORCA is still running against the store (above). The
+switch itself is `switchStoreToSqlite` in the store package; the release check runs it
+through `tools/legacy-fence/switch.js`, which is not shipped, and checks that the shipped
+command still refuses. Under the store's format lock the switch:
 
 1. Switches only a store in this ORCA's current file format. An older store is
    carried forward first; an unmarked one is opened once first. A store already on

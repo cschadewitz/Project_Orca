@@ -16,17 +16,14 @@
  *
  * A store runs on the backend its format marker records (store-backend.ts). `import` builds a
  * SQLite database beside the files, as often as wanted, and the files stay the authority;
- * `switch` makes SQLite the authority, after a verified backup, an import and a verify, and
- * fences released ORCA versions that never read the format marker out of the store. It is not
- * offered yet (`refuseInPlaceSwitch`), and refused on Windows while store format changes are
- * (#910, #947).
+ * `switch` would make SQLite the authority (`switchStoreToSqlite`, @orca/store); it always
+ * refuses for now (`refuseInPlaceSwitch`).
  */
 import { resolve } from "node:path";
 import { OrcaError } from "@orca/core";
 import {
   backupSqliteMetadata,
   recordedStoreBackend,
-  switchStoreToSqlite,
   carryStoreForward,
   enterStoreFormat,
   holdStoreWriter,
@@ -85,20 +82,13 @@ export async function storeCommand(ctx: CommandContext): Promise<number> {
 }
 
 /**
- * Set to `unenforced` (Linux only) to run the in-place switch anyway: the release check of the
- * legacy fence (tools/legacy-fence) and tests do. Not for workspaces anyone else uses.
+ * The in-place switch is not offered (#339): the legacy fence turns away a released ORCA that
+ * starts after it, but nothing makes one that is already running (an idle daemon, a command
+ * between two writes) stop, and released versions leave no trace of themselves to check for. So
+ * the shipped command refuses, always; the release check of the fence switches through its own
+ * entry point (tools/legacy-fence/switch.js), which is not shipped.
  */
-export const IN_PLACE_SQLITE_SWITCH_ENV = "ORCA_IN_PLACE_SQLITE_SWITCH";
-
-/**
- * The in-place switch stays off (#339): the legacy fence turns away a released ORCA that starts
- * after it, but nothing makes one that is already running (an idle daemon, a command between two
- * writes) stop, and released versions leave no trace of themselves to check for. The stopped-
- * process instruction cannot be enforced, so the switch is not offered until it can be, or until
- * a conversion that leaves the files untouched replaces it.
- */
-function refuseInPlaceSwitch(storeDir: string): void {
-  if (process.platform === "linux" && process.env[IN_PLACE_SQLITE_SWITCH_ENV] === "unenforced") return;
+function refuseInPlaceSwitch(storeDir: string): never {
   throw new StoreFormatError(
     "SWITCH_REFUSED",
     "Switching a workspace to SQLite in place is not available yet: ORCA 0.7.0 and earlier do not register as the store's writers, so this ORCA cannot make sure none of them is still running against it. Nothing was changed, and the store stays on files.",
@@ -113,21 +103,9 @@ async function sqliteCommand(ctx: CommandContext, configDir: string, storeDir: s
     return resolve(ctx.cwd, file);
   };
   switch (action) {
-    case "switch": {
+    case "switch":
       refuseAppOwned(configDir, storeDir);
-      refuseInPlaceSwitch(storeDir);
-      const privacy = storePrivacy();
-      const outcome = await switchStoreToSqlite(storeDir, {
-        appVersion: readOrcaVersion(),
-        ...(privacy ? { privacy } : {}),
-      });
-      if (outcome.status === "switched") {
-        ctx.out(`switched ${storeDir} to SQLite metadata (store format ${outcome.epoch})`);
-        ctx.out(`backup of the store as it was on files: ${outcome.backup}`);
-        ctx.out("ORCA versions from before this one now refuse this store, including 0.7.0 and earlier");
-      } else ctx.out(`${storeDir} already keeps its metadata in SQLite; nothing to do`);
-      return 0;
-    }
+      return refuseInPlaceSwitch(storeDir);
     case "import": {
       if (recordedStoreBackend(storeDir) === "sqlite")
         throw new OrcaError(
