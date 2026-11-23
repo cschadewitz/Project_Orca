@@ -74,13 +74,21 @@ export const DelegationReceiptSchema = z
     version: z.literal(1),
     /** Bumped by every transition; what a writer must have read to replace the receipt. */
     revision: z.number().int().nonnegative(),
+    /**
+     * Random, fixed when the receipt file is created and never reused: a receipt removed and
+     * made again at the same path is another instance, so a writer holding the old one can
+     * never compare equal to the new one at the same revision. Absent only on a receipt written
+     * before it existed: such a receipt is read and followed as ever, and gets a fresh instance
+     * at its first transition (under its lock), after which a holder of the old copy conflicts.
+     */
+    instance: z.string().min(1).optional(),
     profile: z.string().min(1),
     binding: DelegationBindingSchema,
     parentRunId: z.string().min(1),
     delegationId: z.string().min(1),
     generation: z.number().int().nonnegative(),
     key: z.string().min(1),
-    state: z.enum(["submitting", "admitted", "cancel-pending", "settled"]),
+    state: z.enum(["reserved", "submitting", "admitted", "cancel-pending", "settled"]),
     remoteRunId: z.string().min(1).optional(),
     /**
      * The origin this generation's admission states (#883): this daemon's
@@ -90,6 +98,20 @@ export const DelegationReceiptSchema = z
      */
     origin: RunOriginSchema.optional(),
     outcome: z.enum(["succeeded", "failed", "cancelled", "never-admitted"]).optional(),
+    /**
+     * A `reserved` next generation: the settled generation it would replace, restored if the
+     * reservation is backed out.
+     */
+    previous: z
+      .object({
+        generation: z.number().int().nonnegative(),
+        key: z.string().min(1),
+        remoteRunId: z.string().min(1).optional(),
+        outcome: z.enum(["succeeded", "failed", "cancelled", "never-admitted"]),
+        origin: RunOriginSchema.optional(),
+      })
+      .strict()
+      .optional(),
     updatedAt: z.string(),
   })
   .strict();
@@ -185,24 +207,99 @@ export class DelegationReceipts {
    * Anything else throws `ReceiptConflict` and writes nothing.
    */
   write(
-    receipt: Omit<DelegationReceipt, "version" | "updatedAt" | "revision"> & { revision?: number | undefined },
+    receipt: Omit<DelegationReceipt, "version" | "updatedAt" | "revision" | "instance"> & {
+      revision?: number | undefined;
+      instance?: string | undefined;
+    },
   ): DelegationReceipt {
     mkdirSync(this.dir, { recursive: true });
     const target = this.file(receipt.parentRunId, receipt.delegationId);
     const lock = this.lock(target);
     try {
       const current = this.read(receipt.parentRunId, receipt.delegationId);
-      if (current?.revision !== receipt.revision) throw new ReceiptConflict();
+      if (current?.revision !== receipt.revision || current?.instance !== receipt.instance) throw new ReceiptConflict();
       const full = DelegationReceiptSchema.parse({
         ...receipt,
         version: 1,
         revision: (receipt.revision ?? -1) + 1,
+        instance: receipt.instance ?? randomUUID(),
         updatedAt: new Date().toISOString(),
       });
       // The lock must still be ours at the commit: never write over a successor's decision.
       if (!lock.held()) throw new ReceiptConflict();
       this.replace(target, full);
       return full;
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * Back a `reserved` receipt out, if it is still the revision read: nothing was ever sent
+   * under it. A next generation goes back to the settled generation it would have replaced; a
+   * first one leaves no receipt. Anything else throws `ReceiptConflict` and changes nothing.
+   */
+  unreserve(receipt: DelegationReceipt): void {
+    if (receipt.state !== "reserved") throw new ReceiptConflict();
+    const { previous, version: _v, updatedAt: _u, ...rest } = receipt;
+    if (!previous) return this.discard(receipt);
+    const { remoteRunId: _r, origin: _o, outcome: _x, ...base } = rest;
+    this.write({
+      ...base,
+      generation: previous.generation,
+      key: previous.key,
+      state: "settled",
+      outcome: previous.outcome,
+      ...(previous.remoteRunId ? { remoteRunId: previous.remoteRunId } : {}),
+      ...(previous.origin ? { origin: previous.origin } : {}),
+    });
+  }
+
+  /**
+   * Back out every `reserved` receipt for `profile` (an enrollment does this under its lock):
+   * a reservation is never sent under until a session promotes it after checking that lock,
+   * so one backed out here is either promoted never or re-reserved under the new enrollment.
+   */
+  unreserveAll(profile: string): void {
+    let names: string[];
+    try {
+      names = readdirSync(this.dir).filter((n) => n.endsWith(".json"));
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      try {
+        const receipt = DelegationReceiptSchema.parse(JSON.parse(readFileSync(join(this.dir, name), "utf8")));
+        if (receipt.profile === profile && receipt.state === "reserved") this.unreserve(receipt);
+      } catch {
+        // Unreadable, or moved on meanwhile: `unsettled` counts what is left.
+      }
+    }
+  }
+
+  /**
+   * Remove a receipt that nothing was ever sent under, if it is still the revision written:
+   * a delegation that backed out before submitting leaves no receipt to strand. Anything else
+   * throws `ReceiptConflict` and removes nothing.
+   */
+  discard(receipt: Pick<DelegationReceipt, "parentRunId" | "delegationId" | "revision" | "instance">): void {
+    const target = this.file(receipt.parentRunId, receipt.delegationId);
+    const lock = this.lock(target);
+    try {
+      const current = this.read(receipt.parentRunId, receipt.delegationId);
+      if (current?.revision !== receipt.revision || current?.instance !== receipt.instance || !lock.held())
+        throw new ReceiptConflict();
+      rmSync(target);
+      try {
+        const dir = openSync(this.dir, "r");
+        try {
+          fsyncSync(dir);
+        } finally {
+          closeSync(dir);
+        }
+      } catch {
+        // Directory fsync is not available everywhere (Windows); the removal stands.
+      }
     } finally {
       lock.release();
     }
@@ -277,6 +374,36 @@ export class DelegationReceipts {
     } catch {
       // Directory fsync is not available everywhere (Windows); the rename stands.
     }
+  }
+
+  /**
+   * How many delegations to `profile` (under `credentialId`, when given) are not settled yet:
+   * still submitting, running or being cancelled. A receipt that cannot be read counts, so an
+   * enrollment never strands what it cannot see.
+   */
+  unsettled(profile: string, credentialId?: string): number {
+    let names: string[];
+    try {
+      names = readdirSync(this.dir).filter((n) => n.endsWith(".json"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+    let count = 0;
+    for (const name of names) {
+      try {
+        const receipt = DelegationReceiptSchema.parse(JSON.parse(readFileSync(join(this.dir, name), "utf8")));
+        if (
+          receipt.profile === profile &&
+          receipt.state !== "settled" &&
+          (credentialId === undefined || receipt.binding.credentialId === credentialId)
+        )
+          count++;
+      } catch {
+        count++;
+      }
+    }
+    return count;
   }
 
   /** Cancellations still being settled under one binding (never another's). */

@@ -417,18 +417,57 @@ agents:
     roles: [builder]
 ```
 
-One-time setup on the remote: issue this daemon a credential and save it beside this
-daemon's config, readable only by its user:
+One-time setup: enroll the remote. With no credential saved for it, enrollment has the
+remote's own ORCA CLI issue one over the same verified ssh:
+
+```sh
+# on build-box: its host key's fingerprint
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+# on this machine
+orca remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for a jump host
+```
+
+The remote runs `<serverCommand> auth issue delegate-<this workspace id> --preset client
+--workflow-scope <each workflow this config's agents delegate there>` (with `--config
+<serverConfig>` when set): a credential that may start only those workflows and see only the
+runs it started. Enrollment checks it like any other and saves it in its own file,
+`auth/remotes/<id>.<credential id>.token`, readable only by this user; the enrollment record
+names that file. Enrolling again reuses it while the route and host keys are unchanged.
+`orca remote enroll <id> --issue` replaces it. The ssh login must be able to run that CLI
+(`remotes[].serverCommand`, default `orca`).
+
+Before anything is saved, enrollment checks what the credential may actually do there: the
+remote must take delegated runs, and the credential must be able to start every workflow this
+config delegates to it. An issued one must be scoped to exactly those workflows and to its own
+runs; one that no longer fits (the config now delegates other workflows) is replaced.
+
+The enrollment record is written last, so an enrollment that fails or is cut off at any step
+leaves the previous one in use. Only one enrollment of a remote runs at a time
+(`auth/remotes/<id>.json.lock`; a lock left by a process that is gone is taken over), and none
+runs while delegations to that remote are still in progress, since a new enrollment would
+strand them. The other way round, a delegated step that starts while its remote is being
+enrolled waits for the enrollment to finish before it sends anything; if the enrollment
+replaced the record it was about to use, the step is refused with nothing sent and can be
+retried. Each file enrollment writes is flushed together with its directory, so the order holds
+across a power loss. Windows cannot flush a directory, so there enrollment does not issue
+credentials: save one by hand, as below.
+
+Every credential enrollment issues carries a label unique to that request, and is listed in
+`auth/remotes/<id>.json.pending-revoke` before the request is sent and again before a newer
+enrollment replaces it. A listed credential is revoked only on the daemon that issued it: over
+the same route and host keys, at the same workspace, and only once that daemon's own credential
+list shows the label. Anything that cannot be proven or revoked yet (another daemon issued it,
+a delegation still uses it, or the request never arrived) stays listed with the reason and a
+warning. The next enrollment retries; otherwise run `orca auth revoke <credential id>` on the
+daemon that issued it and remove the entry.
+
+To use a credential issued by hand instead, save it first and enroll as above:
 
 ```sh
 # on build-box, in the remote daemon's workspace
 orca auth issue parent-daemon --preset client --json > build-box.token
 # on this machine
 install -m 600 build-box.token auth/remotes/build-box.token   # or set remotes[].credentialFile
-# on build-box: its host key's fingerprint
-ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
-# on this machine
-orca remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for a jump host
 ```
 
 `orca remote enroll` trusts a host key only when it is already pinned in
@@ -549,7 +588,7 @@ and reason `git-ref` before any run is admitted. A remote whose `hello` does not
 in `admitFields` (older than protocol 2.7) is refused with reason `protocol`, never run
 without the ref.
 
-Not yet: issuing the credential automatically over SSH, and binary artifacts.
+Not yet: binary artifacts.
 
 ## MCP servers and skills for agent steps
 
