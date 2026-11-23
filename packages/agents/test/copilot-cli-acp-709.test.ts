@@ -458,12 +458,12 @@ describe("permission options", () => {
   });
 
   // Characterization of current shared behavior, not a requirement: README proposal P1.
-  it("currently widens a rule match to allow_always when no allow_once is offered", async () => {
+  it("does not widen a rule match to allow_always when no allow_once is offered (#702)", async () => {
     const res = await answer(
       { toolCallId: "w1", title: "edit a.txt", kind: "edit", locations: [{ path: join(workspace, "a.txt") }] },
       [SYNTHETIC_OPTIONS[1], SYNTHETIC_OPTIONS[2]],
     );
-    expect(outcome(res)).toEqual({ outcome: "selected", optionId: "fixture-allow-always" });
+    expect(outcome(res)).toEqual({ outcome: "cancelled" });
   });
 
   it("returns an error, not a selection, for an option kind outside ACP's four", async () => {

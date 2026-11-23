@@ -58,6 +58,9 @@ export const AlertPreferencesPatchSchema = z.object({
   unfocusedEscalationMs: z.number().int().positive().optional(),
 });
 
+export const UpdatePreferencesSchema = z.object({ automatic: z.boolean().default(true) });
+export type UpdatePreferences = z.infer<typeof UpdatePreferencesSchema>;
+
 /**
  * A dragged pane size, per boundary id (#276), in one of **two shapes** (#281).
  *
@@ -142,6 +145,11 @@ export const PreferencesSchema = z.object({
    */
   canvases: z.record(z.string(), GraphViewSchema).optional(),
   alerts: AlertPreferencesSchema.prefault({}),
+  /**
+   * Desktop updates (#566). `automatic` on (the default) checks, downloads and installs at a
+   * natural idle moment, never during work; off, every step is the person's.
+   */
+  updates: UpdatePreferencesSchema.prefault({}),
 });
 export type Preferences = z.infer<typeof PreferencesSchema>;
 
@@ -159,6 +167,7 @@ export const PreferencesPatchSchema = z.object({
   canvases: z.record(z.string(), GraphViewSchema).optional(),
   /** Merges by tier, so turning gates on says only that. */
   alerts: AlertPreferencesPatchSchema.optional(),
+  updates: z.object({ automatic: z.boolean().optional() }).optional(),
 });
 export type PreferencesPatch = z.infer<typeof PreferencesPatchSchema>;
 
@@ -215,5 +224,6 @@ export function mergePreferences(current: Preferences, patch: PreferencesPatch):
     /* Spread of a `Partial`, so an explicitly-undefined tier would overwrite a set one:
        the entries are filtered rather than spread blind. */
     alerts: { ...current.alerts, ...definedOnly(patch.alerts ?? {}) },
+    updates: { ...current.updates, ...definedOnly(patch.updates ?? {}) },
   };
 }

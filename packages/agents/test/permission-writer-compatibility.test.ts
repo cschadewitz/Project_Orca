@@ -56,7 +56,8 @@ describe("permission writer existing-document compatibility", () => {
     expect(authorize).toHaveBeenCalledTimes(1);
   });
 
-  it.each([0, 3, "2", null])("preserves an unsupported explicit version %j", async (version) => {
+  // 3 is the rule-lifetime version this writer reads and writes (#702), so it is not here.
+  it.each([0, 4, "2", "3", null])("preserves an unsupported explicit version %j", async (version) => {
     const { file, bytes, revision } = await fixture(version);
     await expect(replacePermissionPolicyFile(file, replacement, { expectedRevision: revision })).rejects.toMatchObject({
       code: "CONFIG_INVALID",

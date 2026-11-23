@@ -22,6 +22,52 @@ describe("configuration reference selectors", () => {
     expect(configurationReferenceChoices(value, undefined, ["extensions", "roles"])).toBeUndefined();
   });
 });
+describe("capability selections (#335)", () => {
+  const value = {
+    capabilities: { mcpServers: { github: {}, db: {} }, skills: { review: {} } },
+    agents: [{ id: "worker", mcpServers: [{ name: "notes", command: "notes-mcp" }] }],
+  };
+  it("offers catalog ids, and an agent's own inline servers at the agent's scope", () => {
+    for (const verb of ["replace", "enable", "disable", "available"])
+      expect(
+        configurationReferenceChoices(value, undefined, ["capabilities", "workspace", "mcpServers", verb, 0]),
+      ).toEqual(["db", "github"]);
+    expect(
+      configurationReferenceChoices(value, undefined, ["capabilities", "workspace", "skills", "enable", 0]),
+    ).toEqual(["review"]);
+    expect(
+      configurationReferenceChoices(value, undefined, ["agents", 0, "capabilities", "mcpServers", "disable", 0]),
+    ).toEqual(["db", "github", "notes"]);
+    expect(
+      configurationReferenceChoices(value, undefined, ["agents", 0, "capabilities", "skills", "available", 0]),
+    ).toEqual(["review"]);
+    // An empty catalog offers nothing rather than free text.
+    expect(configurationReferenceChoices({}, undefined, ["capabilities", "workspace", "skills", "enable", 0])).toEqual(
+      [],
+    );
+  });
+});
+describe("secret references in a catalog server's environment (#335)", () => {
+  it("offers the draft's secret ids only at a variable's secret", () => {
+    const value = { secrets: { "gh-token": {}, "db.password": {} }, capabilities: { mcpServers: { github: {} } } };
+    expect(
+      configurationReferenceChoices(value, undefined, [
+        "capabilities",
+        "mcpServers",
+        "github",
+        "env",
+        "TOKEN",
+        "secret",
+      ]),
+    ).toEqual(["db.password", "gh-token"]);
+    expect(
+      configurationReferenceChoices(value, undefined, ["capabilities", "mcpServers", "github", "env", "TOKEN"]),
+    ).toBeUndefined();
+    expect(
+      configurationReferenceChoices({}, undefined, ["capabilities", "mcpServers", "github", "env", "TOKEN", "secret"]),
+    ).toEqual([]);
+  });
+});
 describe("three-way configuration reconciliation", () => {
   it("retains independent scalar edits and detects overlapping values", () => {
     const edits = [{ kind: "set" as const, path: ["roles", "builder"], value: "next" }];

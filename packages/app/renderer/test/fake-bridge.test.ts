@@ -295,6 +295,7 @@ describe("installation", () => {
       density: {},
       panes: {},
       alerts: DEFAULT_PREFERENCES.alerts,
+      updates: DEFAULT_PREFERENCES.updates,
     });
     expect(window.orca.preferences.read().theme).toBe("dark");
     restore();

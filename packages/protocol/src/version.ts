@@ -200,6 +200,13 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * than a count, so a page back through history is not shifted by runs created meanwhile.
  * A 2.7 daemon strips the unknown param and answers the first page again, so a client sends
  * it only to a 2.8 daemon and pages a 2.7 one by `offset`.
+ *
+ * 2.8 also (#702) adds standing-rule lifetimes and previews, all optional fields: `durationMs` on
+ * `inputs.answer`'s `always`, `standing` on `OpenInputView` (the rule each "always" direction
+ * would write, shown before anybody saves it) and `expiresAt` on `EffectivePermissionRule`.
+ * A 2.7 daemon sends no `standing`, so the app offers only one-time answers there rather
+ * than a save whose rule it cannot show; a 2.7 daemon would also drop `durationMs` and write
+ * a rule with no end, which is the other reason the app does not offer it.
  */
 /**
  * 2.9 (#183) adds dry runs: `workflowDrafts.dryRun` (simulate the caller's draft with fixtures;

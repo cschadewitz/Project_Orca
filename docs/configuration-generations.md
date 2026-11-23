@@ -28,6 +28,16 @@ remains a separate release gate.
 The effective permission view uses the active configured rules and the current
 sidecar; a saved but unapplied permission edit is not reported as active policy.
 
+Capability sets (#335) follow the same split. `config.get` reports `capabilities`
+for the active configuration, and a `config.set` of the config document under
+`validateOnly` reports the candidate's. Each is, per agent, the MCP servers and
+skills its own scope gives it (workspace, inline servers, `agents[].capabilities`)
+with the scope that decided each one, plus warnings. They carry identities and
+sources only: no command, argument, environment value or skill path, and no skill
+content is read. A candidate the schema refuses has no `capabilities`; its
+validation errors say why. The app's review step compares the two to show what
+applying the candidate changes for each agent.
+
 `config.apply` takes `expectedRevision`, `expectedGeneration` and optional
 `validateOnly`. Both guards are mandatory. It shares the config writer's file
 lock, reloads candidate assets and validates references and immutable workflow

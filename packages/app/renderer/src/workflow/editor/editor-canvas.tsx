@@ -20,6 +20,7 @@
  * viewer's own preference (`workflow`), because this is the viewer's canvas with hands. A drop
  * in a turned graph is sent in the horizontal frame the layout record keeps (`draft-model.ts`).
  */
+import { edgeKey, type DryRunTrace } from "./dry-run-panel.js";
 import {
   useCallback,
   useEffect,
@@ -99,6 +100,11 @@ export interface EditorCanvasProps {
   measure?: ViewportMeasurer;
   /** The editor's hold on the canvas: where it puts focus after a delete from the inspector. */
   ref?: Ref<CanvasHandle>;
+  /**
+   * A dry run of the revision on screen (#183): its unreached nodes and the edges it never
+   * followed out of a reached node are drawn untaken, as the viewer draws a run's overlay.
+   */
+  trace?: DryRunTrace | undefined;
 }
 
 interface Drag {
@@ -112,7 +118,7 @@ interface Drag {
 }
 
 export function EditorCanvas(props: EditorCanvasProps): JSX.Element {
-  const { graph, layout, path, issues, selection, onSelect, readOnly, label } = props;
+  const { graph, layout, path, issues, selection, onSelect, readOnly, label, trace } = props;
   const graphView = useGraphPreferences("workflow", "workflow-edit");
   const { direction } = graphView;
   const [override, setOverride] = useState<{ id: string; x: number; y: number } | undefined>(undefined);
@@ -479,6 +485,8 @@ export function EditorCanvas(props: EditorCanvasProps): JSX.Element {
                   if (selection?.kind === "edge" && selection.index === edge.edge.index)
                     classes.push("orca-wfedit__edge--selected");
                   if (dropTarget === edge.edge.index) classes.push("orca-wfedit__edge--drop");
+                  if (trace?.untakenEdges.has(edgeKey(edge.edge.from, edge.edge.to)))
+                    classes.push("orca-edge--untaken");
                   const text = edge.edge.label ?? edge.edge.when;
                   return (
                     <g key={edge.key}>
@@ -514,6 +522,7 @@ export function EditorCanvas(props: EditorCanvasProps): JSX.Element {
 
               {placed.nodes.map((node) => {
                 const errors = (issues.byNode.get(node.node.id) ?? []).filter((issue) => issue.severity === "error");
+                const unreached = trace?.unreached.has(node.node.id) === true;
                 const flag =
                   errors.length > 0
                     ? counted(errors.length, "error")
@@ -544,6 +553,7 @@ export function EditorCanvas(props: EditorCanvasProps): JSX.Element {
                       selected={node.node.id === selectedNode}
                       {...(node.node.state ? { draft: node.node.state } : {})}
                       {...(errors.length > 0 ? { invalid: true } : {})}
+                      {...(unreached ? { untaken: true } : {})}
                       {...(flag !== undefined ? { flag } : {})}
                       {...(inner.length > 0 ? { collapsed: `${inner.length} inside — double-click to open` } : {})}
                       onOpen={() => onSelect({ kind: "node", id: node.node.id })}

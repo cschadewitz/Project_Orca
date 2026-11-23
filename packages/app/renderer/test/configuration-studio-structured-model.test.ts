@@ -1,5 +1,5 @@
 /** #333 invariants independent of UI and YAML persistence: ordered edits and rich branch semantics. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   atPath,
   initialValue,
@@ -60,6 +60,17 @@ describe("ordered display projection, never a serialization contract", () => {
   );
   it("refuses duplicates and prototype mutation while preserving original unsafe extension keys", () => {
     expect(recordKeyError("existing", { existing: false })).toBe("This key already exists.");
+    // A daemon-named key rule (#335): a catalog id, checked by fixed code.
+    expect(recordKeyError("github", {}, "catalog-id")).toBeUndefined();
+    expect(recordKeyError("-github", {}, "catalog-id")).toBe("This key is not one this field accepts.");
+    // A dotted id is valid in core but stays raw-only here: the path rule refuses dots.
+    expect(recordKeyError("github.enterprise", {}, "catalog-id")).toMatch(/without dots/);
+    // An unknown rule (or one shaped like a pattern) refuses every key and is never compiled.
+    const compile = vi.spyOn(globalThis, "RegExp");
+    for (const format of ["future-rule", "^(a+)+$", "("])
+      expect(recordKeyError("github", {}, format)).toBe("This field's key rule needs a newer app. Use raw editing.");
+    expect(compile).not.toHaveBeenCalled();
+    compile.mockRestore();
     expect(recordKeyError("safe-key_1", {})).toBeUndefined();
     expect(() => projectEdits({}, [{ kind: "set", path: ["__proto__", "polluted"], value: true }])).toThrow(
       "Unsupported edit path",

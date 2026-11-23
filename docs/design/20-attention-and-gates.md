@@ -74,6 +74,26 @@ An option is a rejection when it is marked `destructive`, which the engine reads
 selection doesn't, the button is disabled and says why. It never sends an allow with a deny
 rule. The daemon refuses that mismatch from any client too.
 
+Neither button writes anything by itself (#702). Each opens the **standing rule review** under
+the options (`attention/standing-rule-review.tsx`): the exact rule in `mono-log`, in the Config
+surface's words ("allow edit at src/a.ts"), taken from the daemon's preview on the ask
+(`OpenInputView.standing`) and never composed by the app; the agent it is for; and a lifetime
+as a row of toggle buttons (1 hour, 1 day, **7 days** by default, 30 days, Until removed). One
+`caption` line says what the rule will do and that ORCA answers the agent once each time, so
+removing or expiring the rule takes effect on its next ask. **Save rule and allow** /
+**Save rule and deny** sends the answer with the rule and the preview's `ref`, so the daemon
+saves the rule shown or refuses it as stale; **Cancel** closes it. When the preview
+says no rule can be scoped to this call, or the daemon sent none, the review says why in one
+`caption` line and the save is disabled with that reason; the one-time answers still work.
+For a standing deny on a single shell command the preview also carries wider command rules
+(`broader`), and the review shows a **Rule scope** row of toggle buttons above the rule:
+**Exactly this**, then each pattern by its command text (`npm run *`, `npm *`), narrowest
+first. Choosing a wider one adds a `caption` line saying a family rule refuses the whole
+family, also inside a compound command or under `sudo` or `bash -c`, and can catch lookalikes.
+A standing allow for a shell command is not offered: the preview is refused
+(`unverified-command`), because the command's words do not prove what runs (ADR 0009).
+The save sends that rule's own `ref`.
+
 ## Request changes and recorded corrections
 
 A gate that offers a revision action also carries a **Request changes** form

@@ -569,6 +569,47 @@ edges: [{ from: s, to: a }, { from: a, to: e }]
   });
 });
 
+describe("a catalog MCP server's secret references against the step's host (#182)", () => {
+  it("names a reference to a secret bound to another host where the step selects the server, by id only", () => {
+    const config = parseOrcaConfig({
+      hosts: [
+        { id: "local", type: "local" },
+        { id: "box", type: "ssh", host: "box.example" },
+      ],
+      secrets: {
+        here: { host: "local", provider: "env", name: "HERE_TOKEN" },
+        there: { host: "box", provider: "env", name: "THERE_TOKEN" },
+      },
+      capabilities: {
+        mcpServers: {
+          near: { command: "near-mcp", env: { TOKEN: { secret: "here" } } },
+          far: { command: "far-mcp", env: { TOKEN: { secret: "there" }, MODE: "plain" } },
+        },
+      },
+      agents: [{ id: "claude", command: "x", capabilities: { mcpServers: { available: ["near", "far"] } } }],
+    });
+    const registry = AgentRegistry.fromConfig(config);
+    const def = parseWorkflow(`
+id: w
+name: W
+start: s
+nodes:
+  s: { type: start }
+  a: { type: agent, agent: claude, prompt: hi, capabilities: { mcpServers: { enable: [near, far] } } }
+  e: { type: end }
+edges: [{ from: s, to: a }, { from: a, to: e }]
+`);
+    const result = validateWorkflow(def, { checkCapabilities: capabilityChecker(registry) });
+    expect(result.errors).toEqual([
+      {
+        path: "workflow(w).nodes.a.capabilities.mcpServers",
+        message:
+          "MCP server 'far' reads secret 'there' (TOKEN), which is bound to host 'box', but this step's agent runs on 'local'. A secret is only ever read on its own host",
+      },
+    ]);
+  });
+});
+
 describe("delivering catalog MCP servers (#337)", () => {
   /** A catalog whose servers' commands are real executables in a temp dir (or not, for `missing`). */
   async function deliverable(opts: { missing?: boolean; bare?: boolean; sessionMode?: "per-run" | "per-step" } = {}) {

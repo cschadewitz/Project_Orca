@@ -1007,6 +1007,8 @@ describe("delegation through a proxy the test controls (#883)", () => {
       drop?: string | undefined;
       dropReply?: string | undefined;
       tamper?: { method: string; from: string; to: string } | undefined;
+      /** Answer the next call of `method` with `result` instead of the remote's own answer. */
+      answer?: { method: string; result: unknown } | undefined;
     } = {};
     let held: Buffer[] | undefined;
     let onHeld: (() => void) | undefined;
@@ -1056,6 +1058,19 @@ describe("delegation through a proxy the test controls (#883)", () => {
         if (rules.dropReply && text.includes(`"method":"${rules.dropReply}"`)) {
           rules.dropReply = undefined;
           loseReply = true;
+        }
+        if (rules.answer && text.includes(`"method":"${rules.answer.method}"`)) {
+          // Answered here, never sent on: the remote does nothing for this call.
+          const result = rules.answer.result;
+          rules.answer = undefined;
+          const split = text.indexOf("\r\n\r\n");
+          const id = (JSON.parse(split === -1 ? text : text.slice(split + 4)) as { id: unknown }).id;
+          const body = JSON.stringify({ kind: "response", id, ok: true, result });
+          client.end(
+            `HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`,
+          );
+          upstream.destroy();
+          return;
         }
         if (rules.tamper && text.includes(`"method":"${rules.tamper.method}"`)) {
           tamper = rules.tamper;
@@ -1784,6 +1799,54 @@ describe("delegation through a proxy the test controls (#883)", () => {
       gitRef: "refs/heads/feature/x",
     });
     expect(await runsOf("remote-task")).toHaveLength(before);
+    await session.close();
+    await proxy.close();
+  }, 60_000);
+
+  it("fails the step at once, without reconciling, when the remote says the pinned ref moved (#956)", async () => {
+    const proxy = await proxied();
+    const receipts = new DelegationReceipts(join(work, "receipts-ref-moved"));
+    const agent = AgentSpecSchema.parse({
+      id: "remote",
+      type: "orca-daemon",
+      profile: "direct",
+      workflow: "remote-task",
+      gitRef: "refs/heads/feature/x",
+    });
+    const message =
+      "git ref 'refs/heads/feature/x' cannot be used: it moved after the run was admitted; admit the run again";
+    // The remote's answer when the ref moved between its check and the run's creation.
+    proxy.state.rules.answer = {
+      method: "runs.admit",
+      result: {
+        state: "recoverable-failure",
+        operationId: "retry_moved",
+        admissionId: "direct_moved",
+        runId: "run_reserved_moved",
+        failure: { code: "GIT_REF_MOVED", message, recovery: "reconcile" },
+      },
+    };
+    const session = await open(proxy.transport(), receipts, { agent });
+    const started = Date.now();
+    const error = await session
+      .prompt("ignored", { timeoutMs: 30_000, turn: turn("run_moved_ref", join(work, "moved-ref", "report.md")) })
+      .catch((e: unknown) => e);
+    // Refused at once (a reconcile loop would have run to the turn's 30 s deadline).
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(isOrcaError(error, "DELEGATION_REFUSED")).toBe(true);
+    expect((error as Error).message).toContain(message);
+    expect((error as { details: Record<string, unknown> }).details).toMatchObject({
+      reason: "git-ref",
+      remoteCode: "GIT_REF_MOVED",
+      gitRef: "refs/heads/feature/x",
+    });
+    // Nothing will ever be created under that key: the receipt is settled, so a retried step
+    // starts a new generation (a new key) that checks the ref again.
+    expect(receipts.read("run_moved_ref", "run_moved_ref_step1")).toMatchObject({
+      state: "settled",
+      outcome: "never-admitted",
+      generation: 0,
+    });
     await session.close();
     await proxy.close();
   }, 60_000);

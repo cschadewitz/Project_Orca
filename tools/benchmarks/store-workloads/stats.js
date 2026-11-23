@@ -9,6 +9,7 @@ export function summarize(samples) {
     min: round(sorted[0]),
     p50: round(rank(50)),
     p95: round(rank(95)),
+    p99: round(rank(99)),
     max: round(sorted[sorted.length - 1]),
     mean: round(total / sorted.length),
     total: round(total),

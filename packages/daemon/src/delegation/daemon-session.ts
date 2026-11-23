@@ -138,6 +138,15 @@ export function delegationRefusal(
   return new OrcaError("DELEGATION_REFUSED", message, { reason, profile, ...details });
 }
 
+/**
+ * Whether a recoverable-looking admission result is in fact final on the remote (#956): its
+ * pinned git ref moved, and no run will ever be created under that key.
+ */
+function refusedFinally(result: { failure?: unknown }): boolean {
+  const failure = result.failure as { code?: unknown } | undefined;
+  return failure?.code === "GIT_REF_MOVED";
+}
+
 /** What the session needs of the tunnel: streams to the daemon, and its end. */
 export interface DelegationTransport {
   connect(): import("node:stream").Duplex;
@@ -815,8 +824,10 @@ class DaemonSession implements AgentSession {
     const found = AdmissionsFindResultSchema.parse(answer);
     if (found.state !== "resolved") return "pending";
     // The retained result, without the wire receipt's operation id.
-    const result = (found.result ?? {}) as { state?: unknown; runId?: unknown };
+    const result = (found.result ?? {}) as { state?: unknown; runId?: unknown; failure?: unknown };
     if (result.state === "fenced") return "fenced";
+    // A final refusal (#956): the remote will never create the reserved run under this key.
+    if (result.state === "recoverable-failure" && refusedFinally(result)) return "fenced";
     if (result.state === "recoverable-failure") {
       // Never reconcile here: reconciling can admit the reserved run. Only a run that already
       // exists under the reserved id is a cancel target; otherwise the outcome stays unknown
@@ -895,6 +906,17 @@ class DaemonSession implements AgentSession {
         // A prepared or recoverable admission settles through its receipt, never a new submit;
         // a recoverable failure's reserved run id is followed only once reconcile accepts it.
         while (answer.state !== "accepted") {
+          // A ref that moved after the remote checked it (#956) is final: nothing will ever be
+          // created under this key, so the receipt is settled and the step refused at once.
+          if (answer.state === "recoverable-failure" && refusedFinally(answer)) {
+            this.store({ ...receipt, state: "settled", outcome: "never-admitted" });
+            throw delegationRefusal(
+              this.options.profile,
+              "git-ref",
+              `The remote daemon refused the run: ${answer.failure.message}`,
+              { remoteCode: answer.failure.code, ...(params.gitRef !== undefined ? { gitRef: params.gitRef } : {}) },
+            );
+          }
           await sleep(this.pollMs, signal);
           if (signal?.aborted) return this.abandon(receipt, deadline);
           if (this.clock.now() > deadline)

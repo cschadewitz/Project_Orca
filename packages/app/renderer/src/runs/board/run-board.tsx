@@ -79,7 +79,7 @@ function BoardCard({ followed, run, live, onOpen, onRetry, recovery }: BoardCard
   return (
     <article className={`orca-board__card orca-board__card--${phase}`} aria-label={`${name}, ${PHASE_WORDS[phase]}`}>
       <div className="orca-board__head">
-        {run && <StatusChip status={run.status} />}
+        {run && <StatusChip status={run.status} {...(run.dryRun ? { dry: true } : {})} />}
         <button
           type="button"
           className={`orca-board__open ${textClass("body-strong")}`}

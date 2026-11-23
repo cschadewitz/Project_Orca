@@ -367,6 +367,7 @@ export function App(): JSX.Element {
                 {...(route.edit ? { edit: true } : {})}
                 connection={connection.state}
                 onHeader={onWorkflowHeader}
+                onOpen={navigate}
               />
             ) : (
               <WorkflowsSurface connection={connection.state} onOpen={navigate} onHeader={onWorkflowHeader} />

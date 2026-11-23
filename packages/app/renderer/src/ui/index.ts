@@ -91,7 +91,7 @@ export {
   type RiskPin,
 } from "./risk-matrix.js";
 export { StateView, type StateViewAction, type StateViewProps } from "./state-view.js";
-export { StatusChip, type StatusChipProps } from "./status-chip.js";
+export { StatusChip, dryStatusWord, type StatusChipProps } from "./status-chip.js";
 export { StatusDot, type StatusDotProps } from "./status-dot.js";
 export { Text, textClass, type TextProps } from "./text.js";
 export { useTick } from "./ticker.js";

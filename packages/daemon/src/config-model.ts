@@ -46,6 +46,7 @@ import {
   effectivePermissionPolicy,
   isOrcaError,
   isWildcardPermissionRule,
+  permissionRuleExpired,
   OrcaError,
   OrcaConfigSchema,
   PERMISSION_POLICY_FILENAME,
@@ -72,6 +73,7 @@ import {
 import { withFileLock } from "@orca/store";
 import { describeConfigSchema, validationErrors } from "./config-schema.js";
 import { describeConfigFormSchema } from "./config-form-schema.js";
+import { effectiveCapabilities } from "./config-capabilities.js";
 import { lowerConfigEdits } from "./config-collection-edits.js";
 import { configReferenceErrors } from "./config-references.js";
 import { TemplateAuthoringService } from "./template-authoring.js";
@@ -239,6 +241,9 @@ export class ConfigModel {
     const config = await this.read("config");
     const permissions = await this.read("permissions");
     await authorize?.();
+    const capabilities = effectiveCapabilities(
+      this.generations ? this.generations.effectiveConfig() : configurationValue(config),
+    );
     return {
       config,
       permissions,
@@ -248,6 +253,7 @@ export class ConfigModel {
         this.generations ? { ...config, parsed: this.generations.effectiveConfig() } : config,
         permissions,
       ),
+      ...(capabilities === undefined ? {} : { capabilities }),
       ...(this.generations ? { generation: this.generations.status(configurationValue(config), config.revision) } : {}),
       asOf: this.clock.isoNow(),
     };
@@ -280,10 +286,13 @@ export class ConfigModel {
       refuseIfStale(params, current);
       const text = this.nextText(current, params);
       const parsed = safeParse(params.document, text);
+      const capabilities =
+        params.document === "config" && parsed !== undefined ? effectiveCapabilities(parsed ?? {}) : undefined;
       return {
         document: { ...current, exists: true, revision: hash(text), text, ...(parsed === undefined ? {} : { parsed }) },
         written: false,
         validation: { errors: this.validate(params.document, text) },
+        ...(capabilities === undefined ? {} : { capabilities }),
         asOf: this.clock.isoNow(),
       };
     }
@@ -502,6 +511,8 @@ export class ConfigModel {
    * list - which is why this counts rather than assuming. What it counts is the sidecar rules
    * that are evaluated: a wildcard `allow` is ignored by `permissionOverlayFor` (C4-01), so
    * it is left out here too, or every later rule would be paired with the wrong provenance.
+   * A rule whose `expiresAt` has passed is left out for the same reason, and because it is no
+   * longer part of what is evaluated (#702).
    */
   private effective(config: ConfigDocumentView, permissions: ConfigDocumentView): ConfigEffectivePolicy {
     const parsed = OrcaConfigSchema.safeParse(config.parsed ?? {});
@@ -511,9 +522,13 @@ export class ConfigModel {
       ? { version: sidecar.data.version, agents: sidecar.data.agents }
       : { version: 1, agents: {} };
     const agents: ConfigEffectivePolicy["agents"] = {};
+    // One instant for both lists, so an expiring rule cannot be in one and not the other (#702).
+    const now = Date.now();
     for (const agent of parsed.data.agents) {
-      const recorded = (doc.agents[agent.id]?.rules ?? []).filter((rule) => !isWildcardPermissionRule(rule));
-      const layered = effectivePermissionPolicy(agent.permissions, permissionOverlayFor(doc, agent.id));
+      const recorded = (doc.agents[agent.id]?.rules ?? []).filter(
+        (rule) => !isWildcardPermissionRule(rule) && !permissionRuleExpired(rule, now),
+      );
+      const layered = effectivePermissionPolicy(agent.permissions, permissionOverlayFor(doc, agent.id, undefined, now));
       const configured = agent.permissions.rules.length;
       const sidecarEnd = configured + recorded.length;
       const rules: EffectivePermissionRule[] = layered.rules.map((rule, i) => {
@@ -525,6 +540,7 @@ export class ConfigModel {
           source: "permissions",
           ...(provenance?.addedAt ? { addedAt: provenance.addedAt } : {}),
           ...(provenance?.grantedFor ? { grantedFor: provenance.grantedFor } : {}),
+          ...(provenance?.expiresAt ? { expiresAt: provenance.expiresAt } : {}),
         };
       });
       agents[agent.id] = { default: layered.default, rules };

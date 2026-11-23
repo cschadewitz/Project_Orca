@@ -291,7 +291,12 @@ describe("authorized typed launch admission", () => {
   });
 });
 
-async function permissionGate(h: Awaited<ReturnType<typeof fixture>>) {
+async function permissionGate(
+  h: Awaited<ReturnType<typeof fixture>>,
+  toolCall?: Parameters<
+    NonNullable<Parameters<NonNullable<typeof h.orchestrator.sessionFactory>>[0]["askPermission"]>
+  >[0]["toolCall"],
+) {
   h.workflows.register(
     WorkflowDefinitionSchema.parse({
       id: "permission",
@@ -329,7 +334,7 @@ async function permissionGate(h: Awaited<ReturnType<typeof fixture>>) {
         const answer = await options.askPermission!(
           {
             sessionId: id,
-            toolCall: {
+            toolCall: toolCall ?? {
               toolCallId: "tool",
               title: "Edit a.ts",
               kind: "edit",
@@ -363,7 +368,12 @@ async function permissionGate(h: Awaited<ReturnType<typeof fixture>>) {
   await vi.waitFor(async () => expect((await h.reads.inputsList({ runId })).inputs).toHaveLength(1));
   const input = (await h.reads.inputsList({ runId })).inputs[0]!;
   expect(input.live?.state).toBe("pending");
-  return { params: { runId, requestId: input.id, live: input.live!.target }, done, answers };
+  const ref = (decision: "allow" | "deny") => {
+    const preview = input.standing?.[decision];
+    if (!preview || !("ref" in preview)) throw new Error(`no ${decision} preview`);
+    return preview.ref;
+  };
+  return { params: { runId, requestId: input.id, live: input.live!.target }, done, answers, ref, input };
 }
 const sidecar = async (path: string) =>
   readFile(path, "utf8").catch((e: unknown) => {
@@ -372,11 +382,122 @@ const sidecar = async (path: string) =>
   });
 
 describe("standing permission acceptance", () => {
+  it("shows the exact rule before saving, and stamps a chosen lifetime on the daemon's clock (#702)", async () => {
+    const h = await fixture();
+    const live = await permissionGate(h);
+    const input = (await h.reads.inputsList({ runId: live.params.runId })).inputs[0]!;
+    expect(input.standing).toEqual({
+      allow: {
+        rules: [{ match: { kind: "edit", path: "a.ts" }, decision: "allow" }],
+        ref: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      },
+      deny: {
+        rules: [{ match: { kind: "edit", path: "a.ts" }, decision: "deny" }],
+        ref: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      },
+    });
+    const before = Date.now();
+    const reply = await h.rpc(h.owner, "inputs.answer", {
+      ...live.params,
+      optionId: "allow",
+      always: { decision: "allow", durationMs: 60 * 60 * 1000, previewRef: live.ref("allow") },
+      resume: true,
+    });
+    expect(reply.ok).toBe(true);
+    const saved = JSON.parse((await sidecar(h.permissionsFile))!) as {
+      agents: Record<string, { rules: { match: unknown; addedAt: string; expiresAt: string }[] }>;
+    };
+    const [rule] = Object.values(saved.agents)[0]!.rules;
+    expect(rule!.match).toEqual({ kind: "edit", path: "a.ts" });
+    expect(Date.parse(rule!.expiresAt) - Date.parse(rule!.addedAt)).toBe(60 * 60 * 1000);
+    expect(Date.parse(rule!.addedAt)).toBeGreaterThanOrEqual(before - 1000);
+    await live.done;
+    expect(live.answers).toEqual(["allow"]);
+  });
+  it("offers no standing allow for a shell command, and wider deny rules, saving the one chosen (#702)", async () => {
+    const h = await fixture();
+    const live = await permissionGate(h, {
+      toolCallId: "tool",
+      title: "Run command",
+      kind: "execute",
+      rawInput: { command: "npm run build" },
+    });
+    // The words don't prove what runs, so "Always allow" is refused with the reason.
+    const allow = live.input.standing?.allow;
+    expect(allow && "refused" in allow && allow.refused.reason).toBe("unverified-command");
+    const deny = live.input.standing?.deny;
+    if (!deny || !("rules" in deny)) throw new Error("no deny preview");
+    // The title is not the command, so the exact rule names the command, not the title.
+    expect(deny.rules).toEqual([{ match: { kind: "execute", command: "npm run build" }, decision: "deny" }]);
+    expect(deny.broader?.map((b) => b.rules)).toEqual([
+      [{ match: { kind: "execute", command: "npm run *" }, decision: "deny" }],
+      [{ match: { kind: "execute", command: "npm *" }, decision: "deny" }],
+    ]);
+    const reply = await h.rpc(h.owner, "inputs.answer", {
+      ...live.params,
+      optionId: "deny",
+      always: { decision: "deny", previewRef: deny.broader![1]!.ref },
+      resume: true,
+    });
+    expect(reply.ok).toBe(true);
+    const saved = JSON.parse((await sidecar(h.permissionsFile))!) as {
+      version: number;
+      agents: Record<string, { rules: { match: unknown; decision: string }[] }>;
+    };
+    // A command rule is version 3, so a release that would drop `command` refuses it.
+    expect(saved.version).toBe(3);
+    expect(Object.values(saved.agents)[0]!.rules.map((r) => [r.match, r.decision])).toEqual([
+      [{ kind: "execute", command: "npm *" }, "deny"],
+    ]);
+    await live.done;
+    expect(live.answers).toEqual(["deny"]);
+  });
+  it("saves only the reviewed rule: a missing or stale preview is refused before anything is answered (#702)", async () => {
+    const h = await fixture();
+    const live = await permissionGate(h);
+    const always = (previewRef?: string) =>
+      h.rpc(h.owner, "inputs.answer", {
+        ...live.params,
+        optionId: "allow",
+        always: { decision: "allow", ...(previewRef ? { previewRef } : {}) },
+        resume: true,
+      });
+    expect((await always()).error?.code).toBe("NOT_SUPPORTED");
+    // Another direction's preview, or one from a different ask, is a different rule.
+    expect((await always(live.ref("deny"))).error?.code).toBe("CONFIG_STALE");
+    expect((await always("sha256:not-what-was-shown")).error?.code).toBe("CONFIG_STALE");
+    expect(await sidecar(h.permissionsFile)).toBeUndefined();
+    expect(h.livePort.inspect(live.params.live)).toBe("pending");
+    expect(live.answers).toEqual([]);
+    // The plain one-time answer needs no preview at all.
+    expect((await h.rpc(h.owner, "inputs.answer", { ...live.params, optionId: "allow", resume: true })).ok).toBe(true);
+    await live.done;
+    expect(live.answers).toEqual(["allow"]);
+    expect(await sidecar(h.permissionsFile)).toBeUndefined();
+  });
+  it("refuses a lifetime longer than 90 days before answering anything (#702)", async () => {
+    const h = await fixture();
+    const live = await permissionGate(h);
+    const reply = await h.rpc(h.owner, "inputs.answer", {
+      ...live.params,
+      optionId: "allow",
+      always: { decision: "allow", durationMs: 91 * 24 * 60 * 60 * 1000, previewRef: live.ref("allow") },
+      resume: true,
+    });
+    expect(reply.ok).toBe(false);
+    expect(await sidecar(h.permissionsFile)).toBeUndefined();
+    expect(h.livePort.inspect(live.params.live)).toBe("pending");
+  });
   it("does not grant for an invalid option, stale gate, wrong run or foreign lease", async () => {
     const h = await fixture();
     const live = await permissionGate(h);
     const gate = live.params;
-    const params = { ...gate, optionId: "allow", always: { decision: "allow" }, resume: true };
+    const params = {
+      ...gate,
+      optionId: "allow",
+      always: { decision: "allow", previewRef: live.ref("allow") },
+      resume: true,
+    };
     expect((await h.rpc(h.owner, "inputs.answer", { ...params, optionId: "wrong" })).error?.code).toBe("RUN_STATE");
     expect(await sidecar(h.permissionsFile)).toBeUndefined();
     expect((await h.rpc(h.owner, "inputs.answer", { ...params, runId: "wrong-run" })).ok).toBe(false);
@@ -394,7 +515,15 @@ describe("standing permission acceptance", () => {
     const next = await permissionGate(h);
     expect((await h.rpc(h.owner, "inputs.answer", { ...next.params, optionId: "deny" })).ok).toBe(true);
     await next.done;
-    expect((await h.rpc(h.owner, "inputs.answer", { ...params, ...next.params })).error).toMatchObject({
+    expect(
+      (
+        await h.rpc(h.owner, "inputs.answer", {
+          ...params,
+          ...next.params,
+          always: { decision: "allow", previewRef: next.ref("allow") },
+        })
+      ).error,
+    ).toMatchObject({
       code: "RUN_STATE",
       details: { liveInputState: "expired" },
     });
@@ -408,7 +537,7 @@ describe("standing permission acceptance", () => {
         await h.rpc(h.owner, "inputs.answer", {
           ...live.params,
           optionId: "allow",
-          always: { decision: "allow" },
+          always: { decision: "allow", previewRef: live.ref("allow") },
           resume: false,
         })
       ).error?.code,
@@ -437,7 +566,12 @@ describe("standing permission acceptance", () => {
     });
     const replies = await Promise.all(
       ["allow", "deny"].map((decision) =>
-        h.rpc(h.owner, "inputs.answer", { ...gate, optionId: decision, always: { decision }, resume: true }),
+        h.rpc(h.owner, "inputs.answer", {
+          ...gate,
+          optionId: decision,
+          always: { decision, previewRef: live.ref(decision as "allow" | "deny") },
+          resume: true,
+        }),
       ),
     );
     expect(replies.filter((reply) => reply.ok)).toHaveLength(1);
@@ -460,7 +594,12 @@ describe("standing permission acceptance", () => {
       ["allow", "deny"],
       ["deny", "allow"],
     ] as const) {
-      const reply = await h.rpc(h.owner, "inputs.answer", { ...gate, optionId, always: { decision }, resume: true });
+      const reply = await h.rpc(h.owner, "inputs.answer", {
+        ...gate,
+        optionId,
+        always: { decision, previewRef: live.ref(decision) },
+        resume: true,
+      });
       expect(reply.ok).toBe(false);
       expect(reply.error?.code).toBe("NOT_SUPPORTED");
     }
@@ -471,7 +610,7 @@ describe("standing permission acceptance", () => {
     const reply = await h.rpc(h.owner, "inputs.answer", {
       ...gate,
       optionId: "deny",
-      always: { decision: "deny" },
+      always: { decision: "deny", previewRef: live.ref("deny") },
       resume: true,
     });
     expect(reply.ok).toBe(true);
@@ -489,7 +628,11 @@ describe("standing permission acceptance", () => {
       return append(event);
     });
     const resume = vi.spyOn(h.orchestrator, "resume");
-    const reply = await h.rpc(h.owner, "inputs.answer", { ...gate, optionId: "allow", always: { decision: "allow" } });
+    const reply = await h.rpc(h.owner, "inputs.answer", {
+      ...gate,
+      optionId: "allow",
+      always: { decision: "allow", previewRef: live.ref("allow") },
+    });
     expect(reply.ok).toBe(false);
     expect(await sidecar(h.permissionsFile)).toBeUndefined();
     expect(resume).not.toHaveBeenCalled();
@@ -520,7 +663,11 @@ describe("standing permission acceptance", () => {
     const gate = live.params;
     await mkdir(h.permissionsFile);
     const resume = vi.spyOn(h.orchestrator, "resume");
-    const reply = await h.rpc(h.owner, "inputs.answer", { ...gate, optionId: "allow", always: { decision: "allow" } });
+    const reply = await h.rpc(h.owner, "inputs.answer", {
+      ...gate,
+      optionId: "allow",
+      always: { decision: "allow", previewRef: live.ref("allow") },
+    });
     expect(reply.ok).toBe(false);
     expect(reply.error?.details).toMatchObject({ answerRecorded: true });
     expect(resume).not.toHaveBeenCalled();

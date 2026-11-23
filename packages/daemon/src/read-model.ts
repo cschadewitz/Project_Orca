@@ -101,6 +101,7 @@ import {
   type RunsDryRunReportResult,
 } from "@orca/protocol";
 import { PlanModel } from "./plan-model.js";
+import { standingRulePreview } from "./standing-preview.js";
 import { searchStore, type SearchScope } from "./search-model.js";
 import { workflowSummaryView, workflowView } from "./workflow-model.js";
 
@@ -1239,6 +1240,9 @@ export class ReadModel {
       artifacts,
       ...(step?.nodeId ? { nodeId: step.nodeId } : {}),
       ...(session ? { agent: { id: session.agentId, hostId: session.hostId, ...(hostType ? { hostType } : {}) } } : {}),
+      // What each "always" would write, bound to this ask and agent (#702). Only with an
+      // agent: a rule is written for one, and a preview that named none could not be checked.
+      ...(session ? standingPreview(request, state, session.agentId) : {}),
       ...(workItem ? { workItem } : {}),
     };
   }
@@ -1270,4 +1274,14 @@ export class ReadModel {
       ...(claim.stepRunId ? { stepRunId: claim.stepRunId } : {}),
     };
   }
+}
+
+function standingPreview(
+  request: HumanInputRequest,
+  state: RunState,
+  agentId: string,
+): Pick<OpenInputView, "standing"> {
+  const allow = standingRulePreview(request, state, agentId, "allow");
+  const deny = standingRulePreview(request, state, agentId, "deny");
+  return allow && deny ? { standing: { allow, deny } } : {};
 }

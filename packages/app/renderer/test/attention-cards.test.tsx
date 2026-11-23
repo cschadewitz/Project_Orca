@@ -221,6 +221,11 @@ describe("Enter on a control inside a card is the control's", () => {
 
     always.focus();
     pressEnter(always);
+    // Enter opens the rule review rather than saving anything (#702).
+    expect(answers()).toEqual([]);
+    const save = within(ask).getByRole("button", { name: "Save rule and deny" });
+    save.focus();
+    pressEnter(save);
 
     await waitFor(() => expect(answers()).toHaveLength(1));
     // The button's request, with the standing rule it names — not `Enter` on the card, which
@@ -239,6 +244,9 @@ describe("Enter on a control inside a card is the control's", () => {
     const always = within(ask).getByRole("button", { name: "Always deny" });
     always.focus();
     pressEnter(always);
+    const save = within(ask).getByRole("button", { name: "Save rule and deny" });
+    save.focus();
+    pressEnter(save);
 
     await waitFor(() => expect(answers()).toHaveLength(1));
     expect(answers()[0]).toMatchObject({ optionId: "deny", always: { decision: "deny" } });
@@ -268,6 +276,7 @@ describe("an always-button answers this call the same way as its rule", () => {
         .getAttribute("aria-pressed"),
     ).toBe("true");
     fireEvent.click(within(ask).getByRole("button", { name: "Always deny" }));
+    fireEvent.click(within(ask).getByRole("button", { name: "Save rule and deny" }));
     await waitFor(() => expect(answers()).toHaveLength(1));
     expect(answers()[0]).toMatchObject({ optionId: "deny", always: { decision: "deny" } });
   });
@@ -277,6 +286,7 @@ describe("an always-button answers this call the same way as its rule", () => {
     const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
     fireEvent.click(within(ask).getByRole("button", { name: /Deny$/ }));
     fireEvent.click(within(ask).getByRole("button", { name: "Always allow" }));
+    fireEvent.click(within(ask).getByRole("button", { name: "Save rule and allow" }));
     await waitFor(() => expect(answers()).toHaveLength(1));
     expect(answers()[0]).toMatchObject({ optionId: "allow", always: { decision: "allow" } });
   });
@@ -298,8 +308,113 @@ describe("an always-button answers this call the same way as its rule", () => {
     expect(answers()).toEqual([]);
     // Allowing still has an unambiguous option to answer with.
     fireEvent.click(within(ask).getByRole("button", { name: "Always allow" }));
+    fireEvent.click(within(ask).getByRole("button", { name: "Save rule and allow" }));
     await waitFor(() => expect(answers()).toHaveLength(1));
     expect(answers()[0]).toMatchObject({ optionId: "allow", always: { decision: "allow" } });
+  });
+});
+
+describe("an always-button shows the rule before anything is saved (#702)", () => {
+  it("shows the exact rule, whose it is and its lifetime, and sends the chosen lifetime only on save", async () => {
+    mount([PERMISSION_ASK]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    fireEvent.click(within(ask).getByRole("button", { name: "Always allow" }));
+    const review = within(ask).getByRole("region", { name: "Standing allow rule" });
+    expect(within(review).getByRole("list", { name: "Rules to save" }).textContent).toBe(
+      "allow execute matching ^rm -rf build/$",
+    );
+    expect(review.textContent).toContain("for claude");
+    // The default lifetime is bounded; it is pressed, and nothing has been sent yet.
+    expect(within(review).getByRole("button", { name: "7 days" }).getAttribute("aria-pressed")).toBe("true");
+    expect(answers()).toEqual([]);
+
+    fireEvent.click(within(review).getByRole("button", { name: "1 hour" }));
+    fireEvent.click(within(review).getByRole("button", { name: "Save rule and allow" }));
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    // The reviewed preview's ref travels with the save, so the daemon can refuse a changed rule.
+    expect(answers()[0]).toMatchObject({
+      optionId: "allow",
+      always: { decision: "allow", durationMs: 3_600_000, previewRef: "sha256:preview-allow" },
+    });
+  });
+
+  it("sends no duration for Until removed", async () => {
+    mount([PERMISSION_ASK]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    fireEvent.click(within(ask).getByRole("button", { name: "Always allow" }));
+    fireEvent.click(within(ask).getByRole("button", { name: "Until removed" }));
+    fireEvent.click(within(ask).getByRole("button", { name: "Save rule and allow" }));
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    expect(answers()[0]!.always).toEqual({ decision: "allow", previewRef: "sha256:preview-allow" });
+  });
+
+  it("lets a standing deny for one command be saved wider, and sends the chosen rule's ref", async () => {
+    const deny = PERMISSION_ASK.standing!.deny;
+    if (!("rules" in deny)) throw new Error("fixture has a deny preview");
+    const widened: typeof PERMISSION_ASK = {
+      ...PERMISSION_ASK,
+      standing: {
+        ...PERMISSION_ASK.standing!,
+        deny: {
+          ...deny,
+          broader: [
+            { rules: [{ match: { kind: "execute", command: "rm -rf *" }, decision: "deny" }], ref: "sha256:wide-1" },
+            { rules: [{ match: { kind: "execute", command: "rm *" }, decision: "deny" }], ref: "sha256:wide-2" },
+          ],
+        },
+      },
+    };
+    mount([widened]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    fireEvent.click(within(ask).getByRole("button", { name: "Always deny" }));
+    const review = within(ask).getByRole("region", { name: "Standing deny rule" });
+    const scope = within(review).getByRole("group", { name: "Rule scope" });
+    expect(within(scope).getByRole("button", { name: "Exactly this" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(scope).getByRole("button", { name: "rm *" }));
+    expect(within(review).getByRole("list", { name: "Rules to save" }).textContent).toBe("deny execute running rm *");
+    expect(review.textContent).toContain("A family rule refuses the whole family");
+    fireEvent.click(within(review).getByRole("button", { name: "Save rule and deny" }));
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    expect(answers()[0]!.always).toMatchObject({ decision: "deny", previewRef: "sha256:wide-2" });
+  });
+
+  it("cancels without sending anything", async () => {
+    mount([PERMISSION_ASK]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    fireEvent.click(within(ask).getByRole("button", { name: "Always deny" }));
+    fireEvent.click(within(ask).getByRole("button", { name: "Cancel" }));
+    expect(within(ask).queryByRole("region", { name: "Standing deny rule" })).toBeNull();
+    expect(answers()).toEqual([]);
+  });
+
+  it("offers nothing to save when the daemon refused to derive a rule, and says why", async () => {
+    mount([
+      {
+        ...PERMISSION_ASK,
+        standing: {
+          allow: { refused: { reason: "outside-workspace", detail: "/etc/hosts is not inside the workspace" } },
+          deny: { refused: { reason: "outside-workspace", detail: "/etc/hosts is not inside the workspace" } },
+        },
+      },
+    ]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    fireEvent.click(within(ask).getByRole("button", { name: "Always allow" }));
+    const review = within(ask).getByRole("region", { name: "Standing allow rule" });
+    expect(review.textContent).toContain("/etc/hosts is not inside the workspace");
+    const save = within(review).getByRole("button", { name: "Save rule and allow" });
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(save);
+    expect(answers()).toEqual([]);
+  });
+
+  it("offers nothing to save against a daemon that sends no preview", async () => {
+    const { standing: _none, ...older } = PERMISSION_ASK;
+    mount([older]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    fireEvent.click(within(ask).getByRole("button", { name: "Always allow" }));
+    const save = within(ask).getByRole("button", { name: "Save rule and allow" });
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(save.getAttribute("title")).toContain("protocol 2.8");
   });
 });
 

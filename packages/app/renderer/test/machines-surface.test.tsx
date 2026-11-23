@@ -202,6 +202,34 @@ describe("the Machines surface", () => {
     expect(screen.getByRole("alert").textContent).toContain("Save or discard pending edits first.");
   });
 
+  it("gives each machine's run a console line: steps, wait, owner and last activity (#340)", () => {
+    renderSurface();
+    const consoleWork = work(["Remote build", "Remote lint"]);
+    consoleWork.runs[0] = {
+      ...consoleWork.runs[0]!,
+      status: "waiting",
+      waitingOn: "agent-slot",
+      waitingDetail: "cap 2",
+      operations: {
+        lastActivityAt: NOW,
+        progress: { attempts: 3, active: 0, waiting: 1, completed: 2, failed: 0, skipped: 0 },
+        owner: { holder: "h", host: "build-box", since: NOW, lapsed: false },
+      },
+    };
+    act(() =>
+      push?.({
+        machines: [machine({ key: "profile:alpha", name: "Alpha", request: { profile: "alpha" }, work: consoleWork })],
+      }),
+    );
+    const alpha = screen.getByRole("region", { name: "Alpha" });
+    const rows = within(alpha).getAllByRole("listitem");
+    expect(rows[0]!.textContent).toContain(
+      "3 steps · 2 done · 1 waiting · Waiting for an agent slot: cap 2 · Held on build-box",
+    );
+    // A run its machine sent no facts for has no line, not zeros.
+    expect(rows[1]!.querySelector(".orca-machine__console")).toBeNull();
+  });
+
   it("follows pushed snapshots", () => {
     renderSurface();
     act(() => push?.({ machines: [machine({ key: "bundled", name: "This computer", focused: true })] }));

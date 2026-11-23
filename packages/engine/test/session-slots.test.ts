@@ -570,8 +570,22 @@ nodes:
 edges: [{ from: first, to: child }, { from: child, to: done }]
 `;
     const agents = [{ id: "a", sessionMode: "per-run" }, { id: "b" }];
+    // Both parents' first turns finish only once both are under way, so each parent holds its
+    // per-run slot before either child asks for one. Without this, a parent that got through
+    // its first step before the other opened its session could take the free slot for its own
+    // child and finish, which is a valid schedule but not the cycle under test.
+    const bothFirstTurns = () => {
+      let started = 0;
+      let release!: () => void;
+      const both = new Promise<void>((r) => (release = r));
+      return (agent: string) => {
+        if (agent !== "a") return new Promise<void>((r) => setTimeout(r, 15));
+        if (++started === 2) release();
+        return both;
+      };
+    };
     // Each parent pins one of the two slots and its child needs one: neither can ever end.
-    const stuck = fake({ agents, maxAgentSessions: 2, agentSlotWaitMs: 100, workflow: nested });
+    const stuck = fake({ agents, maxAgentSessions: 2, agentSlotWaitMs: 100, workflow: nested, turn: bothFirstTurns() });
     const runs = await Promise.all([
       stuck.orchestrator.startAndRun({ workflowId: "nested" }),
       stuck.orchestrator.startAndRun({ workflowId: "nested" }),
@@ -584,7 +598,7 @@ edges: [{ from: first, to: child }, { from: child, to: done }]
     expect(stuck.opened).toEqual(["a", "a"]);
     await expect.poll(() => stuck.orchestrator.sessionSlots.view()).toMatchObject({ inUse: { total: 0 }, queued: 0 });
     // One more slot and the same two runs drain on their own.
-    const fits = fake({ agents, maxAgentSessions: 3, agentSlotWaitMs: 100, workflow: nested });
+    const fits = fake({ agents, maxAgentSessions: 3, agentSlotWaitMs: 100, workflow: nested, turn: bothFirstTurns() });
     const ok = await Promise.all([
       fits.orchestrator.startAndRun({ workflowId: "nested" }),
       fits.orchestrator.startAndRun({ workflowId: "nested" }),

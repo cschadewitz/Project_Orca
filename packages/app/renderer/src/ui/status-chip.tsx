@@ -23,6 +23,10 @@
  * badges: the plan's schedule column, where a settled item draws its outcome as a chip and
  * every other item draws a `ScheduleBadge`. There the chip takes the badge's aligned width
  * (`--badge-aligned-width`), so the **why** after either one starts at one edge.
+ *
+ * `dry` marks the status of a dry run (#183): the word becomes "running · dry", in the label
+ * and the accessible name alike, so a simulated run never reads as work wherever its status
+ * is drawn. It decorates the word, never the status: the glyph and colour stay the status's.
  */
 import type { JSX } from "react";
 import { STATUS_PRESENTATION, type RunStatus } from "@orca/design";
@@ -40,11 +44,23 @@ export interface StatusChipProps {
    * aligned `ScheduleBadge`s, at the badge's width.
    */
   aligned?: boolean | "schedule";
+  /** The run is a dry run (#183): "running · dry". */
+  dry?: boolean;
 }
 
-export function StatusChip({ status, label, glyphOnly = false, aligned = false }: StatusChipProps): JSX.Element {
+/** The status word of a dry run's chip, and of anything else that names its status in words. */
+export const dryStatusWord = (word: string): string => `${word} · dry`;
+
+export function StatusChip({
+  status,
+  label,
+  glyphOnly = false,
+  aligned = false,
+  dry = false,
+}: StatusChipProps): JSX.Element {
   const { word, glyph } = STATUS_PRESENTATION[status];
-  const text = label ?? word;
+  const base = label ?? word;
+  const text = dry ? dryStatusWord(base) : base;
 
   return (
     <span
@@ -52,6 +68,7 @@ export function StatusChip({ status, label, glyphOnly = false, aligned = false }
         "orca-chip",
         textClass("caption"),
         `orca-chip--${status}`,
+        dry ? "orca-chip--dry" : "",
         glyphOnly
           ? "orca-chip--glyph-only"
           : aligned === "schedule"

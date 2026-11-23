@@ -255,13 +255,26 @@ export function RunsSurface({ connection, onCrumbs, open, onOpen }: RunsSurfaceP
        definition — it would take a `workflows.get` per run in the tree to know. The version
        alone is a fact; the chip would be a guess (rule 12). The viewer draws the chip, and
        the crumb's own menu is the way to it. */
-    trail.push({
-      type: "run",
-      id: selectedRun.id,
-      label: selectedRun.name,
-      counterpartIds: { workflow: selectedRun.workflowId },
-      version: `${selectedRun.workflowId} v${selectedRun.workflowVersion}`,
-    });
+    /* A dry run (#183) says so in the header, where its version would be: it ran a draft, not
+       a version, so it names the draft revision, and it has no workflow counterpart - the
+       viewer would overlay it on a published graph it never ran. */
+    const dry = selectedRun.dryRun;
+    trail.push(
+      dry
+        ? {
+            type: "run",
+            id: selectedRun.id,
+            label: selectedRun.name,
+            version: `dry run · ${selectedRun.workflowId}${dry.draftRevision !== undefined ? ` draft revision ${dry.draftRevision}` : ""}`,
+          }
+        : {
+            type: "run",
+            id: selectedRun.id,
+            label: selectedRun.name,
+            counterpartIds: { workflow: selectedRun.workflowId },
+            version: `${selectedRun.workflowId} v${selectedRun.workflowVersion}`,
+          },
+    );
     if (selectedStepRunId !== undefined && currentStep !== undefined) {
       trail.push({ type: "step", id: selectedStepRunId, label: currentStep });
     }

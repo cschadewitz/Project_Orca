@@ -54,7 +54,7 @@ export function updateDriver(packaged: boolean, platform: string, arch: string):
         instance.off("download-progress", listener);
       }
     },
-    async install() {
+    async install(options = {}) {
       let instance: InstanceType<typeof electronUpdater.NsisUpdater>;
       try {
         instance = get();
@@ -78,7 +78,8 @@ export function updateDriver(packaged: boolean, platform: string, arch: string):
           // Silent, then relaunch the updated app: "Restart to update" asks nothing more. The
           // installer's interactive pages would stop on the per-user/per-machine choice, and
           // "all users" elevates into a second, per-machine install beside this one.
-          instance.quitAndInstall(true, true);
+          // An install on quit (#566) does not start the app again: the person closed it.
+          instance.quitAndInstall(true, options.relaunch !== false);
         } catch {
           failed();
         }

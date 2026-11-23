@@ -13,8 +13,20 @@ import {
   type RecoveryAssessment,
   type RecoveryOption,
   type RecoveryStep,
+  type RunOperationsView,
   type RunSummaryView,
 } from "@orca/protocol";
+
+/**
+ * What the words below read from a run: a board card's `RunSummaryView`, or a machine's run
+ * row in the Machines surface (#340 over #882), which carries the same facts and no more.
+ */
+export interface ConsoleRun {
+  waitingOn?: string | undefined;
+  waitingDetail?: string | undefined;
+  outcome?: string | undefined;
+  operations?: Partial<Pick<RunOperationsView, "progress" | "owner">> | undefined;
+}
 
 /** Statuses that are still going somewhere: the ones the board follows by default. */
 export const ACTIVE_STATUSES: ReadonlySet<DisplayStatus> = new Set(["running", "waiting", "blocked", "held", "stale"]);
@@ -34,7 +46,7 @@ export const PHASE_WORDS: Record<FollowPhase, string> = {
 };
 
 /** "4 steps · 2 done · 1 running · 1 failed", zero buckets left out. */
-export function progressText(run: RunSummaryView): string | undefined {
+export function progressText(run: ConsoleRun): string | undefined {
   const p = run.operations?.progress;
   if (!p) return undefined;
   const parts = [`${p.attempts} ${p.attempts === 1 ? "step" : "steps"}`];
@@ -56,14 +68,14 @@ const WAITS: Record<string, string> = {
 };
 
 /** Why the run is parked, with the engine's detail when it recorded one. */
-export function waitText(run: RunSummaryView): string | undefined {
+export function waitText(run: ConsoleRun): string | undefined {
   if (!run.waitingOn) return undefined;
   const what = WAITS[run.waitingOn] ?? `Waiting on ${run.waitingOn}`;
   return run.waitingDetail ? `${what}: ${run.waitingDetail}` : what;
 }
 
 /** Who drives the run, from its lease. */
-export function ownerText(run: RunSummaryView): string | undefined {
+export function ownerText(run: ConsoleRun): string | undefined {
   const ops = run.operations;
   if (!ops) return undefined;
   if (!ops.owner) return run.outcome ? undefined : "No process holds it";

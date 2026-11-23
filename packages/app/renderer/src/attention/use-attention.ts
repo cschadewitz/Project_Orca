@@ -170,12 +170,19 @@ export function useAttention(): AttentionFeed {
       inputVersions.set(runId, (inputVersions.get(runId) ?? 0) + 1);
       resolveInputs(runId);
     };
+    /* A dry run (#183) never asks for a person and is not work: one that fails or runs is read
+       once, found to be dry, and kept off this surface, like `runs.list` keeps it. */
+    const dryRuns = new Set<string>();
     const resolveRun = (runId: string) => {
-      if (resolvingRuns.has(runId) || runs.has(runId)) return;
+      if (resolvingRuns.has(runId) || runs.has(runId) || dryRuns.has(runId)) return;
       resolvingRuns.add(runId);
       void window.orca.runs.get({ runId }).then((result) => {
         resolvingRuns.delete(runId);
         if (!live || !result.ok) return;
+        if (result.result.run.dryRun) {
+          dryRuns.add(runId);
+          return;
+        }
         runs.set(runId, result.result.run);
         cursors.set(runId, result.result.lastSeq);
         publish();

@@ -100,3 +100,39 @@ it.each(["missing root", "prior inert"] as const)("requires an available owned i
     h.dispose();
   }
 });
+
+it("offers the automatic-updates switch in the palette and flags an overdue install (#566)", async () => {
+  const fake = installBridge({ platform: "win32" });
+  const h = harness("win32");
+  let push!: (state: UpdateSnapshot) => void;
+  fake.bridge.updates = {
+    read: () => ({ phase: "ready", current: "0.8.0", version: "0.8.1", automatic: true }),
+    act: vi.fn(),
+    subscribe: (listener) => {
+      push = listener;
+      return () => undefined;
+    },
+    prepare: () => () => undefined,
+  };
+  const write = vi.spyOn(fake.bridge.preferences, "write");
+  const mounted = render(
+    <h.Providers>
+      <div className="orca-window">
+        <UpdateControl />
+      </div>
+    </h.Providers>,
+  );
+  try {
+    expect(screen.getByRole("button", { name: "Restart to update to 0.8.1" })).toBeTruthy();
+    const off = h.keyboard.list().find((command) => command.label === "Turn off automatic updates");
+    expect(off).toBeTruthy();
+    off!.action();
+    expect(write).toHaveBeenLastCalledWith({ updates: { automatic: false } });
+    act(() => push({ phase: "ready", current: "0.8.0", version: "0.8.1", automatic: false, overdue: true }));
+    expect(screen.getByRole("button", { name: "Restart to update to 0.8.1 · waiting 3 days" })).toBeTruthy();
+    expect(h.keyboard.list().some((command) => command.label === "Turn on automatic updates")).toBe(true);
+  } finally {
+    mounted.unmount();
+    h.dispose();
+  }
+});

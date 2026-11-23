@@ -74,6 +74,7 @@ export function backends(api) {
           // benchmark's own to checkpoint it with.
           wal: {
             settings: store.SQLITE_CHECKPOINT,
+            file: join(dir, store.SQLITE_METADATA_FILE),
             checkpoints,
             bytes: () => {
               const file = join(dir, `${store.SQLITE_METADATA_FILE}-wal`);

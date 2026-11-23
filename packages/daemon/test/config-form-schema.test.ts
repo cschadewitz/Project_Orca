@@ -68,16 +68,69 @@ describe("authoritative rich configuration metadata", () => {
     expect(describeFormNode(z.enum(["private"]), "hosts[].sshArgs[]")).not.toHaveProperty("field.enum");
   });
 
-  it("reports ordinary unions/transforms/catch and constrained records unsupported", () => {
+  it("reports ordinary unions/transforms/catch and records with other key constraints unsupported", () => {
     for (const schema of [
       z.union([z.string(), z.number()]),
       z.string().transform((v) => v),
       z.string().catch("fallback"),
       z.record(z.enum(["x"]), z.string()),
+      z.record(z.string().min(2), z.string()),
+      z.record(z.string().regex(/^a/).regex(/b$/), z.string()),
+      z.record(z.string().regex(/^allowed$/i), z.string()),
+      // A regex the daemon has no name for is never sent for a client to evaluate.
       z.record(z.string().regex(/^allowed$/), z.string()),
+      z.record(z.string().regex(/^(a+)+$/), z.string()),
     ])
       expect(describeFormNode(schema)).toMatchObject({ kind: "unsupported", visibility: "metadata-unavailable" });
     expect(describeFormNode(z.string().catch("fallback")).acceptsAbsent).toBe("metadata-unavailable");
+  });
+
+  it("describes a record whose keys follow a named rule, such as a catalog id (#335)", () => {
+    expect(describeFormNode(z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/), z.string()))).toMatchObject({
+      kind: "record",
+      keyFormat: "catalog-id",
+    });
+    expect(describeFormNode(z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/), z.string()))).not.toHaveProperty(
+      "keyPattern",
+    );
+    const root = describeConfigFormSchema().root;
+    if (root.kind !== "object") throw new Error("root");
+    const capabilities = root.fields.capabilities!;
+    if (capabilities.kind !== "object") throw new Error("capabilities");
+    for (const kind of ["skills", "mcpServers"] as const)
+      expect(capabilities.fields[kind]).toMatchObject({
+        kind: "record",
+        visibility: "non-secret",
+        keyFormat: "catalog-id",
+      });
+    expect(root.fields.secrets).toMatchObject({ kind: "record", keyFormat: "catalog-id" });
+    // A rule name from a newer daemon still parses; the client decides what it knows.
+    expect(
+      ConfigFormSchemaSchema.parse({
+        version: 1,
+        root: { ...capabilities.fields.skills, keyFormat: "future-rule" },
+      }).root,
+    ).toMatchObject({ keyFormat: "future-rule" });
+    // An MCP server's id and command are shown; its arguments are withheld. Its environment
+    // names variables, and each value stays opaque: a literal is never described as shown.
+    const server = (capabilities.fields.mcpServers as { value: { fields: Record<string, { visibility: string }> } })
+      .value.fields;
+    expect(server.command!.visibility).toBe("non-secret");
+    expect(server.args!.visibility).toBe("withheld");
+    expect(server.env).toMatchObject({
+      kind: "record",
+      visibility: "non-secret",
+      valueKind: "env",
+      value: { kind: "unsupported", visibility: "metadata-unavailable" },
+    });
+    // Agent environments keep their withheld classification.
+    const agent = (root.fields.agents as { item: { fields: Record<string, { visibility: string }> } }).item.fields;
+    expect(agent.env!.visibility).toBe("withheld");
+    // Only the audited environment value schema carries the hint.
+    expect(
+      describeFormNode(z.record(z.string(), z.union([z.string(), z.object({ secret: z.string() })]))),
+    ).not.toHaveProperty("valueKind");
+    expect(ConfigFormSchemaSchema.parse(describeConfigFormSchema())).toBeTruthy();
   });
 
   it("fails closed for prefault/coercion rather than guessing input acceptance", () => {
