@@ -315,9 +315,11 @@ it("does not send a reviewed token to a replaced target before the boundary rere
   const { changeTarget, calls } = await openEditor();
   await review();
   act(() => changeTarget());
-  fireEvent.click(screen.getByRole("button", { name: "Publish v2" }));
+  // A different target validates the draft again (#182), which retires the review at once.
+  expect(screen.queryByRole("button", { name: "Publish v2" })).toBeNull();
   await act(async () => {});
   expect(calls.some((call) => call.method === "workflowDrafts.publish")).toBe(false);
+  expect(calls.at(-1)?.method).toBe("workflowDrafts.get");
 });
 
 it("does not restore an old target's pending review after boundary replacement", async () => {

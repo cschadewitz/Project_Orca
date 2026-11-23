@@ -12,6 +12,13 @@
  * **A refusal keeps the draft.** `CONFIG_STALE` means another window moved the draft on: the
  * editor re-reads it and says so, rather than re-sending an edit made against bytes it no
  * longer has. Any other refusal is said in the bar and the draft is left as it was.
+ *
+ * **Validation is bound to a revision (#182).** The findings arrive inside the view, so an
+ * older view - a re-read that answers after an edit's result - never replaces a newer one,
+ * and of two re-reads only the last one asked counts. Losing the daemon leaves the findings
+ * on screen but marks them `checking`; when it comes back (or the configuration they were
+ * checked against changes) the draft is re-read and validated again, and only that answer
+ * clears the mark. Nothing here ever decides on its own that a draft is clean.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
@@ -37,6 +44,11 @@ export interface WorkflowDraftController {
   message: string | undefined;
   /** The draft moved on in another window; the editor has re-read it. */
   conflict: string | undefined;
+  /**
+   * The findings on screen are not yet known to be current: the daemon went away, or the
+   * configuration they were checked against changed, and the re-read has not answered.
+   */
+  checking: boolean;
   apply(ops: DraftOperation[]): Promise<boolean>;
   undo(): Promise<void>;
   redo(): Promise<void>;
@@ -44,6 +56,8 @@ export interface WorkflowDraftController {
   publish(reviewToken: string): Promise<WorkflowDraftPublishResult | undefined>;
   discard(): Promise<boolean>;
   reload(): Promise<void>;
+  /** Mark the findings as not current and re-read the draft, which validates it again. */
+  revalidate(this: void): Promise<void>;
   clearMessage(): void;
 }
 
@@ -55,28 +69,56 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | undefined>(undefined);
   const [conflict, setConflict] = useState<string | undefined>(undefined);
+  const [checking, setChecking] = useState(false);
   /** The draft every queued call reads its revision from: the latest, not the one rendered. */
   const latest = useRef<WorkflowDraftView | undefined>(undefined);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const live = useRef(true);
+  /** Which re-read is the last one asked: an earlier one that answers late is dropped. */
+  const reads = useRef(0);
 
-  const accept = useCallback((draft: WorkflowDraftView) => {
+  /**
+   * Hold `draft` unless it is older than the one already held - the same draft (same
+   * creation) at a lower revision. A draft discarded and opened again starts its revisions
+   * over, so a different `createdAt` is always newer news.
+   */
+  const accept = useCallback((draft: WorkflowDraftView): boolean => {
+    const held = latest.current;
+    if (
+      held &&
+      held.workflowId === draft.workflowId &&
+      held.createdAt === draft.createdAt &&
+      draft.revision < held.revision
+    )
+      return false;
     latest.current = draft;
     if (live.current) setState({ phase: "ready", draft });
+    return true;
   }, []);
 
   const reload = useCallback(async () => {
     const bridge = window.orca.workflowDrafts;
     if (!bridge) return;
+    const ticket = ++reads.current;
     const result = await bridge.call("workflowDrafts.get", { workflowId });
-    if (!live.current) return;
+    if (!live.current || ticket !== reads.current) return;
     if (!result.ok) {
       setMessage(describe(result.error));
       return;
     }
     const got: WorkflowDraftGetResult = result.result;
-    if (got.draft) accept(got.draft);
+    // A re-read answers with the draft as validated now. If an edit's result has already
+    // brought a newer revision, that one was validated by the same daemon later still.
+    if (got.draft) {
+      accept(got.draft);
+      setChecking(false);
+    }
   }, [workflowId, accept]);
+
+  const revalidate = useCallback(async () => {
+    setChecking(true);
+    await reload();
+  }, [reload]);
 
   useEffect(() => {
     live.current = true;
@@ -95,6 +137,33 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
       live.current = false;
     };
   }, [workflowId, accept]);
+
+  /* The daemon going away makes the findings unverified; its return, or a different daemon
+     behind the same window, validates the draft again. Anything else the connection pushes
+     (methods, capabilities) leaves them alone. */
+  useEffect(() => {
+    const connection = window.orca.connection;
+    let was = connection.read();
+    return connection.subscribe((now) => {
+      const before = was;
+      was = now;
+      if (now.state !== "live") {
+        if (before.state === "live") setChecking(true);
+        return;
+      }
+      if (before.state !== "live" || now.generation !== before.generation) void revalidate();
+    });
+  }, [revalidate]);
+  useEffect(() => {
+    const target = window.orca.daemonConnection;
+    if (!target) return;
+    let epoch = target.read().epoch;
+    return target.subscribe((now) => {
+      if (now.epoch === epoch) return;
+      epoch = now.epoch;
+      void revalidate();
+    });
+  }, [revalidate]);
 
   /** Run `call` after everything already queued, with the busy flag and the refusal handling. */
   const enqueue = useCallback(<T>(call: (draft: WorkflowDraftView) => Promise<T>): Promise<T | undefined> => {
@@ -133,7 +202,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
         if (result.ok) {
           setConflict(undefined);
           setMessage(undefined);
-          accept(result.result);
+          if (accept(result.result)) setChecking(false);
         } else await refused(result.error);
       }),
     [enqueue, workflowId, accept, refused],
@@ -150,7 +219,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
         if (result.ok) {
           setConflict(undefined);
           setMessage(undefined);
-          accept(result.result);
+          if (accept(result.result)) setChecking(false);
           return true;
         }
         await refused(result.error);
@@ -213,6 +282,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
     busy,
     message,
     conflict,
+    checking,
     apply,
     undo: async () => void (await mutate("workflowDrafts.undo")),
     redo: async () => void (await mutate("workflowDrafts.redo")),
@@ -220,6 +290,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
     publish,
     discard,
     reload,
+    revalidate,
     clearMessage: () => {
       setMessage(undefined);
       setConflict(undefined);

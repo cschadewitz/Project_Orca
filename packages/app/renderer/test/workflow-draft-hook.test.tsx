@@ -227,4 +227,62 @@ describe("useWorkflowDraft", () => {
     expect(await hook.result.current.apply([{ op: "tidy" }])).toBe(false);
     expect(call.mock.calls.map(([method]) => method)).toEqual(["workflowDrafts.open", "workflowDrafts.get"]);
   });
+  it("keeps the newest revision: a re-read older than an edit's result, or than a later re-read, is dropped (#182)", async () => {
+    const answers: ((value: Answer) => void)[] = [];
+    const { hook } = await ready({
+      "workflowDrafts.get": () => new Promise<Answer>((resolve) => answers.push(resolve)),
+    });
+    const got = (revision: number): Answer => ({
+      ok: true,
+      result: { draft: view(revision), layout: { graphs: {} }, editable: true },
+    });
+    let first!: Promise<void>;
+    act(() => void (first = hook.result.current.revalidate()));
+    expect(hook.result.current.checking).toBe(true);
+    await act(async () => void (await hook.result.current.apply([{ op: "tidy" }])));
+    expect(revisionOf(hook)).toBe(1);
+    // An edit's result is validated by the daemon that produced it.
+    expect(hook.result.current.checking).toBe(false);
+    await act(async () => {
+      answers[0]!(got(0));
+      await first;
+    });
+    expect(revisionOf(hook)).toBe(1);
+
+    // Of two re-reads, only the one asked last counts, whichever answers first.
+    let second!: Promise<void>;
+    let third!: Promise<void>;
+    act(() => {
+      second = hook.result.current.revalidate();
+      third = hook.result.current.revalidate();
+    });
+    await act(async () => {
+      answers[2]!(got(3));
+      await third;
+    });
+    expect(revisionOf(hook)).toBe(3);
+    expect(hook.result.current.checking).toBe(false);
+    await act(async () => {
+      answers[1]!(got(2));
+      await second;
+    });
+    expect(revisionOf(hook)).toBe(3);
+  });
+
+  it("takes a re-opened draft's lower revision: a new creation is newer news", async () => {
+    const { hook } = await ready({
+      "workflowDrafts.get": () => ({
+        ok: true,
+        result: {
+          draft: { ...view(0), createdAt: "2026-10-11T12:00:00.000Z" },
+          layout: { graphs: {} },
+          editable: true,
+        },
+      }),
+    });
+    await act(async () => void (await hook.result.current.apply([{ op: "tidy" }])));
+    expect(revisionOf(hook)).toBe(1);
+    await act(() => hook.result.current.reload());
+    expect(revisionOf(hook)).toBe(0);
+  });
 });
