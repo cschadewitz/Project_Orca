@@ -83,7 +83,19 @@ describe("permissions.saveJudgedRule", () => {
     const heard = vi.fn();
     model.onChange(heard);
     await model.saveJudgedRule(RULE);
-    expect((await model.get()).effective).toEqual(before);
+    // The typed rules are as they were; the saved rule is listed apart from them (#701).
+    const after = (await model.get()).effective.agents["claude"]!;
+    expect(after.rules).toEqual(before.agents["claude"]!.rules);
+    expect(after.default).toBe(before.agents["claude"]!.default);
+    expect(after.judged).toEqual([
+      {
+        ruleId: "sidecar:0",
+        source: "permissions",
+        match: RULE.match,
+        criterion: RULE.criterion,
+        addedAt: "2026-11-23T12:00:00.000Z",
+      },
+    ]);
     expect(heard).toHaveBeenCalledWith(expect.objectContaining({ document: "permissions" }));
     heard.mockClear();
     expect((await model.saveJudgedRule(RULE)).outcome).toBe("already-present");

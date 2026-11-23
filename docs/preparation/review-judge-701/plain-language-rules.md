@@ -300,6 +300,16 @@ In the app:
   to the rule.
 - When the judge declined, the prompt shows ORCA's wording for the reason code ("Your rule doesn't
   cover this.").
+- **Writing and editing rules (built, #701 item 5).** The Agents surface's permission panel has a
+  "Plain-language rules" section after the written grants. A person adds a rule there, writes
+  the sentence, picks `read` or `search`, and may narrow it to a path or a path prefix inside the
+  workspace. Each row says what Save would refuse while it is typed (no sentence, another kind,
+  a path outside the workspace). Edits and removals are drafts saved by the panel's one Save, as
+  grants are, and a file holding one is version 4; removing the last one writes the version the
+  rest needs. The rules are not numbered among the grants, because they are not in the
+  first-match order. `config.get` lists them per agent apart from the typed rules (`judged`,
+  protocol 2.12), named `config:N` or `sidecar:N` as a decision record names them, and the
+  Config surface shows them in their own group.
 - The prompt gets a third choice next to Allow once and Save: **"Write a rule for things like
   this"**, prefilled with a suggested sentence the person edits. ORCA never saves a rule the
   person didn't confirm.

@@ -215,6 +215,35 @@
   text-overflow: ellipsis;
 }
 
+/* A plain-language rule (#701): the declared two-line variant of a rule row (rule 9). The gate
+   and its source on the first line, the sentence a person wrote on the second; each line is
+   one line and cut at its end, never wrapped. */
+.orca-config__judged {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: calc(var(--row-h) * 2);
+  padding: 0 var(--space-2);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+}
+
+.orca-config__judged-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* type: body */
+.orca-config__judged-criterion {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* type: caption */
 .orca-config__granted {
   color: var(--ink-secondary);

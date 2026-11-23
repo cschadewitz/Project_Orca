@@ -232,7 +232,9 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * 2.12 (#701) adds `permissions.saveJudgedRule`, the app's save method for a plain-language
  * rule: it appends a judged rule to the permission sidecar, which becomes version 4. A new
  * method name in `hello.methods`: a 2.11 client never calls it, and the app offers the save
- * only to a daemon that lists it.
+ * only to a daemon that lists it. It also adds an optional `judged` list on each agent's
+ * effective policy in `config.get`, the plain-language rules apart from the typed ones; an
+ * older client ignores the key, and the app reads its absence as none listed.
  */
 export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 12 };
 

@@ -264,9 +264,32 @@ export type EffectivePermissionRule = z.infer<typeof EffectivePermissionRuleSche
  * one. It is reported here because a list of rules without the fallthrough is not the
  * effective policy, it is half of it.
  */
+/**
+ * One plain-language rule an agent's policy holds (protocol 2.12, #701), apart from `rules`:
+ * a judged rule decides nothing in the first-match order, so listing it among the typed rules
+ * would draw a precedence it does not have. It is asked about only after the typed rules
+ * answered `ask`, only by a session given a judge, and its `covered` allows one call once.
+ *
+ * `ruleId` is the name the judged lane and the decision record give it, `config:N` or
+ * `sidecar:N`: its index in its list as written, typed rules counted. A saved rule whose
+ * lifetime has run out is left out, as the lane leaves it out.
+ */
+export const EffectiveJudgedRuleSchema = z.object({
+  ruleId: z.string(),
+  source: z.enum(["config", "permissions"]),
+  match: PermissionRuleSchema.shape.match,
+  criterion: z.string(),
+  /** Sidecar provenance. Absent on a configured rule. */
+  addedAt: z.string().optional(),
+  expiresAt: z.string().optional(),
+});
+export type EffectiveJudgedRule = z.infer<typeof EffectiveJudgedRuleSchema>;
+
 export const EffectiveAgentPolicySchema = z.object({
   default: PermissionDecisionSchema,
   rules: z.array(EffectivePermissionRuleSchema),
+  /** The plain-language rules (protocol 2.12, #701). Absent from an older daemon: none listed. */
+  judged: z.array(EffectiveJudgedRuleSchema).optional(),
 });
 export type EffectiveAgentPolicy = z.infer<typeof EffectiveAgentPolicySchema>;
 
@@ -479,6 +502,9 @@ export const PERMISSIONS_SAVE_JUDGED_RULE_METHOD = "permissions.saveJudgedRule";
 
 /** The kinds a saved judged rule may name; `SAVED_JUDGED_KINDS` in `@orca/core`. */
 export const SAVED_JUDGED_RULE_KINDS = SAVED_JUDGED_KINDS;
+
+/** The longest criterion a judged rule may carry; `JUDGED_CRITERION_MAX` in `@orca/core`. */
+export const JUDGED_RULE_CRITERION_MAX = JUDGED_CRITERION_MAX;
 
 export const PermissionsSaveJudgedRuleParamsSchema = z
   .object({

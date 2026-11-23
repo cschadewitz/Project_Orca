@@ -34,6 +34,7 @@ import type {
   ConfigSchemaDescription,
   ConfigValidationError,
   EffectiveAgentPolicy,
+  EffectiveJudgedRule,
   EffectivePermissionRule,
 } from "@orca/protocol";
 import { counted } from "../ui/count.js";
@@ -463,6 +464,29 @@ export interface AgentPolicyView {
   /** The fallthrough, which is configuration's alone — the sidecar carries none (ADR 0009). */
   default: EffectiveAgentPolicy["default"];
   rows: readonly PermissionRow[];
+  /**
+   * The plain-language rules (#701), apart from `rows`: they decide nothing in the first-match
+   * order, so numbering them among the typed rules would draw a precedence they do not have.
+   * Empty from a daemon that does not report them.
+   */
+  judged: readonly JudgedRow[];
+}
+
+/** One plain-language rule, as a surface lists it (#701). */
+export interface JudgedRow {
+  /** The name the judged lane and a decision record give it, `config:N` or `sidecar:N`. */
+  ruleId: string;
+  source: Exclude<PolicySource, "default">;
+  /** Which calls a judge is asked about at all, as a phrase: "read under docs". */
+  gate: string;
+  criterion: string;
+  addedAt?: string;
+  expiresAt?: string;
+}
+
+/** A judged rule's gate in words: the same phrase `describeRule` draws, without a decision. */
+export function describeGate(match: EffectiveJudgedRule["match"]): string {
+  return describeRule({ match, decision: "ask", source: "config" }).replace(/^ask /, "");
 }
 
 /**
@@ -516,6 +540,14 @@ export function agentPolicies(effective: {
       decision: rule.decision,
       ...(rule.addedAt === undefined ? {} : { addedAt: rule.addedAt }),
       ...(rule.grantedFor === undefined ? {} : { grantedFor: rule.grantedFor }),
+      ...(rule.expiresAt === undefined ? {} : { expiresAt: rule.expiresAt }),
+    })),
+    judged: (policy.judged ?? []).map((rule) => ({
+      ruleId: rule.ruleId,
+      source: rule.source === "permissions" ? "sidecar" : "config",
+      gate: describeGate(rule.match),
+      criterion: rule.criterion,
+      ...(rule.addedAt === undefined ? {} : { addedAt: rule.addedAt }),
       ...(rule.expiresAt === undefined ? {} : { expiresAt: rule.expiresAt }),
     })),
   }));

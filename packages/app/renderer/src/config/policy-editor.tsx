@@ -27,6 +27,11 @@
  *   the sidecar on every "allow always", and a copy would put back what it wrote meanwhile.
  *   Save composes the edited agents onto the file as it is and sends that as `text`, because
  *   the sidecar is JSON and `config.set`'s `patch` edits a YAML document in place.
+ * - **the sidecar's plain-language rules, editable** (#701), in their own section after the
+ *   grants. A judged rule decides nothing in the first-match order: a judge is asked about it
+ *   only after the typed rules answered `ask`, and its yes allows one call once. So it is not
+ *   numbered among the grants, and its kind is one the judged lane can open for. It is drafted
+ *   and saved like a grant, through the same Save, and the file becomes version 4.
  * - **the fallthrough**, which is configuration's alone. The sidecar cannot carry one, and a
  *   list of rules without it is half a policy.
  *
@@ -53,16 +58,23 @@ import { configUrl } from "../route-table.js";
 import { POLICY_LAYERS, agentPolicies, describeRule, rowsFrom } from "./config-model.js";
 import { DraftBar } from "./draft-bar.js";
 import {
+  JUDGED_RULE_CRITERION_MAX,
+  SAVED_JUDGED_RULE_KINDS,
   composeGrants,
   grantKeys,
+  handJudgedRule,
   handRule,
+  isJudgedRule,
+  judgedRuleProblem,
   parseSidecar,
   ruleChanges,
   rulesOf,
   sidecarRuleWarning,
   withMatch,
+  type JudgedSidecarRule,
   type RuleMatch,
   type SidecarRule,
+  type TypedSidecarRule,
 } from "./policy-model.js";
 import { useConfig } from "./config-context.js";
 import type { ConfigFeed } from "./use-config.js";
@@ -152,8 +164,8 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
   );
 
   const editRule = useCallback(
-    (index: number, patch: Partial<SidecarRule>) =>
-      write(rules.map((rule, at) => (at === index ? { ...rule, ...patch } : rule))),
+    (index: number, patch: Partial<TypedSidecarRule> | Partial<JudgedSidecarRule>) =>
+      write(rules.map((rule, at) => (at === index ? ({ ...rule, ...patch }) : rule))),
     [rules, write],
   );
   const editMatch = useCallback(
@@ -175,10 +187,25 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
      focus a person has put somewhere else stays where they put it. */
   const section = useRef<HTMLElement>(null);
   const list = useRef<HTMLOListElement>(null);
+  const judgedSection = useRef<HTMLElement>(null);
+  const judgedList = useRef<HTMLOListElement>(null);
   const keys = useMemo(() => grantKeys(rules), [rules]);
+  /* The two lists the file's rows are drawn in (#701): the typed grants, numbered in
+     evaluation order, and the plain-language rules apart from them. Each row keeps its index
+     in the file, which is what an edit or a removal addresses. */
+  const typed = useMemo(
+    () => rules.flatMap((rule, index) => (isJudgedRule(rule) ? [] : [{ rule, index, key: keys[index]! }])),
+    [keys, rules],
+  );
+  const judged = useMemo(
+    () => rules.flatMap((rule, index) => (isJudgedRule(rule) ? [{ rule, index, key: keys[index]! }] : [])),
+    [keys, rules],
+  );
+  const typedKeys = useMemo(() => typed.map((row) => row.key), [typed]);
+  const judgedKeys = useMemo(() => judged.map((row) => row.key), [judged]);
   /* The rows as the last commit drew them, and the one that left it holding focus — written
      by the row's own unmount, in the same commit as the effect below that reads it. */
-  const drawn = useRef(keys);
+  const drawn = useRef({ typed: typedKeys, judged: judgedKeys });
   const leftHoldingFocus = useRef<string | undefined>(undefined);
   const onLeaveHoldingFocus = useCallback((key: string) => {
     leftHoldingFocus.current = key;
@@ -188,18 +215,24 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
      same frame means there is never a painted moment, or a keystroke, with it there. */
   useLayoutEffect(() => {
     const before = drawn.current;
-    drawn.current = keys;
+    drawn.current = { typed: typedKeys, judged: judgedKeys };
     const gone = leftHoldingFocus.current;
     leftHoldingFocus.current = undefined;
-    if (gone === undefined || keys.includes(gone)) return;
+    if (gone === undefined || typedKeys.includes(gone) || judgedKeys.includes(gone)) return;
     // Something in this same commit has already put focus somewhere: it is not lost.
     if (document.activeElement !== null && document.activeElement !== document.body) return;
-    const at = focusAfterLeaving(before, keys, gone);
+    // The list the row left is the one focus stays in: a plain-language rule's neighbour is
+    // another plain-language rule, or that section's Add.
+    const inJudged = before.judged.includes(gone);
+    const [was, now, into, region] = inJudged
+      ? [before.judged, judgedKeys, judgedList, judgedSection]
+      : [before.typed, typedKeys, list, section];
+    const at = focusAfterLeaving(was, now, gone);
     const remove =
-      at === undefined ? null : (list.current?.children[at]?.querySelector<HTMLElement>("[data-grant-remove]") ?? null);
-    const add = section.current?.querySelector<HTMLElement>("[data-grant-add]") ?? null;
-    (remove ?? add ?? section.current)?.focus();
-  }, [keys]);
+      at === undefined ? null : (into.current?.children[at]?.querySelector<HTMLElement>("[data-grant-remove]") ?? null);
+    const add = region.current?.querySelector<HTMLElement>("[data-grant-add]") ?? null;
+    (remove ?? add ?? region.current)?.focus();
+  }, [typedKeys, judgedKeys]);
 
   const configured = policy ? rowsFrom(policy, "config") : [];
   /* ORCA's own floor, appended after the sidecar (#140). Read-only like the configured
@@ -304,26 +337,27 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
                 The sidecar is not valid JSON, so it cannot be edited here. Open it in the configuration&apos;s raw view
                 and fix it there.
               </Text>
-            ) : rules.length === 0 ? (
+            ) : typed.length === 0 ? (
               <Text style="caption" className="orca-policy__none">
                 Nothing has been granted with &quot;always&quot; for this agent.
               </Text>
             ) : (
               <ol ref={list} className="orca-policy__grants">
-                {rules.map((rule, index) => (
+                {typed.map(({ rule, index, key }, position) => (
                   <Grant
                     /* The rule's name, not its place (`grantKeys`): the grants after a removed
                        one keep their rows, and the one that slides into the gap is a row
                        focus can be put back on. */
-                    key={keys[index]}
-                    rowKey={keys[index]!}
+                    key={key}
+                    rowKey={key}
                     rule={rule}
                     agentId={agentId}
                     index={index}
                     /* The number a configured rule list ends at, continued: these rules are
                        evaluated after those, and numbering them from 1 again would draw a
-                       precedence that is not the one `decidePermission` uses. */
-                    order={configured.length + index + 1}
+                       precedence that is not the one `decidePermission` uses. Plain-language
+                       rules are not counted: they are not in that order (#701). */
+                    order={configured.length + position + 1}
                     live={live}
                     editable={editable}
                     onDecision={(decision) => editRule(index, { decision })}
@@ -335,6 +369,61 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
               </ol>
             )}
           </section>
+
+          {/* The plain-language rules (#701): the sidecar's too, drafted and saved with the
+              grants, but drawn apart because they are not in the first-match order. */}
+          {held !== undefined && (
+            <section
+              ref={judgedSection}
+              className="orca-policy__section"
+              aria-label="Plain-language rules"
+              tabIndex={-1}
+            >
+              <div className="orca-policy__section-head">
+                <Text style="label-strong">Plain-language rules</Text>
+                <Chip>sidecar</Chip>
+                <span className="orca-spacer" />
+                {editable && (
+                  <Button
+                    size="sm"
+                    data-grant-add=""
+                    onClick={() => write([...rules, handJudgedRule((now ?? isoNow)())])}
+                  >
+                    Add a plain-language rule
+                  </Button>
+                )}
+              </div>
+              <Text style="caption" className="orca-policy__none">
+                A rule in a sentence, for reads and searches. When the rules above answer ask, a judge on your own key
+                decides whether the call fits the sentence. A yes allows that one call once; anything else goes to you.
+                A judge is used only in a session given one.
+              </Text>
+              {judged.length === 0 ? (
+                <Text style="caption" className="orca-policy__none">
+                  No plain-language rules for this agent.
+                </Text>
+              ) : (
+                <ol ref={judgedList} className="orca-policy__grants">
+                  {judged.map(({ rule, index, key }, position) => (
+                    <JudgedGrant
+                      key={key}
+                      rowKey={key}
+                      rule={rule}
+                      agentId={agentId}
+                      index={index}
+                      position={position + 1}
+                      live={live}
+                      editable={editable}
+                      onCriterion={(criterion) => editRule(index, { judge: { criterion } })}
+                      onMatch={(key, value) => editMatch(index, key, value)}
+                      onRemove={() => write(rules.filter((_, at) => at !== index))}
+                      onLeaveHoldingFocus={onLeaveHoldingFocus}
+                    />
+                  ))}
+                </ol>
+              )}
+            </section>
+          )}
 
           {/* ORCA's floor, last. Its own group because it is neither of the documents: no
               path under it, no link out of it, and nothing here or on the Config surface
@@ -414,14 +503,14 @@ const isoNow = (): string => new Date().toISOString();
 interface GrantProps {
   /** The rule's name in the list, which is also its React key (`grantKeys`). */
   rowKey: string;
-  rule: SidecarRule;
+  rule: TypedSidecarRule;
   /** Whose policy this is, and where in the file the rule sits: together they are its path. */
   agentId: string;
   index: number;
   order: number;
   live: boolean;
   editable: boolean;
-  onDecision: (decision: SidecarRule["decision"]) => void;
+  onDecision: (decision: TypedSidecarRule["decision"]) => void;
   onMatch: <K extends keyof RuleMatch>(key: K, value: RuleMatch[K]) => void;
   onRemove: () => void;
   /** Said once, as the row unmounts, if focus was inside it: the list decides where it goes. */
@@ -526,7 +615,7 @@ function Grant({
         choices={PERMISSION_DECISIONS}
         editable={editable}
         required
-        onChoose={(value) => onDecision(value as SidecarRule["decision"])}
+        onChoose={(value) => onDecision(value as TypedSidecarRule["decision"])}
       />
       <Choice
         label="Tool kind"
@@ -577,6 +666,145 @@ function Grant({
         editable={editable}
         help="An execute call's command by its words, such as npm * or git push. A final * is any further words. A command rule can deny or ask, not allow: the words don't prove what runs. It also catches the words with options between them, inside a compound command or under sudo or bash -c, so git push catches git -C repo push."
         onChange={(value) => onMatch("command", value)}
+      />
+    </li>
+  );
+}
+
+interface JudgedGrantProps {
+  rowKey: string;
+  rule: JudgedSidecarRule;
+  agentId: string;
+  /** Where in the agent's list as written the rule sits: its path, and its `sidecar:N` id. */
+  index: number;
+  /** Its place among the plain-language rules, for its Remove's name. */
+  position: number;
+  live: boolean;
+  editable: boolean;
+  onCriterion: (criterion: string) => void;
+  onMatch: <K extends keyof RuleMatch>(key: K, value: RuleMatch[K]) => void;
+  onRemove: () => void;
+  onLeaveHoldingFocus: (key: string) => void;
+}
+
+/**
+ * One plain-language rule (#701): the sentence a person wrote, and the gate that decides which
+ * calls a judge is asked about at all. The gate is narrower than a grant's on purpose: its
+ * kind is one the judged lane can open for, and it has no command and no title pattern to
+ * set here, because a judge never decides a command and a title is the agent's own words.
+ * What would make Save refuse it is said on the row as it is typed (`judgedRuleProblem`).
+ */
+function JudgedGrant({
+  rowKey,
+  rule,
+  agentId,
+  index,
+  position,
+  live,
+  editable,
+  onCriterion,
+  onMatch,
+  onRemove,
+  onLeaveHoldingFocus,
+}: JudgedGrantProps): JSX.Element {
+  const base = `agents.${agentId}.rules[${index}]`;
+  const problem = judgedRuleProblem(rule);
+  const problemId = useId();
+  const gate = describeRule({ match: rule.match, decision: "ask", source: "permissions" }).replace(/^ask /, "");
+  const row = useRef<HTMLLIElement>(null);
+
+  useLayoutEffect(() => {
+    const element = row.current;
+    return () => {
+      if (element?.contains(document.activeElement)) onLeaveHoldingFocus(rowKey);
+    };
+  }, [rowKey, onLeaveHoldingFocus]);
+
+  return (
+    <li ref={row} className="orca-policy__grant" aria-describedby={problem === undefined ? undefined : problemId}>
+      <div className="orca-policy__grant-head">
+        <span className={`orca-config__order ${textClass("mono-id")}`}>{`sidecar:${index}`}</span>
+        <span className={`orca-config__rule-text ${textClass("mono-body")}`} title={`judge ${gate}`}>
+          {`judge ${gate}`}
+        </span>
+        <span className="orca-spacer" />
+        {editable && (
+          <Button
+            size="sm"
+            data-grant-remove=""
+            onClick={onRemove}
+            aria-label={`Remove plain-language rule ${position}`}
+          >
+            Remove
+          </Button>
+        )}
+      </div>
+
+      {problem !== undefined && (
+        <Text style="caption" id={problemId}>
+          {problem}
+        </Text>
+      )}
+
+      <div className="orca-policy__provenance">
+        {rule.addedAt !== undefined && <Time at={new Date(rule.addedAt)} show={live ? "both" : "absolute"} />}
+        {rule.expiresAt !== undefined && (
+          <Text style="caption" className="orca-config__granted">
+            {Date.parse(rule.expiresAt) <= Date.now()
+              ? `expired ${formatAbsolute(new Date(rule.expiresAt))}; decides nothing`
+              : `expires ${formatAbsolute(new Date(rule.expiresAt))}`}
+          </Text>
+        )}
+      </div>
+
+      <ConfigField
+        label="Rule"
+        path={`${base}.judge.criterion`}
+        document="permissions"
+        help={`The sentence a judge applies, at most ${JUDGED_RULE_CRITERION_MAX} characters. Say what is fine and what is not, such as: reading source, tests and docs, but never .env files.`}
+      >
+        {(control) =>
+          editable ? (
+            <textarea
+              {...control}
+              className={`orca-input orca-policy__criterion ${textClass("body")}`}
+              rows={3}
+              maxLength={JUDGED_RULE_CRITERION_MAX}
+              value={rule.judge.criterion}
+              onChange={(event) => onCriterion(event.target.value)}
+            />
+          ) : (
+            <span {...control} className={`orca-config__value ${textClass("body")}`}>
+              {rule.judge.criterion}
+            </span>
+          )
+        }
+      </ConfigField>
+      <Choice
+        label="Tool kind"
+        path={`${base}.match.kind`}
+        value={rule.match.kind}
+        choices={SAVED_JUDGED_RULE_KINDS}
+        editable={editable}
+        required
+        help="Which calls a judge is asked about. Reads and searches only: other calls go to you."
+        onChoose={(value) => onMatch("kind", value as RuleMatch["kind"])}
+      />
+      <Entry
+        label="Path prefix"
+        path={`${base}.match.pathPrefix`}
+        value={rule.match.pathPrefix}
+        editable={editable}
+        help="Only calls under this folder, relative to the workspace. Anywhere in the workspace when it is not set."
+        onChange={(value) => onMatch("pathPrefix", value)}
+      />
+      <Entry
+        label="Path"
+        path={`${base}.match.path`}
+        value={rule.match.path}
+        editable={editable}
+        help="Only calls on this one location, relative to the workspace."
+        onChange={(value) => onMatch("path", value)}
       />
     </li>
   );

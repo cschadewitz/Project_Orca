@@ -71,6 +71,7 @@ import {
   type ConfigSetParams,
   type ConfigSetResult,
   type ConfigValidationError,
+  type EffectiveJudgedRule,
   type EffectivePermissionRule,
   type PermissionsSaveJudgedRuleParams,
   type PermissionsSaveJudgedRuleResult,
@@ -572,7 +573,7 @@ export class ConfigModel {
       : { version: 1, agents: {} };
     const agents: ConfigEffectivePolicy["agents"] = {};
     // One instant for both lists, so an expiring rule cannot be in one and not the other (#702).
-    const now = Date.now();
+    const now = this.clock.now();
     for (const agent of parsed.data.agents) {
       // Saved judged rules are not typed rules either (#701): the overlay leaves them out.
       const recorded = (doc.agents[agent.id]?.rules ?? []).filter(
@@ -595,13 +596,42 @@ export class ConfigModel {
           ...(provenance?.expiresAt ? { expiresAt: provenance.expiresAt } : {}),
         };
       });
-      agents[agent.id] = { default: layered.default, rules };
+      // The plain-language rules (#701), apart from the typed ones and named as the judged
+      // lane names them: `config:N` and `sidecar:N` by their index as written, typed rules
+      // counted. A saved one whose lifetime has run out is left out, as the lane leaves it out.
+      const judged: EffectiveJudgedRule[] = [];
+      agent.permissions.rules.forEach((rule, index) => {
+        if (isJudgedPermissionRule(rule))
+          judged.push({
+            ruleId: `config:${index}`,
+            source: "config",
+            match: definedOnly(rule.match),
+            criterion: rule.judge.criterion,
+          });
+      });
+      (doc.agents[agent.id]?.rules ?? []).forEach((rule, index) => {
+        if (!isSidecarJudgedRule(rule) || permissionRuleExpired(rule, now)) return;
+        judged.push({
+          ruleId: `sidecar:${index}`,
+          source: "permissions",
+          match: definedOnly(rule.match),
+          criterion: rule.judge.criterion,
+          ...(rule.addedAt ? { addedAt: rule.addedAt } : {}),
+          ...(rule.expiresAt ? { expiresAt: rule.expiresAt } : {}),
+        });
+      });
+      agents[agent.id] = { default: layered.default, rules, ...(judged.length > 0 ? { judged } : {}) };
     }
     return { agents };
   }
 }
 
 /* ------------------------------ plain helpers ------------------------------ */
+
+/** A match without the keys it leaves unset, so the wire carries no `undefined`. */
+function definedOnly<T extends object>(match: T): T {
+  return Object.fromEntries(Object.entries(match).filter(([, value]) => value !== undefined)) as T;
+}
 
 /**
  * Refuse an edit made against a revision the file no longer has.
