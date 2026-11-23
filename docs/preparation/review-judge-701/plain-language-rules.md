@@ -110,9 +110,8 @@ canonical reply shape only decide whether an action *inside* them is covered; no
 boundary on its own.
 
 - The judge only ever answers **allow** or **no match**. It never denies.
-- **Decision for Casey:** may a saved judged rule ever sit *above* configured rules, for example
-  by an explicit "put this first"? Recommendation: **no.** Saved rules, judged or not, always come
-  after hand-written ones, as today.
+- **Decided (Casey, 2026-11-23):** a saved judged rule never sits *above* configured rules, for
+  now. Saved rules, judged or not, always come after hand-written ones, as today.
 
 **Shadowing.** Judged rules only allow, so when several cover a call the outcome is the same
 (allow once). Only the credit differs, and the record lists every rule the batch judged covered,
@@ -277,7 +276,7 @@ ORCA helps write the rules, but **never applies one the person hasn't accepted**
 and every rewrite is shown as a diff (old rule list → new rule list) with Accept / Edit / Dismiss.
 
 **Suggestions from repeated approvals.** When the person answers "Allow once" for similar calls
-several times (default: 3 times in 7 days, same agent and kind), the prompt offers "Make a rule
+several times (default 3 times in 7 days, configurable; same agent and kind), the prompt offers "Make a rule
 for these?" with a drafted criterion and a deterministic `match`.
 - The draft is generated from the approved calls only, never from calls the person declined or
   that were denied.
@@ -351,10 +350,15 @@ replay shows exactly what the rule would cover.
 
 ## 13. Decisions for Casey
 
-1. May a saved judged rule ever be placed above hand-written rules? (Recommended: no. Order
-   already lets an explicit ask win.)
-2. ~~First real judge~~: decided, a small hosted model with your own key.
-4. Suggestion threshold (recommended: 3 approvals in 7 days) and whether "Tidy" may propose
-   removing unused rules (recommended: yes, as a suggestion).
-3. Default budget and deadline (recommended: 5 s, 200 judge calls per day, cache off).
-5. ~~Plain-language "always ask me" rules and Tidy's shadowing warning~~: decided, both (section 3).
+All decided (Casey, 2026-11-23):
+
+1. **Saved judged rules above hand-written rules:** no, for now. Saved rules always come after
+   hand-written ones. With the hard boundaries in section 3, position can't get past a restriction
+   anyway.
+2. **First real judge:** a small hosted model with your own key.
+3. **Default budget and deadline:** 5 s per call, 200 judge calls per day, repeat cache off. All
+   configurable.
+4. **Suggestions and Tidy:** suggest a rule after 3 approvals in 7 days, and Tidy may propose
+   removing rules unused for 30 days, as a suggestion only. The threshold, window and unused period
+   are configurable, and suggestions can be turned off.
+5. **Plain-language "always ask me" rules and Tidy's shadowing warning:** both (section 3).
