@@ -133,22 +133,31 @@ describe("CLI auth lifecycle", () => {
     expect(credentials.find((c) => c.id === revoked)?.revokedAt).toBeDefined();
   });
 
-  it("moves only a credential id after the subcommand behind --", () => {
-    expect(credentialIdLast(["auth", "revoke", "-AbCdEfGhIjK", "--json"])).toEqual([
-      "auth",
-      "revoke",
-      "--json",
-      "--",
-      "-AbCdEfGhIjK",
-    ]);
+  it("moves only the credential id of auth rotate/revoke behind --", () => {
+    const id = "-AbCdEfGhIjK";
+    expect(credentialIdLast(["auth", "revoke", id, "--json"])).toEqual(["auth", "revoke", "--json", "--", id]);
     expect(credentialIdLast(["auth", "revoke", "--AbCdEfGhIj"])).toEqual(["auth", "revoke", "--", "--AbCdEfGhIj"]);
-    // A declared option of the same length, an explicit --, other commands and other shapes stay.
+    // Global options and their values may sit anywhere, as the parser allows.
+    expect(
+      credentialIdLast(["--cwd", "/w", "auth", "--json", "rotate", "--expires-at", "2030-01-01T00:00:00Z", id]),
+    ).toEqual(["--cwd", "/w", "auth", "--json", "rotate", "--expires-at", "2030-01-01T00:00:00Z", "--", id]);
     for (const argv of [
+      // A declared option of the same length, and an explicit --.
       ["auth", "rotate", "--expires-at", "2030-01-01T00:00:00Z", "AbCdEfGhIjKl"],
-      ["auth", "revoke", "--", "-AbCdEfGhIjK"],
-      ["auth", "issue", "-AbCdEfGhIjK"],
-      ["runs", "revoke", "-AbCdEfGhIjK"],
+      ["auth", "revoke", "--", id],
+      // Other commands and subcommands, even with "auth revoke" among their arguments.
+      ["auth", "issue", id],
+      ["runs", "revoke", id],
+      ["runs", "show", "auth", "revoke", id],
+      ["workflows", "auth", "revoke", id],
+      // "auth" or "revoke" as an option's value is not the command.
+      ["--cwd", "auth", "revoke", id],
+      ["--label", "auth", "auth", "issue", "--label", "revoke", id],
+      ["--note=auth", "revoke", id],
+      // An id-shaped value of an option, and other shapes.
+      ["auth", "revoke", "--label", id, "AbCdEfGhIjKl"],
       ["auth", "revoke", "-short"],
+      ["auth", "revoke", "AbCdEfGhIjKl", id],
     ])
       expect(credentialIdLast(argv)).toBe(argv);
   });

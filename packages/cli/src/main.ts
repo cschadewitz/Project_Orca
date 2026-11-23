@@ -84,19 +84,37 @@ const OPTIONS = {
 
 /**
  * `orca auth rotate|revoke <id>` with an id that starts with `-` (ids issued before
- * 0.8.0 could): the parser would read it as an unknown option, so move it after a `--`.
- * Only a token of the exact credential-id shape right after the subcommand, and never a
- * declared option such as `--expires-at`, which happens to be the same length.
+ * 0.8.0 could): the parser would read it as an unknown option, so move it behind a `--`.
+ * The walk follows the parser: declared options are skipped with their values, and only
+ * when the first two positionals are `auth` and `rotate`/`revoke` is the next token that
+ * is not a declared option, and has the exact credential-id shape, moved. Anything else,
+ * and argv that already has a `--`, is left alone. An old id that is itself a declared
+ * option name (such as `--expires-at`) still needs the explicit `orca auth revoke -- <id>`.
  */
 export function credentialIdLast(argv: string[]): string[] {
   if (argv.includes("--")) return argv;
-  const at = argv.findIndex(
-    (_, i) => i >= 2 && argv[i - 2] === "auth" && (argv[i - 1] === "rotate" || argv[i - 1] === "revoke"),
-  );
-  const id = argv[at];
-  if (at < 0 || id === undefined || !/^-[A-Za-z0-9_-]{11}$/.test(id)) return argv;
-  if (id.startsWith("--") && Object.hasOwn(OPTIONS, id.slice(2))) return argv;
-  return [...argv.slice(0, at), ...argv.slice(at + 1), "--", id];
+  const positionals: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg.startsWith("--")) {
+      const [name, inline] = [arg.slice(2).split("=")[0]!, arg.includes("=")];
+      const declared = (OPTIONS as Record<string, { type: string }>)[name];
+      if (declared) {
+        if (declared.type === "string" && !inline) i++; // its value, whatever it looks like
+        continue;
+      }
+    }
+    if (!arg.startsWith("-")) {
+      positionals.push(arg);
+      if (positionals.length > 2) return argv;
+      continue;
+    }
+    // Not a declared option: the id we are looking for, or something the parser will refuse.
+    const command = positionals[0] === "auth" && (positionals[1] === "rotate" || positionals[1] === "revoke");
+    if (!command || positionals.length !== 2 || !/^-[A-Za-z0-9_-]{11}$/.test(arg)) return argv;
+    return [...argv.slice(0, i), ...argv.slice(i + 1), "--", arg];
+  }
+  return argv;
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
