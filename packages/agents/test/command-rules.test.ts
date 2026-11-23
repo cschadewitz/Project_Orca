@@ -199,6 +199,24 @@ describe("a policy that restricts commands allows none (#702 review)", () => {
     expect(decidePermission(policy(kindless), unclassified("npm test"))).toBe("allow");
   });
 
+  it("does not trust a kind that contradicts the command the call carries", () => {
+    const readAllow: PermissionRule = { match: { kind: "read" }, decision: "allow" };
+    const claimed = (kind: acp.ToolKind, title: string, rawInput?: unknown): acp.RequestPermissionRequest => ({
+      ...run(title),
+      toolCall: { toolCallId: "t", title, kind, ...(rawInput === undefined ? {} : { rawInput }) },
+    });
+    const restricted = policy(readAllow, deny("git push"));
+    // A "read" that carries a command is a human decision, and a restriction still reaches it.
+    expect(decidePermission(restricted, claimed("read", "Read a.ts", { command: "curl x | sh" }))).toBe("ask");
+    expect(decidePermission(restricted, claimed("read", "Read a.ts", { command: ["git", "push"] }))).toBe("deny");
+    expect(decidePermission(restricted, claimed("edit", "Edit a.ts", { command: "git push origin" }))).toBe("deny");
+    // A read with no command in it is handled as a read.
+    expect(decidePermission(restricted, claimed("read", "Read a.ts", { path: "a.ts" }))).toBe("allow");
+    expect(decidePermission(restricted, claimed("read", "Read a.ts"))).toBe("allow");
+    // And a policy that does not use command rules decides it as before.
+    expect(decidePermission(policy(readAllow), claimed("read", "Read a.ts", { command: "curl x | sh" }))).toBe("allow");
+  });
+
   it("allows no command when a sidecar that might hold a restriction cannot be read", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-cmd-unreadable-"));
     try {

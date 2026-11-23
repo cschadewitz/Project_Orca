@@ -233,11 +233,15 @@ changes, all on this file and its writer, with no second store:
   (`COMMAND_POLICY_PERMISSIVE`): set `default: ask` or leave it unset, and give each allow a
   kind other than `execute`. A command rule in the sidecar, from "Always deny", turns the
   same restriction on for that agent. Two defensive cases count as restricted too: a call the
-  agent left unclassified (no kind, or `other`) is never allowed in a restricted policy, and
-  a `command` rule's deny or ask reaches it; and when a sidecar cannot be read, it might have
+  agent left unclassified (no kind, or `other`), or whose input carries a command
+  (`rawInput.command`) whatever kind it claims, is never allowed in a restricted policy, and a
+  `command` rule's deny or ask reaches it; and when a sidecar cannot be read, it might have
   held a restriction, so the policy is marked `commandsRestricted` and no `execute` or
   unclassified call is allowed, not even by the configured rules ahead of it, until the file
-  is repaired. A sidecar holding a command
+  is repaired. All of this reads what the agent's adapter reports: its kind, title and
+  `rawInput` are advice, not facts ORCA checked. An untrusted adapter can misreport a call,
+  so these rules add friction and refusals but give no enforcement guarantee; that takes an
+  executor ORCA runs itself (#703) or an operating-system boundary. A sidecar holding a command
   rule is version 3, and a config holding one must say `version: 2`, so 0.7.x refuses them.
   The "Always deny" review offers the exact command plus wider patterns (`npm run *`,
   `npm *`), each with its own preview ref, and says a family rule refuses the whole family.

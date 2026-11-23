@@ -124,8 +124,12 @@ function decideByRules(
   const tc = request.toolCall;
   const title = tc.title ?? "";
   const kind = tc.kind ?? "other";
-  // A call the agent did not classify could be a command under another name (#702 review).
-  const unclassified = kind === "other";
+  // A call the agent did not classify could be a command under another name, and so could one
+  // that carries a command in its input whatever kind it claims: the kind is the adapter's
+  // advice, not a fact ORCA checked (#702 review).
+  const raw = tc.rawInput;
+  const rawCommand = raw !== null && typeof raw === "object" ? (raw as { command?: unknown }).command : undefined;
+  const commandLike = kind === "other" || (rawCommand !== undefined && rawCommand !== null && rawCommand !== "");
   const cwd = ctx?.workspaceCwd;
   const locations = (tc.locations ?? []).map((l) => l.path);
   const paths = locations.flatMap((p) => permissionPathForms(p, cwd));
@@ -133,9 +137,9 @@ function decideByRules(
   const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
   const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
   const matchesCall = (m: PermissionRule["match"]): boolean => {
-    // A command rule also reaches an unclassified call, so its restriction is not dodged by
-    // leaving the kind out.
-    if (m.kind && m.kind !== kind && !(m.command !== undefined && unclassified)) return false;
+    // A command rule also reaches a command-like call of another kind, so its restriction is
+    // not dodged by leaving the kind out or giving a wrong one.
+    if (m.kind && m.kind !== kind && !(m.command !== undefined && commandLike)) return false;
     if (m.scope === "workspace" && !allInside) return false;
     if (m.scope === "outside-workspace" && !anyOutside) return false;
     if (m.titlePattern && !new RegExp(m.titlePattern).test(title)) return false;
@@ -149,10 +153,10 @@ function decideByRules(
     }
     return true;
   };
-  // Once commands are restricted by their words, no allow decides an `execute` or an
-  // unclassified call (#702 review): skipping them lets a restriction later in the list still
+  // Once commands are restricted by their words, no allow decides an `execute`, an
+  // unclassified call or one whose input carries a command (#702 review): skipping them lets a restriction later in the list still
   // be reached, and nothing approves a call whose command ORCA cannot vouch for.
-  const restricted = (kind === "execute" || unclassified) && !unverifiedExecuteAllowed(policy);
+  const restricted = (kind === "execute" || commandLike) && !unverifiedExecuteAllowed(policy);
   const decide = (part: CommandPart | undefined): PermissionDecision => {
     for (const rule of policy.rules) {
       const m = rule.match;
