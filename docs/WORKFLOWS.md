@@ -430,11 +430,20 @@ orca remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for
 The remote runs `<serverCommand> auth issue delegate-<this workspace id> --preset client
 --workflow-scope <each workflow this config's agents delegate there>` (with `--config
 <serverConfig>` when set): a credential that may start only those workflows and see only the
-runs it started. Enrollment checks it like any other and saves it to
-`auth/remotes/<id>.token`, readable only by this user; a credential it issued but could not
-verify is revoked there. `orca remote enroll <id> --issue` replaces it the same way and revokes
-the one it issued before. The ssh login must be able to run that CLI (`remotes[].serverCommand`,
-default `orca`).
+runs it started. Enrollment checks it like any other and saves it in its own file,
+`auth/remotes/<id>.<credential id>.token`, readable only by this user; the enrollment record
+names that file. Enrolling again reuses it while the route and host keys are unchanged.
+`orca remote enroll <id> --issue` replaces it. The ssh login must be able to run that CLI
+(`remotes[].serverCommand`, default `orca`).
+
+The enrollment record is written last, so an enrollment that fails or is cut off at any step
+leaves the previous one in use. Only one enrollment of a remote runs at a time
+(`auth/remotes/<id>.json.lock`). A credential enrollment issued and no longer uses (one it could
+not verify, or the one a new enrollment replaced) is revoked on the remote, but only when that
+remote is provably the daemon that issued it: the same route, the same host keys and the same
+workspace. Anything it could not revoke stays listed in `auth/remotes/<id>.json.pending-revoke`,
+with a warning; the next enrollment retries the ones it can prove, and the rest need
+`orca auth revoke <credential id>` on the daemon that issued them.
 
 To use a credential issued by hand instead, save it first and enroll as above:
 

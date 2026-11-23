@@ -7,7 +7,8 @@
  *
  * - `auth/remotes/<id>.token`: the bearer credential the remote daemon issued for this daemon
  *   (`orca auth issue <principal> --json` there). Read at every session open, never logged.
- *   `credentialFile` moves it.
+ *   `credentialFile` moves it. A credential enrollment issued itself lives in its own
+ *   generation file instead, `auth/remotes/<id>.<credential id>.token`, named by the record.
  * - `auth/remotes/<id>.known_hosts`: the remote's SSH host keys (and its jump host's), pinned
  *   only by `orca remote enroll <id>`.
  * - `auth/remotes/<id>.json`: the enrollment record (`enrollment.ts`): the sealed keys, the
@@ -19,7 +20,7 @@
  * is recorded under the store's `delegations/` (`receipts.ts`).
  */
 import { readFileSync, statSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { OrcaError, type AgentSpec, type OrcaConfig, type RemoteDaemonSpec } from "@orca/core";
 import type { AgentSession, OpenSessionOptions } from "@orca/agents";
@@ -58,7 +59,10 @@ export {
   enrollmentFile,
   enrollRemote,
   EnrollmentSchema,
+  pendingRevokeFile,
   readEnrollment,
+  readPendingRevokes,
+  tokenFileName,
   type Enrollment,
   type EnrollOptions,
 } from "./enrollment.js";
@@ -187,6 +191,11 @@ export function delegationBinding(
   };
 }
 
+/** The credential file an enrollment binds: an issued generation's own file, else the configured one. */
+export function enrolledCredentialFile(files: RemoteFiles, enrollment: Enrollment): string {
+  return enrollment.tokenFile ? resolve(dirname(files.enrollmentFile), enrollment.tokenFile) : files.credentialFile;
+}
+
 /** The remote's enrollment record, or a refusal saying how to enroll it. */
 export function enrolled(remote: RemoteDaemonSpec, files: RemoteFiles): Enrollment {
   let record: Enrollment | undefined;
@@ -265,8 +274,10 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
     if (!remote) throw delegationRefusal(id, "profile-invalid", `no remotes[] entry has id ${id}`);
     const profile = remoteProfile(remote);
     const files = remoteFiles(options.configDir, remote);
-    const token = readRemoteCredential(remote, files.credentialFile);
+    // The record first: it names the credential generation (an issued one's own file), so a
+    // re-enrollment that has not committed yet never changes what this session sends.
     const enrollment = enrolled(remote, files);
+    const token = readRemoteCredential(remote, enrolledCredentialFile(files, enrollment));
     // The bearer goes only where enrollment proved it belongs: this route, these keys, this
     // credential. Each is checked before ssh starts.
     if (!sameRoute(routeOf(profile), enrollment.route))

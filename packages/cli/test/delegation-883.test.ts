@@ -13,22 +13,25 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { hostname, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { AgentSpecSchema, isOrcaError } from "@orca/core";
+import { AgentSpecSchema, isOrcaError, RemoteDaemonSpecSchema } from "@orca/core";
 import { helloOffer } from "@orca/protocol";
 import { LocalHost } from "@orca/agents";
 import {
   delegationKey,
   DelegationReceipts,
+  enrollRemote,
   openDaemonSession,
   ReceiptConflict,
   recordsOrigin,
+  remoteFiles,
+  remoteProfile,
   takesGitRef,
   type DelegationTransport,
   type OpenDaemonSessionOptions,
@@ -485,58 +488,201 @@ edges:
     expect(((await call(remote, "runs.list", {})).runs as unknown[]).length).toBe(before);
   }, 120_000);
 
+  /** The credentials the remote's CLI lists. */
+  const remoteCredentials = () => {
+    const out = spawnSync(process.execPath, [CLI_ENTRY, "auth", "list", "--json"], {
+      cwd: remote.dir,
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "", HOME: join(remote.dir, "..", "home") },
+    });
+    expect(out.status, out.stderr).toBe(0);
+    return JSON.parse(out.stdout) as {
+      id: string;
+      principal: string;
+      revokedAt?: string;
+      label?: string;
+      scope: { workflows: string[] | "*"; runs: string };
+    }[];
+  };
+  const revokedOnRemote = (id: string) => Boolean(remoteCredentials().find((c) => c.id === id)?.revokedAt);
+  const autoDir = () => join(parent.dir, "auth", "remotes");
+  const autoRecord = () => join(autoDir(), "auto-box.json");
+  type AutoRecord = {
+    credentialId: string;
+    principalId: string;
+    issued?: boolean;
+    tokenFile?: string;
+    workspaceId: string;
+  };
+  const readAutoRecord = async () => JSON.parse(await readFile(autoRecord(), "utf8")) as AutoRecord;
+  const enrollAuto = (...flags: string[]) => {
+    const out = cli(parent, ["remote", "enroll", "auto-box", "--json", ...flags]);
+    expect(out.status, out.stderr).toBe(0);
+    return { record: JSON.parse(out.stdout) as AutoRecord, stderr: out.stderr };
+  };
+  const delegatesAuto = async (city: string) =>
+    expect(await finished(parent, await admit(parent, "delegate-auto", { city }))).toMatchObject({
+      status: "succeeded",
+    });
+
   it("issues the credential over ssh when none was saved, scoped to the delegated workflow (#883)", async (ctx) => {
     if (!sshd) return ctx.skip();
-    const token = join(parent.dir, "auth", "remotes", "auto-box.token");
-    const record = join(parent.dir, "auth", "remotes", "auto-box.json");
-    const credentials = () => {
-      const out = spawnSync(process.execPath, [CLI_ENTRY, "auth", "list", "--json"], {
-        cwd: remote.dir,
-        encoding: "utf8",
-        env: { PATH: process.env.PATH ?? "", HOME: join(remote.dir, "..", "home") },
-      });
-      expect(out.status, out.stderr).toBe(0);
-      return JSON.parse(out.stdout) as {
-        id: string;
-        principal: string;
-        revokedAt?: string;
-        label?: string;
-        scope: { workflows: string[] | "*"; runs: string };
-      }[];
-    };
-    expect(existsSync(token)).toBe(false);
-    const out = cli(parent, ["remote", "enroll", "auto-box", "--json", "--host-key", sshd.hostKeyFingerprint]);
-    expect(out.status, out.stderr).toBe(0);
-    const first = JSON.parse(out.stdout) as { credentialId: string; principalId: string; issued?: boolean };
+    expect(existsSync(join(autoDir(), "auto-box.token"))).toBe(false);
+    const { record: first } = enrollAuto("--host-key", sshd.hostKeyFingerprint);
     const parentWorkspace = ((await call(parent, "operator.discover", {})).target as { workspaceId: string })
       .workspaceId;
-    expect(first).toMatchObject({ issued: true, principalId: `delegate-${parentWorkspace}` });
-    // Saved for this user alone, holding the credential the record names.
+    expect(first).toMatchObject({
+      issued: true,
+      principalId: `delegate-${parentWorkspace}`,
+      tokenFile: `auto-box.${first.credentialId}.token`,
+    });
+    // Saved for this user alone, in its own generation file, holding the credential the record names.
+    const token = join(autoDir(), first.tokenFile!);
     expect(statSync(token).mode & 0o777).toBe(0o600);
     expect((await readFile(token, "utf8")).trim().split(".")[1]).toBe(first.credentialId);
+    expect(existsSync(join(autoDir(), "auto-box.token"))).toBe(false);
     // On the remote: a client credential, owned runs only, for exactly the delegated workflow.
-    expect(credentials().find((c) => c.id === first.credentialId)).toMatchObject({
+    expect(remoteCredentials().find((c) => c.id === first.credentialId)).toMatchObject({
       principal: `delegate-${parentWorkspace}`,
       label: "orca-delegation-auto-box",
       scope: { workflows: ["remote-auto"], runs: "owned" },
     });
-    expect(credentials().find((c) => c.id === first.credentialId)?.revokedAt).toBeUndefined();
-    expect(await finished(parent, await admit(parent, "delegate-auto", { city: "Oslo" }))).toMatchObject({
-      status: "succeeded",
-    });
+    expect(revokedOnRemote(first.credentialId)).toBe(false);
+    await delegatesAuto("Oslo");
 
-    // Enrolling again with --issue replaces it: a new credential, and the old one revoked there.
-    const again = cli(parent, ["remote", "enroll", "auto-box", "--issue", "--json"]);
-    expect(again.status, again.stderr).toBe(0);
-    const second = JSON.parse(again.stdout) as { credentialId: string; issued?: boolean };
+    // Enrolling again with --issue replaces it: a new credential and generation file, the old
+    // one revoked there and its file gone.
+    const { record: second } = enrollAuto("--issue");
     expect(second.issued).toBe(true);
     expect(second.credentialId).not.toBe(first.credentialId);
-    expect(JSON.parse(await readFile(record, "utf8"))).toMatchObject({ credentialId: second.credentialId });
-    expect(credentials().find((c) => c.id === first.credentialId)?.revokedAt).toBeTruthy();
-    expect(credentials().find((c) => c.id === second.credentialId)?.revokedAt).toBeUndefined();
-    expect(await finished(parent, await admit(parent, "delegate-auto", { city: "Bergen" }))).toMatchObject({
-      status: "succeeded",
-    });
+    expect(await readAutoRecord()).toMatchObject({ credentialId: second.credentialId });
+    expect(revokedOnRemote(first.credentialId)).toBe(true);
+    expect(revokedOnRemote(second.credentialId)).toBe(false);
+    expect(existsSync(token)).toBe(false);
+    expect(existsSync(`${autoRecord()}.pending-revoke`)).toBe(false);
+    await delegatesAuto("Bergen");
+  }, 180_000);
+
+  it("keeps an issued credential's provenance when re-enrolling reuses it, so a later rotation retires it", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const before = await readAutoRecord();
+    const issuedBefore = remoteCredentials().length;
+    // Plain re-enrollment: the same credential, still marked issued, nothing new on the remote.
+    const { record: reused } = enrollAuto();
+    expect(reused).toMatchObject({ credentialId: before.credentialId, issued: true, tokenFile: before.tokenFile });
+    expect(remoteCredentials()).toHaveLength(issuedBefore);
+    await delegatesAuto("Tromsø");
+    // So the rotation after it still revokes it.
+    const { record: rotated } = enrollAuto("--issue");
+    expect(rotated.credentialId).not.toBe(before.credentialId);
+    expect(revokedOnRemote(before.credentialId)).toBe(true);
+    await delegatesAuto("Bodø");
+  }, 180_000);
+
+  it("leaves the previous enrollment working when a rotation is cut off before it commits", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const before = await readAutoRecord();
+    const recordText = await readFile(autoRecord(), "utf8");
+    const known = new Set(remoteCredentials().map((c) => c.id));
+    const config = JSON.parse(await readFile(join(parent.dir, "orca.config.yaml"), "utf8")) as {
+      remotes: unknown[];
+    };
+    const spec = RemoteDaemonSpecSchema.parse(config.remotes.find((r) => (r as { id: string }).id === "auto-box"));
+    const files = remoteFiles(parent.dir, spec);
+    await expect(
+      enrollRemote({
+        remote: spec,
+        profile: remoteProfile(spec),
+        knownHostsFile: files.knownHostsFile,
+        file: files.enrollmentFile,
+        issue: { principal: before.principalId, workflows: ["remote-auto"], rotate: true },
+        beforeCommit: () => {
+          throw new Error("cut off");
+        },
+      }),
+    ).rejects.toThrow("cut off");
+    // The record, its token file and the credential it names are untouched...
+    expect(await readFile(autoRecord(), "utf8")).toBe(recordText);
+    expect(existsSync(join(autoDir(), before.tokenFile!))).toBe(true);
+    expect(revokedOnRemote(before.credentialId)).toBe(false);
+    // ...and the credential the cut-off rotation issued is revoked, its file gone, nothing pending.
+    const extra = remoteCredentials().filter((c) => !known.has(c.id));
+    expect(extra).toHaveLength(1);
+    expect(extra[0]!.revokedAt).toBeTruthy();
+    expect(existsSync(join(autoDir(), `auto-box.${extra[0]!.id}.token`))).toBe(false);
+    expect(existsSync(`${autoRecord()}.pending-revoke`)).toBe(false);
+    await delegatesAuto("Narvik");
+  }, 180_000);
+
+  it("revokes what a crashed enrollment left pending only on the daemon that issued it", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const current = await readAutoRecord();
+    const { route, keys } = JSON.parse(await readFile(autoRecord(), "utf8")) as { route: unknown; keys: string };
+    // As a crash right after issuing leaves it: issued over this route and these keys, workspace
+    // not yet learned. And one issued by a daemon at another workspace, which must not be sent here.
+    const crashed = issueCredential(remote, current.principalId).split(".")[1]!;
+    const elsewhere = issueCredential(remote, current.principalId).split(".")[1]!;
+    const since = new Date().toISOString();
+    writeFileSync(
+      `${autoRecord()}.pending-revoke`,
+      JSON.stringify({
+        version: 1,
+        entries: [
+          { credentialId: crashed, route, keys, reason: "issued, not yet enrolled", since },
+          { credentialId: elsewhere, route, keys, workspaceId: "ws_elsewhere", reason: "replaced", since },
+          // The active credential is never revoked, whatever a cut-off run listed.
+          { credentialId: current.credentialId, route, keys, reason: "issued, not yet enrolled", since },
+        ],
+      }),
+      { mode: 0o600 },
+    );
+    const { record, stderr } = enrollAuto();
+    expect(record.credentialId).toBe(current.credentialId);
+    expect(revokedOnRemote(crashed)).toBe(true);
+    expect(revokedOnRemote(elsewhere)).toBe(false);
+    expect(revokedOnRemote(current.credentialId)).toBe(false);
+    expect(stderr).toContain(elsewhere);
+    const left = JSON.parse(await readFile(`${autoRecord()}.pending-revoke`, "utf8")) as {
+      entries: { credentialId: string }[];
+    };
+    expect(left.entries.map((e) => e.credentialId)).toEqual([elsewhere]);
+    await delegatesAuto("Alta");
+
+    // A rotation away from an enrollment whose daemon named another workspace does not send its
+    // credential id to this one: it is kept pending, with a warning.
+    const recorded = JSON.parse(await readFile(autoRecord(), "utf8")) as Record<string, unknown>;
+    writeFileSync(autoRecord(), JSON.stringify({ ...recorded, workspaceId: "ws_moved" }), { mode: 0o600 });
+    const { record: rotated, stderr: warned } = enrollAuto("--issue");
+    expect(rotated.credentialId).not.toBe(current.credentialId);
+    expect(revokedOnRemote(current.credentialId)).toBe(false);
+    expect(warned).toContain(current.credentialId);
+    const pending = JSON.parse(await readFile(`${autoRecord()}.pending-revoke`, "utf8")) as {
+      entries: { credentialId: string; workspaceId?: string }[];
+    };
+    expect(pending.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ credentialId: elsewhere }),
+        expect.objectContaining({ credentialId: current.credentialId, workspaceId: "ws_moved" }),
+      ]),
+    );
+    await delegatesAuto("Kirkenes");
+  }, 180_000);
+
+  it("refuses a second enrollment of the same remote while one is running", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const lock = `${autoRecord()}.lock`;
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, host: hostname(), since: new Date().toISOString() }));
+    try {
+      const out = cli(parent, ["remote", "enroll", "auto-box", "--json"]);
+      expect(out.status).not.toBe(0);
+      expect(out.stderr).toContain("already being enrolled");
+    } finally {
+      rmSync(lock, { force: true });
+    }
+    // A lock whose process on this host is gone is taken over.
+    writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 1, host: hostname(), since: new Date().toISOString() }));
+    enrollAuto();
+    expect(existsSync(lock)).toBe(false);
   }, 180_000);
 
   it("fails the step with a typed refusal once the remote revokes the credential", async (ctx) => {

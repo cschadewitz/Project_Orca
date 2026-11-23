@@ -12,7 +12,7 @@ import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence"
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { OrcaError } from "@orca/core";
-import { enrollRemote, readRemoteCredential, remoteFiles, remoteProfile } from "@orca/daemon";
+import { enrolledCredentialFile, enrollRemote, readRemoteCredential, remoteFiles, remoteProfile } from "@orca/daemon";
 import { workspaceIdentity } from "@orca/store";
 import { loadConfig } from "../bootstrap.js";
 import type { CommandContext } from "./index.js";
@@ -26,7 +26,11 @@ export async function remoteEnrollCommand(ctx: CommandContext): Promise<number> 
   if (!remote) throw new OrcaError("CONFIG_INVALID", `no remotes[] entry has id ${id}`);
   const profile = remoteProfile(remote);
   const files = remoteFiles(configDir, remote);
-  const issue = ctx.flags.issue === true || !existsSync(files.credentialFile);
+  // A saved credential is used as given. Without one the remote issues it: the credential an
+  // earlier enrollment issued is reused while it is still bound to this route and host, and
+  // `--issue` always replaces it.
+  const rotate = ctx.flags.issue === true;
+  const issue = rotate || !existsSync(files.credentialFile);
   const workflows = [
     ...new Set(
       config.agents.flatMap((a) =>
@@ -44,7 +48,7 @@ export async function remoteEnrollCommand(ctx: CommandContext): Promise<number> 
           issue: {
             principal: `delegate-${await workspaceIdentity(resolve(configDir, config.storeDir))}`,
             workflows,
-            credentialFile: files.credentialFile,
+            rotate,
           },
         }
       : { token: readRemoteCredential(remote, files.credentialFile) }),
@@ -55,9 +59,9 @@ export async function remoteEnrollCommand(ctx: CommandContext): Promise<number> 
   if (ctx.flags.json) ctx.out(JSON.stringify(record, null, 2));
   else {
     ctx.out(`enrolled remote ${id}: workspace ${record.workspaceId}, principal ${record.principalId}`);
-    if (record.issued)
+    if (record.tokenFile)
       ctx.out(
-        `issued credential ${record.credentialId} there (workflows ${workflows.join(", ")}), saved to ${files.credentialFile}`,
+        `credential ${record.credentialId} issued there (workflows ${workflows.join(", ")}), saved to ${enrolledCredentialFile(files, record)}`,
       );
     ctx.out(`host keys pinned in ${files.knownHostsFile}`);
   }
