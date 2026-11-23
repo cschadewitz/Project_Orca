@@ -201,7 +201,14 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * A 2.7 daemon strips the unknown param and answers the first page again, so a client sends
  * it only to a 2.8 daemon and pages a 2.7 one by `offset`.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 8 };
+/**
+ * 2.9 (#183) adds dry runs: `workflowDrafts.dryRun` (simulate the caller's draft with fixtures;
+ * `config.write` and `runs.start`) and `runs.dryRunReport` (a read), an optional `dryRun` on
+ * `RunSummaryView`, and an optional `dryRuns` on `runs.list`. `runs.list` now leaves dry runs
+ * out unless asked, so a 2.8 client never lists one as work; new method names, and a 2.8 client
+ * strips the field.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 9 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is

@@ -87,6 +87,18 @@ export function workflowDraftMethods(writable: boolean): MethodTable {
           return s.model.publish(params, s.caller);
         },
       },
+      "workflowDrafts.dryRun": {
+        params: contracts["workflowDrafts.dryRun"].params,
+        handle: async (params, ctx) => {
+          if (!ctx.control) throw new OrcaError("NOT_SUPPORTED", "this daemon is read-only: it does not drive runs");
+          const s = service(ctx);
+          const { definition, revision } = await s.model.dryRunSource(params, s.caller);
+          return ctx.control.dryRun(definition, revision, params, ctx.mutationActor, {
+            ...(ctx.dryRunAuthority ? { authorize: () => ctx.dryRunAuthority!(params.workflowId) } : {}),
+            ...(ctx.attributeStartedRun ? { attributeStartedRun: ctx.attributeStartedRun } : {}),
+          });
+        },
+      },
       "workflowDrafts.discard": {
         params: contracts["workflowDrafts.discard"].params,
         handle: (params, ctx) => {

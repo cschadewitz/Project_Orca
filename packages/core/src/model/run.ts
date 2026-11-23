@@ -163,6 +163,73 @@ export const DryRunSchema = z
   .strict();
 export type DryRun = z.infer<typeof DryRunSchema>;
 
+/** The most characters of one fixture artifact, and the most visits a fixture list may name. */
+export const DRY_RUN_MAX_FIXTURE_TEXT = 256 * 1024;
+export const DRY_RUN_MAX_VISITS = 64;
+
+export const DryRunAgentFixtureSchema = z
+  .object({
+    /** Deliverable content by the produces entry's `name`, else its `kind`. */
+    artifacts: z.record(z.string().max(128), z.string().max(DRY_RUN_MAX_FIXTURE_TEXT)).optional(),
+    /** Fail this visit instead, as an agent that did not deliver would. */
+    fail: z.string().min(1).max(2_000).optional(),
+  })
+  .strict();
+export type DryRunAgentFixture = z.infer<typeof DryRunAgentFixtureSchema>;
+
+/**
+ * The fixtures and simulated choices of a dry run (#183), keyed by node id - or by the qualified
+ * id of a node in a nested graph (`loop::build`), which wins over the plain id. A list gives one
+ * entry per visit, in order; the last one repeats.
+ */
+export const DryRunFixturesSchema = z
+  .object({
+    agents: z
+      .record(
+        z.string().max(512),
+        z.union([DryRunAgentFixtureSchema, z.array(DryRunAgentFixtureSchema).min(1).max(DRY_RUN_MAX_VISITS)]),
+      )
+      .optional(),
+    choices: z
+      .record(
+        z.string().max(512),
+        z.union([z.string().max(128), z.array(z.string().max(128)).min(1).max(DRY_RUN_MAX_VISITS)]),
+      )
+      .optional(),
+  })
+  .strict();
+export type DryRunFixtures = z.infer<typeof DryRunFixturesSchema>;
+
+/**
+ * What a dry run did (#183), traced from its tree's logs: the choices made and by whom, the
+ * options, edges and nodes it never reached, what it assumed, and what failed.
+ */
+export const DryRunReportSchema = z.object({
+  runId: z.string(),
+  status: RunStatusSchema,
+  outcome: RunOutcomeSchema.optional(),
+  dryRun: DryRunSchema,
+  /** Every run of the tree, the root first. */
+  runs: z.array(z.object({ runId: z.string(), workflowId: z.string(), status: RunStatusSchema })),
+  /** Each choice made, by whom: live evaluation, a fixture, or a documented default. */
+  choices: z.array(z.object({ runId: z.string(), nodeId: z.string(), choice: z.string(), source: z.string() })),
+  /** Options of a gate or decision that no visit in that run chose. */
+  untakenOptions: z.array(z.object({ runId: z.string(), nodeId: z.string(), options: z.array(z.string()) })),
+  /** Edges out of a node the run reached that it never followed. */
+  untakenEdges: z.array(
+    z.object({ runId: z.string(), from: z.string(), to: z.string(), label: z.string().optional() }),
+  ),
+  /** Nodes of a run's graph that no step of that run reached. */
+  unreachedNodes: z.array(z.object({ runId: z.string(), nodeIds: z.array(z.string()) })),
+  /** What was assumed in place of an agent, a person or the plan. */
+  assumptions: z.array(z.object({ runId: z.string(), nodeId: z.string(), assumption: z.string(), detail: z.string() })),
+  /** Steps that failed, unsupported nodes and invalid fixtures among them. */
+  failures: z.array(z.object({ runId: z.string(), nodeId: z.string(), code: z.string(), message: z.string() })),
+  /** Read this before trusting a simulated success. */
+  limits: z.string(),
+});
+export type DryRunReport = z.infer<typeof DryRunReportSchema>;
+
 export const StepRunSchema = z.object({
   id: z.string(),
   runId: z.string(),

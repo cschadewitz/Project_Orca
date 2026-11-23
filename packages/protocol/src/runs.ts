@@ -121,6 +121,11 @@ export const RunSummaryViewSchema = z.object({
   checkpoint: z.object({ runId: z.string(), stepRunId: z.string() }).optional(),
   /** A delegated run (#883, protocol 2.6): the parent workspace, run and step it was started for. */
   origin: z.object({ workspaceId: z.string(), runId: z.string(), stepRunId: z.string().optional() }).optional(),
+  /**
+   * A dry run (#183, protocol 2.8): simulated with fixtures, never work. The exact definition
+   * and draft revision it simulated, so a client can tell when later edits made it stale.
+   */
+  dryRun: z.object({ definitionRevision: z.string(), draftRevision: z.number().int().optional() }).optional(),
 });
 export type RunSummaryView = z.infer<typeof RunSummaryViewSchema>;
 
@@ -161,6 +166,11 @@ export const RunsListParamsSchema = z.object({
     .max(400)
     .refine((c) => parseRunsListCursor(c) !== undefined, "not a runs.list cursor")
     .optional(),
+  /**
+   * Protocol 2.9 (#183): whether dry runs are listed. `exclude` unless the call names its runs
+   * (`runIds`) or a parent (`parentRunId`), where it is `include`; `only` lists nothing else.
+   */
+  dryRuns: z.enum(["exclude", "include", "only"]).optional(),
   /** Newest first, from `offset`. */
   limit: z.number().int().positive().max(500).default(100),
   offset: z.number().int().nonnegative().default(0),

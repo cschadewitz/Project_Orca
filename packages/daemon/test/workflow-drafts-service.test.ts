@@ -409,6 +409,7 @@ describe("the method table", () => {
       [
         "workflowDrafts.apply",
         "workflowDrafts.discard",
+        "workflowDrafts.dryRun",
         "workflowDrafts.get",
         "workflowDrafts.open",
         "workflowDrafts.publish",

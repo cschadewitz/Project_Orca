@@ -180,6 +180,13 @@ are `decision.resolved` events with `source` `dry-run:fixture` or `dry-run:defau
 to drive or recover a dry run, and a dry run's orchestrator drives nothing else. Absent on every
 other run, and on every log written before it.
 
+Over the daemon (protocol 2.9), `workflowDrafts.dryRun` simulates the exact revision of the
+caller's own draft and answers once the tree has stopped, with the root's row and the report;
+`runs.dryRunReport` reads the report again. Dry runs stay out of `runs.list` unless asked
+(`dryRuns: "include" | "only"`; naming runs by id or parent includes them), and out of a
+workflow's recorded versions. A dry run is driven only by the daemon that started it, so one
+left unfinished by a daemon that stopped is cancelled when the next one starts.
+
 ## Expression / template context
 
 Built by `RunContext.evalContext()` (`packages/engine/src/run-context.ts`):
