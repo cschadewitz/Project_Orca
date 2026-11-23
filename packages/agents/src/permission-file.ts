@@ -1,8 +1,7 @@
 /** Shared sidecar file mechanics. All policy writers use this lock and exact byte revision. */
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { mkdir, readdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
-import { hostname } from "node:os";
+import { readFileSync, readlinkSync } from "node:fs";
+import { lstat, mkdir, readdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { OrcaError } from "@orca/core";
@@ -70,32 +69,39 @@ interface SidecarOwner {
   version: 1;
   kind: "sidecar";
   pid: number;
-  /** The machine, as `machineIdentity()` names it. */
-  machine: string;
+  /** The process namespace `pid` belongs to (`livenessDomain()`), or null where none is known. */
+  domain: string | null;
   nonce: string;
 }
+const SIDECAR_OWNER_KEYS = ["domain", "kind", "nonce", "pid", "version"];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const TOKEN_NAME = /^owner\.([1-9][0-9]{0,9})\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$/;
 
-let machineCache: string | undefined;
+let domainCache: string | null | undefined;
 /**
- * This machine's identity: `/etc/machine-id` (or the D-Bus copy) where there is one, which two
- * machines do not share, else the host name. A lock is only ever judged by a writer on the
- * machine that took it; a config directory reached from two machines with the same host name
- * and no machine id is outside what this can tell apart.
+ * The domain a pid is meaningful in, positively established, or null (#1040 review): on Linux,
+ * this kernel boot (`/proc/sys/kernel/random/boot_id`) and this process's pid namespace
+ * (`/proc/self/ns/pid`, an inode unique within the boot). Two processes with the same domain
+ * see the same pids, so `kill(pid, 0)` in one says whether the other's pid is running. A
+ * machine id or host name does not establish that: two containers on one machine, or two
+ * machines sharing a workspace, see different pids under the same name. Anywhere this cannot
+ * be read (macOS, Windows, a Linux without `/proc`), there is no domain, and a lock left there
+ * is recovered by a person, as before.
  */
-function machineIdentity(): string {
-  if (machineCache !== undefined) return machineCache;
-  for (const path of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
-    try {
-      const id = readFileSync(path, "utf8").trim();
-      if (id !== "") return (machineCache = `machine-id:${id}`);
-    } catch {
-      // Not on this platform; try the next.
-    }
+function livenessDomain(): string | null {
+  if (domainCache !== undefined) return domainCache;
+  if (process.platform !== "linux") return (domainCache = null);
+  try {
+    const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    const ns = readlinkSync("/proc/self/ns/pid");
+    if (!UUID.test(boot) || !/^pid:\[[0-9]+\]$/.test(ns)) return (domainCache = null);
+    return (domainCache = `linux:${boot}:${ns}`);
+  } catch {
+    return (domainCache = null);
   }
-  return (machineCache = `host:${hostname()}`);
 }
 
-/** Whether a process with this pid is running here. A pid we may not signal is running. */
+/** Whether a process with this pid is running in this domain. A pid we may not signal is running. */
 function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -105,50 +111,56 @@ function processAlive(pid: number): boolean {
   }
 }
 
+/** The token as written by a plain sidecar writer, exactly, or undefined for anything else. */
+function sidecarOwner(name: string, text: string): SidecarOwner | undefined {
+  const m = TOKEN_NAME.exec(name);
+  if (!m) return undefined;
+  const raw: unknown = JSON.parse(text);
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  if (Object.keys(o).sort().join() !== SIDECAR_OWNER_KEYS.join()) return undefined;
+  if (o["version"] !== 1 || o["kind"] !== "sidecar") return undefined;
+  if (typeof o["pid"] !== "number" || !Number.isSafeInteger(o["pid"]) || o["pid"] <= 0) return undefined;
+  // The filename and the token must agree on who wrote them.
+  if (String(o["pid"]) !== m[1]) return undefined;
+  if (typeof o["nonce"] !== "string" || !UUID.test(o["nonce"])) return undefined;
+  if (o["domain"] !== null && typeof o["domain"] !== "string") return undefined;
+  return o as unknown as SidecarOwner;
+}
+
 /**
  * Remove a sidecar lock whose owner is provably gone, so a crash in the middle of a write does
  * not need a person (#701 follow-up). This is not a takeover by age: a writer that is paused,
  * however long, is a running process and keeps its lock. The lock is removed only when all of
- * these hold:
+ * these hold, and is otherwise left for a person (the wait goes on, then `STORE_LOCK_TIMEOUT`):
  *
- * - it holds exactly one owner token, and that token is a plain sidecar writer's
- *   (`kind: "sidecar"`); a typed or budget owner, an empty directory (a crash between `mkdir`
- *   and the token) and a legacy lock file are never touched;
- * - the token names this machine; a lock taken on another machine is never judged here;
- * - no process with its pid is running. A pid reused since is running, so the lock stays: that
+ * - it holds exactly one entry, a regular file named `owner.<pid>.<uuid>.json`, whose content
+ *   is exactly a plain sidecar writer's token (`sidecarOwner`), with the same pid as its name;
+ *   a typed or budget owner, an empty directory (a crash between `mkdir` and the token), a
+ *   legacy lock file and anything malformed or of another version are never touched;
+ * - this process has a liveness domain (`livenessDomain`) and the token names the same one, so
+ *   its pid means the same process here; a lock from another machine, container or boot, or
+ *   from a platform with no domain, is never judged;
+ * - no process with that pid is running. A pid reused since is running, so the lock stays: that
  *   errs toward refusing.
  *
  * Only that exact token is unlinked, and the directory is removed only if it is then empty, so a
  * writer that took the lock meanwhile keeps it, and one that made the directory but had not yet
- * written its token fails its own token write and ownership check rather than proceed.
+ * written its token fails its own token write and ownership check rather than proceed. Nothing
+ * here throws: any failure leaves the lock as it is.
  */
 async function removeDeadSidecarLock(lock: string): Promise<boolean> {
-  let names: string[];
   try {
-    names = await readdir(lock);
-  } catch {
-    return false;
-  }
-  if (names.length !== 1 || !/^owner\.[0-9]+\.[0-9a-f-]+\.json$/.test(names[0]!)) return false;
-  const token = `${lock}/${names[0]!}`;
-  let owner: Partial<SidecarOwner>;
-  try {
-    owner = JSON.parse(await readFile(token, "utf8")) as Partial<SidecarOwner>;
-  } catch {
-    return false;
-  }
-  if (
-    owner.version !== 1 ||
-    owner.kind !== "sidecar" ||
-    typeof owner.pid !== "number" ||
-    !Number.isInteger(owner.pid) ||
-    owner.pid <= 0 ||
-    owner.machine !== machineIdentity() ||
-    owner.pid === process.pid ||
-    processAlive(owner.pid)
-  )
-    return false;
-  try {
+    const domain = livenessDomain();
+    if (domain === null) return false;
+    const names = await readdir(lock);
+    if (names.length !== 1) return false;
+    const token = `${lock}/${names[0]!}`;
+    const info = await lstat(token);
+    if (!info.isFile() || info.size > 4096) return false;
+    const owner = sidecarOwner(names[0]!, await readFile(token, "utf8"));
+    if (owner === undefined || owner.domain !== domain) return false;
+    if (owner.pid === process.pid || processAlive(owner.pid)) return false;
     await unlink(token);
   } catch {
     return false;
@@ -179,7 +191,7 @@ async function withStrictPolicyLock<T>(
           version: 1,
           kind: "sidecar",
           pid: process.pid,
-          machine: machineIdentity(),
+          domain: livenessDomain(),
           nonce: randomUUID(),
         } satisfies SidecarOwner)
       : { version: 1, pid: process.pid, nonce: randomUUID() },
