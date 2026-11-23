@@ -68,7 +68,6 @@ const STATUS = {
 };
 const generations: ConfigGenerationProvider = {
   effectiveConfig: () => ({}),
-  validationContext: () => ({}),
   status: () => STATUS,
   apply: async () => ({ outcome: "unchanged", status: STATUS, validation: { errors: [] } }),
   onChange: () => () => {},
