@@ -392,8 +392,8 @@ describe.skipIf(!BIN)(`OpenCode ${OPENCODE_VERIFIED_VERSION}, installed binary, 
     const { agent, ws, dir } = await agentIn("other-build");
     const copy = join(dir, "opencode");
     await copyFile(BIN!, copy);
-    await appendFile(copy, "\n");
     await chmod(copy, 0o755);
+    await appendFile(copy, "\n");
     await expect(open({ ...agent, command: copy }, ws, pick("reject_once"))).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
     });
