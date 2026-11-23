@@ -142,7 +142,7 @@
         "Codex lets a call through when its hook runner fails (exit 1, quiet exit 2, timeout); ORCA's startup probe refuses the session unless the hook blocks with a receipt, but cannot watch later calls",
         "A hook is not an operating-system boundary; Codex's sandbox and ORCA's protected-path rules stay in force beside it"
       ],
-      "next": "Pin the tuple and commit installed receipts per route for A/B once promotion is enabled; no connected proof exists for Codex (#1016 is diagnostic and Claude-only)."
+      "next": "Tier C, receipts and promotion move to 0.9.0 (#1026): pin the tuple and commit installed receipts per route there. No connected proof exists for Codex (#1016 is diagnostic and Claude-only)."
     },
     {
       "id": "gemini",
@@ -166,7 +166,7 @@
         "ORCA decides only the calls Gemini asks about; an OS sandbox is the boundary for the rest",
         "MCP rules and grants: Gemini names an MCP call by tool and arguments, without its server, unless the call has no arguments (#1021)"
       ],
-      "next": "Fix #1021, then add gemini-acp-ask (Gemini-shaped asks; F04 checked on the installed CLI instead) and a world seam so grants are recorded from that shape.",
+      "next": "Add gemini-acp-ask once #1021's fix (#1024) lands; tier C, receipts and promotion move to 0.9.0 (#1026).",
       "pendingRoutes": {
         "gemini-acp-ask": "ORCA's answer to Gemini-shaped asks. Held: run against this suite it shows that rules and grants for MCP tools do not match Gemini's asks as they match Claude's (#1021); added once that is fixed"
       }
@@ -190,7 +190,7 @@
       "residualRisks": [
         "ORCA's rules and protected files do not apply to pi: run it only inside an operating-system sandbox, which ORCA neither creates nor checks"
       ],
-      "next": "No route to add until pi has a hook ORCA can install and verify; tier none stands."
+      "next": "No route to add until pi has a hook ORCA can install and verify; tier none stands. Tier C work is tracked in #1026 (0.9.0)."
     },
     {
       "id": "copilot",
