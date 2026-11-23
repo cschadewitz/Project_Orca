@@ -38,6 +38,8 @@ export function scriptedAgentSpec(options: {
   promptLog?: string;
   /** Where the agent appends each `session/new` it receives (see `ScriptedAgentOptions`). */
   sessionLog?: string;
+  /** Advertise ACP `promptCapabilities.embeddedContext`, so skills can be delivered (#337). */
+  embeddedContext?: boolean;
   roles?: string[];
   /** Session config options the agent advertises (overrides the playbook's `configOptions`). */
   configOptions?: SessionConfigOption[];
@@ -66,6 +68,7 @@ export function scriptedAgentSpec(options: {
   if (options.playbookJson !== undefined) env.ORCA_PLAYBOOK_JSON = JSON.stringify(options.playbookJson);
   if (options.configOptions) env.ORCA_CONFIG_OPTIONS_JSON = JSON.stringify(options.configOptions);
   if (options.sessionLog) env.ORCA_SESSION_LOG = options.sessionLog;
+  if (options.embeddedContext) env.ORCA_EMBEDDED_CONTEXT = "1";
   return AgentSpecSchema.parse({
     id: options.id ?? "scripted",
     name: "Scripted test agent",

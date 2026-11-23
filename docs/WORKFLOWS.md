@@ -408,6 +408,8 @@ another ORCA daemon, which runs a named workflow there as one of its own runs (#
 remote is reached over SSH with the same tunnel the desktop app's SSH profiles use (#874):
 typed fields only, no ssh config file read. A remote takes delegated steps only once it is
 enrolled, and only over the host keys and with the credential enrollment recorded.
+[Running across machines](MULTI-MACHINE.md) compares this with SSH-hosted agents and the
+app watching several daemons, with a worked worker and parent config.
 
 ```yaml
 remotes:
@@ -708,9 +710,8 @@ nodes:
     what the agent passes on. That is the agent's behaviour, not something ORCA enforces.
 
   The executable being there is not proof the server works: the agent starts it, over
-  ACP's stdio transport, which every ACP agent supports. Skills resolve and appear in
-  validation and the preview, but a step that selects one is refused at launch (and warned
-  about at validation): delivering them is the next part of #337.
+  ACP's stdio transport, which every ACP agent supports. Skills are delivered under the
+  same decision; see [Skills](#skills).
 - **Who decides.** The workspace and agent scopes live in `orca.config.yaml`, which only
   config authority can change. A workflow or node can only narrow that, or turn on what the
   agent permits. A caller's role override picks a different configured agent, and then that
@@ -736,7 +737,43 @@ the digest it found so you can review the change and update the pin. A run is pi
 configuration, so only a skill's files could change under it: a step whose skill no longer
 hashes to what its launch recorded is refused rather than given the edited skill.
 
-This version resolves skills but does not deliver them yet (#337).
+**How a skill reaches a session (#337).** A step's selected skills travel in its prompts,
+not through any host's filesystem: every prompt the step sends starts with each skill file
+as an ACP `resource` block, its text inline, named
+`orca-skill://<id>/<file>?digest=<sha256:...>`. So no host path is involved, and a skill
+on the daemon's machine reaches an agent on an SSH host the same way.
+
+- The run's owner must hold one current credential with `capabilities.use` whose grant
+  covers the step's whole set, servers and skills together. A named skill grant pins the
+  content digest (`orca auth issue <principal> --skill review`), so an edited skill needs a
+  new grant; `--skill '*'` (and the `owner` preset) covers every skill. A wildcard is per
+  kind: `--mcp-server '*'` grants no skill, and `--skill '*'` no server.
+- The skill is read once at session open, hashed over exactly the bytes that are sent, and
+  refused if that is not what the launch recorded. The configured path is resolved to its
+  real place once, and every directory above it must be one only root or the daemon's
+  account can change (owned by one of them, writable by no one else unless sticky, like
+  `/tmp`). The walk goes through each directory's open descriptor, so a rename meanwhile
+  cannot lead it outside the skill; every file and directory is opened without following a
+  symbolic link and checked by its descriptor to be what the walk found. That walk needs a
+  Linux daemon: elsewhere only a single-file skill can be delivered, and on Windows none.
+  A step's skills share one budget, spent as they are read and never checked after: at most
+  256 KiB together, counting each file's content and the block that names it (so empty
+  files are paid for), and at most 64 files and directories together. A directory is
+  listed one entry at a time and never past what is left.
+  Every file must be UTF-8 text; a leading byte-order mark is kept in the text, so what is
+  sent is exactly the bytes the digest names.
+- The use decision is asked again before every prompt that carries the skills, so a grant
+  revoked while the step waits sends nothing.
+- The agent must say at `initialize` that it accepts embedded context
+  (`promptCapabilities.embeddedContext`). One that does not is refused right after
+  `initialize`, before `session/new` or `session/load` configures any MCP server, and the
+  step fails; a `per-run` session that could not take the skills is closed rather than kept
+  in the pool. ORCA does not fall back to leaving the skill out or pasting it in as plain
+  text.
+- **A skill is instructions, not authority.** It grants nothing: tool calls still go through
+  the agent's permission policy and ORCA's asks. ORCA delivers the skills it lists in the
+  preview and nothing else, but it cannot stop an agent from also loading skills of its own
+  (for example from the user's home directory); those are not shown as selected.
 
 ## Secret references
 

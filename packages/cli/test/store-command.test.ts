@@ -272,6 +272,20 @@ describe("orca store", () => {
     expect(await readFile(join(two, "orca.config.yaml"), "utf8")).not.toContain("sqlite");
   });
 
+  it("a daemon asked to switch in place outside the app's own workspace starts on files", async () => {
+    const dir = await fileWorkspace({ name: "orca.config.yaml", text: "version: 1\nworkflows: []\ntemplates: []\n" });
+    process.env.ORCA_STORE_SWITCH = "sqlite";
+    try {
+      const app = await bootstrap({ cwd: dir, logger: silentLogger });
+      expect(process.env.ORCA_STORE_SWITCH).toBeUndefined();
+      expect(app.storeSwitch).toMatchObject({ status: "refused", reason: "SWITCH_REFUSED" });
+      expect(app.orchestrator.stores.capabilities?.backend).toBe("file");
+      app.orchestrator.stores.close?.();
+    } finally {
+      delete process.env.ORCA_STORE_SWITCH;
+    }
+  });
+
   it("refuses to convert a desktop app's own store, and changes nothing", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-store-convert-"));
     dirs.push(dir);

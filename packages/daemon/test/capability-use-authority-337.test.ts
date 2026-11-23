@@ -15,7 +15,7 @@ import {
   mcpServerDefinitionDigest,
   secretHostBinding,
   type AgentHost,
-  type CapabilityUse,
+  type McpServerUse,
 } from "@orca/agents";
 import { HostSpecSchema } from "@orca/core";
 import {
@@ -24,6 +24,7 @@ import {
   MemoryAuditSink,
   OwnershipStore,
   PRESETS,
+  type CapabilityGrant,
   credentialCapabilityUse,
   loopbackCapabilityUse,
   type ResourceResolver,
@@ -37,7 +38,7 @@ afterEach(async () => {
 const LOCAL_BINDING = secretHostBinding({ id: "local", type: "local" });
 const GITHUB = { command: "/opt/mcp/gh-mcp", args: [], env: { GITHUB_TOKEN: { secret: "github-token" } } };
 const DEFINITION = mcpServerDefinitionDigest(GITHUB);
-const use = (over: Partial<CapabilityUse> = {}): CapabilityUse => ({
+const use = (over: Partial<McpServerUse> = {}): McpServerUse => ({
   kind: "mcpServer",
   id: "github",
   hostId: "local",
@@ -184,6 +185,32 @@ describe("capability use authority", () => {
     await g.check({ runId: "root", uses: [use({ definition: bare, trustedExecutable: false })] });
   });
 
+  it("grants a skill by its exact content, and takes servers and skills as one set", async () => {
+    const f = fixture();
+    f.ownership.record("root", "ci-bot");
+    const digest = `sha256:${"a".repeat(64)}`;
+    const skill = { kind: "skill" as const, id: "review", digest };
+    await f.credentials.issue({
+      principal: "ci-bot",
+      permissions: client,
+      scope: PRESETS.client.scope,
+      capabilities: [
+        { kind: "mcpServer", id: "github", host: "local", binding: LOCAL_BINDING, definition: DEFINITION },
+        { kind: "skill", id: "review", digest },
+      ],
+    });
+    await f.check({ runId: "root", uses: [use(), skill] });
+    expect(f.audit.records.at(-1)?.target).toEqual({ runId: "root", mcpServers: "github", skills: "review" });
+    // An edited skill has another digest: not covered.
+    await expect(
+      f.check({ runId: "root", uses: [{ ...skill, digest: `sha256:${"b".repeat(64)}` }] }),
+    ).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      details: { kind: "skill", id: "review", reason: "unauthorized" },
+    });
+    await expect(f.check({ runId: "root", uses: [{ ...skill, id: "other" }] })).rejects.toMatchObject(unauthorized);
+  });
+
   it("stops at the next decision once the credential is revoked, and refuses unowned runs", async () => {
     const f = fixture();
     f.ownership.record("root", "ci-bot");
@@ -200,8 +227,40 @@ describe("capability use authority", () => {
     expect(f.audit.records.map((r) => r.reason)).toEqual([undefined, "no current grant", "run has no recorded owner"]);
   });
 
+  it("never lets a wildcard for one kind grant the other", async () => {
+    const skill = { kind: "skill" as const, id: "review", digest: `sha256:${"a".repeat(64)}` };
+    // A server-only wildcard: the stored "*" that `--mcp-server '*'` first wrote, and its
+    // explicit entry. Neither grants a skill.
+    for (const capabilities of ["*", [{ kind: "mcpServer", any: true }]] satisfies CapabilityGrant[]) {
+      const f = fixture();
+      f.ownership.record("root", "ci-bot");
+      await f.credentials.issue({
+        principal: "ci-bot",
+        permissions: client,
+        scope: PRESETS.client.scope,
+        capabilities,
+      });
+      await f.check({ runId: "root", uses: [use({ trustedExecutable: false })] });
+      await expect(f.check({ runId: "root", uses: [skill] })).rejects.toMatchObject(unauthorized);
+    }
+    // And every skill grants no server.
+    const g = fixture();
+    g.ownership.record("root", "ci-bot");
+    await g.credentials.issue({
+      principal: "ci-bot",
+      permissions: client,
+      scope: PRESETS.client.scope,
+      capabilities: [{ kind: "skill", any: true }],
+    });
+    await g.check({ runId: "root", uses: [skill] });
+    await expect(g.check({ runId: "root", uses: [use()] })).rejects.toMatchObject(unauthorized);
+  });
+
   it("is granted everything by the owner preset and loopback mode, and nothing by other presets", async () => {
-    expect(PRESETS.owner.capabilities).toBe("*");
+    expect(PRESETS.owner.capabilities).toEqual([
+      { kind: "mcpServer", any: true },
+      { kind: "skill", any: true },
+    ]);
     for (const preset of ["operator", "viewer", "client"] as const)
       expect("capabilities" in PRESETS[preset]).toBe(false);
     await loopbackCapabilityUse(LOCAL_PRINCIPAL)({ runId: "any", uses: [use()] });

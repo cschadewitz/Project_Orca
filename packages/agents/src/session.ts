@@ -73,6 +73,13 @@ export interface AgentSession {
    * and then `close()` settling stands in for it.
    */
   readonly terminated?: Promise<void>;
+  /**
+   * What the agent said at `initialize` it accepts in a prompt beyond text. `embeddedContext`
+   * is ACP's `promptCapabilities.embeddedContext`: whether a prompt may carry `resource`
+   * blocks with their content inline, which is how skills reach a session (#337). Absent for a
+   * transport that does not report it, which is treated as not accepted.
+   */
+  readonly promptCapabilities?: { readonly embeddedContext: boolean };
   prompt(input: string | acp.ContentBlock[], options?: PromptOptions): Promise<TurnResult>;
   onUpdate(listener: (e: SessionUpdateEvent) => void): () => void;
   /**

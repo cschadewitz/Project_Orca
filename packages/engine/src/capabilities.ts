@@ -4,8 +4,19 @@
  * session open - turns an agent step into a resolved manifest.
  */
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  opendirSync,
+  readSync,
+  realpathSync,
+  type Stats,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   OrcaError,
   resolveCapabilities,
@@ -26,62 +37,237 @@ import type { AgentRegistry } from "@orca/agents";
 
 /** A skill larger than this is refused rather than hashed: skills are instructions, not data. */
 const SKILL_MAX_BYTES = 16 * 1024 * 1024;
+/** Files and directories a skill may hold: each file becomes a block, even an empty one. */
+const SKILL_MAX_ENTRIES = 1024;
+
+/** One file of a skill as read: its path inside the skill (POSIX separators) and its bytes. */
+export interface SkillFile {
+  rel: string;
+  bytes: Buffer;
+}
 
 /**
- * `sha256:` over a skill's files: each file's path relative to the skill (POSIX separators),
- * its size and its bytes, in sorted path order. A single-file skill hashes the same way with
- * its own name as the path. A symbolic link is refused rather than followed, so a digest
- * always describes files that are inside the skill.
+ * Linux only: `/proc/self/fd/<fd>` names the very directory an open descriptor holds, so a
+ * walk through it is `openat`: renaming or replacing a directory on the path after it was
+ * opened cannot move the walk elsewhere.
  */
-export function skillDigest(skill: SkillDefinition, baseDir: string | undefined): SkillDigestResult {
+const PROC_FD = process.platform === "linux" && existsSync("/proc/self/fd");
+const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+const O_DIRECTORY = fsConstants.O_DIRECTORY ?? 0;
+const O_NONBLOCK = fsConstants.O_NONBLOCK ?? 0;
+
+class SkillReadRefusal extends Error {
+  constructor(
+    message: string,
+    readonly tooLarge = false,
+  ) {
+    super(message);
+  }
+}
+
+/** The same filesystem object, by device and inode. */
+function sameObject(a: { dev: number; ino: number }, b: { dev: number; ino: number }): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+/**
+ * Read at most `budget` bytes from `fd`, failing once there would be more: the allocation is
+ * bounded by the budget, never by what the file says its size is.
+ */
+function readBounded(fd: number, sizeHint: number, budget: number, what: string): Buffer {
+  let buf = Buffer.allocUnsafe(Math.min(Math.max(sizeHint, 0), budget) + 1);
+  let length = 0;
+  for (;;) {
+    if (length === buf.length) {
+      if (buf.length > budget) throw new SkillReadRefusal(what, true);
+      const grown = Buffer.allocUnsafe(Math.min(buf.length * 2, budget + 1));
+      buf.copy(grown, 0, 0, length);
+      buf = grown;
+    }
+    const n = readSync(fd, buf, length, buf.length - length, null);
+    if (n === 0) break;
+    length += n;
+    if (length > budget) throw new SkillReadRefusal(what, true);
+  }
+  return Buffer.from(buf.subarray(0, length));
+}
+
+/**
+ * Whether no one but root or the daemon's own account can replace anything at `dir` or above
+ * it: each directory up to `/` is owned by one of them and writable by neither group nor
+ * others, unless it is sticky (like `/tmp`), where others cannot rename or remove what they
+ * do not own.
+ */
+function trustedAncestors(dir: string): boolean {
+  const uid = process.getuid?.();
+  for (let at = dir; ; at = dirname(at)) {
+    const info = lstatSync(at);
+    if (!info.isDirectory()) return false;
+    if (info.uid !== 0 && info.uid !== uid) return false;
+    if ((info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0) return false;
+    if (at === dirname(at)) return true;
+  }
+}
+
+export interface ReadSkillOptions {
+  /** The most content bytes, all files together; the read stops past it. */
+  maxBytes?: number;
+  /** The most files and directories together. A directory is never listed past it. */
+  maxEntries?: number;
+  /**
+   * Bytes each file costs beyond its content, charged against `maxBytes` before it is read:
+   * what naming it in a delivered block takes, so even empty files are paid for.
+   */
+  metadataBytes?: (rel: string) => number;
+  /**
+   * For delivery: walk only in ways that cannot be led outside the skill, and refuse where
+   * that is not possible. The configured path is resolved once to its real path, every
+   * directory above it must be one only root or the daemon's account can change, and a
+   * directory skill is walked through its open directory descriptors (Linux). Elsewhere only
+   * a single-file skill can be delivered, and on Windows none.
+   */
+  anchored?: boolean;
+}
+
+/**
+ * Read a skill's files, within `maxBytes` and `maxEntries`. Each file and directory is opened
+ * without following a symbolic link (`O_NOFOLLOW`), checked by its descriptor to be the
+ * regular file or directory the walk found (same device and inode), and read through that
+ * descriptor with the remaining budget as the bound. On Linux the walk goes through each
+ * directory's open descriptor, so nothing outside the skill is ever opened, whatever is
+ * renamed meanwhile. See `ReadSkillOptions.anchored` for what delivery requires. A
+ * single-file skill is one file named by its own name. Sorted by path.
+ */
+export function readSkillFiles(
+  skill: SkillDefinition,
+  baseDir: string | undefined,
+  options: ReadSkillOptions = {},
+): { files: SkillFile[]; bytes: number; entries: number } | { error: string; tooLarge?: true } {
+  const maxBytes = options.maxBytes ?? SKILL_MAX_BYTES;
+  const metadataBytes = options.metadataBytes ?? (() => 0);
+  const maxEntries = options.maxEntries ?? SKILL_MAX_ENTRIES;
   if (!isAbsolute(skill.path) && baseDir === undefined)
     return { error: `skill path '${skill.path}' is relative, and no config directory is known to resolve it against` };
-  const root = isAbsolute(skill.path) ? skill.path : resolve(baseDir!, skill.path);
-  const files: { rel: string; abs: string; size: number }[] = [];
+  const configured = isAbsolute(skill.path) ? skill.path : resolve(baseDir!, skill.path);
+  let root = configured;
+  const tooLarge = `skill '${skill.path}' is larger than ${maxBytes} bytes`;
+  const files: SkillFile[] = [];
   let total = 0;
-  const visit = (abs: string, rel: string): string | undefined => {
-    const stat = lstatSync(abs);
-    if (stat.isSymbolicLink())
-      return `skill '${rel || skill.path}' contains a symbolic link, which ORCA does not follow`;
-    if (stat.isDirectory()) {
-      for (const name of readdirSync(abs).sort()) {
-        const problem = visit(join(abs, name), rel ? `${rel}/${name}` : name);
-        if (problem) return problem;
-      }
-      return undefined;
+  let entries = 0;
+  const tooMany = () =>
+    new SkillReadRefusal(`skill '${skill.path}' has more than ${maxEntries} files and directories`, true);
+  const count = () => {
+    if (++entries > maxEntries) throw tooMany();
+  };
+  const readFile = (path: string, rel: string, found: Stats) => {
+    count();
+    const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    try {
+      const opened = fstatSync(fd);
+      if (!opened.isFile() || !sameObject(opened, found))
+        throw new SkillReadRefusal(`skill '${rel || skill.path}' changed while it was read`);
+      total += metadataBytes(rel);
+      if (total > maxBytes) throw new SkillReadRefusal(tooLarge, true);
+      const bytes = readBounded(fd, opened.size, maxBytes - total, tooLarge);
+      total += bytes.length;
+      files.push({ rel, bytes });
+    } finally {
+      closeSync(fd);
     }
-    if (!stat.isFile()) return `skill path '${skill.path}' contains something that is neither a file nor a directory`;
-    total += stat.size;
-    if (total > SKILL_MAX_BYTES) return `skill '${skill.path}' is larger than ${SKILL_MAX_BYTES} bytes`;
-    files.push({ rel, abs, size: stat.size });
-    return undefined;
+  };
+  const visit = (path: string, rel: string, found: Stats): void => {
+    count();
+    const fd = O_DIRECTORY ? openSync(path, fsConstants.O_RDONLY | O_DIRECTORY | O_NOFOLLOW) : undefined;
+    try {
+      if (fd !== undefined && !sameObject(fstatSync(fd), found))
+        throw new SkillReadRefusal(`skill '${rel || skill.path}' changed while it was read`);
+      const dir = PROC_FD && fd !== undefined ? `/proc/self/fd/${fd}` : path;
+      // Listed one entry at a time, and never past what the entry budget has left.
+      const names: string[] = [];
+      const listing = opendirSync(dir);
+      try {
+        for (let entry = listing.readSync(); entry; entry = listing.readSync()) {
+          names.push(entry.name);
+          if (entries + names.length > maxEntries) throw tooMany();
+        }
+      } finally {
+        listing.closeSync();
+      }
+      for (const name of names.sort()) {
+        const childRel = rel ? `${rel}/${name}` : name;
+        const child = join(dir, name);
+        const stat = lstatSync(child);
+        if (stat.isSymbolicLink())
+          throw new SkillReadRefusal(`skill '${childRel}' contains a symbolic link, which ORCA does not follow`);
+        if (stat.isDirectory()) visit(child, childRel, stat);
+        else if (stat.isFile()) readFile(child, childRel, stat);
+        else
+          throw new SkillReadRefusal(
+            `skill path '${skill.path}' contains something that is neither a file nor a directory`,
+          );
+      }
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
   };
   try {
+    const named = lstatSync(configured);
+    if (named.isSymbolicLink())
+      return { error: `skill '${skill.path}' contains a symbolic link, which ORCA does not follow` };
+    if (options.anchored) {
+      if (process.platform === "win32" || O_NOFOLLOW === 0)
+        return {
+          error: `skill '${skill.path}' cannot be delivered from a Windows daemon: ORCA cannot read it safely there`,
+        };
+      root = realpathSync(configured);
+      if (!trustedAncestors(dirname(root)))
+        return {
+          error: `skill '${skill.path}' is under a directory that someone other than root or the daemon's account can change, so it cannot be delivered`,
+        };
+      if (named.isDirectory() && !PROC_FD)
+        return {
+          error: `skill '${skill.path}' is a directory, which ORCA can deliver safely only from a Linux daemon; use a single-file skill here`,
+        };
+    }
     const top = lstatSync(root);
-    const problem = top.isFile()
-      ? (files.push({ rel: relative(resolve(root, ".."), root).split(sep).join("/"), abs: root, size: top.size }),
-        top.size > SKILL_MAX_BYTES ? `skill '${skill.path}' is larger than ${SKILL_MAX_BYTES} bytes` : undefined)
-      : visit(root, "");
-    if (problem) return { error: problem };
+    if (!sameObject(top, named)) return { error: `skill '${skill.path}' changed while it was read` };
+    if (top.isFile()) readFile(root, relative(resolve(configured, ".."), configured).split(sep).join("/"), top);
+    else if (top.isDirectory()) visit(root, "", top);
+    else return { error: `skill path '${skill.path}' contains something that is neither a file nor a directory` };
   } catch (error) {
+    if (error instanceof SkillReadRefusal)
+      return error.tooLarge ? { error: error.message, tooLarge: true } : { error: error.message };
     const code = (error as NodeJS.ErrnoException).code;
     return {
       error:
         code === "ENOENT"
           ? `skill path '${skill.path}' does not exist`
-          : `skill path '${skill.path}' cannot be read (${code ?? "error"})`,
+          : code === "ELOOP"
+            ? `skill '${skill.path}' contains a symbolic link, which ORCA does not follow`
+            : `skill path '${skill.path}' cannot be read (${code ?? "error"})`,
     };
   }
+  return { files: files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0)), bytes: total, entries };
+}
+
+/**
+ * `sha256:` over a skill's files: each file's path relative to the skill (POSIX separators),
+ * its size and its bytes, in sorted path order. Computed from the bytes given, so content
+ * read once can be both hashed and delivered.
+ */
+export function skillFilesDigest(files: readonly SkillFile[]): string {
   const hash = createHash("sha256");
-  try {
-    for (const file of files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0))) {
-      hash.update(`${file.rel}\0${file.size}\0`);
-      hash.update(readFileSync(file.abs));
-    }
-  } catch (error) {
-    return { error: `skill path '${skill.path}' cannot be read (${(error as NodeJS.ErrnoException).code ?? "error"})` };
+  for (const file of files) {
+    hash.update(`${file.rel}\0${file.bytes.length}\0`);
+    hash.update(file.bytes);
   }
-  return { digest: `sha256:${hash.digest("hex")}` };
+  return `sha256:${hash.digest("hex")}`;
+}
+
+/** A skill's content digest as it is on disk now (`skillFilesDigest` over `readSkillFiles`). */
+export function skillDigest(skill: SkillDefinition, baseDir: string | undefined): SkillDigestResult {
+  const read = readSkillFiles(skill, baseDir);
+  return "error" in read ? read : { digest: skillFilesDigest(read.files) };
 }
 
 /** The `capabilities` field of the agent instruction a node carries, if it has one. */
@@ -120,26 +306,25 @@ export function resolveNodeCapabilities(input: NodeCapabilityInput): ResolveCapa
 }
 
 /**
- * What a step's resolved set needs that ORCA cannot give a session.
+ * What a step's resolved set needs that this orchestrator cannot give a session.
  *
- * - **Catalog MCP servers** (#337) are given to a session only through the server-verified
- *   use decision (the run owner's `capabilities` grant), after their command is found on the
- *   agent's host. A caller with no such decision (`catalogServers: false`) refuses them.
- * - **Skills** resolve, with identities, sources and content digests that validation and the
- *   launch preview show, but are not delivered yet: a step that selects one is refused rather
- *   than started without it.
+ * Catalog MCP servers and skills (#337) are given to a session only through the
+ * server-verified use decision (the run owner's `capabilities` grant). A caller with no such
+ * decision (`catalog: false`) refuses them. Whether the host has each server's command, and
+ * whether the agent accepts skills, is checked when the session opens.
  *
  * The agent's own legacy inline `mcpServers` need neither: config authority put them on it.
  */
 export function deliveryIssues(
   result: ResolveCapabilitiesResult,
   nodePath: string,
-  delivery: { catalogServers: boolean } = { catalogServers: true },
+  delivery: { catalog: boolean } = { catalog: true },
 ): CapabilityIssue[] {
+  if (delivery.catalog) return [];
   const issues: CapabilityIssue[] = [];
   const list = (ids: string[]) => ids.map((id) => `'${id}'`).join(", ");
   const servers = result.manifest.mcpServers.filter((m) => m.catalog).map((m) => m.id);
-  if (servers.length && !delivery.catalogServers)
+  if (servers.length)
     issues.push({
       path: `${nodePath}.capabilities.mcpServers`,
       message: `selects catalog MCP server${servers.length > 1 ? "s" : ""} ${list(servers)}, and this daemon has no server-verified use check to give ${
@@ -150,11 +335,76 @@ export function deliveryIssues(
   if (skills.length)
     issues.push({
       path: `${nodePath}.capabilities.skills`,
-      message: `selects skill${skills.length > 1 ? "s" : ""} ${list(skills)}, but this version of ORCA cannot deliver skills to an agent session yet. Remove ${
+      message: `selects skill${skills.length > 1 ? "s" : ""} ${list(skills)}, and this daemon has no server-verified use check to give ${
         skills.length > 1 ? "them" : "it"
-      } from the selection to run this step`,
+      } to a session with. Run it through a daemon or an admitted run`,
     });
   return issues;
+}
+
+/** The most skill bytes one step may carry inline in its prompts, names and URIs included. */
+export const SKILL_DELIVERY_MAX_BYTES = 256 * 1024;
+/** The most files and directories all of a step's skills may bring together. */
+export const SKILL_DELIVERY_MAX_FILES = 64;
+
+/** What a step's skills may still use (#337): shared by every skill the step selects. */
+export interface SkillDeliveryBudget {
+  bytes: number;
+  entries: number;
+}
+
+export function skillDeliveryBudget(): SkillDeliveryBudget {
+  return { bytes: SKILL_DELIVERY_MAX_BYTES, entries: SKILL_DELIVERY_MAX_FILES };
+}
+
+/** The URI a delivered skill file is named by: `orca-skill://<id>/<file>?digest=<sha256:...>`. */
+export function skillResourceUri(id: string, rel: string, digest: string): string {
+  return `orca-skill://${encodeURIComponent(id)}/${rel.split("/").map(encodeURIComponent).join("/")}?digest=${digest}`;
+}
+
+/** A resource block's fixed fields beyond its URI and text, generously. */
+const RESOURCE_BLOCK_OVERHEAD = 96;
+const DIGEST_LENGTH = "sha256:".length + 64;
+
+/**
+ * A selected skill as it will be delivered: its files read once, digest computed over the
+ * very bytes that will be sent, and each file decoded as UTF-8 text. The read is bounded by
+ * what `budget` has left, each file charged its content and the block naming it; on success
+ * the budget is spent by what this skill used. Refused when it no longer hashes to
+ * `expected` (what the launch recorded), is not text, or does not fit (`tooLarge`).
+ */
+export function readSkillForDelivery(
+  id: string,
+  skill: SkillDefinition,
+  baseDir: string | undefined,
+  expected: string | undefined,
+  budget: SkillDeliveryBudget = skillDeliveryBudget(),
+): { files: { rel: string; text: string }[]; digest: string } | { error: string; tooLarge?: true } {
+  const read = readSkillFiles(skill, baseDir, {
+    maxBytes: budget.bytes,
+    maxEntries: budget.entries,
+    metadataBytes: (rel) =>
+      Buffer.byteLength(skillResourceUri(id, rel, "x".repeat(DIGEST_LENGTH))) + RESOURCE_BLOCK_OVERHEAD,
+    anchored: true,
+  });
+  if ("error" in read) return read;
+  const digest = skillFilesDigest(read.files);
+  if (expected !== undefined && digest !== expected)
+    return { error: `skill '${id}' changed since the run was launched (now ${digest}); start a new run to use it` };
+  // `ignoreBOM` keeps a leading byte-order mark in the text, so the text sent is exactly the
+  // bytes the digest names.
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  const files: { rel: string; text: string }[] = [];
+  for (const file of read.files) {
+    try {
+      files.push({ rel: file.rel, text: decoder.decode(file.bytes) });
+    } catch {
+      return { error: `skill '${id}' file '${file.rel}' is not UTF-8 text, and skills are delivered as text` };
+    }
+  }
+  budget.bytes -= read.bytes;
+  budget.entries -= read.entries;
+  return { files, digest };
 }
 
 /** The refusal a launch or a session open throws for a step whose capabilities do not resolve. */
@@ -256,7 +506,7 @@ const INLINE_PATH_SEP = "::";
 export function preflightCapabilities(
   registry: AgentRegistry,
   def: WorkflowDefinition,
-  delivery: { catalogServers: boolean } = { catalogServers: true },
+  delivery: { catalog: boolean } = { catalog: true },
 ): void {
   for (const step of agentInstructions(def)) {
     if (!registry.canResolve(step.agent)) continue;

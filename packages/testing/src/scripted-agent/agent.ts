@@ -33,6 +33,8 @@ export interface ScriptedAgentOptions {
    * name, command, args and the names (never the values) of its environment variables.
    */
   sessionLog?: string;
+  /** Advertise ACP `promptCapabilities.embeddedContext` (inline `resource` blocks). */
+  embeddedContext?: boolean;
   name?: string;
 }
 
@@ -73,7 +75,10 @@ export class ScriptedAgent {
     return app
       .onRequest(acp.methods.agent.initialize, () => ({
         protocolVersion: acp.PROTOCOL_VERSION,
-        agentCapabilities: { loadSession: false },
+        agentCapabilities: {
+          loadSession: false,
+          ...(this.opts.embeddedContext ? { promptCapabilities: { embeddedContext: true } } : {}),
+        },
         agentInfo: { name: this.opts.name ?? "orca-scripted-agent", version: "0.1.0" },
       }))
       .onRequest(acp.methods.agent.authenticate, () => ({}))
@@ -162,7 +167,18 @@ export class ScriptedAgent {
     const text = prompt.map((b) => (b.type === "text" ? b.text : `[${b.type}]`)).join("\n");
     if (this.opts.promptLog) {
       await mkdir(dirname(this.opts.promptLog), { recursive: true });
-      await appendJsonl(this.opts.promptLog, { sessionId, turn: session.turns, cwd: session.cwd, text });
+      const resources = prompt.flatMap((b) =>
+        b.type === "resource"
+          ? [{ uri: b.resource.uri, ...("text" in b.resource ? { text: b.resource.text } : {}) }]
+          : [],
+      );
+      await appendJsonl(this.opts.promptLog, {
+        sessionId,
+        turn: session.turns,
+        cwd: session.cwd,
+        text,
+        ...(resources.length ? { resources } : {}),
+      });
     }
     const say = (t: string) =>
       ctx.client.notify(acp.methods.client.session.update, {

@@ -1,5 +1,7 @@
 /** Scoped capabilities (#335): skill digests, validation, launch preflight, provenance and session open. */
 import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -26,6 +28,11 @@ import {
   capabilityChecker,
   ConfigurationGenerations,
   launchProvenance,
+  readSkillFiles,
+  readSkillForDelivery,
+  SKILL_DELIVERY_MAX_BYTES,
+  SKILL_DELIVERY_MAX_FILES,
+  skillDeliveryBudget,
   LocalWorkspaceProvider,
   Orchestrator,
   PausingHumanInput,
@@ -33,6 +40,7 @@ import {
   type GenerationMaterial,
 } from "@orca/engine";
 import { memoryStores } from "@orca/store";
+import type * as acp from "@agentclientprotocol/sdk";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -69,6 +77,114 @@ describe("skillDigest", () => {
     expect(skillDigest({ path: "linked" }, dir)).toEqual({ error: expect.stringMatching(/symbolic link/) });
     expect(skillDigest({ path: "missing" }, dir)).toEqual({ error: "skill path 'missing' does not exist" });
     expect(skillDigest({ path: "style.md" }, undefined)).toEqual({ error: expect.stringMatching(/relative/) });
+  });
+});
+
+describe("reading a skill for delivery (#337)", () => {
+  it("reads within the byte budget, through the opened file, and refuses past it", async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, "s"));
+    await writeFile(join(dir, "s", "a.md"), "12345");
+    await writeFile(join(dir, "s", "b.md"), "67890");
+    const read = readSkillFiles({ path: "s" }, dir, { maxBytes: 10 });
+    expect(read).toMatchObject({ bytes: 10, entries: 3 });
+    expect("files" in read && read.files.map((f) => f.bytes.toString())).toEqual(["12345", "67890"]);
+    expect(readSkillFiles({ path: "s" }, dir, { maxBytes: 9 })).toEqual({
+      error: expect.stringMatching(/larger than 9/),
+      tooLarge: true,
+    });
+    // Delivery charges each file the block that names it too, before reading it.
+    expect(readSkillForDelivery("s", { path: "s" }, dir, undefined, { bytes: 10, entries: 64 })).toMatchObject({
+      tooLarge: true,
+    });
+  });
+
+  it("spends one budget across all of a step's skills, files and names included", async () => {
+    const dir = await tempDir();
+    for (const name of ["a", "b"]) {
+      await mkdir(join(dir, name));
+      for (let i = 0; i < 20; i++) await writeFile(join(dir, name, `f${i}.md`), "");
+    }
+    const budget = skillDeliveryBudget();
+    expect(readSkillForDelivery("a", { path: "a" }, dir, undefined, budget)).toHaveProperty("files");
+    // 21 entries spent, and 20 empty files' blocks paid for in bytes.
+    expect(budget.entries).toBe(SKILL_DELIVERY_MAX_FILES - 21);
+    expect(budget.bytes).toBeLessThan(SKILL_DELIVERY_MAX_BYTES - 20 * 100);
+    expect(readSkillForDelivery("b", { path: "b" }, dir, undefined, budget)).toHaveProperty("files");
+    expect(budget.entries).toBe(SKILL_DELIVERY_MAX_FILES - 42);
+    // A third of the same size no longer fits: refused, and nothing more is spent.
+    await mkdir(join(dir, "c"));
+    for (let i = 0; i < 30; i++) await writeFile(join(dir, "c", `f${i}.md`), "");
+    expect(readSkillForDelivery("c", { path: "c" }, dir, undefined, budget)).toMatchObject({ tooLarge: true });
+    expect(budget.entries).toBe(SKILL_DELIVERY_MAX_FILES - 42);
+  });
+
+  it("stops listing a directory once it holds more entries than the walk may visit", async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, "huge"));
+    await Promise.all(Array.from({ length: 1100 }, (_, i) => writeFile(join(dir, "huge", `f${i}`), "")));
+    expect(readSkillFiles({ path: "huge" }, dir)).toEqual({
+      error: expect.stringMatching(/more than 1024 files and directories/),
+      tooLarge: true,
+    });
+  });
+
+  it("refuses a link at the top or inside, and anything that is not a regular file", async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, "real.md"), "x");
+    await symlink(join(dir, "real.md"), join(dir, "top.md"));
+    expect(readSkillFiles({ path: "top.md" }, dir)).toEqual({ error: expect.stringMatching(/symbolic link/) });
+    await mkdir(join(dir, "outer"));
+    await symlink(dir, join(dir, "outer", "inner"));
+    expect(readSkillFiles({ path: "outer" }, dir)).toEqual({ error: expect.stringMatching(/symbolic link/) });
+    if (process.platform !== "win32") {
+      await mkdir(join(dir, "piped"));
+      spawnSync("mkfifo", [join(dir, "piped", "fifo")]);
+      if (existsSync(join(dir, "piped", "fifo")))
+        expect(readSkillFiles({ path: "piped" }, dir)).toEqual({ error: expect.stringMatching(/neither a file/) });
+    }
+  });
+
+  it("bounds how many files a skill may bring, empty ones included", async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, "many"));
+    for (let i = 0; i < 64; i++) await writeFile(join(dir, "many", `f${i}.md`), "");
+    // 64 empty files and the directory itself: one entry too many for delivery.
+    expect(readSkillForDelivery("many", { path: "many" }, dir, undefined)).toEqual({
+      error: expect.stringMatching(/more than 64 files and directories/),
+      tooLarge: true,
+    });
+    expect(readSkillFiles({ path: "many" }, dir)).toHaveProperty("files");
+  });
+
+  it("delivers only from under directories that only root or the daemon's account can change", async () => {
+    if (process.platform === "win32") return;
+    const dir = await tempDir();
+    await mkdir(join(dir, "shared", "review"), { recursive: true });
+    await writeFile(join(dir, "shared", "review", "SKILL.md"), "x");
+    expect(readSkillForDelivery("review", { path: "shared/review" }, dir, undefined)).toHaveProperty("files");
+    // Group-writable and not sticky: someone else could swap what is below it.
+    await chmod(join(dir, "shared"), 0o775);
+    expect(readSkillForDelivery("review", { path: "shared/review" }, dir, undefined)).toEqual({
+      error: expect.stringMatching(/someone other than root or the daemon's account can change/),
+    });
+    // A sticky one is fine: others cannot rename or remove what they do not own.
+    await chmod(join(dir, "shared"), 0o1777);
+    expect(readSkillForDelivery("review", { path: "shared/review" }, dir, undefined)).toHaveProperty("files");
+    // Reached through a link above it, it is read at its real place.
+    await symlink(join(dir, "shared"), join(dir, "alias"));
+    expect(readSkillForDelivery("review", { path: "alias/review" }, dir, undefined)).toHaveProperty("files");
+  });
+
+  it("keeps a leading byte-order mark, so the text sent is the bytes the digest names", async () => {
+    const dir = await tempDir();
+    const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("# Review\n")]);
+    await writeFile(join(dir, "bom.md"), bytes);
+    const read = readSkillForDelivery("bom", { path: "bom.md" }, dir, undefined);
+    if ("error" in read) throw new Error(read.error);
+    expect(read.files[0]!.text.startsWith("\uFEFF")).toBe(true);
+    expect(Buffer.from(read.files[0]!.text, "utf8")).toEqual(bytes);
+    expect(skillDigest({ path: "bom.md" }, dir)).toEqual({ digest: read.digest });
   });
 });
 
@@ -112,6 +228,8 @@ function setup(
     stores?: ReturnType<typeof memoryStores>;
     pause?: boolean;
     capabilityUse?: CapabilityUseCheck;
+    /** What sessions report for ACP `promptCapabilities.embeddedContext`; true by default. */
+    embeddedContext?: boolean;
   } = {},
 ) {
   const config: OrcaConfig = parseOrcaConfig({
@@ -132,6 +250,7 @@ function setup(
   const workflows = new WorkflowRegistry();
   for (const w of [opts.workflow ?? flow].flat()) workflows.register(parseWorkflow(w));
   const opened: { mcp: string[]; envKeys: string[][]; commands: string[] }[] = [];
+  const prompts: (string | acp.ContentBlock[])[] = [];
   let n = 0;
   const orchestrator = new Orchestrator({
     stores: opts.stores ?? memoryStores(),
@@ -161,7 +280,11 @@ function setup(
         terminated: closed,
         configOptions: [],
         setConfigOption: async () => [],
-        prompt: async () => ({ stopReason: "end_turn" as const, durationMs: 1 }),
+        promptCapabilities: { embeddedContext: opts.embeddedContext ?? true },
+        prompt: async (input) => {
+          prompts.push(input);
+          return { stopReason: "end_turn" as const, durationMs: 1 };
+        },
         onUpdate: () => () => {},
         cancel: async () => {},
         close: async () => close(),
@@ -169,7 +292,7 @@ function setup(
       return session;
     },
   });
-  return { orchestrator, registry, config, workflows, opened };
+  return { orchestrator, registry, config, workflows, opened, prompts };
 }
 
 /** `setup` with configuration generations wired the way bootstrap wires them, so runs record provenance. */
@@ -376,7 +499,7 @@ describe("scoped capabilities before agent work", () => {
     });
   });
 
-  it("refuses a step that selects a skill, which cannot be delivered yet, and names it", async () => {
+  it("refuses a step that selects a skill where there is no use decision, and names it", async () => {
     const dir = await tempDir();
     await writeFile(join(dir, "review.md"), "review carefully");
     const { orchestrator } = setup({
@@ -385,7 +508,7 @@ describe("scoped capabilities before agent work", () => {
     });
     await expect(orchestrator.startRun({ workflowId: "flow" })).rejects.toMatchObject({
       code: "CONFIG_INVALID",
-      message: expect.stringMatching(/cannot deliver skills/),
+      message: expect.stringMatching(/selects skill 'review', and this daemon has no server-verified use check/),
     });
   });
 
@@ -416,7 +539,7 @@ describe("scoped capabilities before agent work", () => {
     ).rejects.toMatchObject({ message: expect.stringMatching(/agent 'codex' is not permitted/) });
   });
 
-  it("validates a workflow against the registry: errors under the node, undeliverable entries as warnings", async () => {
+  it("validates a workflow against the registry: errors under the node, and a resolvable skill is no warning", async () => {
     const dir = await tempDir();
     await writeFile(join(dir, "review.md"), "review carefully");
     const config = parseOrcaConfig({
@@ -441,9 +564,8 @@ edges: [{ from: s, to: a }, { from: a, to: e }]
         message: expect.stringMatching(/no MCP server 'ghost'/),
       },
     ]);
-    expect(result.warnings).toEqual([
-      { path: "workflow(w).nodes.a.capabilities.skills", message: expect.stringMatching(/cannot deliver skills/) },
-    ]);
+    // Whether a run may be given it, and whether its agent accepts it, is decided at session open.
+    expect(result.warnings).toEqual([]);
   });
 });
 
@@ -625,6 +747,151 @@ describe("delivering catalog MCP servers (#337)", () => {
     expect(closed).toHaveLength(1);
     const events = await made.orchestrator.events(run.id);
     expect(events.filter((e) => e.type === "agent.session.closed")).toHaveLength(1);
+  });
+});
+
+describe("delivering skills (#337)", () => {
+  async function withSkill(
+    opts: { embeddedContext?: boolean; allow?: boolean; refuseFrom?: number; sessionMode?: "per-run" } = {},
+  ) {
+    const dir = await tempDir();
+    await mkdir(join(dir, "review"));
+    await writeFile(join(dir, "review", "SKILL.md"), "# Review\nreview carefully");
+    await writeFile(join(dir, "review", "checklist.txt"), "- tests\n");
+    const asked: CapabilityUse[][] = [];
+    const made = setup(
+      {
+        capabilities: { ...catalog, skills: { review: { path: join(dir, "review"), version: "1" } } },
+        agents: [
+          {
+            id: "claude",
+            command: "x",
+            roles: ["planner"],
+            mcpServers: inlineServers,
+            capabilities: { skills: { available: ["review"] } },
+          },
+        ],
+      },
+      {
+        ...(opts.embeddedContext === undefined ? {} : { embeddedContext: opts.embeddedContext }),
+        ...(opts.sessionMode ? { sessionMode: opts.sessionMode } : {}),
+        workflow: flow.replace(
+          "capabilities: { mcpServers: { enable: [files] } }",
+          "capabilities: { skills: { enable: [review] } }",
+        ),
+        capabilityUse: async ({ uses }) => {
+          asked.push(uses);
+          if (opts.allow === false || (opts.refuseFrom !== undefined && asked.length >= opts.refuseFrom))
+            throw new Error("not granted");
+        },
+      },
+    );
+    return { ...made, asked, dir };
+  }
+
+  it("puts a granted skill's files in each prompt of its step, inline and named by digest", async () => {
+    const made = await withSkill();
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("completed");
+    const digest = skillDigest({ path: join(made.dir, "review") }, undefined);
+    if (!("digest" in digest)) throw new Error(digest.error);
+    // `plan` selects no skill; `build` does.
+    expect(typeof made.prompts[0]).toBe("string");
+    const build = made.prompts[1] as acp.ContentBlock[];
+    expect(build.slice(0, 2)).toEqual([
+      {
+        type: "resource",
+        resource: {
+          uri: `orca-skill://review/SKILL.md?digest=${digest.digest}`,
+          mimeType: "text/markdown",
+          text: "# Review\nreview carefully",
+        },
+      },
+      {
+        type: "resource",
+        resource: {
+          uri: `orca-skill://review/checklist.txt?digest=${digest.digest}`,
+          mimeType: "text/plain",
+          text: "- tests\n",
+        },
+      },
+    ]);
+    expect(build[2]).toMatchObject({ type: "text" });
+    // Before and after the (empty) probe, after the slot wait, and before the prompt.
+    const use = [{ kind: "skill", id: "review", digest: digest.digest }];
+    expect(made.asked).toEqual([use, use, use, use]);
+  });
+
+  it("asks again before the prompt: a skill revoked while its step waits is not sent", async () => {
+    // Decisions 1-3 open the session; the 4th is right before the prompt.
+    const made = await withSkill({ refuseFrom: 4 });
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(made.asked).toHaveLength(4);
+    // Only `plan`'s prompt was sent; `build` never sent its skill.
+    expect(made.prompts).toHaveLength(1);
+    expect(JSON.stringify(made.prompts)).not.toContain("review carefully");
+  });
+
+  it("refuses the step when its skill is not granted, before any session opens", async () => {
+    const made = await withSkill({ allow: false });
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(made.opened).toHaveLength(1);
+    expect(made.prompts).toHaveLength(1);
+  });
+
+  it("refuses the step when the agent does not accept embedded context, and never pastes the skill in", async () => {
+    const made = await withSkill({ embeddedContext: false });
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(JSON.stringify(await made.orchestrator.events(run.id))).toMatch(
+      /agent 'claude' does not accept embedded context.*skill 'review'/,
+    );
+    expect(JSON.stringify(made.prompts)).not.toContain("review carefully");
+  });
+
+  it("asks ACP startup to refuse such an agent, and retires a pooled session that was not", async () => {
+    const made = await withSkill({ embeddedContext: false, sessionMode: "per-run" });
+    const required: boolean[] = [];
+    const closed: string[] = [];
+    const factory = made.orchestrator.sessionFactory;
+    made.orchestrator.sessionFactory = async (o) => {
+      required.push(o.requireEmbeddedContext !== undefined);
+      // This factory ignores the requirement, as a non-ACP integration might.
+      const session = await factory(o);
+      const close = session.close.bind(session);
+      session.close = async () => {
+        closed.push(session.id);
+        return close();
+      };
+      return session;
+    };
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    // `plan` selects no skill; `build` does, so its open carries the requirement.
+    expect(required).toEqual([false, true]);
+    // Both pooled sessions were closed: plan's when build needed other capabilities, and
+    // build's own when it could not take the skill, rather than kept in the pool.
+    expect(closed).toHaveLength(2);
+    // Closed as the step is refused, never kept pooled for another step.
+    const events = (await made.orchestrator.events(run.id)).map((e) => e.type);
+    expect(events.slice(events.lastIndexOf("agent.session.opened"))).toEqual([
+      "agent.session.opened",
+      "agent.session.closed",
+      "step.failed",
+      "run.failed",
+    ]);
+    expect(JSON.stringify(made.prompts)).not.toContain("review carefully");
+  });
+
+  it("refuses a skill that is not UTF-8 text rather than sending part of it", async () => {
+    const made = await withSkill();
+    await writeFile(join(made.dir, "review", "logo.bin"), Buffer.from([0xff, 0xfe, 0x00]));
+    await expect(made.orchestrator.startAndRun({ workflowId: "flow" })).resolves.toMatchObject({
+      run: { status: "failed" },
+    });
+    expect(JSON.stringify(made.prompts)).not.toContain("review carefully");
   });
 });
 

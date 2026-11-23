@@ -46,6 +46,12 @@ export type OrcaErrorCode =
    */
   | "EFFECT_ABANDONED"
   /**
+   * A dry run's fixtures do not fit the definition (#183): a fixture naming a node that is not
+   * there or not of that kind, a choice that is not one of the node's options, an artifact the
+   * step does not produce, or one that fails the step's validation. `details` names the node.
+   */
+  | "DRY_RUN_FIXTURE_INVALID"
+  /**
    * The recovery asked for is not possible for this run now (#357): a checkpoint attempt of a
    * run that did not fail, whose pin, inputs or artifacts are gone, or with an unreviewed step.
    * `details` has `runId`, `blockers` (RecoveryBlocker codes) and `checkpointStepRunId` when known.
