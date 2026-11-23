@@ -10,6 +10,7 @@ import { z } from "zod";
 import { ArtifactSchema } from "../model/artifact.js";
 import {
   BranchSkipReasonSchema,
+  DryRunSchema,
   EffectReviewDecisionSchema,
   ErrorInfoSchema,
   GateOptionSchema,
@@ -150,6 +151,8 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       checkpoint: RunCheckpointSchema.optional(),
       /** A delegated run's parent workspace, run and step (#883, `runs.admit` `origin`). */
       origin: RunOriginSchema.optional(),
+      /** A dry run (#183): every event of this run is simulated. Children of a dry run carry it too. */
+      dryRun: DryRunSchema.optional(),
     }),
   ),
   base("run.started", z.object({})),

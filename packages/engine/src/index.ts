@@ -50,3 +50,4 @@ export {
 } from "./admission-execution.js";
 export * from "./checkpoint-attempt.js";
 export * from "./checkpoint-admission.js";
+export * from "./dry-run.js";
