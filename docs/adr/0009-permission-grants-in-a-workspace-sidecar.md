@@ -166,6 +166,22 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   execution record. This is the
   client-owned ACP file path only: an agent's native tools and its own MCP connections do not
   pass through it, and keeping an agent on this path is an operating-system boundary's job.
+- **Each decision names what decided it (#702).** `explainPermission` is the one evaluation
+  and `decidePermission` its decision: it reports whether ORCA's own files, a rule, the
+  fallthrough or the command restriction decided, and for a rule its index. The loader records
+  each evaluated rule's origin beside it: the layer (`config`, `sidecar`, `default`), the
+  rule's index in that layer as written (a sidecar index counts the entries skipped as expired
+  or wildcard, so it names the entry a person sees), and for a sidecar the sha256 of the very
+  bytes the rule was parsed from. An allow turned into an ask behind an unreadable sidecar is
+  marked `capped`. `agent.permission` carries this as an optional `rule`, for asks and `fs:`
+  calls alike. For a restricted command that is asked, it cites the first part an explicit ask
+  rule decided before a part that only fell through to an ask default. The event carries
+  the layer and index but never the sidecar `revision`: that sha256 is a deterministic
+  fingerprint of the whole permission file, and an ordinary event reaches every reader and
+  export of the run log, where it could correlate one workspace's policy across runs. The
+  loader keeps it in memory for owner-private audit data, and the event schema drops one a
+  writer sends. The record is a record of the evaluation, not of the person's answer, and it is not a
+  durable authorization record either: it says which rule ORCA consulted, not what then ran.
 - **A wildcard `allow` in this file is ignored**, with a warning. Everything ORCA writes here
   is derived and scoped, and the Config surface narrows a kind by a path, a prefix, the
   workspace or a title; an `allow` naming no kind, or a kind and nothing that narrows it

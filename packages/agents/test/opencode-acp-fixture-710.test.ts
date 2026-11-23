@@ -398,7 +398,11 @@ describe("offered options and rule-matched answers", () => {
       request: { sessionId: SESSION, toolCall: edit(`${WS}/src/a.ts`), options: offered },
       scope: { workspaceCwd: WS },
     });
-    expect(answer).toEqual({ response: { outcome: { outcome: "cancelled" } }, decision: "allow:no-one-time-option" });
+    expect(answer).toEqual({
+      response: { outcome: { outcome: "cancelled" } },
+      decision: "allow:no-one-time-option",
+      rule: { basis: "rule" },
+    });
   });
 });
 
