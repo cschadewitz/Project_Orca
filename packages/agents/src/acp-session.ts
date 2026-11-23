@@ -15,6 +15,7 @@ import {
   describeError,
   literalEnv,
   newId,
+  redactSecretValues,
   OrcaError,
   silentLogger,
   systemClock,
@@ -444,12 +445,10 @@ async function openPlanned(
     };
     if (sessionLive.signal.aborted) throw new Error("the session has ended");
     if (call.method !== "tools/call") {
-      return {
-        signal: sessionLive.signal,
-        dispatch: () => {
-          if (sessionLive.signal.aborted) throw new Error("the session ended before the request was sent");
-        },
+      const check = () => {
+        if (sessionLive.signal.aborted) throw new Error("the session ended before the request was sent");
       };
+      return { signal: sessionLive.signal, dispatch: check, recheck: async () => check() };
     }
     const title = `${call.server}: ${call.tool}`;
     const refuse = (decision: string, reason: string): never => {
@@ -460,12 +459,22 @@ async function openPlanned(
     if (!turn || turn.abort.signal.aborted)
       return refuse("no-turn", "no live turn: ORCA relays tool calls only in one");
     const live = () => activeTurn === turn && !turn.abort.signal.aborted && !sessionLive.signal.aborted;
+    /** How the call was allowed: a person's one-time allow stands until a deny appears. */
+    let grantedBy: "allow" | "ask:allow_once" = "allow";
     const gate: McpRelayDispatch = {
       signal: turn.abort.signal,
       dispatch: () => {
         if (live()) return;
         record(title, "dispatch:turn-ended");
         throw new Error("the turn ended before the tool call was sent");
+      },
+      // After the relay waited for the server to start: the policy as it is now, the same turn.
+      recheck: async () => {
+        const now = decide(await policyForAsk());
+        if (now === "deny") return refuse("recheck:denied-since", "ORCA's policy denies it now");
+        if (now === "ask" && grantedBy === "allow")
+          return refuse("recheck:asks-since", "ORCA's policy asks for it now, and nobody was asked");
+        if (!live()) return refuse("recheck:turn-ended", "the turn ended while the server started");
       },
     };
     const toolCall = (toolCallId: string): acp.RequestPermissionRequest["toolCall"] => ({
@@ -509,6 +518,7 @@ async function openPlanned(
       return refuse("ask:allow_once:denied-since", "ORCA's policy denies it now");
     if (!live()) return refuse("ask:allow_once:turn-ended", "the turn ended while the tool call was asked");
     record(title, "ask:allow_once");
+    grantedBy = "ask:allow_once";
     return gate;
   };
 
@@ -551,6 +561,8 @@ async function openPlanned(
           cwd: opts.cwd,
           env: opts.env,
           servers: mcpServers.map((m) => ({ name: m.name, command: m.command, args: m.args, env: literalEnv(m.env) })),
+          withheldEnv: secretPlan.withheldEnv,
+          redact: (text) => redactSecretValues(text, values),
           admitted,
           authorize: authorizeMcp,
           logger,
@@ -657,9 +669,11 @@ async function openPlanned(
   if (relay) app.onRequest(acpUnstable.methods.client.mcp.message, mcpMessageParams, relay.handleRequest);
   const conn = app.connect(proc.stream);
   const closed = conn.closed.then(() => undefined);
+  // Losing the agent's transport ends everything the relay runs for it, not only the turn.
   void closed.then(() => {
     activeTurn?.abort.abort("agent connection closed");
     sessionLive.abort("agent connection closed");
+    void relay?.close();
   });
   // A handle whose exit cannot be observed rejects; that ends no turn, and must not surface as
   // an unhandled rejection either.
@@ -667,6 +681,7 @@ async function openPlanned(
     () => {
       activeTurn?.abort.abort("agent process exited");
       sessionLive.abort("agent process exited");
+      void relay?.close();
     },
     () => undefined,
   );

@@ -17,6 +17,7 @@ import {
   ENV_SECRET_DELIVERY,
   LocalHost,
   openAcpSession,
+  type AgentHost,
   type AgentSecretDelivery,
   type AgentSession,
   type OpenSessionOptions,
@@ -55,6 +56,7 @@ rl.on("line", async (line) => {
     servers = m.params.mcpServers;
     send({ jsonrpc: "2.0", id: m.id, result: { sessionId: "s1" } });
     const out = [];
+    if (process.env.NO_LIST) return;
     for (const s of servers) {
       out.push(await mcp(s.serverId, "server/discover"));
       out.push(await mcp(s.serverId, "tools/list"));
@@ -63,6 +65,7 @@ rl.on("line", async (line) => {
     fs.writeFileSync(process.env.LIST_LOG, JSON.stringify(out));
   } else if (m.method === "session/prompt") {
     const ops = JSON.parse(m.params.prompt[0].text);
+    if (ops[0] === "EXIT") process.exit(0);
     const out = [];
     for (const s of servers) for (const [method, params] of ops) out.push(await mcp(s.serverId, method, params));
     fs.writeFileSync(process.env.RESULT_LOG, JSON.stringify(out));
@@ -80,7 +83,9 @@ setInterval(() => {}, 1000);
 
 /**
  * A stdio MCP server of the 2025-06-18 era: `initialize` first (never answered with
- * `HANG_INIT`), then a tool `touch` and a tool `slow` that never answers.
+ * `HANG_INIT`, answered after `SLOW_INIT` ms), then a tool `touch` that reports what it was
+ * given, a tool `slow` that never answers, and a tool `leak` that fails with the secret in its
+ * error.
  */
 const serverScript = `
 const rl = require("node:readline").createInterface({ input: process.stdin });
@@ -91,17 +96,24 @@ rl.on("line", (line) => {
   const m = JSON.parse(line);
   fs.appendFileSync(process.env.SERVER_LOG, (m.method || "response") + (m.params && m.params.name ? " " + m.params.name : "") + "\\n");
   if (m.method === "initialize") {
-    if (!process.env.HANG_INIT)
+    const answer = () => {
       send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "real-server", version: "3" } } });
+    };
+    if (process.env.HANG_INIT) {}
+    else if (process.env.SLOW_INIT) setTimeout(answer, Number(process.env.SLOW_INIT));
+    else answer();
   } else if (m.method === "tools/list")
     send({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "touch", inputSchema: { type: "object" } }] } });
   else if (m.method === "tools/call" && m.params.name === "slow") {}
+  else if (m.method === "tools/call" && m.params.name === "leak")
+    send({ jsonrpc: "2.0", id: m.id, error: { code: -32050, message: "token " + process.env.API_TOKEN + " rejected\\n" + "x".repeat(5000), data: { token: process.env.API_TOKEN, stack: "at server.cjs:1" } } });
   else if (m.method === "tools/call")
-    send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "secret is " + (process.env.API_TOKEN === "${SECRET}" ? "here" : "missing") }] } });
+    send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "secret is " + (process.env.API_TOKEN === "${SECRET}" ? "here" : "missing") + (process.env.ORCA_TEST_WITHHELD ? "; withheld is present" : "") }] } });
   else if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: "no" } });
 });
 `;
 
+const WITHHELD = "ORCA_TEST_WITHHELD";
 const CALL = JSON.stringify([["tools/call", { name: "touch", arguments: {} }]]);
 
 const dirs: string[] = [];
@@ -128,6 +140,12 @@ async function setup(opts: {
   delivery?: AgentSecretDelivery;
   outsideCall?: boolean;
   hangInit?: boolean;
+  slowInitMs?: number;
+  /** Wraps the host the session spawns through. */
+  host?: (inner: AgentHost) => AgentHost;
+  noList?: boolean;
+  withheld?: boolean;
+  permissionFiles?: string[];
   permissions?: { default: "allow" | "ask" | "deny"; rules: unknown[] };
   askPermission?: OpenSessionOptions["askPermission"];
   startTimeoutMs?: number;
@@ -146,7 +164,7 @@ async function setup(opts: {
   const tokenFile = join(dir, "token");
   await writeFile(tokenFile, `${SECRET}\n`);
   const session = openAcpSession({
-    host: new LocalHost({ id: "local", type: "local" }),
+    host: (opts.host ?? ((h) => h))(new LocalHost({ id: "local", type: "local" })),
     agent: AgentSpecSchema.parse({
       id: "relay",
       command: process.execPath,
@@ -156,6 +174,7 @@ async function setup(opts: {
         RESULT_LOG: resultLog,
         LIST_LOG: listLog,
         ...(opts.outsideCall ? { OUTSIDE_CALL: "1" } : {}),
+        ...(opts.noList ? { NO_LIST: "1" } : {}),
         ...(opts.noAcp ? { NO_ACP: "1" } : {}),
         ...(opts.agentToken ? { AGENT_TOKEN: { secret: "token" } } : {}),
       },
@@ -169,13 +188,20 @@ async function setup(opts: {
             API_TOKEN: { secret: "token" },
             SERVER_LOG: serverLog,
             ...(opts.hangInit ? { HANG_INIT: "1" } : {}),
+            ...(opts.slowInitMs ? { SLOW_INIT: String(opts.slowInitMs) } : {}),
           },
         },
       ],
     }),
     cwd: dir,
     logger,
-    secrets: { token: { host: "local", provider: "file", path: tokenFile } },
+    secrets: {
+      token: { host: "local", provider: "file", path: tokenFile },
+      // A secret ORCA reads from its own environment: that variable is withheld from the
+      // agent, and so from the servers ORCA runs for it.
+      ...(opts.withheld ? { fromEnv: { host: "local", provider: "env", name: WITHHELD } } : {}),
+    },
+    ...(opts.permissionFiles ? { permissionFiles: opts.permissionFiles } : {}),
     authorizeSecretUse: async () => undefined,
     ...(opts.delivery ? { secretDelivery: opts.delivery } : {}),
     handshakeTimeoutMs: 10_000,
@@ -340,8 +366,9 @@ describe("ORCA serves a hooked session's MCP servers over ACP (#704)", () => {
     const s = await t.open();
     await t.listed();
     const [slow] = await t.turn(s, JSON.stringify([["tools/call", { name: "slow", arguments: {} }]]));
-    expect(slow).toEqual(expect.objectContaining({ acpError: expect.anything() }));
-    expect(JSON.stringify(slow)).toMatch(/deadline/);
+    expect(slow).toEqual({
+      acpError: expect.objectContaining({ message: "the request's deadline passed", data: { reason: "deadline" } }),
+    });
     for (let i = 0; i < 40 && !(await t.serverLog()).includes("notifications/cancelled"); i++)
       await new Promise((r) => setTimeout(r, 50));
     expect(await t.serverLog()).toContain("notifications/cancelled");
@@ -351,8 +378,12 @@ describe("ORCA serves a hooked session's MCP servers over ACP (#704)", () => {
     const t = await setup({ hangInit: true, startTimeoutMs: 300 });
     await t.open();
     const [discover] = await t.listed();
-    expect(discover).toEqual(refused(/did not start/));
-    expect(JSON.stringify(discover)).toMatch(/initialize within 300 ms/);
+    expect(discover).toEqual({
+      acpError: expect.objectContaining({
+        message: expect.stringMatching(/did not start/),
+        data: { reason: "start-timeout" },
+      }),
+    });
     await expectGone(await serverPid(t.serverLog));
   });
 
@@ -361,6 +392,86 @@ describe("ORCA serves a hooked session's MCP servers over ACP (#704)", () => {
     const s = await t.open();
     const pid = await serverPid(t.serverLog);
     await s.close();
+    await expectGone(pid);
+  });
+
+  it("withholds from a server what the session withholds from its agent", async () => {
+    process.env[WITHHELD] = "daemon-only-value";
+    try {
+      const t = await setup({ withheld: true });
+      const s = await t.open();
+      expect((await t.seen()).env[WITHHELD]).toBeUndefined();
+      await t.listed();
+      const [call] = await t.turn(s);
+      expect(call).toEqual({ content: [{ type: "text", text: "secret is here" }] });
+    } finally {
+      delete process.env[WITHHELD];
+    }
+  });
+
+  it("passes on a server's error as its code and a bounded, redacted message, and nothing else", async () => {
+    logged.length = 0;
+    const t = await setup({});
+    const s = await t.open();
+    await t.listed();
+    const [leak] = await t.turn(s, JSON.stringify([["tools/call", { name: "leak", arguments: {} }]]));
+    const error = (leak as { acpError: { code: number; message: string; data?: unknown } }).acpError;
+    expect(error.code).toBe(-32050);
+    expect(error.message).toMatch(/^token \[REDACTED\] rejected x+…$/);
+    expect(error.message.length).toBeLessThanOrEqual(501);
+    expect(error.data).toBeUndefined();
+    expect(JSON.stringify(leak)).not.toContain(SECRET);
+    expect(JSON.stringify(leak)).not.toContain("server.cjs");
+    expect(logged.join("\n")).not.toContain(SECRET);
+  });
+
+  it("decides a call again once its server has started, at the write", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-704-sidecar-"));
+    dirs.push(dir);
+    const sidecar = join(dir, "permissions.json");
+    const t = await setup({ noList: true, slowInitMs: 800, permissionFiles: [sidecar] });
+    const s = await t.open();
+    await t.seen();
+    const turn = t.turn(s);
+    // The call was allowed when it arrived; while its server starts, a deny is recorded.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await t.serverLog()).toContain("initialize");
+    await writeFile(
+      sidecar,
+      JSON.stringify({
+        version: 1,
+        agents: { relay: { rules: [{ match: { kind: "other", titlePattern: "^tools: touch$" }, decision: "deny" }] } },
+      }),
+    );
+    const [call] = await turn;
+    expect(call).toEqual(refused(/denies it now/));
+    expect(await t.serverLog()).not.toContain("tools/call");
+  });
+
+  it("stops a server whose input is stuck, without waiting on the write", async () => {
+    let stuck = false;
+    const t = await setup({
+      noList: true,
+      requestTimeoutMs: 60_000,
+      host: (inner) => stallingServerInput(inner, () => (stuck = true)),
+    });
+    const s = await t.open();
+    await t.seen();
+    const turn = s.prompt([{ type: "text", text: CALL }]).catch(() => undefined);
+    const pid = await serverPid(t.serverLog);
+    for (let i = 0; i < 100 && !stuck; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(stuck).toBe(true);
+    await s.close();
+    await expectGone(pid);
+    await turn;
+  });
+
+  it("stops its servers when the agent's transport is lost", async () => {
+    const t = await setup({});
+    const s = await t.open();
+    await t.listed();
+    const pid = await serverPid(t.serverLog);
+    await s.prompt([{ type: "text", text: JSON.stringify(["EXIT"]) }]).catch(() => undefined);
     await expectGone(pid);
   });
 
@@ -404,6 +515,36 @@ describe("ORCA serves a hooked session's MCP servers over ACP (#704)", () => {
     expect(call).toEqual({ content: [{ type: "text", text: "secret is here" }] });
   });
 });
+
+/**
+ * The host, except that once a relayed server is sent a tool call, the write to it never
+ * finishes, and neither does closing its input: a server that has stopped reading.
+ */
+function stallingServerInput(inner: AgentHost, onStuck: () => void): AgentHost {
+  const host = Object.create(inner) as AgentHost;
+  host.spawnAgent = async (agent, options) => {
+    const handle = await inner.spawnAgent(agent, options);
+    if (!agent.id.startsWith("mcp-")) return handle;
+    const writer = handle.stream.writable.getWriter();
+    let stuck = false;
+    const never = () => new Promise<void>(() => undefined);
+    const writable = new WritableStream<unknown>({
+      write: (message) => {
+        if (stuck || JSON.stringify(message).includes('"tools/call"')) {
+          stuck = true;
+          onStuck();
+          return never();
+        }
+        return writer.write(message as never);
+      },
+      close: never,
+    });
+    return Object.assign(Object.create(handle) as typeof handle, {
+      stream: { readable: handle.stream.readable, writable },
+    });
+  };
+  return host;
+}
 
 async function serverPid(log: () => Promise<string>): Promise<number> {
   for (let i = 0; i < 100; i++) {

@@ -397,9 +397,13 @@ permission: ORCA checks every request again when it sends it on. Listing a serve
 needs only a live session. A tool call needs the session's live prompt turn and ORCA's rules,
 read at that moment, deciding `<server>: <tool>` (kind `other`, the same call the hook decides):
 a deny never reaches the server, and an ask is put to a person as a one-time allow for that
-call. Any other MCP request (resources, prompts) is refused. A request ends with its turn, or
-after 10 minutes, and the server is told it was cancelled; a server that has not answered
-`initialize` within 30 seconds, or is still starting when the session closes, is stopped. A
+call. A call that had to wait for its server to start is decided again once it has started,
+before it is sent. Any other MCP request (resources, prompts) is refused. A request ends with
+its turn, or after 10 minutes, and the server is told it was cancelled; a server that has not
+answered `initialize` within 30 seconds, or is still starting when the session closes, or
+when the agent's connection is lost, is stopped, even if a write to it is stuck. A server
+runs without the variables ORCA withholds from the agent, and its errors reach the agent as
+a code and a short message with secret values redacted, never anything else it attached. A
 Claude adapter that does not offer MCP over ACP is refused when the agent has servers. Codex keeps its servers as configured: its
 runtime is checked before `session/new` hands them over.
 
