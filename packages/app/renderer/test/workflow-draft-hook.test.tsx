@@ -236,13 +236,11 @@ describe("useWorkflowDraft", () => {
       ok: true,
       result: { draft: view(revision), layout: { graphs: {} }, editable: true },
     });
+    // A plain re-read (a refused edit's) that answers after an edit's result is older news.
     let first!: Promise<void>;
-    act(() => void (first = hook.result.current.revalidate()));
-    expect(hook.result.current.checking).toBe(true);
+    act(() => void (first = hook.result.current.reload()));
     await act(async () => void (await hook.result.current.apply([{ op: "tidy" }])));
     expect(revisionOf(hook)).toBe(1);
-    // An edit's result is validated by the daemon that produced it.
-    expect(hook.result.current.checking).toBe(false);
     await act(async () => {
       answers[0]!(got(0));
       await first;
@@ -256,6 +254,7 @@ describe("useWorkflowDraft", () => {
       second = hook.result.current.revalidate();
       third = hook.result.current.revalidate();
     });
+    expect(hook.result.current.checking).toBe(true);
     await act(async () => {
       answers[2]!(got(3));
       await third;

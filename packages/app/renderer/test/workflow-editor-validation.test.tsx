@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { DraftIssue, NotificationMessage, WorkflowDraftView } from "@orca/protocol";
 import type { WorkflowDraftBridge } from "../../src/workflow-draft-bridge.js";
+import type { DaemonTargetSnapshot } from "../../src/daemon-connection.js";
 import type { FakeBridge } from "./fake-bridge.js";
 import { draftBridge } from "./fixtures-workflow-drafts.js";
 import { harness, installBridge, renderChrome, stubMatchMedia } from "./harness.js";
@@ -176,21 +177,19 @@ describe("findings bound to the current revision", () => {
     node: "plan",
   });
 
-  it("never lets a late re-read replace a newer revision's findings", async () => {
-    const { fake, drafts } = await openEditor(CLEAN, [problem("old finding")]);
-    // A configuration change asks for a re-read; it answers late, after an edit.
-    const release = drafts.hold("workflowDrafts.get");
+  it("never lets an earlier re-read replace a later one's findings", async () => {
+    const { fake, drafts } = await openEditor(CLEAN, [problem("first finding")]);
+    // A configuration change asks for a re-read that answers late, after a second change's.
+    const releaseFirst = drafts.hold("workflowDrafts.get");
     act(() => fake.notify(configChanged()));
     await waitFor(() => expect(drafts.calls).toContain("workflowDrafts.get"));
-    const stale = structuredClone(drafts.state);
-    drafts.state.issues = [problem("new finding")];
-    fireEvent.click(screen.getByRole("button", { name: "Tidy layout" }));
-    await waitFor(() => expect(panel().textContent).toContain("new finding"));
-    // The held re-read was answered from the revision before the edit.
-    expect(stale.revision).toBeLessThan(drafts.state.revision);
-    await act(async () => release());
-    expect(panel().textContent).toContain("new finding");
-    expect(panel().textContent).not.toContain("old finding");
+    drafts.state.issues = [problem("second finding")];
+    act(() => fake.notify(configChanged()));
+    await waitFor(() => expect(said()).toContain("second finding"));
+    expect(said()).not.toContain("Checking");
+    await act(async () => releaseFirst());
+    expect(said()).toContain("second finding");
+    expect(said()).not.toContain("first finding");
   });
 
   it("marks findings as checking while the daemon is away, and validates again when it is back", async () => {
@@ -224,6 +223,67 @@ describe("findings bound to the current revision", () => {
     await act(async () => release());
     expect(panel().textContent).toContain("No problems");
   });
+
+  it.each(["config.changed", "a different daemon"])(
+    "keeps an edit's reply from before %s from clearing the check while the re-read is out",
+    async (change) => {
+      const { fake, drafts } = await openEditor(CLEAN, [problem("old finding")]);
+      let epoch = 1;
+      const listeners = new Set<(target: DaemonTargetSnapshot) => void>();
+      const target = (): DaemonTargetSnapshot => ({
+        epoch,
+        url: "http://localhost:6722",
+        source: "saved",
+        environmentOverride: false,
+      });
+      if (change !== "config.changed") {
+        // Installed before the editor would be too late for this hook: re-open it under one.
+        fake.bridge.daemonConnection = {
+          read: target,
+          subscribe: (listener) => {
+            listeners.add(listener);
+            return () => void listeners.delete(listener);
+          },
+          onShow: () => () => {},
+          show: () => {},
+          cancel: () => {},
+          activate: () => {},
+          connect: async () => ({ ok: true }),
+        };
+        fireEvent.click(screen.getByRole("button", { name: "Close the editor" }));
+        fireEvent.click(await screen.findByRole("button", { name: /Continue editing|Edit/ }));
+        await screen.findByRole("listbox", { name: "ai-sdlc draft graph" });
+      }
+      // An edit goes out under the old context, whose answer calls the draft clean, and is held.
+      drafts.state.issues = [];
+      const releaseEdit = drafts.hold("workflowDrafts.apply");
+      fireEvent.click(screen.getByRole("button", { name: "Tidy layout" }));
+      await waitFor(() => expect(drafts.calls).toContain("workflowDrafts.apply"));
+      // The new context finds a problem.
+      drafts.state.issues = [problem("new context finding")];
+      const releaseRead = drafts.hold("workflowDrafts.get");
+      const reads = drafts.calls.filter((method) => method === "workflowDrafts.get").length;
+      if (change === "config.changed") act(() => fake.notify(configChanged()));
+      else
+        act(() => {
+          epoch += 1;
+          listeners.forEach((listener) => listener(target()));
+        });
+      await waitFor(() =>
+        expect(drafts.calls.filter((method) => method === "workflowDrafts.get").length).toBe(reads + 1),
+      );
+      await act(async () => releaseEdit());
+      // The old context's reply is dropped: the last rows stay, as stale, and nothing is clean.
+      expect(said()).toContain("Checking");
+      expect(said()).toContain("old finding");
+      expect(said()).not.toContain("No problems");
+      expect(screen.getByRole("button", { name: "Review and publish" }).getAttribute("aria-disabled")).toBe("true");
+      // The new context's validation is what clears it.
+      await act(async () => releaseRead());
+      await waitFor(() => expect(said()).toContain("new context finding"));
+      expect(said()).not.toContain("Checking");
+    },
+  );
 
   it("validates again when the configuration it was checked against changes", async () => {
     const { fake, drafts } = await openEditor(CLEAN, []);

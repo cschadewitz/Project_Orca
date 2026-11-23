@@ -137,7 +137,9 @@ A missing start reports once, not once more for every node it leaves unreachable
 for an older revision never replaces a newer one. When the daemon goes away the rows stay but
 the panel says `Checking`, and it never says the draft is clean until the daemon has
 validated it again: on reconnecting, on a different daemon behind the window, and whenever
-the configuration it was checked against changes. Publishing waits for that. A daemon with no
+the configuration it was checked against changes. Any answer sent before such a change, an
+edit's reply included, is dropped rather than shown, so the old rows stay marked stale until
+the new check answers. Publishing waits for that. A daemon with no
 active configuration to check against says so as one whole-workflow error, which keeps the
 draft from publishing. The live region speaks only when the draft goes from clean to having
 errors or back, never on every edit.
