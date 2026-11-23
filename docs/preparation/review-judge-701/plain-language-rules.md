@@ -370,10 +370,18 @@ and only does two metadata lookups. The first is the key's binding, which must b
 this destination and usable on this machine. The second is a disclosure grant for this destination,
 provider version and wire format. No key is read and nothing is sent until the judge is called.
 On each call:
-- the daily budget is reserved first, per UTC day, and never refunded;
+- the daily budget is reserved first, per UTC day, and never refunded. It counts within one prepared
+  judge only, so it is not a durable spending cap: a restart or re-preparation starts at zero.
+  Activation stays unwired until a durable cap exists;
 - the key is leased for that one request (purpose `review-judge`, the pinned destination);
-- the grant is rechecked as the lease's last awaited step, and the use check is re-decided at the
-  hand-off.
+- the grant is rechecked as the lease's last awaited step. Then, synchronously at the dispatch, in
+  the turn that calls the sender, the call's cancellation and the grant's current revision and
+  expiry are checked again (`currentNow`), and the #336 use check is re-decided. The send happens
+  only after all of these pass.
+
+The provider is resolved once into one frozen object (the config is snapshotted first). The
+disclosure query names its version, and the sender's key placement and headers and every request
+body come from that same object, so the choice approved is the choice used.
 
 A refused call is `unavailable`, which is no match, so the person is asked. The sender, key binding,
 grant and budget fold into the judge's config ref. The repeat cache stays off (Casey's default), so

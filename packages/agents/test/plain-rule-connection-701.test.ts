@@ -113,9 +113,12 @@ function credentials(over: { pinned?: string; authorizedNow?: () => boolean } = 
   });
 }
 
-function disclosure(over: Partial<PlainRuleDisclosureService> & { revision?: () => string } = {}) {
+function disclosure(
+  over: Partial<PlainRuleDisclosureService> & { revision?: () => string; revisionNow?: () => string } = {},
+) {
   const queries: PlainRuleDisclosureQuery[] = [];
   let checks = 0;
+  let nowChecks = 0;
   const service: PlainRuleDisclosureService = {
     find:
       over.find ??
@@ -129,8 +132,14 @@ function disclosure(over: Partial<PlainRuleDisclosureService> & { revision?: () 
         checks++;
         return { revision: over.revision?.() ?? "g1", expiresAt: "2999-01-01T00:00:00Z" };
       }),
+    currentNow:
+      over.currentNow ??
+      (() => {
+        nowChecks++;
+        return { revision: over.revisionNow?.() ?? over.revision?.() ?? "g1", expiresAt: "2999-01-01T00:00:00Z" };
+      }),
   };
-  return { service, queries, checks: () => checks };
+  return { service, queries, checks: () => checks, nowChecks: () => nowChecks };
 }
 
 const config = (over: Record<string, unknown> = {}) => ({
@@ -207,6 +216,76 @@ describe("#701 plain-rule judge from config", () => {
     const made2 = await prepared({}, { disclosure: gone.service });
     expect(await made2.judge(input, signal())).toMatchObject({ verdict: "unavailable" });
     expect(seen).toHaveLength(0);
+  });
+
+  it("rechecks the grant synchronously at the dispatch itself, after the awaited recheck", async () => {
+    let now = "g1";
+    const d = disclosure({ revisionNow: () => now });
+    const made = await prepared({}, { disclosure: d.service });
+    expect(await made.judge(input, signal())).toMatchObject({ outcome: "allow" });
+    expect(d.nowChecks()).toBe(1);
+    // The awaited recheck still passes, but the grant changed by the time of the dispatch.
+    now = "g2";
+    expect(await made.judge(input, signal())).toMatchObject({ verdict: "unavailable" });
+    // An expired grant at dispatch, and a dispatch check that throws.
+    const expired = disclosure({ currentNow: () => ({ revision: "g1", expiresAt: "2000-01-01T00:00:00Z" }) });
+    const made2 = await prepared({}, { disclosure: expired.service });
+    expect(await made2.judge(input, signal())).toMatchObject({ verdict: "unavailable" });
+    const throwing = disclosure({
+      currentNow: () => {
+        throw new Error("store");
+      },
+    });
+    const made3 = await prepared({}, { disclosure: throwing.service });
+    expect(await made3.judge(input, signal())).toMatchObject({ verdict: "unavailable" });
+    expect(seen).toHaveLength(1);
+  });
+
+  it("a call cancelled during the awaited recheck is not sent", async () => {
+    const controller = new AbortController();
+    const d = disclosure({
+      current: async () => {
+        controller.abort();
+        return { revision: "g1", expiresAt: "2999-01-01T00:00:00Z" };
+      },
+    });
+    const made = await prepared({}, { disclosure: d.service });
+    await made.judge(input, controller.signal);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("uses exactly the provider approved for disclosure: later changes to the config change nothing", async () => {
+    const cfg = { provider: { kind: "anthropic", model: "claude-haiku-5-5" }, destination, credential: "judge-key" };
+    const d = disclosure();
+    const made = await preparePlainRuleJudge(
+      cfg,
+      { credentials: credentials(), disclosure: d.service, request: loopback },
+      signal(),
+    );
+    if (made.status !== "prepared") throw new Error(made.reason);
+    cfg.provider.kind = "openai-compatible";
+    cfg.provider.model = "other-model";
+    expect(Object.isFrozen(made.provider)).toBe(true);
+    expect(await made.judge(input, signal())).toMatchObject({ outcome: "allow" });
+    expect(seen[0]!.headers["x-api-key"]).toBe(keyValue);
+    expect(seen[0]!.body.model).toBe("claude-haiku-5-5");
+    // A config read through a getter is read once.
+    let reads = 0;
+    const tricky = {
+      get provider() {
+        reads++;
+        return reads === 1 ? { kind: "anthropic" } : { kind: "openai-compatible", model: "x" };
+      },
+      destination,
+      credential: "judge-key",
+    };
+    const made2 = await preparePlainRuleJudge(
+      tricky,
+      { credentials: credentials(), disclosure: disclosure().service, request: loopback },
+      signal(),
+    );
+    expect(made2).toMatchObject({ status: "prepared", provider: { kind: "anthropic" } });
+    expect(reads).toBe(1);
   });
 
   it("a key use revoked at the hand-off stops the send", async () => {
@@ -356,6 +435,10 @@ describe("#701 plain-rule judge from config: fail-closed preparation", () => {
   it("refuses missing services and a cancelled preparation", async () => {
     expect(await unavailable(config(), { credentials: undefined })).toMatchObject({ reason: "incomplete-config" });
     expect(await unavailable(config(), { disclosure: {} })).toMatchObject({ reason: "incomplete-config" });
+    const { currentNow: _omitted, ...withoutDispatchCheck } = disclosure().service;
+    expect(await unavailable(config(), { disclosure: withoutDispatchCheck })).toMatchObject({
+      reason: "incomplete-config",
+    });
     const c = new AbortController();
     c.abort();
     expect(await unavailable(config(), {}, c.signal)).toMatchObject({ reason: "cancelled" });
