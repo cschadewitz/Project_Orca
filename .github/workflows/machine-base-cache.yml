@@ -1,0 +1,42 @@
+# Warms the two-machine test's base image cache (#885) from main. A cache saved by a
+# pull_request run is scoped to that PR's merge ref, so only a cache saved on the default branch
+# can be restored by every PR. This job saves it whenever the base image definition changes on
+# main, and weekly so an unused entry is not evicted. The PR job (two-daemons.yml, "two machines
+# in containers") restores the same key and falls back to its own bounded build on a miss.
+name: Machine base cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/testing/machine/base.Dockerfile
+      - packages/testing/machine/build-base.sh
+      - .github/workflows/machine-base-cache.yml
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: machine-base-cache
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    name: warm the machine base image cache
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Restore the machine base image
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/orca-machine-base.tar
+          key: orca-machine-base-${{ runner.os }}-${{ hashFiles('packages/testing/machine/base.Dockerfile') }}
+      - name: Load or build the machine base image
+        run: packages/testing/machine/build-base.sh "$RUNNER_TEMP/orca-machine-base.tar"
