@@ -145,10 +145,21 @@ every later `execute` approved, because the file is re‑read per ask. Three cha
   `work/` and `program/`, where the shipped workflows have agents write deliverables
   (`.orca/work/…` from a workspace that holds the store). Unreadable as well:
   `auth/` and the store's `private-execution` and `private-workflows` directories, which hold
-  its keys. The ACP client's `fs/read_text_file` and `fs/write_text_file` handlers, which
-  ask nobody, refuse the same list. Paths are compared as the file system resolves them —
+  its keys. The ACP client's `fs/read_text_file` and `fs/write_text_file` handlers refuse
+  the same list. Paths are compared as the file system resolves them —
   symlinks followed, `..` taken physically — and segment by segment. The CLI's
   `makeSessionFactory` binds the list beside the sidecar path (`orcaProtectedPaths`).
+- **ORCA's own file executor is decided by the policy (#703).** An agent given `fs/*` has
+  ORCA do its file I/O, and before this the handlers checked only the session roots and the
+  list above, so an agent that never asked wrote what the policy would refuse. Now each call is
+  decided, just before its I/O and with the policy read fresh, as the `read` or `edit` call an
+  ask for it would carry (`owned-fs-gate.ts`). An `allow` proceeds and a `deny` refuses. An
+  `ask` proceeds only on a one-use permit: a one-time allow given to the agent's own ask for
+  that path and access in this turn, or one ORCA asks for on the agent's behalf. A permit is
+  spent by the first call that uses it and dies with the turn, and a call outside a live turn
+  is refused. Each decision is recorded like an ask's, prefixed `fs:`. This is the
+  client-owned ACP file path only: an agent's native tools and its own MCP connections do not
+  pass through it, and keeping an agent on this path is an operating-system boundary's job.
 - **A wildcard `allow` in this file is ignored**, with a warning. Everything ORCA writes here
   is derived and scoped, and the Config surface narrows a kind by a path, a prefix, the
   workspace or a title; an `allow` naming no kind, or a kind and nothing that narrows it
