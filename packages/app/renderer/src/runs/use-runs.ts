@@ -26,6 +26,10 @@
  * **A link can name a run no page holds yet.** `include` resolves it with one `runs.get` and
  * pins it in the list whatever the filter says, so `orca://run/<id>` opens last month's run
  * as surely as this morning's.
+ *
+ * **Dry runs are not work (#183).** `runs.list` leaves them out, and a dry run a notification
+ * names is resolved once, found to be dry, and left out too - unless a link pinned it, which
+ * is how the editor's "Open in Runs" shows one.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { compareRunsListOrder } from "@orca/protocol";
@@ -162,6 +166,8 @@ export function useRuns(status: StatusFilter, query: RunsQuery = {}, paging: Run
     const resolved = new Map<string, RunSummaryView>();
     const cursors = new Map<string, number>();
     const fetching = new Set<string>();
+    /* Dry runs a notification named: read once, kept out of the list, never read again. */
+    const dry = new Set<string>();
     setState({ phase: "loading" });
     // A new read generation (retry, reconnect, filter) asks again about every pinned run.
     setUnresolved(NOTHING);
@@ -211,7 +217,7 @@ export function useRuns(status: StatusFilter, query: RunsQuery = {}, paging: Run
       });
     };
     const resolve = (runId: string) => {
-      if (fetching.has(runId) || resolved.has(runId)) return;
+      if (fetching.has(runId) || resolved.has(runId) || (dry.has(runId) && !pinned.has(runId))) return;
       fetching.add(runId);
       void window.orca.runs.get({ runId }).then((result) => {
         fetching.delete(runId);
@@ -229,6 +235,10 @@ export function useRuns(status: StatusFilter, query: RunsQuery = {}, paging: Run
           next.delete(runId);
           return next;
         });
+        if (result.result.run.dryRun && !pinned.has(runId)) {
+          dry.add(runId);
+          return;
+        }
         resolved.set(runId, result.result.run);
         cursors.set(runId, result.result.lastSeq);
         publish();

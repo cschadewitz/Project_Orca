@@ -1,8 +1,8 @@
 # Workflow editing
 
 The viewer shipped first (#177). The editor now ships over it: workflow drafts in the daemon
-(#180), the visual editor (#181) and its validation panel (#182). Dry run (#183) is still
-ahead. This file is the editor's spec and its as-built record.
+(#180), the visual editor (#181), its validation panel (#182) and dry run (#183). This file
+is the editor's spec and its as-built record.
 
 ## The model: semantic edits, drag and drop, layout as metadata
 
@@ -131,9 +131,24 @@ draft that validates clean is one activation will accept. Three severities:
 
 **Not built yet:** the rules the runtime validator does not have. These are a `loop` with no
 exit, retries above the host's concurrency, a `set` that shadows an earlier one, and a cycle
-outside a `loop`, which `ai-sdlc`'s own back edges would currently trip. **Dry run** (#183)
-is also still ahead. It will execute the draft against a real request with every agent turn
-stubbed and gates auto-answered, and produce a run tree marked `dry run`.
+outside a `loop`, which `ai-sdlc`'s own back edges would currently trip.
+
+**Dry run** (#183, as built). The draft bar's **Dry run** opens a panel under the canvas, beside
+the validation panel, so the graph stays in view. It lists each gate, and each decision a
+person, an agent or the plan makes, with a choice of its default or one of its options; a
+decision an expression or an artifact makes is evaluated as it would be live and takes no
+choice. **Run a dry run** simulates exactly the revision on screen (`workflowDrafts.dryRun`):
+no agent, person, workspace or secret takes part and nothing is written. The result shows
+its status as `failed · dry` (every status chip of a dry run reads `… · dry`), the choices
+made and by whom, the options and edges never taken, the nodes never reached, what was
+assumed and what failed, then the daemon's limits sentence, whole. While the result is for
+the revision on screen, the root graph's unreached nodes and untaken edges are drawn untaken
+on the canvas, as the viewer draws a run's overlay. After an edit it stays readable, says
+the draft has changed since, and stops drawing. **Open in Runs** opens the dry run there: its
+header names the draft revision in place of a version (`dry run · ai-sdlc draft revision 4`),
+with no link to the published workflow, whose graph it never ran. Dry runs are never listed
+as work: `runs.list` leaves them out, and Runs and Attention keep out one a notification
+names; a link is the way to one.
 
 ## Runs in flight
 

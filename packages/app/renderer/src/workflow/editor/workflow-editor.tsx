@@ -2,10 +2,11 @@
  * The visual workflow editor (#181, #182) over a workflow draft (#180).
  *
  * ```
- * ┌ draft bar: draft of ai-sdlc v3 · 4 changes   Undo Redo Tidy  Review and publish  Discard  Close ┐
+ * ┌ draft bar: draft of ai-sdlc v3 · 4 changes   Undo Redo Tidy  Dry run  Review and publish  Discard  Close ┐
  * ├ palette ─┬─────────────── canvas ───────────────┬─ inspector ─┤
  * │ outline  │                                       │             │
  * │          ├──────────── validation ──────────────┤             │
+ * │          ├──────── dry run (when open) ──────────┤             │
  * └──────────┴───────────────────────────────────────┴─────────────┘
  * ```
  *
@@ -19,6 +20,8 @@ import type {
   DraftGraphPath,
   DraftIssue,
   DraftOperation,
+  DryRunFixtures,
+  WorkflowDraftDryRunResult,
   WorkflowDraftReview,
   WorkflowDraftView,
 } from "@orca/protocol";
@@ -31,6 +34,7 @@ import { changeCount, editorGraph, freshId, issuesAt, nestedSteps, newNode, type
 import { EditorCanvas, type CanvasHandle, type EditorSelection } from "./editor-canvas.js";
 import { EditorInspector, type InspectorHandle } from "./editor-inspector.js";
 import { EditorSidebar, ValidationPanel, type PaletteHandle } from "./editor-panels.js";
+import { DryRunPanel, traceOf } from "./dry-run-panel.js";
 import { useWorkflowDraft } from "./use-workflow-draft.js";
 import "./editor.css";
 
@@ -40,9 +44,11 @@ export interface WorkflowEditorProps {
   onClose: () => void;
   /** A publish landed: the viewer re-reads the workflow at its new version. */
   onPublished: (version: string) => void;
+  /** Open an `orca://` URL: a dry run in the Runs surface (#183). */
+  onOpen?: ((url: string) => void) | undefined;
 }
 
-export function WorkflowEditor({ workflowId, onClose, onPublished }: WorkflowEditorProps): JSX.Element {
+export function WorkflowEditor({ workflowId, onClose, onPublished, onOpen }: WorkflowEditorProps): JSX.Element {
   const controller = useWorkflowDraft(workflowId);
   const { state } = controller;
   if (state.phase === "loading") return <StateView kind="loading" title="Opening the draft" />;
@@ -64,7 +70,9 @@ export function WorkflowEditor({ workflowId, onClose, onPublished }: WorkflowEdi
         action={{ label: "Back to the viewer", onClick: onClose }}
       />
     );
-  return <Editor draft={state.draft} controller={controller} onClose={onClose} onPublished={onPublished} />;
+  return (
+    <Editor draft={state.draft} controller={controller} onClose={onClose} onPublished={onPublished} onOpen={onOpen} />
+  );
 }
 
 function Editor({
@@ -72,11 +80,13 @@ function Editor({
   controller,
   onClose,
   onPublished,
+  onOpen,
 }: {
   draft: WorkflowDraftView;
   controller: ReturnType<typeof useWorkflowDraft>;
   onClose: () => void;
   onPublished: (version: string) => void;
+  onOpen?: ((url: string) => void) | undefined;
 }): JSX.Element {
   const writable = useWritability();
   const announce = useAnnounce();
@@ -123,6 +133,10 @@ function Editor({
       ? heldReview.value
       : undefined;
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  /* The dry run panel (#183), and the last result it showed: kept when the draft moves on,
+     marked stale, and no longer drawn on the canvas. */
+  const [dryOpen, setDryOpen] = useState(false);
+  const [dryResult, setDryResult] = useState<WorkflowDraftDryRunResult | undefined>(undefined);
   const workflows = useWorkflowIds();
   const inspector = useRef<InspectorHandle>(null);
   const palette = useRef<PaletteHandle>(null);
@@ -325,6 +339,20 @@ function Editor({
     onPublished(result.version);
   };
 
+  const dryRun = async (fixtures: DryRunFixtures) => {
+    if (readOnly) return;
+    const result = await controller.dryRun(fixtures);
+    if (!result) return;
+    setDryResult(result);
+    announce(
+      `Dry run ${result.report.outcome === "failure" ? "ended in failure" : result.report.outcome === "success" ? "ended in success" : "stopped"}.`,
+    );
+  };
+  const trace =
+    dryOpen && dryResult && path.length === 0 && dryResult.run.dryRun?.draftRevision === draft.revision
+      ? traceOf(dryResult.report)
+      : undefined;
+
   const discard = async () => {
     if (!confirmDiscard) {
       setConfirmDiscard(true);
@@ -401,6 +429,9 @@ function Editor({
             </Button>
             <Button size="sm" tone="ghost" onClick={() => void apply([{ op: "tidy" }])}>
               Tidy layout
+            </Button>
+            <Button size="sm" tone="ghost" aria-pressed={dryOpen} onClick={() => setDryOpen((open) => !open)}>
+              Dry run
             </Button>
             <Button
               size="sm"
@@ -506,8 +537,21 @@ function Editor({
               onReorder={reorder}
               onUndo={() => void undo()}
               onRedo={() => void redo()}
+              {...(trace ? { trace } : {})}
             />
             <ValidationPanel issues={draft.issues} path={path} onGo={goTo} />
+            {dryOpen && !readOnly && (
+              <DryRunPanel
+                graph={editorGraph(draft.document, draft.base.document, []) ?? graph}
+                revision={draft.revision}
+                busy={controller.busy}
+                errors={errors}
+                result={dryResult}
+                onRun={(fixtures) => void dryRun(fixtures)}
+                onClose={() => setDryOpen(false)}
+                onOpen={onOpen}
+              />
+            )}
           </div>
           <PaneSplitter boundary="panel" label="Resize the inspector" />
           <EditorInspector

@@ -19,7 +19,7 @@ access invite developer insight; they do not require code changes or host access
 | [Planning](PLANNING.md) | understand cross-request dependencies, risk/decision matrices, scheduling and the five Plan modes |
 | [Workflow authoring](WORKFLOWS.md) / [typed inputs](workflow-inputs.md) | define nodes, completion, templates and validated launch inputs |
 | [Extensibility](EXTENSIBILITY.md) / [builtin validation](builtin-node-validation.md) | implement plugin seams and understand bootstrap/restoration constraints |
-| [Design](design/README.md) / [binding UI rules](design/RULES.md) / [workflow editor](design/70-workflow-editing.md) | inspect the design system and implemented editor; #180–#182 remain open acceptance owners and dry run remains future work |
+| [Design](design/README.md) / [binding UI rules](design/RULES.md) / [workflow editor](design/70-workflow-editing.md) | inspect the design system and implemented editor; #180–#183 remain open acceptance owners |
 | [ADRs](adr/) | read settled architectural decisions with their historical context |
 
 ## Runtime, clients and safe operation

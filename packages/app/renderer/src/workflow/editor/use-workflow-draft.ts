@@ -7,7 +7,8 @@
  * a few hundred milliseconds of each other; each names the revision the previous one
  * produced, so they are queued here rather than racing to the daemon and refusing each other.
  * Every result replaces the draft wholesale - the daemon's view is the truth, including its
- * validation.
+ * validation. A dry run (#183) is queued the same way, so it simulates exactly the revision
+ * the edits before it produced.
  *
  * **A refusal keeps the draft.** `CONFIG_STALE` means another window moved the draft on: the
  * editor re-reads it and says so, rather than re-sending an edit made against bytes it no
@@ -16,7 +17,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DraftOperation,
+  DryRunFixtures,
   ProtocolError,
+  WorkflowDraftDryRunResult,
   WorkflowDraftGetResult,
   WorkflowDraftPublishResult,
   WorkflowDraftReview,
@@ -43,6 +46,11 @@ export interface WorkflowDraftController {
   review(): Promise<WorkflowDraftReview | undefined>;
   publish(reviewToken: string): Promise<WorkflowDraftPublishResult | undefined>;
   discard(): Promise<boolean>;
+  /**
+   * Simulate the draft at the revision the editor holds (#183), with these fixtures. Answers
+   * once the simulation has stopped; a refusal is said in the bar like any other.
+   */
+  dryRun(fixtures: DryRunFixtures): Promise<WorkflowDraftDryRunResult | undefined>;
   reload(): Promise<void>;
   clearMessage(): void;
 }
@@ -208,6 +216,24 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
     [enqueue, workflowId, refused],
   );
 
+  const dryRun = useCallback(
+    (fixtures: DryRunFixtures) =>
+      enqueue(async (draft) => {
+        const result = await window.orca.workflowDrafts!.call("workflowDrafts.dryRun", {
+          workflowId,
+          expectedRevision: draft.revision,
+          fixtures,
+        });
+        if (result.ok) {
+          setMessage(undefined);
+          return result.result;
+        }
+        await refused(result.error);
+        return undefined;
+      }),
+    [enqueue, workflowId, refused],
+  );
+
   return {
     state,
     busy,
@@ -219,6 +245,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
     review,
     publish,
     discard,
+    dryRun,
     reload,
     clearMessage: () => {
       setMessage(undefined);
