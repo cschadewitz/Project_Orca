@@ -5,7 +5,9 @@
  *
  * - `anthropic`: the Messages API with structured output (`output_config.format`), default model Claude Haiku 5.5;
  * - `openai-compatible`: the chat-completions shape with a strict JSON-schema `response_format`, for OpenAI and the
- *   many hosts that accept that shape. It has no default model: the owner names one.
+ *   many hosts that accept that shape. It has no default model: the owner names one. The output cap goes in
+ *   `max_completion_tokens` (current OpenAI, required by its reasoning models, which reject `max_tokens`) unless the
+ *   owner sets `tokenParam: max_tokens` for a host that only accepts the older field.
  *
  * Each adapter is a `PlainRuleTransport` over an owner-injected `post(body, signal)`, which is where the reviewed
  * HTTPS sender (https-sender.ts) and the BYOK connection go once wiring is reviewed. This module sends nothing by
@@ -49,12 +51,22 @@ export type PlainRuleProviderConfig =
       readonly model: string;
       /** Default 1024. */
       readonly maxTokens?: number;
+      /**
+       * Which field carries the cap. Default `max_completion_tokens` (OpenAI's current field; its reasoning models
+       * reject `max_tokens`). Set `max_tokens` only for a host that does not accept the newer field.
+       */
+      readonly tokenParam?: "max_completion_tokens" | "max_tokens";
     };
 
 /** A validated configuration, with every default filled in. */
 export type ResolvedPlainRuleProvider =
   | { readonly kind: "anthropic"; readonly model: string; readonly maxTokens: number; readonly effort: string }
-  | { readonly kind: "openai-compatible"; readonly model: string; readonly maxTokens: number };
+  | {
+      readonly kind: "openai-compatible";
+      readonly model: string;
+      readonly maxTokens: number;
+      readonly tokenParam: "max_completion_tokens" | "max_tokens";
+    };
 
 export type PlainRuleProviderFailure =
   | "provider-http-body"
@@ -92,9 +104,11 @@ export function resolvePlainRuleProvider(config: unknown): ResolvedPlainRuleProv
     return Object.freeze({ kind: "anthropic", model, maxTokens: maxTokens as number, effort });
   }
   if (c.kind === "openai-compatible") {
-    if (!Object.keys(c).every((k) => ["kind", "model", "maxTokens"].includes(k))) return null;
+    if (!Object.keys(c).every((k) => ["kind", "model", "maxTokens", "tokenParam"].includes(k))) return null;
     if (typeof c.model !== "string" || !MODEL.test(c.model)) return null;
-    return Object.freeze({ kind: "openai-compatible", model: c.model, maxTokens: maxTokens as number });
+    const tokenParam = c.tokenParam === undefined ? "max_completion_tokens" : c.tokenParam;
+    if (tokenParam !== "max_completion_tokens" && tokenParam !== "max_tokens") return null;
+    return Object.freeze({ kind: "openai-compatible", model: c.model, maxTokens: maxTokens as number, tokenParam });
   }
   return null;
 }
@@ -172,17 +186,19 @@ function compact(text: string): string {
 }
 
 /**
- * The model's answer as compact JSON, or a fixed failure. It must parse, and serializing the parsed value must give
- * back the same compact text: duplicate keys, alternate escapes and non-JSON tails are refused, not normalized.
+ * The model's answer as compact JSON, or a fixed failure. The original text must parse as it is (so dropping
+ * whitespace can never repair malformed JSON), and serializing the parsed value must give back the same text once
+ * whitespace outside strings is dropped: duplicate keys, alternate escapes and non-JSON tails are refused, not
+ * normalized.
  */
-function verdictText(answer: string): string {
-  const compacted = compact(answer);
+export function plainRuleVerdictText(answer: string): string {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(compacted);
+    parsed = JSON.parse(answer);
   } catch {
     throw new PlainRuleProviderFailed("provider-not-json");
   }
+  const compacted = compact(answer);
   if (JSON.stringify(parsed) !== compacted) throw new PlainRuleProviderFailed("provider-not-canonical");
   return compacted;
 }
@@ -221,13 +237,13 @@ function anthropicAnswer(raw: string): string {
   const blocks = (body.content as unknown[]).filter((b) => !(record(b) && b.type === "thinking"));
   if (blocks.length !== 1 || !record(blocks[0]) || blocks[0].type !== "text" || typeof blocks[0].text !== "string")
     throw new PlainRuleProviderFailed("provider-shape");
-  return verdictText(blocks[0].text);
+  return plainRuleVerdictText(blocks[0].text);
 }
 
 function openAiBody(p: Extract<ResolvedPlainRuleProvider, { kind: "openai-compatible" }>, frame: string): string {
   return JSON.stringify({
     model: p.model,
-    max_tokens: p.maxTokens,
+    [p.tokenParam]: p.maxTokens,
     n: 1,
     messages: [
       { role: "system", content: PLAIN_RULE_SYSTEM_PROMPT },
@@ -252,7 +268,7 @@ function openAiAnswer(raw: string): string {
   if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0)
     throw new PlainRuleProviderFailed("provider-shape");
   if (typeof message.content !== "string") throw new PlainRuleProviderFailed("provider-shape");
-  return verdictText(message.content);
+  return plainRuleVerdictText(message.content);
 }
 
 /** The version a decision records: changes with the provider, model, limits, prompt, schema and API version. */

@@ -19,7 +19,9 @@ import {
   DEFAULT_ANTHROPIC_PLAIN_RULE_MODEL,
   PLAIN_RULE_OUTPUT_SCHEMA,
   PLAIN_RULE_SYSTEM_PROMPT,
+  PlainRuleProviderFailed,
   plainRuleProviderSenderOptions,
+  plainRuleVerdictText,
   plainRuleProviderVersion,
   resolvePlainRuleProvider,
 } from "../src/review-judge/plain-rule-providers.js";
@@ -162,7 +164,7 @@ describe("#701 plain-rule provider: OpenAI-compatible", () => {
     expect(await judge(input, signal())).toMatchObject({ outcome: "allow", ruleId: "pr_docs" });
     expect(bodies[0]).toMatchObject({
       model: "gpt-small",
-      max_tokens: 512,
+      max_completion_tokens: 512,
       n: 1,
       messages: [{ role: "system", content: PLAIN_RULE_SYSTEM_PROMPT }, { role: "user" }],
       response_format: {
@@ -200,6 +202,83 @@ describe("#701 plain-rule provider: OpenAI-compatible", () => {
   });
 });
 
+describe("#701 plain-rule provider: wire shapes", () => {
+  const frameOf = (body: Record<string, unknown>) =>
+    JSON.parse((body.messages as { content: string }[]).at(-1)!.content) as Frame;
+
+  it("sends the exact Anthropic Messages body", async () => {
+    const { judge, bodies } = judgeWith({ kind: "anthropic", maxTokens: 256, effort: "medium" }, (_b, f) =>
+      anthropicReply(answerFor(f, ["covered"])),
+    );
+    await judge(input, signal());
+    const body = bodies[0]!;
+    expect(body).toEqual({
+      model: "claude-haiku-5-5",
+      max_tokens: 256,
+      system: PLAIN_RULE_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: JSON.stringify(frameOf(body)) }],
+      output_config: { effort: "medium", format: { type: "json_schema", schema: PLAIN_RULE_OUTPUT_SCHEMA } },
+    });
+  });
+
+  it.each([
+    [{}, "max_completion_tokens"],
+    [{ tokenParam: "max_completion_tokens" }, "max_completion_tokens"],
+    [{ tokenParam: "max_tokens" }, "max_tokens"],
+  ])("sends the exact chat-completions body with %j", async (extra, field) => {
+    const { judge, bodies } = judgeWith(
+      { kind: "openai-compatible", model: "gpt-small", maxTokens: 300, ...extra },
+      (_b, f) => openAiReply(answerFor(f, ["covered"])),
+    );
+    await judge(input, signal());
+    const body = bodies[0]!;
+    expect(body).toEqual({
+      model: "gpt-small",
+      [field]: 300,
+      n: 1,
+      messages: [
+        { role: "system", content: PLAIN_RULE_SYSTEM_PROMPT },
+        { role: "user", content: JSON.stringify(frameOf(body)) },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "orca_plain_rule_verdict", strict: true, schema: PLAIN_RULE_OUTPUT_SCHEMA },
+      },
+    });
+    expect(Object.keys(body)).not.toContain(field === "max_tokens" ? "max_completion_tokens" : "max_tokens");
+  });
+});
+
+describe("#701 plain-rule provider: the answer must already be valid JSON", () => {
+  it.each([
+    ["a literal split by whitespace", '{"a":tr ue}'],
+    ["a number split by whitespace", '{"a":1 0}'],
+    ["a literal split by a newline", '{"a":nu\nll}'],
+    ["a trailing comma", '{"a":1,}'],
+    ["two values", '{"a":1} {"b":2}'],
+  ])("refuses %s rather than repairing it", (_name, text) => {
+    expect(() => plainRuleVerdictText(text)).toThrow(PlainRuleProviderFailed);
+    try {
+      plainRuleVerdictText(text);
+    } catch (error) {
+      expect((error as PlainRuleProviderFailed).code).toBe("provider-not-json");
+    }
+  });
+
+  it("refuses valid JSON that is not canonical, and keeps strings byte for byte", () => {
+    expect(() => plainRuleVerdictText('{"a":1,"a":2}')).toThrow(PlainRuleProviderFailed);
+    expect(() => plainRuleVerdictText('{"a":"\\u0041"}')).toThrow(PlainRuleProviderFailed);
+    expect(plainRuleVerdictText('{ "a" : "x  y" ,\n "b": [1, 2] }')).toBe('{"a":"x  y","b":[1,2]}');
+  });
+
+  it("refuses a malformed answer end to end", async () => {
+    const { judge } = judgeWith({ kind: "anthropic" }, (_b, f) =>
+      anthropicReply(answerFor(f, ["covered"]).replace('"verdicts":[', '"verdicts" [')),
+    );
+    expect(await judge(input, signal())).toMatchObject({ outcome: "no-match" });
+  });
+});
+
 describe("#701 plain-rule provider: configuration", () => {
   it.each([
     ["no config", undefined],
@@ -211,6 +290,8 @@ describe("#701 plain-rule provider: configuration", () => {
     ["too many tokens", { kind: "anthropic", maxTokens: 100_000 }],
     ["an unknown effort", { kind: "anthropic", effort: "max" }],
     ["effort on OpenAI-compatible", { kind: "openai-compatible", model: "m", effort: "low" }],
+    ["an unknown token field", { kind: "openai-compatible", model: "m", tokenParam: "max_output_tokens" }],
+    ["a token field on Anthropic", { kind: "anthropic", tokenParam: "max_tokens" }],
   ])("refuses %s", (_name, config) => {
     expect(resolvePlainRuleProvider(config)).toBeNull();
     expect(createPlainRuleProviderTransport({ config, post: async () => "" }).status).toBe("invalid");
@@ -226,9 +307,10 @@ describe("#701 plain-rule provider: configuration", () => {
         resolvePlainRuleProvider({ kind: "anthropic", maxTokens: 2048 })!,
         resolvePlainRuleProvider({ kind: "anthropic", effort: "medium" })!,
         resolvePlainRuleProvider({ kind: "openai-compatible", model: "claude-haiku-5-5" })!,
+        resolvePlainRuleProvider({ kind: "openai-compatible", model: "claude-haiku-5-5", tokenParam: "max_tokens" })!,
       ].map(plainRuleProviderVersion),
     );
-    expect(versions.size).toBe(5);
+    expect(versions.size).toBe(6);
   });
 
   it("names how each provider's key and headers are sent", () => {
