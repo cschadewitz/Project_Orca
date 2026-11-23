@@ -401,23 +401,33 @@ function entryProblems(entries: readonly { path: string; kind: "directory" | "fi
 
 /** Hooks, plugins and Cline-configured MCP servers present for this launch. */
 export function clineFileProblems(configDir: string, cwd: string, home: string): string[] {
+  // What ORCA inspects must be exactly what Cline receives: its config directory, and the home
+  // and directory it discovers hooks, plugins and the workspace from. A path with a link on it,
+  // or written any other way than its real path, is refused before anything is inspected.
+  const named: [string, string, string][] = [
+    ["--config", configDir, "give --config"],
+    ["HOME", home, "set HOME to"],
+    ["the session directory", cwd, "start the session in"],
+  ];
+  const noncanonical = named.flatMap(([what, path, fix]) => {
+    const real = canonical(path);
+    return real === path
+      ? []
+      : [`files: ${what} ${path} is not a real path (it is ${real}); ${fix} its real path, with no link on it`];
+  });
+  if (noncanonical.length) return noncanonical;
   const paths = clineLoadPaths(configDir, cwd, home);
   const problems: string[] = [];
-  const dir = canonical(configDir);
   const shared = canonical(join(home, ".cline"));
-  if (within(dir, shared) || within(shared, dir))
+  if (within(configDir, shared) || within(shared, configDir))
     problems.push(
       `files: ${configDir} is Cline's own default directory (${join(home, ".cline")}), shared with Cline run outside ORCA; give ORCA's Cline a directory of its own`,
     );
   // The workspace is Cline's: from the session directory up to the repository root that holds it.
-  const workspaceRoot = workspaceChain(canonical(cwd)).at(-1)!;
-  if (within(dir, workspaceRoot))
+  const workspaceRoot = workspaceChain(cwd).at(-1)!;
+  if (within(configDir, workspaceRoot))
     problems.push(
       `files: ${configDir} is inside the workspace (${workspaceRoot}); keep Cline's config directory outside it`,
-    );
-  if (dir !== resolvePath(configDir))
-    problems.push(
-      `files: ${configDir} has a link on its path (it is really ${dir}); give --config its real path, with no link on it`,
     );
   problems.push(...clineConfigDirProblems(configDir));
   for (const hooks of paths.hookDirs) {

@@ -8,7 +8,7 @@
  */
 import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as acp from "@agentclientprotocol/sdk";
 import { AgentSpecSchema, type AgentSpec } from "@orca/core";
@@ -290,22 +290,28 @@ describe("Cline's config directory, deny by default", () => {
     expect(clineFileProblems(configDir, workspace, home)).toEqual([]);
   });
 
-  it("compares real paths, so a link does not hide Cline's default directory or the workspace", async () => {
+  it("inspects exactly the paths Cline receives: a link or another spelling is refused before inspection", async () => {
     const shared = join(home, ".cline");
     await mkdir(join(shared, "data"), { recursive: true });
     const link = join(root, "looks-separate");
     await symlink(shared, link);
-    expect(clineFileProblems(link, workspace, home)[0]).toContain("is Cline's own default directory");
-    const plain = join(root, "plain-link");
-    await symlink(configDir, plain);
-    expect(clineFileProblems(plain, workspace, home)).toEqual([
-      `files: ${plain} has a link on its path (it is really ${configDir}); give --config its real path, with no link on it`,
-      `files: ${plain} is a link; Cline's config must hold its own directories, not links`,
+    expect(clineFileProblems(link, workspace, home)).toEqual([
+      `files: --config ${link} is not a real path (it is ${shared}); give --config its real path, with no link on it`,
     ]);
-    const intoWork = join(root, "also-separate");
-    await mkdir(join(workspace, "cfg", "data"), { recursive: true });
-    await symlink(join(workspace, "cfg"), intoWork);
-    expect(clineFileProblems(intoWork, workspace, home)[0]).toContain("is inside the workspace");
+    const dotted = `${configDir}/../${basename(configDir)}`;
+    expect(clineFileProblems(dotted, workspace, home)[0]).toContain(`--config ${dotted} is not a real path`);
+    expect(clineFileProblems(`${configDir}/`, workspace, home)[0]).toContain("is not a real path");
+    const homeLink = join(root, "home-link");
+    await symlink(home, homeLink);
+    expect(clineFileProblems(configDir, workspace, homeLink)).toEqual([
+      `files: HOME ${homeLink} is not a real path (it is ${home}); set HOME to its real path, with no link on it`,
+    ]);
+    const workLink = join(root, "work-link");
+    await symlink(workspace, workLink);
+    expect(clineFileProblems(configDir, workLink, home)[0]).toContain(
+      `the session directory ${workLink} is not a real path`,
+    );
+    expect(clineFileProblems(configDir, workspace, home)).toEqual([]);
   });
 
   // Root reads through any mode, so this needs an ordinary user.
