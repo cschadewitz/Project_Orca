@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { AuthorityCapabilityScopeSchema } from "./capabilities.js";
 import { EnvSchema } from "./secrets.js";
+import { AgentDiagnosticsSchema } from "./tool-telemetry.js";
 import { neutralPart, parseCommand, parseCommandPattern, quoteWord } from "./command-words.js";
 
 // Scoped capabilities (#335) belong with the agent model they select for.
@@ -303,6 +304,47 @@ export type PermissionPolicy = {
    * commands are treated as restricted even though no command rule is visible.
    */
   commandsRestricted?: boolean | undefined;
+  /**
+   * Where each rule came from, parallel to `rules` (#702): what an `agent.permission` event
+   * records as the rule that decided. Absent, or of another length, means unknown, and a
+   * decision is then recorded without its rule's origin rather than with a wrong one.
+   */
+  origins?: PermissionRuleOrigin[] | undefined;
+};
+
+/**
+ * One evaluated rule's provenance (#702). `index` is the rule's position in its own layer as
+ * written: the config's `permissions.rules`, the sidecar's list for this agent (counting rules
+ * that were skipped as expired or wildcard, so it names the entry a person sees in the file),
+ * or `DEFAULT_PERMISSION_POLICY.rules`. `revision` is the sha256 of the sidecar bytes the rule
+ * was read from; it is kept in memory for owner-private audit and is never written to an
+ * ordinary `agent.permission` event (#702 review). `capped` is set when the rule's `allow` became `ask` because a sidecar ahead
+ * of it could not be read.
+ */
+export type PermissionRuleOrigin = {
+  layer: "config" | "sidecar" | "default";
+  index: number;
+  /** Which sidecar, by its position in the files the policy was loaded from. */
+  file?: number | undefined;
+  revision?: string | undefined;
+  capped?: boolean | undefined;
+};
+
+/**
+ * Why a call was decided the way it was (#702), as `explainPermission` reports it:
+ * - `protected`: it touches one of ORCA's own files, denied ahead of every rule;
+ * - `rule`: the rule at `ruleIndex` in the evaluated policy decided it;
+ * - `default`: no rule matched and the policy's fallthrough decided it;
+ * - `command-restricted`: commands are restricted by their words and nothing denied it, so
+ *   it is asked whatever an allow would have said.
+ */
+export type PermissionBasis = "protected" | "rule" | "default" | "command-restricted";
+
+export type PermissionExplanation = {
+  decision: PermissionDecision;
+  basis: PermissionBasis;
+  ruleIndex?: number | undefined;
+  origin?: PermissionRuleOrigin | undefined;
 };
 
 /* -------------------------------------------------------------------------- *
@@ -903,6 +945,11 @@ export const AgentSpecSchema = z
      * provider or account that limits concurrent use. Absent means unlimited, the default.
      */
     maxSessions: z.number().int().positive().optional(),
+    /**
+     * Diagnostics ORCA keeps about this agent's work (#1000). Absent, or every option `off`,
+     * keeps nothing beyond the run log. See `AgentDiagnosticsSchema`.
+     */
+    diagnostics: AgentDiagnosticsSchema.optional(),
   })
   .superRefine((agent, ctx) => {
     if (agent.type === "acp") {
@@ -936,6 +983,12 @@ export const AgentSpecSchema = z
         code: "custom",
         path: [agent.mcpServers.length > 0 ? "mcpServers" : "capabilities"],
         message: "an orca-daemon agent runs the remote daemon's own agents; give capabilities to those",
+      });
+    if (agent.diagnostics?.toolCalls === "keep")
+      ctx.addIssue({
+        code: "custom",
+        path: ["diagnostics", "toolCalls"],
+        message: "an orca-daemon agent runs the remote daemon's own agents; keep their tool calls on the remote daemon",
       });
   });
 export type AgentSpec = z.infer<typeof AgentSpecSchema>;

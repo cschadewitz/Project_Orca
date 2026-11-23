@@ -28,7 +28,7 @@ jobs:
     name: warm the machine base image cache
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,4 +39,7 @@ jobs:
           path: ${{ runner.temp }}/orca-machine-base.tar
           key: orca-machine-base-${{ runner.os }}-${{ hashFiles('packages/testing/machine/base.Dockerfile') }}
       - name: Load or build the machine base image
+        env:
+          # Nothing waits on this job, so a slow archive gets a long attempt rather than a restart.
+          ORCA_BASE_BUILD_TIMEOUT: "600"
         run: packages/testing/machine/build-base.sh "$RUNNER_TEMP/orca-machine-base.tar"

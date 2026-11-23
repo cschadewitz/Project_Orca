@@ -9,6 +9,7 @@
  * - artifact bytes (content-addressed blobs; SQLite holds only their index);
  * - private execution records and pinned workflow versions, which are encrypted per record
  *   (`protected-file.ts`) and keep that protection unchanged;
+ * - tool-call telemetry (#1000), diagnostic records kept apart from the metadata;
  * - claims and leases, whose ownership callbacks write to other stores while the fence is held:
  *   an asynchronous callback cannot run inside a synchronous SQLite transaction without holding
  *   the database's write lock across it.
@@ -34,6 +35,7 @@ import { FileExecutionStore } from "../execution-store.js";
 import { FileLeaseStore } from "../lease-store.js";
 import { ProtectedEventStore } from "../protected-event-store.js";
 import { SQLITE_STORE_CAPABILITIES } from "../store-contracts.js";
+import { fileToolTelemetryStore, withToolTelemetry } from "../tool-telemetry-store.js";
 import { FileWorkflowVersionStore } from "../workflow-store.js";
 import { SqliteArtifactStore } from "./artifacts.js";
 import { checkBoundSqliteMetadata, SqliteDatabase, type SqliteOptions } from "./database.js";
@@ -95,6 +97,7 @@ export function sqliteStores(dir: string, options: SqliteStoresOptions = {}): St
     leases: new FileLeaseStore(dir, clock),
     plan: { plans, dependencies, risks, decisions, journal: new SqlitePlanJournal(database, clock) },
     workflows,
+    ...withToolTelemetry(fileToolTelemetryStore(dir)),
     capabilities: SQLITE_STORE_CAPABILITIES,
     unitOfWork: sqliteUnitOfWork(database, {
       requests: c(requests),
