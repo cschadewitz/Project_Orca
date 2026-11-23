@@ -110,6 +110,10 @@ each location:
   of every rule), plus no real ancestor that is a no-access path by identity, and no case-folded
   match against one. Protection over-matches on purpose; containment under-matches on purpose.
 
+Only "no such file" counts as absence. A permission, I/O or identity failure anywhere the check
+needs evidence (the workspace, a target, any of its ancestors, an existing no-access path) refuses
+the call as `unverifiable`; the check never claims a verification it could not complete.
+
 The verified locations are the real, workspace-relative paths, and those are what the judge sees.
 
 **Decision-time limit.** The check runs when the slot decides. A file or link swapped after the

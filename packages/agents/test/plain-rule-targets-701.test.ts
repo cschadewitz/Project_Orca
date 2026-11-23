@@ -177,7 +177,7 @@ describe("#701 plain-rule target check", () => {
     for (const file of ["/case/ws/src/a.ts", "/case/ws/secrets/key.pem", "/case/out/x"]) add(file, false);
     const find = (path: string) => {
       const hit = files.get(path.replace(/\/+$/, "").toLowerCase() || "/");
-      if (!hit) throw new Error("ENOENT");
+      if (!hit) throw Object.assign(new Error("no such file"), { code: "ENOENT" });
       return hit;
     };
     return {
@@ -242,5 +242,54 @@ describe("#701 plain-rule target check", () => {
     // A guard that does not exist still over-matches by case-folded text.
     expect(at("src/a.ts", ["/CASE/WS/SRC"])).toMatchObject({ reason: "protected" });
     expect(at("src/a.ts", ["/case/ws/secrets"])).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
+  });
+
+  onPosix("refuses as unverifiable when identity evidence cannot be established; only absence is absence", () => {
+    const base = caseInsensitiveIo((path) => path);
+    const failing = (code: string, when: (op: "realpath" | "stat", path: string) => boolean): PlainRuleTargetIo => ({
+      realpath: (path) => {
+        if (when("realpath", path)) throw Object.assign(new Error(code), { code });
+        return base.realpath(path);
+      },
+      stat: (path) => {
+        if (when("stat", path)) throw Object.assign(new Error(code), { code });
+        return base.stat(path);
+      },
+    });
+    const at = (io: PlainRuleTargetIo, noAccess: string[] = ["/case/ws/secrets"]) =>
+      verifyPlainRuleTargets({
+        kind: "read",
+        locations: ["src/a.ts"],
+        workspaceCwd: "/case/ws",
+        protectedPaths: { readOnly: [], noAccess },
+        io,
+      });
+    expect(at(base)).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
+    // A guard the file system will not answer for: permission, I/O.
+    expect(at(failing("EACCES", (_, p) => p === "/case/ws/secrets"))).toMatchObject({ reason: "unverifiable" });
+    expect(at(failing("EIO", (op, p) => op === "realpath" && p === "/case/ws/secrets"))).toMatchObject({
+      reason: "unverifiable",
+    });
+    // A guard that confirmably does not exist is fine, and still guards by text.
+    expect(at(base, ["/case/ws/gone"])).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
+    expect(at(base, ["/case/ws/src/a.ts/x"])).toEqual({ targetsVerified: true, locations: ["src/a.ts"] });
+    // An ancestor, the target, or the workspace whose identity cannot be read.
+    expect(at(failing("EACCES", (op, p) => op === "stat" && p === "/case/ws/src"))).toMatchObject({
+      reason: "unverifiable",
+    });
+    expect(at(failing("EACCES", (op, p) => op === "stat" && p === "/case"))).toMatchObject({
+      reason: "unverifiable",
+    });
+    expect(at(failing("EPERM", (op, p) => op === "realpath" && p.endsWith("a.ts")))).toMatchObject({
+      reason: "unverifiable",
+    });
+    expect(at(failing("EACCES", (op, p) => op === "stat" && p === "/case/ws"))).toMatchObject({
+      reason: "unverifiable",
+    });
+    // An ancestor that vanished mid-check is not absence to shrug off: its identity was needed.
+    expect(at(failing("ENOENT", (op, p) => op === "stat" && p === "/"))).toMatchObject({ reason: "unverifiable" });
+    // A file system that gives no real identity.
+    const noIno: PlainRuleTargetIo = { realpath: (p) => base.realpath(p), stat: (p) => ({ ...base.stat(p), ino: 0n }) };
+    expect(at(noIno)).toMatchObject({ reason: "unverifiable" });
   });
 });

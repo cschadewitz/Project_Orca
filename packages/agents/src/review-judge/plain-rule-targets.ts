@@ -18,6 +18,9 @@
  *   rule), and, on top of it, no real ancestor of the file is a no-access path by identity, and no real path matches
  *   one ignoring case. Protection over-matches on purpose; containment under-matches on purpose.
  *
+ * Only "no such file" counts as absence. A permission, I/O or identity failure anywhere the check needs evidence (the
+ * workspace, a target, any of its ancestors, an existing no-access path) refuses the call as `unverifiable`.
+ *
  * The check runs at decision time, and that is its limit. The allow it can lead to is one-time and the slot re-checks
  * protected paths in the same turn it answers, but a file or link swapped after that, before the agent's own open,
  * is outside what any check on the request can see: that window closes only with ORCA-owned execution (#703), and is
@@ -37,7 +40,8 @@ export type PlainRuleTargetRefusal =
   | "outside-workspace"
   | "protected"
   | "not-a-file"
-  | "linked-file";
+  | "linked-file"
+  | "unverifiable";
 
 export type PlainRuleTargetCheck =
   | {
@@ -76,32 +80,43 @@ function within(inner: readonly string[], outer: readonly string[]): boolean {
   return outer.length <= inner.length && outer.every((segment, i) => segment === inner[i]);
 }
 
-/** The real path of an existing file or directory, or undefined. */
+/** Thrown when the file system could not answer: permission, I/O, or an identity it would not give. */
+class Unverifiable extends Error {}
+
+/** Only "no such file" is absence; every other failure leaves the question open. */
+function isAbsence(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** The real path of an existing file or directory; undefined only when it confirmably does not exist. */
 function real(io: PlainRuleTargetIo, path: string): string | undefined {
   try {
     const resolved = io.realpath(path);
     io.stat(resolved);
     return resolved;
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (isAbsence(error)) return undefined;
+    throw new Unverifiable();
   }
 }
 
-function identity(io: PlainRuleTargetIo, path: string): string | undefined {
+/** The identity of an existing file. Any failure, absence included, is unverifiable: the caller knows it exists. */
+function identity(io: PlainRuleTargetIo, path: string): string {
   try {
     const s = io.stat(path);
+    if (typeof s.dev !== "bigint" || typeof s.ino !== "bigint" || s.ino === 0n) throw new Unverifiable();
     return `${s.dev}:${s.ino}`;
   } catch {
-    return undefined;
+    throw new Unverifiable();
   }
 }
 
-/** The identities of every real ancestor of `path`, nearest first, up to the file system root. */
+/** The identities of every real ancestor of `path`, nearest first, up to the file system root. All must answer. */
 function ancestorIdentities(io: PlainRuleTargetIo, path: string): string[] {
   const ids: string[] = [];
   for (let dir = dirname(path); ; dir = dirname(dir)) {
-    const id = identity(io, dir);
-    if (id !== undefined) ids.push(id);
+    ids.push(identity(io, dir));
     if (dirname(dir) === dir) return ids;
   }
 }
@@ -126,8 +141,8 @@ export function verifyPlainRuleTargets(input: {
     if (!protectedPaths || !Array.isArray(protectedPaths.noAccess) || !Array.isArray(protectedPaths.readOnly))
       return refuse("no-protected-paths");
     const root = real(io, workspaceCwd);
-    const rootId = root === undefined ? undefined : identity(io, root);
-    if (root === undefined || rootId === undefined || !io.stat(root).isDirectory()) return refuse("no-workspace");
+    if (root === undefined || !io.stat(root).isDirectory()) return refuse("no-workspace");
+    const rootId = identity(io, root);
     const rootSegments = segments(root, false);
     // No-access paths, by identity where they exist and by case-folded real path either way.
     const guardIds = new Set<string>();
@@ -135,8 +150,9 @@ export function verifyPlainRuleTargets(input: {
     for (const guard of protectedPaths.noAccess) {
       if (typeof guard !== "string" || !isAbsolute(guard)) return refuse("no-protected-paths");
       const resolved = real(io, guard);
-      const id = resolved === undefined ? undefined : identity(io, resolved);
-      if (id !== undefined) guardIds.add(id);
+      // A guard that confirmably does not exist still guards by text; one the file system would not answer for
+      // leaves the whole check unverified.
+      if (resolved !== undefined) guardIds.add(identity(io, resolved));
       guardSegments.push(segments(resolved ?? guard, true));
     }
     const verified: string[] = [];
@@ -154,7 +170,7 @@ export function verifyPlainRuleTargets(input: {
       const targetId = identity(io, target);
       if (
         protectedPathFor(target, "read", protectedPaths, workspaceCwd) !== undefined ||
-        (targetId !== undefined && guardIds.has(targetId)) ||
+        guardIds.has(targetId) ||
         ancestors.some((id) => guardIds.has(id)) ||
         guardSegments.some((guard) => within(segments(target, true), guard))
       ) {
@@ -167,6 +183,7 @@ export function verifyPlainRuleTargets(input: {
     }
     return Object.freeze({ targetsVerified: true as const, locations: Object.freeze(verified) });
   } catch {
-    return refuse("missing");
+    // Unverifiable, or anything unexpected: never a verification.
+    return refuse("unverifiable");
   }
 }
