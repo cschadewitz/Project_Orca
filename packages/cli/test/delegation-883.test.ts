@@ -1140,6 +1140,42 @@ describe("delegation through a proxy the test controls (#883)", () => {
     });
     receipts.unreserve(second);
 
+    // Receipts written before `instance` existed are read, counted and moved on as ever; the
+    // first transition gives one a fresh instance, after which the old copy conflicts.
+    const legacy = (parentRunId: string, state: string, extra: Record<string, unknown> = {}) => {
+      const fields = {
+        profile: "direct",
+        binding: bound,
+        parentRunId,
+        delegationId: `${parentRunId}_step1`,
+        generation: 0,
+        key: delegationKey(parentRunId, `${parentRunId}_step1`, 0),
+        state,
+        ...extra,
+      };
+      const before = new Set(readdirSync(receipts.dir));
+      // Through the API, then with `instance` stripped, exactly as the earlier format wrote it.
+      receipts.write(fields as never);
+      const file = readdirSync(receipts.dir).find((n) => n.endsWith(".json") && !before.has(n))!;
+      const { instance: _i, ...old } = JSON.parse(readFileSync(join(receipts.dir, file), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      writeFileSync(join(receipts.dir, file), JSON.stringify({ ...old, revision: 3 }));
+      return receipts.read(parentRunId, `${parentRunId}_step1`)!;
+    };
+    const submitting = legacy("run_old_s", "submitting");
+    const admitted = legacy("run_old_a", "admitted", { remoteRunId: "run_remote_old" });
+    legacy("run_old_d", "settled", { remoteRunId: "run_remote_done", outcome: "succeeded" });
+    expect(submitting.instance).toBeUndefined();
+    expect(receipts.unsettled("direct")).toBe(2);
+    const moved = receipts.write({ ...admitted, state: "settled", outcome: "succeeded" });
+    expect(moved).toMatchObject({ revision: 4, state: "settled" });
+    expect(moved.instance).toEqual(expect.any(String));
+    expect(() => receipts.write({ ...admitted, state: "cancel-pending" })).toThrow(ReceiptConflict);
+    expect(receipts.write({ ...submitting, state: "cancel-pending" }).instance).toEqual(expect.any(String));
+    expect(receipts.read("run_old_d", "run_old_d_step1")).toMatchObject({ state: "settled", outcome: "succeeded" });
+
     // Recovery after a crash: the reservation is promoted through the gate, by exactly one of
     // two sessions racing for it, and submitted once.
     reserve("run_res_c");

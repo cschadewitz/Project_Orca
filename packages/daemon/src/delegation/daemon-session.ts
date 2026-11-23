@@ -569,7 +569,7 @@ class DaemonSession implements AgentSession {
   private store(
     receipt: Omit<DelegationReceipt, "version" | "updatedAt" | "revision" | "instance"> & {
       revision?: number;
-      instance?: string;
+      instance?: string | undefined;
     },
   ): DelegationReceipt {
     const { version: _v, updatedAt: _u, ...rest } = receipt as DelegationReceipt;

@@ -77,9 +77,11 @@ export const DelegationReceiptSchema = z
     /**
      * Random, fixed when the receipt file is created and never reused: a receipt removed and
      * made again at the same path is another instance, so a writer holding the old one can
-     * never compare equal to the new one at the same revision.
+     * never compare equal to the new one at the same revision. Absent only on a receipt written
+     * before it existed: such a receipt is read and followed as ever, and gets a fresh instance
+     * at its first transition (under its lock), after which a holder of the old copy conflicts.
      */
-    instance: z.string().min(1),
+    instance: z.string().min(1).optional(),
     profile: z.string().min(1),
     binding: DelegationBindingSchema,
     parentRunId: z.string().min(1),
