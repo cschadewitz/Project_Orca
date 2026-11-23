@@ -32,8 +32,10 @@ only Cline's `data` directory there, and in `data/settings` only `providers.json
 `global-settings.json` and `cline_mcp_settings.json`.
 
 Do not use Cline's default `~/.cline`, which Cline run outside ORCA shares, or a directory
-inside the workspace: ORCA refuses both. ORCA checks what the directory holds before every
-start; it cannot tell whether something other than ORCA also uses it, so keep it for ORCA.
+inside the workspace, even through a link: ORCA refuses both. The directory and its settings
+must belong to you and be writable by you alone (`chmod -R go-w <dir>`). ORCA checks what the
+directory holds before every start; it cannot tell whether something other than ORCA also
+uses it, so keep it for ORCA.
 
 ## 3. Sign in
 

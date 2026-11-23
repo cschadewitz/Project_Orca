@@ -42,6 +42,7 @@ Code: `packages/agents/src/providers/copilot-cli.ts`.
 | Options offered on an ask | `allow_once`, `allow_always`, `reject_once` (no `reject_always`) | installed |
 | ORCA deny (rule or person) | `reject_once`: the command does not run | installed |
 | ORCA allow | `allow_once`: the command runs | installed |
+| Answers | Only one-time answers reach Cline: "always" becomes "once"; with no one-time option offered, or an answer that is not one of the offered options, the ask is cancelled | offline |
 | "Always" answers | Sent as `allow_once`; the next call with the same command name is asked again; Copilot saves nothing (`permissions-config.json` absent) | installed |
 | File writes (`create`, `edit`) | Asked about as `edit`; denied, no file. Written by Copilot itself, not through ACP `fs/*`, so ORCA's protected-path check applies only through the policy | installed |
 | Subagents (`task`) | Their commands are asked about on the parent session; denied, they do not run | installed |
@@ -77,7 +78,9 @@ below is about that ask being made, being decided on the right facts, and holdin
 | Cline's state | Must be in its own `--config` directory: not Cline's default `~/.cline` (shared with Cline run outside ORCA) and not inside the workspace. ORCA refuses agent reads and writes there (Cline keeps sign-ins in plain files). Deny by default: only `data`, and in `data/settings` only Cline's three settings files; `toolAutoApprove` on is refused | source; installed (edit refusal shown for hooks) |
 | Background hub | Cline runs sessions in a detached hub process by default, which outlives the agent ORCA stops. `CLINE_SESSION_BACKEND_MODE=local` is required; no Cline process remains after ORCA closes its sessions | source; installed |
 | Auto-update | `CLINE_NO_AUTO_UPDATE=1` is required | source |
-| Other `CLINE_*` variables | Refused from the profile and from ORCA's environment (they move state, settings or MCP servers) | source; offline |
+| Other `CLINE_*` variables | Refused from the profile, the session's overlay and ORCA's environment (they move state, settings or MCP servers) | source; offline |
+| Launch environment | Checked as the host builds it: ORCA's environment less withheld secrets, the profile's `env`, the session overlay, then secret-filled names. Checked again at the moment of start; a start whose `HOME`, `--config` or directory differ from the ones checked is refused | offline |
+| File checks | Fail closed: only a missing entry counts as absent; anything ORCA cannot read is refused. Paths are compared after resolving links. On Linux and macOS the config directory, `data`, `data/settings` and its files must belong to the user ORCA runs as and be writable by no one else | offline |
 | Sign-in | A Cline account via `cline auth --config <dir>`, or a provider key as a secret reference in `CLINE_API_KEY`. No sign-in: `session/new` fails and ORCA stops the agent | installed |
 | Streaming, turn identity | Text streams as `agent_message_chunk`; turns end `end_turn` | installed |
 | Model error | The turn fails with `AGENT_PROTOCOL`; the session stays usable | installed |

@@ -47,14 +47,15 @@
  * can, and its effects are not ORCA's to see. See the matrix.
  */
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, readdirSync, realpathSync, statSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve as resolvePath, sep, win32 } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import { OrcaError, isSecretRef, literalEnv, quoteWord, type AgentSpec, type SessionConfigOption } from "@orca/core";
 import type { OpenSessionOptions } from "../acp-session.js";
-import type { AgentHost } from "../host.js";
+import type { AgentHost, SpawnAgentOptions } from "../host.js";
 import type { ProtectedPaths } from "../permissions.js";
+import { planSessionSecrets, withoutWithheld } from "../secrets.js";
 import type { AgentSession } from "../session.js";
 import type { ProviderGuard } from "./guard.js";
 
@@ -177,16 +178,45 @@ export function clineConfigDir(agent: Pick<AgentSpec, "args">): string | undefin
 }
 
 /**
- * What is wrong with this launch profile, as the host would start it: the agent's `env` over
- * `ambient`, the daemon's own environment, less what ORCA withholds for secrets. Empty when
- * none of the known hazards is present. It says nothing about files on disk (see
- * `clineFileProblems`) or the version, which Cline reports at `initialize`.
+ * The environment Cline is started with, as the local host builds it: the daemon's own less
+ * what ORCA withholds, then the agent's literal `env`, then the session's overlay; and the
+ * names a secret fills last. `HOME` is the one Cline will use.
+ */
+export interface ClineLaunchEnv {
+  values: Readonly<Record<string, string | undefined>>;
+  fromSecrets: ReadonlySet<string>;
+}
+
+/** The launch environment of an actual start (`LocalHost.spawnAgent`'s own order). */
+export function clineLaunchEnv(
+  agent: AgentSpec,
+  options: Pick<SpawnAgentOptions, "env" | "secrets" | "withheldEnv">,
+  daemonEnv: NodeJS.ProcessEnv = process.env,
+): ClineLaunchEnv {
+  return {
+    values: { ...withoutWithheld(daemonEnv, options.withheldEnv), ...literalEnv(agent.env), ...(options.env ?? {}) },
+    fromSecrets: new Set((options.secrets ?? []).flatMap((d) => d.env)),
+  };
+}
+
+/**
+ * What is wrong with this launch profile. `launch` is the environment Cline gets (see
+ * `clineLaunchEnv`); given a plain record, it is the daemon's environment, with the agent's
+ * `env` over it and its secret references as secret-filled. Empty when none of the known
+ * hazards is present. It says nothing about files on disk (see `clineFileProblems`) or the
+ * version, which Cline reports at `initialize`.
  */
 export function clineProfileProblems(
   agent: AgentSpec,
-  ambient: Readonly<Record<string, string | undefined>>,
+  launch: ClineLaunchEnv | Readonly<Record<string, string | undefined>>,
   hostType: "local" | "ssh" | undefined,
 ): string[] {
+  const view: ClineLaunchEnv = isLaunchEnv(launch)
+    ? launch
+    : {
+        values: { ...launch, ...literalEnv(agent.env) },
+        fromSecrets: new Set(Object.entries(agent.env).flatMap(([k, v]) => (isSecretRef(v) ? [k] : []))),
+      };
   const problems: string[] = [];
   if (baseName(agent.command) !== "cline")
     problems.push(
@@ -225,28 +255,40 @@ export function clineProfileProblems(
       "mcpServers: Cline ignores MCP servers handed to it over ACP, so ORCA does not hand it any; remove them from this agent",
     );
 
-  const literal = literalEnv(agent.env);
-  const effective: Record<string, string | undefined> = { ...ambient, ...literal };
+  const values = view.values;
+  const set = (k: string) => (values[k] ?? "") !== "" || view.fromSecrets.has(k);
   for (const [variable, wanted] of Object.entries(REQUIRED_VARIABLES))
-    if ((effective[variable] ?? "").trim() !== wanted) problems.push(`env: set ${variable} to "${wanted}"`);
-  const names = new Set([...Object.keys(agent.env), ...Object.keys(ambient).filter((k) => (ambient[k] ?? "") !== "")]);
+    if (view.fromSecrets.has(variable) || (values[variable] ?? "").trim() !== wanted)
+      problems.push(`env: set ${variable} to "${wanted}"`);
+  if (view.fromSecrets.has("HOME"))
+    problems.push("env: HOME is filled from a secret, so ORCA cannot check what Cline loads from it");
+  const names = new Set([...Object.keys(values), ...view.fromSecrets].filter(set));
   for (const variable of [...names].sort()) {
-    if (!/^CLINE_/i.test(variable) || variable in REQUIRED_VARIABLES || CHOICE_VARIABLES.has(variable)) continue;
+    if (!/^CLINE_/i.test(variable) || variable in REQUIRED_VARIABLES) continue;
     const configured = agent.env[variable];
+    const origin = configured === undefined ? " (inherited from the daemon's environment or the session)" : "";
+    if (CHOICE_VARIABLES.has(variable)) {
+      if (view.fromSecrets.has(variable)) problems.push(`env: ${variable} is filled from a secret; write it as text`);
+      continue;
+    }
     if (variable === CLINE_KEY_VARIABLE) {
-      if (configured !== undefined && !isSecretRef(configured))
-        problems.push(`env: ${variable} is written into ORCA's config; refer to it as a secret instead`);
-      else if (configured === undefined)
-        problems.push(
-          `env: ${variable} is inherited from the daemon's environment and would replace the Cline sign-in; define it as a secret (which withholds it) or start ORCA without it`,
-        );
+      if (view.fromSecrets.has(variable)) continue;
+      problems.push(
+        configured !== undefined
+          ? `env: ${variable} is written into ORCA's config; refer to it as a secret instead`
+          : `env: ${variable} is inherited from the daemon's environment or the session and would replace the Cline sign-in; define it as a secret (which withholds it) or start ORCA without it`,
+      );
       continue;
     }
     problems.push(
-      `env: ${variable} is not supported${configured === undefined ? " (inherited from the daemon's environment)" : ""}; it moves Cline's state, settings or servers outside what ORCA checked`,
+      `env: ${variable} is not supported${origin}; it moves Cline's state, settings or servers outside what ORCA checked`,
     );
   }
   return problems;
+}
+
+function isLaunchEnv(v: unknown): v is ClineLaunchEnv {
+  return isObject(v) && isObject(v.values) && v.fromSecrets instanceof Set;
 }
 
 /** Directories and files Cline loads code or servers from, for this launch. */
@@ -287,33 +329,90 @@ function workspaceChain(cwd: string): string[] {
   return existsSync(join(chain.at(-1)!, ".git")) ? chain : [chain[0]!];
 }
 
-function nonEmptyDir(path: string): boolean {
+/** What is at `path`, as Cline would find it. Only a missing entry counts as absent. */
+type Entry = { state: "absent" } | { state: "present"; stats: Stats } | { state: "unreadable"; reason: string };
+function entryAt(path: string): Entry {
   try {
-    return statSync(path).isDirectory() && readdirSync(path).length > 0;
-  } catch {
-    return false;
+    return { state: "present", stats: statSync(path) };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { state: "absent" };
+    return { state: "unreadable", reason: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/** A problem unless `dir` is positively absent or an empty directory ORCA could list. */
+function loadDirProblem(dir: string, what: string): string | undefined {
+  const at = entryAt(dir);
+  if (at.state === "absent") return undefined;
+  if (at.state === "unreadable") return `files: ${dir} cannot be checked for Cline ${what} (${at.reason})`;
+  if (!at.stats.isDirectory())
+    return `files: ${dir} is where Cline looks for ${what} and is not a directory; remove it`;
+  try {
+    if (readdirSync(dir).length === 0) return undefined;
+  } catch (error) {
+    return `files: ${dir} cannot be checked for Cline ${what} (${error instanceof Error ? error.message : String(error)})`;
+  }
+  return `files: ${dir} holds Cline ${what}, which run without asking ORCA`;
+}
+
+/** The path with every link resolved; for a missing tail, its nearest existing parent's real path plus the rest. */
+function canonical(path: string): string {
+  const resolved = resolvePath(path);
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    const parent = dirname(resolved);
+    return parent === resolved
+      ? resolved
+      : join(canonical(parent), resolved.slice(parent.length + (parent.endsWith(sep) ? 0 : 1)));
+  }
+}
+
+const within = (a: string, b: string) => a === b || a.startsWith(b.endsWith(sep) ? b : b + sep);
+
+/**
+ * On POSIX: each entry must belong to the user ORCA runs as and be writable by nobody else,
+ * so no other account can change what Cline loads between ORCA's check and Cline's read.
+ */
+function ownershipProblems(paths: readonly string[]): string[] {
+  if (typeof process.getuid !== "function") return [];
+  const uid = process.getuid();
+  const problems: string[] = [];
+  for (const path of paths) {
+    const at = entryAt(path);
+    if (at.state !== "present") continue;
+    if (at.stats.uid !== uid)
+      problems.push(`files: ${path} belongs to another user; Cline's config must be yours alone`);
+    else if ((at.stats.mode & 0o022) !== 0)
+      problems.push(`files: ${path} is writable by other users; make it writable by you alone (chmod go-w)`);
+  }
+  return problems;
 }
 
 /** Hooks, plugins and Cline-configured MCP servers present for this launch. */
 export function clineFileProblems(configDir: string, cwd: string, home: string): string[] {
   const paths = clineLoadPaths(configDir, cwd, home);
   const problems: string[] = [];
-  const dir = resolvePath(configDir);
-  const shared = resolvePath(home, ".cline");
-  const within = (a: string, b: string) => a === b || a.startsWith(b.endsWith(sep) ? b : b + sep);
+  const dir = canonical(configDir);
+  const shared = canonical(join(home, ".cline"));
   if (within(dir, shared) || within(shared, dir))
     problems.push(
-      `files: ${configDir} is Cline's own default directory (${shared}), shared with Cline run outside ORCA; give ORCA's Cline a directory of its own`,
+      `files: ${configDir} is Cline's own default directory (${join(home, ".cline")}), shared with Cline run outside ORCA; give ORCA's Cline a directory of its own`,
     );
-  if (within(dir, resolvePath(cwd)))
+  if (within(dir, canonical(cwd)))
     problems.push(`files: ${configDir} is inside the workspace; keep Cline's config directory outside it`);
   problems.push(...clineConfigDirProblems(configDir));
-  for (const dir of paths.hookDirs)
-    if (nonEmptyDir(dir)) problems.push(`files: ${dir} holds Cline hooks, which run without asking ORCA`);
-  for (const dir of paths.pluginDirs)
-    if (nonEmptyDir(dir)) problems.push(`files: ${dir} holds Cline plugins, which run without asking ORCA`);
-  if (existsSync(paths.mcpSettings)) {
+  for (const hooks of paths.hookDirs) {
+    const p = loadDirProblem(hooks, "hooks");
+    if (p) problems.push(p);
+  }
+  for (const plugins of paths.pluginDirs) {
+    const p = loadDirProblem(plugins, "plugins");
+    if (p) problems.push(p);
+  }
+  const mcp = entryAt(paths.mcpSettings);
+  if (mcp.state !== "absent") {
     let servers = 1;
     try {
       const parsed = JSON.parse(readFileSync(paths.mcpSettings, "utf8")) as { mcpServers?: unknown };
@@ -323,7 +422,7 @@ export function clineFileProblems(configDir: string, cwd: string, home: string):
     }
     if (servers > 0)
       problems.push(
-        `files: ${paths.mcpSettings} configures MCP servers for Cline, which ORCA does not see; remove them`,
+        `files: ${paths.mcpSettings} configures MCP servers for Cline, or cannot be read; ORCA does not see them, so remove them`,
       );
   }
   return problems;
@@ -353,13 +452,19 @@ export function clineConfigDirProblems(configDir: string): string[] {
   for (const entry of entries.sort())
     if (!CONFIG_DIR_ENTRIES.has(entry))
       problems.push(`files: ${join(configDir, entry)} is not something ORCA lets Cline load; remove it`);
-  const settings = join(configDir, "data", "settings");
+  const data = join(configDir, "data");
+  const settings = join(data, "settings");
   let files: string[] = [];
-  try {
-    files = readdirSync(settings);
-  } catch {
-    /* No settings yet. */
+  const at = entryAt(settings);
+  if (at.state === "unreadable") problems.push(`files: ${settings} cannot be checked (${at.reason})`);
+  else if (at.state === "present") {
+    try {
+      files = readdirSync(settings);
+    } catch (error) {
+      problems.push(`files: ${settings} cannot be listed (${error instanceof Error ? error.message : String(error)})`);
+    }
   }
+  problems.push(...ownershipProblems([configDir, data, settings, ...files.map((f) => join(settings, f))]));
   for (const file of files.sort())
     if (!SETTINGS_FILES.has(file))
       problems.push(`files: ${join(settings, file)} is a Cline setting ORCA does not check; remove it`);
@@ -547,8 +652,8 @@ export const CLINE_ASKED_TOOLS: ReadonlySet<string> = new Set([
 /** The answer ORCA gives, itself, to an ask about a tool outside `CLINE_ASKED_TOOLS`; undefined for one inside. */
 export function clineRefusal(request: acp.RequestPermissionRequest): acp.RequestPermissionResponse | undefined {
   if (CLINE_ASKED_TOOLS.has(clineToolName(request.toolCall.title))) return undefined;
-  const reject =
-    request.options.find((o) => o.kind === "reject_once") ?? request.options.find((o) => o.kind === "reject_always");
+  // Only a one-time rejection; with none on offer, the ask is cancelled, so no lasting decision is kept.
+  const reject = request.options.find((o) => o.kind === "reject_once");
   return reject
     ? { outcome: { outcome: "selected", optionId: reject.optionId } }
     : { outcome: { outcome: "cancelled" } };
@@ -639,17 +744,75 @@ export function sharedWritable(writable: WritableStream<acp.AnyMessage>): {
   };
 }
 
-/** `host`, starting the agent with its wire passed through `clineReadable`. */
-export function clineHost(host: AgentHost, cwd: string): AgentHost {
+/** What a start checks, and the facts it was checked against. */
+export interface ClineLaunchCheck {
+  problems: string[];
+  home: string;
+  configDir: string | undefined;
+}
+
+/** Every check that depends on how Cline is started: profile, environment, files. */
+export function clineLaunchProblems(
+  agent: AgentSpec,
+  launch: ClineLaunchEnv,
+  hostType: "local" | "ssh" | undefined,
+  cwd: string,
+  fallbackHome: () => string,
+): ClineLaunchCheck {
+  const problems = clineProfileProblems(agent, launch, hostType);
+  const configDir = clineConfigDir(agent);
+  const home = launch.values.HOME || fallbackHome();
+  if (problems.length === 0 && configDir) problems.push(...clineFileProblems(configDir, cwd, home));
+  return { problems, home, configDir };
+}
+
+const refusal = (agentId: string, problems: string[]) =>
+  new OrcaError("CONFIG_INVALID", `Cline agent '${agentId}' cannot start: ${problems.join("; ")}.`, {
+    agentId,
+    problems,
+  });
+
+/**
+ * `host`, starting the agent with its wire passed through `clineReadable`. Before the start it
+ * checks the launch again, on the environment the host is about to give Cline, and refuses
+ * one whose home, config directory or directory differ from the ones `prepared` was checked
+ * and protected for.
+ */
+export function clineHost(
+  host: AgentHost,
+  cwd: string,
+  prepared?: { home: string; configDir: string; fallbackHome: () => string; image: ClineImageCheck },
+): AgentHost {
   const wrapped = Object.create(host) as AgentHost;
   Object.defineProperty(wrapped, "spawnAgent", {
     value: async (...args: Parameters<AgentHost["spawnAgent"]>) => {
+      const [agent, options] = args;
+      if (prepared) {
+        const check = clineLaunchProblems(
+          agent,
+          clineLaunchEnv(agent, options),
+          host.spec?.type,
+          options.cwd,
+          prepared.fallbackHome,
+        );
+        if (check.home !== prepared.home)
+          check.problems.push(`env: HOME is ${check.home} at start, not the ${prepared.home} ORCA checked`);
+        if (check.configDir !== prepared.configDir)
+          check.problems.push("args: --config changed between ORCA's check and the start");
+        if (resolvePath(options.cwd) !== resolvePath(cwd))
+          check.problems.push("cwd: the directory changed between ORCA's check and the start");
+        if (check.problems.length === 0)
+          check.problems.push(
+            ...(await clineImageProblems(agent.command, prepared.image.platform, prepared.image.digest)),
+          );
+        if (check.problems.length) throw refusal(agent.id, check.problems);
+      }
       const handle = await host.spawnAgent(...args);
       const out = sharedWritable(handle.stream.writable);
       return {
         ...handle,
         stream: {
-          readable: clineReadable(handle.stream.readable, cwd, args[0].id, out.inject),
+          readable: clineReadable(handle.stream.readable, cwd, agent.id, out.inject),
           writable: out.writable,
         },
         // Keep the methods bound to the original handle.
@@ -679,17 +842,21 @@ function clineGrantingOptionsIn(options: readonly SessionConfigOption[]): string
     .map((o) => o.id);
 }
 
-/** "Always allow" becomes "Allow once"; with no once option offered, nothing is chosen. */
+/**
+ * Only one-time answers reach Cline: "always" becomes its "once" option, and with no "once"
+ * option offered, or an answer that is not one of the request's options, nothing is chosen
+ * and the ask is cancelled.
+ */
 export function clineBoundedOptionId(
   request: acp.RequestPermissionRequest,
   chosen: string | undefined,
 ): string | undefined {
   if (chosen === undefined) return undefined;
   const option = request.options.find((o) => o.optionId === chosen);
-  if (!option) return chosen;
-  if (option.kind === "allow_always") return request.options.find((o) => o.kind === "allow_once")?.optionId;
-  if (option.kind === "reject_always") return request.options.find((o) => o.kind === "reject_once")?.optionId ?? chosen;
-  return chosen;
+  if (!option) return undefined;
+  const once = (kind: "allow_once" | "reject_once") => request.options.find((o) => o.kind === kind)?.optionId;
+  if (option.kind === "allow_always" || option.kind === "allow_once") return once("allow_once");
+  return once("reject_once");
 }
 
 /** Enforce the session half: Cline's auto-approve option stays off. */
@@ -755,39 +922,31 @@ function mergeProtected(base: ProtectedPaths | undefined, readOnly: string[], no
   };
 }
 
-export function clineGuard(
-  home: () => string = homedir,
-  image: { platform?: string; digest?: ImageDigest } = {},
-): ProviderGuard {
+export type ClineImageCheck = { platform?: string; digest?: ImageDigest };
+
+export function clineGuard(home: () => string = homedir, image: ClineImageCheck = {}): ProviderGuard {
   return {
     id: "cline",
     matches: (agent) => isClineAgent(agent),
     async prepare(options: OpenSessionOptions): Promise<OpenSessionOptions> {
       const { agent, host } = options;
-      const withheld = new Set(
-        Object.values(options.secrets ?? {})
-          .filter((d) => d.host === host.id && d.provider === "env")
-          .map((d) => (d.provider === "env" ? d.name : "")),
-      );
-      const ambient = Object.fromEntries(Object.entries(process.env).filter(([k]) => !withheld.has(k)));
-      const problems = clineProfileProblems(agent, ambient, host.spec?.type);
-      const configDir = clineConfigDir(agent);
-      const effectiveHome = literalEnv(agent.env).HOME ?? ambient.HOME ?? home();
-      if (problems.length === 0 && configDir)
-        problems.push(
-          ...clineFileProblems(configDir, options.cwd, effectiveHome),
-          ...(await clineImageProblems(agent.command, image.platform, image.digest)),
-        );
-      if (problems.length)
-        throw new OrcaError("CONFIG_INVALID", `Cline agent '${agent.id}' cannot start: ${problems.join("; ")}.`, {
-          agentId: agent.id,
-          problems,
-        });
-      const paths = clineLoadPaths(configDir!, options.cwd, effectiveHome);
+      // The environment the host will build: the same secret plan the session uses.
+      const plan = planSessionSecrets(host, agent, options.secrets);
+      const launch = clineLaunchEnv(agent, {
+        ...(options.env ? { env: options.env } : {}),
+        secrets: plan.deliveries,
+        withheldEnv: plan.withheldEnv,
+      });
+      const check = clineLaunchProblems(agent, launch, host.spec?.type, options.cwd, home);
+      if (check.problems.length === 0)
+        check.problems.push(...(await clineImageProblems(agent.command, image.platform, image.digest)));
+      if (check.problems.length) throw refusal(agent.id, check.problems);
+      const configDir = check.configDir!;
+      const paths = clineLoadPaths(configDir, options.cwd, check.home);
       const ask = options.askPermission;
       return {
         ...options,
-        host: clineHost(host, options.cwd),
+        host: clineHost(host, options.cwd, { home: check.home, configDir, fallbackHome: home, image }),
         protectedPaths: mergeProtected(options.protectedPaths, paths.readOnly, paths.noAccess),
         ...(ask
           ? {

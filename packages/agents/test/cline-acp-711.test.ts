@@ -6,7 +6,7 @@
  * must look like, what a permission ask is rewritten to before the policy reads it, and what the
  * session refuses. The installed Cline is exercised by `cline-acp-711.acceptance.test.ts`.
  */
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +19,11 @@ import {
   clinePlatform,
   clineFileProblems,
   clineGuard,
+  clineBoundedOptionId,
+  clineHost,
+  clineLaunchEnv,
   clineProfileProblems,
+  clineRefusal,
   isClineAgent,
   normalizeClinePermissionRequest,
   openAcpSession,
@@ -168,7 +172,7 @@ describe("launch profile", () => {
       "env: CLINE_DATA_DIR is not supported; it moves Cline's state, settings or servers outside what ORCA checked",
     ]);
     expect(clineProfileProblems(spec(), { CLINE_MCP_SETTINGS_PATH: "/x.json" }, "local")).toEqual([
-      "env: CLINE_MCP_SETTINGS_PATH is not supported (inherited from the daemon's environment); it moves Cline's state, settings or servers outside what ORCA checked",
+      "env: CLINE_MCP_SETTINGS_PATH is not supported (inherited from the daemon's environment or the session); it moves Cline's state, settings or servers outside what ORCA checked",
     ]);
     // Provider and model choices are fine.
     expect(clineProfileProblems(spec(), { CLINE_PROVIDER: "openai-compatible", CLINE_MODEL: "m" }, "local")).toEqual(
@@ -280,6 +284,42 @@ describe("Cline's config directory, deny by default", () => {
     await mkdir(inside);
     expect(clineFileProblems(inside, workspace, home)[0]).toContain("is inside the workspace");
     expect(clineFileProblems(configDir, workspace, home)).toEqual([]);
+  });
+
+  it("compares real paths, so a link does not hide Cline's default directory or the workspace", async () => {
+    const shared = join(home, ".cline");
+    await mkdir(join(shared, "data"), { recursive: true });
+    const link = join(root, "looks-separate");
+    await symlink(shared, link);
+    expect(clineFileProblems(link, workspace, home)[0]).toContain("is Cline's own default directory");
+    const intoWork = join(root, "also-separate");
+    await mkdir(join(workspace, "cfg", "data"), { recursive: true });
+    await symlink(join(workspace, "cfg"), intoWork);
+    expect(clineFileProblems(intoWork, workspace, home)[0]).toContain("is inside the workspace");
+  });
+
+  // Root reads through any mode, so this needs an ordinary user.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "fails closed on a load directory it cannot read",
+    async () => {
+      await mkdir(join(workspace, ".cline", "hooks"), { recursive: true });
+      await chmod(join(workspace, ".cline"), 0o000);
+      try {
+        expect(clineFileProblems(configDir, workspace, home).join("\n")).toContain("cannot be checked for Cline hooks");
+      } finally {
+        await chmod(join(workspace, ".cline"), 0o755);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("refuses settings other users can change", async () => {
+    const settings = join(configDir, "data", "settings");
+    await mkdir(settings, { recursive: true });
+    await writeFile(join(settings, "providers.json"), "{}");
+    await chmod(join(settings, "providers.json"), 0o666);
+    expect(clineFileProblems(configDir, workspace, home)).toEqual([
+      `files: ${join(settings, "providers.json")} is writable by other users; make it writable by you alone (chmod go-w)`,
+    ]);
   });
 
   it("refuses a config directory that is not there", () => {
@@ -545,5 +585,96 @@ describe("the session, through ORCA's policy", () => {
       opened({ host: fake.host, agent: spec({ args: ["--acp", "--config", configDir, "--yolo"] }), cwd: root }),
     ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     expect(fake.spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe("one-time answers only", () => {
+  const request = (options: { optionId: string; kind: string }[]) =>
+    ({
+      sessionId: "s",
+      toolCall: { toolCallId: "t", title: "run_commands" },
+      options: options.map((o) => ({ ...o, name: o.optionId })),
+    }) as unknown as Parameters<typeof clineBoundedOptionId>[0];
+
+  it("turns always into once, and cancels when only a lasting answer is offered", () => {
+    const full = request([
+      { optionId: "allow_once", kind: "allow_once" },
+      { optionId: "allow_always", kind: "allow_always" },
+      { optionId: "reject_once", kind: "reject_once" },
+      { optionId: "reject_always", kind: "reject_always" },
+    ]);
+    expect(clineBoundedOptionId(full, "allow_always")).toBe("allow_once");
+    expect(clineBoundedOptionId(full, "reject_always")).toBe("reject_once");
+    expect(clineBoundedOptionId(full, "not-offered")).toBeUndefined();
+    const lasting = request([
+      { optionId: "allow_always", kind: "allow_always" },
+      { optionId: "reject_always", kind: "reject_always" },
+    ]);
+    expect(clineBoundedOptionId(lasting, "allow_always")).toBeUndefined();
+    expect(clineBoundedOptionId(lasting, "reject_always")).toBeUndefined();
+  });
+
+  it("cancels a refused tool's ask when Cline offers no one-time rejection", () => {
+    const spawn = (options: { optionId: string; kind: string }[]) =>
+      ({ ...request(options), toolCall: { toolCallId: "t", title: "spawn_agent: x" } }) as Parameters<
+        typeof clineRefusal
+      >[0];
+    expect(clineRefusal(spawn([{ optionId: "reject_always", kind: "reject_always" }]))).toEqual({
+      outcome: { outcome: "cancelled" },
+    });
+    expect(clineRefusal(spawn([{ optionId: "r", kind: "reject_once" }]))).toEqual({
+      outcome: { outcome: "selected", optionId: "r" },
+    });
+  });
+});
+
+describe("the environment Cline is started with", () => {
+  it("checks the session overlay and secret-filled names, not only the profile", () => {
+    const agent = spec({ env: { CLINE_SESSION_BACKEND_MODE: "local", CLINE_NO_AUTO_UPDATE: "1", HOME: home } });
+    const launch = (env: Record<string, string>, secretNames: string[] = []) =>
+      clineLaunchEnv(
+        agent,
+        { env, secrets: [{ id: "k", source: { provider: "file", path: "/k" }, env: secretNames }] },
+        {},
+      );
+    expect(clineProfileProblems(agent, launch({}), "local")).toEqual([]);
+    expect(clineProfileProblems(agent, launch({ CLINE_SESSION_BACKEND_MODE: "auto" }), "local")).toEqual([
+      'env: set CLINE_SESSION_BACKEND_MODE to "local"',
+    ]);
+    expect(clineProfileProblems(agent, launch({ CLINE_DIR: "/elsewhere" }), "local")[0]).toContain(
+      "CLINE_DIR is not supported",
+    );
+    expect(clineProfileProblems(agent, launch({ CLINE_API_KEY: "sk-overlay" }), "local")[0]).toContain(
+      "CLINE_API_KEY is inherited",
+    );
+    expect(clineProfileProblems(agent, launch({}, ["CLINE_API_KEY"]), "local")).toEqual([]);
+    expect(clineProfileProblems(agent, launch({}, ["HOME"]), "local")[0]).toContain("HOME is filled from a secret");
+    expect(clineLaunchEnv(agent, { env: { HOME: "/other" } }, {}).values.HOME).toBe("/other");
+  });
+
+  it("checks the overlay's home, and refuses a start whose launch differs from the one checked", async () => {
+    const otherHome = join(root, "other-home");
+    await mkdir(join(otherHome, "Documents", "Cline", "Hooks"), { recursive: true });
+    await writeFile(join(otherHome, "Documents", "Cline", "Hooks", "PreToolUse"), "#!/bin/sh\n");
+    const peer = new ScriptedClinePeer();
+    await expect(connect(peer, { env: { HOME: otherHome } })).rejects.toThrow(
+      /Documents\/Cline\/Hooks holds Cline hooks/,
+    );
+
+    const fake = scriptedClineHost(new ScriptedClinePeer());
+    const guarded = clineHost(fake.host, workspace, {
+      home,
+      configDir,
+      fallbackHome: () => home,
+      image: pinnedImage,
+    });
+    await expect(guarded.spawnAgent(spec(), { cwd: workspace, env: { HOME: otherHome } })).rejects.toThrow(
+      /HOME is .* at start, not the .* ORCA checked/,
+    );
+    await expect(guarded.spawnAgent(spec(), { cwd: workspace, env: { CLINE_DIR: "/x" } })).rejects.toThrow(
+      /CLINE_DIR is not supported/,
+    );
+    expect(fake.spawn).not.toHaveBeenCalled();
+    await expect(guarded.spawnAgent(spec(), { cwd: workspace })).resolves.toBeDefined();
   });
 });
