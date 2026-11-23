@@ -243,7 +243,7 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("the hook 
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       },
       permissions,
-      nativeToolHook: "on",
+      nativeToolHook: "experimental",
     });
 
   const marks = async () =>
@@ -260,9 +260,6 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("the hook 
     makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
       runtime: process.execPath,
       script: hookScript,
-      // The hook is off in every shipped build until activation is approved; this suite is
-      // what proves it.
-      activation: "acceptance-only",
     })({
       host: new LocalHost({ id: "local", type: "local" }),
       agent: agent(permissions, env),
@@ -295,7 +292,7 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("the hook 
     expect(pinned).not.toContain(await sha256(OTHER_RUNTIME!));
     await expect(factorySession(undefined, { CLAUDE_CODE_EXECUTABLE: OTHER_RUNTIME! })).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      message: expect.stringMatching(/is not the one ORCA verified[\s\S]*nativeToolHook: on/),
+      message: expect.stringMatching(/is not the one ORCA verified[\s\S]*remove nativeToolHook/),
     });
     expect(await marks()).toBe(0);
     // Nothing of the refused session is left in ORCA's private directory.
@@ -493,9 +490,6 @@ rl.on("line", (line) => {
       const session = await makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
         runtime: process.execPath,
         script: hookScript,
-        // The hook is off in every shipped build until activation is approved; this suite is
-        // what proves it.
-        activation: "acceptance-only",
       })({
         host: new LocalHost({ id: "local", type: "local" }),
         agent: spec,

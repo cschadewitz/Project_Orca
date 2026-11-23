@@ -41,7 +41,7 @@ import type { JudgePermission } from "./review-judge/plain-rule.js";
 import { processCleanup } from "./process-cleanup.js";
 import * as acpUnstable from "@agentclientprotocol/sdk/unstable";
 import { createMcpRelay, type McpRelay, type McpRelayCall, type McpRelayDispatch } from "./mcp-relay.js";
-import { nativeToolHookUnavailable } from "./native-tool-hook-session.js";
+import { nativeToolHookRefused } from "./native-tool-hook-session.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import { isHostFileMissing, type AgentHost, type AgentProcessHandle } from "./host.js";
 import {
@@ -247,7 +247,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   // An agent that asked for ORCA's tool hook is opened only by the session factory that
   // installs it (`sessionMeta`); any other caller (a probe, a tool) would run it unguarded.
   if (opts.sessionMeta === undefined) {
-    const refused = nativeToolHookUnavailable(opts.agent);
+    const refused = nativeToolHookRefused(opts.agent, "outside-factory");
     if (refused) throw refused;
   }
   if (opts.requireContextRecovery && !opts.resumeSessionId?.trim()) throw contextRecoveryFailure("missing-session-id");

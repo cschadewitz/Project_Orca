@@ -8,7 +8,7 @@
 # GEMINI_CLI_VERSION must be listed in GEMINI_CLI_SUPPORT
 # (packages/agents/src/agent-profiles/gemini-cli.ts); the suite fails if it is not. Moving to
 # another version is a reviewed change to both. A weekly run sees a change in behaviour behind
-# the pin. ORCA installs no hook in Gemini; nativeToolHook: on stays refused for it.
+# the pin. ORCA installs no hook in Gemini; nativeToolHook stays refused for it.
 name: Gemini ACP acceptance
 
 on:

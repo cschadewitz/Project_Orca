@@ -20,7 +20,7 @@ Every entry says how it is known, as in the hook coverage page:
 
 ## Support levels
 
-| Agent (pinned) | A | B | C | Hook (`nativeToolHook: on`) |
+| Agent (pinned) | A | B | C | Hook (`nativeToolHook: experimental`) |
 | --- | --- | --- | --- | --- |
 | GitHub Copilot CLI 1.0.114, the npm builds for Linux x64 and macOS arm64 only (pinned by SHA-256), on the daemon's own computer, with a profile ORCA has inspected | **Yes** (installed) | **Yes, for the routes marked installed below** | No, after #706 | None yet: refused |
 | OpenCode 1.19.4 (`opencode acp`), the npm builds for Linux x64 and macOS arm64 only (pinned by SHA-256), on the daemon's own computer, with an isolated profile ORCA has inspected | **Yes** (installed) | **Yes, with the limits listed** (installed) | No, after #706 | None: no supported hook, refused |
@@ -176,7 +176,7 @@ release, and tier C is not claimed.
 - **The internal HTTP server**, unauthenticated on loopback: any local process that finds the
   port can drive OpenCode, replies to its permission asks included. ORCA cannot generate a
   per-launch secret for it today (`OPENCODE_SERVER_PASSWORD`).
-- **No native tool hook.** OpenCode has no supported hook, so `nativeToolHook: on` is refused
+- **No native tool hook.** OpenCode has no supported hook, so `nativeToolHook: experimental` is refused
   for it, and ORCA sees only the calls OpenCode asks about.
 - **Model backends.** The acceptance suite runs against a scripted stand-in, and the reviewed
   operator profile names one real backend (Anthropic, with the operator's own key, entered
@@ -231,4 +231,4 @@ below is about that ask being made, being decided on the right facts, and holdin
 | Plan mode | Cline's `mode: plan` is its own read-only preset; it changes nothing ORCA relies on | source |
 | Outside ORCA's ask | What an allowed shell command does beyond its own text. Cline has no shell sandbox in ACP mode | source |
 | Execution guard (C) | Not claimed; after #706 | unknown |
-| `nativeToolHook: on` | Not offered: no Cline hook adapter | by design |
+| `nativeToolHook: experimental` | Not offered: no Cline hook adapter | by design |

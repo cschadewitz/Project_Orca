@@ -115,7 +115,7 @@ export function telemetryText(value: string, max: number): TelemetryText {
 export const AgentDiagnosticsSchema = z.strictObject({
   /**
    * `keep` stores a record of every tool call the agent's native pre-tool hook decides
-   * (#1000). Only calls the hook covers are recorded; it needs `nativeToolHook: on`.
+   * (#1000). Only calls the hook covers are recorded; it needs `nativeToolHook: experimental`.
    * Default `off`: nothing is recorded.
    */
   toolCalls: z.enum(["off", "keep"]).default("off"),
