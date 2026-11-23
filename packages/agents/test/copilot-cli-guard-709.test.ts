@@ -3,7 +3,7 @@
  * prompts, allow-all/autopilot options and bounded "always" answers. No Copilot runs here; the
  * same checks against the real Copilot CLI are in copilot-cli-acceptance-709.test.ts.
  */
-import { chmod, chown, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { chmod, chown, mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -149,7 +149,8 @@ describe("executable identity and Copilot's profile", () => {
     expect(COPILOT_CLI_VERIFIED_VERSIONS).toEqual(["1.0.114"]);
   });
 
-  async function options(command: string, home = "/nonexistent/copilot-profile"): Promise<OpenSessionOptions> {
+  async function options(command: string, home?: string): Promise<OpenSessionOptions> {
+    home ??= join(await mkdtemp(join(tmpdir(), "orca-copilot-home-")), "profile");
     return {
       host: new LocalHost({ id: "local", type: "local" }),
       agent: good({ command, env: { ...good().env, COPILOT_HOME: home } }),
@@ -422,7 +423,11 @@ describe("the environment Copilot actually receives (#709 review)", () => {
   }
   const opts = async (over: Partial<OpenSessionOptions> = {}, agent: Partial<Record<string, unknown>> = {}) => ({
     host: new LocalHost({ id: "local", type: "local" }),
-    agent: good({ command: await exe(), ...agent }),
+    agent: good({
+      command: await exe(),
+      env: { ...good().env, COPILOT_HOME: join(await mkdtemp(join(tmpdir(), "orca-copilot-home-")), "profile") },
+      ...agent,
+    }),
     cwd: tmpdir(),
     ...over,
   });
@@ -459,6 +464,56 @@ describe("the environment Copilot actually receives (#709 review)", () => {
       ).toContain(`${variable} comes from a secret`);
   });
 
+  it("treats a variable a secret fills as unreadable, even under a session override (#709 review 3)", async () => {
+    // The host applies secrets after the session's overrides, so the override is not what runs.
+    for (const variable of ["COPILOT_HOME", "COPILOT_ALLOW_ALL", "COPILOT_AUTO_UPDATE"])
+      expect(
+        copilotCliProfileProblems(good({ env: { ...good().env, [variable]: { secret: "s" } } }), {}, "local", {
+          [variable]: variable === "COPILOT_HOME" ? "/opt/copilot/profile" : "false",
+        }).join(),
+      ).toContain(`${variable} comes from a secret`);
+    const open = vi.fn(async () => fakeSession());
+    const secrets = { s: { host: "local", provider: "env" as const, name: "SOME_VALUE" } };
+    const base = await opts();
+    await expect(
+      withProviderGuards(open, [guard()])({
+        ...base,
+        secrets,
+        env: { COPILOT_ALLOW_ALL: "false" },
+        agent: good({ command: base.agent.command, env: { ...base.agent.env, COPILOT_ALLOW_ALL: { secret: "s" } } }),
+      }),
+    ).rejects.toMatchObject({ message: expect.stringContaining("COPILOT_ALLOW_ALL comes from a secret") });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("checks the start itself, with the arguments the host is given (#709 review 3)", async () => {
+    const base = await opts();
+    const spawned = vi.fn(async () => {
+      throw new Error("spawned");
+    });
+    (base.host as { spawnAgent: unknown }).spawnAgent = spawned;
+    const prepared = await guard().prepare(base);
+    expect(prepared.host).not.toBe(base.host);
+    const start = (over: object) => prepared.host.spawnAgent(base.agent, { cwd: tmpdir(), ...over });
+
+    await expect(start({ env: { COPILOT_ALLOW_ALL: "true" } })).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("COPILOT_ALLOW_ALL approves tools"),
+    });
+    await expect(
+      start({ secrets: [{ id: "s", source: { provider: "env", name: "X" }, env: ["COPILOT_AUTO_UPDATE"] }] }),
+    ).rejects.toMatchObject({ message: expect.stringContaining("COPILOT_AUTO_UPDATE comes from a secret") });
+    const other = join(await mkdtemp(join(tmpdir(), "orca-copilot-home-")), "profile");
+    await expect(start({ env: { COPILOT_HOME: other } })).rejects.toMatchObject({
+      message: expect.stringContaining("COPILOT_HOME changed"),
+    });
+    expect(spawned).not.toHaveBeenCalled();
+
+    // The start ORCA checked goes through to the host unchanged.
+    await expect(start({})).rejects.toThrow("spawned");
+    expect(spawned).toHaveBeenCalledOnce();
+  });
+
   it("treats a daemon variable the host withholds as absent, exactly as the spawn does", async () => {
     const open = vi.fn(async () => fakeSession());
     const secrets = { gh: { host: "local", provider: "env" as const, name: "GITHUB_TOKEN" } };
@@ -486,6 +541,29 @@ describe("profile entries are checked for type, ownership and permissions (#709 
       `COPILOT_HOME ${join(root, "file")} is not a directory`,
     ]);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "calls a missing profile private only where no one else can create it (#709 review 3)",
+    async () => {
+      const root = await profile();
+      expect(await copilotHomeProblems(join(root, "a", "b", "profile"))).toEqual([]);
+
+      const open = await profile();
+      await chmod(open, 0o777);
+      expect((await copilotHomeProblems(join(open, "profile")))[0]).toMatch(/can be written by other users/);
+      // Through a link, the real directory is the one judged.
+      const link = join(await profile(), "link");
+      await symlink(open, link);
+      expect((await copilotHomeProblems(join(link, "profile")))[0]).toContain(await realpath(open));
+
+      const above = await profile();
+      await chmod(above, 0o777);
+      await mkdir(join(above, "mine"), { mode: 0o700 });
+      expect((await copilotHomeProblems(join(above, "mine", "profile")))[0]).toMatch(
+        /above COPILOT_HOME .* can be changed by other users/,
+      );
+    },
+  );
 
   it("refuses a recognised entry of the wrong type or behind a link", async () => {
     const root = await profile();
