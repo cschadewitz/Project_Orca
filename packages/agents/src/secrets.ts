@@ -30,7 +30,7 @@ import {
 } from "@orca/core";
 import { createHash } from "node:crypto";
 import type { HostSpec } from "@orca/core";
-import type { AgentHost, SecretDelivery } from "./host.js";
+import type { AgentHost, SecretDelivery, SpawnAgentOptions } from "./host.js";
 
 /** Why a secret could not be read. Never the value, never the provider's own error text. */
 export type SecretFailure = "undefined" | "wrong-host" | "missing" | "unsupported" | "unauthorized";
@@ -254,6 +254,33 @@ export function planSessionSecrets(
     withheldEnv,
   };
 }
+
+/**
+ * How an agent is given the secrets its own `env` refers to (#704). The host always reads
+ * every secret the plan names, since ORCA needs the values of those its MCP servers use and
+ * redacts all of them; the strategy decides what of that reaches the agent process.
+ *
+ * ORCA has one strategy today, `ENV_SECRET_DELIVERY`: each value is put in the agent's
+ * environment, which is how every agent ORCA runs reads its keys. A key store or broker that
+ * gives the agent a handle, and hands the value over only once the session is admitted, is a
+ * second strategy behind this same interface; nothing else in a session depends on which one
+ * is in use.
+ */
+export interface AgentSecretDelivery {
+  /** A short name for logs and errors, such as `env`. */
+  readonly kind: string;
+  /** What `spawnAgent` is given so the host reads the plan's secrets and delivers them. */
+  spawnOptions(plan: SessionSecretPlan): Pick<SpawnAgentOptions, "secrets" | "withheldEnv">;
+}
+
+/** Each secret the agent's env refers to is set in the agent process's environment. */
+export const ENV_SECRET_DELIVERY: AgentSecretDelivery = {
+  kind: "env",
+  spawnOptions: (plan) => ({
+    ...(plan.deliveries.length ? { secrets: plan.deliveries } : {}),
+    ...(plan.withheldEnv.length ? { withheldEnv: plan.withheldEnv } : {}),
+  }),
+};
 
 /** The MCP servers with their secret-backed variables filled from what the host read. */
 export function fillMcpSecrets(plan: SessionSecretPlan, values: ReadonlyMap<string, string>): AgentSpec["mcpServers"] {

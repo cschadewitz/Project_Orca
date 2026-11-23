@@ -314,15 +314,9 @@ An agent asks ORCA only when its own permission check has no answer. Once it rem
 grant (Claude's "always allow", a rule in its own settings), the same call never reaches ORCA
 again, so a grant you revoke in ORCA, or a rule you add, does not apply to it.
 
-For the Claude and Codex ACP adapters on the daemon's own machine, ORCA will close that gap
-with a `PreToolUse` hook it installs in the agent's sessions (#704, #705).
-
-> **Not available yet.** The hook is built and tested against the real Claude Code and the
-> real Codex, but this build refuses every session with `nativeToolHook: on`. It is turned on
-> once ORCA also holds a session away from its host services until its runtime is admitted.
-> What follows is how it will work.
-
-It is opt-in, per agent:
+For the Claude and Codex ACP adapters on the daemon's own machine, ORCA closes that gap
+with a `PreToolUse` hook it installs in the agent's sessions (#704, #705). It is opt-in, per
+agent:
 
 ```yaml
   - id: claude
@@ -366,21 +360,48 @@ it unguarded:
   0.171.0 (linux-x64)**;
 - the agent must run on the daemon's own machine, on Linux x64;
 - for Codex, ORCA also asks the adapter at startup and refuses unless Codex lists ORCA's hook
-  as trusted and enabled, and runs the hook once the way Codex will (through `$SHELL -lc`) on
-  a call it must block, and refuses unless it blocks with a receipt only ORCA's hook can sign
-  for that call: an exit status alone is not proof. An agent whose own `CODEX_CONFIG`
+  as trusted and enabled, and runs the hook once the way Codex will on a call it must block,
+  and refuses unless it blocks with a receipt only ORCA's hook can sign for that call: an exit
+  status alone is not proof. "The way Codex will" is exact: the probe runs in the shell Codex
+  runs hooks in (the account's login shell from the user database, with `-c`; not `$SHELL`,
+  and not as a login shell), with the environment ORCA reads off the running Codex process,
+  which is the one Codex gives its hooks, `codex-path` first on `PATH` included. A login shell
+  other than bash, zsh or sh is refused, since ORCA cannot say which shell Codex would use. A
+  refused probe says how it ended (exit status, signal, timeout, whether a receipt was there)
+  and a short, cleaned excerpt of what the command wrote. An agent whose own `CODEX_CONFIG`
   already sets hooks is refused.
 
 Each is what ORCA's acceptance tests run against the real agent, including sessions pointed
 at another Claude Code or Codex, which are refused. Without
 `nativeToolHook: on` (or with `off`), no hook is installed and nothing is refused.
 
+Until those checks have passed, the session is **held**: it is started, but ORCA answers none
+of its file reads or writes and puts none of its permission asks to anybody, and a session
+that fails a check is refused everything it asked for while it waited. Only the daemon's
+session factory installs the hook; `orca ping`, and an `orca-daemon` agent's delegation,
+refuse an agent with `nativeToolHook: on` instead of starting it unhooked.
+
+**MCP servers.** Claude Code would start a session's MCP servers itself, before ORCA has
+checked the Claude Code it runs, and would be handed their commands and environment, secrets
+included. With the hook on, ORCA runs a Claude agent's `mcpServers` instead and serves them to
+Claude Code over the ACP connection (MCP over ACP): Claude Code is told each server's name and
+nothing else, a server starts only for the first request after the session's checks pass, and
+its tools go through the hook like any other call. A Claude adapter that does not offer MCP
+over ACP is refused when the agent has servers. Codex keeps its servers as configured: its
+runtime is checked before `session/new` hands them over.
+
+**The agent's own secrets.** A `{ secret: … }` in the agent's own `env` reaches the agent as an
+environment variable, with or without the hook, since that is how agents read their keys. An
+agent can print its environment if a tool call asks it to; ORCA's logs and errors redact the
+values. How the value is delivered is one strategy in ORCA (`ENV_SECRET_DELIVERY`), so a key
+store or broker can replace it without changing anything else.
+
 What the hook does not see, said plainly (details in
 [agent-hook-coverage.md](agent-hook-coverage.md)): a hook is not an operating-system boundary;
 it sees one call's input, not every file a command goes on to touch. In Codex, text typed
 into a command that is already running (`write_stdin`) is never shown to it, and its
 hosted web search is not a local call at all; Codex's own hook runner, not ORCA, decides that
-a hook it cannot run (a broken login shell, a timeout) lets the call through, which is why
+a hook it cannot run (a broken shell, a timeout) lets the call through, which is why
 ORCA probes the hook when the session opens.
 
 Other agents (Gemini, pi) take no hook yet: with `nativeToolHook: on` they are refused;

@@ -3,9 +3,10 @@
  * the Claude ACP adapter (#704) or the Codex ACP adapter (#705).
  *
  * `nativeToolHook: on` is a promise that the agent's tool calls are checked, so every session
- * this cannot guard is refused, never opened without the hook. It is also unavailable in every
- * build ORCA ships (`nativeToolHookUnavailable`) until a session can be held away from host
- * services until its runtime is admitted; only the hook's own suites install it.
+ * this cannot guard is refused, never opened without the hook. Only the session factory
+ * installs it; every other way of starting agent work refuses such an agent
+ * (`nativeToolHookUnavailable`). The factory holds the session away from ORCA's host services,
+ * and from the MCP servers ORCA runs for it, until its runtime is admitted.
  *
  * The two adapters take the hook at different moments, and ORCA knows which adapter it runs,
  * and at what version, only once the agent has answered `initialize`:
@@ -53,8 +54,9 @@
  */
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readdir, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { userInfo } from "node:os";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { OrcaError, type ConfiguredPermissionPolicy } from "@orca/core";
@@ -70,11 +72,9 @@ import {
 import type { ProtectedPaths } from "./permissions.js";
 
 /**
- * Whether `nativeToolHook: on` can be used at all. It cannot, in any build ORCA ships, until a
- * session can be held away from host services until its runtime is admitted (#704): every
- * entry point that starts agent work refuses such an agent before anything starts, the
- * session factory, `openAcpSession` itself, and remote delegation. Only the hook's own test
- * suites turn it on, through the session factory's `activation`, which no config reaches.
+ * The refusal for `nativeToolHook: on` wherever ORCA cannot install its hook (#704): only the
+ * session factory installs it, so `openAcpSession` called without the factory's hook (as
+ * `orca ping` calls it) and remote delegation refuse such an agent before anything starts.
  */
 export function nativeToolHookUnavailable(agent: {
   id: string;
@@ -83,7 +83,7 @@ export function nativeToolHookUnavailable(agent: {
   if (agent.nativeToolHook !== "on") return undefined;
   return new OrcaError(
     "NOT_SUPPORTED",
-    `agent ${agent.id} has nativeToolHook: on, but ORCA's native tool hook is not available in this build yet (#704). ` +
+    `agent ${agent.id} has nativeToolHook: on, but ORCA cannot install its native tool hook when the agent is started this way (#704). ` +
       `ORCA refuses the session rather than run it unguarded; remove nativeToolHook: on to run it without the hook.`,
     { agentId: agent.id },
   );
@@ -193,6 +193,38 @@ export async function codexRuntimeProcess(agentPid: number | undefined): Promise
   return { pid: leaves[0]! };
 }
 
+/**
+ * The environment Codex runs its hooks in, read from the Codex process itself (#705): Codex
+ * starts a hook from an empty environment and replays its own, with the directory of its
+ * helper programs (`codex-path`, beside its `bin`) put first on `PATH`. Reading the process
+ * rather than rebuilding what ORCA meant to give it keeps the probe to exactly what the hook
+ * will see: the variables ORCA withheld are absent, the secrets it delivered are present, and
+ * whatever the adapter changed on the way is included.
+ */
+export async function codexHookEnvironment(pid: number): Promise<NodeJS.ProcessEnv | { error: string }> {
+  let raw: string;
+  let exe: string;
+  try {
+    [raw, exe] = await Promise.all([readFile(`/proc/${pid}/environ`, "utf8"), readlink(`/proc/${pid}/exe`)]);
+  } catch (e) {
+    return {
+      error: `the Codex process's environment cannot be read (${(e as NodeJS.ErrnoException).code ?? "unknown"})`,
+    };
+  }
+  const env: NodeJS.ProcessEnv = {};
+  for (const entry of raw.split("\0")) {
+    const eq = entry.indexOf("=");
+    if (eq > 0) env[entry.slice(0, eq)] = entry.slice(eq + 1);
+  }
+  const helpers = join(dirname(dirname(exe)), "codex-path");
+  const isDir = await stat(helpers).then(
+    (st) => st.isDirectory(),
+    () => false,
+  );
+  if (isDir) env["PATH"] = env["PATH"] ? `${helpers}:${env["PATH"]}` : helpers;
+  return env;
+}
+
 /** The platforms that workflow runs on. */
 export const CODEX_HOOK_VERIFIED_PLATFORMS: readonly NodeJS.Platform[] = ["linux"];
 
@@ -202,7 +234,25 @@ export const CODEX_PRE_TOOL_TIMEOUT_SECONDS = 30;
 /** One word for a POSIX shell, quoted so nothing in it is interpreted. */
 const shellWord = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
-/** The command line Codex runs (through `$SHELL -lc`) for the hook. */
+/**
+ * The shell Codex 0.171 starts a hook in, as `<shell> -c <command>` (observed by the acceptance
+ * suite, which records the hook shell's own arguments): the account's login shell from the
+ * system's user database, not `$SHELL`, and not as a login shell. ORCA knows this only for the
+ * shells Codex names (bash, zsh, sh); for any other login shell it cannot say which shell
+ * Codex would fall back to, and refuses rather than check the hook in the wrong one.
+ */
+export function codexHookShell(
+  loginShell: string | undefined = userInfo().shell ?? undefined,
+): { program: string; args: string[] } | { error: string } {
+  if (!loginShell) return { error: "this account has no login shell" };
+  if (!["bash", "zsh", "sh"].includes(basename(loginShell)))
+    return {
+      error: `this account's login shell is ${loginShell}, and ORCA knows how Codex runs hooks only in bash, zsh or sh`,
+    };
+  return { program: loginShell, args: ["-c"] };
+}
+
+/** The command line Codex runs (through `codexHookShell`) for the hook. */
 export function codexPreToolHookCommand(runtime: string, script: string, contextFile: string): string {
   return [runtime, script, "--codex", contextFile].map(shellWord).join(" ");
 }
@@ -297,8 +347,42 @@ export function codexHookListProblem(listed: unknown, command: string): string |
 /** The most stderr the probe reads; a hook that says more than this has not answered it. */
 const PROBE_STDERR_LIMIT = 16 * 1024;
 
+export interface CodexProbeDiagnostics {
+  /** How the probe ended; only `blocked` lets the session open. */
+  outcome: "blocked" | "timeout" | "overflow" | "spawn-error" | "signal" | "exit" | "no-receipt";
+  /** The shell the command ran in. */
+  shell: string;
+  exitCode?: number | null;
+  signal?: string;
+  /** How much the command wrote on stderr, in bytes, up to the probe's bound. */
+  stderrBytes: number;
+  /** Whether stderr carried a receipt line, and whether it was the one for this call. */
+  receipt: "matched" | "mismatched" | "absent";
+  elapsedMs: number;
+}
+
+/** A receipt-shaped line, whoever wrote it. */
+const RECEIPT_LINE = /^orca-hook-receipt:/;
+
 /**
- * Run the hook's command line the way Codex does (`$SHELL -lc`, in the session's directory)
+ * At most `max` characters of what a command said, for a person reading a refusal: receipt
+ * lines left out (they mean nothing to a reader), control characters and escape sequences
+ * shown as `?`, and runs of white space folded. A login shell's profile writes here too.
+ */
+export function probeExcerpt(stderr: string, max = 200): string {
+  const text = stderr
+    .split("\n")
+    .filter((line) => !RECEIPT_LINE.test(line))
+    .join(" ")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, "?")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/**
+ * Run the hook's command line the way Codex does (`codexHookShell`, in the session's directory)
  * on a call that ORCA's own protected paths must block, and say whether ORCA's hook blocked
  * it. An exit status alone is not taken as proof: a profile, an alias or another program on
  * the shell's path can exit 2 too. The probe's frame carries a fresh nonce, and the session
@@ -321,11 +405,13 @@ export function probeCodexHook(opts: {
   contextFile: string;
   /** The `probeKey` written into the context file the command names. */
   probeKey: string;
+  /** The shell to run it in, as Codex would (`codexHookShell`). */
+  shell: { program: string; args: string[] };
   env?: NodeJS.ProcessEnv | undefined;
   timeoutMs?: number | undefined;
-}): Promise<{ blocked: boolean; detail: string }> {
+}): Promise<{ blocked: boolean; detail: string; diagnostics: CodexProbeDiagnostics }> {
   const env = opts.env ?? process.env;
-  const shell = env["SHELL"] || "/bin/sh";
+  const shell = opts.shell.program;
   const nonce = randomBytes(16).toString("hex");
   const toolUseId = `orca-hook-probe:${nonce}`;
   if (!CODEX_PROBE_TOOL_USE_ID.test(toolUseId)) throw new Error("probe id does not match the hook's pattern");
@@ -339,15 +425,19 @@ export function probeCodexHook(opts: {
     cwd: opts.cwd,
   });
   const expected = Buffer.from(codexProbeReceipt(opts.probeKey, nonce), "utf8");
-  const receipted = (stderr: string): boolean =>
-    stderr.split("\n").some((line) => {
+  const receipt = (stderr: string): CodexProbeDiagnostics["receipt"] => {
+    const lines = stderr.split("\n");
+    const matched = lines.some((line) => {
       const got = Buffer.from(line, "utf8");
       return got.length === expected.length && timingSafeEqual(got, expected);
     });
+    return matched ? "matched" : lines.some((line) => RECEIPT_LINE.test(line)) ? "mismatched" : "absent";
+  };
+  const started = Date.now();
   return new Promise((resolve) => {
     let settled = false;
     let stderr = "";
-    const child = spawn(shell, ["-lc", opts.command], {
+    const child = spawn(shell, [...opts.shell.args, opts.command], {
       cwd: opts.cwd,
       env,
       stdio: ["pipe", "ignore", "pipe"],
@@ -364,32 +454,45 @@ export function probeCodexHook(opts: {
       child.stdin.destroy();
       child.stderr.destroy();
     };
-    const settle = (result: { blocked: boolean; detail: string }) => {
+    const settle = (
+      outcome: CodexProbeDiagnostics["outcome"],
+      detail: string,
+      extra: Pick<CodexProbeDiagnostics, "exitCode" | "signal"> = {},
+    ) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       stop();
-      resolve(result);
+      resolve({
+        blocked: outcome === "blocked",
+        detail,
+        diagnostics: {
+          outcome,
+          shell,
+          ...extra,
+          stderrBytes: Buffer.byteLength(stderr, "utf8"),
+          receipt: receipt(stderr),
+          elapsedMs: Date.now() - started,
+        },
+      });
     };
     const timeoutMs = opts.timeoutMs ?? CODEX_PRE_TOOL_TIMEOUT_SECONDS * 1000;
-    const timer = setTimeout(
-      () => settle({ blocked: false, detail: `the hook did not answer within ${timeoutMs} ms` }),
-      timeoutMs,
-    );
+    const timer = setTimeout(() => settle("timeout", `the hook did not answer within ${timeoutMs} ms`), timeoutMs);
     child.stderr.on("data", (d: Buffer) => {
       stderr += d.toString();
       if (Buffer.byteLength(stderr, "utf8") > PROBE_STDERR_LIMIT)
-        settle({ blocked: false, detail: "the hook wrote more than the probe reads" });
+        settle("overflow", "the hook wrote more than the probe reads");
     });
     child.stderr.on("error", () => undefined);
-    child.on("error", (e) => settle({ blocked: false, detail: e.message }));
+    child.on("error", (e) => settle("spawn-error", `${shell} could not be started: ${e.message}`));
     child.on("close", (code, signal) => {
-      const said = stderr.trim().slice(0, 300);
-      if (signal) settle({ blocked: false, detail: `killed by ${signal}` });
-      else if (code !== 2) settle({ blocked: false, detail: `exit ${code}: ${said}` });
-      else if (!receipted(stderr))
-        settle({ blocked: false, detail: `exit 2 without ORCA's hook's receipt for this call: ${said}` });
-      else settle({ blocked: true, detail: "blocked, with the hook's receipt" });
+      const said = probeExcerpt(stderr);
+      const saying = said === "" ? "" : `: ${said}`;
+      if (signal) settle("signal", `killed by ${signal}${saying}`, { signal });
+      else if (code !== 2) settle("exit", `exit ${code}${saying}`, { exitCode: code });
+      else if (receipt(stderr) !== "matched")
+        settle("no-receipt", `exit 2 without ORCA's hook's receipt for this call${saying}`, { exitCode: code });
+      else settle("blocked", "blocked, with the hook's receipt", { exitCode: code });
     });
     child.stdin.on("error", () => undefined);
     child.stdin.end(frame);
@@ -399,6 +502,12 @@ export function probeCodexHook(opts: {
 /* ------------------------------------ both ------------------------------------ */
 
 export interface NativeToolHookSessionOptions {
+  /**
+   * Variables `runtime` needs to run the hook program as a plain Node, given to the agent so
+   * the hooks it starts inherit them: `ELECTRON_RUN_AS_NODE=1` when ORCA's runtime is the
+   * desktop app's Electron binary. Claude Code runs the hook with no environment of its own.
+   */
+  runtimeEnv?: Readonly<Record<string, string>> | undefined;
   agentId: string;
   permissions: ConfiguredPermissionPolicy;
   permissionFiles: readonly string[];
@@ -418,6 +527,10 @@ export interface NativeToolHookSessionOptions {
     ((pid: number, agentPid: number | undefined) => Promise<{ sha256: string } | { error: string }>) | undefined;
   /** How the Codex process an adapter runs is found; `codexRuntimeProcess` unless a test says otherwise. */
   codexProcess?: ((agentPid: number | undefined) => Promise<{ pid: number } | { error: string }>) | undefined;
+  /** The shell Codex runs hooks in; `codexHookShell` unless a test says otherwise. */
+  codexShell?: (() => { program: string; args: string[] } | { error: string }) | undefined;
+  /** The environment Codex runs hooks in; `codexHookEnvironment` unless a test says otherwise. */
+  codexEnvironment?: ((pid: number) => Promise<NodeJS.ProcessEnv | { error: string }>) | undefined;
   /**
    * The environment the agent is spawned with (the daemon's, then the agent's own), which
    * the Codex hook's `CODEX_CONFIG` builds on and its probe runs in.
@@ -623,7 +736,7 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
       await writeFile(file, JSON.stringify(context), { encoding: "utf8", mode: 0o600, flag: "wx" });
       codexCommand = codexPreToolHookCommand(opts.runtime, opts.script, file);
       codexEnv = codexHookConfig(opts.agentEnv["CODEX_CONFIG"], codexCommand);
-      return { env: codexEnv === undefined ? {} : { CODEX_CONFIG: codexEnv } };
+      return { env: { ...(opts.runtimeEnv ?? {}), ...(codexEnv === undefined ? {} : { CODEX_CONFIG: codexEnv }) } };
     },
     sessionMeta: async (agentInfo, ext, agentPid) => {
       if (file === undefined || opts.script === undefined || codexCommand === undefined || probeKey === undefined)
@@ -676,15 +789,25 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
         const found = await (opts.codexProcess ?? codexRuntimeProcess)(agentPid);
         if ("error" in found) throw refuse(`ORCA could not tell which Codex the adapter runs (${found.error})`);
         await attest(CODEX_HOOK_VERIFIED_PAIRS, agentInfo.version, found.pid, "Codex");
+        // The probe runs in the environment Codex itself will give the hook, not in a copy of
+        // what ORCA meant to give the agent.
+        const env = await (opts.codexEnvironment ?? codexHookEnvironment)(found.pid);
+        if ("error" in env) throw refuse(`ORCA could not run its startup check as Codex runs the hook: ${env.error}`);
+        const shell = (opts.codexShell ?? codexHookShell)();
+        if ("error" in shell)
+          throw refuse(`ORCA could not run its startup check as Codex runs the hook: ${shell.error}`);
         const probe = await probeCodexHook({
           command: codexCommand,
           cwd: opts.workspaceCwd,
           contextFile: file,
           probeKey: key,
-          env: { ...opts.agentEnv, CODEX_CONFIG: codexEnv },
+          shell,
+          env,
         });
         if (!probe.blocked)
-          throw refuse(`the hook did not block a call it must block when run as Codex runs it (${probe.detail})`);
+          throw refuse(`the hook did not block a call it must block when run as Codex runs it (${probe.detail})`, {
+            probe: probe.diagnostics,
+          });
         status = "codex";
         adapterVersion = agentInfo.version;
         return undefined;

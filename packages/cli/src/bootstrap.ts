@@ -37,8 +37,8 @@ import { parse as parseYaml } from "yaml";
 import {
   AgentRegistry,
   claudePreToolHookScript,
+  CLAUDE_ADAPTER_NAMES,
   nativeToolHookSession,
-  nativeToolHookUnavailable,
   openAcpSession,
   permissionPolicyPath,
   type AgentSession,
@@ -298,13 +298,9 @@ export function makeSessionFactory(
     arch?: string | undefined;
     imageDigest?:
       ((pid: number, agentPid: number | undefined) => Promise<{ sha256: string } | { error: string }>) | undefined;
-    /**
-     * Whether `nativeToolHook: on` may install the hook at all. Off in every build ORCA ships
-     * until the session can be held from host services until its runtime is admitted (#704);
-     * only the hook's own tests turn it on.
-     */
-    activation?: "acceptance-only" | undefined;
     codexProcess?: ((agentPid: number | undefined) => Promise<{ pid: number } | { error: string }>) | undefined;
+    codexEnvironment?: ((pid: number) => Promise<NodeJS.ProcessEnv | { error: string }>) | undefined;
+    codexShell?: (() => { program: string; args: string[] } | { error: string }) | undefined;
   } = {
     runtime: process.execPath,
     script: claudePreToolHookScript(),
@@ -318,7 +314,6 @@ export function makeSessionFactory(
     // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
     // says who it is, and the session refused wherever it cannot be put in force.
     if (options.agent.nativeToolHook !== "on") return open(bound);
-    if (hook.activation !== "acceptance-only") throw nativeToolHookUnavailable(options.agent)!;
     // The hook runs where the agent does; ORCA installs it only on its own host.
     if (options.host.spec.type !== "local")
       throw new OrcaError(
@@ -341,7 +336,12 @@ export function makeSessionFactory(
       arch: hook.arch,
       imageDigest: hook.imageDigest,
       codexProcess: hook.codexProcess,
+      codexEnvironment: hook.codexEnvironment,
+      codexShell: hook.codexShell,
       agentEnv: { ...process.env, ...literalEnv(options.agent.env), ...(options.env ?? {}) },
+      // In the desktop app ORCA's runtime is the Electron binary, which runs a script as Node
+      // only with this set; the hooks the agent starts inherit it from the agent.
+      runtimeEnv: process.versions["electron"] !== undefined ? { ELECTRON_RUN_AS_NODE: "1" } : undefined,
     });
     let hookEnv: Record<string, string>;
     try {
@@ -350,14 +350,29 @@ export function makeSessionFactory(
       await installed.cleanup();
       throw error;
     }
+    // ORCA's host services wait for this: settled once the session's runtime is admitted,
+    // and rejected, so that each held request is refused, on every way the open fails.
+    let admit!: () => void;
+    let refuseAdmission!: (reason: unknown) => void;
+    const admission = new Promise<void>((resolve, reject) => {
+      admit = resolve;
+      refuseAdmission = reject;
+    });
     let session: AgentSession;
     try {
       session = await open({
         ...bound,
         env: { ...(options.env ?? {}), ...hookEnv },
         sessionMeta: installed.sessionMeta,
+        admission,
+        // Claude Code would start its MCP servers itself, before ORCA has admitted the runtime
+        // it runs, and would hold their secrets; ORCA runs them instead and serves them over
+        // ACP. Codex keeps its servers: its runtime is admitted before `session/new` hands
+        // them over.
+        relayMcpServers: (agentInfo) => agentInfo !== undefined && CLAUDE_ADAPTER_NAMES.includes(agentInfo.name),
       });
     } catch (error) {
+      refuseAdmission(error);
       await installed.cleanup();
       throw error;
     }
@@ -365,10 +380,12 @@ export function makeSessionFactory(
     try {
       await installed.verifyRuntime();
     } catch (error) {
+      refuseAdmission(error);
       await session.close().catch(() => undefined);
       await installed.cleanup();
       throw error;
     }
+    admit();
     void session.closed.then(installed.cleanup, installed.cleanup);
     const close = session.close.bind(session);
     session.close = async (...args: Parameters<AgentSession["close"]>) => {

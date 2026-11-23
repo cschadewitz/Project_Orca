@@ -260,9 +260,6 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("the hook 
     makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
       runtime: process.execPath,
       script: hookScript,
-      // The hook is off in every shipped build until activation is complete; this suite is
-      // what proves it.
-      activation: "acceptance-only",
     })({
       host: new LocalHost({ id: "local", type: "local" }),
       agent: agent(permissions, env),
@@ -441,6 +438,83 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("the hook 
         expect(await marks()).toBe(1);
       } finally {
         await session.close();
+      }
+    },
+    120_000,
+  );
+
+  it.each([
+    ["allowed by ORCA's policy, runs", { default: "allow", rules: [] }, 1],
+    [
+      "denied by an ORCA rule, does not run",
+      { default: "allow", rules: [{ match: { kind: "other", titlePattern: "^marker: mark$" }, decision: "deny" }] },
+      0,
+    ],
+  ] as const)(
+    "serves the agent's MCP servers through ORCA, and a relayed tool %s; Claude Code never sees the command or its secret",
+    async (_, permissions, runs) => {
+      asks.length = 0;
+      const secret = "orca-704-relay-secret";
+      const serverFile = join(root, "mcp-server.cjs");
+      const serverLog = join(root, "mcp-server.log");
+      // A stdio MCP server of the 2025-06-18 era, with one tool that marks the workspace.
+      await writeFile(
+        serverFile,
+        `const rl = require("node:readline").createInterface({ input: process.stdin });
+const fs = require("node:fs");
+const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+rl.on("line", (line) => {
+  const m = JSON.parse(line);
+  fs.appendFileSync(${JSON.stringify(serverLog)}, (m.method || "response") + "\\n");
+  if (m.method === "initialize")
+    send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "marker", version: "1" } } });
+  else if (m.method === "tools/list")
+    send({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "mark", description: "mark", inputSchema: { type: "object", properties: {} } }] } });
+  else if (m.method === "tools/call") {
+    if (process.env.MARKER_TOKEN === ${JSON.stringify(secret)}) fs.appendFileSync("marker.txt", "mcp\\n");
+    send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "marked" }] } });
+  } else if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: "no" } });
+});
+`,
+      );
+      // Claude Code allows the tool by its own settings, so the only gate is ORCA's.
+      await writeFile(
+        join(claudeConfig, "settings.json"),
+        JSON.stringify({ permissions: { allow: ["mcp__marker__mark"] } }),
+        "utf8",
+      );
+      const spec = AgentSpecSchema.parse({
+        ...agent(permissions, { ENABLE_TOOL_SEARCH: "false" }),
+        mcpServers: [{ name: "marker", command: process.execPath, args: [serverFile], env: { MARKER_TOKEN: secret } }],
+      });
+      const session = await makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
+        runtime: process.execPath,
+        script: hookScript,
+      })({
+        host: new LocalHost({ id: "local", type: "local" }),
+        agent: spec,
+        cwd: workspace,
+        askPermission,
+        logger: silentLogger,
+        handshakeTimeoutMs: 60_000,
+      });
+      try {
+        await session.prompt(`CALL:${JSON.stringify({ name: "mcp__marker__mark", input: {} })}`);
+        expect(await marks()).toBe(runs);
+        expect(asks).toEqual([]);
+      } finally {
+        await session.close();
+      }
+      const log = (await readFile(serverLog, "utf8")).split("\n");
+      expect(log).toEqual(expect.arrayContaining(["initialize", "notifications/initialized", "tools/list"]));
+      // A denied call is stopped before it reaches the server at all.
+      expect(log.includes("tools/call")).toBe(runs === 1);
+      // Claude Code's own record of its MCP servers names the ORCA-served one and nothing else.
+      const files = await readdir(claudeConfig, { recursive: true });
+      for (const f of files) {
+        const text = await readFile(join(claudeConfig, f), "utf8").catch(() => "");
+        expect(text).not.toContain(secret);
+        expect(text).not.toContain("mcp-server.cjs");
       }
     },
     120_000,

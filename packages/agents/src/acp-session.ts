@@ -26,14 +26,18 @@ import {
 } from "@orca/core";
 import {
   checkSecretUse,
+  ENV_SECRET_DELIVERY,
   fillMcpSecrets,
   planSessionSecrets,
   redactError,
   redactingLogger,
+  type AgentSecretDelivery,
   type AuthorizeSecretUse,
 } from "./secrets.js";
 import { decideFsCall, fsToolCall, type FsAccess } from "./owned-fs-gate.js";
 import { processCleanup } from "./process-cleanup.js";
+import * as acpUnstable from "@agentclientprotocol/sdk/unstable";
+import { createMcpRelay, type McpRelay } from "./mcp-relay.js";
 import { nativeToolHookUnavailable } from "./native-tool-hook-session.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import { isHostFileMissing, type AgentHost, type AgentProcessHandle } from "./host.js";
@@ -65,6 +69,12 @@ export interface OpenSessionOptions {
    */
   authorizeSecretUse?: AuthorizeSecretUse | undefined;
   /**
+   * How the secrets the agent's own `env` refers to reach it (#704). Default
+   * `ENV_SECRET_DELIVERY`: in its process environment. The one place a key store or broker
+   * would be put instead.
+   */
+  secretDelivery?: AgentSecretDelivery | undefined;
+  /**
    * The use decision for this session's catalog MCP servers (#337), asked again immediately
    * before `session/new` (or `session/load`) hands the agent its servers, after the process
    * is up and initialized. A denial fails the open, and startup cleanup stops the process.
@@ -93,6 +103,23 @@ export interface OpenSessionOptions {
         agentPid: number | undefined,
       ) => Promise<Record<string, unknown> | undefined>)
     | undefined;
+  /**
+   * Settles once the session may use ORCA's host services (#704). Until it fulfils, every
+   * request the agent makes of ORCA (`fs/read_text_file`, `fs/write_text_file`, a permission
+   * ask) waits; if it rejects, each is refused and nothing is read, written or asked. The
+   * CLI's session factory sets it for a session with ORCA's pre-tool hook, and fulfils it only
+   * once the runtime that session runs has been admitted. Undefined: no wait.
+   */
+  admission?: Promise<void> | undefined;
+  /**
+   * ORCA runs the agent's MCP servers itself and serves them over the ACP connection (#704):
+   * the agent is told each server's name and nothing else, and a server is started, with its
+   * secrets, only for a request made after `admission`. An agent that does not offer MCP over
+   * ACP at `initialize` is refused when it has servers to be given. Off: the agent is handed
+   * each server's command and environment in `session/new`, as before. A function decides
+   * once the agent has said at `initialize` who it is.
+   */
+  relayMcpServers?: boolean | ((agentInfo: { name: string; version: string } | undefined) => boolean) | undefined;
   /** Handed every resolved secret value, before anything else happens, so the caller can redact it. */
   onSecretValues?: (values: readonly string[]) => void;
   host: AgentHost;
@@ -154,6 +181,20 @@ export interface PermissionInvocation {
 export interface SessionContinuity {
   mode: "fresh" | "loaded";
   reason: "new" | "load-supported" | "load-unsupported" | "load-failed";
+}
+
+/** The outer `mcp/message` params, checked as far as dispatching to a server needs. */
+function mcpMessageParams(params: unknown): acpUnstable.McpMessageParams {
+  const p = params as Partial<acpUnstable.McpMessageParams> | null;
+  if (
+    p === null ||
+    typeof p !== "object" ||
+    typeof p.serverId !== "string" ||
+    typeof p.requestId !== "string" ||
+    typeof p.method !== "string"
+  )
+    throw acp.RequestError.invalidParams({ reason: "not an MCP message" });
+  return p as acpUnstable.McpMessageParams;
 }
 
 export const ORCA_CLIENT_INFO = { name: "orca", version: "0.1.0" } as const;
@@ -377,6 +418,19 @@ async function openPlanned(
    * Refuse an `fs/*` request for one of ORCA's own files. These handlers read and write with
    * no permission ask at all, so this is the only check ORCA makes on them.
    */
+  // Settled once, observed by every request: a rejection is an answer here, never unhandled.
+  const admitted: Promise<boolean> = opts.admission
+    ? opts.admission.then(
+        () => true,
+        () => false,
+      )
+    : Promise.resolve(true);
+  const refuseUnadmitted = async (path: string): Promise<void> => {
+    if (await admitted) return;
+    logger.warn("agent file request refused: the session was not admitted", { path });
+    throw acp.RequestError.invalidParams({ path, reason: "the session was not admitted" });
+  };
+
   const refuseProtected = (path: string, access: "read" | "write"): void => {
     if (protectedPathFor(path, access, opts.protectedPaths) === undefined) return;
     logger.warn("agent file request refused: the path is ORCA's own", { path, access });
@@ -386,13 +440,25 @@ async function openPlanned(
   const proc: AgentProcessHandle = await opts.host.spawnAgent(secretPlan.agent, {
     cwd: opts.cwd,
     ...(opts.env ? { env: opts.env } : {}),
-    ...(secretPlan.deliveries.length ? { secrets: secretPlan.deliveries } : {}),
-    ...(secretPlan.withheldEnv.length ? { withheldEnv: secretPlan.withheldEnv } : {}),
+    ...(opts.secretDelivery ?? ENV_SECRET_DELIVERY).spawnOptions(secretPlan),
   });
   const secretValues = proc.secretValues ?? new Map<string, string>();
   values.push(...secretValues.values());
   if (values.length) opts.onSecretValues?.([...values]);
   const mcpServers = fillMcpSecrets(secretPlan, secretValues);
+  const relay: McpRelay | undefined =
+    opts.relayMcpServers && mcpServers.length
+      ? createMcpRelay({
+          host: opts.host,
+          cwd: opts.cwd,
+          env: opts.env,
+          servers: mcpServers.map((m) => ({ name: m.name, command: m.command, args: m.args, env: literalEnv(m.env) })),
+          admitted,
+          logger,
+          clientInfo: { ...ORCA_CLIENT_INFO },
+          exitGraceMs: opts.exitGraceMs,
+        })
+      : undefined;
 
   const app = acp
     .client({ name: ORCA_CLIENT_INFO.name })
@@ -411,6 +477,8 @@ async function openPlanned(
       for (const l of listeners) l(e);
     })
     .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
+      // Nothing is asked of anybody for a session that has not been admitted.
+      if (!(await admitted)) return { outcome: { outcome: "cancelled" } };
       const turn = activeTurn;
       // A session id alone is insufficient: asks outside this exact live prompt are stale.
       if (!turn || turn.abort.signal.aborted || ctx.params.sessionId !== acpSessionId)
@@ -441,6 +509,7 @@ async function openPlanned(
     })
     .onRequest(acp.methods.client.fs.readTextFile, async (ctx) => {
       const { path, line, limit } = ctx.params;
+      await refuseUnadmitted(path);
       // Only this session's own agent session may ask ORCA for file I/O (#703 review).
       if (ctx.params.sessionId !== acpSessionId)
         throw acp.RequestError.invalidParams({ path, reason: "not this session" });
@@ -471,6 +540,7 @@ async function openPlanned(
     })
     .onRequest(acp.methods.client.fs.writeTextFile, async (ctx) => {
       const { path, content } = ctx.params;
+      await refuseUnadmitted(path);
       if (ctx.params.sessionId !== acpSessionId)
         throw acp.RequestError.invalidParams({ path, reason: "not this session" });
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
@@ -481,6 +551,9 @@ async function openPlanned(
       return {};
     });
 
+  // The stable builder has no MCP-over-ACP method of its own, so it takes the request as a
+  // custom method with its own params check; the relay validates the rest.
+  if (relay) app.onRequest(acpUnstable.methods.client.mcp.message, mcpMessageParams, relay.handleRequest);
   const conn = app.connect(proc.stream);
   const closed = conn.closed.then(() => undefined);
   void closed.then(() => activeTurn?.abort.abort("agent connection closed"));
@@ -508,7 +581,7 @@ async function openPlanned(
       } catch {
         /* Still retain responsibility for the child if transport close fails. */
       }
-      await cleanupProcess();
+      await Promise.all([cleanupProcess(), relay?.close()]);
     })();
     // Cancellation can initiate shutdown without an awaiting caller.
     void terminating.catch((error: unknown) =>
@@ -560,15 +633,26 @@ async function openPlanned(
     logger.debug("initialized", { protocolVersion: init.protocolVersion, agentInfo: init.agentInfo });
     embeddedContext = init.agentCapabilities?.promptCapabilities?.embeddedContext === true;
     if (opts.requireEmbeddedContext && !embeddedContext) throw opts.requireEmbeddedContext();
+    const agentInfo = init.agentInfo ? { name: init.agentInfo.name, version: init.agentInfo.version } : undefined;
+    const relayed =
+      relay !== undefined && (typeof opts.relayMcpServers === "function" ? opts.relayMcpServers(agentInfo) : true);
+    if (relayed && (init.agentCapabilities?.mcpCapabilities as { acp?: unknown } | undefined)?.acp !== true)
+      throw new OrcaError(
+        "AGENT_PROTOCOL",
+        "the agent cannot be given its MCP servers through ORCA: it does not offer MCP over ACP",
+        { agent: opts.agent.id },
+      );
     const newSession: acp.NewSessionRequest = {
       cwd: opts.cwd,
-      mcpServers: mcpServers.map((m) => ({
-        name: m.name,
-        command: m.command,
-        args: m.args,
-        // Every reference was resolved above, so only literal values remain.
-        env: Object.entries(literalEnv(m.env)).map(([name, value]) => ({ name, value })),
-      })),
+      mcpServers: relayed
+        ? relay.declare(conn.agent)
+        : mcpServers.map((m) => ({
+            name: m.name,
+            command: m.command,
+            args: m.args,
+            // Every reference was resolved above, so only literal values remain.
+            env: Object.entries(literalEnv(m.env)).map(([name, value]) => ({ name, value })),
+          })),
     };
     if (opts.additionalDirectories) newSession.additionalDirectories = opts.additionalDirectories;
     const meta = await opts.sessionMeta?.(

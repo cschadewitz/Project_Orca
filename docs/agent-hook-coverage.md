@@ -32,6 +32,7 @@ An agent, version or platform not listed here is refused while `nativeToolHook: 
 | ORCA deny | `permissionDecision: "deny"`: nothing runs | installed |
 | Hook cannot start, exits 1 or 3, times out, prints JSON Claude cannot validate | Blocked (`onFailure: "block"`) | installed |
 | Hook exits 0 printing non-JSON | Claude lets the call through. ORCA's program cannot do this (its output guard turns stray stdout into exit 2) | installed |
+| MCP servers | ORCA runs them and serves them over the ACP connection; Claude Code gets a name and an id, never a command or environment, and a server starts only after the session is admitted. Their tools are hooked as `mcp__<server>__<tool>`: allowed, the call reaches the server; denied, it never does | installed |
 | Adapter runs another Claude Code (`CLAUDE_CODE_EXECUTABLE`) | Refused before any work: a session-start hook records its own process, ORCA checks that process is under the agent it started and hashes the image it runs, accepting only the digest pinned for the adapter (`CLAUDE_HOOK_VERIFIED_PAIRS`). Nothing it records is executed | installed (2.1.329 refused) |
 | Outside the hook | What a shell command touches beyond its own text; ORCA's protected-path rules and Claude's sandbox still apply | by design |
 
@@ -39,7 +40,10 @@ An agent, version or platform not listed here is refused while `nativeToolHook: 
 
 ORCA hands Codex its hook through `CODEX_CONFIG`, which the adapter passes to Codex as session
 flags, with Codex's trust for it recorded beside it (`hooks.state`), so nothing is written to
-the user's Codex config. Codex runs the hook through `$SHELL -lc`.
+the user's Codex config. Codex runs the hook as `<login shell> -c <command>`, where the login
+shell is the account's in the user database (not `$SHELL`), in Codex's own environment with
+its `codex-path` directory put first on `PATH`; the acceptance suite records both from the hook
+shell itself.
 
 The acceptance suite starts the adapter in its full-access mode (`INITIAL_AGENT_MODE`), with
 no sandbox and no asks of Codex's own, so that each row below is the hook's doing alone. The
@@ -58,7 +62,7 @@ replaces the hook, which runs before them.
 | ORCA deny, ORCA ask | Exit 2 with the reason on stderr: blocked. Codex's own `ask` answer lets the call run, so ORCA never sends it | installed |
 | Hook exits 1, exits 2 with nothing on stderr, prints output Codex cannot read, times out (ORCA sets 30 s) | **Codex lets the call through.** ORCA's program answers only with exit 0, or exit 2 and a reason, including when it fails | installed (exit codes), source (timeout) |
 | Hook not trusted (hash changed, config turned it off) | Not run, so not blocking. ORCA asks the adapter (`_codex/hooks/list`) at session start and refuses unless ORCA's hook is listed trusted and enabled | installed |
-| Login shell cannot run the hook, or runs something else | Codex lets calls through. ORCA runs the hook's command once the same way at session start, on a call it must block with a fresh nonce, and refuses unless it exits 2 **and** writes the receipt the hook signs for that nonce with a key only the session's context file holds. Another program that exits 2, or echoes the call back, has no receipt. The receipt shows possession of that context and a block for that call, not which program answered: a process under the same OS account could read the file too. The probe's deadline refuses the session even if something the command started keeps its streams open | unit-tested; the shell is the user's |
+| The shell cannot run the hook, or runs something else | Codex lets calls through. ORCA runs the hook's command once the same way at session start, on a call it must block with a fresh nonce, and refuses unless it exits 2 **and** writes the receipt the hook signs for that nonce with a key only the session's context file holds. Another program that exits 2, or echoes the call back, has no receipt. The receipt shows possession of that context and a block for that call, not which program answered: a process under the same OS account could read the file too. The probe's deadline refuses the session even if something the command started keeps its streams open. The probe runs in Codex's hook shell and the environment read off the Codex process (both checked against the real Codex), and its refusal names how it ended | unit-tested; installed (shell and environment) |
 | Agent's own `CODEX_CONFIG` sets hooks | Refused: ORCA does not reorder somebody else's hooks | installed |
 | Adapter runs another Codex (`CODEX_PATH`) | Refused before the session is created: ORCA finds the Codex app-server among the agent's own processes and hashes the image it runs, accepting only the digest pinned for the adapter (`CODEX_HOOK_VERIFIED_PAIRS`). Nothing it finds is executed | installed (0.170.0 refused) |
 

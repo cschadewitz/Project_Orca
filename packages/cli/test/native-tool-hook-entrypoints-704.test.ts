@@ -1,9 +1,10 @@
 /**
- * `nativeToolHook: on` is unavailable in every build ORCA ships (#704), and every entry point
- * that starts agent work refuses such an agent before anything starts: the session factory
- * the daemon and runs use, `openAcpSession` (which `orca ping` calls directly), and remote
- * delegation. Each case here watches for the work itself: a spawned process writing a
- * marker, a host asked to spawn, a remote looked up.
+ * Only the session factory the daemon and runs use installs ORCA's hook (#704), so every
+ * other entry point that starts agent work refuses a `nativeToolHook: on` agent before
+ * anything starts: `openAcpSession` called without the factory's hook (as `orca ping` calls
+ * it), and remote delegation. Each case here watches for the work itself: a spawned process
+ * writing a marker, a host asked to spawn, a remote looked up. That the factory does install
+ * it is `claude-hook-wiring-704.test.ts`.
  */
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -11,10 +12,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSpecSchema, type AgentSpec } from "@orca/core";
-import { LocalHost, openAcpSession, type AgentHost, type OpenSessionOptions } from "@orca/agents";
+import { LocalHost, openAcpSession, type AgentHost } from "@orca/agents";
 import { delegatingSessionFactory } from "@orca/daemon";
 import { commands, type CommandContext } from "../src/commands/index.js";
-import { makeSessionFactory } from "../src/bootstrap.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -38,7 +38,9 @@ async function closedPort(): Promise<number> {
 
 const refusal = {
   code: "NOT_SUPPORTED",
-  message: expect.stringMatching(/not available in this build yet[\s\S]*nativeToolHook: on/),
+  message: expect.stringMatching(
+    /cannot install its native tool hook when the agent is started this way[\s\S]*nativeToolHook: on/,
+  ),
 };
 
 /** A host that records whether anything asked it to start an agent. */
@@ -51,7 +53,7 @@ function watchedHost(): { host: AgentHost; spawned: ReturnType<typeof vi.fn> } {
   return { host, spawned };
 }
 
-describe("nativeToolHook: on is refused at every entry point in a shipped build (#704)", () => {
+describe("nativeToolHook: on is refused at every entry point that cannot install the hook (#704)", () => {
   it("orca ping: refused, and the agent's program never runs", async () => {
     const dir = await tempDir();
     const marker = join(dir, "started");
@@ -91,18 +93,6 @@ describe("nativeToolHook: on is refused at every entry point in a shipped build 
     const agent = AgentSpecSchema.parse({ id: "claude", command: "claude-agent-acp", nativeToolHook: "on" });
     await expect(openAcpSession({ host, agent, cwd: tmpdir() })).rejects.toMatchObject(refusal);
     expect(spawned).not.toHaveBeenCalled();
-  });
-
-  it("the shipped session factory: refused before the base opener is called", async () => {
-    const dir = await tempDir();
-    const open = vi.fn(async (_: OpenSessionOptions) => {
-      throw new Error("a session was opened");
-    });
-    // No hook argument: exactly as bootstrap builds it for the daemon, runs and agents.ping.
-    const factory = makeSessionFactory({ configDir: dir, storeDir: ".orca" }, open);
-    const agent = AgentSpecSchema.parse({ id: "claude", command: "claude-agent-acp", nativeToolHook: "on" });
-    await expect(factory({ host: watchedHost().host, agent, cwd: dir })).rejects.toMatchObject(refusal);
-    expect(open).not.toHaveBeenCalled();
   });
 
   it("remote delegation: config refuses it, and a spec built another way is refused before any dispatch", async () => {

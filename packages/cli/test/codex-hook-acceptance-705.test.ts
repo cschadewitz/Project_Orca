@@ -42,6 +42,8 @@ import {
   CODEX_HOOK_VERIFIED_PAIRS,
   CODEX_HOOK_VERIFIED_PLATFORMS,
   LocalHost,
+  codexHookEnvironment,
+  codexHookShell,
   codexHookTrustHash,
   codexRuntimeProcess,
   openAcpSession,
@@ -246,9 +248,6 @@ describe.skipIf(ADAPTER === undefined)("the hook in the real Codex (#705)", () =
     makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
       runtime: process.execPath,
       script: hookScript,
-      // The hook is off in every shipped build until activation is complete; this suite is
-      // what proves it.
-      activation: "acceptance-only",
     })({
       host: new LocalHost({ id: "local", type: "local" }),
       agent: agent(permissions, env),
@@ -416,7 +415,6 @@ createInterface({ input: process.stdin }).on("line", (l) => {
     const session = await makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
       runtime: process.execPath,
       script: hookScript,
-      activation: "acceptance-only",
       codexProcess: async (agentPid) => {
         const r = await codexRuntimeProcess(agentPid);
         if ("pid" in r) found.push({ pid: r.pid, agentPid: agentPid! });
@@ -487,6 +485,68 @@ createInterface({ input: process.stdin }).on("line", (l) => {
       logger: silentLogger,
       handshakeTimeoutMs: 60_000,
     });
+
+  it("runs its hooks in the shell and environment ORCA's startup probe uses", async () => {
+    const out = join(root, "hook-shell");
+    // The shell Codex starts the hook in records what it was started with: its initial
+    // environment (before any login profile ran), its program and arguments, and its parent.
+    const command = `cat /proc/$$/environ > '${out}.env'; tr '\\0' '\\n' < /proc/$$/cmdline > '${out}.argv'; readlink /proc/$$/exe > '${out}.exe'; echo $PPID > '${out}.ppid'; cat >/dev/null; exit 0`;
+    const session = await openAcpSession({
+      host: new LocalHost({ id: "local", type: "local" }),
+      agent: agent(
+        { default: "allow", rules: [] },
+        {
+          CODEX_CONFIG: JSON.stringify(
+            codexConfig({
+              hooks: {
+                PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: 30 }] }],
+                state: { [CODEX_HOOK_KEY]: { trusted_hash: codexHookTrustHash(command, 30) } },
+              },
+            }),
+          ),
+          // Codex does not take its hook shell from $SHELL; this one is never run.
+          SHELL: "/nonexistent-orca-705/sh",
+          ORCA_705_PLAIN: "1",
+          BASH_ENV: "/nonexistent-orca-705",
+          LD_LIBRARY_PATH: "/nonexistent-orca-705",
+        },
+        false,
+      ),
+      cwd: workspace,
+      askPermission,
+      logger: silentLogger,
+      handshakeTimeoutMs: 60_000,
+    });
+    try {
+      await session.prompt(script(shell("echo ran >> ran.txt")));
+      const codex = Number((await readFile(`${out}.ppid`, "utf8")).trim());
+      // Read while that Codex still runs, as the factory reads it at startup.
+      const read = await codexHookEnvironment(codex);
+      if ("error" in read) throw new Error(read.error);
+      const given = new Map(
+        (await readFile(`${out}.env`, "utf8"))
+          .split("\0")
+          .filter(Boolean)
+          .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)] as const),
+      );
+      // What the recording shell sets itself is not what it was given.
+      for (const own of ["PWD", "OLDPWD", "SHLVL", "_"]) {
+        given.delete(own);
+        delete read[own];
+      }
+      expect(Object.fromEntries(given)).toEqual(read);
+      expect(read["PATH"]).toMatch(/codex-path:/);
+      // And it runs the hook in the shell ORCA's probe uses: the login shell, with -c.
+      const shellUsed = codexHookShell();
+      if ("error" in shellUsed) throw new Error(shellUsed.error);
+      expect((await readFile(`${out}.argv`, "utf8")).split("\n").slice(0, 2)).toEqual([
+        shellUsed.program,
+        ...shellUsed.args,
+      ]);
+    } finally {
+      await session.close();
+    }
+  }, 180_000);
 
   it("blocks a call only on exit 2 with a reason on stderr", async () => {
     for (const [name, command, ran] of [
