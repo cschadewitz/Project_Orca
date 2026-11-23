@@ -216,14 +216,14 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
         `case ${first}: a call without refusal, approvals and evidence kept apart`,
       ],
       [[{ strayApprovals: ["Write a.md"] }], `case ${first}: an approval matched no call of its turn`],
-    ])
-      expect(structural(check(hookAgent(), { "i.json": onHook("installed"), "c.json": withCalls(calls) }))).toEqual([
-        expect.stringMatching(
-          new RegExp(
-            `tier C on claude-native-hook needs a passing connected receipt from claude-connected .*${why.replace(/[()]/g, "\\$&")}`,
-          ),
-        ),
-      ]);
+    ]) {
+      const problems = structural(check(hookAgent(), { "i.json": onHook("installed"), "c.json": withCalls(calls) }));
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain(
+        "tier C on claude-native-hook needs a passing connected receipt from claude-connected",
+      );
+      expect(problems[0]).toContain(`c.json: ${why}`);
+    }
   });
 
   it("tier C when its connected path excludes a lifecycle case, named residual or not", () => {
