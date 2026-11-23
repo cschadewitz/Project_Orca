@@ -37,6 +37,8 @@ export type DraftPhase =
   | { phase: "loading" }
   | { phase: "unavailable"; reason: string }
   | { phase: "error"; error: string }
+  /** The daemon answering for this window now has no draft of the workflow (#182). */
+  | { phase: "missing" }
   | { phase: "ready"; draft: WorkflowDraftView };
 
 export interface WorkflowDraftController {
@@ -113,25 +115,38 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
     [accept],
   );
 
-  const reload = useCallback(async () => {
-    const bridge = window.orca.workflowDrafts;
-    if (!bridge) return;
-    const ticket = ++reads.current;
-    const sentUnder = freshness.current;
-    const result = await bridge.call("workflowDrafts.get", { workflowId });
-    if (!live.current || ticket !== reads.current || sentUnder !== freshness.current) return;
-    if (!result.ok) {
-      setMessage(describe(result.error));
-      return;
-    }
-    const got: WorkflowDraftGetResult = result.result;
-    // A re-read answers with the draft as validated now. If an edit's result has already
-    // brought a newer revision, that one was validated by the same daemon later still.
-    if (got.draft) {
-      accept(got.draft);
-      setChecking(false);
-    }
-  }, [workflowId, accept]);
+  /**
+   * Re-read the draft. `revalidating` (a moved context) also settles what to show when the
+   * daemon now answering has no draft: a definite "missing" rather than an old context's
+   * rows, or a Loading its dropped open will never end. A plain re-read keeps what it holds.
+   */
+  const read = useCallback(
+    async (revalidating: boolean) => {
+      const bridge = window.orca.workflowDrafts;
+      if (!bridge) return;
+      const ticket = ++reads.current;
+      const sentUnder = freshness.current;
+      const result = await bridge.call("workflowDrafts.get", { workflowId });
+      if (!live.current || ticket !== reads.current || sentUnder !== freshness.current) return;
+      if (!result.ok) {
+        setMessage(describe(result.error));
+        return;
+      }
+      const got: WorkflowDraftGetResult = result.result;
+      // A re-read answers with the draft as validated now. If an edit's result has already
+      // brought a newer revision, that one was validated by the same daemon later still.
+      if (got.draft) {
+        accept(got.draft);
+        setChecking(false);
+      } else if (revalidating || !latest.current) {
+        latest.current = undefined;
+        setChecking(false);
+        setState({ phase: "missing" });
+      }
+    },
+    [workflowId, accept],
+  );
+  const reload = useCallback(() => read(false), [read]);
 
   /** The context changed: nothing sent before now may clear `checking`. */
   const invalidate = useCallback(() => {
@@ -141,10 +156,10 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
 
   const revalidate = useCallback(async () => {
     invalidate();
-    const read = reload();
-    settling.current = read.catch(() => undefined);
-    await read;
-  }, [invalidate, reload]);
+    const reading = read(true);
+    settling.current = reading.catch(() => undefined);
+    await reading;
+  }, [invalidate, read]);
 
   useEffect(() => {
     live.current = true;
@@ -302,6 +317,8 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
           reviewToken,
         });
         if (result.ok) {
+          // Published where it was sent; a context that has moved on does not hear of it.
+          if (sentUnder !== freshness.current) return undefined;
           latest.current = undefined;
           return result.result;
         }
@@ -319,6 +336,7 @@ export function useWorkflowDraft(workflowId: string): WorkflowDraftController {
           expectedRevision: draft.revision,
         });
         if (result.ok) {
+          if (sentUnder !== freshness.current) return false;
           latest.current = undefined;
           return true;
         }

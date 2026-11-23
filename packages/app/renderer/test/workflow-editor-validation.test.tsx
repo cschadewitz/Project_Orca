@@ -37,7 +37,7 @@ type Rule = { rule: string; document: Graph & { id: string }; issue: DraftIssue 
  */
 function service(fake: FakeBridge, document: unknown, issues: DraftIssue[]) {
   draftBridge(fake); // advertises the draft methods on the connection
-  const state = { document, issues, revision: 0 };
+  const state = { document, issues, revision: 0, gone: false };
   /** The viewer offers Edit before a draft exists, Continue editing after. */
   let opened = false;
   const calls: string[] = [];
@@ -64,7 +64,10 @@ function service(fake: FakeBridge, document: unknown, issues: DraftIssue[]) {
     calls.push(method);
     let answer: Answer;
     if (method === "workflowDrafts.get")
-      answer = { ok: true, result: { draft: opened ? view() : null, layout: { graphs: {} }, editable: true } };
+      answer = {
+        ok: true,
+        result: { draft: opened && !state.gone ? view() : null, layout: { graphs: {} }, editable: true },
+      };
     else {
       if (method === "workflowDrafts.open") opened = true;
       else state.revision += 1;
@@ -284,6 +287,16 @@ describe("findings bound to the current revision", () => {
       expect(said()).not.toContain("Checking");
     },
   );
+
+  it("says so, and offers the way back, when the re-validated daemon has no draft", async () => {
+    const { fake, drafts } = await openEditor(CLEAN, [problem("old finding")]);
+    drafts.state.gone = true;
+    act(() => fake.notify(configChanged()));
+    expect(await screen.findByText("No draft here")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Validation" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Back to the viewer" }));
+    await screen.findByRole("button", { name: "Edit" });
+  });
 
   it("validates again when the configuration it was checked against changes", async () => {
     const { fake, drafts } = await openEditor(CLEAN, []);

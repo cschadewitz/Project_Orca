@@ -334,6 +334,64 @@ describe("useWorkflowDraft", () => {
       expect(hook.result.current.state.phase).toBe("ready");
     });
 
+    it.each([
+      ["publish", "workflowDrafts.publish"],
+      ["discard", "workflowDrafts.discard"],
+    ] as const)("ignores a %s that succeeds on the former target after the new target's read", async (name, method) => {
+      let answer!: (value: Answer) => void;
+      const { fake, call } = drafts({
+        [method]: () => new Promise<Answer>((resolve) => (answer = resolve)),
+        "workflowDrafts.get": () => ({
+          ok: true,
+          result: { draft: view(4), layout: { graphs: {} }, editable: true },
+        }),
+      });
+      const change = target(fake);
+      const hook = renderHook(() => useWorkflowDraft("ai-sdlc"));
+      await waitFor(() => expect(hook.result.current.state.phase).toBe("ready"));
+      let pending!: Promise<unknown>;
+      act(() => {
+        pending = name === "publish" ? hook.result.current.publish("token-0") : hook.result.current.discard();
+      });
+      await waitFor(() => expect(call.mock.calls.some(([m]) => m === method)).toBe(true));
+      await act(async () => change());
+      await waitFor(() => expect(revisionOf(hook)).toBe(4));
+      await act(async () => {
+        answer({
+          ok: true,
+          result: name === "publish" ? { workflowId: "ai-sdlc", version: "2", apply: {} } : { discarded: true },
+        });
+        expect(await pending).toBe(name === "publish" ? undefined : false);
+      });
+      // The draft the new target answered with is still the one held, and can be edited.
+      expect(revisionOf(hook)).toBe(4);
+      expect(hook.result.current.checking).toBe(false);
+      await act(async () => void (await hook.result.current.apply([{ op: "tidy" }])));
+      expect(call.mock.calls.filter(([m]) => m === "workflowDrafts.apply").at(-1)![1].expectedRevision).toBe(4);
+    });
+
+    it.each(["while its open is still out", "after showing the former target's rows"])(
+      "says there is no draft when the new target has none, %s",
+      async (when) => {
+        let answerOpen: ((value: Answer) => void) | undefined;
+        const bridge = drafts({
+          ...(when === "while its open is still out"
+            ? { "workflowDrafts.open": () => new Promise<Answer>((resolve) => (answerOpen = resolve)) }
+            : {}),
+          "workflowDrafts.get": () => ({ ok: true, result: { draft: null, layout: { graphs: {} }, editable: true } }),
+        });
+        const change = target(bridge.fake);
+        const hook = renderHook(() => useWorkflowDraft("ai-sdlc"));
+        if (!answerOpen) await waitFor(() => expect(hook.result.current.state.phase).toBe("ready"));
+        await act(async () => change());
+        await waitFor(() => expect(hook.result.current.state.phase).toBe("missing"));
+        expect(hook.result.current.checking).toBe(false);
+        // The former target's open, answering late, does not bring its draft back.
+        if (answerOpen) await act(async () => answerOpen!({ ok: true, result: view(0) }));
+        expect(hook.result.current.state.phase).toBe("missing");
+      },
+    );
+
     it("never sends an edit queued for the former target to the new one", async () => {
       let release!: () => void;
       const held = new Promise<void>((resolve) => (release = resolve));

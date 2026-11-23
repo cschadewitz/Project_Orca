@@ -56,6 +56,15 @@ export function WorkflowEditor({ workflowId, onClose, onPublished }: WorkflowEdi
         action={{ label: "Back to the viewer", onClick: onClose }}
       />
     );
+  if (state.phase === "missing")
+    return (
+      <StateView
+        kind="empty"
+        title="No draft here"
+        body={`The daemon this window is connected to now has no draft of ${workflowId}. Start one from the viewer.`}
+        action={{ label: "Back to the viewer", onClick: onClose }}
+      />
+    );
   if (state.phase === "error")
     return (
       <StateView
