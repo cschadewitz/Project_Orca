@@ -128,10 +128,13 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("connected
     expect(receipt.cases.map((c) => c.id)).toEqual([...runs]);
     expect(connectedEvidenceProblems(receipt, qualifyingCases(listed, catalogue))).toEqual([]);
     // A case listed as unobserved really had no call where ORCA's decision was observed.
-    for (const id of Object.keys(listed.unobserved ?? {}))
-      expect(connectedEvidenceProblems(receipt, [id]), id).toEqual([
-        `case ${id}: ORCA's decision was not observed for any call`,
-      ]);
+    // Each call that ORCA never answered leaves its case nonqualifying on its own.
+    for (const id of Object.keys(listed.unobserved ?? {})) {
+      const problems = connectedEvidenceProblems(receipt, [id]);
+      expect(problems.length, id).toBeGreaterThan(0);
+      for (const p of problems)
+        expect(p, id).toMatch(new RegExp(`^case ${id}: .*ORCA's decision was not observed \\(`));
+    }
     expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
   });
 });

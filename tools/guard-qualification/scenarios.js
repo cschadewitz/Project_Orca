@@ -13,9 +13,12 @@ import { CLAUDE_PRE_TOOL_FRAME_LIMIT } from "@orca/agents";
 
 const issue = { tool: "mcp", server: "github", name: "create_issue" };
 
-/** Decide and check one outcome, saying which call and path went wrong. */
+/**
+ * Decide and check one outcome, saying which call and path went wrong. `expect` tells a path
+ * that records evidence which assertion the call serves, so the evidence is bound to it.
+ */
 async function expectOutcome(world, path, action, expected, opts) {
-  const got = await path.decide(world, action, opts);
+  const got = await path.decide(world, action, { ...opts, expect: [expected] });
   // A connected path may count an agent's own refusal, when nothing could have run (it says when).
   if (got.outcome !== expected && path.equivalent?.(world, got, expected)) return got;
   assert.equal(got.outcome, expected, `${path.id}: ${JSON.stringify(action)} -> ${JSON.stringify(got.detail)}`);
@@ -23,9 +26,12 @@ async function expectOutcome(world, path, action, expected, opts) {
 }
 
 /** `n` identical calls at once: in one agent message where the path has a live agent. */
-function concurrently(world, path, action, n) {
+function concurrently(world, path, action, n, expected) {
   const actions = Array(n).fill(action);
-  return path.decideAll ? path.decideAll(world, actions) : Promise.all(actions.map((a) => path.decide(world, a)));
+  const opts = { expect: [expected] };
+  return path.decideAll
+    ? path.decideAll(world, actions, opts)
+    : Promise.all(actions.map((a) => path.decide(world, a, opts)));
 }
 
 const secretOf = () => `orca706secret${randomBytes(8).toString("hex")}`;
@@ -78,13 +84,13 @@ export const SCENARIOS = {
 
   async L05(world, path) {
     await world.answerAlways(issue);
-    const before = await concurrently(world, path, issue, 16);
+    const before = await concurrently(world, path, issue, 16, "allow");
     assert.deepEqual(
       before.map((r) => r.outcome),
       Array(16).fill("allow"),
     );
     await world.revokeAll();
-    const after = await concurrently(world, path, issue, 16);
+    const after = await concurrently(world, path, issue, 16, "ask");
     assert.deepEqual(
       after.map((r) => r.outcome),
       Array(16).fill("ask"),
@@ -338,7 +344,7 @@ export const SCENARIOS = {
       { tool: "read", path: join(world.configDir, "auth", secret) },
     ];
     for (const action of calls) {
-      const got = await path.decide(world, action);
+      const got = await path.decide(world, action, { expect: ["ask", "deny"] });
       assert.ok(got.outcome === "ask" || got.outcome === "deny", `${got.outcome} for ${action.tool}`);
       for (const s of got.surfaces) assert.ok(!s.includes(secret), `${path.id} echoed input: ${s}`);
     }
@@ -379,7 +385,8 @@ export const SCENARIOS = {
       { tool: "unknown", name: `Tool${"z".repeat(4096)}` },
     ];
     for (const action of calls) {
-      const got = await path.decide(world, action);
+      // Any decision of ORCA's will do; the assertion is on what it hands back.
+      const got = await path.decide(world, action, { expect: ["allow", "ask", "deny", "block"] });
       for (const s of got.surfaces) assert.ok(Buffer.byteLength(s) <= 512, `${path.id}: ${Buffer.byteLength(s)} bytes`);
     }
   },

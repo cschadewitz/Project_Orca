@@ -84,11 +84,15 @@ Every call is recorded with three things kept apart, and its outcome follows fro
 | `ask` | Effect none, and an approval bound to this call |
 | `indeterminate` | Anything without proof; fails the case |
 
-A refusal text or an absent result never shows on its own that nothing ran. The checker does
-not trust the recorded effect or outcome: `connectedEvidenceProblems` re-derives the effect
-from each call's `effectRef` (`connected/evidence.js`), requires every approval's tool call id
-to be the call's own `tool_use` id, and requires the outcome to follow. The privacy cases
-search the tool results handed back to the model.
+A refusal text or an absent result never shows on its own that nothing ran. Each call is also
+bound to the assertion it serves: `expected` lists the outcomes that assertion accepts, so a
+call that no assertion asked for, or whose outcome its assertion does not accept, fails the
+case. The checker does not trust the recorded effect or outcome: `connectedEvidenceProblems`
+re-derives the effect from each call's `effectRef` (`connected/evidence.js`), requires every
+`tool_use` id to belong to one call only across the receipt, every approval's tool call id to
+be the call's own, the outcome to follow from the evidence, and the outcome to be one its
+assertion accepts. Missing or ambiguous evidence leaves the case nonqualifying. The privacy
+cases search the tool results handed back to the model.
 
 Claude Code refuses some calls itself before any hook runs: a tool it does not offer, an Edit
 of a file that does not exist, a change to a file it has not read. For a change to an existing
@@ -96,10 +100,14 @@ file the path first reads it, as an agent would, with a person allowing that one
 asks. Where Claude refuses anyway and no effect is proven (the tool is not offered; Edit cannot
 create a file; ORCA denied the read), the case goes on, but the call is recorded as
 `orcaDecision: "unobserved"`: it is diagnostic only and never counts as evidence of
-enforcement. A case needs at least one call where ORCA's decision was observed. F05, where
-every call is to a tool Claude does not offer, is listed under the path's `unobserved` cases:
-it runs as a diagnostic and does not count toward a tier, and for tier C an unobserved
-lifecycle or bypass case blocks the claim like an exclusion.
+enforcement. A case qualifies only if ORCA's decision was observed for **every** call its
+assertions need: a passing call elsewhere in the case, such as a positive control, cannot
+stand in for an unobserved refusal. The cases where Claude refuses a required call itself are
+listed under the path's `unobserved` cases with the reason: F05 (tools Claude does not
+offer), A02 and B01 (Edits, or changes after a denied read, that Claude refuses before the
+hook) and P03 (a long unknown tool name Claude does not offer). They run as diagnostics and do not count toward a
+tier, and for tier C an unobserved lifecycle or bypass case, such as B01, blocks the claim like
+an exclusion.
 
 Cases that run on this path include the concurrency case (16 identical calls in one model
 message), the timed grant (a real one-minute grant, waited out) and the unanswered,
@@ -107,9 +115,10 @@ cancelled and wrongly-answered asks. The cases it cannot run (raw hook input, th
 file, the installed settings, ACP options, a call from another working directory) are
 excluded with reasons and run on the synthetic paths. The run also checks that a session
 pointed at a Claude Code other than the pinned one is refused before any work
-(`checks.unpinnedRuntimeRefused`). That check proves that one case only, not that every
+(`checks.unpinnedRuntimeRefused`), and a connected receipt must carry it passing, on its own,
+before its cases are looked at. That check proves that one case only, not that every
 uncovered route is refused, so the connected receipt does not claim
-`checks.uncoveredRoutesRefused`.
+`checks.uncoveredRoutesRefused`; route coverage stays with the installed receipts.
 
 `claude-hook-acceptance.yml` runs it after the #704 acceptance tests and keeps the receipt as
 an artifact. It is evidence for review: promotion stays disabled, so no tier changes on it.

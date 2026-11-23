@@ -250,6 +250,8 @@ export function claudeConnected(env) {
         const outcome = outcomeOf(c, refusal, effect, unobserved);
         const record = {
           toolUseId: c.toolUseId ?? null,
+          // The outcomes the case's assertion accepts for this call; null when it asserts none.
+          expected: opts.expect ?? null,
           tool: p.name.slice(0, 120),
           outcome,
           // Whether ORCA's own decision for this call was observed. An agent's own refusal is

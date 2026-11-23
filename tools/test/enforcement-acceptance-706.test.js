@@ -153,14 +153,20 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     matrix.paths.find((p) => p.id === "claude-native-hook"),
     catalogue,
   );
+  // The tier C rules on their own: a connected path that observes every lifecycle and bypass
+  // case. The real matrix does not (B01 is unobserved on claude-connected), tested below.
+  const idealPaths = structuredClone(matrix.paths);
+  delete idealPaths.find((p) => p.id === "claude-connected").unobserved.B01;
   const connectedCases = qualifyingCases(
-    matrix.paths.find((p) => p.id === "claude-connected"),
+    idealPaths.find((p) => p.id === "claude-connected"),
     catalogue,
   );
+  const checkC = (agent, files, paths = idealPaths) => check(agent, files, paths);
   /** A write ORCA denied: the file is as it was, bound to this call's own tool_use id. */
   const denied = {
     toolUseId: "toolu_1_0",
     tool: "Write",
+    expected: ["deny"],
     outcome: "deny",
     orcaDecision: "observed",
     refusal: "orca-deny",
@@ -174,17 +180,23 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       ? receipt({
           kind,
           route: "claude-connected",
-          cases: connectedCases.map((id) => ({ id, result: "pass", calls: evidence })),
+          checks: { connects: "pass", uncoveredRoutesRefused: "pass", unpinnedRuntimeRefused: "pass" },
+          // Every call has its own tool_use id across the receipt.
+          cases: connectedCases.map((id, i) => ({
+            id,
+            result: "pass",
+            calls: evidence.map((call) => ({ ...call, toolUseId: `toolu_${i}_0` })),
+          })),
         })
       : receipt({ kind, route: "claude-native-hook", cases: hookCases.map((id) => ({ id, result: "pass" })) });
   const hookAgent = (extra = {}) => claude({ tier: "C", routes: ["claude-native-hook"], ...extra });
 
   it("tier C needs the installed receipts below it as well as the connected one", () => {
-    expect(structural(check(hookAgent(), { "c.json": onHook("connected") }))).toEqual([
+    expect(structural(checkC(hookAgent(), { "c.json": onHook("connected") }))).toEqual([
       `${needs("A", "installed", "claude-native-hook")} (c.json: kind connected, needs installed; c.json: route claude-connected)`,
       `${needs("B", "installed", "claude-native-hook")} (c.json: kind connected, needs installed; c.json: route claude-connected; c.json: missing ${hookCases.filter((id) => !connectedCases.includes(id)).join(",")})`,
     ]);
-    expect(structural(check(hookAgent(), { "i.json": onHook("installed"), "c.json": onHook("connected") }))).toEqual(
+    expect(structural(checkC(hookAgent(), { "i.json": onHook("installed"), "c.json": onHook("connected") }))).toEqual(
       [],
     );
   });
@@ -192,7 +204,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
   it("tier C needs its connected receipt from a connected path that proves the route", () => {
     // An installed-style receipt relabelled connected, on the route itself, is not that.
     const relabelled = { ...onHook("installed"), kind: "connected" };
-    expect(structural(check(hookAgent(), { "i.json": onHook("installed"), "c.json": relabelled }))).toEqual([
+    expect(structural(checkC(hookAgent(), { "i.json": onHook("installed"), "c.json": relabelled }))).toEqual([
       expect.stringMatching(
         /^agent claude: tier C on claude-native-hook needs a passing connected receipt from claude-connected .*c\.json: route claude-native-hook/,
       ),
@@ -209,6 +221,10 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       r.cases[0] = { ...r.cases[0], calls };
       return r;
     };
+    const noRuntimeCheck = { ...onHook("connected"), checks: { connects: "pass", uncoveredRoutesRefused: "pass" } };
+    expect(structural(checkC(hookAgent(), { "i.json": onHook("installed"), "c.json": noRuntimeCheck }))[0]).toContain(
+      "c.json: needs checks.unpinnedRuntimeRefused passing",
+    );
     const first = connectedCases[0];
     const ran = { ...denied.effectRef, after: "w" };
     for (const [calls, why] of [
@@ -240,19 +256,32 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
         `case ${first}: mcp__github__create_issue: its evidence shows effect indeterminate, not none`,
       ],
       [
-        [{ ...denied, orcaDecision: "unobserved", outcome: "unobserved:tool-not-offered" }],
-        `case ${first}: ORCA's decision was not observed for any call`,
+        [{ ...denied, orcaDecision: "unobserved", unobservedBecause: "tool-not-offered", outcome: "unobserved:x" }],
+        `case ${first}: Write: ORCA's decision was not observed (tool-not-offered)`,
       ],
+      // A passing control in the same case cannot stand in for a required call left unobserved.
       [
-        [{ ...denied, orcaDecision: "unobserved", effect: "observed", effectRef: ran }],
-        `case ${first}: Write: an unobserved decision needs no effect proven`,
+        [
+          denied,
+          {
+            ...denied,
+            toolUseId: "toolu_x_1",
+            orcaDecision: "unobserved",
+            unobservedBecause: "edit-of-missing-file",
+            outcome: "unobserved:x",
+          },
+        ],
+        `case ${first}: Write: ORCA's decision was not observed (edit-of-missing-file)`,
       ],
+      [[{ ...denied, expected: undefined }], `case ${first}: Write: bound to no assertion`],
+      [[{ ...denied, expected: ["ask"] }], `case ${first}: Write: outcome deny is not one its assertion accepts (ask)`],
+      [[denied, denied], `tool_use id used by more than one call: toolu_1_0`],
       [
         [{ strayApprovals: [{ toolCallId: "toolu_9_0", title: "Write a.md" }] }],
         `case ${first}: an approval matched no call of its turn`,
       ],
     ]) {
-      const problems = structural(check(hookAgent(), { "i.json": onHook("installed"), "c.json": withCalls(calls) }));
+      const problems = structural(checkC(hookAgent(), { "i.json": onHook("installed"), "c.json": withCalls(calls) }));
       expect(problems).toHaveLength(1);
       expect(problems[0]).toContain(
         "tier C on claude-native-hook needs a passing connected receipt from claude-connected",
@@ -262,7 +291,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
   });
 
   it("tier C when its connected path excludes a lifecycle case, named residual or not", () => {
-    const paths = structuredClone(matrix.paths);
+    const paths = structuredClone(idealPaths);
     const connected = paths.find((p) => p.id === "claude-connected");
     connected.capabilities = connected.capabilities.filter((c) => c !== "answerer");
     connected.excluded.L08 = "Pretend this path could not reach ORCA's answerer at all.";
@@ -276,7 +305,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     const paths = structuredClone(matrix.paths);
     paths.find((p) => p.id === "claude-connected").unobserved.B01 = "Pretend the agent refuses these calls first.";
     expect(
-      structural(check(hookAgent(), { "i.json": onHook("installed"), "c.json": onHook("connected") }, paths)),
+      structural(checkC(hookAgent(), { "i.json": onHook("installed"), "c.json": onHook("connected") }, paths)),
     ).toEqual([
       "agent claude: tier C on claude-native-hook does not observe ORCA's decision for bypass case B01 on claude-connected",
     ]);

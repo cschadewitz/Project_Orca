@@ -54,28 +54,37 @@ export function receiptProblems(receipt, agent, route, kind, neededCases) {
   if (missing.length) problems.push(`missing ${missing.join(",")}`);
   if (!(receipt.checks?.connects === "pass" && receipt.checks?.uncoveredRoutesRefused === "pass"))
     problems.push("needs checks.connects and checks.uncoveredRoutesRefused passing");
-  if (kind === "connected") problems.push(...connectedEvidenceProblems(receipt, neededCases));
+  if (kind === "connected") {
+    // The connected run's own narrow check (a session on an unpinned runtime is refused), kept
+    // apart from the route coverage above, which it does not show.
+    if (receipt.checks?.unpinnedRuntimeRefused !== "pass") problems.push("needs checks.unpinnedRuntimeRefused passing");
+    problems.push(...connectedEvidenceProblems(receipt, neededCases));
+  }
   return problems;
 }
 
 /**
- * A connected receipt must bind every call to its own evidence, and this re-derives the outcome
- * from that evidence rather than trusting it: approvals carry the call's own tool_use id, the
- * effect is recomputed from the call's `effectRef` (`connected/evidence.js`), and the outcome
- * must follow (allow only with the effect observed; deny, block and ask only with it proven none
- * and ORCA's text or an approval for that call). A call the agent refused before ORCA could
- * answer is `orcaDecision: "unobserved"` and does not count; a case needs at least one call
- * where ORCA's decision was observed.
+ * A connected receipt must bind every call to the assertion it serves and to its own evidence,
+ * and this re-derives each outcome from that evidence rather than trusting it: every call has a
+ * tool_use id used by no other call, the outcomes its assertion accepts (`expected`), approvals
+ * carrying its own id, and an `effectRef` from which the effect is recomputed
+ * (`connected/evidence.js`). The outcome must follow (allow only with the effect observed; deny,
+ * block and ask only with it proven none and ORCA's text or an approval for that call) and be
+ * one the assertion accepts. A case qualifies only if every one of its calls does: a call the
+ * agent refused before ORCA answered (`orcaDecision: "unobserved"`) leaves its case
+ * nonqualifying, whatever its other calls show.
  */
 export function connectedEvidenceProblems(receipt, neededCases = (receipt.cases ?? []).map((c) => c.id)) {
   const problems = [];
+  const ids = (receipt.cases ?? []).flatMap((c) => (c.calls ?? []).map((call) => call.toolUseId)).filter(Boolean);
+  const reused = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
+  if (reused.length) problems.push(`tool_use id used by more than one call: ${reused.join(",")}`);
   for (const c of (receipt.cases ?? []).filter((x) => neededCases.includes(x.id))) {
     const calls = c.calls ?? [];
     if (calls.length === 0) {
       problems.push(`case ${c.id}: no per-call evidence`);
       continue;
     }
-    let observed = 0;
     for (const call of calls) {
       if (call.strayApprovals) {
         problems.push(`case ${c.id}: an approval matched no call of its turn`);
@@ -91,12 +100,13 @@ export function connectedEvidenceProblems(receipt, neededCases = (receipt.cases 
         problems.push(`${at}: needs its tool_use id, approvals, refusal and effect evidence`);
         continue;
       }
+      if (!Array.isArray(call.expected) || call.expected.length === 0) problems.push(`${at}: bound to no assertion`);
       if (call.approvals.some((a) => a.toolCallId !== call.toolUseId))
         problems.push(`${at}: an approval is bound to another call`);
       const effect = effectFrom(call.effectRef);
       if (effect !== call.effect) problems.push(`${at}: its evidence shows effect ${effect}, not ${call.effect}`);
       if (call.orcaDecision === "unobserved") {
-        if (effect !== "none") problems.push(`${at}: an unobserved decision needs no effect proven`);
+        problems.push(`${at}: ORCA's decision was not observed (${call.unobservedBecause ?? "unknown"})`);
         continue;
       }
       if (call.orcaDecision !== "observed") {
@@ -111,9 +121,9 @@ export function connectedEvidenceProblems(receipt, neededCases = (receipt.cases 
               (call.outcome === "block" && call.refusal === "orca-block") ||
               (call.outcome === "ask" && call.approvals.length > 0));
       if (!follows) problems.push(`${at}: outcome ${call.outcome} does not follow from its evidence`);
-      else observed++;
+      else if (Array.isArray(call.expected) && !call.expected.includes(call.outcome))
+        problems.push(`${at}: outcome ${call.outcome} is not one its assertion accepts (${call.expected.join("|")})`);
     }
-    if (observed === 0) problems.push(`case ${c.id}: ORCA's decision was not observed for any call`);
   }
   return problems;
 }
