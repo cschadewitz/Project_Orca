@@ -309,3 +309,56 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* ---------- search (#340 over #255) ----------
+   In the tree's place, like the board: a field, then the hits, which scroll here and nowhere
+   else (AGENTS.md, "Say where your screen scrolls"). */
+.orca-run-search {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.orca-run-search__bar {
+  display: flex;
+  padding: var(--space-3) var(--space-4) var(--space-2);
+  min-width: 0;
+}
+.orca-run-search__field {
+  flex: 1;
+  min-width: 0;
+}
+.orca-run-search__hits {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-3);
+  overflow-y: auto;
+  list-style: none;
+}
+.orca-run-search__hit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-2) 0;
+  border: 0;
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.orca-run-search__hit:focus-visible {
+  outline: var(--stroke-focus) solid var(--border-focus);
+}
+.orca-run-search__excerpt {
+  overflow-wrap: anywhere;
+}
+.orca-run-search__where {
+  color: var(--ink-tertiary);
+}
+.orca-run-search__more {
+  margin: var(--space-2) 0 0;
+  color: var(--ink-tertiary);
+}

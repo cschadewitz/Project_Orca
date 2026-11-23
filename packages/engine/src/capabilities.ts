@@ -28,6 +28,7 @@ import {
   type CapabilityScope,
   type NodeDef,
   type ResolveCapabilitiesResult,
+  type SecretsConfig,
   type SkillDefinition,
   type SkillDigestResult,
   type WorkflowDefinition,
@@ -423,7 +424,7 @@ export function capabilityRefusal(nodeId: string, issues: CapabilityIssue[]): Or
 export function capabilityChecker(registry: AgentRegistry) {
   return (check: CapabilityCheck) => {
     if (!registry.canResolve(check.agent)) return { errors: [], warnings: [] };
-    const { agent } = registry.resolve(check.agent);
+    const { agent, host } = registry.resolve(check.agent);
     const result = resolveNodeCapabilities({
       registry,
       agent,
@@ -434,8 +435,39 @@ export function capabilityChecker(registry: AgentRegistry) {
       nodePath: check.nodePath,
       digests: true,
     });
-    return { errors: result.errors, warnings: [...result.warnings, ...deliveryIssues(result, check.nodePath)] };
+    return {
+      errors: [...result.errors, ...catalogSecretHostIssues(result, registry.secrets(), host.id, check.nodePath)],
+      warnings: [...result.warnings, ...deliveryIssues(result, check.nodePath)],
+    };
   };
+}
+
+/**
+ * A catalog MCP server runs wherever the agent given it runs, so config validation cannot say
+ * whether its secret references can be read there (`validateSecretReferences` checks only that
+ * each names a secret). Once a step puts the server on an agent, the host is known: a reference
+ * to a secret bound to another host would refuse the session when the step opens it (#336), so
+ * say so where the step selects it. Ids only: a secret's value is never read here.
+ */
+export function catalogSecretHostIssues(
+  result: ResolveCapabilitiesResult,
+  secrets: SecretsConfig,
+  hostId: string,
+  nodePath: string,
+): CapabilityIssue[] {
+  const issues: CapabilityIssue[] = [];
+  for (const entry of result.manifest.mcpServers) {
+    if (!entry.catalog) continue;
+    for (const { name, ref } of secretRefs(entry.server.env)) {
+      const bound = secrets[ref.secret]?.host;
+      if (bound === undefined || bound === hostId) continue;
+      issues.push({
+        path: `${nodePath}.capabilities.mcpServers`,
+        message: `MCP server '${entry.id}' reads secret '${ref.secret}' (${name}), which is bound to host '${bound}', but this step's agent runs on '${hostId}'. A secret is only ever read on its own host`,
+      });
+    }
+  }
+  return issues;
 }
 
 /** One agent instruction (an agent node, or an agent decision's source) anywhere in a definition. */

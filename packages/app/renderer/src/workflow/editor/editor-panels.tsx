@@ -10,7 +10,10 @@
  *   on the canvas, to reorder the file.
  * - **The validation panel is always there**, empty when the draft is clean - "a panel that
  *   appears and disappears is a panel people stop watching" (docs/design/70). Every row names
- *   where it is and selects it when pressed.
+ *   where it is and selects it when pressed. A finding about the whole workflow has nowhere
+ *   to go and is a row without a button. While the findings are not known to be current
+ *   (`checking`: the daemon went away, or the configuration changed) the panel says so and
+ *   never says the draft is clean.
  */
 import { forwardRef, useImperativeHandle, useRef, useState, type DragEvent, type JSX } from "react";
 import { draftGraphKey, type DraftGraphPath, type DraftIssue } from "@orca/protocol";
@@ -153,10 +156,12 @@ export interface ValidationPanelProps {
   issues: readonly DraftIssue[];
   /** The graph on the canvas: rows elsewhere say where, and pressing one goes there. */
   path: DraftGraphPath;
+  /** The findings have not been confirmed against the daemon since it or its configuration changed. */
+  checking?: boolean;
   onGo: (issue: DraftIssue) => void;
 }
 
-export function ValidationPanel({ issues, path, onGo }: ValidationPanelProps): JSX.Element {
+export function ValidationPanel({ issues, path, checking = false, onGo }: ValidationPanelProps): JSX.Element {
   const count = (severity: DraftIssue["severity"]) => issues.filter((issue) => issue.severity === severity).length;
   const errors = count("error");
   const warnings = count("warning");
@@ -169,10 +174,17 @@ export function ValidationPanel({ issues, path, onGo }: ValidationPanelProps): J
           Validation
         </h2>
         <Text style="caption">
-          {`${counted(errors, "error")} · ${counted(warnings, "warning")} · ${counted(notes, "note")}`}
+          {`${checking ? "Checking · " : ""}${counted(errors, "error")} · ${counted(warnings, "warning")} · ${counted(notes, "note")}`}
         </Text>
       </header>
-      {issues.length === 0 ? (
+      {checking && issues.length === 0 ? (
+        <div className={`orca-validation__row orca-validation__row--note ${textClass("caption")}`}>
+          <span className="orca-validation__glyph" aria-hidden="true">
+            ◷
+          </span>
+          <span>Checking the draft against the running configuration.</span>
+        </div>
+      ) : issues.length === 0 ? (
         <div className={`orca-validation__row orca-validation__row--ok ${textClass("caption")}`}>
           <span className="orca-validation__glyph" aria-hidden="true">
             ✓
