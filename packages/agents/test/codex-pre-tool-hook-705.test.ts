@@ -498,9 +498,10 @@ describe("installing it in Codex", () => {
           // Never answers.
           "sleep 30",
           // Answers, but leaves a descendant holding stderr open, so the stream never closes.
-          `(sleep 30 >&2 & echo $! > '${marker}'); exit 2`,
+          // Its shell has exited, so ORCA no longer owns that group and signals nothing.
+          "(sleep 30 >&2 &); exit 2",
           // A descendant in the background holding stdin and stderr, the shell waiting on it.
-          "sleep 30 <&0 >&2 & wait",
+          `sleep 30 <&0 >&2 & echo $! > '${marker}'; wait`,
         ]) {
           const started = Date.now();
           const r = await probeCodexHook({
@@ -519,7 +520,7 @@ describe("installing it in Codex", () => {
           // The caller is released at the deadline, not when the descendant finally lets go.
           expect(took).toBeLessThan(5_000);
         }
-        // And the descendant went with the command's process group, within the stop grace.
+        // And while the shell still ran, its descendant went with the group ORCA owned.
         const pid = Number(await readFile(marker, "utf8"));
         await new Promise((r) => setTimeout(r, 1_500));
         // Gone, or a zombie its reaper has not collected yet: either way it no longer runs.

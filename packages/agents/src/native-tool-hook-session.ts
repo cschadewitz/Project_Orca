@@ -387,11 +387,12 @@ const HOOK_SHELL_STOP_GRACE_MS = 1_000;
  * group of its own, reading at most `stderrLimit` bytes of stderr. It ends when the shell has
  * exited and its streams have closed (`exit`), when stderr passes the limit (`overflow`), or
  * when `signal` aborts (`aborted`, with the signal's reason). On overflow and abort it settles
- * at once and stops only what it owns: it sends TERM to the shell it started (on which the
- * fail-closed line kills the program's own group, `codexFailClosedLine`). After
- * `HOOK_SHELL_STOP_GRACE_MS` it sends KILL to the shell's group, which it created, only while
- * that group provably still exists (the shell is not yet reaped, or a member still holds the
- * stream ORCA reads), then closes its streams. A run that ended normally is left as it is. Completion (`exit`, with its code) is never taken from the output.
+ * at once, closes its streams and signals only what it owns: the process group it created,
+ * and only while that group's leader, its own child, has not been reaped (so the id cannot
+ * have been reused). It sends TERM (on which the fail-closed line also kills the program's own
+ * group, `codexFailClosedLine`) and, if the leader has not exited within
+ * `HOOK_SHELL_STOP_GRACE_MS`, KILL. Once the leader has exited nothing is signalled, and a run
+ * that ended normally is left as it is. Completion (`exit`, with its code) is never taken from the output.
  */
 function runInHookShell(opts: {
   shell: { program: string; args: string[] };
@@ -417,27 +418,27 @@ function runInHookShell(opts: {
       // The leader of a process group of its own, which only ORCA's own signals address.
       detached: true,
     });
-    let streamOpen = true;
     child.on("exit", () => (exited = true));
-    child.stderr?.on("close", () => (streamOpen = false));
     const stop = () => {
-      // Nothing ORCA started is left: a normal end needs no cleanup.
-      if (exited && !streamOpen) return;
-      const pid = child.pid;
-      if (!exited) child.kill("SIGTERM");
-      const grace = setTimeout(() => {
-        // The group is ORCA's: its leader has not been reaped, or a member still holds the
-        // stream ORCA reads, so the group still exists and its id cannot have been reused.
-        if (pid !== undefined && (!exited || streamOpen))
-          try {
-            process.kill(-pid, "SIGKILL");
-          } catch {
-            // Already gone.
-          }
-        child.stdin?.destroy();
-        child.stderr?.destroy();
-      }, HOOK_SHELL_STOP_GRACE_MS);
+      // The group is ORCA's only while its leader, ORCA's own child, has not been reaped:
+      // until then its id cannot be reused. After that nothing is signalled.
+      const signalGroup = (sig: NodeJS.Signals) => {
+        if (exited || child.pid === undefined) return;
+        try {
+          process.kill(-child.pid, sig);
+        } catch {
+          // Already gone.
+        }
+      };
+      // TERM to the whole group: the fail-closed line, on TERM, also kills the program's own
+      // group, which `timeout` made (`codexFailClosedLine`).
+      signalGroup("SIGTERM");
+      child.stdin?.destroy();
+      child.stderr?.destroy();
+      if (exited) return;
+      const grace = setTimeout(() => signalGroup("SIGKILL"), HOOK_SHELL_STOP_GRACE_MS);
       grace.unref();
+      child.once("exit", () => clearTimeout(grace));
     };
     const settle = (run: HookShellRun, stopping: boolean) => {
       if (settled) return;
