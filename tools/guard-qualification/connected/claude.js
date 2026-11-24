@@ -90,15 +90,30 @@ export function claudeConnected(env) {
     },
 
     /** Open a session the daemon's way. The world's `configured` is read now, as at session open. */
-    async openSession(world, { askPermission, extraEnv } = {}) {
+    async openSession(world, { askPermission, extraEnv, host } = {}) {
       const claudeConfig = join(world.root, "claude-config");
       await mkdir(claudeConfig, { recursive: true });
       await writeFile(join(claudeConfig, "settings.json"), JSON.stringify(CLAUDE_SETTINGS));
-      return makeSessionFactory({ configDir: world.configDir, storeDir: ".orca" }, openAcpSession, {
+      // The hook settings ORCA hands the agent at session/new, kept so the installed run can
+      // run the very program, arguments and context file this session installed.
+      const capturing = (o) =>
+        openAcpSession({
+          ...o,
+          ...(o.sessionMeta
+            ? {
+                sessionMeta: async (...args) => {
+                  const meta = await o.sessionMeta(...args);
+                  world.installedMeta = meta;
+                  return meta;
+                },
+              }
+            : {}),
+        });
+      return makeSessionFactory({ configDir: world.configDir, storeDir: ".orca" }, capturing, {
         runtime: process.execPath,
         script: env.hookScript,
       })({
-        host: new LocalHost({ id: "local", type: "local" }),
+        host: host ?? new LocalHost({ id: "local", type: "local" }),
         agent: path.agent(world, extraEnv),
         cwd: world.workspace,
         askPermission: askPermission ?? (async () => undefined),

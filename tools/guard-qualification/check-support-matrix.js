@@ -9,14 +9,16 @@
  * and synthetic results never count toward a tier. A receipt backs a tier only when it is
  * bound to the run that produced it (`attestation.js`): from the command line every receipt's
  * GitHub artifact attestation is verified; called as a function without a verifier, every
- * receipt counts as unverified. That binding is plumbing only: no tier is promoted yet
- * (`PROMOTABLE_TIERS` is empty) until a reviewed receipt producer exists and an end-to-end
- * check accepts a real qualifying receipt and refuses a real nonqualifying one (#1026).
+ * receipt counts as unverified. No tier is promoted yet (`PROMOTABLE_TIERS` is empty): the
+ * receipt producer is guard-receipts.yml, whose end-to-end check (`e2e-check.js`) must accept a
+ * real qualifying receipt and refuse a real failing one and a tampered copy (#1026); A and B
+ * open in a reviewed change after that has run on main.
  *
  *   node tools/guard-qualification/check-support-matrix.js --release
  *
  * also refuses a promoted row whose certified build is stale against HEAD (the release gate).
  */
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,13 +29,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "..", "..");
 const TIERS = ["none", "A", "B", "C"];
 /**
- * Tiers a row may be promoted to on attested receipts: none yet. Promotion to A or B waits for
- * the reviewed receipt producer and an end-to-end check of a real qualifying and nonqualifying
- * receipt; C also needs #1026's independent observer.
+ * Tiers a row may be promoted to on attested receipts: none yet. A and B open in a separate,
+ * reviewed change once guard-receipts.yml has produced, verified and checked end to end
+ * (`e2e-check.js`) real receipts on main; C waits for #1026's independent observer.
  */
 export const PROMOTABLE_TIERS = [];
 export const PROMOTION_DISABLED =
-  "tier promotion is disabled until a reviewed receipt producer and an end-to-end check of real receipts exist (#1026)";
+  "tier promotion is disabled until guard-receipts.yml's receipts and end-to-end check are reviewed on main (#1026)";
 /** What a receipt is when nothing verified its attestation (the function's default). */
 export const UNVERIFIED = "attestation not verified (run check-support-matrix.js, which verifies it)";
 
@@ -45,10 +47,21 @@ const MUST_COVER_FOR_C = ["lifecycle", "bypass"];
  * adapter version, host, route or build, a duplicate, failed or missing case, or a missing
  * connectivity check (every tier needs tier A's). Structural only. Empty when it holds.
  */
-export function receiptProblems(receipt, agent, route, kind, neededCases, assertions = loadAssertions()) {
+export function receiptProblems(
+  receipt,
+  agent,
+  route,
+  kind,
+  neededCases,
+  assertions = loadAssertions(),
+  routePath = undefined,
+  profile = undefined,
+) {
   const problems = [];
   if (receipt?.format !== "orca-enforcement-receipt/1") return ["not an orca-enforcement-receipt/1"];
   if (receipt.kind !== kind) problems.push(`kind ${receipt.kind}, needs ${kind}`);
+  // A receipt made to test the verifier (`e2e-check.js`) is never evidence, whatever it shows.
+  if (receipt.scope !== undefined) problems.push(`a ${receipt.scope} receipt, never evidence`);
   if (receipt.agent !== agent.id) problems.push(`agent ${receipt.agent}`);
   if (receipt.agentVersion !== agent.pin?.agentVersion) problems.push(`agentVersion ${receipt.agentVersion}`);
   if (receipt.adapterVersion !== agent.pin?.adapterVersion) problems.push(`adapterVersion ${receipt.adapterVersion}`);
@@ -67,6 +80,12 @@ export function receiptProblems(receipt, agent, route, kind, neededCases, assert
   // receipt's claim. A connected receipt proves one route end to end and does not make it.
   if (kind === "installed" && receipt.checks?.uncoveredRoutesRefused !== "pass")
     problems.push("needs checks.uncoveredRoutesRefused passing");
+  // Checked only on what claims to be installed evidence; any other kind is refused above.
+  if (kind === "installed" && receipt.kind === "installed") {
+    problems.push(...uncoveredRouteProblems(receipt, agent));
+    problems.push(...installedInputProblems(receipt, agent, profile));
+    problems.push(...installedCaseProblems(receipt, neededCases, assertions, routePath));
+  }
   if (kind === "connected") {
     // The connected run's own narrow check (a session on an unpinned runtime is refused), kept
     // apart from the route coverage above, which it does not show.
@@ -166,6 +185,239 @@ export function connectedEvidenceProblems(
     }
   }
   return problems;
+}
+
+/**
+ * An installed receipt's route coverage, entry by entry: every route the row lists as
+ * unsupported must be shown refused or asked about on the installed agent, saying how. A route
+ * that cannot be refused is not an unsupported route but a residual risk, and is listed there.
+ */
+export function uncoveredRouteProblems(receipt, agent) {
+  const problems = [];
+  const shown = new Map((receipt.uncoveredRoutes ?? []).map((r) => [r.route, r]));
+  for (const route of agent.unsupportedRoutes ?? []) {
+    const r = shown.get(route);
+    if (!r) problems.push(`uncovered route not shown refused: ${route}`);
+    else if (!["refused", "asked"].includes(r.result) || typeof r.how !== "string" || r.how.trim().length < 20)
+      problems.push(`uncovered route needs result refused or asked, and how it was shown: ${route}`);
+  }
+  return problems;
+}
+
+/**
+ * How each case of an installed receipt ran, from the route's `installed` entry in the matrix.
+ * Only one class of evidence holds a case toward A or B:
+ *
+ * - `live`: through the real installed agent, driven by the runner of the connected path
+ *   `installed.live` names, with every call's evidence checked exactly as a connected receipt's
+ *   is, against that path's committed assertion inventory (`connectedEvidenceProblems`). A call
+ *   whose decision by ORCA was not observed never counts, whatever its outcome.
+ *
+ * Cases the route lists under `installed.diagnostic` (the agent cannot make the call, or
+ * refuses it before ORCA answers) are outside the claim: `assertedCases` leaves them out, the
+ * row names them in `notAsserted`, and their runs on ORCA's installed program (`via:
+ * "program"`) are diagnostics (`programEvidenceProblems`) that count toward no tier. A route
+ * with no `installed` entry has no installed runner, so no installed receipt holds it beyond A.
+ */
+export function installedCaseProblems(receipt, neededCases, assertions, routePath) {
+  if (neededCases.length === 0) return [];
+  const spec = routePath?.installed;
+  if (!spec) return [`route ${receipt.route} has no installed runner in the matrix`];
+  const problems = [];
+  const live = [];
+  for (const c of (receipt.cases ?? []).filter((x) => neededCases.includes(x.id))) {
+    if (c.via === "live") live.push(c.id);
+    else
+      problems.push(`case ${c.id}: needs the installed agent's observed outcome (via live), not ${c.via ?? "nothing"}`);
+  }
+  if (live.length) {
+    if (!spec.live) problems.push(`route ${receipt.route}: no live runner for cases ${live.join(",")}`);
+    else
+      problems.push(
+        ...connectedEvidenceProblems({ ...receipt, route: spec.live }, live, assertions).map(
+          (p) => `${p} (live, on ${spec.live})`,
+        ),
+      );
+  }
+  return problems;
+}
+
+/** The cases a tier B claim on `path` asserts: those it runs, less its installed diagnostics. */
+export function assertedCases(path, catalogue) {
+  return casesFor(path, catalogue).filter((id) => !(id in (path.installed?.diagnostic ?? {})));
+}
+
+/**
+ * The diagnostic evidence of the cases an installed receipt ran on ORCA's installed program
+ * (a route's `installed.diagnostic`), re-derived rather than trusted. It counts toward no tier:
+ * the installed runner asserts it holds, and a reader sees what ORCA's program did. The runs each case makes, in order, which arguments they use (the
+ * installed ones or a case's replacement) and the outcomes each accepts come from the committed
+ * program inventory (`assertions.programs`, for the receipt's route). Each run must be of the
+ * command the session installed (`receipt.installedSettings`), record the digest of the bytes
+ * it was sent, and keep its exit code, stdout and stderr, from which the outcome is derived as
+ * Claude Code would: a non-zero exit blocks, no output allows, otherwise the hook's
+ * `permissionDecision`. A case with no runs in the inventory (F03) is held by the installed
+ * settings themselves (`installedSettingsProblems`).
+ */
+export function programEvidenceProblems(receipt, neededCases, assertions = loadAssertions()) {
+  const inventory = assertions.programs?.[receipt.route];
+  if (!inventory) return [`no committed program inventory for route ${receipt.route}`];
+  const problems = [];
+  const settingsProblems = installedSettingsProblems(receipt.installedSettings);
+  problems.push(...settingsProblems.map((p) => `installed settings: ${p}`));
+  const command =
+    settingsProblems.length === 0 ? receipt.installedSettings.hooks.PreToolUse[0].hooks[0].command : undefined;
+  for (const c of (receipt.cases ?? []).filter((x) => neededCases.includes(x.id))) {
+    const at = `case ${c.id} (program)`;
+    const entries = inventory[c.id];
+    if (!Array.isArray(entries)) {
+      problems.push(`${at}: not in the program inventory`);
+      continue;
+    }
+    const required = entries.flatMap((e) => Array.from({ length: e.calls ?? 1 }, () => e));
+    const calls = c.calls ?? [];
+    if (!Array.isArray(calls) || calls.length !== required.length) {
+      problems.push(`${at}: ${calls.length ?? 0} runs, the inventory requires ${required.length}`);
+      continue;
+    }
+    calls.forEach((call, i) => {
+      const want = required[i];
+      const run = `${at}: run ${i + 1}`;
+      if (
+        typeof call?.input?.sha256 !== "string" ||
+        !/^[0-9a-f]{64}$/.test(call.input.sha256) ||
+        !Number.isInteger(call.input.bytes) ||
+        !Number.isInteger(call.exitCode) ||
+        typeof call.stdout !== "string" ||
+        typeof call.stderr !== "string"
+      ) {
+        problems.push(`${run}: needs its input digest, exit code, stdout and stderr`);
+        return;
+      }
+      if (command !== undefined && call.command !== command) problems.push(`${run}: not the installed command`);
+      if (call.args !== want.args)
+        problems.push(`${run}: ran with ${call.args} arguments, the inventory's run uses ${want.args}`);
+      const outcome = programOutcome(call);
+      if (outcome !== call.outcome) problems.push(`${run}: its output shows ${outcome}, not ${call.outcome}`);
+      else if (!want.expected.includes(outcome))
+        problems.push(`${run}: outcome ${outcome} is not one the inventory accepts (${want.expected.join("|")})`);
+      if (want.surfaceLimit !== undefined)
+        for (const [name, text] of [
+          ["stdout", call.stdout],
+          ["stderr", call.stderr],
+        ])
+          if (Buffer.byteLength(text) > want.surfaceLimit)
+            problems.push(`${run}: ${name} is ${Buffer.byteLength(text)} bytes, over ${want.surfaceLimit}`);
+    });
+  }
+  return problems;
+}
+
+/** The outcome Claude Code takes from one run of a command hook (as `paths.js` `hookOutcome`). */
+function programOutcome(call) {
+  if (call.exitCode !== 0) return "block";
+  if (call.stdout === "") return "allow";
+  let decision;
+  try {
+    decision = JSON.parse(call.stdout)?.hookSpecificOutput?.permissionDecision;
+  } catch {
+    return "invalid:output";
+  }
+  return decision === "ask" || decision === "deny" ? decision : `invalid:${String(decision)}`;
+}
+
+/**
+ * Why the settings a session installed in the agent do not hold ORCA's hook in front of every
+ * tool: one PreToolUse entry matching every tool, one exec-form command hook with an absolute
+ * executable, a bounded timeout and `onFailure: "block"`, and nothing else in the settings.
+ */
+export function installedSettingsProblems(settings) {
+  const entries = settings?.hooks?.PreToolUse;
+  if (!Array.isArray(entries) || entries.length !== 1) return ["needs exactly one PreToolUse entry"];
+  const problems = [];
+  if (entries[0].matcher !== "*") problems.push("the PreToolUse entry must match every tool");
+  const hooks = entries[0].hooks;
+  if (!Array.isArray(hooks) || hooks.length !== 1) return [...problems, "needs exactly one hook"];
+  const hook = hooks[0];
+  if (hook.type !== "command") problems.push("the hook must be a command hook");
+  if (hook.onFailure !== "block") problems.push("a hook that fails must block");
+  if (!(hook.timeout > 0 && hook.timeout <= 30)) problems.push("needs a timeout of at most 30 seconds");
+  if (typeof hook.command !== "string" || !hook.command.startsWith("/")) problems.push("needs an absolute executable");
+  else if (/[;&|`$]/.test(hook.command)) problems.push("needs the exec form, not a shell line");
+  if (!Array.isArray(hook.args)) problems.push("needs its arguments as a list");
+  if (Object.keys(settings).join() !== "hooks") problems.push("changes more of the agent's settings than its hooks");
+  return problems;
+}
+
+/**
+ * What an installed receipt ran: the adapter as installed (its lockfile integrity), the digest
+ * of the runtime image it ran and of ORCA's hook program, and the qualification profile (a
+ * digest of what the route had to show when it ran, recomputed here). Each must match the
+ * row's pin (`pin.artifacts`, set from the receipt by `record-receipts.js`), and the profile
+ * must match the requirements as committed now.
+ */
+export function installedInputProblems(receipt, agent, profile) {
+  const inputs = receipt.inputs;
+  const hex = (v) => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
+  if (
+    typeof inputs?.adapter?.integrity !== "string" ||
+    !inputs.adapter.integrity.startsWith("sha512-") ||
+    !hex(inputs.runtime?.sha256) ||
+    !hex(inputs.hookProgram?.sha256) ||
+    !hex(inputs.profile)
+  )
+    return ["needs inputs: the adapter's integrity, the runtime and hook program digests, and the profile"];
+  const problems = [];
+  if (profile !== undefined && inputs.profile !== profile)
+    problems.push("ran against other requirements than the matrix states now (profile differs)");
+  const pinned = agent.pin?.artifacts ?? {};
+  for (const [name, value] of Object.entries(artifactsOf(receipt)))
+    if (pinned[name] !== value) problems.push(`${name} ${value} is not the row's pinned ${pinned[name] ?? "nothing"}`);
+  return problems;
+}
+
+/** The artifact digests a row pins from an installed receipt. */
+export function artifactsOf(receipt) {
+  return {
+    adapterIntegrity: receipt.inputs?.adapter?.integrity,
+    runtimeSha256: receipt.inputs?.runtime?.sha256,
+    hookProgramSha256: receipt.inputs?.hookProgram?.sha256,
+  };
+}
+
+/**
+ * The digest of what an installed receipt on `routePath` must show for `agent`: the route and
+ * its live runner as the matrix states them, the catalogue entries of the cases it runs, the
+ * row's unsupported routes, and the committed inventories its evidence is checked against. A
+ * receipt from a run against other requirements does not hold the ones committed now.
+ */
+export function qualificationProfile(matrix, catalogue, assertions, agent, routePath) {
+  const live = routePath.installed?.live;
+  const ids = casesFor(routePath, catalogue);
+  const profile = {
+    format: "orca-qualification-profile/1",
+    route: routePath,
+    live: matrix.paths.find((p) => p.id === live) ?? null,
+    cases: catalogue.cases.filter((c) => ids.includes(c.id)),
+    unsupportedRoutes: [...(agent.unsupportedRoutes ?? [])].sort(),
+    notAsserted: [...(agent.notAsserted ?? [])].sort(),
+    inventories: {
+      live: (live && assertions.paths?.[live]) ?? null,
+      program: assertions.programs?.[routePath.id] ?? null,
+    },
+  };
+  return createHash("sha256").update(canonical(profile)).digest("hex");
+}
+
+/** JSON with object keys sorted, so equal values have one text. */
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object")
+    return `{${Object.keys(value)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`)
+      .join(",")}}`;
+  return JSON.stringify(value ?? null);
 }
 
 /** The inventory's calls for one case, one entry per call; undefined when it lists none. */
@@ -269,6 +521,25 @@ export function checkSupportMatrix(
     }
   }
 
+  // A route's installed diagnostics have their program runs and accepted outcomes committed.
+  for (const path of matrix.paths) {
+    const program = path.installed?.diagnostic ?? {};
+    const inventory = assertions.programs?.[path.id] ?? {};
+    const runs = new Set(casesFor(path, catalogue));
+    for (const id of Object.keys(program)) {
+      if (!runs.has(id)) problems.push(`path ${path.id}: lists ${id} as an installed diagnostic, but does not run it`);
+      if (!Array.isArray(inventory[id]))
+        problems.push(`path ${path.id}: diagnostic case ${id} has no committed program inventory`);
+    }
+    for (const [id, entries] of Object.entries(inventory)) {
+      if (!(id in program))
+        problems.push(`path ${path.id}: the program inventory lists ${id}, not an installed diagnostic`);
+      for (const e of entries ?? [])
+        if (!["installed", "replaced"].includes(e.args) || !Array.isArray(e.expected) || e.expected.length === 0)
+          problems.push(`path ${path.id}: program inventory for ${id} needs arguments and accepted outcomes per run`);
+    }
+  }
+
   const agents = new Set();
   for (const agent of matrix.agents) {
     const at = `agent ${agent.id}`;
@@ -291,10 +562,24 @@ export function checkSupportMatrix(
       }
       receipts.push({ file, receipt: readReceipt(file) });
     }
+    // A receipt says what it says; only one bound to the run that produced it is evidence. Every
+    // listed receipt is verified, at any tier: one that a verifier refuses is never listed.
+    for (const r of receipts) {
+      r.trust = verifyReceipt(r.file, r.receipt);
+      if (tier === 0 && r.trust.some((p) => p !== UNVERIFIED))
+        problems.push(`${at}: receipt ${r.file}: ${r.trust.join("; ")}`);
+    }
+    // The cases a tier B claim leaves out are named on the row, so the claim reads as its scope.
+    const diagnostics = [
+      ...new Set(agent.routes.flatMap((r) => Object.keys(paths.get(r)?.installed?.diagnostic ?? {}))),
+    ].sort();
+    const named = [...(agent.notAsserted ?? [])].sort();
+    if (named.join() !== diagnostics.join())
+      problems.push(
+        `${at}: notAsserted must name exactly its routes' installed diagnostics (${diagnostics.join(",") || "none"})`,
+      );
     if (tier === 0) continue;
     if (!promotable.includes(agent.tier)) problems.push(`${at}: ${PROMOTION_DISABLED}`);
-    // A receipt says what it says; only one bound to the run that produced it is evidence.
-    for (const r of receipts) r.trust = verifyReceipt(r.file, r.receipt);
 
     const pin = agent.pin;
     if (!pin || !pin.agentVersion || !pin.adapterVersion || !pin.host || !/^[0-9a-f]{40}$/.test(pin.build ?? "")) {
@@ -313,17 +598,27 @@ export function checkSupportMatrix(
       const provers = matrix.paths.filter((p) => p.connected && p.proves === route);
       const required = [
         { tier: 1, kind: "installed", route, cases: [] },
-        { tier: 2, kind: "installed", route, cases: casesFor(path, catalogue) },
+        { tier: 2, kind: "installed", route, cases: assertedCases(path, catalogue) },
         ...provers.map((p) => ({ tier: 3, kind: "connected", route: p.id, cases: qualifyingCases(p, catalogue) })),
       ].filter((r) => r.tier <= tier);
       if (tier === 3 && provers.length === 0)
         problems.push(`${at}: tier C on ${route} needs a connected path that proves it`);
+      const profile = qualificationProfile(matrix, catalogue, assertions, agent, path);
       const met = new Set();
       for (const need of required) {
         const good = receipts.filter(
           ({ receipt, trust }) =>
             trust.length === 0 &&
-            receiptProblems(receipt, agent, need.route, need.kind, need.cases, assertions).length === 0,
+            receiptProblems(
+              receipt,
+              agent,
+              need.route,
+              need.kind,
+              need.cases,
+              assertions,
+              paths.get(need.route),
+              profile,
+            ).length === 0,
         );
         if (good.length > 0) {
           met.add(need.route);
@@ -331,9 +626,19 @@ export function checkSupportMatrix(
         }
         if (need.tier === 3) continue;
         const why = receipts.flatMap(({ file, receipt, trust }) =>
-          [...receiptProblems(receipt, agent, need.route, need.kind, need.cases, assertions), ...trust].map(
-            (p) => `${file}: ${p}`,
-          ),
+          [
+            ...receiptProblems(
+              receipt,
+              agent,
+              need.route,
+              need.kind,
+              need.cases,
+              assertions,
+              paths.get(need.route),
+              profile,
+            ),
+            ...trust,
+          ].map((p) => `${file}: ${p}`),
         );
         problems.push(
           `${at}: tier ${TIERS[need.tier]} on ${route} needs a passing ${need.kind} receipt for ${agent.id} ${pin.agentVersion} on ${pin.host}` +
