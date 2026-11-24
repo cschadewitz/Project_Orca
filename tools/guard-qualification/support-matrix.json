@@ -101,7 +101,7 @@
       ],
       "installed": {
         "live": "codex-connected",
-        "program": {
+        "diagnostic": {
           "F01": "A live Codex cannot make this call: Codex builds the hook's input itself; a live run cannot hand the hook malformed bytes.",
           "F02": "A live Codex cannot make this call: The session's context file is written by ORCA's factory; damaging it mid-session is a hook-program case.",
           "P02": "A live Codex cannot make this call: No raw input or context file can be damaged from inside a live run (see F01 and F02).",
@@ -202,11 +202,13 @@
       "tier": "none",
       "routes": ["codex-native-hook"],
       "receipts": [],
+      "notAsserted": ["A04", "B01", "F01", "F02", "F05", "P02", "P03"],
       "unverified": [
         "Any tier: only with nativeToolHook: experimental, on the pinned pair and host; without the hook Codex runs calls in its full-access mode without asking ORCA",
         "Behaviour of a real model, which may make calls in shapes the stand-in does not",
         "Subagents (multi_agent_v1, which Codex offers for models other than gpt-5.5): whether the hook runs for their calls is not shown",
-        "Events and logs about its calls are redacted"
+        "Events and logs about its calls are redacted",
+        "Cases outside the B claim (notAsserted): the installed agent cannot make them or refuses them before ORCA answers, so its handling is not observed; they run on ORCA's installed hook program as diagnostics only"
       ],
       "unsupportedRoutes": [
         "Remote sessions over SSH while the hook is on",
@@ -224,7 +226,7 @@
         "A hook is not an operating-system boundary; Codex's sandbox and ORCA's protected-path rules stay in force beside it",
         "Admission checks (adapter, runtime image, startup probe) run once when the session opens; nothing re-checks them during the session"
       ],
-      "next": "Cal on #1051: a route that can continue when its guard fails does not meet tier A, so Codex stays none while its hook runner fails open. Installed receipts on codex-native-hook come from guard-receipts.yml (#1026); C after #1026's independent observer."
+      "next": "Cal on #1051: a route that can continue when its guard fails does not meet tier A. Codex's own hook runner fails open, so ORCA now runs its program inside a fail-closed line; Codex stays none until that line is accepted and a trusted receipt is pinned. Installed receipts on codex-native-hook come from guard-receipts.yml (#1026); C after #1026's independent observer."
     },
     {
       "id": "gemini",

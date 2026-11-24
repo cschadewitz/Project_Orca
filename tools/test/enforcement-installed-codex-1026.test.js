@@ -8,12 +8,11 @@
  * - `uncoveredRoutes`: every route the Codex row lists as unsupported, shown refused here.
  * - `cases`: every case the `codex-native-hook` route can run. A case a live agent can make
  *   runs live (`connected/codex.js`) with each call's independent evidence; the ones the
- *   matrix lists under the route's `installed.program` run on the hook program that same kind
- *   of session installed (`installed/codex-hook-program.js`).
+ *   matrix lists under the route's `installed.diagnostic` run on the hook program that same
+ *   kind of session installed (`installed/codex-hook-program.js`), as diagnostics only.
  *
  * `guard-receipts.yml` runs this with ORCA_CODEX_ADAPTER, ORCA_CODEX_OTHER_RUNTIME and
- * ORCA_ENFORCEMENT_RECEIPT_DIR set, and attests the receipt it writes. Its end-to-end check
- * also runs part of it with ORCA_GUARD_RECEIPT_FAULT set, for a receipt that must be refused. Without them only the
+ * ORCA_ENFORCEMENT_RECEIPT_DIR set, and attests the receipt it writes. Without them only the
  * agreement checks run. A receipt counts only through that attestation (`attestation.js`).
  */
 import { execFileSync } from "node:child_process";
@@ -27,11 +26,13 @@ import { CODEX_HOOK_FAILED_REASON, CODEX_HOOK_VERIFIED_PAIRS } from "@orca/agent
 import { childBundle } from "@orca/testing/child-bundle";
 import {
   REPO_ROOT,
+  assertedCases,
   casesFor,
   installedCaseProblems,
   loadAssertions,
   loadCatalogue,
   loadMatrix,
+  programEvidenceProblems,
   qualificationProfile,
   uncoveredRouteProblems,
 } from "../guard-qualification/check-support-matrix.js";
@@ -43,8 +44,6 @@ import { codexHookProgram } from "../guard-qualification/installed/codex-hook-pr
 
 const ADAPTER = process.env["ORCA_CODEX_ADAPTER"];
 const OTHER_RUNTIME = process.env["ORCA_CODEX_OTHER_RUNTIME"];
-/** Set only by the end-to-end check, for a real nonqualifying receipt (`PROGRAM_FAULTS`). */
-const FAULT = process.env["ORCA_GUARD_RECEIPT_FAULT"] || undefined;
 const ROUTE = "codex-native-hook";
 const FAILING_HOOK = fileURLToPath(
   new URL("../guard-qualification/installed/failing-hook-program.js", import.meta.url),
@@ -53,7 +52,7 @@ const catalogue = loadCatalogue();
 const matrix = loadMatrix();
 const route = matrix.paths.find((p) => p.id === ROUTE);
 const row = matrix.agents.find((a) => a.id === "codex");
-const program = route.installed?.program ?? {};
+const program = route.installed?.diagnostic ?? {};
 
 const realWorld = () =>
   createWorld({
@@ -187,7 +186,7 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     if (!built?.["hook"]) throw new Error("the hook program could not be built for this run");
     hookScript = built["hook"];
     live = codexConnected({ adapter: ADAPTER, hookScript, model });
-    hookProgram = codexHookProgram({ live, fault: FAULT });
+    hookProgram = codexHookProgram({ live });
   });
 
   afterAll(async () => {
@@ -256,8 +255,10 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     expect(receipt.checks.uncoveredRoutesRefused).toBe("pass");
     expect(receipt.cases.map((c) => c.id)).toEqual(casesFor(route, catalogue));
     expect(
-      installedCaseProblems({ ...receipt, route: ROUTE }, casesFor(route, catalogue), loadAssertions(), route),
+      installedCaseProblems({ ...receipt, route: ROUTE }, assertedCases(route, catalogue), loadAssertions(), route),
     ).toEqual([]);
+    // The diagnostics hold too, though they count toward no tier.
+    expect(programEvidenceProblems({ ...receipt, route: ROUTE }, Object.keys(program), loadAssertions())).toEqual([]);
     expect(receipt.inputs.profile).toBe(qualificationProfile(matrix, catalogue, loadAssertions(), row, route));
     expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
   });
@@ -309,7 +310,6 @@ async function writeReceipt(receipt) {
       {
         format: "orca-enforcement-receipt/1",
         kind: "installed",
-        ...(FAULT ? { fault: FAULT } : {}),
         agent: "codex",
         agentVersion: pair?.runtime ?? null,
         adapterVersion,

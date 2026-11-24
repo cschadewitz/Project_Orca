@@ -56,18 +56,10 @@ export function installedCodexHook(codexConfig) {
 }
 
 /**
- * Faults the end-to-end check in `guard-receipts.yml` injects to produce a real nonqualifying
- * receipt, as for Claude (`installed/claude-hook-program.js`): `lets-everything-through` runs
- * a program that exits 0 with no output in place of the installed line.
- */
-export const PROGRAM_FAULTS = ["lets-everything-through"];
-
-/**
- * @param {{ live: ReturnType<typeof import("../connected/codex.js").codexConnected>, fault?: string }} env
- *   the live path whose sessions install the hook this runs, and a fault to inject
+ * @param {{ live: ReturnType<typeof import("../connected/codex.js").codexConnected> }} env
+ *   the live path whose sessions install the hook this runs
  */
 export function codexHookProgram(env) {
-  if (env.fault !== undefined && !PROGRAM_FAULTS.includes(env.fault)) throw new Error(`unknown fault ${env.fault}`);
   const path = {
     id: "codex-native-hook",
     capabilities: codexNativeHook.capabilities,
@@ -106,10 +98,7 @@ export function codexHookProgram(env) {
               );
       const shell = codexHookShell();
       if ("error" in shell) throw new Error(shell.error);
-      const result =
-        env.fault === "lets-everything-through"
-          ? await run(process.execPath, ["-e", ""], input, hook.timeout * 1000, world.workspace)
-          : await run(shell.program, [...shell.args, command], input, hook.timeout * 1000, world.workspace);
+      const result = await run(shell.program, [...shell.args, command], input, hook.timeout * 1000, world.workspace);
       (world.programCalls ??= []).push(programRecord(hook, args, input, result));
       return {
         outcome: codexHookOutcome(result),
