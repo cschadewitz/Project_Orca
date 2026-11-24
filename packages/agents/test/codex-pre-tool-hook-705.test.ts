@@ -6,7 +6,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,7 @@ import {
   codexProbeReceipt,
   permissionPolicyPath,
   probeCodexHook,
+  openHookTelemetrySpool,
   codexHookEnvironment,
   codexHookShell,
   runClaudePreToolHook,
@@ -461,6 +462,42 @@ describe("installing it in Codex", () => {
           },
         });
       },
+    );
+
+    it.skipIf(bundled === undefined || process.platform !== "linux")(
+      "keeps the real hook's telemetry working through the line: its recorder appends to the spool (#1000)",
+      async () => {
+        const dir = join(configDir, ".orca", "private-execution", "tool-hooks");
+        await chmod(dir, 0o700);
+        const spool = await openHookTelemetrySpool({
+          dir,
+          protectedPaths: { readOnly: [], noAccess: [join(configDir, ".orca", "private-execution")] },
+        });
+        await writeFile(contextFile, JSON.stringify({ ...context(), telemetry: spool.target }), "utf8");
+        const got: unknown[] = [];
+        spool.attach(async (lines) => void got.push(...lines));
+        const command = codexPreToolHookCommand(process.execPath, bundled!, contextFile);
+        const run = (input: string) =>
+          new Promise<{ code: number | null; stderr: string }>((done) => {
+            const child = spawn(SH.program, [...SH.args, command], { cwd: workspace });
+            let stderr = "";
+            child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+            child.on("close", (code) => done({ code, stderr }));
+            child.stdin.end(input);
+          });
+        // A call ORCA's rules deny, decided and blocked as usual.
+        const denied = await run(frame("view_image", { path: contextFile }));
+        expect(denied.code).toBe(2);
+        expect(denied.stderr).toMatch(/^(Denied|Blocked) by ORCA: /);
+        // The detached recorder appends after the answer; wait for its line.
+        for (let i = 0; i < 50 && got.length === 0; i++) {
+          await new Promise((r) => setTimeout(r, 100));
+          await spool.drain();
+        }
+        expect(got.length).toBeGreaterThan(0);
+        await spool.finish();
+      },
+      20_000,
     );
 
     it.skipIf(bundled === undefined || process.platform === "win32")(
