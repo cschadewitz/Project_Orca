@@ -43,7 +43,7 @@
       ],
       "installed": {
         "live": "claude-connected",
-        "program": {
+        "diagnostic": {
           "F01": "A live agent cannot make this call: The agent builds the hook's input itself; a live run cannot hand the hook malformed bytes. Run on claude-native-hook.",
           "F02": "A live agent cannot make this call: The session's context file is written by ORCA's factory; damaging it mid-session is a hook-program case. Run on claude-native-hook.",
           "F03": "A live agent cannot make this call: The installed settings are the factory's own; their shape is checked on claude-native-hook and by the #704 acceptance test.",
@@ -136,11 +136,13 @@
       "pin": null,
       "tier": "none",
       "routes": ["claude-native-hook"],
+      "notAsserted": ["A02", "A04", "B01", "F01", "F02", "F03", "F05", "P02", "P03"],
       "receipts": [],
       "unverified": [
         "Any tier: only with nativeToolHook: experimental, on the pinned pair and host; without the hook Claude runs remembered calls without asking ORCA",
         "Behaviour of a real model, which may make calls in shapes the stand-in does not",
-        "Events and logs about its calls are redacted"
+        "Events and logs about its calls are redacted",
+        "Cases outside the B claim (notAsserted): the installed agent cannot make them or refuses them before ORCA answers, so its handling is not observed; they run on ORCA's installed hook program as diagnostics only"
       ],
       "unsupportedRoutes": [
         "Remote sessions over SSH while the hook is on",

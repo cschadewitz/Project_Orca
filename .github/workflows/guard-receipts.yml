@@ -2,14 +2,14 @@
 # person in the loop.
 #
 # Each agent job installs its pinned agent the way its acceptance workflow does and runs its
-# installed receipt test against a scripted model stand-in (no account, key or spend). The
-# `publish` job then signs every receipt with GitHub's artifact attestation (Sigstore, through
-# this job's OIDC identity), commits each receipt with its bundle under
-# tools/guard-qualification/receipts/, pins each agent's row to the receipt's versions, host and
-# build (record-receipts.js), and opens or updates one pull request. Before it proposes anything
-# it checks the chain end to end (e2e-check.js): with the row at B, the checker must accept this
-# run's receipt and refuse a real receipt from a run with a broken hook program injected and a
-# byte-tampered copy, attestations verified for real.
+# installed receipt test against a scripted model stand-in (no account, key or spend), then
+# part of it again with a broken hook installed. The `sign` job, which can attest but not write,
+# stages only this run's validated receipts with a manifest (stage-receipts.js), signs exactly
+# those with GitHub's artifact attestation (Sigstore, through its OIDC identity), verifies each
+# attestation, and checks the chain end to end (e2e-check.js): with the row at B, the checker
+# must accept this run's receipt and refuse the broken run's and a byte-tampered copy. The
+# `propose` job, which can write but not attest, verifies what it received again, pins each
+# agent's row (record-receipts.js), and opens a pull request from a new branch.
 #
 # This workflow is the one signer check-support-matrix.js accepts (attestation.js): a receipt
 # counts only when it was signed here, on a GitHub-hosted runner, from main or a release line,
@@ -115,22 +115,22 @@ jobs:
           test -f "$RUNNER_TEMP/receipts/claude-claude-native-hook.json"
 
       # The end-to-end check's nonqualifying receipt: a real run of part of the same test with a
-      # broken hook program injected, in which a case fails. Never proposed; publish checks that
-      # the checker refuses it.
-      - name: Run part of it with a broken hook program
+      # hook that answers allow to every call installed in place of ORCA's, so a case the rules
+      # deny (L03) is allowed. Never proposed; the sign job checks that the checker refuses it.
+      - name: Run part of it with a broken hook installed
         shell: bash
         env:
           ORCA_ENFORCEMENT_RECEIPT_DIR: ${{ runner.temp }}/fault
-          ORCA_GUARD_RECEIPT_FAULT: lets-everything-through
+          ORCA_GUARD_RECEIPT_FAULT: hook-allows-everything
         run: |
           set -euo pipefail
-          # The injected fault fails F01 and the final check; the receipt is what matters here.
+          # The injected fault fails L03 and the final check; the receipt is what matters here.
           pnpm exec vitest run tools/test/enforcement-installed-claude-1026.test.js \
-            -t "connects|F01|binds the receipt" || true
+            -t "connects|L03|binds the receipt" || true
           node -e '
             const r = require(process.argv[1]);
-            if (r.fault !== "lets-everything-through" || r.cases.find((c) => c.id === "F01")?.result !== "fail")
-              throw new Error("expected a receipt with F01 failed under the injected fault");
+            if (r.fault !== "hook-allows-everything" || r.cases.find((c) => c.id === "L03")?.result !== "fail")
+              throw new Error("expected a receipt with L03 failed under the injected fault");
           ' "$RUNNER_TEMP/fault/claude-claude-native-hook.json"
           mv "$RUNNER_TEMP/fault/claude-claude-native-hook.json" "$RUNNER_TEMP/fault/fault-claude-native-hook.json"
 
@@ -148,34 +148,24 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  publish:
-    name: sign and propose receipts
+  # Signs this run's validated receipts and nothing else. It can attest, and cannot write to the
+  # repository: no write token, no release App, no environment.
+  sign:
+    name: sign and check receipts
     # Only runs of main or a release line sign anything; a pull request run stops at the receipts.
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
     needs: [claude]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # The optional release App's token makes CI run on the pull request this opens; the
-    # environment is main-only with no reviewers, as in release-prepare.yml.
-    environment: release-bot
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
       id-token: write
       attestations: write
     steps:
-      - name: Release bot token (optional)
-        id: app
-        if: ${{ vars.ORCA_RELEASE_APP_ID != '' }}
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
-        with:
-          app-id: ${{ vars.ORCA_RELEASE_APP_ID }}
-          private-key: ${{ secrets.ORCA_RELEASE_APP_PRIVATE_KEY }}
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          token: ${{ steps.app.outputs.token || github.token }}
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -183,35 +173,31 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: guard-receipt-*
-          path: ${{ runner.temp }}/receipts
+          path: ${{ runner.temp }}/downloaded/receipts
           merge-multiple: true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: guard-fault-claude
-          path: ${{ runner.temp }}/fault
+          path: ${{ runner.temp }}/downloaded/fault
 
-      - name: Place the receipts
-        id: place
+      # Each receipt is validated (an installed receipt of this commit, for a row and route the
+      # matrix lists, under its expected name) and copied into an empty directory with a
+      # manifest of names and digests. Only those files are attested.
+      - name: Stage this run's receipts
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p tools/guard-qualification/receipts
-          for f in "$RUNNER_TEMP"/receipts/*.json "$RUNNER_TEMP"/fault/*.json; do
-            # Every receipt must name this run's commit; anything else is not this run's.
-            build=$(node -e 'console.log(require(process.argv[1]).build)' "$f")
-            test "$build" = "$GITHUB_SHA"
-          done
-          cp "$RUNNER_TEMP"/receipts/*.json tools/guard-qualification/receipts/
-          ls tools/guard-qualification/receipts/*.json
+          node tools/guard-qualification/stage-receipts.js stage "$RUNNER_TEMP/signed" "$RUNNER_TEMP"/downloaded/receipts/*.json
+          node tools/guard-qualification/stage-receipts.js stage "$RUNNER_TEMP/fault" "$RUNNER_TEMP"/downloaded/fault/*.json
 
-      - name: Attest the receipts
+      - name: Attest them
         id: attest
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           # The fault receipt is signed too, so the end-to-end check refuses it for what it shows.
           subject-path: |
-            ${{ github.workspace }}/tools/guard-qualification/receipts/*.json
-            ${{ runner.temp }}/fault/*.json
+            ${{ runner.temp }}/signed/*-*.json
+            ${{ runner.temp }}/fault/fault-*.json
 
       - name: Pinned GitHub CLI
         shell: bash
@@ -219,22 +205,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: tools/guard-qualification/ensure-gh.sh
 
-      - name: End-to-end check of the receipt chain
-        shell: bash
-        env:
-          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # With the Claude row at B and pinned to this run's receipt, the checker must accept it,
-          # refuse the fault run's receipt and refuse a byte-tampered copy, attestations verified.
-          q=tools/guard-qualification/receipts/claude-claude-native-hook.json
-          f="$RUNNER_TEMP/fault/fault-claude-native-hook.json"
-          cp "$BUNDLE" "$q.sigstore.json"
-          cp "$BUNDLE" "$f.sigstore.json"
-          node tools/guard-qualification/e2e-check.js "$q" "$f"
-
-      - name: Record them in the support matrix
+      - name: Verify the attestations, and check the receipt chain end to end
         shell: bash
         env:
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
@@ -242,11 +213,65 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          for d in signed fault; do
+            for f in $(node -e 'for (const e of require(process.argv[1]).receipts) console.log(e.name)' "$RUNNER_TEMP/$d/manifest.json"); do
+              cp "$BUNDLE" "$RUNNER_TEMP/$d/$f.sigstore.json"
+            done
+            # Every staged receipt's attestation verifies, whatever tier any row claims.
+            node tools/guard-qualification/stage-receipts.js verify "$RUNNER_TEMP/$d"
+          done
+          # With the Claude row at B and pinned to this run's receipt, the checker must accept it,
+          # refuse the fault run's receipt and refuse a byte-tampered copy.
+          node tools/guard-qualification/e2e-check.js \
+            "$RUNNER_TEMP/signed/claude-claude-native-hook.json" "$RUNNER_TEMP/fault/fault-claude-native-hook.json"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: guard-signed
+          path: ${{ runner.temp }}/signed/
+          if-no-files-found: error
+          retention-days: 30
+
+  # Proposes what sign verified, as a new branch and pull request. It can write, and cannot attest.
+  propose:
+    name: propose receipts
+    needs: [sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: guard-signed
+          path: ${{ runner.temp }}/signed
+
+      - name: Pinned GitHub CLI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/guard-qualification/ensure-gh.sh
+
+      - name: Record them in the support matrix
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # What arrived is exactly what sign staged, and each attestation verifies again here.
+          node tools/guard-qualification/stage-receipts.js verify "$RUNNER_TEMP/signed"
+          mkdir -p tools/guard-qualification/receipts
           new=()
-          for f in "$RUNNER_TEMP"/receipts/*.json; do
-            r="tools/guard-qualification/receipts/$(basename "$f")"
-            cp "$BUNDLE" "$r.sigstore.json"
-            new+=("$r")
+          for f in $(node -e 'for (const e of require(process.argv[1]).receipts) console.log(e.name)' "$RUNNER_TEMP/signed/manifest.json"); do
+            cp "$RUNNER_TEMP/signed/$f" "$RUNNER_TEMP/signed/$f.sigstore.json" tools/guard-qualification/receipts/
+            new+=("tools/guard-qualification/receipts/$f")
           done
           node tools/guard-qualification/record-receipts.js "${new[@]}"
           # Receipts no row lists any more go, with their bundles.
@@ -260,30 +285,27 @@ jobs:
               if (!listed.has(receipt)) fs.rmSync(p);
             }
           '
-          # The structure holds and every listed receipt's attestation verifies.
+          # The structure holds and every listed receipt's attestation verifies, at any tier.
           node tools/guard-qualification/check-support-matrix.js
 
+      # A new branch per run, never rewritten; an earlier run's pull request is left for review.
       - name: Propose them
         shell: bash
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          GH_TOKEN: ${{ github.token }}
           BASE: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          branch="bot/guard-receipts-${BASE//\//-}"
+          branch="bot/guard-receipts-${GITHUB_SHA::12}-${GITHUB_RUN_ATTEMPT}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$branch"
+          git checkout -b "$branch"
           git add tools/guard-qualification/receipts tools/guard-qualification/support-matrix.json
           if git diff --cached --quiet; then
             echo "Nothing new to record."
             exit 0
           fi
           git commit -m "Record attested guard receipts for ${GITHUB_SHA::12} (#1026)"
-          git push --force origin "$branch"
-          body="Installed receipts from [run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) at ${GITHUB_SHA}, each signed with GitHub's artifact attestation by guard-receipts.yml. Rows are pinned to the receipts; tiers are unchanged until promoted by a reviewed edit here. @calciferschadewitz for review."
-          if [ -z "$(gh pr list --head "$branch" --base "$BASE" --json number --jq '.[].number')" ]; then
-            gh pr create --head "$branch" --base "$BASE" --title "Record attested guard receipts (#1026)" --body "$body" --label no-changelog
-          else
-            gh pr comment "$branch" --body "Updated: $body"
-          fi
+          git push origin "$branch"
+          body="Installed receipts from [run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) at ${GITHUB_SHA}, each signed with GitHub's artifact attestation by guard-receipts.yml and verified before this was written. Rows are pinned to the receipts; tiers are unchanged until promoted by a reviewed edit. @calciferschadewitz for review."
+          gh pr create --head "$branch" --base "$BASE" --title "Record attested guard receipts for ${GITHUB_SHA::12} (#1026)" --body "$body" --label no-changelog

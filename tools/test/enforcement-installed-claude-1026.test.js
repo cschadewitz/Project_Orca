@@ -6,10 +6,11 @@
  *
  * - `checks.connects`: the factory admits a session and a workspace write takes effect.
  * - `uncoveredRoutes`: every route the Claude row lists as unsupported, shown refused here.
- * - `cases`: every case the `claude-native-hook` route can run. A case a live agent can make
- *   runs live (`connected/claude.js`) with each call's independent evidence; the ones the
- *   matrix lists under the route's `installed.program` run on the hook program that same kind
- *   of session installed (`installed/claude-hook-program.js`).
+ * - `cases`: every case the `claude-native-hook` route can run. Each case the B claim asserts
+ *   runs live (`connected/claude.js`), with each call's independent evidence and ORCA's
+ *   decision observed. The ones the matrix lists under the route's `installed.diagnostic`
+ *   (the row's `notAsserted`) run on the hook program that same kind of session installed
+ *   (`installed/claude-hook-program.js`), as diagnostics that count toward no tier.
  *
  * `guard-receipts.yml` runs this with ORCA_CLAUDE_ADAPTER, ORCA_CLAUDE_OTHER_RUNTIME and
  * ORCA_ENFORCEMENT_RECEIPT_DIR set, and attests the receipt it writes. Its end-to-end check
@@ -19,7 +20,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -28,7 +30,9 @@ import { childBundle } from "@orca/testing/child-bundle";
 import {
   REPO_ROOT,
   casesFor,
+  assertedCases,
   installedCaseProblems,
+  programEvidenceProblems,
   loadAssertions,
   loadCatalogue,
   loadMatrix,
@@ -43,14 +47,23 @@ import { claudeHookProgram } from "../guard-qualification/installed/claude-hook-
 
 const ADAPTER = process.env["ORCA_CLAUDE_ADAPTER"];
 const OTHER_RUNTIME = process.env["ORCA_CLAUDE_OTHER_RUNTIME"];
-/** Set only by the end-to-end check, for a real nonqualifying receipt (`PROGRAM_FAULTS`). */
+/**
+ * Set only by guard-receipts.yml's end-to-end check, for a real receipt that must be refused:
+ * `hook-allows-everything` installs, in place of ORCA's hook program, one that answers `allow`
+ * to every call (what a broken install looks like), so a case the rules deny fails.
+ */
 const FAULT = process.env["ORCA_GUARD_RECEIPT_FAULT"] || undefined;
+const FAULTS = {
+  "hook-allows-everything": `process.stdout.write(${JSON.stringify(
+    JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } }),
+  )});`,
+};
 const ROUTE = "claude-native-hook";
 const catalogue = loadCatalogue();
 const matrix = loadMatrix();
 const route = matrix.paths.find((p) => p.id === ROUTE);
 const row = matrix.agents.find((a) => a.id === "claude");
-const program = route.installed?.program ?? {};
+const program = route.installed?.diagnostic ?? {};
 
 const realWorld = () =>
   createWorld({
@@ -122,8 +135,14 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     const entry = fileURLToPath(new URL("../../packages/agents/src/bin/claude-pre-tool-hook.ts", import.meta.url));
     const built = childBundle("claude-pre-tool-hook-1026-installed", { entries: { hook: entry } });
     if (!built?.["hook"]) throw new Error("the hook program could not be built for this run");
-    live = claudeConnected({ adapter: ADAPTER, hookScript: built["hook"], model });
-    hookProgram = claudeHookProgram({ live, fault: FAULT });
+    let hookScript = built["hook"];
+    if (FAULT) {
+      if (!(FAULT in FAULTS)) throw new Error(`unknown fault ${FAULT}`);
+      hookScript = join(await mkdtemp(join(tmpdir(), "guard-fault-")), "hook.js");
+      await writeFile(hookScript, FAULTS[FAULT]);
+    }
+    live = claudeConnected({ adapter: ADAPTER, hookScript, model });
+    hookProgram = claudeHookProgram({ live });
   });
 
   afterAll(async () => {
@@ -191,8 +210,10 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     expect(receipt.checks.uncoveredRoutesRefused).toBe("pass");
     expect(receipt.cases.map((c) => c.id)).toEqual(casesFor(route, catalogue));
     expect(
-      installedCaseProblems({ ...receipt, route: ROUTE }, casesFor(route, catalogue), loadAssertions(), route),
+      installedCaseProblems({ ...receipt, route: ROUTE }, assertedCases(route, catalogue), loadAssertions(), route),
     ).toEqual([]);
+    // The diagnostics hold too, though they count toward no tier.
+    expect(programEvidenceProblems({ ...receipt, route: ROUTE }, Object.keys(program), loadAssertions())).toEqual([]);
     expect(receipt.inputs.profile).toBe(qualificationProfile(matrix, catalogue, loadAssertions(), row, route));
     expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
   });

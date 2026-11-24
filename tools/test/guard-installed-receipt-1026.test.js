@@ -6,13 +6,16 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  assertedCases,
   installedCaseProblems,
   installedInputProblems,
   installedSettingsProblems,
+  loadCatalogue,
   programEvidenceProblems,
   uncoveredRouteProblems,
 } from "../guard-qualification/check-support-matrix.js";
 
+const catalogue = loadCatalogue();
 const agent = { id: "claude", unsupportedRoutes: ["Remote sessions over SSH while the hook is on"] };
 const how = "a hooked session on an SSH host is refused before it opens";
 
@@ -47,7 +50,7 @@ describe("an installed receipt shows every uncovered route refused or asked abou
 describe("each installed case runs live, or on the program only where a live agent cannot", () => {
   const route = {
     id: "claude-native-hook",
-    installed: { live: "claude-connected", program: { F01: "a live agent builds the hook's input itself" } },
+    installed: { live: "claude-connected", diagnostic: { F01: "a live agent builds the hook's input itself" } },
   };
   const assertions = {
     format: "orca-706-assertions/1",
@@ -104,15 +107,16 @@ describe("each installed case runs live, or on the program only where a live age
   };
   const receipt = (cases) => ({ route: "claude-native-hook", cases, installedSettings: settings });
 
-  it("holds for live cases with evidence and program cases the route lists", () => {
+  it("holds for asserted cases run live with observed evidence; diagnostics are not needed", () => {
     expect(
       installedCaseProblems(
         receipt([{ id: "L03", result: "pass", via: "live", calls: [denied] }, programCase([run(), asked])]),
-        ["L03", "F01"],
+        ["L03"],
         assertions,
         route,
       ),
     ).toEqual([]);
+    expect(assertedCases({ ...route, capabilities: [] }, catalogue)).not.toContain("F01");
   });
 
   it("refuses a route with no installed runner", () => {
@@ -123,12 +127,29 @@ describe("each installed case runs live, or on the program only where a live age
     expect(installedCaseProblems(receipt([]), [], assertions, { id: "acp-ask" })).toEqual([]);
   });
 
-  it("refuses a case on the program that a live agent can make, or one that says neither", () => {
+  it("never counts a program run, even of a diagnostic case, as the installed agent's outcome", () => {
     expect(
       installedCaseProblems(receipt([{ id: "L03", result: "pass", via: "program" }]), ["L03"], assertions, route),
-    ).toEqual(["case L03: run on the program, but a live agent can make it"]);
+    ).toEqual(["case L03: needs the installed agent's observed outcome (via live), not program"]);
+    expect(installedCaseProblems(receipt([programCase([run(), asked])]), ["F01"], assertions, route)).toEqual([
+      "case F01: needs the installed agent's observed outcome (via live), not program",
+    ]);
     expect(installedCaseProblems(receipt([{ id: "L03", result: "pass" }]), ["L03"], assertions, route)).toEqual([
-      "case L03: needs via live or program",
+      "case L03: needs the installed agent's observed outcome (via live), not nothing",
+    ]);
+  });
+
+  it("never counts a call whose decision by ORCA was not observed", () => {
+    const unobserved = { ...denied, orcaDecision: "unobserved", unobservedBecause: "the agent refused it first" };
+    expect(
+      installedCaseProblems(
+        receipt([{ id: "L03", result: "pass", via: "live", calls: [unobserved] }]),
+        ["L03"],
+        assertions,
+        route,
+      ),
+    ).toEqual([
+      "case L03: Write: ORCA's decision was not observed (the agent refused it first) (live, on claude-connected)",
     ]);
   });
 

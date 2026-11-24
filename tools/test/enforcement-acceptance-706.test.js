@@ -20,6 +20,7 @@ import {
   loadCatalogue,
   loadMatrix,
   loadAssertions,
+  loadAssertions,
   qualificationProfile,
   qualifyingCases,
 } from "../guard-qualification/check-support-matrix.js";
@@ -89,6 +90,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     ...structuredClone(matrix.agents.find((a) => a.id === "claude")),
     // The structure tests claim the ask route; the hook route's rules are tested with hookAgent.
     routes: ["acp-ask"],
+    notAsserted: [],
     pin,
     ...extra,
   });
@@ -97,22 +99,26 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     catalogue,
   );
   /**
-   * The structure tests run every installed case on the program, so each route path gets an
-   * `installed` entry listing all its cases; the live/program rules are tested on their own below.
+   * The structure tests run every installed case live, through a fixture runner whose committed
+   * inventory (below) is one Write that ORCA must deny per case; each route path gets an
+   * `installed` entry naming it and no diagnostics. The evidence rules are tested on their own.
    */
-  const withInstalled = (paths) =>
-    paths.map((p) =>
-      p.connected
-        ? p
-        : {
-            ...p,
-            installed: {
-              program: Object.fromEntries(
-                casesFor(p, catalogue).map((id) => [id, "a fixture: every case on the program"]),
-              ),
-            },
-          },
-    );
+  const withInstalled = (paths) => paths.map((p) => (p.connected ? p : { ...p, installed: { live: "fixture-live" } }));
+  /** A write ORCA denied: the file is as it was, bound to this call's own tool_use id. */
+  const denied = {
+    toolUseId: "toolu_1_0",
+    tool: "Write",
+    expected: ["deny"],
+    outcome: "deny",
+    orcaDecision: "observed",
+    refusal: "orca-deny",
+    approvals: [],
+    effect: "none",
+    effectRef: { kind: "file", path: "p", before: null, after: null, written: "w" },
+  };
+  /** Each case run live on the installed agent, one denied Write with its own tool_use id. */
+  const liveCases = (ids) =>
+    ids.map((id) => ({ id, result: "pass", via: "live", calls: [{ ...denied, toolUseId: `toolu_${id}` }] }));
   const testPaths = withInstalled(matrix.paths);
   const shownRefused = matrix.agents
     .find((a) => a.id === "claude")
@@ -132,7 +138,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     route: "acp-ask",
     build,
     checks: { connects: "pass", uncoveredRoutesRefused: "pass" },
-    cases: acpCases.map((id) => ({ id, result: "pass", via: "program", calls: [] })),
+    cases: liveCases(acpCases),
     inputs: {
       adapter: { version: "0.109.1", integrity: artifacts.adapterIntegrity },
       runtime: { sha256: artifacts.runtimeSha256 },
@@ -154,12 +160,13 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
         "claude-connected": Object.fromEntries(
           casesFor(connected, catalogue).map((id) => [id, [{ tool: "Write", expected: ["deny"] }]]),
         ),
+        "fixture-live": Object.fromEntries(catalogue.cases.map((c) => [c.id, [{ tool: "Write", expected: ["deny"] }]])),
       },
-      // Every program case is held by its receipt's installed settings alone, as F03 is.
+      // The committed program inventories: the diagnostics count toward no tier.
       programs: Object.fromEntries(
-        paths
-          .filter((p) => p.installed?.program)
-          .map((p) => [p.id, Object.fromEntries(Object.keys(p.installed.program).map((id) => [id, []]))]),
+        Object.entries(loadAssertions().programs).filter(
+          ([id]) => paths.find((p) => p.id === id)?.installed?.diagnostic,
+        ),
       ),
     };
   };
@@ -197,27 +204,19 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
   const needs = (tier, kind = tier === "C" ? "connected" : "installed", route = "acp-ask") =>
     `agent claude: tier ${tier} on ${route} needs a passing ${kind} receipt for claude 2.1.330 on linux-x64`;
 
-  it("promotes to A and B on attested receipts, and not yet to C", () => {
-    expect(PROMOTABLE_TIERS).toEqual(["A", "B"]);
-    for (const tier of ["A", "B"])
+  it("promotes nothing yet, whatever the receipts show", () => {
+    expect(PROMOTABLE_TIERS).toEqual([]);
+    for (const tier of ["A", "B", "C"]) {
+      const kind = tier === "C" ? "connected" : "installed";
       expect(
-        check(claude({ tier }), { "r.json": receipt() }, testPaths, undefined, attested, PROMOTABLE_TIERS),
-      ).toEqual([]);
-    expect(
-      check(
-        claude({ tier: "C" }),
-        { "r.json": receipt({ kind: "connected" }) },
-        testPaths,
-        undefined,
-        attested,
-        PROMOTABLE_TIERS,
-      )[0],
-    ).toBe(`agent claude: ${PROMOTION_DISABLED}`);
+        check(claude({ tier }), { "r.json": receipt({ kind }) }, testPaths, undefined, attested, PROMOTABLE_TIERS)[0],
+      ).toBe(`agent claude: ${PROMOTION_DISABLED}`);
+    }
   });
 
   it("refuses a receipt from a run with an injected fault, whatever else it shows", () => {
-    expect(check(claude({ tier: "A" }), { "r.json": receipt({ fault: "lets-everything-through" }) })).toEqual([
-      `${needs("A")} (r.json: a run with an injected fault (lets-everything-through))`,
+    expect(check(claude({ tier: "A" }), { "r.json": receipt({ fault: "hook-allows-everything" }) })).toEqual([
+      `${needs("A")} (r.json: a run with an injected fault (hook-allows-everything))`,
     ]);
   });
 
@@ -302,18 +301,6 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     catalogue,
   );
   const checkC = (agent, files, paths = idealPaths, assertions) => check(agent, files, paths, assertions);
-  /** A write ORCA denied: the file is as it was, bound to this call's own tool_use id. */
-  const denied = {
-    toolUseId: "toolu_1_0",
-    tool: "Write",
-    expected: ["deny"],
-    outcome: "deny",
-    orcaDecision: "observed",
-    refusal: "orca-deny",
-    approvals: [],
-    effect: "none",
-    effectRef: { kind: "file", path: "p", before: null, after: null, written: "w" },
-  };
   const evidence = [denied];
   const onHook = (kind) =>
     kind === "connected"
@@ -332,7 +319,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       : receipt({
           kind,
           route: "claude-native-hook",
-          cases: hookCases.map((id) => ({ id, result: "pass", via: "program" })),
+          cases: liveCases(hookCases),
         });
   const hookAgent = (extra = {}) => claude({ tier: "C", routes: ["claude-native-hook"], ...extra });
 

@@ -6,8 +6,8 @@
  *
  * Both receipts come from real installed runs of this commit, each with its Sigstore bundle
  * beside it (`<receipt>.sigstore.json`): the qualifying one from the full run, the failing one
- * from a run with an injected fault (`installed/claude-hook-program.js`, `PROGRAM_FAULTS`), in
- * which a case failed. With the agent's row promoted to B and pinned to the receipt as
+ * from a run with a broken hook installed (`ORCA_GUARD_RECEIPT_FAULT`, in the installed test), in
+ * which a case the rules deny was allowed. With the agent's row promoted to B and pinned to the receipt as
  * record-receipts.js pins it, the checker, verifying attestations for real, must:
  *
  * - accept the qualifying receipt;
@@ -41,6 +41,8 @@ export function checkAt(root, file, tier, verify = (f, r) => attestationProblems
     (p) => JSON.parse(readFileSync(join(root, p), "utf8")),
     loadAssertions(),
     verify,
+    // What A and B would accept, checked before either is promotable in the committed checker.
+    ["A", "B"],
   );
 }
 

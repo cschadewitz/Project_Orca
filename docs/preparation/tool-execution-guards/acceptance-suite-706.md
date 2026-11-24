@@ -144,13 +144,20 @@ says what it says; it counts only when it is bound to that run
 passes for that exact file in this repository on a GitHub-hosted runner, and it then checks the
 certificate itself: signed by that workflow file at the ref it ran from (`main` or a release
 line), with the signer workflow at the receipt's own `build` commit, so the signer is the
-revision reviewed with the code it certified. Rows may be promoted to A or B on such receipts
-(`PROMOTABLE_TIERS`), because every run of that workflow on `main` or a release line checks the
-chain end to end before it proposes anything (`e2e-check.js`): with the Claude row promoted to
-B and pinned to the run's own receipt, the checker, verifying attestations for real, must
-accept that receipt, refuse a real receipt from a second run with a broken hook program
-injected (a case fails; the receipt names its fault and is refused for that too), and refuse a
-copy of the qualifying receipt with one byte changed. C waits for #1026's independent observer.
+revision reviewed with the code it certified. Every listed receipt is verified, at any tier.
+
+The workflow keeps signing apart from writing. Its `sign` job (attestation rights, read-only
+contents, no release credential) stages only this run's validated receipts in an empty
+directory with a manifest of their names and digests (`stage-receipts.js`), attests exactly
+those, verifies each attestation, and checks the chain end to end (`e2e-check.js`): with the
+Claude row at B and pinned to the run's own receipt, the checker, verifying attestations for
+real, must accept that receipt, refuse a real receipt from a second run with a hook that allows
+everything installed in its place (a case the rules deny is allowed; the receipt names its
+fault and is refused for that too), and refuse a copy of the qualifying receipt with one byte
+changed. Its `propose` job (write rights, no attestation) checks what it received against the
+manifest and the attestations again, pins the rows, and opens a pull request from a new branch.
+No tier is promotable yet (`PROMOTABLE_TIERS` is empty): A and B open in a reviewed change after
+that has run on `main`; C waits for #1026's independent observer.
 
 `guard-matrix.yml` verifies the attestations on every change to the matrix or its receipts.
 A tier is certified for one build: the release gate (`check-support-matrix.js --release`)
@@ -180,26 +187,31 @@ stand-in, signs it, and proposes it in a pull request that pins the agent's row 
 - **Every uncovered route refused.** `uncoveredRoutes` lists each of the row's
   `unsupportedRoutes` with `result` `refused` or `asked` and how the run showed it. A route
   nothing can refuse is a residual risk and is listed there instead.
-- **Every case on the real agent.** Each case says how it ran (`via`). `live`: through the
-  real agent, by the runner of the connected path the route's `installed.live` names, with
-  every call's evidence checked as a connected receipt's is, against that path's committed
-  assertion inventory. `program`: on ORCA's program exactly as the live session installed it
-  (for Claude, the hook command, arguments and context file read back from `session/new`),
-  only for the cases the route's `installed.program` lists, each with the reason a live agent
-  cannot make that call or refuses it before ORCA answers. A route with no `installed` entry
-  has no installed runner, and no receipt holds it beyond tier A.
-- **Per-run evidence for program cases.** Each program case lists every run of the program:
+- **Every asserted case observed on the installed agent.** Each case says how it ran (`via`).
+  Only `live` counts: through the real agent, by the runner of the connected path the route's
+  `installed.live` names, with every call's evidence checked as a connected receipt's is,
+  against that path's committed assertion inventory, and ORCA's decision observed for every
+  call. A call the agent refused before ORCA answered never counts as proving a refusal. A route
+  with no `installed` entry has no installed runner, and no receipt holds it beyond tier A.
+- **The claim's scope, on the row.** Cases the installed agent cannot make, or refuses itself
+  before ORCA answers, are listed under the route's `installed.diagnostic` with a reason. They
+  are outside the B claim (`assertedCases`), and the row names them in `notAsserted`, which the
+  checker holds equal to its routes' diagnostics.
+- **Diagnostics, which count toward no tier.** Diagnostic cases run on ORCA's program exactly
+  as the live session installed it (for Claude, the hook command, arguments and context file
+  read back from `session/new`), `via: "program"`. Each lists every run of the program:
   the digest and size of the bytes it was sent, whether it ran with the installed arguments or
   a case's replacement, and its exit code, stdout and stderr. The checker re-derives each
   outcome as Claude Code would (a non-zero exit blocks, no output allows, otherwise the hook's
   `permissionDecision`) and holds the runs, in order, to the committed program inventory
   (`connected/assertions.json`, `programs`). The receipt carries the settings the session
-  installed (`installedSettings`), which must put one exec-form command hook in front of every
-  tool, failing closed, with a bounded timeout and nothing else changed; F03 rests on that.
+  installed (`installedSettings`), checked to put one exec-form command hook in front of every
+  tool, failing closed, with a bounded timeout and nothing else changed. The installed run
+  asserts these hold; they show what ORCA's program does, not how the agent handles it.
 - **What it ran.** `inputs` binds the receipt to the adapter's lockfile integrity, the digest
   of the Claude Code image it ran (the pair's pinned one), the digest of ORCA's hook program,
   and the qualification profile: a digest of the route, its live runner, the catalogue entries
-  of its cases, the row's unsupported routes and both inventories, which the checker
+  of its cases, the row's unsupported routes and `notAsserted`, and both inventories, which the checker
   recomputes, so a receipt from a run against other requirements is refused. The artifact
   digests are pinned on the row (`pin.artifacts`) by `record-receipts.js`.
 
@@ -211,7 +223,7 @@ hook Claude runs remembered calls without asking ORCA.
 | --- | --- | --- |
 | none | Nothing verified about policy coverage | — |
 | A | Connects and fails closed | `installed`, with the two connectivity checks passing |
-| B | Approvals validated | A, plus `installed` with every case the route can run passing against the real agent |
+| B | Approvals validated | A, plus `installed` with every case the route asserts (all it runs but its diagnostics, named on the row) passing, observed on the installed agent |
 | C | Execution guard certified | B, plus `connected` from a connected path that proves the route (`proves` in the matrix), with every case that path can run passing; and that path excludes no lifecycle or bypass case |
 
 Today every agent is `none` until a reviewed pull request promotes its row on its receipts. Claude and Codex connect and are recognised by first-run

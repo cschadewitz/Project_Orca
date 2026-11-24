@@ -9,9 +9,10 @@
  * and synthetic results never count toward a tier. A receipt backs a tier only when it is
  * bound to the run that produced it (`attestation.js`): from the command line every receipt's
  * GitHub artifact attestation is verified; called as a function without a verifier, every
- * receipt counts as unverified. Rows may be promoted to A or B (`PROMOTABLE_TIERS`): the
- * receipt producer is guard-receipts.yml, whose end-to-end check (`e2e-check.js`) accepts a
- * real qualifying receipt and refuses a real failing one and a tampered copy on every run (#1026).
+ * receipt counts as unverified. No tier is promoted yet (`PROMOTABLE_TIERS` is empty): the
+ * receipt producer is guard-receipts.yml, whose end-to-end check (`e2e-check.js`) must accept a
+ * real qualifying receipt and refuse a real failing one and a tampered copy (#1026); A and B
+ * open in a reviewed change after that has run on main.
  *
  *   node tools/guard-qualification/check-support-matrix.js --release
  *
@@ -28,11 +29,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "..", "..");
 const TIERS = ["none", "A", "B", "C"];
 /**
- * Tiers a row may be promoted to on attested receipts: A and B, whose receipts guard-receipts.yml
- * produces and checks end to end (`e2e-check.js`). C waits for #1026's independent observer.
+ * Tiers a row may be promoted to on attested receipts: none yet. A and B open in a separate,
+ * reviewed change once guard-receipts.yml has produced, verified and checked end to end
+ * (`e2e-check.js`) real receipts on main; C waits for #1026's independent observer.
  */
-export const PROMOTABLE_TIERS = ["A", "B"];
-export const PROMOTION_DISABLED = "tier C promotion waits for an independent observer (#1026)";
+export const PROMOTABLE_TIERS = [];
+export const PROMOTION_DISABLED =
+  "tier promotion is disabled until guard-receipts.yml's receipts and end-to-end check are reviewed on main (#1026)";
 /** What a receipt is when nothing verified its attestation (the function's default). */
 export const UNVERIFIED = "attestation not verified (run check-support-matrix.js, which verifies it)";
 
@@ -201,35 +204,31 @@ export function uncoveredRouteProblems(receipt, agent) {
 }
 
 /**
- * How each case of an installed receipt ran on the installed agent, from the route's `installed`
- * entry in the matrix:
+ * How each case of an installed receipt ran, from the route's `installed` entry in the matrix.
+ * Only one class of evidence holds a case toward A or B:
  *
- * - `live`: through the real agent, driven by the runner of the connected path `installed.live`
- *   names, with every call's evidence checked exactly as a connected receipt's is, against that
- *   path's committed assertion inventory (`connectedEvidenceProblems`);
- * - `program`: through ORCA's installed program as the agent would run it (the hook script,
- *   the context file and settings the session factory wrote), only for the cases
- *   `installed.program` lists, each with the reason a live agent cannot make that call.
+ * - `live`: through the real installed agent, driven by the runner of the connected path
+ *   `installed.live` names, with every call's evidence checked exactly as a connected receipt's
+ *   is, against that path's committed assertion inventory (`connectedEvidenceProblems`). A call
+ *   whose decision by ORCA was not observed never counts, whatever its outcome.
  *
- * A route with no `installed` entry has no installed runner, so no installed receipt holds it
- * beyond tier A.
+ * Cases the route lists under `installed.diagnostic` (the agent cannot make the call, or
+ * refuses it before ORCA answers) are outside the claim: `assertedCases` leaves them out, the
+ * row names them in `notAsserted`, and their runs on ORCA's installed program (`via:
+ * "program"`) are diagnostics (`programEvidenceProblems`) that count toward no tier. A route
+ * with no `installed` entry has no installed runner, so no installed receipt holds it beyond A.
  */
 export function installedCaseProblems(receipt, neededCases, assertions, routePath) {
   if (neededCases.length === 0) return [];
   const spec = routePath?.installed;
   if (!spec) return [`route ${receipt.route} has no installed runner in the matrix`];
   const problems = [];
-  const program = spec.program ?? {};
   const live = [];
-  const onProgram = [];
   for (const c of (receipt.cases ?? []).filter((x) => neededCases.includes(x.id))) {
-    if (c.via === "program") {
-      if (!(c.id in program)) problems.push(`case ${c.id}: run on the program, but a live agent can make it`);
-      else onProgram.push(c.id);
-    } else if (c.via === "live") live.push(c.id);
-    else problems.push(`case ${c.id}: needs via live or program`);
+    if (c.via === "live") live.push(c.id);
+    else
+      problems.push(`case ${c.id}: needs the installed agent's observed outcome (via live), not ${c.via ?? "nothing"}`);
   }
-  if (onProgram.length) problems.push(...programEvidenceProblems(receipt, onProgram, assertions));
   if (live.length) {
     if (!spec.live) problems.push(`route ${receipt.route}: no live runner for cases ${live.join(",")}`);
     else
@@ -242,9 +241,15 @@ export function installedCaseProblems(receipt, neededCases, assertions, routePat
   return problems;
 }
 
+/** The cases a tier B claim on `path` asserts: those it runs, less its installed diagnostics. */
+export function assertedCases(path, catalogue) {
+  return casesFor(path, catalogue).filter((id) => !(id in (path.installed?.diagnostic ?? {})));
+}
+
 /**
- * The evidence of the cases an installed receipt ran on ORCA's installed program, re-derived
- * rather than trusted. The runs each case makes, in order, which arguments they use (the
+ * The diagnostic evidence of the cases an installed receipt ran on ORCA's installed program
+ * (a route's `installed.diagnostic`), re-derived rather than trusted. It counts toward no tier:
+ * the installed runner asserts it holds, and a reader sees what ORCA's program did. The runs each case makes, in order, which arguments they use (the
  * installed ones or a case's replacement) and the outcomes each accepts come from the committed
  * program inventory (`assertions.programs`, for the receipt's route). Each run must be of the
  * command the session installed (`receipt.installedSettings`), record the digest of the bytes
@@ -394,6 +399,7 @@ export function qualificationProfile(matrix, catalogue, assertions, agent, route
     live: matrix.paths.find((p) => p.id === live) ?? null,
     cases: catalogue.cases.filter((c) => ids.includes(c.id)),
     unsupportedRoutes: [...(agent.unsupportedRoutes ?? [])].sort(),
+    notAsserted: [...(agent.notAsserted ?? [])].sort(),
     inventories: {
       live: (live && assertions.paths?.[live]) ?? null,
       program: assertions.programs?.[routePath.id] ?? null,
@@ -514,18 +520,19 @@ export function checkSupportMatrix(
     }
   }
 
-  // A route's installed program cases have their runs and accepted outcomes committed too.
+  // A route's installed diagnostics have their program runs and accepted outcomes committed.
   for (const path of matrix.paths) {
-    const program = path.installed?.program ?? {};
+    const program = path.installed?.diagnostic ?? {};
     const inventory = assertions.programs?.[path.id] ?? {};
     const runs = new Set(casesFor(path, catalogue));
     for (const id of Object.keys(program)) {
-      if (!runs.has(id)) problems.push(`path ${path.id}: runs ${id} on its installed program, but does not run it`);
+      if (!runs.has(id)) problems.push(`path ${path.id}: lists ${id} as an installed diagnostic, but does not run it`);
       if (!Array.isArray(inventory[id]))
-        problems.push(`path ${path.id}: program case ${id} has no committed inventory`);
+        problems.push(`path ${path.id}: diagnostic case ${id} has no committed program inventory`);
     }
     for (const [id, entries] of Object.entries(inventory)) {
-      if (!(id in program)) problems.push(`path ${path.id}: the program inventory lists ${id}, not a program case`);
+      if (!(id in program))
+        problems.push(`path ${path.id}: the program inventory lists ${id}, not an installed diagnostic`);
       for (const e of entries ?? [])
         if (!["installed", "replaced"].includes(e.args) || !Array.isArray(e.expected) || e.expected.length === 0)
           problems.push(`path ${path.id}: program inventory for ${id} needs arguments and accepted outcomes per run`);
@@ -554,10 +561,24 @@ export function checkSupportMatrix(
       }
       receipts.push({ file, receipt: readReceipt(file) });
     }
+    // A receipt says what it says; only one bound to the run that produced it is evidence. Every
+    // listed receipt is verified, at any tier: one that a verifier refuses is never listed.
+    for (const r of receipts) {
+      r.trust = verifyReceipt(r.file, r.receipt);
+      if (tier === 0 && r.trust.some((p) => p !== UNVERIFIED))
+        problems.push(`${at}: receipt ${r.file}: ${r.trust.join("; ")}`);
+    }
+    // The cases a tier B claim leaves out are named on the row, so the claim reads as its scope.
+    const diagnostics = [
+      ...new Set(agent.routes.flatMap((r) => Object.keys(paths.get(r)?.installed?.diagnostic ?? {}))),
+    ].sort();
+    const named = [...(agent.notAsserted ?? [])].sort();
+    if (named.join() !== diagnostics.join())
+      problems.push(
+        `${at}: notAsserted must name exactly its routes' installed diagnostics (${diagnostics.join(",") || "none"})`,
+      );
     if (tier === 0) continue;
     if (!promotable.includes(agent.tier)) problems.push(`${at}: ${PROMOTION_DISABLED}`);
-    // A receipt says what it says; only one bound to the run that produced it is evidence.
-    for (const r of receipts) r.trust = verifyReceipt(r.file, r.receipt);
 
     const pin = agent.pin;
     if (!pin || !pin.agentVersion || !pin.adapterVersion || !pin.host || !/^[0-9a-f]{40}$/.test(pin.build ?? "")) {
@@ -576,7 +597,7 @@ export function checkSupportMatrix(
       const provers = matrix.paths.filter((p) => p.connected && p.proves === route);
       const required = [
         { tier: 1, kind: "installed", route, cases: [] },
-        { tier: 2, kind: "installed", route, cases: casesFor(path, catalogue) },
+        { tier: 2, kind: "installed", route, cases: assertedCases(path, catalogue) },
         ...provers.map((p) => ({ tier: 3, kind: "connected", route: p.id, cases: qualifyingCases(p, catalogue) })),
       ].filter((r) => r.tier <= tier);
       if (tier === 3 && provers.length === 0)

@@ -1,8 +1,9 @@
 /**
- * The installed half of Claude's hook route (#1026): the cases a live Claude Code cannot make
- * (raw hook input, a damaged context file, the installed settings, a call from another working
+ * Diagnostics for Claude's hook route (#1026): the cases a live Claude Code cannot make (raw
+ * hook input, a damaged context file, the installed settings, a call from another working
  * directory) and the ones it refuses itself before ORCA answers, run on ORCA's hook program
- * exactly as the live session installed it.
+ * exactly as the live session installed it. They show what ORCA's program does, not how the
+ * installed agent handles it, so they count toward no tier (the route's `installed.diagnostic`).
  *
  * Each world first opens a real session through the daemon's session factory (`connected/
  * claude.js`), so the program, its arguments and the context file are the ones ORCA wrote for
@@ -34,21 +35,10 @@ export function installedPreToolHook(meta) {
 }
 
 /**
- * Faults the end-to-end check in `guard-receipts.yml` injects to produce a real nonqualifying
- * receipt. `lets-everything-through` runs a program that exits 0 with no output (what a broken
- * install that allows every call looks like) in place of ORCA's. A receipt from such a run
- * names its fault, and the checker refuses it whatever else it shows.
- */
-export const PROGRAM_FAULTS = ["lets-everything-through"];
-
-/**
- * @param {{
- *   live: ReturnType<typeof import("../connected/claude.js").claudeConnected>,
- *   fault?: string,
- * }} env the live path, whose sessions install the hook this runs, and a fault to inject
+ * @param {{ live: ReturnType<typeof import("../connected/claude.js").claudeConnected> }} env
+ *   the live path, whose sessions install the hook this runs
  */
 export function claudeHookProgram(env) {
-  if (env.fault !== undefined && !PROGRAM_FAULTS.includes(env.fault)) throw new Error(`unknown fault ${env.fault}`);
   const path = {
     id: "claude-native-hook",
     capabilities: claudeNativeHook.capabilities,
@@ -73,10 +63,7 @@ export function claudeHookProgram(env) {
     async decideRaw(world, input, args) {
       const { hook, contextFile, script } = await path.installed(world);
       const argv = args === undefined ? [...script, contextFile] : [...script, ...args];
-      const result =
-        env.fault === "lets-everything-through"
-          ? await run(process.execPath, ["-e", ""], input, hook.timeout * 1000, world.workspace)
-          : await run(hook.command, argv, input, hook.timeout * 1000, world.workspace);
+      const result = await run(hook.command, argv, input, hook.timeout * 1000, world.workspace);
       (world.programCalls ??= []).push(programRecord(hook, args, input, result));
       return {
         outcome: hookOutcome(result),
