@@ -142,6 +142,24 @@ export function judgeSetupSteps(status: JudgeStatusResult): readonly JudgeStep[]
               detail: BUDGET_UNSUPPORTED[budget.reason] ?? "This machine cannot keep the judge's budget.",
             },
   );
+  if (config.state === "configured")
+    steps.push(
+      status.enabled
+        ? {
+            id: "enabled",
+            title: "Turned on",
+            state: "done",
+            detail:
+              "You opted in with review.plainRules.enabled: true. Set it to false to turn the judge off for new runs.",
+          }
+        : {
+            id: "enabled",
+            title: "Turn on",
+            state: "todo",
+            detail:
+              "Opt in with review.plainRules.enabled: true in orca.config.yaml. Until you do, nothing is sent to the judge and every call these rules would cover goes to you.",
+          },
+    );
   return steps;
 }
 

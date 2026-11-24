@@ -25,6 +25,9 @@ import {
 } from "@orca/agents";
 import type { JudgePermission, PlainRuleJudgeOutcome } from "../src/review-judge/plain-rule.js";
 
+/** No session secrets: every text is sent as it is. */
+const same = (text: string): string => text;
+
 let ws: string;
 let ctx: PermissionEvalContext;
 beforeEach(async () => {
@@ -123,7 +126,7 @@ describe("a judged rule in the config", () => {
 describe("the judged lane", () => {
   const file = () => join(ws, "src", "a.ts");
   const lane = (judge: JudgePermission, reload: () => Promise<PermissionPolicy>): JudgedLane =>
-    judgedLane({ judge, reload, localHost: true });
+    judgedLane({ judge, reload, localHost: true, redact: same });
 
   it("allows once by the rule the judge said covers the call, after reading the policy again", async () => {
     const policy = await policyOf([READ_RULE]);
@@ -266,7 +269,7 @@ describe("the judged lane", () => {
   it("stays closed for a session whose files are not on the daemon's own machine", async () => {
     const policy = await policyOf([READ_RULE]);
     const judge = fakeJudge();
-    const remote = judgedLane({ judge, reload: async () => policy, localHost: false });
+    const remote = judgedLane({ judge, reload: async () => policy, localHost: false, redact: same });
     expect(await remote(policy, call("read", file()), ctx, signal())).toEqual({
       decision: "ask",
       basis: "default",
@@ -279,7 +282,7 @@ describe("the judged lane", () => {
 describe("answering with the judged lane", () => {
   it("answers allow once, never allow always, and records the rule by its id without its revision", async () => {
     const policy = await policyOf([READ_RULE]);
-    const judged = judgedLane({ judge: fakeJudge(), reload: async () => policy, localHost: true });
+    const judged = judgedLane({ judge: fakeJudge(), reload: async () => policy, localHost: true, redact: same });
     const answered = await resolvePermission(policy, {
       request: call("read", join(ws, "src", "a.ts")),
       scope: ctx,
@@ -306,6 +309,7 @@ describe("answering with the judged lane", () => {
         judge: fakeJudge(() => ({ outcome: "no-match", verdict: "not-covered", reasonCode: "outside-criterion" })),
         reload: async () => policy,
         localHost: true,
+        redact: same,
       }),
     });
     expect(answered.decision).toBe("ask:allow_once");
@@ -334,7 +338,7 @@ describe("answering with the judged lane", () => {
       request: call("read", join(ws, "src", "a.ts")),
       scope: ctx,
       signal: controller.signal,
-      judged: judgedLane({ judge, reload: async () => policy, localHost: true }),
+      judged: judgedLane({ judge, reload: async () => policy, localHost: true, redact: same }),
     });
     expect(answered.decision).toBe("ask:expired");
     expect(answered.response).toEqual({ outcome: { outcome: "cancelled" } });

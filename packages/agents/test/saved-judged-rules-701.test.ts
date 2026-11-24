@@ -39,6 +39,9 @@ import {
 } from "@orca/agents";
 import type { JudgePermission } from "../src/review-judge/plain-rule.js";
 
+/** No session secrets: every text is sent as it is. */
+const same = (text: string): string => text;
+
 let ws: string;
 let file: string;
 let ctx: PermissionEvalContext;
@@ -482,7 +485,7 @@ describe("loading saved judged rules", () => {
       judgeConfigRef: "judge-ref",
     }));
     const load = () => loadEffectivePermissionPolicy(agent(), [file]);
-    const lane = judgedLane({ judge, reload: load, localHost: true });
+    const lane = judgedLane({ judge, reload: load, localHost: true, redact: same });
     const request = call("read", join(ws, "src", "a.ts"));
     const answer = await lane(await load(), request, ctx, new AbortController().signal);
     expect(answer).toMatchObject({ decision: "allow", basis: "judged", judged: { ruleId: "sidecar:0" } });
@@ -500,7 +503,7 @@ describe("loading saved judged rules", () => {
     });
     const judge = vi.fn<JudgePermission>();
     const load = () => loadEffectivePermissionPolicy(agent(), [file]);
-    const lane = judgedLane({ judge, reload: load, localHost: true });
+    const lane = judgedLane({ judge, reload: load, localHost: true, redact: same });
     const answer = await lane(await load(), call("read", join(ws, "src", "a.ts")), ctx, new AbortController().signal);
     expect(answer.decision).toBe("deny");
     expect(judge).not.toHaveBeenCalled();

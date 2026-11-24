@@ -413,6 +413,7 @@ describe("the judge status method", () => {
   let seen: unknown;
   const answer = {
     active: false,
+    enabled: false,
     config: { state: "none" },
     auth: "token",
     principal: "casey",

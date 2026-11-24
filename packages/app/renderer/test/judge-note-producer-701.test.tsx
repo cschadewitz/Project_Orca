@@ -96,7 +96,8 @@ it("read lane: a covered verdict overturned by an edited rule reaches the card a
     toolCall: { toolCallId: "t", kind: "read", title: `read ${file}`, locations: [{ path: file }] },
     options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
   };
-  const lane = judgedLane({ judge: covering, reload: async () => edited, localHost: true });
+  // No session secrets here: every text is sent as it is.
+  const lane = judgedLane({ judge: covering, reload: async () => edited, localHost: true, redact: (text) => text });
   const explained = await lane(policy, request, ctx, new AbortController().signal);
   expect(explained.decision).toBe("ask");
   // The lane keeps the judge's own reason and rule for the record; the note does not.

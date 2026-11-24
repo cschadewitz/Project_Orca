@@ -44,7 +44,7 @@ import {
   stricterExplanation,
   type FsAccess,
 } from "./owned-fs-gate.js";
-import { judgedEditAdvice, judgedLane, judgedMcpLane } from "./judged-lane.js";
+import { judgedAllowStillHolds, judgedEditAdvice, judgedLane, judgedMcpLane } from "./judged-lane.js";
 import {
   bindOwnedFs,
   newFileMode,
@@ -299,7 +299,7 @@ export interface FsAuthorizationRecord {
   linked?: true;
   /** How the I/O is carried out: bound to the checked file or directory, compatibility, or unbound (remote). */
   io: FsIoMode;
-  /** `allow` by the policy, or `ask:allow_once` by a person's one-time answer. */
+  /** `allow` by the policy, `judged` by a plain-language rule (reads, #701), or `ask:allow_once` by a person's one-time answer. */
   decision: string;
   rule?: PermissionRuleRecord;
 }
@@ -442,14 +442,33 @@ async function openPlanned(
         });
       },
     );
-  /** The judged lane, when this session has a judge (#702): re-reads the policy after a verdict. */
-  const judged = opts.judgePermission
+  /**
+   * The judged lane on the agent's own permission asks (#702): command advice only. The agent carries out what it
+   * asks for itself, so ORCA cannot show the operation is the one the judge was shown, and a read or search it asks
+   * about goes to the person (#701 activation review). Reads a judge may allow are the ones ORCA performs itself,
+   * through its file gate (`judgedRead`).
+   */
+  const judged =
+    opts.judgePermission && opts.judgeKinds?.command
+      ? judgedLane({
+          judge: opts.judgePermission,
+          reload: policyForAsk,
+          localHost: opts.host.spec.type === "local",
+          command: opts.judgeKinds.command,
+          redact: (text) => redactSecretValues(text, values),
+          reads: false,
+        })
+      : undefined;
+  /**
+   * The judged lane on a read ORCA performs itself (`fs/read_text_file`, #701): a judged rule may allow that one read,
+   * once, of the file ORCA verified and then reads. Re-reads the policy after a verdict.
+   */
+  const judgedRead = opts.judgePermission
     ? judgedLane({
         judge: opts.judgePermission,
         reload: policyForAsk,
         // Targets are checked on this machine's file system: only a local session's are its own.
         localHost: opts.host.spec.type === "local",
-        command: opts.judgeKinds?.command,
         redact: (text) => redactSecretValues(text, values),
       })
     : undefined;
@@ -510,7 +529,13 @@ async function openPlanned(
    * leads to. Each decision is logged like an ask's, prefixed `fs:`; that log is not a
    * durable authorization or execution record.
    */
-  const authorizeFs = async (path: string, access: FsAccess, resolved?: string): Promise<FsAuthorization> => {
+  const authorizeFs = async (
+    path: string,
+    access: FsAccess,
+    resolved?: string,
+    /** The existing file the I/O is bound to (`ownedTarget`): a judged read must be of this very file. */
+    binding?: OwnedFsBinding,
+  ): Promise<FsAuthorization> => {
     const explain = (policy: PermissionPolicy) => {
       const written = explainFsCall(policy, path, access, evalScope);
       return resolved === undefined || resolved === path
@@ -560,11 +585,57 @@ async function openPlanned(
       };
     }
     if (decision !== "ask") return refuse(decision, `not allowed: ${decision}`, rule);
+    let advice: JudgedDecision | undefined;
+    // A plain-language rule may allow a read ORCA performs itself (#701): this one read, once. Only for a path that
+    // is the file it reaches (no link), so the file the judge is shown is the one decided and read.
+    // The judge is shown the file the I/O is bound to, by identity, and the read opens that file and checks it again
+    // on the descriptor (`readBound`): so the file judged and the file read are one (#701 activation review). With
+    // no binding to an existing file (a remote host), no read is judged.
+    if (access === "read" && judgedRead && binding?.exists === true && (resolved === undefined || resolved === path)) {
+      // One canonical request for every policy check of this read, at decision and at I/O: the one the file gate's
+      // own typed check uses (`explainFsCall`). The label the provider sees is the lane's own, made separately from
+      // the verified workspace-relative path, so the judge never sees the absolute one.
+      const canonical: acp.RequestPermissionRequest = {
+        sessionId: acpSessionId,
+        toolCall: fsToolCall(path, access),
+        options: [],
+      };
+      const lane = await judgedRead(policy, canonical, evalScope, turn.abort.signal, [binding.identity]);
+      if (!live()) return refuse("turn-ended", "the turn ended while the file request was judged", rule);
+      if (
+        lane.decision === "allow" &&
+        lane.basis === "judged" &&
+        lane.judged?.ruleId !== undefined &&
+        lane.judged.ruleRevision !== undefined
+      ) {
+        const by = { ruleId: lane.judged.ruleId, ruleRevision: lane.judged.ruleRevision };
+        const judgedRule = permissionRuleRecord(lane);
+        record("judged", judgedRule);
+        return {
+          dispatch,
+          turnId: turn.id,
+          decision: "judged",
+          rule: judgedRule,
+          // At the I/O, on the same canonical request and against the policy as it is then: the lane's whole check
+          // again (no typed deny, ask or protected path anywhere in the policy, the allowing rule still there at the
+          // same revision, and the file eligible by every rule the judge relied on, as the very file bound). The read
+          // then checks identity and the single link on the descriptor before any content is read (#701 activation
+          // review). Anything unproven: not read.
+          stillAllowed: (now) => judgedAllowStillHolds(now, canonical, evalScope, by, [binding.identity]),
+        };
+      }
+      // Why the judge did not allow it goes with the ask (#701).
+      advice = lane.judged;
+    }
     // The experimental edit class (#701): a judge's recommendation on this write, recorded with the ask.
     // It allows nothing: a path does not show what a write changes (#701 review), so the person answers.
-    let advice: JudgedDecision | undefined;
     if (access === "write" && judgedEdit) {
-      const advise = judgedEditAdvice({ judge: judgedEdit, localHost: opts.host.spec.type === "local", explain });
+      const advise = judgedEditAdvice({
+        judge: judgedEdit,
+        localHost: opts.host.spec.type === "local",
+        explain,
+        redact: (text) => redactSecretValues(text, values),
+      });
       advice = await advise(
         policy,
         {
@@ -1028,11 +1099,13 @@ async function openPlanned(
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       refuseProtected(path, "read");
       const target = ownedTarget(path, "read");
-      const authorized = await authorizeFs(path, "read", target.resolved);
+      const authorized = await authorizeFs(path, "read", target.resolved, target.binding);
       let content: string;
       try {
         content = await executeOwnedFs(path, "read", target, authorized, (file) =>
-          target.binding ? bound().read(target.binding) : opts.host.fs.readFile(file),
+          target.binding
+            ? bound().read(target.binding, authorized.decision === "judged" ? { singleLink: true } : undefined)
+            : opts.host.fs.readFile(file),
         );
       } catch (e) {
         // A missing file is an answer, not a failure: agents (Gemini CLI among them) find out

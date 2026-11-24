@@ -17,6 +17,7 @@ const configured = { state: "configured", provider: "anthropic", destination, cr
 const status = (over: Partial<JudgeStatusResult> = {}): JudgeStatusResult =>
   JudgeStatusResultSchema.parse({
     active: false,
+    enabled: true,
     config: { ...configured, key: "present" },
     auth: "token",
     principal: "casey",
@@ -38,7 +39,18 @@ describe("#701 judge setup steps", () => {
       ["key", "done"],
       ["grant", "done"],
       ["budget", "done"],
+      ["enabled", "done"],
     ]);
+  });
+
+  it("asks the owner to opt in last, and says how to turn it back off (#701 activation review)", () => {
+    const off = byId(status({ enabled: false })).enabled!;
+    expect(off).toMatchObject({ state: "todo", title: "Turn on" });
+    expect(off.detail).toContain("review.plainRules.enabled: true");
+    expect(off.detail).toContain("nothing is sent to the judge");
+    expect(byId(status()).enabled!.detail).toContain("Set it to false to turn the judge off");
+    // Nothing to opt in to without judge settings.
+    expect(byId(status({ config: { state: "none" }, grants: [] })).enabled).toBeUndefined();
   });
 
   it("asks for judge settings, without key or grant steps, when none are configured", () => {
@@ -134,7 +146,7 @@ describe("#701 judge setup on the Config surface", () => {
   it("lists the steps, with the owner command for one still to do", async () => {
     const read = show([...(HELLO.methods ?? []), "judge.status"], status({ budget: { state: "uninitialized" } }));
     await waitFor(() => expect(screen.getByText("orca judge budget init")).toBeTruthy());
-    expect(screen.getByLabelText("Judge setup steps").querySelectorAll("[data-judge-step]").length).toBe(4);
+    expect(screen.getByLabelText("Judge setup steps").querySelectorAll("[data-judge-step]").length).toBe(5);
     expect(screen.getByText("inactive")).toBeTruthy();
     expect(read.reads()).toBeGreaterThan(0);
   });

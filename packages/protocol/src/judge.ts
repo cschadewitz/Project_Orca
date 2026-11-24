@@ -90,6 +90,11 @@ export const JudgeStatusResultSchema = z
   .object({
     /** Whether this build hands sessions a judge at all. While false, nothing below is used. */
     active: z.boolean(),
+    /**
+     * The owner's opt-in, `review.plainRules.enabled: true` in the active configuration. Absent or false, no
+     * session gets a judge whatever else is set up: nothing is sent, and every call goes to a person.
+     */
+    enabled: z.boolean(),
     config: JudgeConfigStatusSchema,
     /**
      * `token` when the caller's grants were read; `loopback` keeps no grants, so the judge is

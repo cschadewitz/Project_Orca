@@ -117,7 +117,12 @@ export function stillBound(path: string, binding: OwnedFsBinding): boolean {
  * the open follows no final link and neither waits nor takes a terminal, and the descriptor is
  * checked to be that same ordinary file before it is used.
  */
-async function openBound(binding: OwnedFsBinding, flags: number, changed: string): Promise<FileHandle> {
+async function openBound(
+  binding: OwnedFsBinding,
+  flags: number,
+  changed: string,
+  singleLink = false,
+): Promise<FileHandle> {
   const before = await lstat(binding.io, { bigint: true }).catch((error: unknown) => {
     if (errorCode(error) === "ENOENT") throw new OwnedFsNotDispatched(changed);
     throw new OwnedFsFailedWithoutEffect(error);
@@ -135,6 +140,9 @@ async function openBound(binding: OwnedFsBinding, flags: number, changed: string
   try {
     const stats = await handle.stat({ bigint: true });
     if (!stats.isFile() || idOf(stats) !== binding.identity) throw new OwnedFsNotDispatched(changed);
+    // A judged read (#701): the opened file still has one name, so no other name of it can sit outside the workspace
+    // or under a protected path, as when the judge was shown it.
+    if (singleLink && stats.nlink !== 1n) throw new OwnedFsNotDispatched(changed);
   } catch (error) {
     await handle.close();
     throw error instanceof OwnedFsNotDispatched ? error : new OwnedFsFailedWithoutEffect(error);
@@ -142,8 +150,11 @@ async function openBound(binding: OwnedFsBinding, flags: number, changed: string
   return handle;
 }
 
-/** Read the bound file, refusing anything but the very file authorized. */
-export async function readBound(binding: OwnedFsBinding): Promise<string> {
+/**
+ * Read the bound file, refusing anything but the very file authorized. With `singleLink` (a read a plain-language
+ * rule allowed, #701), the opened descriptor must also show a single hard link before any content is read.
+ */
+export async function readBound(binding: OwnedFsBinding, options?: { singleLink?: boolean }): Promise<string> {
   if (!binding.exists) {
     // Nothing was there when it was authorized: if nothing is there now, that is the answer.
     try {
@@ -154,7 +165,12 @@ export async function readBound(binding: OwnedFsBinding): Promise<string> {
     }
     throw new OwnedFsNotDispatched("a file appeared before it was read");
   }
-  const handle = await openBound(binding, constants.O_RDONLY, "the file changed before it was read");
+  const handle = await openBound(
+    binding,
+    constants.O_RDONLY,
+    "the file changed before it was read",
+    options?.singleLink === true,
+  );
   try {
     return await handle.readFile("utf8");
   } finally {
