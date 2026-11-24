@@ -43,6 +43,9 @@ import {
   ConfigSetResultSchema,
   PERMISSIONS_SAVE_JUDGED_RULE_METHOD,
   PermissionsSaveJudgedRuleResultSchema,
+  JUDGE_STATUS_METHOD,
+  JudgeStatusResultSchema,
+  type JudgeStatusResult,
   DECISIONS_DECIDE_METHOD,
   DECISIONS_LIST_METHOD,
   DECISIONS_REOPEN_METHOD,
@@ -667,6 +670,11 @@ export class DaemonClient {
    */
   permissionsSaveJudgedRule(params: PermissionsSaveJudgedRuleParams): Promise<PermissionsSaveJudgedRuleResult> {
     return this.call(PERMISSIONS_SAVE_JUDGED_RULE_METHOD, params, PermissionsSaveJudgedRuleResultSchema);
+  }
+
+  /** Where the plain-language rule judge's setup stands (protocol 2.12, #701): read-only. */
+  judgeStatus(): Promise<JudgeStatusResult> {
+    return this.call(JUDGE_STATUS_METHOD, {}, JudgeStatusResultSchema);
   }
 
   /** Every configured agent's handshake health, with what is claimed right now beside it. */

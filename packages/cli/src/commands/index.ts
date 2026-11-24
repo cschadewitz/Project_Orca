@@ -46,6 +46,7 @@ import {
   credentialCapabilityUse,
   credentialSecretUse,
   plainRuleJudgeSource,
+  inspectJudgeBudget,
   qualifiedJudgeBudget,
   withPlainRuleJudge,
   loopbackCapabilityUse,
@@ -1210,6 +1211,12 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
     runtimeIdle: liveRuntime,
     // Secret reference metadata from the current configuration generation (#336).
     secretsSource: () => app.orchestrator.generations?.current.agents ?? app.agents,
+    // Where the plain-language rule judge's setup stands (#701): the active generation's
+    // settings and a read-only look at its budget.
+    judgeStatusSource: {
+      config: () => app.generations.effectiveConfig(),
+      budget: () => inspectJudgeBudget({ storeDir, workspaceId }),
+    },
     admissionExecutionSource: async (runId) => {
       const status = await readAdmissionExecutionStatus(app.orchestrator.stores, runId);
       switch (status.state) {

@@ -267,6 +267,8 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   // Secret reference metadata (#336): never a value; filtered to the caller's grant.
   "secrets.list": { permission: "secrets.read", resource: "none" },
   "secrets.check": { permission: "secrets.read", resource: "none" },
+  // Where the plain-language rule judge's setup stands (#701): no value, no key, read-only.
+  "judge.status": { permission: "config.read", resource: "none" },
 
   // Store-wide subscriptions are open to any principal: each notification is gated on its own
   // (guard.ts `notificationGate`). A run-scoped one needs `runs.read` and the run.

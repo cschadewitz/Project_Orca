@@ -234,7 +234,9 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * method name in `hello.methods`: a 2.11 client never calls it, and the app offers the save
  * only to a daemon that lists it. It also adds an optional `judged` list on each agent's
  * effective policy in `config.get`, the plain-language rules apart from the typed ones; an
- * older client ignores the key, and the app reads its absence as none listed.
+ * older client ignores the key, and the app reads its absence as none listed. And it adds
+ * `judge.status`, a read of where the judge's setup stands (config, grants, budget), offered
+ * likewise only by a daemon that lists it.
  */
 export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 12 };
 

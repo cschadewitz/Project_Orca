@@ -627,6 +627,8 @@ handle("orca:config.set", (params: Parameters<DaemonClient["configSet"]>[0]) => 
 handle("orca:permissions.saveJudgedRule", (params: Parameters<DaemonClient["permissionsSaveJudgedRule"]>[0]) =>
   client().permissionsSaveJudgedRule(params),
 );
+// Protocol 2.12 (#701): where the judge's setup stands, read-only.
+handle("orca:judge.status", () => client().judgeStatus());
 
 // The plan writes and `claims.release` (#169, #88). `--read-only` omits them exactly as it
 // omits the three above, so the same `useWritability()` answer covers all of them.
