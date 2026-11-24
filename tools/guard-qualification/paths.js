@@ -137,7 +137,7 @@ export const claudeNativeHook = {
   },
 };
 
-function hookOutcome(result) {
+export function hookOutcome(result) {
   if (result.exitCode !== 0) return "block";
   if (result.stdout === "") return "allow";
   const decision = JSON.parse(result.stdout)?.hookSpecificOutput?.permissionDecision;

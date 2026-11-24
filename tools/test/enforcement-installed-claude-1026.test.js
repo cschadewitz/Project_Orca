@@ -1,0 +1,221 @@
+/**
+ * The installed receipt for Claude's hook route (#1026), for tiers A and B in the support
+ * matrix: the pinned Claude ACP adapter and the Claude Code it bundles, with ORCA's pre-tool hook
+ * installed by the daemon's own session factory (`nativeToolHook: experimental`), against a
+ * scripted model stand-in, so no account, key or spend is involved.
+ *
+ * - `checks.connects`: the factory admits a session and a workspace write takes effect.
+ * - `uncoveredRoutes`: every route the Claude row lists as unsupported, shown refused here.
+ * - `cases`: every case the `claude-native-hook` route can run. A case a live agent can make
+ *   runs live (`connected/claude.js`) with each call's independent evidence; the ones the
+ *   matrix lists under the route's `installed.program` run on the hook program that same kind
+ *   of session installed (`installed/claude-hook-program.js`).
+ *
+ * `guard-receipts.yml` runs this with ORCA_CLAUDE_ADAPTER, ORCA_CLAUDE_OTHER_RUNTIME and
+ * ORCA_ENFORCEMENT_RECEIPT_DIR set, and attests the receipt it writes. Without them only the
+ * agreement checks run. A receipt counts only through that attestation (`attestation.js`).
+ */
+import { execFileSync } from "node:child_process";
+import { once } from "node:events";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { CLAUDE_HOOK_VERIFIED_PAIRS } from "@orca/agents";
+import { childBundle } from "@orca/testing/child-bundle";
+import {
+  REPO_ROOT,
+  casesFor,
+  installedCaseProblems,
+  loadAssertions,
+  loadCatalogue,
+  loadMatrix,
+  uncoveredRouteProblems,
+} from "../guard-qualification/check-support-matrix.js";
+import { SCENARIOS } from "../guard-qualification/scenarios.js";
+import { createWorld } from "../guard-qualification/world.js";
+import { modelStandIn } from "../guard-qualification/connected/model-stand-in.js";
+import { claudeConnected } from "../guard-qualification/connected/claude.js";
+import { claudeHookProgram } from "../guard-qualification/installed/claude-hook-program.js";
+
+const ADAPTER = process.env["ORCA_CLAUDE_ADAPTER"];
+const OTHER_RUNTIME = process.env["ORCA_CLAUDE_OTHER_RUNTIME"];
+const ROUTE = "claude-native-hook";
+const catalogue = loadCatalogue();
+const matrix = loadMatrix();
+const route = matrix.paths.find((p) => p.id === ROUTE);
+const row = matrix.agents.find((a) => a.id === "claude");
+const program = route.installed?.program ?? {};
+
+const realWorld = () =>
+  createWorld({
+    now: Date.now,
+    setNow: (t) => new Promise((done) => setTimeout(done, Math.max(0, t - Date.now()))),
+  });
+
+/**
+ * How each of the row's unsupported routes is shown refused on the installed agent. Every
+ * entry the row lists must have one; the agreement test below holds them together.
+ */
+const PROBES = {
+  "Remote sessions over SSH while the hook is on": {
+    how: "the session factory refuses a hooked session on an SSH host before any agent starts",
+    async run(live, world) {
+      const ssh = { spec: { id: "remote", type: "ssh" } };
+      await expect(live.openSession(world, { host: ssh })).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+    },
+  },
+  "A Claude Code other than the pinned one": {
+    how: "a session whose adapter runs another Claude Code (CLAUDE_CODE_EXECUTABLE) is refused before any work",
+    async run(live, world) {
+      await expect(
+        live.openSession(world, { extraEnv: { CLAUDE_CODE_EXECUTABLE: OTHER_RUNTIME } }),
+      ).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+    },
+  },
+  "Tool calls Claude makes without asking (remembered grants, its own allow rules)": {
+    how: "with Claude's own settings allowing every tool, a write ORCA's rule denies does not land",
+    async run(live, world) {
+      world.configured = { rules: [{ match: { kind: "edit" }, decision: "deny" }] };
+      const got = await live.decide(world, { tool: "write", path: join(world.workspace, "remembered.md") });
+      expect(got.outcome, JSON.stringify(got.detail)).toBe("deny");
+    },
+  },
+};
+
+describe("the installed run and the matrix agree", () => {
+  it("the hook route names a live runner and the program cases, each with a reason", () => {
+    expect(route.installed?.live).toBe("claude-connected");
+    for (const [id, reason] of Object.entries(program)) {
+      expect(casesFor(route, catalogue)).toContain(id);
+      expect(reason.length, id).toBeGreaterThanOrEqual(20);
+    }
+  });
+
+  it("every live case is one the live runner can make and observe", () => {
+    const connected = matrix.paths.find((p) => p.id === "claude-connected");
+    const liveCases = casesFor(route, catalogue).filter((id) => !(id in program));
+    for (const id of liveCases) {
+      expect(casesFor(connected, catalogue), id).toContain(id);
+      expect(connected.unobserved ?? {}, id).not.toHaveProperty(id);
+    }
+  });
+
+  it("every unsupported route of the Claude row has a probe", () => {
+    expect(Object.keys(PROBES).sort()).toEqual([...row.unsupportedRoutes].sort());
+  });
+});
+
+describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed: claude (#1026)", () => {
+  let model;
+  let live;
+  let hookProgram;
+  const receipt = { route: ROUTE, cases: [], uncoveredRoutes: [], checks: {} };
+
+  beforeAll(async () => {
+    model = await modelStandIn();
+    const entry = fileURLToPath(new URL("../../packages/agents/src/bin/claude-pre-tool-hook.ts", import.meta.url));
+    const built = childBundle("claude-pre-tool-hook-1026-installed", { entries: { hook: entry } });
+    if (!built?.["hook"]) throw new Error("the hook program could not be built for this run");
+    live = claudeConnected({ adapter: ADAPTER, hookScript: built["hook"], model });
+    hookProgram = claudeHookProgram({ live });
+  });
+
+  afterAll(async () => {
+    model?.server.close();
+    if (model) await once(model.server, "close").catch(() => undefined);
+    await writeReceipt(receipt);
+  });
+
+  it("connects: the factory admits the session and a workspace write takes effect", async () => {
+    const world = await realWorld();
+    try {
+      const got = await live.decide(world, { tool: "write", path: join(world.workspace, "connects.md") });
+      expect(got.outcome, JSON.stringify(got.detail)).toBe("allow");
+      // The settings this session installed are the ones the program cases run.
+      await hookProgram.installed(world);
+      receipt.checks.connects = "pass";
+    } finally {
+      await world.dispose();
+    }
+  }, 120_000);
+
+  for (const name of Object.keys(PROBES))
+    it(`uncovered route refused: ${name}`, async () => {
+      const world = await realWorld();
+      try {
+        await PROBES[name].run(live, world);
+        receipt.uncoveredRoutes.push({ route: name, result: "refused", how: PROBES[name].how });
+      } finally {
+        await world.dispose();
+      }
+    }, 120_000);
+
+  for (const c of catalogue.cases.filter((x) => casesFor(route, catalogue).includes(x.id))) {
+    const via = c.id in program ? "program" : "live";
+    it(
+      `${c.id} (${via}) ${c.title}`,
+      async () => {
+        const world = await realWorld();
+        const entry = { id: c.id, contract: c.contract, via, result: "fail" };
+        receipt.cases.push(entry);
+        try {
+          await SCENARIOS[c.id](world, via === "program" ? hookProgram : live);
+          entry.result = "pass";
+        } finally {
+          if (via === "live") entry.calls = world.callRecords ?? [];
+          await world.dispose();
+        }
+      },
+      // L02 waits out a real one-minute grant.
+      300_000,
+    );
+  }
+
+  it("the receipt holds: every case, every uncovered route, every live call's evidence", () => {
+    receipt.checks.uncoveredRoutesRefused =
+      uncoveredRouteProblems(receipt, row).length === 0 &&
+      receipt.uncoveredRoutes.length === row.unsupportedRoutes.length
+        ? "pass"
+        : "fail";
+    expect(receipt.checks.uncoveredRoutesRefused).toBe("pass");
+    expect(receipt.cases.map((c) => c.id)).toEqual(casesFor(route, catalogue));
+    expect(
+      installedCaseProblems({ ...receipt, route: ROUTE }, casesFor(route, catalogue), loadAssertions(), route),
+    ).toEqual([]);
+    expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
+  });
+});
+
+async function writeReceipt(receipt) {
+  const dir = process.env["ORCA_ENFORCEMENT_RECEIPT_DIR"];
+  if (!dir || !ADAPTER) return;
+  const adapterVersion = JSON.parse(await readFile(join(ADAPTER, "..", "..", "package.json"), "utf8")).version;
+  const pair = CLAUDE_HOOK_VERIFIED_PAIRS.find((p) => p.adapter === adapterVersion);
+  const build =
+    process.env["GITHUB_SHA"] ??
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, `claude-${ROUTE}.json`),
+    `${JSON.stringify(
+      {
+        format: "orca-enforcement-receipt/1",
+        kind: "installed",
+        agent: "claude",
+        agentVersion: pair?.runtime ?? null,
+        adapterVersion,
+        host: `${process.platform}-${process.arch}`,
+        route: ROUTE,
+        build,
+        node: process.version,
+        checks: receipt.checks,
+        uncoveredRoutes: receipt.uncoveredRoutes,
+        cases: receipt.cases,
+        program,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}

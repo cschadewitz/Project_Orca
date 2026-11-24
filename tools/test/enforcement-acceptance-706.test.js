@@ -67,6 +67,8 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
   const pin = { agentVersion: "2.1.330", adapterVersion: "0.109.1", host: "linux-x64", build };
   const claude = (extra = {}) => ({
     ...structuredClone(matrix.agents.find((a) => a.id === "claude")),
+    // The structure tests claim the ask route; the hook route's rules are tested with hookAgent.
+    routes: ["acp-ask"],
     pin,
     ...extra,
   });

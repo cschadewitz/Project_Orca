@@ -40,7 +40,21 @@
         "That a hook ask reaches ORCA as an ACP ask for the same call",
         "That Claude blocks on deny, on a block, on a timeout and when the hook cannot start",
         "That events, logs and stored records about the call are redacted"
-      ]
+      ],
+      "installed": {
+        "live": "claude-connected",
+        "program": {
+          "F01": "A live agent cannot make this call: The agent builds the hook's input itself; a live run cannot hand the hook malformed bytes. Run on claude-native-hook.",
+          "F02": "A live agent cannot make this call: The session's context file is written by ORCA's factory; damaging it mid-session is a hook-program case. Run on claude-native-hook.",
+          "F03": "A live agent cannot make this call: The installed settings are the factory's own; their shape is checked on claude-native-hook and by the #704 acceptance test.",
+          "A04": "A live agent cannot make this call: One session has one working directory, fixed when it opens; a live agent cannot make a call from another one.",
+          "P02": "A live agent cannot make this call: No raw input or context file can be damaged from inside a live run (see F01 and F02).",
+          "A02": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: The relative Edit (../elsewhere/a.md) is refused by Claude Code (the file does not exist from its working directory) before any hook runs, so that assertion's ORCA decision is unobserved; the case's other calls are observed but cannot stand in for it.",
+          "B01": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: Claude Code refuses Edits of ORCA files that do not exist yet, and a change to a file whose read ORCA denied, before any hook runs, so those assertions' ORCA decisions are unobserved; the denied writes in the same case cannot stand in for them.",
+          "P03": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: The call to a 4 KB unknown tool name is refused by Claude Code (not offered) before any hook runs, so ORCA's answer for it is unobserved; the other calls' short answers cannot stand in for it.",
+          "F05": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: Claude Code refuses a tool it does not offer (No such tool available) before any hook runs, so ORCA's decision is never observed. Run as a diagnostic: nothing runs, shown by the request's tool list."
+        }
+      }
     },
     {
       "id": "gemini-acp-ask",
@@ -121,26 +135,24 @@
       "tuple": "Claude ACP adapter 0.109.1 with Claude Code 2.1.330, linux-x64 (CLAUDE_HOOK_VERIFIED_PAIRS); not pinned here until a trusted receipt exists",
       "pin": null,
       "tier": "none",
-      "routes": ["acp-ask"],
-      "pendingRoutes": {
-        "claude-native-hook": "Shipped as an experimental, unqualified opt-in (nativeToolHook: experimental, off by default). Admission checks run once at session open and are not evidence of later enforcement; connected and installed runs are diagnostic, not qualification. No tier until a trusted receipt exists"
-      },
+      "routes": ["claude-native-hook"],
       "receipts": [],
       "unverified": [
-        "Connects and first-run preflight recognises it (packages/app/src/main/first-run/agent-preflight.ts); no installed receipt",
-        "The uncovered routes below are refused or asked about",
-        "A hook ask reaches ORCA as an ACP ask for the same call: shown by the claude-connected run, not yet as a trusted receipt",
+        "Any tier: only with nativeToolHook: experimental, on the pinned pair and host; without the hook Claude runs remembered calls without asking ORCA",
+        "Behaviour of a real model, which may make calls in shapes the stand-in does not",
         "Events and logs about its calls are redacted"
       ],
       "unsupportedRoutes": [
-        "Tool calls Claude does not ask about (remembered grants, its own allow rules) until the hook is on",
-        "What a shell command touches beyond its own text",
-        "Remote sessions over SSH while the hook is on"
+        "Remote sessions over SSH while the hook is on",
+        "A Claude Code other than the pinned one",
+        "Tool calls Claude makes without asking (remembered grants, its own allow rules)"
       ],
       "residualRisks": [
-        "A hook is not an operating-system boundary; Claude's sandbox and ORCA's protected-path rules stay in force beside it"
+        "What a shell command touches beyond its own text: one decision covers the command, not what it spawns, writes or fetches",
+        "A hook is not an operating-system boundary; Claude's sandbox and ORCA's protected-path rules stay in force beside it",
+        "Admission checks (adapter, runtime image) run once when the session opens; nothing re-checks them during the session"
       ],
-      "next": "Pin the tuple and commit installed receipts per route for A/B; C from a trusted claude-connected receipt once promotion is enabled."
+      "next": "Tiers A and B from an attested installed receipt on claude-native-hook (guard-receipts.yml, #1026); C after #1026's independent observer."
     },
     {
       "id": "codex",

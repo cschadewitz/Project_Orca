@@ -160,6 +160,29 @@ per-call evidence matching the assertion inventory instead. Tiers are
 cumulative: each needs the receipts of every tier below it. A file path, a workflow's existence
 or a named residual risk is not proof.
 
+### Installed receipts (#1026)
+
+An installed receipt is what tiers A and B rest on. `guard-receipts.yml` produces one per agent
+and route on a GitHub-hosted runner, with the pinned agent installed and a scripted model
+stand-in, signs it, and proposes it in a pull request that pins the agent's row to it
+(`record-receipts.js`). Besides the pin, `checks.connects` and its cases, it must show:
+
+- **Every uncovered route refused.** `uncoveredRoutes` lists each of the row's
+  `unsupportedRoutes` with `result` `refused` or `asked` and how the run showed it. A route
+  nothing can refuse is a residual risk and is listed there instead.
+- **Every case on the real agent.** Each case says how it ran (`via`). `live`: through the
+  real agent, by the runner of the connected path the route's `installed.live` names, with
+  every call's evidence checked as a connected receipt's is, against that path's committed
+  assertion inventory. `program`: on ORCA's program exactly as the live session installed it
+  (for Claude, the hook command, arguments and context file read back from `session/new`),
+  only for the cases the route's `installed.program` lists, each with the reason a live agent
+  cannot make that call or refuses it before ORCA answers. A route with no `installed` entry
+  has no installed runner, and no receipt holds it beyond tier A.
+
+For Claude the route is `claude-native-hook` (`tools/test/enforcement-installed-claude-1026.test.js`):
+any tier applies only with `nativeToolHook: experimental` on the pinned pair, since without the
+hook Claude runs remembered calls without asking ORCA.
+
 | Tier | Claim | Receipts per route (cumulative) |
 | --- | --- | --- |
 | none | Nothing verified about policy coverage | — |
