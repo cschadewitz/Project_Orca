@@ -49,3 +49,4 @@ export * from "./operator-host-resources.js";
 export * from "./delegation/index.js";
 export * from "./judge-budget.js";
 export * from "./plain-rule-judge.js";
+export * from "./judge-status.js";

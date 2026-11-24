@@ -19,6 +19,7 @@ import { CapabilityPreview } from "./capability-preview-view.js";
 import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
 import { StorageSection } from "./storage-section.js";
+import { JudgeSetup } from "./judge-setup.js";
 import { agentPolicies } from "./config-model.js";
 import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
 import { FirstRunSection } from "../first-run/first-run-section.js";
@@ -370,6 +371,8 @@ export function ConfigurationStudioSurface({
             />
           </>
         )}
+        {/* Where the plain-language rule judge's setup stands (#701); offered only by a daemon that lists it. */}
+        <JudgeSetup />
         <StorageSection />
         <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
       </div>

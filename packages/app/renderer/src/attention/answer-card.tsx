@@ -66,6 +66,8 @@ export interface AnswerCardProps {
   subtitle: ReactNode;
   /** The exact command or path, verbatim and in mono. Permission asks only. */
   command?: string | undefined;
+  /** A note under the command: what a plain-language rule's judge said (#701). Permission asks only. */
+  judgeNote?: ReactNode;
   options: readonly GateOption[];
   /** A separate revision form owns this option; it is never an ordinary answer. */
   excludedOptionId?: string | undefined;
@@ -109,6 +111,7 @@ export function AnswerCard({
   question,
   subtitle,
   command,
+  judgeNote,
   options: offeredOptions,
   excludedOptionId,
   refs,
@@ -276,6 +279,7 @@ export function AnswerCard({
         <p className={`orca-card__q ${textClass("body-strong")}`}>{question}</p>
         <div className={`orca-card__sub ${textClass("caption")}`}>{subtitle}</div>
         {command !== undefined && <div className={`orca-card__cmd ${textClass("mono-log")}`}>{command}</div>}
+        {judgeNote}
         {refs}
 
         {answerForm !== undefined ? (

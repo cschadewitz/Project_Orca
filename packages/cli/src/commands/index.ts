@@ -46,7 +46,8 @@ import {
   credentialCapabilityUse,
   credentialSecretUse,
   plainRuleJudgeSource,
-  qualifiedJudgeBudget,
+  inspectJudgeBudget,
+  existingJudgeBudget,
   withPlainRuleJudge,
   loopbackCapabilityUse,
   loopbackSecretUse,
@@ -1112,15 +1113,16 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
   const workspaceId = await workspaceIdentity(storeDir);
   // The plain-rule review judge (#701): prepared per session from the judge config, the run
   // owner's key and disclosure grants and the qualified budget, from each run's pinned judge
-  // settings while they match the active generation's. Token mode only; it passes
-  // sessions through untouched while PLAIN_RULE_JUDGE_ACTIVE is false.
+  // settings while they match the active generation's. Token mode only: loopback keeps no
+  // grants, so a loopback session never gets a judge.
   if (authDir)
     app.orchestrator.sessionFactory = withPlainRuleJudge(
       app.orchestrator.sessionFactory,
       plainRuleJudgeSource({
         // The active generation's, which each run's pinned judge settings must still match.
         config: () => app.generations.effectiveConfig(),
-        budget: () => qualifiedJudgeBudget({ storeDir, workspaceId }),
+        // Never creates budget state: only `orca judge budget init` does (#701 activation review).
+        budget: () => existingJudgeBudget({ storeDir, workspaceId }),
         resolver: orchestratorResolver(app.orchestrator),
         ownership: authDir.ownership,
         credentials: authDir.credentials,
@@ -1210,6 +1212,12 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
     runtimeIdle: liveRuntime,
     // Secret reference metadata from the current configuration generation (#336).
     secretsSource: () => app.orchestrator.generations?.current.agents ?? app.agents,
+    // Where the plain-language rule judge's setup stands (#701): the active generation's
+    // settings and a read-only look at its budget.
+    judgeStatusSource: {
+      config: () => app.generations.effectiveConfig(),
+      budget: () => inspectJudgeBudget({ storeDir, workspaceId }),
+    },
     admissionExecutionSource: async (runId) => {
       const status = await readAdmissionExecutionStatus(app.orchestrator.stores, runId);
       switch (status.state) {

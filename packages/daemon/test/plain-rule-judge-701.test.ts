@@ -60,7 +60,7 @@ async function setup(
           ],
         }),
   });
-  const config = over.config ?? (() => ({ review: { plainRules: { judge } } }));
+  const config = over.config ?? (() => ({ review: { plainRules: { enabled: true, judge } } }));
   const source = plainRuleJudgeSource({
     config,
     budget: async () => durable,
@@ -103,6 +103,22 @@ describe("#701 daemon plain-rule judge wiring", () => {
     expect(await source.prepare(session, signal)).toMatchObject({ reason: "budget-not-durable" });
   });
 
+  it("gives no judge, and reads nothing, until the owner opts in with enabled: true (#701 activation review)", async () => {
+    let budgetReads = 0;
+    for (const enabled of [undefined, false]) {
+      const config = () => ({ review: { plainRules: { judge, ...(enabled === undefined ? {} : { enabled }) } } });
+      const { source, session } = await setup({
+        config,
+        budget: async () => {
+          budgetReads++;
+          return durable;
+        },
+      });
+      expect(await source.prepare(session, signal)).toEqual({ status: "unavailable", reason: "not-enabled" });
+    }
+    expect(budgetReads).toBe(0);
+  });
+
   it("gives no judge without the owner's disclosure grant or a durable run owner", async () => {
     let { source, session } = await setup({ grant: false });
     expect(await source.prepare(session, signal)).toMatchObject({ reason: "disclosure-grant-missing" });
@@ -123,11 +139,13 @@ describe("#701 daemon plain-rule judge wiring", () => {
     expect(await source.prepare(session, signal)).toMatchObject({ status: "unavailable" });
   });
 
-  it("is inactive: the session factory is passed through untouched and nothing is prepared", async () => {
-    expect(PLAIN_RULE_JUDGE_ACTIVE).toBe(false);
+  it("is active: every session the factory opens is offered to the judge source first", async () => {
+    expect(PLAIN_RULE_JUDGE_ACTIVE).toBe(true);
     let prepared = 0;
-    const open: SessionFactory = async () => {
-      throw new Error("not opened in this test");
+    const opened: OpenSessionOptions[] = [];
+    const open: SessionFactory = async (options) => {
+      opened.push(options);
+      return { id: "s" } as never;
     };
     const wrapped = withPlainRuleJudge(open, {
       prepare: async () => {
@@ -135,8 +153,17 @@ describe("#701 daemon plain-rule judge wiring", () => {
         return { status: "unavailable", reason: "not-configured" };
       },
     });
-    expect(wrapped).toBe(open);
-    expect(prepared).toBe(0);
+    expect(wrapped).not.toBe(open);
+    const options = {
+      agent: { id: "a" },
+      host: local,
+      secrets,
+      origin: { runId: "r" },
+    } as unknown as OpenSessionOptions;
+    await wrapped(options);
+    expect(prepared).toBe(1);
+    // No judge: the very options asked for, nothing added or replaced.
+    expect(opened).toEqual([options]);
   });
 
   it("prepares only the experimental kinds the config turns on, each needing its own grant", async () => {
@@ -146,7 +173,7 @@ describe("#701 daemon plain-rule judge wiring", () => {
     expect(prepared).toMatchObject({ status: "prepared", kindsUnavailable: [] });
     expect(prepared.status === "prepared" && Object.keys(prepared.kinds)).toEqual([]);
 
-    const config = () => ({ review: { plainRules: { judge, experimental: { kinds } } } });
+    const config = () => ({ review: { plainRules: { enabled: true, judge, experimental: { kinds } } } });
     ({ source, session } = await setup({ config, kindGrants: ["edit", "mcp", "command"] }));
     prepared = await source.prepare(session, signal);
     expect(prepared.status === "prepared" && Object.keys(prepared.kinds).sort()).toEqual(["edit", "mcp"]);
@@ -175,9 +202,9 @@ describe("#701 daemon plain-rule judge wiring", () => {
     // The active generation has another judge, or another switch: neither set is used.
     const other = { ...judge, credential: "other-key" };
     expect(
-      await source.prepare({ ...session, pinned: { review: { plainRules: { judge: other } } } }, signal),
+      await source.prepare({ ...session, pinned: { review: { plainRules: { enabled: true, judge: other } } } }, signal),
     ).toMatchObject({ reason: "config-changed" });
-    const kinds = { review: { plainRules: { judge, experimental: { kinds: { mcpCalls: true } } } } };
+    const kinds = { review: { plainRules: { enabled: true, judge, experimental: { kinds: { mcpCalls: true } } } } };
     expect(await source.prepare({ ...session, pinned: kinds }, signal)).toMatchObject({ reason: "config-changed" });
     // Not configured anywhere: nothing to say.
     ({ source, session } = await setup({ config: () => ({}) }));

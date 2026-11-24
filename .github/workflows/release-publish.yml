@@ -243,6 +243,10 @@ jobs:
       # Every support-matrix tier above `none` must rest on receipts whose GitHub attestation
       # verifies (signed by guard-receipts.yml on a hosted runner, from main or a release line)
       # and whose certified build has the same enforcement code as this commit (#1026).
+      - name: GitHub CLI 2.102.0 or later (GHSA-wjmr-j3rp-mh2g)
+        run: tools/guard-qualification/ensure-gh.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Support-matrix tiers are attested and current
         run: node tools/guard-qualification/check-support-matrix.js --release
         env:

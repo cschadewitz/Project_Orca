@@ -31,6 +31,8 @@ export const bundlePathFor = (receiptPath) => `${receiptPath}.sigstore.json`;
  * `run` is injectable for tests; it receives gh's argument list and returns its stdout or throws.
  */
 export function attestationProblems(repoRoot, receiptPath, receipt, run = runGh) {
+  const version = ghVersionProblem(run, repoRoot);
+  if (version) return [version];
   const bundle = bundlePathFor(receiptPath);
   if (!existsSync(join(repoRoot, bundle))) return [`no attestation bundle ${bundle}`];
   if (!/^[0-9a-f]{40}$/.test(receipt?.build ?? "")) return ["names no exact build to verify against"];
@@ -74,8 +76,40 @@ export function attestationProblems(repoRoot, receiptPath, receipt, run = runGh)
       problems.push(`attested from ${cert.sourceRepositoryRef ?? "an unknown ref"}, not main or a release line`);
     if (cert.runnerEnvironment !== "github-hosted")
       problems.push(`attested on a ${cert.runnerEnvironment ?? "unknown"} runner`);
+    // The signer, checked here exactly rather than by gh's --signer-workflow alone: this
+    // workflow file, at the ref the receipt was produced from, at the receipt's own commit,
+    // so the signer that ran is the revision reviewed with the code it certified.
+    const signer = `https://github.com/${RECEIPTS_WORKFLOW}@${cert.sourceRepositoryRef}`;
+    if (cert.buildSignerURI !== signer)
+      problems.push(`signed by ${cert.buildSignerURI ?? "an unknown workflow"}, not ${signer}`);
+    if (cert.buildSignerDigest !== receipt.build)
+      problems.push(`signer workflow at ${cert.buildSignerDigest ?? "an unknown revision"}, not ${receipt.build}`);
   }
   return problems;
+}
+
+/**
+ * The oldest GitHub CLI whose `--signer-workflow` must match the whole workflow path: earlier
+ * ones (2.51.0 to 2.101.0) took any workflow whose path began with it (GHSA-wjmr-j3rp-mh2g).
+ */
+export const MIN_GH_VERSION = [2, 102, 0];
+
+function ghVersionProblem(run, cwd) {
+  let out;
+  try {
+    out = run(["--version"], cwd);
+  } catch (error) {
+    return `gh cannot run: ${firstLine(error)}`;
+  }
+  const m = /gh version (\d+)\.(\d+)\.(\d+)/.exec(out ?? "");
+  if (!m) return "gh printed no version";
+  const have = m.slice(1, 4).map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (have[i] > MIN_GH_VERSION[i]) return undefined;
+    if (have[i] < MIN_GH_VERSION[i])
+      return `gh ${have.join(".")} is older than ${MIN_GH_VERSION.join(".")}, which matches --signer-workflow exactly (GHSA-wjmr-j3rp-mh2g)`;
+  }
+  return undefined;
 }
 
 function runGh(args, cwd) {
@@ -83,19 +117,21 @@ function runGh(args, cwd) {
 }
 
 /**
- * Whether the code a receipt certified is still the code at HEAD. A tier is certified for one
- * build; the release gate (`--release`) refuses a row whose build differs from HEAD in any
- * path that decides or carries enforcement. Changes only to docs, receipts, the matrix itself
- * and `package.json` files leave a certification current: a release commit bumps every
- * package's version, and a dependency change shows in the lockfile.
+ * Whether the code and requirements a receipt certified are still those at HEAD. A tier is
+ * certified for one build; the release gate (`--release`) refuses a promoted row whose build
+ * differs from HEAD in anything but:
+ *
+ * - documentation, changelog fragments and the receipts themselves (`EXEMPT`);
+ * - a `package.json`'s `version` field, which a release commit bumps (every other field,
+ *   scripts and dependencies included, must be unchanged);
+ * - in the support matrix, a row's `tier`, `pin` and `receipts`: the promotion and the pointer
+ *   to its evidence. The routes, cases, exclusions and requirements the receipts were judged
+ *   against must be unchanged.
+ *
+ * Everything else, workflows and build and packaging configuration included, counts.
  */
-export const CERTIFIED_PATHS = ["packages", "tools/guard-qualification", "pnpm-lock.yaml", "pnpm-workspace.yaml"];
-export const NOT_CERTIFIED = [
-  ":(exclude)tools/guard-qualification/receipts",
-  ":(exclude)tools/guard-qualification/support-matrix.json",
-  ":(glob,exclude)**/*.md",
-  ":(glob,exclude)**/package.json",
-];
+export const EXEMPT = [/^docs\//, /\.md$/, /^changelog\.d\//, /^tools\/guard-qualification\/receipts\//];
+const MATRIX = "tools/guard-qualification/support-matrix.json";
 
 export function staleProblems(repoRoot, build, run = runGit) {
   try {
@@ -105,21 +141,46 @@ export function staleProblems(repoRoot, build, run = runGit) {
   }
   let changed;
   try {
-    changed = run(["diff", "--name-only", build, "HEAD", "--", ...CERTIFIED_PATHS, ...NOT_CERTIFIED], repoRoot)
-      .split("\n")
-      .filter(Boolean);
+    changed = run(["diff", "--name-only", "--no-renames", build, "HEAD"], repoRoot).split("\n").filter(Boolean);
   } catch (error) {
     return [`cannot compare build ${build} with HEAD: ${firstLine(error)}`];
   }
-  if (changed.length === 0) return [];
-  const shown = changed.slice(0, 5).join(", ");
+  const show = (rev, file) => {
+    try {
+      return JSON.parse(run(["show", `${rev}:${file}`], repoRoot));
+    } catch {
+      return undefined;
+    }
+  };
+  const counted = changed.filter((file) => {
+    if (EXEMPT.some((re) => re.test(file))) return false;
+    if (file === "package.json" || file.endsWith("/package.json"))
+      return !sameJson(withoutVersion(show(build, file)), withoutVersion(show("HEAD", file)));
+    if (file === MATRIX) return !sameJson(requirements(show(build, file)), requirements(show("HEAD", file)));
+    return true;
+  });
+  if (counted.length === 0) return [];
+  const shown = counted.slice(0, 5).join(", ");
   return [
-    `build ${build} is stale: ${changed.length} certified file(s) changed since (${shown}${changed.length > 5 ? ", …" : ""})`,
+    `build ${build} is stale: ${counted.length} certified file(s) changed since (${shown}${counted.length > 5 ? ", …" : ""})`,
   ];
 }
 
+const withoutVersion = (pkg) => (pkg && typeof pkg === "object" ? { ...pkg, version: undefined } : pkg);
+/** The matrix less what a promotion may change: each row's tier, pin and receipts. */
+const requirements = (m) =>
+  m && Array.isArray(m.agents)
+    ? { ...m, agents: m.agents.map((a) => ({ ...a, tier: undefined, pin: undefined, receipts: undefined })) }
+    : m;
+const sameJson = (a, b) => a !== undefined && b !== undefined && JSON.stringify(a) === JSON.stringify(b);
+
 function runGit(args, cwd) {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 64 * 1024 * 1024,
+  });
 }
 
 function firstLine(error) {

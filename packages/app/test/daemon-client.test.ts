@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   AGENTS_LIST_METHOD,
+  JUDGE_STATUS_METHOD,
+  JudgeStatusParamsSchema,
   AgentsListParamsSchema,
   ARTIFACTS_GET_METHOD,
   ARTIFACTS_LIST_METHOD,
@@ -403,6 +405,47 @@ describe("the agents method", () => {
     expect(answer.claims.map((c) => c.workItemId)).toEqual(["wi-7"]);
     expect(answer.claims[0]?.owner.runId).toBe("run-1");
     expect(answer.asOf).toBe(asOf);
+  });
+});
+
+/** `judge.status` (#701): a read with no parameters, parsed against the protocol's schema. */
+describe("the judge status method", () => {
+  let seen: unknown;
+  const answer = {
+    active: false,
+    enabled: false,
+    config: { state: "none" },
+    auth: "token",
+    principal: "casey",
+    grants: [],
+    budget: { state: "uninitialized" },
+  };
+  const table: MethodTable = {
+    [HELLO_METHOD]: hello,
+    [JUDGE_STATUS_METHOD]: {
+      params: JudgeStatusParamsSchema,
+      handle: (p: unknown) => {
+        seen = p;
+        return answer;
+      },
+    },
+  };
+  let d: DaemonHandle;
+  beforeAll(async () => {
+    d = await startDaemon({
+      orcaVersion: "0.1.0-test",
+      capabilities: ["runs.read"],
+      auth: { mode: "loopback-unauthenticated" },
+      methods: table,
+    });
+  });
+  afterAll(async () => {
+    await d.close();
+  });
+
+  it("sends no parameters and returns the parsed status", async () => {
+    expect(await new DaemonClient(d.url).judgeStatus()).toEqual(answer);
+    expect(seen).toEqual({});
   });
 });
 

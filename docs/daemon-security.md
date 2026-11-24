@@ -148,7 +148,7 @@ entries naming the catalog MCP servers and skills its principal's runs may be gi
 | `plan.write`         | Waive dependencies, decide and reopen decisions, update risks.             |
 | `agents.read`        | Agent health; `agent.changed`.                                             |
 | `agents.ping`        | Spawn an agent to perform a handshake.                                     |
-| `config.read`        | `config.get`, which returns the configuration **unredacted**; `config.changed`. |
+| `config.read`        | `config.get`, which returns the configuration **unredacted**; `config.changed`; `judge.status`. |
 | `config.write`       | `config.set` (also requires `config.read`), `config.apply`.                                 |
 | `daemon.maintenance` | The update coordinator's admission control.                                |
 | `secrets.use`        | The principal's runs may receive values for the references its `secrets` grant names (#336). |
@@ -303,6 +303,7 @@ that the two match. A method that is missing from the table is refused with
 | `agents.ping` | `agents.ping` | workspace-wide | mutation |
 | `secrets.list` | `secrets.read` | workspace-wide; filtered to the caller's grant | — |
 | `secrets.check` | `secrets.read` | workspace-wide; filtered to the caller's grant | — |
+| `judge.status` | `config.read` | workspace-wide; the caller's own grants; never a key or value | — |
 | `subscribe` | any authenticated principal | a run-scoped stream needs `runs.read` and the run; each notification is checked separately | — |
 | `unsubscribe` | any authenticated principal | only the caller's own connection's subscriptions | — |
 | `maintenance` | `daemon.maintenance` | workspace-wide | mutation |

@@ -20,12 +20,16 @@
  *   `decision` or `question` gate has no agent and this card is not used for one; an ask
  *   recorded before 1.6 has none either, and then the card says the run rather than
  *   guessing a process.
+ * - **It says what the judge said**, when a plain-language rule's judge looked at the call
+ *   before the person was asked (#701): advice on an edit or a command, or why it did not
+ *   allow a read or an MCP call. The person answers either way.
  */
 import type { JSX, Ref } from "react";
 import type { OpenInputView } from "@orca/protocol";
 import { ObjectId, textClass } from "../ui/index.js";
 import { AnswerCard, type AnswerRequest } from "./answer-card.js";
 import { permissionSubject, waitedLabel } from "./card-model.js";
+import { JudgeNote, judgeAskNote } from "./judge-note.js";
 import { ScopedRuleChoices } from "./scoped-rule-choices.js";
 import { scopedRulePort } from "./scoped-rule-port.js";
 import type { ScopedRuleReviewPort } from "./scoped-rule-review.js";
@@ -51,6 +55,7 @@ export function PermissionCard({ input, scopedRuleReview, ...rest }: PermissionC
       ? scopedRulePort(window.orca, input.live.target)
       : undefined;
   const subject = permissionSubject(input.context);
+  const judge = judgeAskNote(input.context);
   const agent = input.agent;
   return (
     <AnswerCard
@@ -81,6 +86,7 @@ export function PermissionCard({ input, scopedRuleReview, ...rest }: PermissionC
         )
       }
       command={scopedRuleReview ? undefined : subject}
+      judgeNote={!scopedRuleReview && judge ? <JudgeNote note={judge} /> : undefined}
       options={input.options}
       offerAlways
       standing={input.standing}

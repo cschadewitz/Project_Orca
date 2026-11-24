@@ -6,7 +6,14 @@
 import { describe, expect, it, vi } from "vitest";
 import * as acp from "@agentclientprotocol/sdk";
 import { AgentRegistry, LocalHost, type AgentSession, type OpenSessionOptions } from "@orca/agents";
-import { AgentSpecSchema, FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
+import {
+  AgentSpecSchema,
+  FakeClock,
+  parseWorkflow,
+  TemplateRegistry,
+  WorkflowRegistry,
+  type JudgedDecision,
+} from "@orca/core";
 import {
   autoHumanInput,
   humanInputCancelled,
@@ -66,7 +73,7 @@ const permissionRequest = (id: string): acp.RequestPermissionRequest => ({
 });
 
 /** A fake ACP session whose prompt turn raises `asksPerTurn` permission requests at once. */
-function fakeSessions(asksPerTurn: number) {
+function fakeSessions(asksPerTurn: number, judged?: JudgedDecision) {
   const answers: (string | undefined)[] = [];
   let opened = 0;
   let calls = 0;
@@ -83,7 +90,7 @@ function fakeSessions(asksPerTurn: number) {
       closed: new Promise(() => {}),
       async prompt() {
         const reqs = Array.from({ length: asksPerTurn }, () => permissionRequest(`tool-${++calls}`));
-        const got = await Promise.all(reqs.map((r) => o.askPermission!(r)));
+        const got = await Promise.all(reqs.map((r) => o.askPermission!(r, undefined, judged)));
         for (const [i, r] of reqs.entries())
           o.onPermission?.({
             toolCallId: r.toolCall.toolCallId,
@@ -156,6 +163,47 @@ edges: [{ from: s, to: first }, { from: first, to: second }, { from: second, to:
 `;
 
 describe("ask permissions as human input", () => {
+  it("carries the judge's note with the ask, field by field (#701)", async () => {
+    const fake = fakeSessions(1, {
+      verdict: "covered",
+      kind: "command",
+      advisory: true,
+      reasonCode: "matches-criterion",
+      ruleId: "config:2",
+      ruleRevision: "sha256:digest-of-the-rule",
+      judgeConfigRef: "judge-config-ref",
+    });
+    const { orchestrator, humanInput } = make(oneStep, fake.sessionFactory);
+    const done = orchestrator.startAndRun({ workflowId: "perm" });
+    await vi.waitFor(() => expect(humanInput.list()).toHaveLength(1));
+    const [ask] = humanInput.list();
+    // The note goes where the person answers; the rule's digest and the judge config ref do not.
+    expect(ask!.context).toEqual({
+      toolCall: expect.objectContaining({ toolCallId: "tool-1" }),
+      judge: {
+        verdict: "covered",
+        kind: "command",
+        advisory: true,
+        reasonCode: "matches-criterion",
+        ruleId: "config:2",
+      },
+    });
+    humanInput.answer(ask!.requestId, "allow");
+    const state = await done;
+    expect(state.humanInputs[ask!.requestId]?.context).toMatchObject({ judge: { verdict: "covered" } });
+  });
+
+  it("adds no judge note to an ask the judge did not look at", async () => {
+    const fake = fakeSessions(1);
+    const { orchestrator, humanInput } = make(oneStep, fake.sessionFactory);
+    const done = orchestrator.startAndRun({ workflowId: "perm" });
+    await vi.waitFor(() => expect(humanInput.list()).toHaveLength(1));
+    const [ask] = humanInput.list();
+    expect(Object.keys(ask!.context)).toEqual(["toolCall"]);
+    humanInput.answer(ask!.requestId, "allow");
+    await done;
+  });
+
   it("gives every concurrent ask its own request id and logs request + answer", async () => {
     const fake = fakeSessions(2);
     const { orchestrator, humanInput } = make(oneStep, fake.sessionFactory);

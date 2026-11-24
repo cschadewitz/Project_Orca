@@ -9,8 +9,9 @@
  * and synthetic results never count toward a tier. A receipt backs a tier only when it is
  * bound to the run that produced it (`attestation.js`): from the command line every receipt's
  * GitHub artifact attestation is verified; called as a function without a verifier, every
- * receipt counts as unverified. Tiers A and B can be promoted that way; tier C stays refused
- * (`PROMOTION_DISABLED_C`) until #1026's independent observer exists.
+ * receipt counts as unverified. That binding is plumbing only: no tier is promoted yet
+ * (`PROMOTABLE_TIERS` is empty) until a reviewed receipt producer exists and an end-to-end
+ * check accepts a real qualifying receipt and refuses a real nonqualifying one (#1026).
  *
  *   node tools/guard-qualification/check-support-matrix.js --release
  *
@@ -26,13 +27,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "..", "..");
 const TIERS = ["none", "A", "B", "C"];
 /**
- * Tiers a row may be promoted to on attested receipts. Tier C also needs #1026's independent
- * observer binding each assertion to its call, its observed effect and ORCA's authority; until
- * that exists it is refused whatever its receipts show.
+ * Tiers a row may be promoted to on attested receipts: none yet. Promotion to A or B waits for
+ * the reviewed receipt producer and an end-to-end check of a real qualifying and nonqualifying
+ * receipt; C also needs #1026's independent observer.
  */
-export const PROMOTABLE_TIERS = ["A", "B"];
-export const PROMOTION_DISABLED_C =
-  "tier C promotion is disabled until #1026's independent observer binds each assertion to its call, effect and authority";
+export const PROMOTABLE_TIERS = [];
+export const PROMOTION_DISABLED =
+  "tier promotion is disabled until a reviewed receipt producer and an end-to-end check of real receipts exist (#1026)";
 /** What a receipt is when nothing verified its attestation (the function's default). */
 export const UNVERIFIED = "attestation not verified (run check-support-matrix.js, which verifies it)";
 
@@ -281,6 +282,7 @@ export function checkSupportMatrix(
   readReceipt = (p) => JSON.parse(readFileSync(join(REPO_ROOT, p), "utf8")),
   assertions = loadAssertions(),
   verifyReceipt = () => [UNVERIFIED],
+  promotable = PROMOTABLE_TIERS,
 ) {
   const problems = [];
   const ids = new Set(catalogue.cases.map((c) => c.id));
@@ -359,7 +361,7 @@ export function checkSupportMatrix(
       receipts.push({ file, receipt: readReceipt(file) });
     }
     if (tier === 0) continue;
-    if (!PROMOTABLE_TIERS.includes(agent.tier) && tier > 0) problems.push(`${at}: ${PROMOTION_DISABLED_C}`);
+    if (!promotable.includes(agent.tier)) problems.push(`${at}: ${PROMOTION_DISABLED}`);
     // A receipt says what it says; only one bound to the run that produced it is evidence.
     for (const r of receipts) r.trust = verifyReceipt(r.file, r.receipt);
 
@@ -445,7 +447,7 @@ export function checkSupportMatrix(
 
 /**
  * Why promoted rows are not current at HEAD: each row above `none` must pin a build whose
- * certified paths HEAD has not changed (`attestation.js`, `CERTIFIED_PATHS`). The release gate.
+ * certified code and requirements HEAD has not changed (`attestation.js`, `staleProblems`). The release gate.
  */
 export function releaseProblems(matrix, repoRoot = REPO_ROOT, stale = staleProblems) {
   return matrix.agents

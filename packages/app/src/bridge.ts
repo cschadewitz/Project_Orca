@@ -56,6 +56,7 @@ import type {
   ConfigSetResult,
   PermissionsSaveJudgedRuleParams,
   PermissionsSaveJudgedRuleResult,
+  JudgeStatusResult,
   DaemonCapability,
   DecisionsDecideParams,
   DecisionsDecideResult,
@@ -549,6 +550,12 @@ export interface OrcaBridge {
     saveJudgedRule?: (
       params: PermissionsSaveJudgedRuleParams,
     ) => Promise<BridgeResult<PermissionsSaveJudgedRuleResult>>;
+    /**
+     * Where the plain-language rule judge's setup stands (protocol 2.12, #701): the judge the
+     * configuration names, whether its key is there, the caller's grants and the budget.
+     * Read-only; offered only when the daemon lists `judge.status`.
+     */
+    judgeStatus?: () => Promise<BridgeResult<JudgeStatusResult>>;
   };
   /** Optional until the integration owner registers the typed template IPC dispatcher. */
   templates?: TemplateBridge;

@@ -24,14 +24,17 @@
  * nothing the judge would only have added is replaced by an allow. A session already carrying a
  * judge (`judgePermission` or `judgeKinds`) is passed through untouched; this never substitutes one.
  *
- * Inactive. `PLAIN_RULE_JUDGE_ACTIVE` is `false`, and `withPlainRuleJudge` passes sessions
- * through untouched while it is. Turning it on is its own reviewed change; nothing here, and no
- * setting, can.
+ * Active as of the reviewed activation (#701). A session still gets a judge only when every piece
+ * above is in place: the config names one, the key is usable, the run's owner holds the disclosure
+ * grant and the budget is durable. Anything missing opens the session without one, and every call a
+ * plain-language rule would cover goes to the person as before. `PLAIN_RULE_JUDGE_ACTIVE` is the
+ * build's switch: no parameter or setting can turn it on or off.
  */
 import { isDeepStrictEqual } from "node:util";
 import type { OrcaConfig } from "@orca/core";
 import {
   preparePlainRuleJudge,
+  type HttpsRequestFn,
   secretJudgeCredentials,
   type JudgePermission,
   type PlainRuleConnectionRefusal,
@@ -48,13 +51,15 @@ import { bindSecretUse, secretUseAuthority, type SecretUseAuthorityOptions } fro
 import type { QualifiedJudgeBudget } from "./judge-budget.js";
 import { judgedSessionFactory } from "./plain-rule-judge-session.js";
 
-/** Whether sessions are given a plain-rule judge at all. Changed only by the reviewed activation change. */
-export const PLAIN_RULE_JUDGE_ACTIVE = false as const;
+/** Whether sessions are given a plain-rule judge at all. Changed only by a reviewed change to this line. */
+export const PLAIN_RULE_JUDGE_ACTIVE = true as const;
 export { PLAIN_RULE_JUDGE_PREPARE_MS } from "./plain-rule-judge-session.js";
 
 /** Why a session got no judge: a fixed code, never a value or a provider's words. */
 export type PlainRuleJudgeUnavailable =
   | "not-configured"
+  /** A judge is configured, but `review.plainRules.enabled` is not `true`: the owner has not opted in. */
+  | "not-enabled"
   | "not-local"
   | "budget-unavailable"
   | "budget-not-durable"
@@ -99,6 +104,8 @@ export interface PlainRuleJudgeSourceOptions {
   readonly ownership: OwnershipStore;
   readonly credentials: Pick<CredentialStore, "currentForPrincipal">;
   readonly audit?: AuditSink | undefined;
+  /** Tests only: the HTTPS request function the judge's sender uses (a deterministic provider stand-in). */
+  readonly request?: HttpsRequestFn | undefined;
 }
 
 export interface PlainRuleJudgeSource {
@@ -149,6 +156,8 @@ export function plainRuleJudgeSource(opts: PlainRuleJudgeSourceOptions): PlainRu
       const plainRules = session.pinned.review?.plainRules;
       const judgeConfig = plainRules?.judge;
       if (judgeConfig === undefined) return unavailable("not-configured");
+      // The owner's explicit opt-in: without it nothing is prepared, read or sent.
+      if (plainRules?.enabled !== true) return unavailable("not-enabled");
       // The run's own settings, and only while the active generation still has the same ones.
       if (!isDeepStrictEqual(plainRules, opts.config()?.review?.plainRules)) return unavailable("config-changed");
       // The judge's key is read, and its request sent, from the daemon's own machine.
@@ -174,7 +183,7 @@ export function plainRuleJudgeSource(opts: PlainRuleJudgeSourceOptions): PlainRu
       });
       const prepared = await preparePlainRuleJudge(
         judgeConfig,
-        { credentials, disclosure, budget: qualified.budget },
+        { credentials, disclosure, budget: qualified.budget, ...(opts.request ? { request: opts.request } : {}) },
         signal,
       );
       if (prepared.status !== "prepared") return prepared;
@@ -187,7 +196,7 @@ export function plainRuleJudgeSource(opts: PlainRuleJudgeSourceOptions): PlainRu
         if (switches[name] !== true) continue;
         const one = await preparePlainRuleJudge(
           judgeConfig,
-          { credentials, disclosure, budget: qualified.budget },
+          { credentials, disclosure, budget: qualified.budget, ...(opts.request ? { request: opts.request } : {}) },
           signal,
           actionClass,
         );
@@ -231,9 +240,8 @@ export type PlainRuleJudgeUnavailableListener = (info: {
 }) => void;
 
 /**
- * The session factory with the plain-rule judge bound to each session that can have one. While
- * `PLAIN_RULE_JUDGE_ACTIVE` is false it returns `open` unchanged in behaviour: nothing is prepared,
- * read or sent. `onUnavailable` hears why a session got no judge (for the log), never a value.
+ * The session factory with the plain-rule judge bound to each session that can have one. Were
+ * `PLAIN_RULE_JUDGE_ACTIVE` false it would return `open` unchanged: nothing prepared, read or sent. `onUnavailable` hears why a session got no judge (for the log), never a value.
  */
 export function withPlainRuleJudge(
   open: SessionFactory,

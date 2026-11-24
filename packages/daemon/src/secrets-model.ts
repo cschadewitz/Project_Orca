@@ -38,6 +38,11 @@ export class SecretsReadModel {
     private readonly maxRemoteChecks = MAX_REMOTE_CHECKS,
   ) {}
 
+  /** Whether `principal` may see reference `id` now: `secrets.read`, and a grant naming it as bound now. */
+  sees(principal: Principal, id: string): boolean {
+    return holds(principal, "secrets.read") && this.visible(principal).some(([candidate]) => candidate === id);
+  }
+
   /** The references `principal` may see: all with `*`, else those its grant names as bound now. */
   private visible(principal: Principal): [string, SecretsConfig[string]][] {
     const registry = this.source();
