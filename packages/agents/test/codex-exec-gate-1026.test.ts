@@ -277,6 +277,8 @@ beforeEach(() => {
 afterEach(async () => {
   for (const client of clients) client.ws.terminate();
   await gate?.close();
+  // Nothing of a connection is left behind: none open, none still stopping.
+  if (gate !== undefined) expect(gate.connections()).toEqual({ open: 0, stopping: 0 });
   gate = undefined;
   // Every byte a gate claimed on the shared budget is given back once it is closed.
   expect(codexExecGateHeldBytes()).toBe(0);
